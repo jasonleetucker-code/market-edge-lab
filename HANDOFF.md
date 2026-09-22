@@ -50,4 +50,4 @@ NEXT ACTION: Gate 3, the point-in-time historical dataset for EXP-001:
    object storage, or low-frequency Actions with artifacts. This is a private repo, so
    Actions minutes count against the account allowance. Needs a cost decision.
 2. **Standing merge rule.** May agents merge docs- or test-only PRs on green CI, or does
-   every merge need an explicit grant like PRs #2 and #3?
+   every merge need an explicit grant like PRs #2 and #8?

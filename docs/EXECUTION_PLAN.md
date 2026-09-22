@@ -7,8 +7,8 @@ be written here when they are made.
 
 | # | Gate | State |
 |---|---|---|
-| 1 | Data collection | **Complete.** Collectors, provenance, source health, freshness and immutable evidence (PR #2); NWS CLI and settlement-evidence collectors, pagination and pacing (PR #3). Scheduled collection needs approval (cost policy). |
-| 2 | Settlement validation | **PASSED 2026-09-22 (PR #3).** 433 daily events audited, 0 mis-predictions, 0 unexplained mismatches; see `experiments/EXP-001-kxhighny-nws-vs-market/gate2/REPORT.md` and `docs/SETTLEMENT.md`. |
+| 1 | Data collection | **Complete.** Collectors, provenance, source health, freshness and immutable evidence (PR #2); NWS CLI and settlement-evidence collectors, pagination and pacing (PR #8). Scheduled collection needs approval (cost policy). |
+| 2 | Settlement validation | **PASSED 2026-09-22 (PR #8).** 433 daily events audited, 0 mis-predictions, 0 unexplained mismatches; see `experiments/EXP-001-kxhighny-nws-vs-market/gate2/REPORT.md` and `docs/SETTLEMENT.md`. |
 | 3 | Historical dataset | **Active (authorized).** Build the point-in-time dataset, and freeze the EXP-001 preregistration before any test-period data is examined. |
 | 4–10 | Model → … → scaling | Not authorized. |
 
