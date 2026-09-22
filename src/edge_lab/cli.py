@@ -13,8 +13,9 @@ from typing import Callable
 from . import experiments
 from .freshness import Freshness, assess
 from .http import HttpFetchError, ResponseDecodeError
-from .kalshi import collect_series
+from .kalshi import collect_series, collect_settlement_evidence
 from .nws import DEFAULT_LAT, DEFAULT_LON, collect_reference_forecast
+from .nws_cli import collect_cli_archive, collect_recent_cli
 from .sources import REGISTRY, SourceStatus, get_source
 from .storage import SnapshotStore, utc_now_iso
 
@@ -27,7 +28,7 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     collect = subparsers.add_parser("collect", help="Collect one immutable data snapshot.")
-    collect.add_argument("--source", choices=("all", "kalshi", "nws"), default="all")
+    collect.add_argument("--source", choices=("all", "kalshi", "nws", "nws_cli"), default="all")
     collect.add_argument("--db", default="data/edge_lab.sqlite3")
     collect.add_argument("--series", default="KXHIGHNY")
     collect.add_argument("--market-status", default="open")
@@ -43,11 +44,41 @@ def build_parser() -> argparse.ArgumentParser:
     health = subparsers.add_parser("health", help="Show latest per-source health and freshness.")
     health.add_argument("--db", default="data/edge_lab.sqlite3")
     health.add_argument("--json", action="store_true", help="Emit machine-readable JSON.")
+    health.add_argument(
+        "--source", action="append", dest="sources",
+        help="Only report these source ids (repeatable); default: every active source.",
+    )
+
+    settle = subparsers.add_parser("settlement", help="Gate 2 settlement evidence and audit.")
+    settle_sub = settle.add_subparsers(dest="settlement_command", required=True)
+    s_collect = settle_sub.add_parser(
+        "collect", help="Capture settlement evidence: series rules, settled markets, contracts."
+    )
+    s_collect.add_argument("--db", default="data/edge_lab.sqlite3")
+    s_collect.add_argument("--series", default="KXHIGHNY")
+    s_collect.add_argument("--no-historical", action="store_true")
+    s_collect.add_argument("--cli-archive-from", help="YYYY-MM-DD: also store IEM CLI archive")
+    s_collect.add_argument("--cli-archive-to", help="YYYY-MM-DD (exclusive)")
+    s_collect.add_argument("--user-agent", default=os.getenv("NWS_USER_AGENT"))
+    s_audit = settle_sub.add_parser("audit", help="Reproduce settlements from stored evidence.")
+    s_audit.add_argument("--db", default="data/edge_lab.sqlite3")
+    s_audit.add_argument("--from", dest="start", required=True, help="YYYY-MM-DD")
+    s_audit.add_argument("--to", dest="end", required=True, help="YYYY-MM-DD (inclusive)")
+    s_audit.add_argument("--csv", help="Write bracket-level audit rows to this path.")
 
     exps = subparsers.add_parser("experiments", help="Experiment registry tools.")
     exps_sub = exps.add_subparsers(dest="experiments_command", required=True)
     validate = exps_sub.add_parser("validate", help="Validate experiments/*/experiment.toml.")
     validate.add_argument("--root", default="experiments")
+    freeze_cmd = exps_sub.add_parser(
+        "freeze", help="Write the one-time preregistration baseline for a PREREGISTERED manifest."
+    )
+    freeze_cmd.add_argument("experiment_id")
+    freeze_cmd.add_argument("--root", default="experiments")
+    frozen = exps_sub.add_parser(
+        "check-frozen", help="Fail if any committed preregistration baseline was modified/deleted."
+    )
+    frozen.add_argument("--base", required=True, help="git ref to compare against, e.g. origin/main")
 
     return parser
 
@@ -87,7 +118,7 @@ def _run_source(
             if not isinstance(exc, ResponseDecodeError):
                 http_errors = 1
 
-    records, payload_bytes, retries = store.run_source_totals(run_id, spec.legacy_name)
+    records, payload_bytes, retries = store.run_source_totals(run_id, spec.legacy_name, spec.source_id)
     retries += failed_fetch_retries
     if error is not None:
         status = "partial" if records else "failed"
@@ -115,7 +146,7 @@ def _run_source(
 
 
 def _collect(args: argparse.Namespace) -> int:
-    if args.source in {"all", "nws"} and not args.nws_user_agent:
+    if args.source in {"all", "nws", "nws_cli"} and not args.nws_user_agent:
         print(
             "NWS_USER_AGENT is required for NWS collection. "
             "Set the environment variable or pass --nws-user-agent.",
@@ -157,6 +188,16 @@ def _collect(args: argparse.Namespace) -> int:
                     user_agent=args.nws_user_agent,
                     lat=args.lat,
                     lon=args.lon,
+                ),
+            )
+
+        if args.source in {"all", "nws_cli"}:
+            outcomes["nws_cli_central_park"] = _run_source(
+                store,
+                run_id=run_id,
+                source_id="nws_cli_central_park",
+                collect=lambda anomalies: collect_recent_cli(
+                    store, run_id=run_id, user_agent=args.nws_user_agent, anomalies=anomalies
                 ),
             )
 
@@ -231,6 +272,12 @@ def health_report(store: SnapshotStore, *, now: datetime) -> list[dict[str, obje
 def _health(args: argparse.Namespace) -> int:
     store = SnapshotStore(Path(args.db))
     report = health_report(store, now=datetime.now(timezone.utc))
+    if args.sources:
+        unknown = set(args.sources) - {item["source_id"] for item in report}
+        if unknown:
+            print(f"unknown or inactive source(s): {sorted(unknown)}", file=sys.stderr)
+            return 2
+        report = [item for item in report if item["source_id"] in args.sources]
     if args.json:
         print(json.dumps(report, indent=2, sort_keys=True))
     else:
@@ -254,7 +301,111 @@ def _health(args: argparse.Namespace) -> int:
     return 0 if all_fresh and all_ok else 1
 
 
+def _settlement_collect(args: argparse.Namespace) -> int:
+    from datetime import date
+
+    if bool(args.cli_archive_from) != bool(args.cli_archive_to):
+        print("--cli-archive-from and --cli-archive-to go together", file=sys.stderr)
+        return 2
+    if args.cli_archive_from and not args.user_agent:
+        print("An identifying --user-agent (or NWS_USER_AGENT) is required", file=sys.stderr)
+        return 2
+    store = SnapshotStore(Path(args.db))
+    run_id = str(uuid.uuid4())
+    store.start_run(run_id)
+    outcomes: dict[str, dict[str, object]] = {}
+    finished = False
+    try:
+        outcomes["kalshi_settlement"] = _run_source(
+            store,
+            run_id=run_id,
+            source_id="kalshi_settlement",
+            collect=lambda anomalies: collect_settlement_evidence(
+                store,
+                run_id=run_id,
+                series_ticker=args.series,
+                include_historical=not args.no_historical,
+                anomalies=anomalies,
+            ),
+        )
+        if args.cli_archive_from:
+            outcomes["iem_afos_clinyc"] = _run_source(
+                store,
+                run_id=run_id,
+                source_id="iem_afos_clinyc",
+                collect=lambda anomalies: collect_cli_archive(
+                    store,
+                    run_id=run_id,
+                    start=date.fromisoformat(args.cli_archive_from),
+                    end_exclusive=date.fromisoformat(args.cli_archive_to),
+                    user_agent=args.user_agent,
+                    anomalies=anomalies,
+                ),
+            )
+        statuses = {o["status"] for o in outcomes.values()}
+        run_status = "succeeded" if statuses == {"ok"} else ("failed" if statuses == {"failed"} else "partial")
+        store.finish_run(run_id, status=run_status, error=None if run_status == "succeeded" else "see source_health")
+        finished = True
+    finally:
+        if not finished:
+            store.finish_run(run_id, status="failed", error="collection aborted before completion")
+    print(json.dumps({"run_id": run_id, "status": run_status, "sources": outcomes}, indent=2, sort_keys=True))
+    return 0 if run_status == "succeeded" else 1
+
+
+def load_settlement_evidence(store: SnapshotStore) -> tuple[list[dict], list]:
+    """All stored settled markets and every parsed CLI report (API products + IEM archives)."""
+    from .nws_cli import parse_cli, split_afos_archive
+
+    markets: list[dict] = []
+    for kind in ("settled_markets", "historical_markets"):
+        for row in store.snapshots_of_kind(source="kalshi_settlement", kind=kind):
+            markets.extend(json.loads(row["payload_json"]).get("markets") or [])
+    reports = [
+        parse_cli(json.loads(row["payload_json"]).get("productText") or "")
+        for row in store.snapshots_of_kind(source="nws_cli", kind="cli_product")
+    ]
+    for sha in store.document_hashes(doc_type="nws_cli_archive_text"):
+        body = store.document_bytes(sha) or b""
+        reports.extend(parse_cli(p) for p in split_afos_archive(body.decode("utf-8", errors="replace")))
+    return markets, reports
+
+
+def _settlement_audit(args: argparse.Namespace) -> int:
+    from datetime import date
+
+    from .settlement_audit import audit, rows_csv, summarize
+
+    start, end = date.fromisoformat(args.start), date.fromisoformat(args.end)
+    markets, reports = load_settlement_evidence(SnapshotStore(Path(args.db)))
+    summaries, rows = audit(markets, reports, start=start, end=end)
+    summary = summarize(summaries, start, end)
+    if args.csv:
+        Path(args.csv).write_text(rows_csv(rows))
+    print(json.dumps(summary, indent=2, sort_keys=True))
+    wrong = [r for r in rows if r.expected_from_nws_cli != "unknown" and not r.match_nws_cli]
+    # Non-zero if any bracket is mis-predicted or any event is unresolved.
+    return 0 if not wrong and not summary["unresolved_events"] and summary["events"] else 1
+
+
 def _experiments(args: argparse.Namespace) -> int:
+    if args.experiments_command == "freeze":
+        matches = [p for p in experiments.discover(Path(args.root)) if p.parent.name.startswith(args.experiment_id + "-")]
+        if len(matches) != 1:
+            print(f"expected one manifest for {args.experiment_id}, found {len(matches)}", file=sys.stderr)
+            return 2
+        try:
+            target = experiments.freeze(experiments.load(matches[0]), now_utc=utc_now_iso())
+        except (ValueError, FileExistsError) as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
+        print(f"wrote {target}")
+        return 0
+    if args.experiments_command == "check-frozen":
+        changed = experiments.changed_baselines(args.base, repo=Path("."))
+        for line in changed:
+            print(f"FAIL preregistration baseline modified or deleted: {line}")
+        return 1 if changed else 0
     results = experiments.validate_all(Path(args.root))
     if not results:
         print(f"No experiments found under {args.root}", file=sys.stderr)
@@ -277,6 +428,10 @@ def main(argv: list[str] | None = None) -> int:
         return _recent(args)
     if args.command == "health":
         return _health(args)
+    if args.command == "settlement":
+        if args.settlement_command == "collect":
+            return _settlement_collect(args)
+        return _settlement_audit(args)
     if args.command == "experiments":
         return _experiments(args)
 

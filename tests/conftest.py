@@ -54,3 +54,14 @@ def http_error(code: int, retry_after: str | None = None) -> HTTPError:
 @pytest.fixture
 def repo_root() -> Path:
     return REPO_ROOT
+
+
+@pytest.fixture(autouse=True)
+def no_network(monkeypatch):
+    """Unit tests never touch the network: the default opener raises if reached."""
+    import edge_lab.http as http_module
+
+    def refuse(request, timeout):
+        raise AssertionError(f"test attempted a real network call: {request.full_url}")
+
+    monkeypatch.setattr(http_module, "_default_opener", refuse)

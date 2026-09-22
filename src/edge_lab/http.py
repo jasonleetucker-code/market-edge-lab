@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import http.client
 import json
+import random
+import threading
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -37,6 +39,31 @@ class ResponseDecodeError(HttpFetchError):
     """The server answered, but the body was not the JSON object we expected."""
 
 
+class Pacer:
+    """Minimum interval between requests to one source (polite, not maximal, throughput).
+
+    Kalshi's public endpoints returned 429 at ~4 requests/s sustained (2026-09-22 probe) and
+    send no Retry-After header, so pacing, not retrying, is the normal control flow.
+    """
+
+    def __init__(self, min_interval_s: float, *, clock=time.monotonic, sleep=time.sleep) -> None:
+        self.min_interval_s = min_interval_s
+        self._clock = clock
+        self._sleep = sleep
+        self._last: float | None = None
+        self._lock = threading.Lock()
+
+    def wait(self) -> None:
+        with self._lock:
+            now = self._clock()
+            if self._last is not None:
+                remaining = self.min_interval_s - (now - self._last)
+                if remaining > 0:
+                    self._sleep(remaining)
+                    now = self._clock()
+            self._last = now
+
+
 @dataclass(frozen=True)
 class FetchResult:
     requested_url: str
@@ -47,6 +74,8 @@ class FetchResult:
     received_at_utc: str
     duration_ms: int
     attempts: int
+    # One entry per failed attempt before success, e.g. "http_429", "URLError".
+    retry_reasons: tuple[str, ...] = ()
 
 
 Opener = Callable[[Request, float], Any]
@@ -75,6 +104,8 @@ def fetch(
     backoff: float = 1.0,
     opener: Opener | None = None,
     sleep: Callable[[float], None] = time.sleep,
+    pacer: Pacer | None = None,
+    jitter: Callable[[], float] = random.random,
 ) -> FetchResult:
     """GET `url`, retrying only transient failures (network errors, 429, 5xx).
 
@@ -94,10 +125,14 @@ def fetch(
     open_fn = opener or _default_opener
     started = time.monotonic()
     attempt = 0
+    reasons: list[str] = []
 
     while True:
         attempt += 1
-        delay = backoff * (2 ** (attempt - 1))
+        # Exponential backoff with up to 50% jitter (429s carry no Retry-After).
+        delay = backoff * (2 ** (attempt - 1)) * (1 + 0.5 * jitter())
+        if pacer is not None:
+            pacer.wait()
         try:
             with open_fn(request, timeout) as response:
                 body = response.read()
@@ -113,6 +148,7 @@ def fetch(
                 received_at_utc=datetime.now(timezone.utc).isoformat(),
                 duration_ms=int((time.monotonic() - started) * 1000),
                 attempts=attempt,
+                retry_reasons=tuple(reasons),
             )
         except HTTPError as exc:
             exc.close()
@@ -120,6 +156,7 @@ def fetch(
                 raise HttpFetchError(
                     f"HTTP {exc.code} fetching {url}", status=exc.code, attempts=attempt
                 ) from exc
+            reasons.append(f"http_{exc.code}")
             retry_after = _retry_after_seconds(exc)
             sleep(retry_after if retry_after is not None else delay)
         except (OSError, http.client.HTTPException) as exc:
@@ -130,6 +167,7 @@ def fetch(
                 raise HttpFetchError(
                     f"Network error fetching {url}: {reason}", attempts=attempt
                 ) from exc
+            reasons.append(type(exc).__name__)
             sleep(delay)
 
 

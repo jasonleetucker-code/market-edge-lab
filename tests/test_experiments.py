@@ -93,8 +93,9 @@ def _locked_concrete(source):
     return concrete.replace(*LOCK)
 
 
-def test_fully_specified_locked_manifest_is_valid(tmp_path):
-    assert _problems(_registry(tmp_path, _locked_concrete)) == []
+def test_fully_specified_locked_manifest_needs_only_its_baseline(tmp_path):
+    problems = _problems(_registry(tmp_path, _locked_concrete))
+    assert len(problems) == 1 and "no preregistration baseline" in problems[0]
 
 
 @pytest.mark.parametrize(
@@ -118,3 +119,83 @@ def test_locked_manifest_rejects_placeholder_variants(tmp_path, mutate, label):
 def test_costs_and_execution_must_name_their_assumptions(tmp_path):
     root = _registry(tmp_path, lambda s: s.replace("[costs]", "[costs]\n# emptied").replace('fee_model = "TBD', 'x_fee = "TBD'))
     assert any("[costs] missing 'fee_model'" in p for p in _problems(root))
+
+
+def _prereg(tmp_path):
+    root = _registry(tmp_path, _locked_concrete)
+    from edge_lab.experiments import discover, freeze, load
+
+    (path,) = discover(root)
+    freeze(load(path), now_utc="2026-09-22T00:00:00+00:00")
+    return root, path
+
+
+def test_freeze_writes_baseline_and_locked_manifest_validates(tmp_path):
+    root, path = _prereg(tmp_path)
+    assert (path.parent / "preregistration.json").exists()
+    assert _problems(root) == []
+
+
+def test_locked_manifest_without_baseline_is_rejected(tmp_path):
+    root = _registry(tmp_path, _locked_concrete)
+    assert any("no preregistration baseline" in p for p in _problems(root))
+
+
+def test_silent_edit_of_locked_field_is_detected(tmp_path):
+    root, path = _prereg(tmp_path)
+    path.write_text(path.read_text().replace("Retail-heavy", "Institution-heavy"))
+    assert any("locked fields changed" in p and "economic_rationale" in p for p in _problems(root))
+
+
+def test_editing_the_baseline_itself_is_detected(tmp_path):
+    import json
+
+    root, path = _prereg(tmp_path)
+    baseline_path = path.parent / "preregistration.json"
+    baseline = json.loads(baseline_path.read_text())
+    baseline["frozen_fields"]["model"] = "something else"
+    baseline_path.write_text(json.dumps(baseline))
+    assert any("does not match its own hash" in p for p in _problems(root))
+
+
+def test_amendments_are_the_change_path(tmp_path):
+    root, path = _prereg(tmp_path)
+    path.write_text(path.read_text() + '\n[[amendments]]\ndate = "2026-10-01"\nfield = "model"\nvalue = "v2"\nchange = "switch model"\nreason = "documented reason"\n')
+    assert _problems(root) == []
+
+
+def test_freeze_refuses_to_overwrite_or_freeze_drafts(tmp_path):
+    from edge_lab.experiments import freeze, load
+
+    root, path = _prereg(tmp_path)
+    with pytest.raises(FileExistsError):
+        freeze(load(path), now_utc="later")
+    draft_root = tmp_path / "d"
+    draft_root.mkdir()
+    draft = _registry(draft_root)
+    (draft_path,) = list(draft.glob("*/experiment.toml"))
+    with pytest.raises(ValueError):
+        freeze(load(draft_path), now_utc="now")
+
+
+def test_check_frozen_flags_modified_baselines(tmp_path):
+    import subprocess
+
+    from edge_lab.experiments import changed_baselines
+
+    def git(*args):
+        subprocess.run(["git", *args], cwd=tmp_path, check=True, capture_output=True)
+
+    git("init", "-q")
+    git("config", "user.email", "t@example.test")
+    git("config", "user.name", "t")
+    target = tmp_path / "experiments" / "EXP-001-x"
+    target.mkdir(parents=True)
+    (target / "preregistration.json").write_text("{}")
+    git("add", ".")
+    git("commit", "-qm", "freeze")
+    git("tag", "base")
+    assert changed_baselines("base", repo=tmp_path) == []
+    (target / "preregistration.json").write_text('{"edited": true}')
+    git("commit", "-qam", "edit")
+    assert changed_baselines("base", repo=tmp_path) and changed_baselines("base", repo=tmp_path)[0].startswith("M")

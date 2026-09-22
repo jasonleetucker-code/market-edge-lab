@@ -29,18 +29,33 @@ DRAFT → PREREGISTERED → RUNNING → CONCLUDED_PASS | CONCLUDED_FAIL | CONCLU
   (a path that exists) and `summary`. A failed experiment is a valid, valuable outcome.
 - **ABANDONED:** give the reason in the README. Never delete the directory.
 
-## What the validator does *not* guarantee
+## Preregistration freeze
 
-The validator checks that a locked manifest has **no recognizable placeholders**. That is a
-heuristic: it cannot judge whether concrete-looking text is actually a usable specification,
-which is still a review question. It also does **not** prove that
-the preregistered hypothesis or criteria were never edited afterwards. Today, protection
-against a silent edit comes only from git history and review, which give traceability but
-not enforcement. **Before any experiment (starting with EXP-001) moves from DRAFT to
-PREREGISTERED**, we must implement a deterministic preregistration baseline: for example, a
-SHA-256 of the locked fields recorded at preregistration and re-checked by the validator,
-with amendments as the only permitted change path. This is tracked in
-`docs/EXECUTION_PLAN.md`.
+To preregister:
+
+1. Set `status = "PREREGISTERED"`.
+2. Run `edge-lab experiments freeze EXP-NNN`. This writes `preregistration.json` with a
+   SHA-256 over the locked fields (hypothesis, rationale, market, decision time, model,
+   data sources, features, success/failure criteria, risk constraints, periods, costs,
+   execution) and a copy of them.
+3. Commit both files together.
+
+From then on:
+
+- the validator rejects a locked manifest whose locked fields differ from the baseline, and
+  rejects a baseline that no longer matches its own hash;
+- CI (`edge-lab experiments check-frozen`) fails if a committed `preregistration.json` is
+  modified or deleted;
+- changes are recorded only as `[[amendments]]` (`date`, `change`, `reason`, and optionally
+  `field` + `value`). The original text stays recoverable in both files.
+
+This detects silent mutation through the normal PR/CI path. It cannot stop someone who
+rewrites git history or disables CI, which remains a governance matter
+(`AI_INSTRUCTIONS.md`: history rewrites need owner approval).
+
+The placeholder check (`TBD`, `TODO`, `pending`, `?`, empty values) is a heuristic. It
+cannot judge whether concrete-looking text is an adequate specification; that is a
+review question.
 
 ## Required fields
 

@@ -1,0 +1,280 @@
+{
+  "window_a": {
+    "audit_version": "1",
+    "events": 68,
+    "events_by_rules_source": {
+      "nws_climatological_report_daily": 29,
+      "the_weather_company": 39
+    },
+    "events_not_exactly_one_yes": [],
+    "events_with_explanations": {},
+    "events_with_kalshi_value": 68,
+    "kalshi_value_minus_nws_cli": {
+      "0": 68
+    },
+    "kalshi_value_vs_nws_cli_exact_agreement": "68/68",
+    "mispredicted_brackets": 0,
+    "missing_dates": [],
+    "reproduced_from_kalshi_value": 68,
+    "reproduced_from_nws_cli": 68,
+    "rules_versions": {
+      "344383c4baa7b715": 6,
+      "3960877ff74c7a93": 114,
+      "56e56f74332a6d2a": 174,
+      "637c4ae4e305aa11": 6,
+      "bd3a26f0ffcaa031": 72,
+      "da2dce853b2f4e3e": 36
+    },
+    "unresolved_events": [],
+    "window": [
+      "2026-07-16",
+      "2026-09-21"
+    ]
+  },
+  "window_b": {
+    "audit_version": "1",
+    "events": 365,
+    "events_by_rules_source": {
+      "nws_climatological_report_daily": 365
+    },
+    "events_not_exactly_one_yes": [],
+    "events_with_explanations": {
+      "KXHIGHNY-25DEC01": [
+        "no Kalshi expiration_value recorded for this event"
+      ],
+      "KXHIGHNY-25DEC02": [
+        "no Kalshi expiration_value recorded for this event"
+      ],
+      "KXHIGHNY-25DEC03": [
+        "NWS CLI: nhigh: delayed determination: first final (40) lower than latest earlier report (41); latest final by 2025-12-04T16:00:00+00:00 used"
+      ],
+      "KXHIGHNY-25DEC04": [
+        "no Kalshi expiration_value recorded for this event"
+      ],
+      "KXHIGHNY-25DEC05": [
+        "no Kalshi expiration_value recorded for this event"
+      ],
+      "KXHIGHNY-25DEC06": [
+        "no Kalshi expiration_value recorded for this event"
+      ],
+      "KXHIGHNY-25DEC08": [
+        "no Kalshi expiration_value recorded for this event"
+      ],
+      "KXHIGHNY-25DEC09": [
+        "no Kalshi expiration_value recorded for this event"
+      ],
+      "KXHIGHNY-25DEC10": [
+        "no Kalshi expiration_value recorded for this event"
+      ],
+      "KXHIGHNY-25DEC11": [
+        "no Kalshi expiration_value recorded for this event"
+      ],
+      "KXHIGHNY-25DEC12": [
+        "no Kalshi expiration_value recorded for this event"
+      ],
+      "KXHIGHNY-25DEC13": [
+        "no Kalshi expiration_value recorded for this event"
+      ],
+      "KXHIGHNY-25DEC14": [
+        "no Kalshi expiration_value recorded for this event"
+      ],
+      "KXHIGHNY-25DEC15": [
+        "no Kalshi expiration_value recorded for this event"
+      ],
+      "KXHIGHNY-25DEC16": [
+        "no Kalshi expiration_value recorded for this event"
+      ],
+      "KXHIGHNY-25DEC17": [
+        "no Kalshi expiration_value recorded for this event"
+      ],
+      "KXHIGHNY-25DEC18": [
+        "no Kalshi expiration_value recorded for this event"
+      ],
+      "KXHIGHNY-25DEC19": [
+        "no Kalshi expiration_value recorded for this event"
+      ],
+      "KXHIGHNY-25DEC20": [
+        "no Kalshi expiration_value recorded for this event"
+      ],
+      "KXHIGHNY-25DEC21": [
+        "no Kalshi expiration_value recorded for this event"
+      ],
+      "KXHIGHNY-25DEC22": [
+        "no Kalshi expiration_value recorded for this event"
+      ],
+      "KXHIGHNY-25DEC23": [
+        "no Kalshi expiration_value recorded for this event"
+      ],
+      "KXHIGHNY-25DEC24": [
+        "no Kalshi expiration_value recorded for this event"
+      ],
+      "KXHIGHNY-25DEC25": [
+        "no Kalshi expiration_value recorded for this event"
+      ],
+      "KXHIGHNY-25DEC26": [
+        "no Kalshi expiration_value recorded for this event"
+      ],
+      "KXHIGHNY-25DEC27": [
+        "no Kalshi expiration_value recorded for this event"
+      ],
+      "KXHIGHNY-25DEC28": [
+        "no Kalshi expiration_value recorded for this event"
+      ],
+      "KXHIGHNY-25DEC29": [
+        "no Kalshi expiration_value recorded for this event"
+      ],
+      "KXHIGHNY-25DEC30": [
+        "no Kalshi expiration_value recorded for this event"
+      ],
+      "KXHIGHNY-25DEC31": [
+        "no Kalshi expiration_value recorded for this event"
+      ],
+      "KXHIGHNY-25FEB21": [
+        "NWS CLI: nhigh: first final report with data (1 earlier final report(s) without a maximum skipped)"
+      ],
+      "KXHIGHNY-25JUN02": [
+        "NWS CLI: no final CLI report with a maximum for this date"
+      ],
+      "KXHIGHNY-25JUN03": [
+        "NWS CLI: no final CLI report with a maximum for this date"
+      ],
+      "KXHIGHNY-25JUN18": [
+        "NWS CLI: no final CLI report with a maximum for this date"
+      ],
+      "KXHIGHNY-25NOV01": [
+        "no Kalshi expiration_value recorded for this event"
+      ],
+      "KXHIGHNY-25NOV02": [
+        "no Kalshi expiration_value recorded for this event"
+      ],
+      "KXHIGHNY-25NOV03": [
+        "no Kalshi expiration_value recorded for this event"
+      ],
+      "KXHIGHNY-25NOV04": [
+        "no Kalshi expiration_value recorded for this event"
+      ],
+      "KXHIGHNY-25NOV05": [
+        "no Kalshi expiration_value recorded for this event"
+      ],
+      "KXHIGHNY-25NOV07": [
+        "no Kalshi expiration_value recorded for this event"
+      ],
+      "KXHIGHNY-25NOV08": [
+        "no Kalshi expiration_value recorded for this event"
+      ],
+      "KXHIGHNY-25NOV09": [
+        "no Kalshi expiration_value recorded for this event"
+      ],
+      "KXHIGHNY-25NOV10": [
+        "no Kalshi expiration_value recorded for this event"
+      ],
+      "KXHIGHNY-25NOV11": [
+        "no Kalshi expiration_value recorded for this event"
+      ],
+      "KXHIGHNY-25NOV12": [
+        "no Kalshi expiration_value recorded for this event"
+      ],
+      "KXHIGHNY-25NOV13": [
+        "NWS CLI: no final CLI report with a maximum for this date"
+      ],
+      "KXHIGHNY-25NOV14": [
+        "no Kalshi expiration_value recorded for this event"
+      ],
+      "KXHIGHNY-25NOV15": [
+        "no Kalshi expiration_value recorded for this event"
+      ],
+      "KXHIGHNY-25NOV16": [
+        "no Kalshi expiration_value recorded for this event"
+      ],
+      "KXHIGHNY-25NOV17": [
+        "no Kalshi expiration_value recorded for this event"
+      ],
+      "KXHIGHNY-25NOV18": [
+        "no Kalshi expiration_value recorded for this event"
+      ],
+      "KXHIGHNY-25NOV19": [
+        "no Kalshi expiration_value recorded for this event"
+      ],
+      "KXHIGHNY-25NOV20": [
+        "no Kalshi expiration_value recorded for this event"
+      ],
+      "KXHIGHNY-25NOV21": [
+        "no Kalshi expiration_value recorded for this event"
+      ],
+      "KXHIGHNY-25NOV22": [
+        "no Kalshi expiration_value recorded for this event"
+      ],
+      "KXHIGHNY-25NOV23": [
+        "no Kalshi expiration_value recorded for this event"
+      ],
+      "KXHIGHNY-25NOV24": [
+        "no Kalshi expiration_value recorded for this event"
+      ],
+      "KXHIGHNY-25NOV26": [
+        "no Kalshi expiration_value recorded for this event"
+      ],
+      "KXHIGHNY-25NOV28": [
+        "no Kalshi expiration_value recorded for this event"
+      ],
+      "KXHIGHNY-25NOV29": [
+        "no Kalshi expiration_value recorded for this event"
+      ],
+      "KXHIGHNY-25NOV30": [
+        "no Kalshi expiration_value recorded for this event"
+      ],
+      "KXHIGHNY-25OCT31": [
+        "no Kalshi expiration_value recorded for this event"
+      ]
+    },
+    "events_with_kalshi_value": 309,
+    "kalshi_value_minus_nws_cli": {
+      "0": 305
+    },
+    "kalshi_value_vs_nws_cli_exact_agreement": "305/305",
+    "mispredicted_brackets": 0,
+    "missing_dates": [],
+    "reproduced_from_kalshi_value": 309,
+    "reproduced_from_nws_cli": 361,
+    "rules_versions": {
+      "56e56f74332a6d2a": 1812,
+      "a6ce4cac04b81266": 378
+    },
+    "unresolved_events": [
+      "KXHIGHNY-25JUN02",
+      "KXHIGHNY-25JUN03",
+      "KXHIGHNY-25JUN18",
+      "KXHIGHNY-25NOV13"
+    ],
+    "window": [
+      "2025-01-01",
+      "2025-12-31"
+    ]
+  },
+  "window_c": {
+    "audit_version": "1",
+    "events": 366,
+    "events_by_rules_source": {
+      "nws_climatological_report_daily": 366
+    },
+    "events_not_exactly_one_yes": [],
+    "events_with_explanations": {},
+    "events_with_kalshi_value": 366,
+    "kalshi_value_minus_nws_cli": {
+      "0": 366
+    },
+    "kalshi_value_vs_nws_cli_exact_agreement": "366/366",
+    "mispredicted_brackets": 0,
+    "missing_dates": [],
+    "reproduced_from_kalshi_value": 366,
+    "reproduced_from_nws_cli": 366,
+    "rules_versions": {
+      "1fd611f12a3bba48": 1482,
+      "a6ce4cac04b81266": 714
+    },
+    "unresolved_events": [],
+    "window": [
+      "2024-01-01",
+      "2024-12-31"
+    ]
+  }
+}

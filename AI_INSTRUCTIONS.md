@@ -44,6 +44,7 @@ authorize something, that thing is not authorized.
 | what is authorized now; gate status | `docs/EXECUTION_PLAN.md` |
 | current state, open items, next action | `HANDOFF.md` |
 | data sources, collectors, freshness, provenance | `docs/DATA_PROVENANCE.md` |
+| how KXHIGHNY settles; settlement labels | `docs/SETTLEMENT.md` |
 | research design, backtests, statistics, costs, LLM use | `docs/RESEARCH_PRINCIPLES.md` |
 | experiments (specs, results, registry) | `experiments/README.md` |
 | secrets, credentials, accounts | `docs/SECURITY.md` |

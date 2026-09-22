@@ -14,10 +14,10 @@ available (`docs/DATA_PROVENANCE.md` §1).
 
 | Priority | Source | Mechanism | Cost / terms | Why |
 |---|---|---|---|---|
-| **Now (gate 2)** | Kalshi series/market rules (`settlement_sources`, `contract_url`, `contract_terms_url`, `rules_primary/secondary`), plus the contract PDFs | official API (already in our snapshots) plus PDF download | free, public | Settlement evidence. Rules can change, so keep versioned snapshots and diff them. |
-| **Now (gate 2)** | The Weather Company page named in the KXHIGHNY rules (`weather.com/kalshi`) | HTTP, terms UNREVIEWED | UNREVIEWED | It is the stated settlement source. Its terms must be reviewed before any automated access. |
-| **Now (gate 2)** | NWS Daily Climate Report (CLI) for Central Park: `api.weather.gov/products/types/CLI/locations/NYC`, then `/products/{id}` (`productText`) | official API | free, public domain | The official observation. Several issuances a day, including corrections, so keep every one. |
-| Next | Iowa Environmental Mesonet AFOS archive (`retrieve.py?pil=CLINYC`) | public archive | free academic service; be polite (≈1 request/s) | Historical CLI back to about 2008, for backfill and preliminary-vs-final studies. |
+| **Implemented** | Kalshi series/market rules (`settlement_sources`, `contract_url`, `contract_terms_url`, `rules_primary/secondary`), plus the contract PDFs | official API (already in our snapshots) plus PDF download | free, public | Settlement evidence. Rules can change, so keep versioned snapshots and diff them. |
+| **Blocked** | The Weather Company page named in the KXHIGHNY rules (`weather.com/kalshi`) | none | Terms of Use (reviewed 2026-09-22) prohibit automated access without written permission | Named in the rules since 2026-08-14. Not collected; see `docs/SETTLEMENT.md` §6. |
+| **Implemented** | NWS Daily Climate Report (CLI) for Central Park: `api.weather.gov/products/types/CLI/locations/NYC`, then `/products/{id}` (`productText`) | official API | free, public domain | The official observation. Several issuances a day, including corrections, so keep every one. |
+| **Implemented** | Iowa Environmental Mesonet AFOS archive (`retrieve.py?pil=CLINYC`) | public archive | free academic service; be polite (≈1 request/s) | Historical CLI back to about 2008, for backfill and preliminary-vs-final studies. |
 | Later (macro) | FRED/ALFRED | official API | free API key (needs owner approval to create); attribution required | `realtime_start`/`realtime_end` vintages are what make macro backtests point-in-time. |
 | Later (filings) | SEC EDGAR (`data.sec.gov` submissions/companyfacts, Latest Filings Atom) | official API + feed | free; ≤10 requests/s; descriptive User-Agent with contact | Primary filings with exact acceptance times. |
 | Later | Agency press-release RSS (BLS, Fed, SEC) | feed | free | Release timing, captured via conditional GET. |

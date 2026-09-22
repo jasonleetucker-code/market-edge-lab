@@ -1,0 +1,155 @@
+APPENDIX A – CONTRACT TERMS AND CONDITIONS
+Official Product Name: 
+“Will the <maximum/minimum/average> temperature in
+ 
+<area> be <above/below/exactly/at least/between> <count> <measurement units>
+ 
+in <time period>?”
+Rulebook: 
+GLOBALTEMPERATURE
+GLOBALTEMPERATURE
+Scope:
+ These rules shall apply to this contract.
+Underlying:
+ The Underlying for this Contract is the <maximum/minimum/average>
+ 
+temperature in <area> in <time period>. Revisions to the Underlying made after Expiration
+ 
+will not be accounted for in determining the Expiration Value.
+Source Agency:
+ The Source Agencies are, in hierarchical order, 
+National Weather Service,
+ 
+the national weather service for <area> (e.g. Australian Bureau of Meteorology, the Met
+ 
+Office, etc.).
+ 
+Type:
+ The type of Contract is an Event Contract.
+Issuance:
+ After the initial Contract, Contract iterations will be listed on an as-needed basis at
+ 
+the discretion of the Exchange and corresponding to the risk management needs of Members. 
+<above/below/exactly/at least/between>
+: <above/below/exactly/at least/between> refers
+ 
+to comparison operators. "Above" means greater than (>), "below" means less than (<),
+ 
+"exactly" means equal to (=) when rounded to one decimal place, "at least" means greater
+ 
+than or equal to (≥), and "between" means within an inclusive range (≥ lower bound and ≤
+ 
+upper bound).
+<count>: 
+<count> refers to a numerical value specified by the Exchange. 
+<measurement units>
+: <measurement units> refers to the relevant units of temperature
+ 
+measurement specified by the Exchange. These may include, but are not limited to
+ 
+Celsius/Centigrade, Fahrenheit, and/or Kelvin. Where relevant, such units may be defined or
+ 
+rounded to one decimal place. 
+<area>
+: <area> refers to a geographic location specified by the Exchange. It may take the
+ 
+form of a specific geographic location, geographic location(s) in the singular or the plural,
+ 
+geographic location(s) by distinguishing characteristics, geographic location(s) that are an
+ 
+element of a set of geographic location(s), or take the forms “Any” or “None”. Unless
+ 
+otherwise stated, <area> will be defined by the data received from the primary official
+ 
+weather measurement station(s) for that location as designated by the National Weather
+ 
+Service, or as otherwise specified by the Exchange. 
+<time period>
+: <time period> refers to a specific range of time as specified by the
+ 
+Exchange. This may be defined by exact dates or times (e.g., “between January 1, 2026, and
+ 
+December 31, 2026”), relative markers (e.g., “before July 1, 2027”), an event (e.g., “the
+ 
+duration of the address”), or broader intervals (e.g., “Q1–Q2 2027,” “January–March 2026”).
+ 
+“Between” is inclusive of both endpoints, while “before” and “after” exclude the specified date
+ 
+unless stated otherwise. <time period> may also refer to “Any” or “None”, to multiple dates
+ 
+(even if non-consecutive), or to a singular and discrete date or time. 
+<maximum/minimum/avearage>: 
+<maximum/minimum/average> refers to relative
+ 
+temperature values specified by the Exchange. When <maximum/minimum/average> is
+ 
+“maximum”, it refers to the highest officially reported temperature in <time period>, when
+ 
+“minimum” to the lowest officially reported temperature in <time period>, and when
+ 
+“average”, the mean officially reported temperature in <time period>. 
+Payout Criterion:
+ The Payout Criterion for the Contract encompasses the Expiration Values
+ 
+that the <maximum/minimum/average> temperature in <area> is <above/below/exactly/at
+ 
+least/between> <count> <measurement units>.  
+Additional clarification(s): 
+If no data is available for <time period> by the Expiration Date, all strikes shall resolve to
+ 
+the last fair price as determined in the sole discretion of the Exchange.
+If multiple weather stations exist within <area>, the Exchange may specify the station in
+ 
+question. Where not specified, the designated “official” or “primary” station for that
+ 
+location as determined by the Source Agencies shall be used.
+Only the first official non-preliminary report published by the Source Agencies that
+ 
+includes the relevant data will be used for resolution. Revisions after the Expiration Date
+ 
+are not included in the Payout Criterion. Where necessary for the avoidance of confusion,
+ 
+the Exchange may concretely specify which report(s) are considered for market
+ 
+resolution. 
+Contract resolution is based on the full precision reported by the Source Agency.
+ 
+Rounding by media outlets, secondary reporting, or third-party summaries does not affect
+ 
+resolution.
+Minimum Tick:
+ The Minimum Tick size for the Contract shall be $0.01.
+Position Accountability Level:
+ The Position Accountability Level for the Contract shall be
+ 
+$25,000 per strike, per Member.
+Last Trading Date:
+ The Last Trading Date of the Contract will be the final day of <time
+ 
+period>. The Last Trading Time will be one minute prior to the final time in <time period>. 
+Settlement Date:
+ The Settlement Date of the Contract shall be no later than the day after
+ 
+the Expiration Date, unless the Market Outcome is under review pursuant to Rule 7.1.
+Expiration Date:
+ The latest Expiration Date of the Contract shall be three months after the
+ 
+final day of <time period>. If an event described in the Payout Criterion occurs, expiration will
+ 
+be moved to an earlier date and time in accordance with Rule 7.2.
+Expiration time:
+ The Expiration time of the Contract shall be 10:00 AM ET.
+Settlement Value:
+ The Settlement Value for this Contract is $1.00.
+Expiration Value:
+ The Expiration Value is the value of the Underlying as documented by the
+ 
+Source Agency on the Expiration Date at the Expiration time. 
+Contingencies:
+ Before Settlement, Kalshi may, at its sole discretion, initiate the Market
+ 
+Outcome Review Process pursuant to Rule 7.1 of the Rulebook. If an Expiration Value cannot
+ 
+be determined on the Expiration Date, Kalshi has the right to determine payouts pursuant to
+ 
+Rule 7.1 in the Rulebook. 

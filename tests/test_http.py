@@ -26,11 +26,13 @@ def test_transient_errors_retry_with_backoff():
     slept: list[float] = []
     opener = ScriptedOpener(http_error(503), URLError("reset"), {"ok": True})
     payload, result = fetch_json_result(
-        "https://example.test/a", opener=opener, retries=2, backoff=0.5, sleep=_no_sleep(slept)
+        "https://example.test/a", opener=opener, retries=2, backoff=0.5, sleep=_no_sleep(slept),
+        jitter=lambda: 0.0,
     )
     assert payload == {"ok": True}
     assert result.attempts == 3
     assert slept == [0.5, 1.0]
+    assert result.retry_reasons == ("http_503", "URLError")
 
 
 def test_retry_after_is_honored_and_capped():
@@ -79,3 +81,29 @@ def test_low_level_transport_errors_retry_and_are_wrapped():
     with pytest.raises(HttpFetchError) as info:
         fetch("https://example.test/a", opener=opener, retries=1, sleep=lambda s: None)
     assert info.value.attempts == 2
+
+
+def test_backoff_jitter_is_bounded():
+    slept: list[float] = []
+    opener = ScriptedOpener(http_error(429), {"ok": True})
+    fetch("https://example.test/a", opener=opener, backoff=1.0, sleep=_no_sleep(slept), jitter=lambda: 1.0)
+    assert slept == [1.5]  # at most +50%
+
+
+def test_pacer_enforces_min_interval():
+    from edge_lab.http import Pacer
+
+    now = [0.0]
+    slept: list[float] = []
+
+    def sleep(seconds):
+        slept.append(seconds)
+        now[0] += seconds
+
+    pacer = Pacer(0.6, clock=lambda: now[0], sleep=sleep)
+    pacer.wait()  # first call never waits
+    now[0] += 0.1
+    pacer.wait()
+    now[0] += 1.0
+    pacer.wait()  # enough time passed
+    assert slept == [pytest.approx(0.5)]

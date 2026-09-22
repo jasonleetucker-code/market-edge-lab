@@ -24,8 +24,9 @@ model = "TBD: start with a simple calibrated mapping from NWS forecast high to a
 data_sources = [
   "kalshi_public: series, markets, events, order books (snapshots)",
   "nws_api: 12h/hourly/grid forecasts for the Central Park reference point (snapshots)",
-  "SETTLEMENT (gate 2, unresolved): live rules captured 2026-09-22 name The Weather Company (weather.com/kalshi) for station CLINYC",
-  "nws_cli_central_park (planned): official observed maximum, for comparison against the settlement value",
+  "kalshi_settlement: settled/historical markets (rules text, strikes, result, expiration_value) and contract documents",
+  "Settlement label: Kalshi expiration_value; NWS CLI final (contract report-selection rules) as validated proxy, 739/739 agreement (gate 2 report)",
+  "nws_cli_central_park + iem_afos_clinyc: official observed maximum, every issuance",
 ]
 
 features = [
@@ -54,11 +55,11 @@ risk_constraints = [
 limitations = [
   "Our own snapshot history starts 2026-09-22; historical order books before then are not available to us",
   "Small sample: one series, around 6-12 brackets per day, so effective independent observations are about one per day",
-  "Settlement source (The Weather Company) differs from the NWS source that web references assumed; the relationship is unmeasured",
+  "Rules name The Weather Company from 2026-08-14 while certified terms name NWS; Kalshi values matched NWS on 39/39 TWC-era days but TWC data itself cannot be checked (terms prohibit automated access)",
 ]
 
 gates_required = [
-  "Gate 2: settlement validation (source, window, timezone, rounding, revisions, voids; reproduce 30+ settled markets)",
+  "Gate 2: settlement validation — PASSED 2026-09-22 (gate2/REPORT.md)",
   "Gate 3: point-in-time historical dataset",
 ]
 

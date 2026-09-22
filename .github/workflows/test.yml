@@ -11,6 +11,7 @@ permissions:
 jobs:
   pytest:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     strategy:
       fail-fast: false
       matrix:
@@ -18,6 +19,9 @@ jobs:
         python-version: ["3.11", "3.12"]
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Full history so preregistration baselines can be compared with the base.
+          fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
@@ -28,3 +32,20 @@ jobs:
         run: python -m pytest
       - name: Validate experiment registry
         run: edge-lab experiments validate
+      - name: Preregistration baselines unchanged
+        # A committed preregistration.json may be added, never modified or deleted.
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_REF: ${{ github.base_ref }}
+          BEFORE_SHA: ${{ github.event.before }}
+        run: |
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            base="origin/$BASE_REF"
+          else
+            base="$BEFORE_SHA"
+          fi
+          if git cat-file -e "${base}^{commit}" 2>/dev/null; then
+            edge-lab experiments check-frozen --base "$base"
+          else
+            echo "no comparable base commit ($base); skipping"
+          fi
