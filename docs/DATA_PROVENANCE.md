@@ -125,7 +125,24 @@ Every layer points to the hash of the layer it came from. An LLM summary is not 
 It is an interpretation of evidence. Retrieved text is untrusted data, and it is passed to
 models as delimited data with no tool authority. See `docs/NEWS_WEB_INGESTION.md`.
 
-## 6. Adding a source
+## 6. Historical archives committed as fixtures (one-time backfills)
+
+Some evidence comes from one-time, manually run, paced backfills rather than from
+`edge-lab collect`. They are not scheduled jobs.
+
+| Source id | What | Where | Identity |
+|---|---|---|---|
+| `iem_afos_clinyc` | NWS CLI Central Park, exact archive bytes | `tests/fixtures/gate2/`, `tests/fixtures/gate3/iem_clinyc_*.txt.gz` | request URL + response SHA-256 in `tests/fixtures/gate3/fetch_manifest.json` (gate 3) and the Gate 2 report |
+| `iem_afos_pfmokx` | NWS OKX Point Forecast Matrices, Central Park block, **exact-substring extracts** (ADR 0011) | `tests/fixtures/gate3/pfm_extracts_YYYY.jsonl.gz` | per product: SHA-256 of the full product; per month: request URL, status, bytes, response SHA-256 (`fetch_manifest.json`) |
+| `kalshi_settlement` | settled KXHIGHNY/HIGHNY markets as returned | `tests/fixtures/gate3/kalshi_markets_all_2026-09-22.json.gz` | file SHA-256 in the dataset manifest |
+
+Point-in-time rule for forecasts: the **issuance** time is the WMO header time (checked
+against the product's local issuance line). The **availability** time used by EXP-001 is
+issuance + 30 min (ADR 0010). Derived datasets record both, plus the SHA-256 of every input
+file (`experiments/EXP-001-kxhighny-nws-vs-market/gate3/dataset_manifest.json`), and CI
+rebuilds them byte for byte.
+
+## 7. Adding a source
 
 1. Choose the highest access tier available. Read the terms and write them in `license_notes`.
 2. Add a `SourceSpec` to `src/edge_lab/sources.py` with `status=PLANNED` and a `max_age`

@@ -113,6 +113,8 @@ def resolve(market: Mapping[str, Any], value: Any) -> Resolution:
     floor = _strike(market.get("floor_strike"))
     cap = _strike(market.get("cap_strike"))
 
+    if strike_type not in ("greater", "less", "between"):
+        return Resolution(Outcome.UNKNOWN, f"unrecognized strike_type {strike_type!r}")
     if strike_type != reading.comparison:
         return Resolution(
             Outcome.UNKNOWN,
