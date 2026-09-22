@@ -1,7 +1,8 @@
 """EXP-001 Gate 4 baseline: model math, references, selection rule, PIT, test-split guards.
 
-Every test here uses SYNTHETIC data, except `test_dataset_constant_matches_frozen_pin`,
-which reads only the preregistration file.
+The unit tests use SYNTHETIC data only (`test_dataset_constant_matches_frozen_pin` reads
+only the preregistration file). The `test_gate4_*` tests at the end were added after the
+single Gate 4 run: they recompute the committed results from committed code and data.
 """
 
 import csv
@@ -306,3 +307,69 @@ def test_stage_a_refuses_overlapping_or_wrong_windows():
         b.compute_stage_a(fit, [day("2022-06-01", split="test")], selected_variant="V1", dataset_sha="x")
     with pytest.raises(ValueError):
         b.compute_stage_a(fit, [day("2025-01-01", split="validation")], selected_variant="V1", dataset_sha="x")
+
+
+# ---------------------------------------------------------------------------
+# Reproducibility of the committed Gate 4 results (real data; added after the single run)
+# ---------------------------------------------------------------------------
+GATE4 = EXP / "gate4"
+DATASET = EXP / "gate3" / "dataset.csv"
+
+
+def _same(recomputed, committed, where="$"):
+    """Exact equality for everything except floats, which must agree to 1e-12 relative.
+
+    The committed files were written on Windows; math.log and math.erf come from the
+    platform C library, which may differ in the last ulp elsewhere. Every decision field
+    (selected variant, conditions, verdict, counts) is compared exactly.
+    """
+    assert type(recomputed) is type(committed), f"{where}: {type(recomputed)} vs {type(committed)}"
+    if isinstance(committed, dict):
+        assert recomputed.keys() == committed.keys(), f"{where}: keys differ"
+        for key in committed:
+            _same(recomputed[key], committed[key], f"{where}.{key}")
+    elif isinstance(committed, list):
+        assert len(recomputed) == len(committed), f"{where}: lengths differ"
+        for i, (r, c) in enumerate(zip(recomputed, committed)):
+            _same(r, c, f"{where}[{i}]")
+    elif isinstance(committed, float):
+        assert math.isclose(recomputed, committed, rel_tol=1e-12, abs_tol=1e-15), f"{where}: {recomputed!r} != {committed!r}"
+    else:
+        assert recomputed == committed, f"{where}: {recomputed!r} != {committed!r}"
+
+
+def _committed(name):
+    payload = json.loads((GATE4 / name).read_text(encoding="utf-8"))
+    return payload, payload.pop("provenance")
+
+
+def test_gate4_results_reproduce_from_committed_code_and_data():
+    selection, _ = _committed(b.VALIDATION_FILE)
+    stage_a, _ = _committed(b.STAGE_A_FILE)
+    sha = b.dataset_sha256(b.dataset_text(DATASET))
+    assert sha == b.DATASET_SHA256
+    recomputed_selection = b.compute_validation(
+        b.load_split(DATASET, "train"), b.load_split(DATASET, "validation"), dataset_sha=sha)
+    _same(recomputed_selection, selection)
+    assert recomputed_selection["selected_variant"] == selection["selected_variant"]
+    recomputed_stage_a = b.compute_stage_a(
+        b.load_fit_window(DATASET, b.FIT_SPLITS), b.load_test_for_reproduction(DATASET, GATE4),
+        selected_variant=recomputed_selection["selected_variant"], dataset_sha=sha)
+    _same(recomputed_stage_a, stage_a)
+    assert recomputed_stage_a["verdict"] == stage_a["verdict"]
+
+
+def test_gate4_report_is_rendered_from_committed_results():
+    selection = json.loads((GATE4 / b.VALIDATION_FILE).read_text(encoding="utf-8"))
+    stage_a = json.loads((GATE4 / b.STAGE_A_FILE).read_text(encoding="utf-8"))
+    assert (GATE4 / "REPORT.md").read_text(encoding="utf-8") == _script().render_report(selection, stage_a)
+
+
+def test_gate4_single_opening_record_is_consistent_and_guard_holds():
+    _, selection_prov = _committed(b.VALIDATION_FILE)
+    _, stage_a_prov = _committed(b.STAGE_A_FILE)
+    opened = json.loads((GATE4 / b.TEST_OPENED_FILE).read_text(encoding="utf-8"))
+    assert opened["code_commit"] == stage_a_prov["code_commit"] != selection_prov["code_commit"]
+    assert selection_prov["run_at_utc"] < opened["opened_at_utc"]
+    with pytest.raises(b.TestSplitRefused):
+        b.open_test_once(DATASET, GATE4, opened_by={})  # a result exists: never a second opening
