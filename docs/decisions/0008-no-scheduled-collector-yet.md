@@ -1,6 +1,6 @@
 # 0008 — No scheduled (cron) collector yet
 
-Status: Accepted (2026-09-22)
+Status: Superseded by 0012 (2026-09-22). Originally accepted 2026-09-22.
 
 **Problem.** Building history needs regular collection. The NWS API keeps only the last few
 days of CLI products, and live order books are only observable at the time.
