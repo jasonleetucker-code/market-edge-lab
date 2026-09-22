@@ -39,7 +39,18 @@ OUT = ROOT / "experiments" / "EXP-001-kxhighny-nws-vs-market" / "gate3"
 
 
 def _sha(path: Path) -> str:
-    return hashlib.sha256(path.read_bytes()).hexdigest()
+    """SHA-256 of an input in its canonical evidence representation.
+
+    Compressed/archive inputs are byte evidence and are hashed exactly as stored.
+    Plain UTF-8 text inputs are newline-normalized before hashing so a Git checkout
+    using CRLF on Windows has the same identity as the canonical LF repository
+    content.
+    """
+    data = path.read_bytes()
+    if path.suffix != ".gz":
+        text = data.decode("utf-8").replace("\r\n", "\n").replace("\r", "\n")
+        data = text.encode("utf-8")
+    return hashlib.sha256(data).hexdigest()
 
 
 def input_files() -> list[Path]:
