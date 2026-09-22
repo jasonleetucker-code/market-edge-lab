@@ -5,8 +5,8 @@
 - PFMOKX (NWS point forecasts), month by month, 2016-12-01 .. 2026-09-22. Full products
   are large (~12 MB/month), so each product is hashed (SHA-256 of its exact text) and only
   an exact-substring extract of the Central Park lines is kept (docs/decisions/0011).
-- CLINYC (Daily Climate Report) for 2016-12-31 .. 2024-01-03, exact archive bytes
-  (2024 onwards is already a Gate 2 fixture).
+- CLINYC (Daily Climate Report) for 2016-12-31 .. 2024-01-03 and 2026-01-01 .. 2026-07-16,
+  exact archive bytes (the rest is already a Gate 2 fixture).
 
 Every request URL, HTTP status, byte length and SHA-256 goes into fetch_manifest.json.
 Requests are paced at >= 1 s (IEM's stated courtesy limit). Not a scheduled job.
@@ -44,6 +44,26 @@ def months(start: date, end: date):
         y, m = nxt.year, nxt.month
 
 
+# CLINYC ranges not already committed as Gate 2 fixtures (each overlaps its neighbours by
+# a few days so late reports for Dec 31 are captured).
+CLI_RANGES = [
+    ("2017", date(2016, 12, 31), date(2018, 1, 3)),
+    *[(str(y), date(y, 1, 1), date(y + 1, 1, 3)) for y in range(2018, 2024)],
+    ("2026H1", date(2026, 1, 1), date(2026, 7, 16)),
+]
+
+
+def consolidate(out: Path) -> None:
+    """raw_parts/pfm_YYYYMM.jsonl -> pfm_extracts_YYYY.jsonl.gz (archive order, gzip mtime=0)."""
+    by_year: dict[str, list[str]] = {}
+    for part in sorted((out / "raw_parts").glob("pfm_*.jsonl")):
+        lines = [ln for ln in part.read_text().splitlines() if ln.strip()]
+        by_year.setdefault(part.stem[4:8], []).extend(lines)
+    for year, lines in sorted(by_year.items()):
+        with gzip.GzipFile(out / f"pfm_extracts_{year}.jsonl.gz", "wb", mtime=0) as fh:
+            fh.write(("\n".join(lines) + "\n").encode("utf-8"))
+
+
 def get(u: str, ua: str):
     result = fetch(u, headers={"User-Agent": ua, "Accept": "text/plain"}, timeout=120, retries=3, pacer=PACER)
     return result
@@ -62,7 +82,6 @@ def main() -> int:
     manifest = json.loads(manifest_path.read_text()) if manifest_path.exists() else {"requests": []}
     done = {r["url"] for r in manifest["requests"]}
 
-    by_year: dict[int, list[dict]] = {}
     for start, end in months(date.fromisoformat(args.pfm_from), date.fromisoformat(args.pfm_to)):
         u = url("PFMOKX", start, end)
         part = out / "raw_parts" / f"pfm_{start:%Y%m}.jsonl"
@@ -89,12 +108,9 @@ def main() -> int:
         manifest_path.write_text(json.dumps(manifest, indent=1, sort_keys=True) + "\n")
         print(f"{start:%Y-%m}: {len(products)} products, {len(r.body)} bytes", flush=True)
 
-    for year in range(2016, 2024):
-        start, end = (date(2016, 12, 31) if year == 2016 else date(year, 1, 1)), date(year + 1, 1, 3)
-        if year == 2016:
-            continue
-        u = url("CLINYC", date(year - 1, 12, 31) if year == 2017 else date(year, 1, 1), end)
-        target = out / f"iem_clinyc_{year}.txt.gz"
+    for name, start, end in CLI_RANGES:
+        u = url("CLINYC", start, end)
+        target = out / f"iem_clinyc_{name}.txt.gz"
         if u in done and target.exists():
             continue
         r = get(u, args.user_agent)
@@ -106,7 +122,8 @@ def main() -> int:
             "retry_reasons": list(r.retry_reasons),
         })
         manifest_path.write_text(json.dumps(manifest, indent=1, sort_keys=True) + "\n")
-        print(f"CLI {year}: {len(r.body)} bytes", flush=True)
+        print(f"CLI {name}: {len(r.body)} bytes", flush=True)
+    consolidate(out)
     return 0
 
 

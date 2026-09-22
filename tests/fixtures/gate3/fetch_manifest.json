@@ -1,0 +1,1130 @@
+{
+ "requests": [
+  {
+   "bytes": 3855169,
+   "fetched_at_utc": "2026-09-22T19:33:19.462563+00:00",
+   "http_status": 200,
+   "retry_reasons": [],
+   "sha256": "bbabe681af286ff8318ce8af507c80eaa9e3c8d13294283c5f6e555edffd4f9a",
+   "url": "https://mesonet.agron.iastate.edu/cgi-bin/afos/retrieve.py?pil=CLINYC&sdate=2016-12-31&edate=2018-01-03&fmt=text&limit=9999"
+  },
+  {
+   "bytes": 4065035,
+   "fetched_at_utc": "2026-09-22T19:33:21.334914+00:00",
+   "http_status": 200,
+   "retry_reasons": [],
+   "sha256": "e36eeca73eaedc48b7a1cf2cbea2764e925beb1302bdfc5e56f679076b61f16b",
+   "url": "https://mesonet.agron.iastate.edu/cgi-bin/afos/retrieve.py?pil=CLINYC&sdate=2018-01-01&edate=2019-01-03&fmt=text&limit=9999"
+  },
+  {
+   "bytes": 3952693,
+   "fetched_at_utc": "2026-09-22T19:33:23.272479+00:00",
+   "http_status": 200,
+   "retry_reasons": [],
+   "sha256": "70e36778c1205d5cdee1c121f7edb1f562415fa55c8e042a13aaf85363ee7b64",
+   "url": "https://mesonet.agron.iastate.edu/cgi-bin/afos/retrieve.py?pil=CLINYC&sdate=2019-01-01&edate=2020-01-03&fmt=text&limit=9999"
+  },
+  {
+   "bytes": 3974703,
+   "fetched_at_utc": "2026-09-22T19:33:25.109082+00:00",
+   "http_status": 200,
+   "retry_reasons": [],
+   "sha256": "1fa3885a67a3ef46ba87e2dda8fe25544ab541c8c5c17d87da8257f844f4ef8b",
+   "url": "https://mesonet.agron.iastate.edu/cgi-bin/afos/retrieve.py?pil=CLINYC&sdate=2020-01-01&edate=2021-01-03&fmt=text&limit=9999"
+  },
+  {
+   "bytes": 3179503,
+   "fetched_at_utc": "2026-09-22T19:33:26.731325+00:00",
+   "http_status": 200,
+   "retry_reasons": [],
+   "sha256": "20d9ee1fe93abf7515cd7cd9a1c7a4984b332a272dfe1efd1bd2ae6e5ff98f0a",
+   "url": "https://mesonet.agron.iastate.edu/cgi-bin/afos/retrieve.py?pil=CLINYC&sdate=2021-01-01&edate=2022-01-03&fmt=text&limit=9999"
+  },
+  {
+   "bytes": 3179605,
+   "fetched_at_utc": "2026-09-22T19:33:28.383656+00:00",
+   "http_status": 200,
+   "retry_reasons": [],
+   "sha256": "4599f47cecdc4afbb7e8c5de277a92a1b3df059d973c467e0417ab0e68bf32c5",
+   "url": "https://mesonet.agron.iastate.edu/cgi-bin/afos/retrieve.py?pil=CLINYC&sdate=2022-01-01&edate=2023-01-03&fmt=text&limit=9999"
+  },
+  {
+   "bytes": 3144223,
+   "fetched_at_utc": "2026-09-22T19:33:30.020456+00:00",
+   "http_status": 200,
+   "retry_reasons": [],
+   "sha256": "434ca8b9a14d83d18d7ec7ccdd3daf5221e447458f826831b3bbddb7ba5277c8",
+   "url": "https://mesonet.agron.iastate.edu/cgi-bin/afos/retrieve.py?pil=CLINYC&sdate=2023-01-01&edate=2024-01-03&fmt=text&limit=9999"
+  },
+  {
+   "bytes": 1685659,
+   "fetched_at_utc": "2026-09-22T21:20:26.813604+00:00",
+   "http_status": 200,
+   "retry_reasons": [],
+   "sha256": "b0f6715c0617e2983715ded221a0e49b601d3720fd85abfcb425a53e8dd55726",
+   "url": "https://mesonet.agron.iastate.edu/cgi-bin/afos/retrieve.py?pil=CLINYC&sdate=2026-01-01&edate=2026-07-16&fmt=text&limit=9999"
+  },
+  {
+   "bytes": 12180854,
+   "fetched_at_utc": "2026-09-22T21:21:51.760318+00:00",
+   "http_status": 200,
+   "products": 331,
+   "retry_reasons": [],
+   "sha256": "08d80d87bf11676d319fcfd05fee764555103ee149faf846cfb935ac70d5d667",
+   "url": "https://mesonet.agron.iastate.edu/cgi-bin/afos/retrieve.py?pil=PFMOKX&sdate=2016-12-01&edate=2017-01-01&fmt=text&limit=9999"
+  },
+  {
+   "bytes": 11476705,
+   "fetched_at_utc": "2026-09-22T21:21:55.662516+00:00",
+   "http_status": 200,
+   "products": 328,
+   "retry_reasons": [],
+   "sha256": "e10acf752c41a998520d7b2d3f5fa4b32003cf3a07e81b14454a820728f82828",
+   "url": "https://mesonet.agron.iastate.edu/cgi-bin/afos/retrieve.py?pil=PFMOKX&sdate=2017-01-01&edate=2017-02-01&fmt=text&limit=9999"
+  },
+  {
+   "bytes": 11168296,
+   "fetched_at_utc": "2026-09-22T21:21:59.479680+00:00",
+   "http_status": 200,
+   "products": 307,
+   "retry_reasons": [],
+   "sha256": "16722aeeb0e8de46342929311ead051741298ab2e0178cfb99f5e90834bfac8a",
+   "url": "https://mesonet.agron.iastate.edu/cgi-bin/afos/retrieve.py?pil=PFMOKX&sdate=2017-02-01&edate=2017-03-01&fmt=text&limit=9999"
+  },
+  {
+   "bytes": 11916360,
+   "fetched_at_utc": "2026-09-22T21:22:03.419811+00:00",
+   "http_status": 200,
+   "products": 328,
+   "retry_reasons": [],
+   "sha256": "86cf63b9f02ac087a56b342689fdae8f625e31ad3cb6cfe6fadde80d2dbb76fe",
+   "url": "https://mesonet.agron.iastate.edu/cgi-bin/afos/retrieve.py?pil=PFMOKX&sdate=2017-03-01&edate=2017-04-01&fmt=text&limit=9999"
+  },
+  {
+   "bytes": 11117350,
+   "fetched_at_utc": "2026-09-22T21:22:07.198258+00:00",
+   "http_status": 200,
+   "products": 322,
+   "retry_reasons": [],
+   "sha256": "57d24211bad4829c8b6a94fd5e4cb33270e35437c8d2bb7af517c763c3a33533",
+   "url": "https://mesonet.agron.iastate.edu/cgi-bin/afos/retrieve.py?pil=PFMOKX&sdate=2017-04-01&edate=2017-05-01&fmt=text&limit=9999"
+  },
+  {
+   "bytes": 10929631,
+   "fetched_at_utc": "2026-09-22T21:22:11.100659+00:00",
+   "http_status": 200,
+   "products": 323,
+   "retry_reasons": [],
+   "sha256": "981f22c28d80145f4309e54e709b91f45b45f2e25399caee35706c137d5881d9",
+   "url": "https://mesonet.agron.iastate.edu/cgi-bin/afos/retrieve.py?pil=PFMOKX&sdate=2017-05-01&edate=2017-06-01&fmt=text&limit=9999"
+  },
+  {
+   "bytes": 11150134,
+   "fetched_at_utc": "2026-09-22T21:22:14.972108+00:00",
+   "http_status": 200,
+   "products": 318,
+   "retry_reasons": [],
+   "sha256": "38694cebfd4d1723112caf38bc2b8308851168785c57254ff26d60d454a9c4dd",
+   "url": "https://mesonet.agron.iastate.edu/cgi-bin/afos/retrieve.py?pil=PFMOKX&sdate=2017-06-01&edate=2017-07-01&fmt=text&limit=9999"
+  },
+  {
+   "bytes": 11791226,
+   "fetched_at_utc": "2026-09-22T21:22:19.188710+00:00",
+   "http_status": 200,
+   "products": 335,
+   "retry_reasons": [],
+   "sha256": "82042ee563ef49f78d336f4ae2c70f06c7eb89aec4ed549584a1f37b61ac0932",
+   "url": "https://mesonet.agron.iastate.edu/cgi-bin/afos/retrieve.py?pil=PFMOKX&sdate=2017-07-01&edate=2017-08-01&fmt=text&limit=9999"
+  },
+  {
+   "bytes": 12348333,
+   "fetched_at_utc": "2026-09-22T21:22:23.680813+00:00",
+   "http_status": 200,
+   "products": 362,
+   "retry_reasons": [],
+   "sha256": "d661fa1749ee87433f087d97157f958b3a5c76087314985f00ddb6c600d2251d",
+   "url": "https://mesonet.agron.iastate.edu/cgi-bin/afos/retrieve.py?pil=PFMOKX&sdate=2017-08-01&edate=2017-09-01&fmt=text&limit=9999"
+  },
+  {
+   "bytes": 10829534,
+   "fetched_at_utc": "2026-09-22T21:22:27.391113+00:00",
+   "http_status": 200,
+   "products": 330,
+   "retry_reasons": [],
+   "sha256": "542d65d7408718981ab66fe85db87a2fe9936571debaf9254b3ff4635b48ad46",
+   "url": "https://mesonet.agron.iastate.edu/cgi-bin/afos/retrieve.py?pil=PFMOKX&sdate=2017-09-01&edate=2017-10-01&fmt=text&limit=9999"
+  },
+  {
+   "bytes": 10557327,
+   "fetched_at_utc": "2026-09-22T21:22:31.051964+00:00",
+   "http_status": 200,
+   "products": 325,
+   "retry_reasons": [],
+   "sha256": "be6addb6cf1cd36bc68f567470d7a1ae981eeb0ccca737435b08a49190fb5478",
+   "url": "https://mesonet.agron.iastate.edu/cgi-bin/afos/retrieve.py?pil=PFMOKX&sdate=2017-10-01&edate=2017-11-01&fmt=text&limit=9999"
+  },
+  {
+   "bytes": 10384355,
+   "fetched_at_utc": "2026-09-22T21:22:34.678347+00:00",
+   "http_status": 200,
+   "products": 308,
+   "retry_reasons": [],
+   "sha256": "16bce2827b75766cf03f434f674826fb2a4f4f0110e2bea58e9b73316d59c5f6",
+   "url": "https://mesonet.agron.iastate.edu/cgi-bin/afos/retrieve.py?pil=PFMOKX&sdate=2017-11-01&edate=2017-12-01&fmt=text&limit=9999"
+  },
+  {
+   "bytes": 12059895,
+   "fetched_at_utc": "2026-09-22T21:22:38.756030+00:00",
+   "http_status": 200,
+   "products": 340,
+   "retry_reasons": [],
+   "sha256": "4a7c513592df589e34547b91fe1d57238f3bd8436ba7e87b861e7d2cd00930b2",
+   "url": "https://mesonet.agron.iastate.edu/cgi-bin/afos/retrieve.py?pil=PFMOKX&sdate=2017-12-01&edate=2018-01-01&fmt=text&limit=9999"
+  },
+  {
+   "bytes": 12734931,
+   "fetched_at_utc": "2026-09-22T21:22:42.932329+00:00",
+   "http_status": 200,
+   "products": 360,
+   "retry_reasons": [],
+   "sha256": "3e2a9cee27062311001fb7d09bf241fadefdac41c76ca063468b73ced49f4693",
+   "url": "https://mesonet.agron.iastate.edu/cgi-bin/afos/retrieve.py?pil=PFMOKX&sdate=2018-01-01&edate=2018-02-01&fmt=text&limit=9999"
+  },
+  {
+   "bytes": 12560099,
+   "fetched_at_utc": "2026-09-22T21:22:47.132598+00:00",
+   "http_status": 200,
+   "products": 349,
+   "retry_reasons": [],
+   "sha256": "073ad44423b74c093b643a4662b5da1e15bb87d4f0e159f4734119f1f90d0168",
+   "url": "https://mesonet.agron.iastate.edu/cgi-bin/afos/retrieve.py?pil=PFMOKX&sdate=2018-02-01&edate=2018-03-01&fmt=text&limit=9999"
+  },
+  {
+   "bytes": 12099280,
+   "fetched_at_utc": "2026-09-22T21:22:51.241580+00:00",
+   "http_status": 200,
+   "products": 331,
+   "retry_reasons": [],
+   "sha256": "4300d18021cac21e260b0a777189fca488569f54a6e0edbf31aa85e7a928831e",
+   "url": "https://mesonet.agron.iastate.edu/cgi-bin/afos/retrieve.py?pil=PFMOKX&sdate=2018-03-01&edate=2018-04-01&fmt=text&limit=9999"
+  },
+  {
+   "bytes": 10494995,
+   "fetched_at_utc": "2026-09-22T21:22:55.032193+00:00",
+   "http_status": 200,
+   "products": 298,
+   "retry_reasons": [],
+   "sha256": "f2f347ca042cc06eab5858f36bfba3a9d0c4b93035a9c60c33142d518a45f566",
+   "url": "https://mesonet.agron.iastate.edu/cgi-bin/afos/retrieve.py?pil=PFMOKX&sdate=2018-04-01&edate=2018-05-01&fmt=text&limit=9999"
+  },
+  {
+   "bytes": 12194704,
+   "fetched_at_utc": "2026-09-22T21:22:59.183406+00:00",
+   "http_status": 200,
+   "products": 359,
+   "retry_reasons": [],
+   "sha256": "cbd15286faf6d290f3899babe5caf88dbbd5e50849b018b3625e682a196c3819",
+   "url": "https://mesonet.agron.iastate.edu/cgi-bin/afos/retrieve.py?pil=PFMOKX&sdate=2018-05-01&edate=2018-06-01&fmt=text&limit=9999"
+  },
+  {
+   "bytes": 12342259,
+   "fetched_at_utc": "2026-09-22T21:23:03.607281+00:00",
+   "http_status": 200,
+   "products": 367,
+   "retry_reasons": [],
+   "sha256": "3559077130e16fe32f77c845379b3364e3813bd759975a1602009a04111fc32a",
+   "url": "https://mesonet.agron.iastate.edu/cgi-bin/afos/retrieve.py?pil=PFMOKX&sdate=2018-06-01&edate=2018-07-01&fmt=text&limit=9999"
+  },
+  {
+   "bytes": 11763538,
+   "fetched_at_utc": "2026-09-22T21:23:07.525338+00:00",
+   "http_status": 200,
+   "products": 334,
+   "retry_reasons": [],
+   "sha256": "996ac85d15e08f9a58237b100848c2b79fd27352c32db172b73532fe6825337d",
+   "url": "https://mesonet.agron.iastate.edu/cgi-bin/afos/retrieve.py?pil=PFMOKX&sdate=2018-07-01&edate=2018-08-01&fmt=text&limit=9999"
+  },
+  {
+   "bytes": 11239025,
+   "fetched_at_utc": "2026-09-22T21:23:11.352667+00:00",
+   "http_status": 200,
+   "products": 319,
+   "retry_reasons": [],
+   "sha256": "5e2f97461e22395b25af1b10260f8f431d02d8d41f3779fecdc6f562625600b8",
+   "url": "https://mesonet.agron.iastate.edu/cgi-bin/afos/retrieve.py?pil=PFMOKX&sdate=2018-08-01&edate=2018-09-01&fmt=text&limit=9999"
+  },
+  {
+   "bytes": 10365045,
+   "fetched_at_utc": "2026-09-22T21:23:14.869129+00:00",
+   "http_status": 200,
+   "products": 301,
+   "retry_reasons": [],
+   "sha256": "5dda3abcf6dbd6a4ac5d75ce5b39b77605e95ca19658d2f026448073500beef5",
+   "url": "https://mesonet.agron.iastate.edu/cgi-bin/afos/retrieve.py?pil=PFMOKX&sdate=2018-09-01&edate=2018-10-01&fmt=text&limit=9999"
+  },
+  {
+   "bytes": 10117565,
+   "fetched_at_utc": "2026-09-22T21:23:18.222369+00:00",
+   "http_status": 200,
+   "products": 301,
+   "retry_reasons": [],
+   "sha256": "059cea14a1b3c4f67c60386c016cc6023989912664579058c2e3838661c4621e",
+   "url": "https://mesonet.agron.iastate.edu/cgi-bin/afos/retrieve.py?pil=PFMOKX&sdate=2018-10-01&edate=2018-11-01&fmt=text&limit=9999"
+  },
+  {
+   "bytes": 10675412,
+   "fetched_at_utc": "2026-09-22T21:23:21.785214+00:00",
+   "http_status": 200,
+   "products": 300,
+   "retry_reasons": [],
+   "sha256": "7946ae2e6f0955435e5356646008bd4cdcbcd11f42ec10895c1af31b316f3bc6",
+   "url": "https://mesonet.agron.iastate.edu/cgi-bin/afos/retrieve.py?pil=PFMOKX&sdate=2018-11-01&edate=2018-12-01&fmt=text&limit=9999"
+  },
+  {
+   "bytes": 11447358,
+   "fetched_at_utc": "2026-09-22T21:23:25.765323+00:00",
+   "http_status": 200,
+   "products": 326,
+   "retry_reasons": [],
+   "sha256": "443e6eb411832cf2b82dd7aa629a7e5aa6bfa130af1f1904f5a2faf077378625",
+   "url": "https://mesonet.agron.iastate.edu/cgi-bin/afos/retrieve.py?pil=PFMOKX&sdate=2018-12-01&edate=2019-01-01&fmt=text&limit=9999"
+  },
+  {
+   "bytes": 12119218,
+   "fetched_at_utc": "2026-09-22T21:23:29.858437+00:00",
+   "http_status": 200,
+   "products": 331,
+   "retry_reasons": [],
+   "sha256": "98f917f3cf34f0d3adf2671e97459ad8a899c46ea407d4159b566816674fc238",
+   "url": "https://mesonet.agron.iastate.edu/cgi-bin/afos/retrieve.py?pil=PFMOKX&sdate=2019-01-01&edate=2019-02-01&fmt=text&limit=9999"
+  },
+  {
+   "bytes": 10268300,
+   "fetched_at_utc": "2026-09-22T21:23:33.266798+00:00",
+   "http_status": 200,
+   "products": 278,
+   "retry_reasons": [],
+   "sha256": "2537f7078f7c5e0bd8e03ffbeda2129a03b5fab7297f6bb23252f70121a7b448",
+   "url": "https://mesonet.agron.iastate.edu/cgi-bin/afos/retrieve.py?pil=PFMOKX&sdate=2019-02-01&edate=2019-03-01&fmt=text&limit=9999"
+  },
+  {
+   "bytes": 10888739,
+   "fetched_at_utc": "2026-09-22T21:23:36.914926+00:00",
+   "http_status": 200,
+   "products": 311,
+   "retry_reasons": [],
+   "sha256": "c6cf959813355d27e9a6b1d825e412ad6f07a74c01ac459cdf87006436ee2a00",
+   "url": "https://mesonet.agron.iastate.edu/cgi-bin/afos/retrieve.py?pil=PFMOKX&sdate=2019-03-01&edate=2019-04-01&fmt=text&limit=9999"
+  },
+  {
+   "bytes": 10469320,
+   "fetched_at_utc": "2026-09-22T21:23:40.488770+00:00",
+   "http_status": 200,
+   "products": 304,
+   "retry_reasons": [],
+   "sha256": "53e7860a311cd6c962741418d0acc96575c6e3ed987c224713d79828b798bbba",
+   "url": "https://mesonet.agron.iastate.edu/cgi-bin/afos/retrieve.py?pil=PFMOKX&sdate=2019-04-01&edate=2019-05-01&fmt=text&limit=9999"
+  },
+  {
+   "bytes": 9955467,
+   "fetched_at_utc": "2026-09-22T21:23:43.815263+00:00",
+   "http_status": 200,
+   "products": 293,
+   "retry_reasons": [],
+   "sha256": "b6782bf878adff91f4413699ccd50aa58de5b8ef0b1e408cb49caba24f2d29ca",
+   "url": "https://mesonet.agron.iastate.edu/cgi-bin/afos/retrieve.py?pil=PFMOKX&sdate=2019-05-01&edate=2019-06-01&fmt=text&limit=9999"
+  },
+  {
+   "bytes": 10832976,
+   "fetched_at_utc": "2026-09-22T21:23:47.605563+00:00",
+   "http_status": 200,
+   "products": 316,
+   "retry_reasons": [],
+   "sha256": "7d43b2f1e7b12494bbd68d779b92fcada93724943ede33108387e921623e6ee6",
+   "url": "https://mesonet.agron.iastate.edu/cgi-bin/afos/retrieve.py?pil=PFMOKX&sdate=2019-06-01&edate=2019-07-01&fmt=text&limit=9999"
+  },
+  {
+   "bytes": 10721819,
+   "fetched_at_utc": "2026-09-22T21:23:51.213583+00:00",
+   "http_status": 200,
+   "products": 308,
+   "retry_reasons": [],
+   "sha256": "84ee40eb0b8358e5fdc497b635a793558b4ece75bc49d430d526934e2d8d5e78",
+   "url": "https://mesonet.agron.iastate.edu/cgi-bin/afos/retrieve.py?pil=PFMOKX&sdate=2019-07-01&edate=2019-08-01&fmt=text&limit=9999"
+  },
+  {
+   "bytes": 10923732,
+   "fetched_at_utc": "2026-09-22T21:23:54.954548+00:00",
+   "http_status": 200,
+   "products": 316,
+   "retry_reasons": [],
+   "sha256": "d94d8b812ffd696bdaa1b583050bc15ac681a41d54706cb0833134a07a216d51",
+   "url": "https://mesonet.agron.iastate.edu/cgi-bin/afos/retrieve.py?pil=PFMOKX&sdate=2019-08-01&edate=2019-09-01&fmt=text&limit=9999"
+  },
+  {
+   "bytes": 9964699,
+   "fetched_at_utc": "2026-09-22T21:23:58.439105+00:00",
+   "http_status": 200,
+   "products": 307,
+   "retry_reasons": [],
+   "sha256": "ec75327db3609b361123892b3616541780f24a2ba58cad5d591cc119a2bcc08f",
+   "url": "https://mesonet.agron.iastate.edu/cgi-bin/afos/retrieve.py?pil=PFMOKX&sdate=2019-09-01&edate=2019-10-01&fmt=text&limit=9999"
+  },
+  {
+   "bytes": 10591751,
+   "fetched_at_utc": "2026-09-22T21:24:02.142419+00:00",
+   "http_status": 200,
+   "products": 317,
+   "retry_reasons": [],
+   "sha256": "01f0076df6d3ef6904424cb6c3fc6af7ed9a8c0554a34014d14eb04426a2ba68",
+   "url": "https://mesonet.agron.iastate.edu/cgi-bin/afos/retrieve.py?pil=PFMOKX&sdate=2019-10-01&edate=2019-11-01&fmt=text&limit=9999"
+  },
+  {
+   "bytes": 11093742,
+   "fetched_at_utc": "2026-09-22T21:24:05.904782+00:00",
+   "http_status": 200,
+   "products": 321,
+   "retry_reasons": [],
+   "sha256": "86d08f572fa3d26290c530c006ca847a8dfdc6c9215ba00286f23c8ae68dc4ee",
+   "url": "https://mesonet.agron.iastate.edu/cgi-bin/afos/retrieve.py?pil=PFMOKX&sdate=2019-11-01&edate=2019-12-01&fmt=text&limit=9999"
+  },
+  {
+   "bytes": 11346402,
+   "fetched_at_utc": "2026-09-22T21:24:09.758690+00:00",
+   "http_status": 200,
+   "products": 324,
+   "retry_reasons": [],
+   "sha256": "85b3ca848f1e55e9cf73984e2e3e92c6682577d74360b6829a0b9d9553a38094",
+   "url": "https://mesonet.agron.iastate.edu/cgi-bin/afos/retrieve.py?pil=PFMOKX&sdate=2019-12-01&edate=2020-01-01&fmt=text&limit=9999"
+  },
+  {
+   "bytes": 10855026,
+   "fetched_at_utc": "2026-09-22T21:24:13.466824+00:00",
+   "http_status": 200,
+   "products": 304,
+   "retry_reasons": [],
+   "sha256": "929db0d79ee49bceeebf9f6f00355bd17e63897a33711d7b07a079639e6febdc",
+   "url": "https://mesonet.agron.iastate.edu/cgi-bin/afos/retrieve.py?pil=PFMOKX&sdate=2020-01-01&edate=2020-02-01&fmt=text&limit=9999"
+  },
+  {
+   "bytes": 11130352,
+   "fetched_at_utc": "2026-09-22T21:24:17.184620+00:00",
+   "http_status": 200,
+   "products": 315,
+   "retry_reasons": [],
+   "sha256": "e871ae5df0afa29e331ac91202560aff7122e30f43523c2d46156e0d1866affe",
+   "url": "https://mesonet.agron.iastate.edu/cgi-bin/afos/retrieve.py?pil=PFMOKX&sdate=2020-02-01&edate=2020-03-01&fmt=text&limit=9999"
+  },
+  {
+   "bytes": 10608525,
+   "fetched_at_utc": "2026-09-22T21:24:20.738607+00:00",
+   "http_status": 200,
+   "products": 305,
+   "retry_reasons": [],
+   "sha256": "27a115154b290ef24a1c04cafb73fdad17a41507db48028892a7e710475846ed",
+   "url": "https://mesonet.agron.iastate.edu/cgi-bin/afos/retrieve.py?pil=PFMOKX&sdate=2020-03-01&edate=2020-04-01&fmt=text&limit=9999"
+  },
+  {
+   "bytes": 10553316,
+   "fetched_at_utc": "2026-09-22T21:24:24.387315+00:00",
+   "http_status": 200,
+   "products": 301,
+   "retry_reasons": [],
+   "sha256": "67ce70b48f248960094456e4ebd78fb0b50510f1a9a893f59ec933e667e1d4f7",
+   "url": "https://mesonet.agron.iastate.edu/cgi-bin/afos/retrieve.py?pil=PFMOKX&sdate=2020-04-01&edate=2020-05-01&fmt=text&limit=9999"
+  },
+  {
+   "bytes": 10162052,
+   "fetched_at_utc": "2026-09-22T21:24:27.869214+00:00",
+   "http_status": 200,
+   "products": 306,
+   "retry_reasons": [],
+   "sha256": "30f27dcea57b3946df3a92cea2022fbad50671aa8bcf76d385fe259dcabcba95",
+   "url": "https://mesonet.agron.iastate.edu/cgi-bin/afos/retrieve.py?pil=PFMOKX&sdate=2020-05-01&edate=2020-06-01&fmt=text&limit=9999"
+  },
+  {
+   "bytes": 10486458,
+   "fetched_at_utc": "2026-09-22T21:24:31.500353+00:00",
+   "http_status": 200,
+   "products": 310,
+   "retry_reasons": [],
+   "sha256": "9f91ff6a35846ff5fefcccee5d73b29eb84e7ad8a6e6d553285665e0d0f185a9",
+   "url": "https://mesonet.agron.iastate.edu/cgi-bin/afos/retrieve.py?pil=PFMOKX&sdate=2020-06-01&edate=2020-07-01&fmt=text&limit=9999"
+  },
+  {
+   "bytes": 9871392,
+   "fetched_at_utc": "2026-09-22T21:24:34.970344+00:00",
+   "http_status": 200,
+   "products": 278,
+   "retry_reasons": [],
+   "sha256": "050906d551f5a5e99f14f0c796e531502f31674e937d2505f265e6d3325a10c9",
+   "url": "https://mesonet.agron.iastate.edu/cgi-bin/afos/retrieve.py?pil=PFMOKX&sdate=2020-07-01&edate=2020-08-01&fmt=text&limit=9999"
+  },
+  {
+   "bytes": 10676407,
+   "fetched_at_utc": "2026-09-22T21:24:38.535428+00:00",
+   "http_status": 200,
+   "products": 302,
+   "retry_reasons": [],
+   "sha256": "ad3ad7ae23696af5ddbbb5ad43d5e3bfa19e0e8b9e99c0e3578532819a58199f",
+   "url": "https://mesonet.agron.iastate.edu/cgi-bin/afos/retrieve.py?pil=PFMOKX&sdate=2020-08-01&edate=2020-09-01&fmt=text&limit=9999"
+  },
+  {
+   "bytes": 9753723,
+   "fetched_at_utc": "2026-09-22T21:24:42.067781+00:00",
+   "http_status": 200,
+   "products": 302,
+   "retry_reasons": [],
+   "sha256": "4ed827df80816ceb3fec7bf98b62c5c9090858b5f4b463ff7e74fe52a7bb9ecb",
+   "url": "https://mesonet.agron.iastate.edu/cgi-bin/afos/retrieve.py?pil=PFMOKX&sdate=2020-09-01&edate=2020-10-01&fmt=text&limit=9999"
+  },
+  {
+   "bytes": 9958528,
+   "fetched_at_utc": "2026-09-22T21:24:45.389608+00:00",
+   "http_status": 200,
+   "products": 304,
+   "retry_reasons": [],
+   "sha256": "1dfcf644da10060c08cc69a88922e3cc8a0b29ccef5ddc3195519f2b74de0222",
+   "url": "https://mesonet.agron.iastate.edu/cgi-bin/afos/retrieve.py?pil=PFMOKX&sdate=2020-10-01&edate=2020-11-01&fmt=text&limit=9999"
+  },
+  {
+   "bytes": 9042063,
+   "fetched_at_utc": "2026-09-22T21:24:48.541434+00:00",
+   "http_status": 200,
+   "products": 274,
+   "retry_reasons": [],
+   "sha256": "b7d7360ba45f1a1c90d68bdd9838e12511eda8df3c39881bc765877503e20a74",
+   "url": "https://mesonet.agron.iastate.edu/cgi-bin/afos/retrieve.py?pil=PFMOKX&sdate=2020-11-01&edate=2020-12-01&fmt=text&limit=9999"
+  },
+  {
+   "bytes": 10921272,
+   "fetched_at_utc": "2026-09-22T21:24:52.211868+00:00",
+   "http_status": 200,
+   "products": 311,
+   "retry_reasons": [],
+   "sha256": "cfcd3a508b7afa6a933dfb557cf02d08c9f5cde8d17cf9cc96cb51a1f688b368",
+   "url": "https://mesonet.agron.iastate.edu/cgi-bin/afos/retrieve.py?pil=PFMOKX&sdate=2020-12-01&edate=2021-01-01&fmt=text&limit=9999"
+  },
+  {
+   "bytes": 11488261,
+   "fetched_at_utc": "2026-09-22T21:24:55.984196+00:00",
+   "http_status": 200,
+   "products": 333,
+   "retry_reasons": [],
+   "sha256": "56aa700e8e2c6670c11381140c0d26b756923d40b16a20d8d7fa2c8bef01c81c",
+   "url": "https://mesonet.agron.iastate.edu/cgi-bin/afos/retrieve.py?pil=PFMOKX&sdate=2021-01-01&edate=2021-02-01&fmt=text&limit=9999"
+  },
+  {
+   "bytes": 10544211,
+   "fetched_at_utc": "2026-09-22T21:24:59.669423+00:00",
+   "http_status": 200,
+   "products": 286,
+   "retry_reasons": [],
+   "sha256": "8647cfc57fe6e1f6674974b83a9cb3f797cc824edf8f07bb45258b6307f4e55f",
+   "url": "https://mesonet.agron.iastate.edu/cgi-bin/afos/retrieve.py?pil=PFMOKX&sdate=2021-02-01&edate=2021-03-01&fmt=text&limit=9999"
+  },
+  {
+   "bytes": 9653222,
+   "fetched_at_utc": "2026-09-22T21:25:03.218412+00:00",
+   "http_status": 200,
+   "products": 283,
+   "retry_reasons": [],
+   "sha256": "a57721db4a90aae0795b363a6809d12b49bd95267b60c1c9b72c314032011e31",
+   "url": "https://mesonet.agron.iastate.edu/cgi-bin/afos/retrieve.py?pil=PFMOKX&sdate=2021-03-01&edate=2021-04-01&fmt=text&limit=9999"
+  },
+  {
+   "bytes": 9432668,
+   "fetched_at_utc": "2026-09-22T21:25:06.460892+00:00",
+   "http_status": 200,
+   "products": 284,
+   "retry_reasons": [],
+   "sha256": "810089bab6eebd613ae6edb8836a30714367ee683bdfa79cd4f26b3ecde65471",
+   "url": "https://mesonet.agron.iastate.edu/cgi-bin/afos/retrieve.py?pil=PFMOKX&sdate=2021-04-01&edate=2021-05-01&fmt=text&limit=9999"
+  },
+  {
+   "bytes": 9758308,
+   "fetched_at_utc": "2026-09-22T21:25:09.907584+00:00",
+   "http_status": 200,
+   "products": 294,
+   "retry_reasons": [],
+   "sha256": "f5261a9fefa7857563de3df081c74f76ed86789fbd162e2982cf54e57d5d0d1a",
+   "url": "https://mesonet.agron.iastate.edu/cgi-bin/afos/retrieve.py?pil=PFMOKX&sdate=2021-05-01&edate=2021-06-01&fmt=text&limit=9999"
+  },
+  {
+   "bytes": 10658679,
+   "fetched_at_utc": "2026-09-22T21:25:13.515350+00:00",
+   "http_status": 200,
+   "products": 312,
+   "retry_reasons": [],
+   "sha256": "e199a41087bef6c227b561391f1e0528022efdd3eeb654744072ba3a1f303638",
+   "url": "https://mesonet.agron.iastate.edu/cgi-bin/afos/retrieve.py?pil=PFMOKX&sdate=2021-06-01&edate=2021-07-01&fmt=text&limit=9999"
+  },
+  {
+   "bytes": 10479318,
+   "fetched_at_utc": "2026-09-22T21:25:17.000767+00:00",
+   "http_status": 200,
+   "products": 295,
+   "retry_reasons": [],
+   "sha256": "1f67236c9d4eb7f3893a7a2c423686704de8148445d2548e03102f093bccf1ab",
+   "url": "https://mesonet.agron.iastate.edu/cgi-bin/afos/retrieve.py?pil=PFMOKX&sdate=2021-07-01&edate=2021-08-01&fmt=text&limit=9999"
+  },
+  {
+   "bytes": 10871999,
+   "fetched_at_utc": "2026-09-22T21:25:20.808711+00:00",
+   "http_status": 200,
+   "products": 305,
+   "retry_reasons": [],
+   "sha256": "3491faaba7ec78aaa974e76a44e1ec389e44549715905801965e40d87a0ab23e",
+   "url": "https://mesonet.agron.iastate.edu/cgi-bin/afos/retrieve.py?pil=PFMOKX&sdate=2021-08-01&edate=2021-09-01&fmt=text&limit=9999"
+  },
+  {
+   "bytes": 8290797,
+   "fetched_at_utc": "2026-09-22T21:25:23.648849+00:00",
+   "http_status": 200,
+   "products": 253,
+   "retry_reasons": [],
+   "sha256": "9ca6dd3af75a080814358bc5347cdd33d7b8012e6d4b60af4350dcb087e6ea36",
+   "url": "https://mesonet.agron.iastate.edu/cgi-bin/afos/retrieve.py?pil=PFMOKX&sdate=2021-09-01&edate=2021-10-01&fmt=text&limit=9999"
+  },
+  {
+   "bytes": 8477904,
+   "fetched_at_utc": "2026-09-22T21:25:26.649174+00:00",
+   "http_status": 200,
+   "products": 262,
+   "retry_reasons": [],
+   "sha256": "fc9919528c2aba2f9e02edfb2de5ecab19942d99c0650ebf1c90c820116df7cd",
+   "url": "https://mesonet.agron.iastate.edu/cgi-bin/afos/retrieve.py?pil=PFMOKX&sdate=2021-10-01&edate=2021-11-01&fmt=text&limit=9999"
+  },
+  {
+   "bytes": 8900670,
+   "fetched_at_utc": "2026-09-22T21:25:29.775483+00:00",
+   "http_status": 200,
+   "products": 267,
+   "retry_reasons": [],
+   "sha256": "0ca1bc90a559c8d78234d7dc880b181695085ed44e8a53d64a1fc79fb2315c32",
+   "url": "https://mesonet.agron.iastate.edu/cgi-bin/afos/retrieve.py?pil=PFMOKX&sdate=2021-11-01&edate=2021-12-01&fmt=text&limit=9999"
+  },
+  {
+   "bytes": 9777888,
+   "fetched_at_utc": "2026-09-22T21:25:33.314207+00:00",
+   "http_status": 200,
+   "products": 278,
+   "retry_reasons": [],
+   "sha256": "5019ca5e415d9dec7894cde1006a24c3caf54061a2aede4fbf755b1193528371",
+   "url": "https://mesonet.agron.iastate.edu/cgi-bin/afos/retrieve.py?pil=PFMOKX&sdate=2021-12-01&edate=2022-01-01&fmt=text&limit=9999"
+  },
+  {
+   "bytes": 10837685,
+   "fetched_at_utc": "2026-09-22T21:25:36.956312+00:00",
+   "http_status": 200,
+   "products": 303,
+   "retry_reasons": [],
+   "sha256": "8bba5b4d702c2fff401f7eebd673647f474b4dfe3ca01acdd341213afa89d68c",
+   "url": "https://mesonet.agron.iastate.edu/cgi-bin/afos/retrieve.py?pil=PFMOKX&sdate=2022-01-01&edate=2022-02-01&fmt=text&limit=9999"
+  },
+  {
+   "bytes": 10606329,
+   "fetched_at_utc": "2026-09-22T21:25:40.464648+00:00",
+   "http_status": 200,
+   "products": 292,
+   "retry_reasons": [],
+   "sha256": "c2174d5492d199104209859c60e698d63f7544558a6c0640bd0f840cc86d7ef8",
+   "url": "https://mesonet.agron.iastate.edu/cgi-bin/afos/retrieve.py?pil=PFMOKX&sdate=2022-02-01&edate=2022-03-01&fmt=text&limit=9999"
+  },
+  {
+   "bytes": 10653319,
+   "fetched_at_utc": "2026-09-22T21:25:44.140662+00:00",
+   "http_status": 200,
+   "products": 296,
+   "retry_reasons": [],
+   "sha256": "86bf8e797de441e92e205a41e1efaf7a768ca4265c7bafb4c3ebab6201fd9ad3",
+   "url": "https://mesonet.agron.iastate.edu/cgi-bin/afos/retrieve.py?pil=PFMOKX&sdate=2022-03-01&edate=2022-04-01&fmt=text&limit=9999"
+  },
+  {
+   "bytes": 8797036,
+   "fetched_at_utc": "2026-09-22T21:25:47.415979+00:00",
+   "http_status": 200,
+   "products": 261,
+   "retry_reasons": [],
+   "sha256": "a9696b77d4c22a313a27f9bc043570dc701e15adbfd78c0f325c68a33df48c27",
+   "url": "https://mesonet.agron.iastate.edu/cgi-bin/afos/retrieve.py?pil=PFMOKX&sdate=2022-04-01&edate=2022-05-01&fmt=text&limit=9999"
+  },
+  {
+   "bytes": 9396865,
+   "fetched_at_utc": "2026-09-22T21:25:50.711074+00:00",
+   "http_status": 200,
+   "products": 278,
+   "retry_reasons": [],
+   "sha256": "b77aedd90cc0df4f6af66391855befcf8e4c828497cba5d4fa33c41b4476932c",
+   "url": "https://mesonet.agron.iastate.edu/cgi-bin/afos/retrieve.py?pil=PFMOKX&sdate=2022-05-01&edate=2022-06-01&fmt=text&limit=9999"
+  },
+  {
+   "bytes": 9493672,
+   "fetched_at_utc": "2026-09-22T21:25:54.971985+00:00",
+   "http_status": 200,
+   "products": 283,
+   "retry_reasons": [],
+   "sha256": "bc369e6486233a1bf54ed7d60d37861023ee7afc6d79b342ee609a794361245a",
+   "url": "https://mesonet.agron.iastate.edu/cgi-bin/afos/retrieve.py?pil=PFMOKX&sdate=2022-06-01&edate=2022-07-01&fmt=text&limit=9999"
+  },
+  {
+   "bytes": 10733135,
+   "fetched_at_utc": "2026-09-22T21:25:58.588797+00:00",
+   "http_status": 200,
+   "products": 303,
+   "retry_reasons": [],
+   "sha256": "078a2c52ad5faeaf44170a307c3eb800370f9fa5e8ba903c1e61129366dc0a41",
+   "url": "https://mesonet.agron.iastate.edu/cgi-bin/afos/retrieve.py?pil=PFMOKX&sdate=2022-07-01&edate=2022-08-01&fmt=text&limit=9999"
+  },
+  {
+   "bytes": 10192705,
+   "fetched_at_utc": "2026-09-22T21:26:02.156062+00:00",
+   "http_status": 200,
+   "products": 292,
+   "retry_reasons": [],
+   "sha256": "ad2fa7270b3fcf1b84843ce7e4e435284064ed91a63bb591eb6123a0f4d5a127",
+   "url": "https://mesonet.agron.iastate.edu/cgi-bin/afos/retrieve.py?pil=PFMOKX&sdate=2022-08-01&edate=2022-09-01&fmt=text&limit=9999"
+  },
+  {
+   "bytes": 8578085,
+   "fetched_at_utc": "2026-09-22T21:26:05.305220+00:00",
+   "http_status": 200,
+   "products": 262,
+   "retry_reasons": [],
+   "sha256": "04d926de43846cee205031c1644cc92426b067306dfc4f749c1a4819c09f27c6",
+   "url": "https://mesonet.agron.iastate.edu/cgi-bin/afos/retrieve.py?pil=PFMOKX&sdate=2022-09-01&edate=2022-10-01&fmt=text&limit=9999"
+  },
+  {
+   "bytes": 9409706,
+   "fetched_at_utc": "2026-09-22T21:26:08.512842+00:00",
+   "http_status": 200,
+   "products": 296,
+   "retry_reasons": [],
+   "sha256": "7ace2add09a4d55867e943e676b06124feef36511e2254cbe1a3819f69cce5eb",
+   "url": "https://mesonet.agron.iastate.edu/cgi-bin/afos/retrieve.py?pil=PFMOKX&sdate=2022-10-01&edate=2022-11-01&fmt=text&limit=9999"
+  },
+  {
+   "bytes": 9636554,
+   "fetched_at_utc": "2026-09-22T21:26:11.832389+00:00",
+   "http_status": 200,
+   "products": 289,
+   "retry_reasons": [],
+   "sha256": "2df6728cf7b2e4d2e4e4c889b1c0bad777f4364e8e6b956ef0e65518bd74355c",
+   "url": "https://mesonet.agron.iastate.edu/cgi-bin/afos/retrieve.py?pil=PFMOKX&sdate=2022-11-01&edate=2022-12-01&fmt=text&limit=9999"
+  },
+  {
+   "bytes": 10668561,
+   "fetched_at_utc": "2026-09-22T21:26:15.655576+00:00",
+   "http_status": 200,
+   "products": 312,
+   "retry_reasons": [],
+   "sha256": "42aab544a41fac0b7b319d60368fc153caf238b5ec7d0b8109f2bab7f823fea7",
+   "url": "https://mesonet.agron.iastate.edu/cgi-bin/afos/retrieve.py?pil=PFMOKX&sdate=2022-12-01&edate=2023-01-01&fmt=text&limit=9999"
+  },
+  {
+   "bytes": 10773167,
+   "fetched_at_utc": "2026-09-22T21:26:19.344879+00:00",
+   "http_status": 200,
+   "products": 308,
+   "retry_reasons": [],
+   "sha256": "8e017379178e0687329f1f5209c8cfaaed638171e823a0419cbcf9b2b5ab4b34",
+   "url": "https://mesonet.agron.iastate.edu/cgi-bin/afos/retrieve.py?pil=PFMOKX&sdate=2023-01-01&edate=2023-02-01&fmt=text&limit=9999"
+  },
+  {
+   "bytes": 9493282,
+   "fetched_at_utc": "2026-09-22T21:26:23.183538+00:00",
+   "http_status": 200,
+   "products": 267,
+   "retry_reasons": [],
+   "sha256": "18d07cb77b3995be358bd1b1e720c0883e3336ffe83e79db2549936ce1cc8a17",
+   "url": "https://mesonet.agron.iastate.edu/cgi-bin/afos/retrieve.py?pil=PFMOKX&sdate=2023-02-01&edate=2023-03-01&fmt=text&limit=9999"
+  },
+  {
+   "bytes": 9947833,
+   "fetched_at_utc": "2026-09-22T21:26:26.778033+00:00",
+   "http_status": 200,
+   "products": 281,
+   "retry_reasons": [],
+   "sha256": "04104f8beb42fbe5fe4f13f1f179cde1fd0c15c1326c64737fd5064e4e06e915",
+   "url": "https://mesonet.agron.iastate.edu/cgi-bin/afos/retrieve.py?pil=PFMOKX&sdate=2023-03-01&edate=2023-04-01&fmt=text&limit=9999"
+  },
+  {
+   "bytes": 9242441,
+   "fetched_at_utc": "2026-09-22T21:26:30.193225+00:00",
+   "http_status": 200,
+   "products": 283,
+   "retry_reasons": [],
+   "sha256": "e5d327cf57c0e66d5ce84128fd09894a926e7bb348292922204b67a79ec47b21",
+   "url": "https://mesonet.agron.iastate.edu/cgi-bin/afos/retrieve.py?pil=PFMOKX&sdate=2023-04-01&edate=2023-05-01&fmt=text&limit=9999"
+  },
+  {
+   "bytes": 8085037,
+   "fetched_at_utc": "2026-09-22T21:26:33.246978+00:00",
+   "http_status": 200,
+   "products": 265,
+   "retry_reasons": [],
+   "sha256": "3c5c7e84da8e1c81f128ff335c243a5c649e5769f756da4ff0ac90847b23be0c",
+   "url": "https://mesonet.agron.iastate.edu/cgi-bin/afos/retrieve.py?pil=PFMOKX&sdate=2023-05-01&edate=2023-06-01&fmt=text&limit=9999"
+  },
+  {
+   "bytes": 9232912,
+   "fetched_at_utc": "2026-09-22T21:26:36.477189+00:00",
+   "http_status": 200,
+   "products": 274,
+   "retry_reasons": [],
+   "sha256": "5823d5b9c8d0ffec84b8292509f0036596569f2959c865f19b7cdfe2a6d44f4b",
+   "url": "https://mesonet.agron.iastate.edu/cgi-bin/afos/retrieve.py?pil=PFMOKX&sdate=2023-06-01&edate=2023-07-01&fmt=text&limit=9999"
+  },
+  {
+   "bytes": 10219262,
+   "fetched_at_utc": "2026-09-22T21:26:39.993337+00:00",
+   "http_status": 200,
+   "products": 288,
+   "retry_reasons": [],
+   "sha256": "5b240bcfa59f0770aec6d6a90850bc721fbfeaa265e3d1cf8cacc277b7cce856",
+   "url": "https://mesonet.agron.iastate.edu/cgi-bin/afos/retrieve.py?pil=PFMOKX&sdate=2023-07-01&edate=2023-08-01&fmt=text&limit=9999"
+  },
+  {
+   "bytes": 8938437,
+   "fetched_at_utc": "2026-09-22T21:26:43.090876+00:00",
+   "http_status": 200,
+   "products": 263,
+   "retry_reasons": [],
+   "sha256": "3e1d980cc79b495d6cdde114b592c143d5374eef8fbf93eb4cd28a33efb446d9",
+   "url": "https://mesonet.agron.iastate.edu/cgi-bin/afos/retrieve.py?pil=PFMOKX&sdate=2023-08-01&edate=2023-09-01&fmt=text&limit=9999"
+  },
+  {
+   "bytes": 9052893,
+   "fetched_at_utc": "2026-09-22T21:26:46.269924+00:00",
+   "http_status": 200,
+   "products": 274,
+   "retry_reasons": [],
+   "sha256": "8027874bf81eccc59a035ac0d936b672acd04e45746729169846a949760740c1",
+   "url": "https://mesonet.agron.iastate.edu/cgi-bin/afos/retrieve.py?pil=PFMOKX&sdate=2023-09-01&edate=2023-10-01&fmt=text&limit=9999"
+  },
+  {
+   "bytes": 8945522,
+   "fetched_at_utc": "2026-09-22T21:26:49.450563+00:00",
+   "http_status": 200,
+   "products": 281,
+   "retry_reasons": [],
+   "sha256": "a17eb4a60ecdd714466244e64c08429342c6b252db247b822f1b0810b25a8654",
+   "url": "https://mesonet.agron.iastate.edu/cgi-bin/afos/retrieve.py?pil=PFMOKX&sdate=2023-10-01&edate=2023-11-01&fmt=text&limit=9999"
+  },
+  {
+   "bytes": 8644615,
+   "fetched_at_utc": "2026-09-22T21:26:52.367855+00:00",
+   "http_status": 200,
+   "products": 264,
+   "retry_reasons": [],
+   "sha256": "089f1c285b1fe45e2ea83fbb6d9cd7080146b9cf2359162c1cb602ee281b792b",
+   "url": "https://mesonet.agron.iastate.edu/cgi-bin/afos/retrieve.py?pil=PFMOKX&sdate=2023-11-01&edate=2023-12-01&fmt=text&limit=9999"
+  },
+  {
+   "bytes": 10168462,
+   "fetched_at_utc": "2026-09-22T21:26:55.877539+00:00",
+   "http_status": 200,
+   "products": 294,
+   "retry_reasons": [],
+   "sha256": "16742840987f0d916549a9fc9d2baef675ecf5a8ec53e92b884681dd7bc2d8c6",
+   "url": "https://mesonet.agron.iastate.edu/cgi-bin/afos/retrieve.py?pil=PFMOKX&sdate=2023-12-01&edate=2024-01-01&fmt=text&limit=9999"
+  },
+  {
+   "bytes": 10384162,
+   "fetched_at_utc": "2026-09-22T21:26:59.298173+00:00",
+   "http_status": 200,
+   "products": 291,
+   "retry_reasons": [],
+   "sha256": "daa5fe320528d402279f3c525d0e717090f2e4a32fa8124050cafe2a36cde837",
+   "url": "https://mesonet.agron.iastate.edu/cgi-bin/afos/retrieve.py?pil=PFMOKX&sdate=2024-01-01&edate=2024-02-01&fmt=text&limit=9999"
+  },
+  {
+   "bytes": 8546017,
+   "fetched_at_utc": "2026-09-22T21:27:02.353868+00:00",
+   "http_status": 200,
+   "products": 249,
+   "retry_reasons": [],
+   "sha256": "396b8f98f907ef5b80680f9c698637fc32426ea95ab4e38e5c9b6ec70df8ed38",
+   "url": "https://mesonet.agron.iastate.edu/cgi-bin/afos/retrieve.py?pil=PFMOKX&sdate=2024-02-01&edate=2024-03-01&fmt=text&limit=9999"
+  },
+  {
+   "bytes": 9666702,
+   "fetched_at_utc": "2026-09-22T21:27:05.661596+00:00",
+   "http_status": 200,
+   "products": 280,
+   "retry_reasons": [],
+   "sha256": "cff2034768746bc59dce172d62ee0d66e03dc822709118b491857412d7938d11",
+   "url": "https://mesonet.agron.iastate.edu/cgi-bin/afos/retrieve.py?pil=PFMOKX&sdate=2024-03-01&edate=2024-04-01&fmt=text&limit=9999"
+  },
+  {
+   "bytes": 9097287,
+   "fetched_at_utc": "2026-09-22T21:27:08.864215+00:00",
+   "http_status": 200,
+   "products": 271,
+   "retry_reasons": [],
+   "sha256": "459c1da40da47815bdcdb512f87501e4b39ab36129ca79a535493d776cee3c4c",
+   "url": "https://mesonet.agron.iastate.edu/cgi-bin/afos/retrieve.py?pil=PFMOKX&sdate=2024-04-01&edate=2024-05-01&fmt=text&limit=9999"
+  },
+  {
+   "bytes": 9453749,
+   "fetched_at_utc": "2026-09-22T21:27:12.163279+00:00",
+   "http_status": 200,
+   "products": 288,
+   "retry_reasons": [],
+   "sha256": "e4c3441e71c4d5920beefe1d3d51b8dece9041880bec16b39996ad68e1eb0980",
+   "url": "https://mesonet.agron.iastate.edu/cgi-bin/afos/retrieve.py?pil=PFMOKX&sdate=2024-05-01&edate=2024-06-01&fmt=text&limit=9999"
+  },
+  {
+   "bytes": 9094619,
+   "fetched_at_utc": "2026-09-22T21:27:15.122677+00:00",
+   "http_status": 200,
+   "products": 265,
+   "retry_reasons": [],
+   "sha256": "9ca6d3e770ed03156a622d4f1ccbeee818d7ad76a914e4707ce1a513ffe99aff",
+   "url": "https://mesonet.agron.iastate.edu/cgi-bin/afos/retrieve.py?pil=PFMOKX&sdate=2024-06-01&edate=2024-07-01&fmt=text&limit=9999"
+  },
+  {
+   "bytes": 10091617,
+   "fetched_at_utc": "2026-09-22T21:27:18.428081+00:00",
+   "http_status": 200,
+   "products": 285,
+   "retry_reasons": [],
+   "sha256": "26750b170898023e132e70bca1ea49d5cb61aaa7681f1910d23a3a8e27b5a0ed",
+   "url": "https://mesonet.agron.iastate.edu/cgi-bin/afos/retrieve.py?pil=PFMOKX&sdate=2024-07-01&edate=2024-08-01&fmt=text&limit=9999"
+  },
+  {
+   "bytes": 9403925,
+   "fetched_at_utc": "2026-09-22T21:27:21.565388+00:00",
+   "http_status": 200,
+   "products": 274,
+   "retry_reasons": [],
+   "sha256": "91e7a32352e009808365f3a376081bd768156ecded820b2da057386d8ff4bf3d",
+   "url": "https://mesonet.agron.iastate.edu/cgi-bin/afos/retrieve.py?pil=PFMOKX&sdate=2024-08-01&edate=2024-09-01&fmt=text&limit=9999"
+  },
+  {
+   "bytes": 7827213,
+   "fetched_at_utc": "2026-09-22T21:27:24.334607+00:00",
+   "http_status": 200,
+   "products": 252,
+   "retry_reasons": [],
+   "sha256": "febc0fdfbabf3335f06a917939576747e7618d9f57d18256e9304e802b66c699",
+   "url": "https://mesonet.agron.iastate.edu/cgi-bin/afos/retrieve.py?pil=PFMOKX&sdate=2024-09-01&edate=2024-10-01&fmt=text&limit=9999"
+  },
+  {
+   "bytes": 8066963,
+   "fetched_at_utc": "2026-09-22T21:27:27.070109+00:00",
+   "http_status": 200,
+   "products": 262,
+   "retry_reasons": [],
+   "sha256": "b9e95abea744408548a3599de8801abc196b9a6adf16ce01addfc0a2c3df6aae",
+   "url": "https://mesonet.agron.iastate.edu/cgi-bin/afos/retrieve.py?pil=PFMOKX&sdate=2024-10-01&edate=2024-11-01&fmt=text&limit=9999"
+  },
+  {
+   "bytes": 8397656,
+   "fetched_at_utc": "2026-09-22T21:27:29.825670+00:00",
+   "http_status": 200,
+   "products": 254,
+   "retry_reasons": [],
+   "sha256": "7260604efbda1652b7e98cfe6ed0f707eb95d34f26c8c7e3acd3b322c126b937",
+   "url": "https://mesonet.agron.iastate.edu/cgi-bin/afos/retrieve.py?pil=PFMOKX&sdate=2024-11-01&edate=2024-12-01&fmt=text&limit=9999"
+  },
+  {
+   "bytes": 9774004,
+   "fetched_at_utc": "2026-09-22T21:27:33.191162+00:00",
+   "http_status": 200,
+   "products": 275,
+   "retry_reasons": [],
+   "sha256": "c022252ef7b5056ebeb5f198f20500daafe55c63956d66c59b85a2f02e015093",
+   "url": "https://mesonet.agron.iastate.edu/cgi-bin/afos/retrieve.py?pil=PFMOKX&sdate=2024-12-01&edate=2025-01-01&fmt=text&limit=9999"
+  },
+  {
+   "bytes": 9053311,
+   "fetched_at_utc": "2026-09-22T21:27:36.189854+00:00",
+   "http_status": 200,
+   "products": 263,
+   "retry_reasons": [],
+   "sha256": "715af19ff37c9d66044c5cd8698352c78c78f713e95bb91eba209cd5b8802d21",
+   "url": "https://mesonet.agron.iastate.edu/cgi-bin/afos/retrieve.py?pil=PFMOKX&sdate=2025-01-01&edate=2025-02-01&fmt=text&limit=9999"
+  },
+  {
+   "bytes": 8293530,
+   "fetched_at_utc": "2026-09-22T21:27:39.072698+00:00",
+   "http_status": 200,
+   "products": 228,
+   "retry_reasons": [],
+   "sha256": "69feab5ad87ed8c02b46532a76143838f75280788bd509ee1a966c32ba613266",
+   "url": "https://mesonet.agron.iastate.edu/cgi-bin/afos/retrieve.py?pil=PFMOKX&sdate=2025-02-01&edate=2025-03-01&fmt=text&limit=9999"
+  },
+  {
+   "bytes": 8896072,
+   "fetched_at_utc": "2026-09-22T21:27:41.982810+00:00",
+   "http_status": 200,
+   "products": 252,
+   "retry_reasons": [],
+   "sha256": "43b48e2f2e3358688a494ca18cf4a901a6af0030254bd388c296424b9046e980",
+   "url": "https://mesonet.agron.iastate.edu/cgi-bin/afos/retrieve.py?pil=PFMOKX&sdate=2025-03-01&edate=2025-04-01&fmt=text&limit=9999"
+  },
+  {
+   "bytes": 8155463,
+   "fetched_at_utc": "2026-09-22T21:27:44.728187+00:00",
+   "http_status": 200,
+   "products": 239,
+   "retry_reasons": [],
+   "sha256": "dadd9f002c4989b698979f8611c9aff1fd8f23fb0998924a5b45c3a116905355",
+   "url": "https://mesonet.agron.iastate.edu/cgi-bin/afos/retrieve.py?pil=PFMOKX&sdate=2025-04-01&edate=2025-05-01&fmt=text&limit=9999"
+  },
+  {
+   "bytes": 8065073,
+   "fetched_at_utc": "2026-09-22T21:27:47.412022+00:00",
+   "http_status": 200,
+   "products": 243,
+   "retry_reasons": [],
+   "sha256": "876ce77b4a6c9aa34053d3b60f27fe5e4a28c9810e60c1679f664be3e56643c6",
+   "url": "https://mesonet.agron.iastate.edu/cgi-bin/afos/retrieve.py?pil=PFMOKX&sdate=2025-05-01&edate=2025-06-01&fmt=text&limit=9999"
+  },
+  {
+   "bytes": 6056039,
+   "fetched_at_utc": "2026-09-22T21:27:49.581592+00:00",
+   "http_status": 200,
+   "products": 175,
+   "retry_reasons": [],
+   "sha256": "ac64638c130b78567e699afce528f3fbded6cc406856896d8083df3f7a1cec77",
+   "url": "https://mesonet.agron.iastate.edu/cgi-bin/afos/retrieve.py?pil=PFMOKX&sdate=2025-06-01&edate=2025-07-01&fmt=text&limit=9999"
+  },
+  {
+   "bytes": 5629653,
+   "fetched_at_utc": "2026-09-22T21:27:51.553948+00:00",
+   "http_status": 200,
+   "products": 158,
+   "retry_reasons": [],
+   "sha256": "8bdde45178c6206e66072a9cefc9da2894a1f0715d1607ffcbec55686e2f3219",
+   "url": "https://mesonet.agron.iastate.edu/cgi-bin/afos/retrieve.py?pil=PFMOKX&sdate=2025-07-01&edate=2025-08-01&fmt=text&limit=9999"
+  },
+  {
+   "bytes": 5174251,
+   "fetched_at_utc": "2026-09-22T21:27:53.655776+00:00",
+   "http_status": 200,
+   "products": 156,
+   "retry_reasons": [],
+   "sha256": "b2aea85d79d8fb04436d82f890f17ac2b6bc7726a90141ce46c4804719d63094",
+   "url": "https://mesonet.agron.iastate.edu/cgi-bin/afos/retrieve.py?pil=PFMOKX&sdate=2025-08-01&edate=2025-09-01&fmt=text&limit=9999"
+  },
+  {
+   "bytes": 4592840,
+   "fetched_at_utc": "2026-09-22T21:27:55.377389+00:00",
+   "http_status": 200,
+   "products": 145,
+   "retry_reasons": [],
+   "sha256": "dfe461410b4c06c3b778a69f3e4400cae59b3b5c14ed2363440b10814656f0d7",
+   "url": "https://mesonet.agron.iastate.edu/cgi-bin/afos/retrieve.py?pil=PFMOKX&sdate=2025-09-01&edate=2025-10-01&fmt=text&limit=9999"
+  },
+  {
+   "bytes": 4747655,
+   "fetched_at_utc": "2026-09-22T21:27:57.101753+00:00",
+   "http_status": 200,
+   "products": 145,
+   "retry_reasons": [],
+   "sha256": "cffae5a8fd4fce8aeddbcc48534822d6c9aefd3b0db9c5d7d3dd1e340063558c",
+   "url": "https://mesonet.agron.iastate.edu/cgi-bin/afos/retrieve.py?pil=PFMOKX&sdate=2025-10-01&edate=2025-11-01&fmt=text&limit=9999"
+  },
+  {
+   "bytes": 5842840,
+   "fetched_at_utc": "2026-09-22T21:28:00.589005+00:00",
+   "http_status": 200,
+   "products": 170,
+   "retry_reasons": [],
+   "sha256": "99b7e4488745e4a2deca97877d6d9742a45f2a57b0a2611d774e597d0773ad45",
+   "url": "https://mesonet.agron.iastate.edu/cgi-bin/afos/retrieve.py?pil=PFMOKX&sdate=2025-11-01&edate=2025-12-01&fmt=text&limit=9999"
+  },
+  {
+   "bytes": 6554914,
+   "fetched_at_utc": "2026-09-22T21:28:02.871551+00:00",
+   "http_status": 200,
+   "products": 183,
+   "retry_reasons": [],
+   "sha256": "0ecd3645be3b1bcb7c651976ebf503ae57c4ffc09dfa42a53df02ff6014bb9c5",
+   "url": "https://mesonet.agron.iastate.edu/cgi-bin/afos/retrieve.py?pil=PFMOKX&sdate=2025-12-01&edate=2026-01-01&fmt=text&limit=9999"
+  },
+  {
+   "bytes": 5075211,
+   "fetched_at_utc": "2026-09-22T21:28:04.734676+00:00",
+   "http_status": 200,
+   "products": 144,
+   "retry_reasons": [],
+   "sha256": "f747b727f32fea9cf92a21fdb6e3f12e9d7a9083ab0b76442d052c2241a3675f",
+   "url": "https://mesonet.agron.iastate.edu/cgi-bin/afos/retrieve.py?pil=PFMOKX&sdate=2026-01-01&edate=2026-02-01&fmt=text&limit=9999"
+  },
+  {
+   "bytes": 5289043,
+   "fetched_at_utc": "2026-09-22T21:28:06.663441+00:00",
+   "http_status": 200,
+   "products": 149,
+   "retry_reasons": [],
+   "sha256": "57ad57490e1253e51b5d0e256391fd83f87b35fa8920391363a264286851fa1f",
+   "url": "https://mesonet.agron.iastate.edu/cgi-bin/afos/retrieve.py?pil=PFMOKX&sdate=2026-02-01&edate=2026-03-01&fmt=text&limit=9999"
+  },
+  {
+   "bytes": 6355573,
+   "fetched_at_utc": "2026-09-22T21:28:08.979936+00:00",
+   "http_status": 200,
+   "products": 179,
+   "retry_reasons": [],
+   "sha256": "2ad33c391d317933520477d8ef6b7b1c221cf846e6e05477fd35bf437fbc2ec7",
+   "url": "https://mesonet.agron.iastate.edu/cgi-bin/afos/retrieve.py?pil=PFMOKX&sdate=2026-03-01&edate=2026-04-01&fmt=text&limit=9999"
+  },
+  {
+   "bytes": 5248083,
+   "fetched_at_utc": "2026-09-22T21:28:10.903598+00:00",
+   "http_status": 200,
+   "products": 157,
+   "retry_reasons": [],
+   "sha256": "1c5d6b2ed19a0006055fe2ad42237cf07beb88b80276aa8558850b31e862b4f1",
+   "url": "https://mesonet.agron.iastate.edu/cgi-bin/afos/retrieve.py?pil=PFMOKX&sdate=2026-04-01&edate=2026-05-01&fmt=text&limit=9999"
+  },
+  {
+   "bytes": 5144551,
+   "fetched_at_utc": "2026-09-22T21:28:12.787328+00:00",
+   "http_status": 200,
+   "products": 156,
+   "retry_reasons": [],
+   "sha256": "a3743156c55a113aebb9b798dddb6e304ce5a2657de2831c0904a96e70aae411",
+   "url": "https://mesonet.agron.iastate.edu/cgi-bin/afos/retrieve.py?pil=PFMOKX&sdate=2026-05-01&edate=2026-06-01&fmt=text&limit=9999"
+  },
+  {
+   "bytes": 5018233,
+   "fetched_at_utc": "2026-09-22T21:28:14.645244+00:00",
+   "http_status": 200,
+   "products": 145,
+   "retry_reasons": [],
+   "sha256": "db0f1a7069789cc288bfdde7b2955800762a85e38b41ec598d397ba2c3843148",
+   "url": "https://mesonet.agron.iastate.edu/cgi-bin/afos/retrieve.py?pil=PFMOKX&sdate=2026-06-01&edate=2026-07-01&fmt=text&limit=9999"
+  },
+  {
+   "bytes": 4962527,
+   "fetched_at_utc": "2026-09-22T21:28:16.468639+00:00",
+   "http_status": 200,
+   "products": 140,
+   "retry_reasons": [],
+   "sha256": "005fa79e31307261af4a0aafa98ddc66dbfa4987033e39ded6cee43fa8ef5e8a",
+   "url": "https://mesonet.agron.iastate.edu/cgi-bin/afos/retrieve.py?pil=PFMOKX&sdate=2026-07-01&edate=2026-08-01&fmt=text&limit=9999"
+  },
+  {
+   "bytes": 4826335,
+   "fetched_at_utc": "2026-09-22T21:28:18.247770+00:00",
+   "http_status": 200,
+   "products": 137,
+   "retry_reasons": [],
+   "sha256": "db3eb8eb4849737bfd8151f9cd06787b27778d1597b121e124e5a169f4b5f633",
+   "url": "https://mesonet.agron.iastate.edu/cgi-bin/afos/retrieve.py?pil=PFMOKX&sdate=2026-08-01&edate=2026-09-01&fmt=text&limit=9999"
+  },
+  {
+   "bytes": 2882097,
+   "fetched_at_utc": "2026-09-22T21:28:19.495423+00:00",
+   "http_status": 200,
+   "products": 88,
+   "retry_reasons": [],
+   "sha256": "e3f6cd51e62d8386ad349493003222ddaa15c4c1a73ac58d4ab7dbba1833f31c",
+   "url": "https://mesonet.agron.iastate.edu/cgi-bin/afos/retrieve.py?pil=PFMOKX&sdate=2026-09-01&edate=2026-09-22&fmt=text&limit=9999"
+  }
+ ]
+}

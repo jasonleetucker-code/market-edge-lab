@@ -18,7 +18,7 @@ import hashlib
 import json
 import sys
 from collections import Counter, defaultdict
-from datetime import date
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -44,6 +44,7 @@ def _sha(path: Path) -> str:
 def input_files() -> list[Path]:
     files = sorted(G3.glob("pfm_extracts_*.jsonl.gz")) + sorted(G3.glob("iem_clinyc_*.txt.gz"))
     files += sorted(G2.glob("iem_clinyc_*.txt.gz")) + [G3 / "kalshi_markets_all_2026-09-22.json.gz"]
+    files += [G3 / "fetch_manifest.json"]
     return files
 
 
@@ -108,10 +109,33 @@ def load_kalshi() -> dict[date, KalshiEvent]:
     return events
 
 
+def _pfm_responses() -> int:
+    requests = json.loads((G3 / "fetch_manifest.json").read_text())["requests"]
+    return sum("pil=PFMOKX" in r["url"] for r in requests)
+
+
+def _span(m) -> int:
+    start, end = (date.fromisoformat(d) for d in m["date_range"])
+    return (end - start).days + 1
+
+
 def quality_report(rows, m, pfm_stats) -> str:
     years = Counter(); usable = Counter(); reasons = defaultdict(Counter); leads = Counter()
-    labels = Counter(); corrected = 0
+    labels = Counter(); corrected = 0; rules = Counter(); regimes = Counter(); bases = Counter()
+    before = Counter(); both = agree = 0
     for r in rows:
+        rules[r["rules_source"] or "(no Kalshi event)"] += 1
+        regimes[r["contract_regime"]] += 1
+        basis = r["nws_cli_basis"]
+        bases[basis if ":" not in basis else basis.split(":")[0] + ": " + (
+            "first final report with data" if "first final report with data" in basis
+            else basis.split(": ", 1)[1].split(":")[0])] += 1
+        if r["kalshi_expiration_value"] and r["nws_cli_value_f"] != "":
+            both += 1
+            agree += int(float(r["kalshi_expiration_value"])) == int(r["nws_cli_value_f"])
+        if r["forecast_issued_utc"]:
+            gap = datetime.fromisoformat(r["decision_utc"]) - datetime.fromisoformat(r["forecast_issued_utc"])
+            before[int(gap.total_seconds() // 3600)] += 1
         y = r["target_date"][:4]
         years[y] += 1
         if r["usable"] == "true":
@@ -129,14 +153,37 @@ def quality_report(rows, m, pfm_stats) -> str:
         "Counts only: no forecast error or model performance appears in this file.",
         "",
         f"- Candidate days: **{m['rows']}** ({m['date_range'][0]} → {m['date_range'][1]}; "
-        "missing calendar days: 0; one row per day by construction)",
+        f"calendar days in range: {_span(m)}; one row per day by construction)",
         f"- Usable days: **{sum(usable.values())}**; excluded: **{m['rows'] - sum(usable.values())}**",
         f"- Rows by status: `{json.dumps(m['rows_by_status'], sort_keys=True)}`",
         f"- Rows by split/usable: `{json.dumps(m['rows_by_split_usable'], sort_keys=True)}`",
         f"- Label source (usable rows): `{json.dumps(dict(sorted(labels.items())), sort_keys=True)}`",
         f"- Chosen forecasts that were corrected (CCx) products: {corrected}",
+        f"- Kalshi `expiration_value` vs NWS CLI contract-rule value, days with both: "
+        f"{agree}/{both} equal (unequal days would be excluded as KALSHI_CLI_CONFLICT)",
+        f"- Contract regime: `{json.dumps(dict(sorted(regimes.items())), sort_keys=True)}` "
+        "(NHIGH rules through 2025-12-09, GLOBALTEMPERATURE from 2025-12-10; Gate 2)",
+        f"- Kalshi rules source by row: `{json.dumps(dict(sorted(rules.items())), sort_keys=True)}`. "
+        "`unrecognized` = early HIGHNY events (2021-08 → 2022-03) whose rules text names no "
+        "source (\"highest temperature recorded in Central Park\"); their label is still Kalshi's "
+        "own `expiration_value`.",
+        f"- NWS CLI selection basis: `{json.dumps(dict(sorted(bases.items())), sort_keys=True)}`",
+        "",
+        "## Hours between the chosen issuance and the decision time",
+        "",
+        "Cutoff is 30 min before the decision; issuances in the last 30 min are never used.",
+        "",
+        "| Hours before decision | Days |",
+        "|---|---|",
+        *[f"| {k}–{k + 1} | {v} |" for k, v in sorted(before.items())],
         "",
         "## PFM archive",
+        "",
+        f"Products = every PFMOKX product in the {_pfm_responses()} monthly archive responses "
+        "(`tests/fixtures/gate3/fetch_manifest.json`). "
+        "Duplicates = identical SHA-256 (the same product archived twice), counted once. "
+        "Ambiguous = WMO header time not within 0–15 min after the typed local issuance line; "
+        "never used.",
         "",
         "| Item | Count |",
         "|---|---|",

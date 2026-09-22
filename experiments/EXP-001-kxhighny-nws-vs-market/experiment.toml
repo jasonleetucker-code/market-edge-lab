@@ -1,6 +1,6 @@
 id = "EXP-001"
 title = "KXHIGHNY: NWS-forecast-implied probability vs executable Kalshi prices"
-status = "DRAFT"
+status = "PREREGISTERED"
 owner = "jasonleetucker-code"
 created = "2026-09-22"
 
@@ -18,63 +18,71 @@ unproven. The null hypothesis is that prices already reflect public NWS forecast
 """
 
 market = "Kalshi KXHIGHNY (Highest temperature in NYC), daily brackets"
-decision_time = "TBD: candidate is a fixed local time on the day before the target date; must precede market close"
-model = "TBD: start with a simple calibrated mapping from NWS forecast high to a bracket distribution (e.g. forecast error distribution by lead time); no ML until the baseline exists"
+decision_time = "18:00 America/New_York on D-1 for target date D (UTC via the US DST rule, edge_lab.dataset_exp001.decision_time). Forecast availability cutoff = decision - 30 min: use the latest PFMOKX issuance (WMO header time, within 0-15 min after its local issuance line) with issuance <= cutoff, a Central Park max for D, and age <= 24 h at the cutoff; nothing issued later, including corrections, is ever used (ADR 0010)."
+model = "Empirical integer error pmf: P(y = f + k) = (n_k + 0.5) / (N + 0.5*41), k in [-20, 20] (outside errors counted/scored at +-20), f = forecast_max_f. Variants exactly two: V1 pooled; V2 one pmf per meteorological season of D. Fit on usable train days for validation scoring; selected variant refit once on train+validation for test scoring; refit once on all usable days through 2026-09-21 for Stage B. Selection: V2 only if mean validation per-day log-score difference (V2 - V1) > 0 and its 95% block-bootstrap lower bound > 0, else V1. Bracket probability = pmf summed over integers that settlement.resolve maps to YES. References: R0 monthly climatology (add-0.5 over integer support [min label - 10, max label + 10] of the fit window); R1 discretized Gaussian N(f + mu, sigma^2) from fit-window errors, prob floor 1e-9 (reported only). Bootstrap everywhere: circular moving-block over days, block 7, 10000 resamples, seed 20260922, percentile. Full spec: gate3/DESIGN.md section 5."
 
 data_sources = [
-  "kalshi_public: series, markets, events, order books (snapshots)",
-  "nws_api: 12h/hourly/grid forecasts for the Central Park reference point (snapshots)",
-  "kalshi_settlement: settled/historical markets (rules text, strikes, result, expiration_value) and contract documents",
-  "Settlement label: Kalshi expiration_value; NWS CLI final (contract report-selection rules) as validated proxy, 739/739 agreement (gate 2 report)",
-  "nws_cli_central_park + iem_afos_clinyc: official observed maximum, every issuance",
+  "iem_afos_pfmokx: NWS OKX Point Forecast Matrices as issued (IEM AFOS archive), Central Park NYZ072 daytime max; committed as exact extracts tests/fixtures/gate3/pfm_extracts_YYYY.jsonl.gz with full-product SHA-256 (ADR 0011)",
+  "Settlement label: Kalshi expiration_value when a settled event exists, else NWS CLI value under the Gate 2 contract report-selection rules (nws_cli.settlement_value); rows where both exist and differ are excluded (none in dataset v1)",
+  "iem_afos_clinyc: NWS CLI Central Park reports 2016-12-31..2026-09-23 (gate2 + gate3 fixtures)",
+  "kalshi_settlement: captured KXHIGHNY/HIGHNY settled markets 2021-08-06..2026-09-21 (tests/fixtures/gate3/kalshi_markets_all_2026-09-22.json.gz)",
+  "Dataset: EXP-001-pit-v1, gate3/dataset.csv, SHA-256 b14efbeca8951fcf679ccf4bba1d19c81b8cd52872ba9131bef506a3ad84f0e4 (gate3/dataset_manifest.json); 3551 candidate days, 3551 usable",
+  "Stage B only (prospective): kalshi_public order books captured at each decision time (+ a latency re-check snapshot) after this freeze",
 ]
 
 features = [
-  "NWS forecast high for the target date, by lead time, as available at decision time",
-  "forecast revision since previous issuance",
-  "bracket bounds parsed from market terms (deterministic)",
+  "forecast_max_f: the NWS PFM Central Park daytime max for D from the issuance selected by the availability rule",
+  "meteorological season of D (DJF/MAM/JJA/SON), V2 only",
+  "bracket bounds from captured market fields strike_type/floor_strike/cap_strike, checked against rules text (settlement.resolve), Stage B only",
 ]
 
 success_criteria = [
-  "Out-of-sample, after fees and crossing the captured spread, mean EV per contract > 0 with a 95% interval excluding 0",
-  "Model probabilities are calibrated out-of-sample (Brier score better than market-implied probabilities)",
-  "Result holds on a test period touched exactly once",
+  "Stage A (historical probability validation, test 2025-01-01..2026-09-21, evaluated once in Gate 4): mean per-day log-score difference (selected model - R0) > 0 with the 95% block-bootstrap lower bound > 0, AND randomized-PIT central-80% coverage (u = F(y-1) + v*P(y), v from random.Random(20260922) in date order; fraction with 0.10 <= u <= 0.90) within [0.75, 0.85]. A Stage A pass is NOT evidence of a trading edge.",
+  "Stage B (prospective shadow trading, BLOCKED-ON-OWNER for scheduled collection): with signal 'buy 1 YES if p - cost_yes >= 0.05; buy 1 NO if (1 - p) - cost_no >= 0.05' (cost = fees.cost_per_contract(1, ask)), after >= 180 decision days with valid collection: mean daily net P&L > 0 with the 95% block-bootstrap lower bound > 0 (SHADOW_POSITIVE, not EDGE_PROVEN).",
 ]
 
 failure_criteria = [
-  "Market-implied probabilities are as well or better calibrated than the model out-of-sample",
-  "Any apparent edge disappears after fees and spread, or depends on mid-price fills",
-  "Settlement cannot be reproduced reliably from the named source",
+  "Stage A fails if either Stage A condition fails; then Stage B is not run for this model",
+  "Stage B fails if the 95% block-bootstrap upper bound of mean daily net P&L < 0 at 180 days or later, or Stage A failed",
+  "Stage B is INCONCLUSIVE if neither pass nor fail holds at 365 decision days",
+  "Any result that depends on mid-price, last-price, stale-book or retroactive fills is void",
 ]
 
 risk_constraints = [
-  "Research only: no orders, no credentials, no funded account",
-  "Any later simulation uses executable prices and available size from captured order books only",
+  "Research only: no orders, no credentials, no funded account, no order-execution code",
+  "Stage B is shadow only; it simulates fills from captured books under the execution model and never sends orders",
+  "Test split is evaluated exactly once, after this freeze, with nothing changed; any later change is a new experiment",
 ]
 
 limitations = [
-  "Our own snapshot history starts 2026-09-22; historical order books before then are not available to us",
-  "Small sample: one series, around 6-12 brackets per day, so effective independent observations are about one per day",
+  "No historical market prices or order books exist for us before 2026-09-22; no historical model-vs-market comparison is made or required (Stage A is probability validation only)",
+  "Small sample: one series, one decision per day; about 470 effective test days; Stage B can detect only large edges within 180-365 days (gate3/POWER.md)",
   "Rules name The Weather Company from 2026-08-14 while certified terms name NWS; Kalshi values matched NWS on 39/39 TWC-era days but TWC data itself cannot be checked (terms prohibit automated access)",
+  "PFM daytime max (7 AM-7 PM LST) differs in definition from the CLI calendar-day max; the empirical error pmf absorbs this, it is not corrected",
+  "Fee coefficient 0.07 is taken from Kalshi's documented worked example; the fee-schedule PDF was behind a bot checkpoint and not retrieved; re-verify before any Stage B result",
+  "Full PFM products are not in git (exact extracts + hashes only; ADR 0011)",
 ]
 
 gates_required = [
   "Gate 2: settlement validation — PASSED 2026-09-22 (gate2/REPORT.md)",
-  "Gate 3: point-in-time historical dataset",
+  "Gate 3: point-in-time historical dataset and preregistration (gate3/)",
+  "Gate 4: fit and evaluate the frozen baseline on the predeclared protocol",
 ]
 
 [periods]
-train = "TBD"
-validation = "TBD"
-test = "TBD"
+train = "2017-01-01..2022-12-31 (target dates; usable rows only)"
+validation = "2023-01-01..2024-12-31 (V1/V2 selection only)"
+test = "2025-01-01..2026-09-21 (Stage A, evaluated once)"
+stage_b = "first decision time with valid collection after the freeze; evaluated at >= 180 and at most 365 decision days"
 
 [costs]
-fee_model = "TBD: capture the Kalshi fee schedule from a primary source with a date; never assumed"
-spread = "Cross the spread using captured order books; mid-prices are not fills"
+fee_model = "edge_lab.fees v1: model fee = fee_multiplier (1 for KXHIGHNY) * 0.07 * C * P * (1 - P); trade fee = ceil to $0.000001; cash change = floor to the cent of (-P*C - trade fee) (non-direct member); taker only; no maker fills, no rounding rebates, no settlement fee assumed. Evidence: gate3/evidence/kalshi_docs_fee_rounding.html, kalshi_series_KXHIGHNY.json"
+spread = "Crossed in full: YES bought at 1 - best NO bid, NO bought at 1 - best YES bid, from the captured book; never mid or last price"
 
 [execution]
-fill_model = "TBD: conservative taker fills at the captured best ask/bid, limited to the displayed size"
-latency = "TBD"
+fill_model = "Stage B only: order book captured within 5 min of the decision time (else NO_BOOK, no trade); 1 contract at the implied ask, size must be <= displayed size; fill counts only if a book captured 10-15 min later still offers <= entry price with size >= 1 (else NO_FILL_UNVERIFIED); no retroactive fills; settle with settlement.resolve on the official label"
+latency = "10 minutes (fill confirmation window 10-15 min after the decision snapshot)"
+max_book_age = "5 minutes"
 
 [artifacts]
 spec = "experiments/EXP-001-kxhighny-nws-vs-market/experiment.toml"

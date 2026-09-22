@@ -20,3 +20,12 @@ def test_statistics_on_train_rows():
     assert out["overall"]["n"] == 2 and out["overall"]["mae"] == 1.0 and out["overall"]["exact_pct"] == 50.0
     assert out["by_season"]["DJF"]["n"] == 1 and out["by_season"]["JJA"]["n"] == 1
     assert out["bracket_boundary"]["outcome_in_different_2F_bracket_than_forecast_pct"] == 50.0
+
+
+def test_power_inputs_are_train_only_and_finite():
+    rows = [row(f"2020-{m:02d}-01", label=50 + m, forecast=49 + m) for m in range(1, 13)]
+    rows += [row(f"2021-{m:02d}-01", label=52 + m, forecast=52 + m) for m in range(1, 13)]
+    out = describe(rows)["power_inputs"]
+    assert out["n_days"] == 24 and out["error_pmf_log_score_sd"] >= 0
+    with pytest.raises(NotTrainData):
+        describe(rows + [row("2023-01-01", split="validation")])

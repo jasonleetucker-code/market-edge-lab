@@ -1,0 +1,68 @@
+{
+  "availability_buffer_minutes": 30,
+  "builder_version": "1",
+  "dataset_id": "EXP-001-pit-v1",
+  "dataset_sha256": "b14efbeca8951fcf679ccf4bba1d19c81b8cd52872ba9131bef506a3ad84f0e4",
+  "date_range": [
+    "2017-01-01",
+    "2026-09-21"
+  ],
+  "decision_rule": "18:00 America/New_York on D-1",
+  "input_sha256": {
+    "tests/fixtures/gate2/iem_clinyc_2024-01-01_2025-01-03.txt.gz": "ddfa28123f40a4dab36482cf99d337966ac75040cf148b23f96ed3cd64a93a98",
+    "tests/fixtures/gate2/iem_clinyc_2025-01-01_2026-01-03.txt.gz": "d58a92542d7f8d06217b39bf5ceef0af6bac93a5a87d3cac07d94447d5b65901",
+    "tests/fixtures/gate2/iem_clinyc_2026-07-15_2026-09-23.txt.gz": "143910fb375bff17a9b8e4b95d1f2dba2f3783b88f89bd342176caee49d0cc5c",
+    "tests/fixtures/gate3/fetch_manifest.json": "998663744709b0a6a87858f33e832dccb9580666cfee7e9893a1d6b148a01d10",
+    "tests/fixtures/gate3/iem_clinyc_2017.txt.gz": "2ba7f939f28c06d0f0306541e15bef8a3d4638d638071340eee7f9aa70112ad2",
+    "tests/fixtures/gate3/iem_clinyc_2018.txt.gz": "8d8ce2396c3377b3ab79e7e21fd95f79a321ffc7f11751623080b4758dc31a89",
+    "tests/fixtures/gate3/iem_clinyc_2019.txt.gz": "6786041f0ec17a3e2cc0436a9430d764398937931d05b8000bbb09faa42a4de6",
+    "tests/fixtures/gate3/iem_clinyc_2020.txt.gz": "9798b9d19c0480736855cb871e319117e8c248b9fa10bf788101186d0ce92289",
+    "tests/fixtures/gate3/iem_clinyc_2021.txt.gz": "3e5cd8962accecd79ef178cc28c5136e27a417918ed888604d4cdb1909cce399",
+    "tests/fixtures/gate3/iem_clinyc_2022.txt.gz": "164a4cb6c29a4d62d0c49647543ac53c9762331f5990cbecb623056149e39c13",
+    "tests/fixtures/gate3/iem_clinyc_2023.txt.gz": "9f5cf176e5baa7ccd8ccb4df7210f1b1821ddf608f003087bdcd01e1ab20cd19",
+    "tests/fixtures/gate3/iem_clinyc_2026H1.txt.gz": "757e0c3bcefe55b1c96083a0faad954188eebe04f07a3607d1d799259bee594a",
+    "tests/fixtures/gate3/kalshi_markets_all_2026-09-22.json.gz": "6daaa8850834a693130940a577b0586b323e7ce8b27c1d2b9a06f298e5827dbc",
+    "tests/fixtures/gate3/pfm_extracts_2016.jsonl.gz": "fdace25697537dc8eb4d184ec1cec460b70fafbc49ebb8ced44c745c69322867",
+    "tests/fixtures/gate3/pfm_extracts_2017.jsonl.gz": "3bb15883a882383cc132733cd2e0b8b0a312d64cd18af74c1fd1a48d0fa94298",
+    "tests/fixtures/gate3/pfm_extracts_2018.jsonl.gz": "7bada38a0cb00d92de301395c0c60d557893c86dc68e097c0a644559d7d473e6",
+    "tests/fixtures/gate3/pfm_extracts_2019.jsonl.gz": "1987b97155dab4800cebe93efcda36f4461dcd52c31e1f0bc786dc09d86a5b1e",
+    "tests/fixtures/gate3/pfm_extracts_2020.jsonl.gz": "20158110e1c9f678ac37b71d02ce88370cc1e33b982d41420181d06462fbeb80",
+    "tests/fixtures/gate3/pfm_extracts_2021.jsonl.gz": "c54d647b64600db8e61260a7b9dbf250c5a9371ff1927b994095ff8d22d562c4",
+    "tests/fixtures/gate3/pfm_extracts_2022.jsonl.gz": "ad01dcf25393b7152898d6b0ab50af04cecb71b5889ca0531b743e02275550f5",
+    "tests/fixtures/gate3/pfm_extracts_2023.jsonl.gz": "3a728211e3b53f69152cfe6d414db5a828fc6b8f8a35b325b95005a5eda28461",
+    "tests/fixtures/gate3/pfm_extracts_2024.jsonl.gz": "48902658f747aa70bb6ba2b0baaec655543be87f75df53aa51e330ad3784a5b3",
+    "tests/fixtures/gate3/pfm_extracts_2025.jsonl.gz": "93625efbf0e78b0ef9216881786f6d3a05306aa645b0d58f8f6ebb97db83c299",
+    "tests/fixtures/gate3/pfm_extracts_2026.jsonl.gz": "7055d75881f8ecb942d433d4cf1c02f95a9ab09457f5f6880a2ff11ce4a66c52"
+  },
+  "max_forecast_age_hours": 24,
+  "pfm_archive_stats": {
+    "ambiguous_or_unparsed_issuance_time": 3,
+    "duplicate_products": 80,
+    "products": 32699,
+    "usable_issuances": 32616
+  },
+  "pfm_parser_version": "2",
+  "rows": 3551,
+  "rows_by_split_usable": {
+    "test/true": 629,
+    "train/true": 2191,
+    "validation/true": 731
+  },
+  "rows_by_status": {
+    "USABLE": 3551
+  },
+  "splits": {
+    "test": [
+      "2025-01-01",
+      "2026-09-21"
+    ],
+    "train": [
+      "2017-01-01",
+      "2022-12-31"
+    ],
+    "validation": [
+      "2023-01-01",
+      "2024-12-31"
+    ]
+  }
+}

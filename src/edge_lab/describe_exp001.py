@@ -59,6 +59,56 @@ def _bin(value: int) -> int:
     return value - (value % 2)
 
 
+def _log_scores_error_pmf(errors: list[int]) -> list[float]:
+    """ln p(e) under the add-0.5 pmf of the same train errors on [-20, 20] (in-sample)."""
+    clipped = [max(-20, min(20, e)) for e in errors]
+    counts, n = Counter(clipped), len(clipped)
+    return [math.log((counts[e] + 0.5) / (n + 0.5 * 41)) for e in clipped]
+
+
+def _log_scores_monthly_climatology(rows) -> list[float]:
+    labels = [int(r["label_f"]) for r in rows]
+    size = max(labels) - min(labels) + 21
+    by_month: dict[int, Counter] = {}
+    for r in rows:
+        by_month.setdefault(int(r["target_date"][5:7]), Counter())[int(r["label_f"])] += 1
+    out = []
+    for r in rows:
+        c = by_month[int(r["target_date"][5:7])]
+        out.append(math.log((c[int(r["label_f"])] + 0.5) / (sum(c.values()) + 0.5 * size)))
+    return out
+
+
+def _lag1(values: list[float]) -> float | None:
+    if len(values) < 3:
+        return None
+    m = mean(values)
+    den = sum((v - m) ** 2 for v in values)
+    return round(sum((values[i] - m) * (values[i + 1] - m) for i in range(len(values) - 1)) / den, 3) if den else None
+
+
+def power_inputs(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    """Variance inputs for the power check: moments of the train error distribution and of
+    train monthly climatology, in-sample on train. Sizing only; selects nothing."""
+    rows = sorted((r for r in rows if r.get("usable") == "true"), key=lambda r: r["target_date"])
+    if not rows:
+        return {}
+    errors = _errors(rows)
+    pmf = _log_scores_error_pmf(errors)
+    clim = _log_scores_monthly_climatology(rows)
+    diff = [a - b for a, b in zip(pmf, clim)]
+    return {
+        "n_days": len(rows),
+        "error_pmf_log_score_mean": round(mean(pmf), 3),
+        "error_pmf_log_score_sd": round(pstdev(pmf), 3),
+        "climatology_log_score_mean": round(mean(clim), 3),
+        "difference_mean": round(mean(diff), 3),
+        "difference_sd": round(pstdev(diff), 3),
+        "lag1_autocorrelation_error": _lag1([float(e) for e in errors]),
+        "lag1_autocorrelation_difference": _lag1(diff),
+    }
+
+
 def describe(rows: list[dict[str, Any]]) -> dict[str, Any]:
     bad = [r["target_date"] for r in rows if r.get("split") != "train"]
     if bad:
@@ -87,6 +137,7 @@ def describe(rows: list[dict[str, Any]]) -> dict[str, Any]:
                 100 * sum(r["prior_forecast_max_f"] != r["forecast_max_f"] for r in with_prior) / len(with_prior), 1
             ) if with_prior else None,
         },
+        "power_inputs": power_inputs(rows),
         "bracket_boundary": {
             "outcome_in_different_2F_bracket_than_forecast_pct": round(100 * boundary / len(rows), 1) if rows else None,
         },

@@ -158,6 +158,22 @@ REGISTRY: dict[str, SourceSpec] = {
                 "(about one request per second); cite IEM."
             ),
         ),
+        SourceSpec(
+            source_id="iem_afos_pfmokx",
+            legacy_name="iem_pfm",
+            description=(
+                "Iowa Environmental Mesonet AFOS archive of NWS OKX Point Forecast Matrices "
+                "(PFMOKX), the official NWS forecast as issued; EXP-001 uses the Central "
+                "Park (NYZ072) daytime maximum. Point-in-time forecast history."
+            ),
+            access_tier=AccessTier.PERMITTED_PUBLIC_ENDPOINT,
+            base_url="https://mesonet.agron.iastate.edu/cgi-bin/afos/retrieve.py",
+            status=SourceStatus.PLANNED,
+            license_notes=(
+                "Free academic service; re-serves public-domain NWS products. Be polite "
+                "(about one request per second); cite IEM. One-time manual backfill only."
+            ),
+        ),
     )
 }
 

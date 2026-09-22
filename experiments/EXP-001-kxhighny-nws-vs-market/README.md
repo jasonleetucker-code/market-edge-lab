@@ -1,8 +1,9 @@
 # EXP-001: KXHIGHNY NWS forecast vs market
 
-**Status: DRAFT.** Gate 2 (settlement validation) **passed** on 2026-09-22; see
-`gate2/REPORT.md`. Next is gate 3 (point-in-time dataset) and the preregistration freeze.
-No modeling results exist, and nothing here claims an edge.
+**Status: PREREGISTERED (frozen 2026-09-22, `preregistration.json`).** Gate 2 (settlement)
+passed; Gate 3 built the point-in-time dataset and the full specification (`gate3/`). No
+model has been fitted, no validation or test error has been computed, and nothing here
+claims an edge. Next: Gate 4 implements the frozen baseline and evaluates it once.
 
 ## Log
 
@@ -31,6 +32,21 @@ No modeling results exist, and nothing here claims an edge.
   report-selection rules were needed and implemented: "first final report that includes
   the data", and NHIGH's delayed determination when the final is lower than earlier reports.
 
+- **2026-09-22 (gate 3).** Built `gate3/dataset.csv` (EXP-001-pit-v1): one row per
+  target date 2017-01-01 → 2026-09-21, 3,551 days, all usable.
+  - Forecast: the NWS PFMOKX Central Park max from the latest issuance at or before 17:30
+    ET on D−1 (decision 18:00 ET).
+  - Label: Kalshi `expiration_value` (1,801 days) or the NWS CLI contract-rule value (1,750
+    days). They agree on all 1,797 days where both exist.
+  - Train-only descriptive analysis: error sd 3.2 °F, MAE 2.3 °F, bias +0.44 °F, with a
+    long right tail.
+  - Specified the baseline (empirical error pmf, V1 pooled or V2 seasonal), the fee and
+    execution models, Stage A (historical probability validation) and Stage B
+    (prospective shadow trading), and the power check. Froze the preregistration.
+  - Found and fixed during the build: pre-March-2017 products use upper-case labels, and
+    the WMO header often trails the local issuance line by 1 minute. Parser v2 handles
+    both; this was found before any error statistic was computed.
+
 ## Open questions
 
 1. ~~What does GLOBALTEMPERATURE.pdf specify?~~ Answered in `docs/SETTLEMENT.md`.
@@ -40,5 +56,9 @@ No modeling results exist, and nothing here claims an edge.
    value agreed with NWS on 39/39 TWC-era days; keep auditing new settlements.
 4. ~~Framework prerequisite: deterministic preregistration baseline.~~ Implemented
    (`edge-lab experiments freeze`, CI `check-frozen`); use it when preregistering.
-5. Gate 3 design question: decision time vs. when forecasts and the preliminary CLI become
-   available (point-in-time availability).
+5. ~~Gate 3 design question: decision time vs. forecast availability.~~ Answered in ADR 0010
+   and `gate3/DESIGN.md` §1.
+6. Stage B needs order books collected at 18:00 ET daily. That is scheduled collection,
+   which is an owner decision (ADR 0008).
+7. Re-verify the fee coefficient against Kalshi's fee-schedule PDF before any Stage B
+   result.

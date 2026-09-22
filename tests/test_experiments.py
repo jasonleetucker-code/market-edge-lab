@@ -3,13 +3,15 @@ from pathlib import Path
 
 from edge_lab.experiments import validate_all
 
-EXP_001 = Path(__file__).resolve().parents[1] / "experiments" / "EXP-001-kxhighny-nws-vs-market"
+# A DRAFT manifest (EXP-001 as it was before its freeze) used as the validator template;
+# the live EXP-001 manifest is now PREREGISTERED and frozen.
+TEMPLATE = Path(__file__).resolve().parent / "fixtures" / "experiment_draft_template.toml"
 
 
 def _registry(tmp_path, text=None, dirname="EXP-001-test"):
     target = tmp_path / dirname
     target.mkdir()
-    source = (EXP_001 / "experiment.toml").read_text()
+    source = TEMPLATE.read_text()
     (target / "experiment.toml").write_text(text(source) if text else source)
     return tmp_path
 

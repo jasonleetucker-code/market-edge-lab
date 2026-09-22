@@ -7,6 +7,8 @@ is printed in the column of the period's last hour (19 EST / 20 EDT); the overni
 minimum in the 07 EST / 08 EDT column. Values are right-aligned to their hour column.
 We verified that every value in the sample archive aligns exactly to an hour token.
 
+Labels are matched case-insensitively (products before March 2017 are upper case).
+
 Parsing is positional and deterministic. A value that does not align to an hour column,
 or sits in an unexpected column, is not read (it stays None). Nothing is inferred.
 
@@ -21,7 +23,7 @@ import re
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 
-PARSER_VERSION = "1"
+PARSER_VERSION = "2"
 ZONE = "NYZ072"
 POINT_NAME = "Central Park-New York NY"
 
@@ -30,8 +32,12 @@ _WMO = re.compile(r"^(FOUS\d\d) (K\w{3}) (\d{6})(?: ([A-Z]{3}))?\s*$", re.M)
 _ISSUED = re.compile(
     r"^(\d{3,4}) (AM|PM) (EDT|EST) \w{3} (\w{3}) +(\d{1,2}) (\d{4})\s*$", re.M
 )
-_HOURS = re.compile(r"^(EDT|EST) (3|6)hrly")
-_EXTREMES = re.compile(r"^(Min/Max|Max/Min)")
+_HOURS = re.compile(r"^(EDT|EST) (3|6)hrly", re.I)
+_EXTREMES = re.compile(r"^(Min/Max|Max/Min)", re.I)
+_DATE = re.compile(r"^Date", re.I)
+# The WMO header (transmission) time may trail the typed local issuance line by a few
+# minutes (1 min in ~16% of the archive). Beyond this window the product is ambiguous.
+WMO_LAG_TOLERANCE = timedelta(minutes=15)
 # Column of the period's last hour for daytime max / overnight min, per local zone.
 _MAX_HOUR = {"EST": 19, "EDT": 20}
 _MIN_HOUR = {"EST": 7, "EDT": 8}
@@ -41,7 +47,7 @@ _MIN_HOUR = {"EST": 7, "EDT": 8}
 class PfmForecast:
     wmo_header: str | None  # e.g. "FOUS51 KOKX 102150"
     correction: str | None  # e.g. "CCA" when the header carries a correction suffix
-    issued_utc: datetime | None  # from the local issuance line (DST-explicit)
+    issued_utc: datetime | None  # WMO header time, cross-checked against the local line
     issued_local_zone: str | None  # "EDT" | "EST"
     max_by_date: dict[date, int] = field(default_factory=dict)
     min_by_date: dict[date, int] = field(default_factory=dict)
@@ -66,13 +72,22 @@ def _parse_issued(text: str) -> tuple[datetime | None, str | None]:
     return local.replace(tzinfo=_TZ[zone]).astimezone(timezone.utc), zone
 
 
-def _wmo_consistent(wmo_ddhhmm: str, issued_utc: datetime) -> bool:
-    """WMO header day/hour/minute (UTC) must match the local issuance line (±1 day wrap)."""
+def _wmo_time(wmo_ddhhmm: str, local_utc: datetime) -> datetime | None:
+    """The WMO header's UTC time, if it falls within [0, WMO_LAG_TOLERANCE] after the local
+    issuance line. The header carries only day/hour/minute, so the month and year come from
+    the local line (candidates on the adjacent days cover month ends). Otherwise None."""
     try:
         dd, hh, mm = int(wmo_ddhhmm[:2]), int(wmo_ddhhmm[2:4]), int(wmo_ddhhmm[4:])
     except ValueError:
-        return False
-    return (issued_utc.day, issued_utc.hour, issued_utc.minute) == (dd, hh, mm)
+        return None
+    for shift in (0, 1, -1):
+        base = local_utc + timedelta(days=shift)
+        if base.day != dd or not (0 <= hh < 24 and 0 <= mm < 60):
+            continue
+        candidate = base.replace(hour=hh, minute=mm, second=0, microsecond=0)
+        if timedelta(0) <= candidate - local_utc <= WMO_LAG_TOLERANCE:
+            return candidate
+    return None
 
 
 def zone_block(text: str, zone: str = ZONE) -> str | None:
@@ -103,7 +118,7 @@ def _sections(block: str):
     for i, line in enumerate(lines):
         if not _HOURS.match(line):
             continue
-        date_line = next((lines[j] for j in range(i - 1, -1, -1) if lines[j].startswith("Date")), None)
+        date_line = next((lines[j] for j in range(i - 1, -1, -1) if _DATE.match(lines[j])), None)
         extremes = next(
             (lines[j] for j in range(i + 1, min(i + 6, len(lines))) if _EXTREMES.match(lines[j])),
             None,
@@ -118,9 +133,10 @@ def parse_pfm(text: str, zone: str = ZONE) -> PfmForecast | None:
     block = zone_block(text, zone)
     if block is None:
         return None
-    issued_utc, local_zone = _parse_issued(block)
-    if issued_utc is not None and wmo and not _wmo_consistent(wmo.group(3), issued_utc):
-        issued_utc = None  # ambiguous: header and local line disagree; refuse to guess
+    local_utc, local_zone = _parse_issued(block)
+    # Issuance time = the WMO header time (the later of the two, so conservative). If the
+    # header is missing or disagrees with the local line, the product is ambiguous: None.
+    issued_utc = _wmo_time(wmo.group(3), local_utc) if (wmo and local_utc) else None
     correction = wmo.group(4) if wmo and wmo.group(4) and wmo.group(4).startswith("CC") else None
 
     forecast = PfmForecast(
@@ -132,7 +148,7 @@ def parse_pfm(text: str, zone: str = ZONE) -> PfmForecast | None:
     if issued_utc is None or local_zone is None:
         return forecast
 
-    issued_local_date = issued_utc.astimezone(_TZ[local_zone]).date()
+    issued_local_date = local_utc.astimezone(_TZ[local_zone]).date()
     unaligned = 0
     for date_line, hours_line, extremes in _sections(block):
         zone_name = hours_line[:3]
@@ -176,7 +192,7 @@ def split_products(archive_text: str) -> list[str]:
     return [part.strip("\x03\n ") for part in archive_text.split("\x01") if "PFMOKX" in part]
 
 
-_KEEP = re.compile(r"^(Date|EDT |EST |UTC |Min/Max|Max/Min)")
+_KEEP = re.compile(r"^(Date|EDT |EST |UTC |Min/Max|Max/Min)", re.I)
 
 
 def extract(product: str, zone: str = ZONE) -> str | None:
@@ -188,7 +204,7 @@ def extract(product: str, zone: str = ZONE) -> str | None:
     head = product.split(f"{zone}-", 1)[0]
     header_lines = [l for l in head.splitlines() if _WMO.match(l) or l.startswith("PFM")]
     block_lines = block.splitlines()
-    kept = block_lines[:4] + [l for l in block_lines[4:] if _KEEP.match(l)]
+    kept = block_lines[:4] + [l for l in block_lines[4:] if _KEEP.match(l) or _ISSUED.match(l)]
     return "\n".join(header_lines + [""] + kept + ["$$"])
 
 

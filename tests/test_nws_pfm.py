@@ -85,3 +85,65 @@ def test_correction_suffix_is_recorded():
 
 def test_no_central_park_block_returns_none():
     assert parse_pfm("FOUS51 KOKX 052050\nPFMOKX\n\nNYZ176-061000-\nLaGuardia\n$$\n") is None
+
+
+def test_wmo_header_trailing_local_line_uses_header_time():
+    # 350 PM EST = 20:50Z; header 2051 is one minute later (common in the archive).
+    f = parse_pfm(_synth("Min/Max                      25          38").replace("052050", "052051"))
+    assert f.issued_utc == datetime(2025, 1, 5, 20, 51, tzinfo=timezone.utc)
+    assert f.max_by_date == {date(2025, 1, 6): 38}
+
+
+def test_wmo_header_beyond_tolerance_is_ambiguous():
+    f = parse_pfm(_synth("Min/Max                      25          38").replace("052050", "052106"))
+    assert f.issued_utc is None and f.max_by_date == {}
+
+
+def test_wmo_header_before_local_line_is_ambiguous():
+    f = parse_pfm(_synth("Min/Max                      25          38").replace("052050", "052049"))
+    assert f.issued_utc is None
+
+
+def test_wmo_header_across_month_end():
+    text = _synth("Min/Max                      25          38", local="758 PM EST Fri Jan 31 2025")
+    text = text.replace("052050", "010059").replace("01/05/25", "01/31/25")
+    f = parse_pfm(text)
+    assert f.issued_utc == datetime(2025, 2, 1, 0, 59, tzinfo=timezone.utc)
+
+
+# Real pre-March-2017 layout (upper case labels; IEM copy repeats the zone header).
+OLD = """FOUS51 KOKX 152333
+PFMOKX
+
+POINT FORECAST MATRICES
+NATIONAL WEATHER SERVICE NEW YORK NY
+633 PM EST SUN JAN 15 2017
+
+NYZ072-160900-
+CENTRAL PARK-NEW YORK NY
+40.78N  73.97W ELEV. 16 FT
+633 PM EST
+NYZ072-160900-
+CENTRAL PARK-NEW YORK NY
+40.78N  73.97W ELEV. 16 FT
+633 PM EST SUN JAN 15 2017
+
+DATE           01/15/17      MON 01/16/17            TUE 01/17/17            WED
+EST 3HRLY     16 19 22 01 04 07 10 13 16 19 22 01 04 07 10 13 16 19 22 01 04 07
+UTC 3HRLY     21 00 03 06 09 12 15 18 21 00 03 06 09 12 15 18 21 00 03 06 09 12
+
+MIN/MAX                      27          42          36          40          40
+TEMP             34 32 29 28 27 32 40 42 40 39 38 37 36 34 38 40 40 40 43 44 44
+$$
+"""
+
+
+def test_old_upper_case_layout_parses_and_extract_keeps_it():
+    f = parse_pfm(OLD)
+    assert f.issued_utc == datetime(2017, 1, 15, 23, 33, tzinfo=timezone.utc)
+    assert f.max_by_date == {date(2017, 1, 16): 42, date(2017, 1, 17): 40}
+    assert f.min_by_date == {date(2017, 1, 16): 27, date(2017, 1, 17): 36, date(2017, 1, 18): 40}
+    ex = extract(OLD)
+    assert "MIN/MAX" in ex and "DATE" in ex and "TEMP" not in ex
+    g = parse_pfm(ex)
+    assert (g.issued_utc, g.max_by_date, g.min_by_date) == (f.issued_utc, f.max_by_date, f.min_by_date)
