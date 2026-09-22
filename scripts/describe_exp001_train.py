@@ -100,8 +100,8 @@ def render(result: dict, dataset_sha256: str) -> str:
 
 
 def build() -> str:
-    csv_text = (GATE3 / "dataset.csv").read_text()
-    manifest = json.loads((GATE3 / "dataset_manifest.json").read_text())
+    csv_text = (GATE3 / "dataset.csv").read_text(encoding="utf-8")
+    manifest = json.loads((GATE3 / "dataset_manifest.json").read_text(encoding="utf-8"))
     return render(describe(train_rows(csv_text)), manifest["dataset_sha256"])
 
 
@@ -112,11 +112,11 @@ def main() -> int:
     content = build()
     target = GATE3 / "DESCRIPTIVE_TRAIN.md"
     if args.check:
-        if not target.exists() or target.read_text() != content:
+        if not target.exists() or target.read_text(encoding="utf-8") != content:
             print("stale DESCRIPTIVE_TRAIN.md (run scripts/describe_exp001_train.py)")
             return 1
         return 0
-    target.write_text(content)
+    target.write_text(content, encoding="utf-8", newline="\n")
     return 0
 
 
