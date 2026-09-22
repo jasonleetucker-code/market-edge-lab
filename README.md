@@ -2,6 +2,9 @@
 
 A read-only research lab for testing whether measurable market edges survive real-world data, prices, fees, and execution constraints.
 
+> **AI agents:** start at [`AI_INSTRUCTIONS.md`](AI_INSTRUCTIONS.md). Current state lives in
+> [`HANDOFF.md`](HANDOFF.md), and what is authorized lives in [`docs/EXECUTION_PLAN.md`](docs/EXECUTION_PLAN.md).
+
 ## Current scope: Milestone 1
 
 This repository currently **cannot place trades**. It collects and timestamps:
@@ -60,11 +63,27 @@ Inspect recent stored snapshots:
 edge-lab recent --db data/edge_lab.sqlite3 --limit 20
 ```
 
+Check per-source health and freshness (exits non-zero if anything is stale or unknown):
+
+```bash
+edge-lab health --db data/edge_lab.sqlite3        # add --json for machine-readable output
+```
+
+Validate the experiment registry:
+
+```bash
+edge-lab experiments validate
+```
+
 Run tests:
 
 ```bash
-pytest
+python -m pytest
 ```
+
+`edge-lab collect` runs each source in isolation. One failing source does not lose the
+others. The run is recorded as `succeeded`, `partial` or `failed`, and the exit code is
+non-zero unless every source was clean.
 
 ## Other useful collection commands
 
@@ -91,7 +110,9 @@ edge-lab collect --source nws --lat 40.7812 --lon -73.9665
 The SQLite database contains:
 
 - `collection_runs`: start/end/status for each collector run
-- `snapshots`: one immutable row per fetched API response
+- `snapshots`: one immutable row per fetched API response (UPDATE/DELETE are blocked by triggers)
+- `source_health`: one row per source per run, with status, record count, bytes, retries,
+  anomalies and error
 
 Each snapshot records:
 
@@ -104,6 +125,10 @@ Each snapshot records:
 - exact URL requested
 - SHA-256 of canonical JSON
 - full raw JSON payload
+- provenance: final URL, HTTP status, content type, byte size, raw-bytes SHA-256, retry
+  attempts, fetch duration, parser/schema version, and a structural shape fingerprint
+
+Existing Milestone 1 databases migrate in place. Details: `docs/DATA_PROVENANCE.md`.
 
 Raw data and local databases are intentionally excluded from Git.
 

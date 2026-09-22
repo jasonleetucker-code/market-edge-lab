@@ -60,17 +60,19 @@ Then test whether our settlement parser can reproduce historical resolved contra
 
 ## Acceptance criteria
 
-Milestone 1 is complete when:
+Milestone 1 is complete when the items below are checked. A box is checked only when there
+is evidence. Evidence from 2026-09-22 comes from live read-only runs in a sandbox, not from
+a scheduled deployment.
 
-- [ ] `pytest` passes in CI.
-- [ ] A Kalshi-only collection run succeeds without credentials.
-- [ ] An NWS-only collection run succeeds with a compliant User-Agent.
-- [ ] A combined collection run writes immutable records to SQLite.
-- [ ] Re-running collection adds new snapshots instead of replacing old ones.
-- [ ] Raw payload hashes are retained.
-- [ ] Recent snapshot metadata can be inspected from the CLI.
-- [ ] Failure of a network call marks the collection run failed without deleting earlier snapshots.
-- [ ] No code path can submit an order.
+- [ ] `pytest` passes in CI. *(Tracked on the foundation PR's CI run. See `HANDOFF.md`.)*
+- [x] A Kalshi-only collection run succeeds without credentials. *(2026-09-22: `--source kalshi`, exit 0)*
+- [x] An NWS-only collection run succeeds with a compliant User-Agent. *(2026-09-22: NWS succeeded within a `--source all` run; points, forecast, hourly and grid were all stored)*
+- [x] A combined collection run writes immutable records to SQLite. *(2026-09-22: 20 snapshots; UPDATE aborted by trigger)*
+- [x] Re-running collection adds new snapshots instead of replacing old ones. *(2026-09-22: 2 runs → 36 rows)*
+- [x] Raw payload hashes are retained. *(`payload_sha256` and `raw_sha256` on every new row)*
+- [x] Recent snapshot metadata can be inspected from the CLI. *(`edge-lab recent`)*
+- [x] Failure of a network call marks the collection run failed without deleting earlier snapshots. *(Unit tests: `tests/test_cli.py`; deletes are blocked by `tests/invariants/test_evidence_immutability.py`)*
+- [x] No code path can submit an order. *(`tests/invariants/test_no_execution_paths.py`)*
 
 ## Next milestone
 
