@@ -43,3 +43,21 @@ def test_descriptive_report_is_current_and_train_only():
     assert _h((GATE3 / "DESCRIPTIVE_TRAIN.md").read_text(encoding="utf-8")) == _h(describer.build())
     rows = describer.train_rows((GATE3 / "dataset.csv").read_text(encoding="utf-8"))
     assert rows and {r["split"] for r in rows} == {"train"}
+
+
+def test_text_input_hash_is_newline_portable(tmp_path):
+    builder = _load("build_exp001_dataset")
+    lf = tmp_path / "input.json"
+    crlf = tmp_path / "input-crlf.json"
+    lf.write_bytes(b'{\n  "x": 1\n}\n')
+    crlf.write_bytes(b'{\r\n  "x": 1\r\n}\r\n')
+    assert builder._sha(lf) == builder._sha(crlf)
+
+
+def test_compressed_input_hash_remains_byte_exact(tmp_path):
+    builder = _load("build_exp001_dataset")
+    a = tmp_path / "a.gz"
+    b = tmp_path / "b.gz"
+    a.write_bytes(b"same\n")
+    b.write_bytes(b"same\r\n")
+    assert builder._sha(a) != builder._sha(b)
