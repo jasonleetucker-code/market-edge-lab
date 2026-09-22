@@ -7,7 +7,7 @@ be written here when they are made.
 
 | # | Gate | State |
 |---|---|---|
-| 1 | Data collection | **In progress.** Collectors are merged. The provenance, health and freshness foundation is in PR review. First live runs succeeded on 2026-09-22. No scheduled collection yet. |
+| 1 | Data collection | **Foundation complete (PR #2).** Collectors, provenance, source health, freshness and immutable evidence are in place. First live runs succeeded on 2026-09-22. No scheduled collection yet (needs approval; see the cost policy). |
 | 2 | Settlement validation | **Authorized, not started.** Blocking finding: live KXHIGHNY rules name *The Weather Company* as the settlement source (see EXP-001). |
 | 3 | Historical dataset | Not authorized until gate 2 passes. |
 | 4–10 | Model → … → scaling | Not authorized. |
@@ -26,17 +26,35 @@ be written here when they are made.
 - Credential creation or storage, or funded accounts.
 - Paid data or AI services, and any signup that creates an ongoing cost.
 - Strategy optimization, parameter searches, or model promotion before gate 2 passes.
-- Scheduled or unattended collection on paid infrastructure.
+- Scheduled or unattended collection of any kind, **including GitHub Actions cron**, without
+  owner approval.
 - Browser automation against any source whose terms have not been reviewed and recorded.
+
+## Cost policy for unattended infrastructure
+
+Unattended infrastructure is not free just because no separate server was bought. This
+repository is private. GitHub Actions minutes on a private repository come out of the
+account's included allowance, and depending on plan and settings they can become billable
+usage. (Allowances and prices change, so check current GitHub documentation rather than
+trusting a number written here.) Any proposed scheduled collector must, before approval:
+
+1. estimate its runtime per run and its minutes per month;
+2. start at low frequency and increase only when evidence shows the extra data is needed;
+3. bound each run (job `timeout-minutes`, request timeouts, bounded retries);
+4. state how usage will be watched and how the job is switched off.
 
 ## Gate exit criteria
 
 - **Gate 1 → 2:** repeated runs append immutable snapshots; per-source health is recorded;
   freshness is reported; a failure in one source does not lose the others.
-  *(All met by the current PR once it is merged and CI is green.)*
+  *(Met by PR #2: see `HANDOFF.md` for the evidence.)*
 - **Gate 2 → 3:**
   1. Capture the official settlement source and rules as versioned evidence.
   2. Document the observation window, timezone, rounding, revisions, and missing/void provisions.
   3. Reproduce at least 30 historical resolved KXHIGHNY markets from the named settlement source,
      with zero unexplained mismatches.
   4. Measure how the settlement value relates to NWS CLI and NWS forecasts.
+- **Before any experiment leaves DRAFT** (a gate-3 requirement for the experiment
+  framework): implement a deterministic preregistration baseline. For example, record a
+  SHA-256 of the locked fields at preregistration and have the validator check it. Today the
+  validator proves only that locked fields are fully specified, not that they are unchanged.

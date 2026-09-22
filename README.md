@@ -110,7 +110,7 @@ edge-lab collect --source nws --lat 40.7812 --lon -73.9665
 The SQLite database contains:
 
 - `collection_runs`: start/end/status for each collector run
-- `snapshots`: one immutable row per fetched API response (UPDATE/DELETE are blocked by triggers)
+- `snapshots`: one immutable row per fetched API response (UPDATE, DELETE and INSERT OR REPLACE are blocked by triggers)
 - `source_health`: one row per source per run, with status, record count, bytes, retries,
   anomalies and error
 

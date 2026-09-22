@@ -28,3 +28,5 @@ here claims an edge.
    of the settlement value exists? Kalshi's `settlement_value` and `result` fields on
    settled markets are one candidate.
 3. How often do The Weather Company's final values differ from the NWS CLI maximum?
+4. Framework prerequisite: this experiment must not move to PREREGISTERED until the
+   deterministic preregistration baseline exists (`experiments/README.md`).

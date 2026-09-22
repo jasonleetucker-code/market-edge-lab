@@ -17,14 +17,26 @@ DRAFT → PREREGISTERED → RUNNING → CONCLUDED_PASS | CONCLUDED_FAIL | CONCLU
 
 - **DRAFT:** anything may change. Periods can be `"TBD"`.
 - **PREREGISTERED:** the hypothesis, decision rule, periods, cost/execution assumptions and
-  success/failure criteria are **locked** before any test-period data is examined. The
-  validator rejects `TBD` periods from this point on.
+  success/failure criteria are **locked** before any test-period data is examined. From
+  this point on, the validator rejects any `TBD` value in the decision time, model, periods,
+  costs or execution.
 - **Changing a locked field:** do not edit the original text. Append an `[[amendments]]`
   entry (`date`, `change`, `reason`). An amendment made after seeing results must say so,
   and it weakens the result.
 - **CONCLUDED_*:** needs a `[result]` table with `code_commit`, `dataset_version`, `report`
   (a path that exists) and `summary`. A failed experiment is a valid, valuable outcome.
 - **ABANDONED:** give the reason in the README. Never delete the directory.
+
+## What the validator does *not* guarantee
+
+The validator checks that a locked manifest is **fully specified**. It does **not** prove that
+the preregistered hypothesis or criteria were never edited afterwards. Today, protection
+against a silent edit comes only from git history and review, which give traceability but
+not enforcement. **Before any experiment (starting with EXP-001) moves from DRAFT to
+PREREGISTERED**, we must implement a deterministic preregistration baseline: for example, a
+SHA-256 of the locked fields recorded at preregistration and re-checked by the validator,
+with amendments as the only permitted change path. This is tracked in
+`docs/EXECUTION_PLAN.md`.
 
 ## Required fields
 

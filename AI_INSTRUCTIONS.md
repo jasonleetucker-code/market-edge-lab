@@ -62,6 +62,8 @@ These require explicit owner approval, recorded in the repo or PR, every time:
 - funding, deposits, withdrawals, or any change to financial risk
 - creating, requesting or handling credentials or API keys
 - paid APIs, data subscriptions, paid AI services, or materially costly cloud resources
+- scheduled or unattended jobs, including GitHub Actions cron (they are not free just because
+  no server was bought)
 - destructive operations (history rewrites on shared branches, deleting evidence or data)
 - public deployment or publishing data externally
 - moving past a gate in `docs/EXECUTION_PLAN.md`
