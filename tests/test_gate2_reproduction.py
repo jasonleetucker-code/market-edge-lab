@@ -136,7 +136,7 @@ def test_settlement_quotes_appear_verbatim_in_deterministic_extractions():
         return re.sub(r"\s+", " ", text).strip()
 
     for name, quotes in QUOTES.items():
-        text = norm((evidence / name).read_text())
+        text = norm((evidence / name).read_text(encoding="utf-8"))
         for quote in quotes:
             assert norm(quote) in text, (name, quote)
 
@@ -145,6 +145,6 @@ def test_evidence_pdfs_match_manifest_hashes():
     import hashlib
 
     evidence = Path(__file__).resolve().parents[1] / "experiments" / "EXP-001-kxhighny-nws-vs-market" / "gate2" / "evidence"
-    manifest = (evidence / "MANIFEST.md").read_text()
+    manifest = (evidence / "MANIFEST.md").read_text(encoding="utf-8")
     for pdf in evidence.glob("*.pdf"):
         assert hashlib.sha256(pdf.read_bytes()).hexdigest() in manifest, pdf.name
