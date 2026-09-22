@@ -3,87 +3,63 @@
 This is the live state of the repository. Each session overwrites it; it is not a history
 (git log is the history). Format: `AI_INSTRUCTIONS.md` → Handoff format.
 
-_Last updated: 2026-09-22, by the Gate 3 PR. This file reaches `main` only through that
-PR's squash merge. The owner authorized the merge only once all 21 criteria hold and CI is
-green on the final head._
+_Last updated: 2026-09-22, by the Gate 4 / collection-authorization docs PR. This is an
+interim state for the three-lane mission in
+`docs/owner/2026-09-22-gate4-collection-directive.md`. It is rewritten when the mission ends._
 
 ```
-STATUS: DONE: gate 3 (point-in-time dataset + EXP-001 preregistration) criteria met on
-  this branch. Gate 4 is active on merge of the Gate 3 PR (docs/EXECUTION_PLAN.md).
-ACCEPTANCE: the owner's 21 Gate 3 criteria, recorded verbatim in
-  docs/owner/2026-09-22-gate3-directive.md
+STATUS: PARTIAL: Gate 4 is active. Three lanes are in flight: the Gate 4 EXP-001
+  execution, the PR #13 reconciliation, and the forward Stage-B collector with #16 and the
+  VPS deployment. Owner decisions for all three are recorded.
+ACCEPTANCE: the owner's 2026-09-22 Gate 4 / collection directive (verbatim in
+  docs/owner/2026-09-22-gate4-collection-directive.md)
 EVIDENCE:
-  - Decision time 18:00 America/New_York on D-1; availability cutoff decision - 30 min;
-    issuance = WMO header time; suffixed products never used (ADR 0010, gate3/DESIGN.md §1)
-  - Source: NWS PFMOKX (Central Park NYZ072) via the IEM AFOS archive. 118 monthly
-    responses, 32,699 products, 0 non-200 responses, stored as exact extracts plus hashes
-    (ADR 0011, tests/fixtures/gate3/)
-  - Dataset EXP-001-pit-v2: 2017-01-01..2026-09-21, 3,551 candidate days, 3,551 usable,
-    0 excluded. SHA-256 1794b23cd519a4c4a952700dc97530df0f0452f070962c0cb7500fd1afcef51a.
-    CI rebuilds it byte-identically (tests/test_gate3_reproducible.py).
-  - Labels: Kalshi expiration_value 1,801 days, NWS CLI contract rule 1,750. They agree on
-    1,797/1,797 days where both exist.
-  - Train-only description (gate3/DESCRIPTIVE_TRAIN.md): n = 2,191; error bias +0.44 °F,
-    sd 3.21, MAE 2.30; 15.3% exact, 65.9% within ±2 °F; long right tail (max +21)
-  - Split: train 2017-2022, validation 2023-2024, test 2025-01-01..2026-09-21. No
-    validation or test error was computed.
-  - Baseline, fees, execution, Stage A/B criteria and power: gate3/DESIGN.md, POWER.md,
-    experiment.toml
-  - Freeze: experiments/EXP-001-kxhighny-nws-vs-market/preregistration.json, frozen fields
-    SHA-256 258baaf6c30d3b04d6fceb42c5f158c1940b901cf552f4523aa49b6fa9c15283. It was
-    re-frozen once on the unmerged branch, after the second review fixed a wrong
-    regime-age sentence and defined a Stage B valid day. The first baseline (4b1cab54…)
-    never reached main. No validation or test error was computed at any point.
-    `edge-lab experiments validate` OK; check-frozen vs origin/main OK.
-    tests/invariants/test_exp001_frozen_artifacts.py pins DESIGN.md, fees.py, stats.py,
-    settlement.py
-    and the dataset hash.
-  - Tests: python -m pytest, 229 passed on 3.11 and on 3.12. CI: see the Gate 3 PR.
-  - Independent adversarial review (read-only): no blocker. All 7 SHOULD-FIX items were
-    fixed before the freeze, including the DST lead-hours bug, the pinned bootstrap, the
-    Stage B two-look rule, the issuance-regime disclosure, artifact pins, suffixed
-    products, and doc overclaims. Nits 1, 2, 3, 5, 6 and 7 were fixed.
-  - Second read-only review of those fixes: no blocker. Both SHOULD-FIX items were fixed
-    (the DESIGN regime sentence; the Stage B valid-day definition). settlement.py is now
-    pinned too, and the implicit V2/PIT/UNKNOWN readings are made explicit.
+  - Gate 3 merged in PR #14 (2f5d640). The Windows portability fixes merged in PR #15
+    (7c93f78).
+  - Owner laptop (Windows, Python 3.12) at the PR #15 head: 231 tests passed.
+    `edge-lab collect --source all` succeeded with no anomalies (reported in issue #16).
+  - Scheduled read-only collection on the Chase Upside VPS is authorized. ADR 0012
+    supersedes ADR 0008.
+  - A read-only VPS headroom review passed: docs/deploy/VPS_REVIEW_2026-09-22.md (4 vCPU,
+    7.9 GB RAM with at least 3.9 GB available over 7 days, 65 GB disk free, Brisket capped
+    at 3G + 2G). sudo needs the owner's password, so install is an owner step.
+  - EXP-001 is PREREGISTERED and frozen (frozen_fields SHA-256 258baaf6…). Dataset
+    EXP-001-pit-v2 SHA-256 1794b23c…
 UNRESOLVED:
-  - Fee coefficient 0.07 comes from Kalshi's documented worked example. The fee-schedule
-    PDF sits behind a bot checkpoint (not bypassed). Re-verify before any Stage B result.
-  - PFMOKX issuance thinned from mid-2025, so test-period forecasts are older at the
-    decision time. This is disclosed and not adjusted for; it may fail Stage A calibration.
-  - Full PFM products are not in git (extracts + hashes only; re-fetchable from IEM).
-  - Test-period protection is procedural: dataset.csv contains test forecasts and labels.
-  - Stage B needs daily 18:00 ET order-book collection, which is scheduled collection and
-    an owner decision (ADR 0008; issue #10 is a candidate host).
-  - Carried from gate 2: TWC cannot be checked directly; the NHIGH delayed-determination
+  - Gate 4 Stage A has not been run yet.
+  - PR #13 is being reconciled against current main. Its old Gate-2-era CI is not accepted.
+  - The forward collector is not built or deployed yet, so no Stage B days have been
+    captured. Every missed 17:55 ET window is lost for good.
+  - Issue #16 (routine collect vs default health) is open.
+  - Fee coefficient 0.07: re-verify against Kalshi's fee schedule before any Stage B result.
+  - PFMOKX issuance thinned from mid-2025. This is disclosed, and it may hurt Stage A
+    calibration.
+  - Test-period protection is procedural (dataset.csv contains test rows).
+  - Carried from Gate 2: TWC cannot be checked directly; the NHIGH delayed-determination
     rule rests on one observation.
-BLOCKERS: NONE for Gate 4. Stage B is BLOCKED-ON-OWNER (scheduled collection).
-NEXT ACTION: Gate 4. Implement the frozen baseline model and evaluate it on the
-  predeclared train/validation/test protocol: fit V1/V2 on train, select on validation by
-  the frozen rule, then refit and run Stage A on test exactly once, reporting the result
-  whatever it is. Use edge_lab.stats for every interval. Do not change the frozen spec.
+BLOCKERS: NONE for Gate 4. The VPS install and timer activation need two owner sudo
+  commands. They will be handed over as exact command lines once the collector PR merges.
+NEXT ACTION: Build and merge the forward collector with the #16 fix, then hand the owner
+  the install command before the 2026-09-23 17:45 ET window. If it is not live by then, use
+  the attended laptop bridge.
 ```
 
 ## 30-day directive status (issue #11, target 2026-10-22)
 
-- Remaining calendar days: 30.
-- Critical path: Gate 4 (days 4–7) → forward Kalshi book collection and opportunity
-  schema (days 6–10) → market-vs-model engine → shadow ledger → risk foundation →
-  dashboard → deployment.
-- New blockers: forward collection needs the owner's scheduled-collection decision (ADR
-  0008). It gates Stage B, the shadow ledger's real data, and the dashboard's live views.
-- Scope changes: none. Issue #12 (Brisket reliability port) runs in a parallel lane with
-  its own file claim.
-- P0 confidence (project status, evidence-based): Gate 3 finished on day 1, ahead of the
-  day-4 target. Everything after Gate 5 depends on the collection decision, so ask for it
-  now.
+- **Remaining calendar days:** 30.
+- **Critical path:** forward collector live (P0, next window 2026-09-23 17:55 ET for
+  D = 09-24) → Gate 4 Stage A result → market-vs-model engine → shadow ledger → risk
+  foundation → dashboard → deployment.
+- **Blockers:** only the owner's sudo steps on the VPS. The scheduled-collection decision
+  that previously blocked Stage B was made on 2026-09-22.
+- **Scope changes:** none. The #10 hosting idea is authorized only for the headless
+  collector. Dashboard, DNS, TLS and auth remain unauthorized.
 
 ## Open questions for the owner
 
-1. **Scheduled collection** (ADR 0008). Should forward collection of order books and
-   forecasts at fixed decision times get a durable, low-cost home? Options: a small VM,
-   the Chase Upside VPS per #10, object storage, or low-frequency Actions with artifacts.
-   This is a private repo, so Actions minutes count against the account allowance. It
-   needs a cost decision, and it now blocks EXP-001 Stage B and the #11 critical path.
-2. **Standing merge rule.** May agents merge docs- or test-only PRs on green CI, or does
-   every merge need an explicit grant like PRs #2, #8 and the Gate 3 PR?
+1. **Standing merge rule.** It is answered for this mission only: agents may merge PR #13
+   and the docs, collector and Gate 4 PRs under the recorded conditions. There is still no
+   general rule for docs- or test-only PRs.
+2. **Alert channel.** Should failed or partial collection runs push somewhere? A private
+   ntfy topic URL in `/etc/market-edge-lab/env` would work. Without one, alerts go to
+   journald and the status file only.

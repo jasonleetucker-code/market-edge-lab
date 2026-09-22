@@ -25,7 +25,7 @@ Readiness vocabulary: **NOT READY** (prerequisites absent) · **READY FOR RESEAR
 | #5 | Sports prediction-market and sports-modeling expansion | READY FOR RESEARCH (not in Gate 3 scope) | Core framework is proving out on weather. Implementation needs the shared market-identity and execution layers. |
 | #9 | Sportsbook odds aggregation, consensus pricing, best-venue comparison | NOT READY | Sub-idea of #5. Needs sports authorization, market equivalence and verified access terms. |
 | #6 | Dynamic bankroll, position sizing, withdrawal guidance | NOT READY | Needs an account/position ledger, P&L, risk engine and an owner risk policy |
-| #10 | Host privately on existing Chase Upside infrastructure (separate service/subdomain, real access control) | NOT READY | Needs a useful private API/dashboard, an auth design, a VPS headroom review, and owner authorization for DNS/TLS/production changes. Also the likely durable home for forward collection (ADR 0008). |
+| #10 | Host privately on existing Chase Upside infrastructure (separate service/subdomain, real access control) | **PARTLY AUTHORIZED** 2026-09-22: headless read-only collector only | Forward collector authorized on the VPS as a separate service (ADR 0012; headroom review `docs/deploy/VPS_REVIEW_2026-09-22.md` PASS). Dashboard/API, subdomain, DNS/TLS and auth remain NOT READY and unauthorized. |
 | #7 | Free-first multi-domain ingestion with paid-source ROI gate | APPLY SELECTIVELY NOW | Gate 3 applied it: the free IEM archive of NWS forecasts was chosen and paid weather data was not considered. The general ingestion platform is not built. |
 
 Related owner records that are not ideas:
