@@ -41,6 +41,18 @@ Evidence rules:
 - **Canonical JSON is stored.** The exact bytes are not. `raw_sha256` proves which bytes were
   received but cannot recreate them. See ADR 0002 for why, and for when to revisit.
 - Milestone 1 rows predate the provenance columns, so those columns are `NULL` for them.
+- **Documents (PDF, text products, HTML) are stored as exact bytes** in `document_blobs`,
+  content-addressed by SHA-256. Each retrieval is a row in `document_retrievals`, holding
+  the requested and final URL, time, HTTP status, content type, byte length, hash, doc
+  type, and related series/market. Re-fetching an unchanged document adds a retrieval row;
+  a changed document becomes a new version, and the old one is kept. Both tables are
+  append-only (triggers). Inserting an existing hash never replaces the stored bytes.
+- Snapshots record `retry_reasons_json`: why each failed attempt before success failed
+  (e.g. `["http_429"]`).
+- Requests to one source are paced (`edge_lab.http.Pacer`): Kalshi 0.6 s, NWS 0.5 s,
+  IEM 1 s. Kalshi's public endpoints returned 429 at about 4 req/s with no `Retry-After`
+  (probe 2026-09-22), so pacing is the normal control flow; retries use jittered
+  exponential backoff.
 
 ## 3. Source health
 
@@ -125,4 +137,6 @@ models as delimited data with no tool authority. See `docs/NEWS_WEB_INGESTION.md
 4. Add fixture-based tests with recorded, non-secret sample payloads. Tests never touch the
    network.
 5. Wire the collector into `edge-lab collect` through `_run_source`. Set `status=ACTIVE`.
+   Paginated listings use `kalshi.paginate_markets`-style bounded cursor following
+   (every page stored, repeated cursor = loop, page cap raises), never "page one only".
 6. If the source needs credentials, stop. That needs owner approval (`docs/SECURITY.md`).

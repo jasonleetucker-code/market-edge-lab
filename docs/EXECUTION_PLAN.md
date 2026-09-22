@@ -7,9 +7,9 @@ be written here when they are made.
 
 | # | Gate | State |
 |---|---|---|
-| 1 | Data collection | **Foundation complete (PR #2).** Collectors, provenance, source health, freshness and immutable evidence are in place. First live runs succeeded on 2026-09-22. No scheduled collection yet (needs approval; see the cost policy). |
-| 2 | Settlement validation | **Authorized, not started.** Blocking finding: live KXHIGHNY rules name *The Weather Company* as the settlement source (see EXP-001). |
-| 3 | Historical dataset | Not authorized until gate 2 passes. |
+| 1 | Data collection | **Complete.** Collectors, provenance, source health, freshness and immutable evidence (PR #2); NWS CLI and settlement-evidence collectors, pagination and pacing (PR #3). Scheduled collection needs approval (cost policy). |
+| 2 | Settlement validation | **PASSED 2026-09-22 (PR #3).** 433 daily events audited, 0 mis-predictions, 0 unexplained mismatches; see `experiments/EXP-001-kxhighny-nws-vs-market/gate2/REPORT.md` and `docs/SETTLEMENT.md`. |
+| 3 | Historical dataset | **Active (authorized).** Build the point-in-time dataset, and freeze the EXP-001 preregistration before any test-period data is examined. |
 | 4–10 | Model → … → scaling | Not authorized. |
 
 ## Authorized now (no further approval needed)
@@ -18,14 +18,19 @@ be written here when they are made.
   (`src/edge_lab/sources.py`), with each source's terms respected.
 - Collector, provenance, freshness, health, storage and test infrastructure.
 - Documentation, ADRs, experiment specifications in `DRAFT`, and research write-ups.
-- Settlement-rule capture and analysis for KXHIGHNY (gate 2 work), read-only.
+- Settlement-rule capture and re-audit for KXHIGHNY, read-only (`edge-lab settlement`).
+- **Gate 3 work:** a point-in-time historical dataset for EXP-001, built from stored
+  snapshots and archives, with explicit availability timestamps.
+- Freezing the EXP-001 preregistration (`edge-lab experiments freeze`) once its decision
+  time, model, periods, costs and execution are fully specified.
 
 ## Explicitly not authorized
 
 - Any order placement, order simulation against live endpoints, or authenticated trading client.
 - Credential creation or storage, or funded accounts.
 - Paid data or AI services, and any signup that creates an ongoing cost.
-- Strategy optimization, parameter searches, or model promotion before gate 2 passes.
+- Strategy optimization, parameter searches, or model fitting on test-period data before
+  EXP-001 is frozen; model promotion before gate 4 criteria exist.
 - Scheduled or unattended collection of any kind, **including GitHub Actions cron**, without
   owner approval.
 - Browser automation against any source whose terms have not been reviewed and recorded.
@@ -48,13 +53,15 @@ trusting a number written here.) Any proposed scheduled collector must, before a
 - **Gate 1 → 2:** repeated runs append immutable snapshots; per-source health is recorded;
   freshness is reported; a failure in one source does not lose the others.
   *(Met by PR #2: see `HANDOFF.md` for the evidence.)*
-- **Gate 2 → 3:**
+- **Gate 2 → 3 (met 2026-09-22):**
   1. Capture the official settlement source and rules as versioned evidence.
   2. Document the observation window, timezone, rounding, revisions, and missing/void provisions.
   3. Reproduce at least 30 historical resolved KXHIGHNY markets from the named settlement source,
      with zero unexplained mismatches.
   4. Measure how the settlement value relates to NWS CLI and NWS forecasts.
-- **Before any experiment leaves DRAFT** (a gate-3 requirement for the experiment
-  framework): implement a deterministic preregistration baseline. For example, record a
-  SHA-256 of the locked fields at preregistration and have the validator check it. Today the
-  validator only rejects placeholders in locked fields. It cannot show that they are unchanged.
+- **Before any experiment leaves DRAFT:** the deterministic preregistration baseline now
+  exists (`edge-lab experiments freeze`, validator check, CI `check-frozen`). Use it.
+- **Gate 3 → 4:** a point-in-time dataset for EXP-001, where each row records what was
+  known at decision time (forecast issuance, receipt time, freshness); a settlement label
+  from Kalshi `expiration_value` or the §4 CLI value; documented gaps; and a frozen EXP-001
+  preregistration.

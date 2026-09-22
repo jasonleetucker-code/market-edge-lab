@@ -1,0 +1,114 @@
+NHIGH
+Scope:
+	These	rules	shall	apply	to	the	contract	referred	to	as	NHIGH.
+Underlying:
+	The	Underlying	for	this	Contract	is	the	maximum	temperature	recorded	for	the
+	
+specified	<date>	published	in	the	National	Weather	Service’s	(“NWS”)	Daily	Climate	Report	for
+	
+Central	Park,	New	York.	Revisions	made	to	the	Underlying	made	after	Expiration	will	not	be
+	
+taken	into	account.
+Instructions:
+	The	Daily	Climate	Report	for	Central	Park,	New	York	can	be	accessed	here:
+	
+https://www.weather.gov/wrh/climate?wfo=okx
+	Click	on	“Observed	Weather”.	Under	“Choose	a
+	
+Location”,	select	“Central	Park	NY”.	The	Underlying	is	in	the	section	labeled	“Temperature”	and
+	
+“Yesterday”	in	a	column	titled	“Observed	Value”	and	row	titled	“Maximum”.	Temperatures	are
+	
+reported	in	degrees	Fahrenheit.	As	stated	on	the	NWS	website,	“These	data	are	preliminary”	and
+	
+“are	subject	to	revision.”	Data	that	is	revised	past	the	Expiration	Date	and	Expiration	time	of	the
+	
+contract	will	not	be	used	to	determine	the	Expiration	Value	of	the	Contract.	Revisions	made
+	
+during	the	statistical	period	or	the	period	between	the	Last	Trading	Date	and	Time	and
+	
+Expiration	Date	and	Expiration	time	may	be	taken	into	account	in	settling	the	contract.	
+These	instructions	are	provided	for	convenience	only	and	may	be	modified	or	clarified	at	any
+	
+time.
+Source	Agency:
+	The	Source	Agency	is	the	National	Weather	Service	(“NWS”).
+Type:
+	The	type	of	Contract	is	a	Binary	Contract.
+Issuance:
+	The	Contract	is	based	on	the	outcome	of	a	recurrent	data	release	which	is	issued	on	a
+	
+daily	basis.	Thus,	Contract	iterations	will	be	issued	on	a	recurring	basis,	and	future	Contract
+	
+iterations	will	generally	correspond	to	the	next	day	
+Degrees:	
+Kalshi	may	list	NHIGH	contracts	with	<degrees>	levels	that	fall	within	an	inclusive
+	
+range	between	a	maximum	value	of	130	degrees	Fahrenheit	and	a	minimum	value	of	-30	degrees
+	
+Fahrenheit	at	consecutive	increments	of	1	degree.	Due	to	the	potential	for	variability	in	the
+	
+Underlying,	the	Exchange	may	modify	<degrees>	levels	in	response	to	suggestions	by
+	
+Members.
+	
+Date:	
+<date>	refers	to	a	date	specified	by	Kalshi.	Kalshi	may	list	contracts	corresponding	to
+	
+different	statistical	periods	of	<date>.
+Payout	Criterion:
+	The	Payout	Criterion	encompasses	the	Expiration	Values	that	are	<greater
+	
+than/less	than/between>	<degrees>.	If	the	value	of	<greater	than/less	than/between>	is
+	
+“between”,	then	<degrees>	shall	be	a	pair	of	degrees,	and	an	Expiration	Value	that	is	greater
+	
+than	or	equal	to	the	lower	value	of	the	degree	pair	and	less	than	or	equal	to	the	greater	value	of
+	
+the	degree	pair	are	encompassed	in	the	Payout	Criterion.	If	the	value	of	<greater	than/less
+	
+than/between>	is	“greater	than”,	then	the	Payout	Criterion	only	encompasses	Expiration	Values
+	
+that	are	strictly	greater	than	<degrees>	(e.g.	if	the	strike	variable	values	are	“greater	than”	and
+	
+“56	degrees”,	then	an	Expiration	Value	of	56	degrees	is	not	encompassed	in	the	Payout
+	
+Criterion).	If	the	value	of	<greater	than/less	than/between>	is	“less	than”,	then	the	Payout
+	
+Criterion	only	encompasses	Expiration	Values	that	are	strictly	less	than	<degrees>.
+Minimum	Tick:
+	The	Minimum	Tick	size	for	the	referred	Contract	shall	be	$0.01.
+Position	Limit:
+	The	Position	Limit	for	the	$1	referred	Contract	shall	be	$25,000	per	Member.
+Last	Trading	Date:
+	The	Last	Trading	Date	shall	be	<date>	and	the	Last	Trading	Time	will	be
+	
+11:59pm	ET.
+Settlement	Date:
+	The	Settlement	Date	of	the	Contract	shall	be	no	later	than	the	day	after	the
+	
+Expiration	Date	unless	Market	Outcome	is	under	review	pursuant	to	Rule	7.1.
+Expiration	Date:
+	The	Expiration	Date	of	the	Contract	shall	be	the	sooner	of	the	first	7:00	or
+	
+8:00	AM	ET	following	the	release	of	the	data	for	<date>,	or	one	week	after	<date>.
+	
+Determination	will	be	delayed	until	11AM	ET	in	the	case	of	either	(1)	High	temperature	is	not
+	
+consistent	with	6-hr	or	24-hr	highs	reported	by	METAR	or	(2)	the	Final	report	high	is	lower	than
+	
+earlier	report(s).
+Expiration	time:
+	The	Expiration	time	of	the	Contract	shall	be	the	sooner	of	the	first	7:00	or	8:00
+	
+AM	ET	following	the	release	of	data	for	<date>.
+Settlement	Value:
+	The	Settlement	Value	for	this	Contract	is	$1.00.
+Expiration	Value:
+	The	Expiration	Value	is	the	value	of	the	Underlying	as	documented	by	the
+	
+Source	Agency	on	the	Expiration	Date	at	the	Expiration	time	
+Contingencies:
+	Before	Settlement,	Kalshi	may,	at	its	sole	discretion,	initiate	the	Market
+	
+Outcome	Review	Process	pursuant	to	Rule	6.3(c)	of	the	Rulebook.

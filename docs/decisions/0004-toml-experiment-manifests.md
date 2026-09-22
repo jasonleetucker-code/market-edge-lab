@@ -20,8 +20,8 @@ heuristic, not a proof that the specification is adequate. It does **not** freez
 hypothesis or criterion, and only review and git history would show it. That is
 traceability, not enforcement.
 
-**Required follow-up.** Before any experiment moves DRAFT → PREREGISTERED, add a
-deterministic preregistration baseline. For example: store a SHA-256 over the locked fields
+**Follow-up (done 2026-09-22, ADR 0009).** Before any experiment moves DRAFT →
+PREREGISTERED, add a deterministic preregistration baseline. For example: store a SHA-256 over the locked fields
 at preregistration, have the validator recompute and compare it, and route every later
 change through `[[amendments]]`.
 
