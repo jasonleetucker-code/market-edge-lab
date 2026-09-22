@@ -22,7 +22,8 @@ When sources disagree, this order applies:
 
 ## 2. The named settlement source changed on 2026-08-14
 
-Deterministic templating of `rules_primary` across all 2,598 audited markets gives:
+Deterministic templating of `rules_primary` across the audited markets gives (2024 uses
+the same NWS wordings):
 
 | Target dates | `rules_primary` names | Events |
 |---|---|---|
@@ -44,10 +45,11 @@ Agency appendix (Appendix C) is confidential.
 
 **Finding.** From 2026-08-14 the market rules name The Weather Company, while the public
 certified terms name the NWS. We cannot see whether TWC was added as a Source Agency. This
-documentary conflict is **not** resolved by the documents themselves. It is resolved
-empirically for every day observed so far: on all 39 TWC-era days, Kalshi's recorded
-`expiration_value` equals the NWS CLI value selected by §4 (0 differences). TWC's own values
-could not be checked, because automated retrieval is prohibited (§6).
+documentary conflict is **not** resolved by the documents themselves. What *is* observed:
+on all 39 TWC-era days, Kalshi's recorded `expiration_value` equals the NWS CLI value
+selected by §4 (0 differences). No TWC value was ever observed, because automated retrieval
+is prohibited (§6), so this is agreement between Kalshi's value and NWS, not between TWC and
+NWS.
 
 ## 3. What "the daily high" means
 
@@ -76,15 +78,24 @@ could not be checked, because automated retrieval is prohibited (§6).
   report high is lower than earlier report(s)." It also says revisions made "between the
   Last Trading Date and Time and Expiration Date and Expiration time may be taken into account".
 
-`edge_lab.nws_cli.settlement_value` implements this:
+**These two documents conflict.** GLOBALTEMPERATURE fixes the *first* final report with
+data. NHIGH can move determination to a later report. The GLOBALTEMPERATURE certification
+says the contract "will initially be listed after close-of-business on December 9, 2025".
+`edge_lab.nws_cli.settlement_value` therefore scopes the rules by target date. This is an
+inference from dates, not a captured per-event contract:
 
-1. Use the first final report whose maximum parses. Finals without a value are skipped;
-   seen on 2025-02-21, where the first final had no maximum and the second said 36, matching
-   Kalshi.
-2. If that first final is lower than an earlier preliminary report, use the latest final
-   issued by 11:00 AM ET the next day. Seen on 2025-12-03: preliminary 41, first final 40,
-   re-issued final 41 at 9:21 AM EST. Kalshi recorded 41.
-3. Condition (1) of the NHIGH rule (METAR inconsistency) is **not implemented**, because we
+1. **Both regimes:** use the first final report whose maximum parses; a final without a
+   value is skipped. Seen on 2025-02-21: the first final had no maximum, the second said 36,
+   and Kalshi recorded 36.
+2. **NHIGH regime (target dates ≤ 2025-12-09):** if the latest preliminary issued before
+   the first final is higher than it, use the latest final issued by 11:00 AM ET the next
+   day. A correction supersedes the report it corrects. If no final exists by then, the
+   value is UNKNOWN. Seen on 2025-12-03: latest preliminary 41, first final 40, re-issued
+   final 41 at 9:21 AM EST, and Kalshi recorded 41. Under GLOBALTEMPERATURE wording the
+   answer would have been 40. This rule rests on that **single** observation.
+3. **GLOBALTEMPERATURE regime (target dates ≥ 2025-12-10):** first final report with data,
+   and nothing else.
+4. Condition (1) of the NHIGH rule (METAR inconsistency) is **not implemented**, because we
    do not collect METAR. No observed event needed it.
 
 A preliminary value is never used. Examples where preliminary differed from final:
@@ -102,7 +113,7 @@ A preliminary value is never used. Examples where preliminary differed from fina
   Exchange" (GLOBALTEMPERATURE). TWC-era `rules_secondary` says the same.
 - Material error: expiration "may be held until the publication of a non-materially-erroneous
   data revision" (TWC-era `rules_secondary`).
-- None of the 433 audited events was voided or settled at a fair price. Every one has
+- None of the 799 audited events was voided or settled at a fair price. Every one has
   exactly one YES bracket.
   The resolver returns UNKNOWN for any `result` other than yes/no.
 
@@ -124,10 +135,10 @@ and NWS.
 
 ## 7. Using NWS as a settlement proxy
 
-Across the audited windows, Kalshi `expiration_value` equals the §4 NWS CLI value on
-**373/373** events where both exist: 68/68 in 2026 (39 of them TWC-era) and 305/305 in 2025.
-That supports using the NWS CLI final value as the settlement **label** for historical
-research. Three conditions come with it:
+Across the audited windows (2024, 2025 and 2026-07-16..09-21), Kalshi's `expiration_value`
+equals the §4 NWS CLI value on **739/739** events where both exist. Only 39 of these are
+TWC-era days. That supports using the NWS CLI final value as a settlement **proxy label**
+for historical research. Three conditions come with it:
 
 - monitor it: `edge-lab settlement audit` fails on any mis-prediction;
 - keep Kalshi's `expiration_value` as the authoritative label when it exists;

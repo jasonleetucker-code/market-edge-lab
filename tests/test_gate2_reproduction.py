@@ -40,6 +40,24 @@ def window_b():
     return sums, rows, summarize(sums, start, end)
 
 
+@pytest.fixture(scope="module")
+def window_c():
+    ms, cli = _load("kalshi_markets_window_c.json.gz", "iem_clinyc_2024-01-01_2025-01-03.txt.gz")
+    start, end = date(2024, 1, 1), date(2024, 12, 31)
+    sums, rows = audit(ms, cli, start=start, end=end)
+    return sums, rows, summarize(sums, start, end, rows)
+
+
+def test_window_c_fresh_validation_with_frozen_procedure(window_c):
+    # Procedure frozen at 9f28602 before window C was evaluated (SAMPLE.md amendment 1).
+    sums, rows, s = window_c
+    assert s["events"] == 366 and s["missing_dates"] == []
+    assert s["reproduced_from_nws_cli"] == 366
+    assert s["reproduced_from_kalshi_value"] == 366 == s["events_with_kalshi_value"]
+    assert s["kalshi_value_minus_nws_cli"] == {"0": 366}
+    assert s["unresolved_events"] == [] and _wrong(rows) == []
+
+
 def _wrong(rows):
     return [r for r in rows if r.expected_from_nws_cli != "unknown" and not r.match_nws_cli]
 

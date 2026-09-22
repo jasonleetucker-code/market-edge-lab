@@ -249,5 +249,32 @@
       "2025-01-01",
       "2025-12-31"
     ]
+  },
+  "window_c": {
+    "audit_version": "1",
+    "events": 366,
+    "events_by_rules_source": {
+      "nws_climatological_report_daily": 366
+    },
+    "events_not_exactly_one_yes": [],
+    "events_with_explanations": {},
+    "events_with_kalshi_value": 366,
+    "kalshi_value_minus_nws_cli": {
+      "0": 366
+    },
+    "kalshi_value_vs_nws_cli_exact_agreement": "366/366",
+    "mispredicted_brackets": 0,
+    "missing_dates": [],
+    "reproduced_from_kalshi_value": 366,
+    "reproduced_from_nws_cli": 366,
+    "rules_versions": {
+      "1fd611f12a3bba48": 1482,
+      "a6ce4cac04b81266": 714
+    },
+    "unresolved_events": [],
+    "window": [
+      "2024-01-01",
+      "2024-12-31"
+    ]
   }
 }

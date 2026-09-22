@@ -8,9 +8,18 @@ be written here when they are made.
 | # | Gate | State |
 |---|---|---|
 | 1 | Data collection | **Complete.** Collectors, provenance, source health, freshness and immutable evidence (PR #2); NWS CLI and settlement-evidence collectors, pagination and pacing (PR #8). Scheduled collection needs approval (cost policy). |
-| 2 | Settlement validation | **PASSED 2026-09-22 (PR #8).** 433 daily events audited, 0 mis-predictions, 0 unexplained mismatches; see `experiments/EXP-001-kxhighny-nws-vs-market/gate2/REPORT.md` and `docs/SETTLEMENT.md`. |
+| 2 | Settlement validation | **PASSED 2026-09-22 (PR #8).** 799 daily events audited (including a fresh 2024 validation with the procedure frozen first), 0 mis-predictions under the final procedure, 0 unexplained mismatches; see `experiments/EXP-001-kxhighny-nws-vs-market/gate2/REPORT.md` and `docs/SETTLEMENT.md`. |
 | 3 | Historical dataset | **Active (authorized).** Build the point-in-time dataset, and freeze the EXP-001 preregistration before any test-period data is examined. |
 | 4–10 | Model → … → scaling | Not authorized. |
+
+## Owner authorization record
+
+- **2026-09-22, gate 2 → gate 3.** The owner's gate-2 directive stated: "You are also
+  explicitly authorized to merge the resulting Gate 2 PR yourself when all acceptance
+  criteria and CI requirements below are satisfied", and "If and only if Gate 2 passed:
+  update `docs/EXECUTION_PLAN.md` to indicate Gate 3 is now the active gate." Gate 3
+  becomes active when PR #8 merges. The directive also said not to begin model
+  optimization in that PR.
 
 ## Authorized now (no further approval needed)
 
@@ -59,6 +68,10 @@ trusting a number written here.) Any proposed scheduled collector must, before a
   3. Reproduce at least 30 historical resolved KXHIGHNY markets from the named settlement source,
      with zero unexplained mismatches.
   4. Measure how the settlement value relates to NWS CLI and NWS forecasts.
+     *Amended 2026-09-22:* the CLI part was measured (739/739). The **forecast** part is
+     moved to gate 3, because it needs the point-in-time forecast dataset. It is also not
+     among the owner's 11 gate-2 acceptance criteria, which govern this gate. Recorded here
+     rather than silently dropped.
 - **Before any experiment leaves DRAFT:** the deterministic preregistration baseline now
   exists (`edge-lab experiments freeze`, validator check, CI `check-frozen`). Use it.
 - **Gate 3 → 4:** a point-in-time dataset for EXP-001, where each row records what was

@@ -26,6 +26,7 @@ OUT = ROOT / "experiments" / "EXP-001-kxhighny-nws-vs-market" / "gate2"
 WINDOWS = {
     "a": ("kalshi_markets_window_a.json.gz", "iem_clinyc_2026-07-15_2026-09-23.txt.gz", date(2026, 7, 16), date(2026, 9, 21)),
     "b": ("kalshi_markets_window_b.json.gz", "iem_clinyc_2025-01-01_2026-01-03.txt.gz", date(2025, 1, 1), date(2025, 12, 31)),
+    "c": ("kalshi_markets_window_c.json.gz", "iem_clinyc_2024-01-01_2025-01-03.txt.gz", date(2024, 1, 1), date(2024, 12, 31)),
 }
 
 

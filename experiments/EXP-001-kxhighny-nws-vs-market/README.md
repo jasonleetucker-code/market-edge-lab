@@ -24,9 +24,10 @@ No modeling results exist, and nothing here claims an edge.
 - **2026-09-22 (gate 2).** Captured contract terms (GLOBALTEMPERATURE, the certification
   filing, legacy NHIGH) as exact bytes, plus every settled market (live and historical API).
   The rules source changed from NWS CLI to The Weather Company on 2026-08-14. Reproduced
-  Kalshi results for 68/68 days (2026 window) and 361/365 days (held-out 2025; 4 UNKNOWN
-  because archived CLI finals are missing), with 0 mis-predicted brackets. Kalshi
-  `expiration_value` equals the NWS CLI settlement value on 373/373 events. Two contract
+  Kalshi results for 68/68 days (2026), 361/365 days (2025; this window was used to develop
+  two rules; 4 UNKNOWN from archive gaps) and 366/366 days (2024, fresh validation with the
+  procedure frozen first). 0 mis-predicted brackets under the final procedure. Kalshi
+  `expiration_value` equals the NWS CLI settlement value on 739/739 events. Two contract
   report-selection rules were needed and implemented: "first final report that includes
   the data", and NHIGH's delayed determination when the final is lower than earlier reports.
 
