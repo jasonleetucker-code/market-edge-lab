@@ -27,19 +27,19 @@ def test_dataset_rebuilds_byte_identically_twice():
     first, second = builder.build(), builder.build()
     assert {k: _h(v) for k, v in first.items()} == {k: _h(v) for k, v in second.items()}
     for name, content in first.items():
-        assert _h((GATE3 / name).read_text()) == _h(content), f"{name} is stale; run scripts/build_exp001_dataset.py"
+        assert _h((GATE3 / name).read_text(encoding="utf-8")) == _h(content), f"{name} is stale; run scripts/build_exp001_dataset.py"
 
 
 def test_manifest_hashes_every_input_file():
     builder = _load("build_exp001_dataset")
-    manifest = json.loads((GATE3 / "dataset_manifest.json").read_text())
-    expected = {str(p.relative_to(ROOT)) for p in builder.input_files()}
+    manifest = json.loads((GATE3 / "dataset_manifest.json").read_text(encoding="utf-8"))
+    expected = {p.relative_to(ROOT).as_posix() for p in builder.input_files()}
     assert set(manifest["input_sha256"]) == expected
     assert any("pfm_extracts_" in k for k in expected) and any("iem_clinyc_" in k for k in expected)
 
 
 def test_descriptive_report_is_current_and_train_only():
     describer = _load("describe_exp001_train")
-    assert _h((GATE3 / "DESCRIPTIVE_TRAIN.md").read_text()) == _h(describer.build())
-    rows = describer.train_rows((GATE3 / "dataset.csv").read_text())
+    assert _h((GATE3 / "DESCRIPTIVE_TRAIN.md").read_text(encoding="utf-8")) == _h(describer.build())
+    rows = describer.train_rows((GATE3 / "dataset.csv").read_text(encoding="utf-8"))
     assert rows and {r["split"] for r in rows} == {"train"}
