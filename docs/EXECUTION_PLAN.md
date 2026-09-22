@@ -7,10 +7,10 @@ be written here when they are made.
 
 | # | Gate | State |
 |---|---|---|
-| 1 | Data collection | **Complete.** Collectors, provenance, source health, freshness and immutable evidence (PR #2); NWS CLI and settlement-evidence collectors, pagination and pacing (PR #8). Scheduled collection needs approval (cost policy). |
-| 2 | Settlement validation | **PASSED 2026-09-22 (PR #8; merge gated on green CI on the final head).** 799 daily events audited (including a fresh 2024 validation with the procedure frozen first), 0 mis-predictions under the final procedure, 0 unexplained mismatches; see `experiments/EXP-001-kxhighny-nws-vs-market/gate2/REPORT.md` and `docs/SETTLEMENT.md`. |
-| 3 | Historical dataset | **PASSED 2026-09-22 (Gate 3 PR; effective on its merge, which the owner authorized only once all 21 criteria hold and CI is green on the final head).** Point-in-time dataset EXP-001-pit-v2 (3,551 days, 3,551 usable, SHA-256 `1794b23c…`), train-only descriptive analysis, EXP-001 PREREGISTERED and frozen; see `experiments/EXP-001-kxhighny-nws-vs-market/gate3/`. |
-| 4 | Baseline model | **Active on merge of the Gate 3 PR (authorized).** Implement the frozen baseline model and evaluate it on the predeclared train/validation/test protocol. |
+| 1 | Data collection | **Complete.** Collectors, provenance, source health, freshness and immutable evidence (PR #2); NWS CLI and settlement-evidence collectors, pagination and pacing (PR #8). Scheduled read-only forward collection **authorized 2026-09-22** (see below; ADR 0012). |
+| 2 | Settlement validation | **PASSED 2026-09-22 (PR #8, merged 22d217b).** 799 daily events audited (including a fresh 2024 validation with the procedure frozen first), 0 mis-predictions under the final procedure, 0 unexplained mismatches; see `experiments/EXP-001-kxhighny-nws-vs-market/gate2/REPORT.md` and `docs/SETTLEMENT.md`. |
+| 3 | Historical dataset | **PASSED 2026-09-22 (PR #14, merged 2f5d640; Windows portability fixes PR #15, 7c93f78).** Point-in-time dataset EXP-001-pit-v2 (3,551 days, 3,551 usable, SHA-256 `1794b23c…`), train-only descriptive analysis, EXP-001 PREREGISTERED and frozen; see `experiments/EXP-001-kxhighny-nws-vs-market/gate3/`. |
+| 4 | Baseline model | **ACTIVE** (since the PR #14 merge, 2026-09-22). Implement the frozen baseline model and evaluate it on the predeclared train/validation/test protocol. |
 | 5–10 | Market-vs-model → … → scaling | Not authorized. |
 
 ## Owner authorization record
@@ -31,6 +31,34 @@ be written here when they are made.
   Gate 3 passed: update `docs/EXECUTION_PLAN.md` so Gate 4 becomes active. Gate 4 should
   then begin with: «Implement the frozen baseline model and evaluate it on the predeclared
   train/validation/test protocol.» Do not perform that evaluation in the Gate 3 PR."
+  PR #14 merged (2f5d640), so Gate 4 is active.
+
+- **2026-09-22, Gate 4 lanes and scheduled read-only collection.** Recorded verbatim in
+  `docs/owner/2026-09-22-gate4-collection-directive.md`. In summary:
+  - **Scheduled collection** is authorized: read-only, unattended collection of public,
+    unauthenticated Kalshi market/order-book data and the required public NWS data, on the
+    existing Chase Upside VPS.
+    - This includes fixed-time timers, the EXP-001 decision window plus its 10–15 min
+      re-check, Market Edge's own storage, logs, health monitoring, failure alerts,
+      backups, bounded retries and resource limits.
+    - Precondition: a resource and isolation review shows that the Brisket application is
+      not materially endangered. That review passed on 2026-09-22 (ADR 0012,
+      `docs/deploy/VPS_REVIEW_2026-09-22.md`) and is re-run immediately before install.
+    - It runs as a separate service and repository. No agent adds, replaces or rotates
+      SSH keys. Owner-only steps (sudo, DNS, TLS, credentials) are prepared, then handed to
+      the owner as exact commands.
+  - **Merge authority:** agents may squash-merge PR #13 and this lane's docs, collector and
+    Gate 4 PRs only when all of these hold:
+    - the PR is reconciled with current `main`;
+    - the Gate 3 / EXP-001 frozen artifacts are untouched;
+    - an independent read-only review finds no unresolved correctness blocker;
+    - CI is green on the exact final head;
+    - the PR is mergeable.
+  - **Attended laptop bridge:** allowed for a single window if the VPS is not yet live.
+    No laptop scheduler may be left behind.
+  - **Still excluded:** orders, trading credentials, authenticated trading APIs, deposits
+    and withdrawals, funded accounts, paid APIs, subscriptions or hosting, and automatic
+    financial decisions.
 
 ## Authorized now (no further approval needed)
 
@@ -39,12 +67,20 @@ be written here when they are made.
 - Collector, provenance, freshness, health, storage and test infrastructure.
 - Documentation, ADRs, experiment specifications in `DRAFT`, and research write-ups.
 - Settlement-rule capture and re-audit for KXHIGHNY, read-only (`edge-lab settlement`).
-- **Gate 4 work (after the Gate 3 merge):** implement the frozen EXP-001 baseline exactly
+- **Gate 4 work:** implement the frozen EXP-001 baseline exactly
   as preregistered (`experiments/EXP-001-kxhighny-nws-vs-market/experiment.toml`,
   `preregistration.json`, `gate3/DESIGN.md` §5–6); select V1/V2 on validation by the frozen
   rule; evaluate Stage A on the test split **once**; report the result whatever it is.
   Any change to the frozen spec is a dated `[[amendments]]` entry made *before* the test
   evaluation, or a new experiment.
+- **Forward Stage-B collection (read-only, scheduled)** on the Chase Upside VPS, as scoped
+  in the 2026-09-22 authorization above and ADR 0012. It covers:
+  - the KXHIGHNY event, markets and order books in the EXP-001 decision window, plus the
+    re-check capture;
+  - the NWS PFMOKX forecast;
+  - health status, alerts and verified backups.
+  Collection is evidence gathering. Stage B *evaluation* for EXP-001 still needs a Stage A
+  PASS, and it simulates only: it never sends orders.
 
 ## Explicitly not authorized
 
@@ -54,9 +90,10 @@ be written here when they are made.
 - Strategy optimization or parameter searches; any model variant, threshold or window not
   in the frozen EXP-001 spec; evaluating the test split more than once, or changing the
   experiment after seeing test performance.
-- Stage B shadow trading until the owner decides on scheduled collection (ADR 0008), and
-  any real-money step (gates 8–10).
-- Scheduled or unattended collection of any kind, **including GitHub Actions cron**, without
+- Any real-money step (gates 8–10), any live-order path, and any Stage B *evaluation*
+  for a model that did not pass Stage A.
+- Scheduled or unattended jobs **outside** the 2026-09-22 read-only VPS authorization,
+  including GitHub Actions cron, any paid host, and any authenticated source, without new
   owner approval.
 - Browser automation against any source whose terms have not been reviewed and recorded.
 
@@ -98,4 +135,5 @@ trusting a number written here.) Any proposed scheduled collector must, before a
   preregistration.
 - **Gate 4 → 5 (proposed; the owner may revise):** the frozen baseline is implemented with tests, validation selection is
   recorded, Stage A on test is run once and reported (pass or fail) in EXP-001's log, and
-  the owner decides whether and how Stage B collection proceeds.
+  the owner decides whether and how Stage B collection proceeds. *(The collection decision
+  was made on 2026-09-22: read-only scheduled collection on the Chase Upside VPS.)*
