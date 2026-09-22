@@ -30,15 +30,22 @@ EVIDENCE:
   - Baseline, fees, execution, Stage A/B criteria and power: gate3/DESIGN.md, POWER.md,
     experiment.toml
   - Freeze: experiments/EXP-001-kxhighny-nws-vs-market/preregistration.json, frozen fields
-    SHA-256 4b1cab54a390efb7c703e1b03a12263ea43435826f048c83d857da76d1d046fc.
+    SHA-256 258baaf6c30d3b04d6fceb42c5f158c1940b901cf552f4523aa49b6fa9c15283. It was
+    re-frozen once on the unmerged branch, after the second review fixed a wrong
+    regime-age sentence and defined a Stage B valid day. The first baseline (4b1cab54…)
+    never reached main. No validation or test error was computed at any point.
     `edge-lab experiments validate` OK; check-frozen vs origin/main OK.
-    tests/invariants/test_exp001_frozen_artifacts.py pins DESIGN.md, fees.py, stats.py
+    tests/invariants/test_exp001_frozen_artifacts.py pins DESIGN.md, fees.py, stats.py,
+    settlement.py
     and the dataset hash.
   - Tests: python -m pytest, 229 passed on 3.11 and on 3.12. CI: see the Gate 3 PR.
   - Independent adversarial review (read-only): no blocker. All 7 SHOULD-FIX items were
     fixed before the freeze, including the DST lead-hours bug, the pinned bootstrap, the
     Stage B two-look rule, the issuance-regime disclosure, artifact pins, suffixed
     products, and doc overclaims. Nits 1, 2, 3, 5, 6 and 7 were fixed.
+  - Second read-only review of those fixes: no blocker. Both SHOULD-FIX items were fixed
+    (the DESIGN regime sentence; the Stage B valid-day definition). settlement.py is now
+    pinned too, and the implicit V2/PIT/UNKNOWN readings are made explicit.
 UNRESOLVED:
   - Fee coefficient 0.07 comes from Kalshi's documented worked example. The fee-schedule
     PDF sits behind a bot checkpoint (not bypassed). Re-verify before any Stage B result.

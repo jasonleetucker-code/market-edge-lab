@@ -38,7 +38,10 @@
   "pfm_archive_stats": {
     "ambiguous_or_unparsed_issuance_time": 3,
     "duplicate_products": 80,
+    "no_central_park_block": 0,
     "products": 32699,
+    "products_with_unaligned_values": 0,
+    "suffixed_products_never_used": 0,
     "usable_issuances": 32616
   },
   "pfm_parser_version": "3",

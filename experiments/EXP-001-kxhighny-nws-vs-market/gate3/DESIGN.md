@@ -21,6 +21,9 @@ error was computed**. The binding version is `../experiment.toml`, frozen in
     2016-12 → 2026-09 archive contains none.
   - If two products share the latest eligible issuance minute and disagree on D's max, the
     row is excluded (`CONFLICTING_SIMULTANEOUS_ISSUANCES`). Picking one would be arbitrary.
+  - If several products share the latest eligible minute and agree on D's max, the one
+    with the lowest `product_sha256` is recorded as the provenance link. The value is the
+    same either way.
   - `forecast_available_utc` = issuance + 30 min. It is recorded separately from issuance.
 - **Never used**: a forecast issued after the cutoff; a corrected value published after
   the cutoff; a later archive copy substituted for the original (products are identified
@@ -64,10 +67,11 @@ min at 07 EST / 08 EDT. A value in any other column, or not aligned, is not read
   `CONFLICTING_SIMULTANEOUS_ISSUANCES`, `NO_SETTLEMENT_LABEL`, `KALSHI_CLI_CONFLICT`,
   `KALSHI_VALUE_INCONSISTENT`. Excluded rows stay in the file with their reason.
 - **Issuance regime shift (disclosed before any error was computed):** the NWS issued fewer
-  PFMOKX updates from mid-2025, and the afternoon package moved to about 18Z. In the test
-  period the chosen forecast is typically 3–5 h old at the decision time, against about
-  2.5 h in 2017–2024 (`QUALITY.md`, "regime by year"). The fit years therefore have fresher
-  forecasts than the test years. This is not corrected; it is part of what Stage A tests.
+  PFMOKX updates from mid-2025, and in 2026 the afternoon package moved to about 18Z. The
+  chosen forecast's median age at the decision time is about 2.4–2.5 h in 2017–2024, 2.8 h
+  in 2025 and 3.5 h in 2026 (65% older than 3 h). Over the whole test period the median is
+  about 3.0 h (`QUALITY.md`, "regime by year"). The later test years therefore have older
+  forecasts than the fit years. This is not corrected; it is part of what Stage A tests.
 - Identity: `dataset_sha256` is computed over the canonical CSV. Every input file's SHA-256
   is in the manifest, and CI rebuilds and byte-compares the outputs
   (`tests/test_gate3_reproducible.py`).
@@ -95,7 +99,8 @@ Notation: f = `forecast_max_f` (integer °F), y = label (integer °F), k = y −
   nearest end (±20). An outcome with |k| > 20 is scored at that end.
 - **Variants (exactly two):**
   - V1: one pooled pmf.
-  - V2: one pmf per meteorological season of D (DJF, MAM, JJA, SON).
+  - V2: one pmf per meteorological season of D (DJF, MAM, JJA, SON), with n_k and N
+    counted within that season's fit days.
 - **Fit windows (no expanding updates):**
   - For validation scoring: fit on usable train days.
   - For test scoring: refit the selected variant once on usable train + validation days.
@@ -134,7 +139,8 @@ days.
   1. mean(ln P_model(y) − ln P_R0(y)) > 0, with the 95% block-bootstrap interval's lower
      end > 0;
   2. calibration: randomized PIT u = F(y−1) + v·P(y), with v ~ U(0,1) drawn by
-     `random.Random(20260922)` in date order (`edge_lab.stats.randomized_pit`). The
+     `random.Random(20260922)` in date order, with F and P taken from the same clamped
+     pmf used for scoring (an outcome with |k| > 20 is evaluated at k = ±20) (`edge_lab.stats.randomized_pit`). The
      fraction of test days with 0.10 ≤ u ≤ 0.90 (`stats.central_coverage`) lies in
      [0.75, 0.85].
 - **FAIL** otherwise.
@@ -156,12 +162,13 @@ days.
 
   There is one fixed threshold and it is not searched. At most one contract per bracket
   per day.
-- **Valid decision day**: the collector stored the event's order books in the decision
-  window (§8) and a latency re-check snapshot 10–15 min later. Days without both are
-  excluded from Stage B and counted in its report.
+- **Valid decision day**: the collector stored, in the decision window (§8), the event's
+  market list and an order book for **every** open bracket, and a latency re-check book
+  10–15 min later for every bracket. A day missing any of these is excluded from Stage B
+  and counted in its report. There is no partial-day inclusion.
 - **Daily value**: the sum of that day's net P&L over filled trades. It is 0 on a valid day
-  with no signal, or where every signal was `NO_BOOK` or `NO_FILL_UNVERIFIED`. Such days
-  stay in the mean.
+  with no signal, or where every signal ended `NO_FILL_UNVERIFIED`. Such days stay in the
+  mean. A bracket for which `settlement.resolve` returns UNKNOWN is never traded.
 - **Exactly two looks**, at the 180th and the 365th valid decision day. Each uses the block
   bootstrap with α = 0.025 (97.5% interval; Bonferroni for two looks). There is no
   checking in between.

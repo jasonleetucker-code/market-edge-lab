@@ -51,6 +51,9 @@ def input_files() -> list[Path]:
 
 def load_issuances() -> tuple[list[Issuance], Counter]:
     stats: Counter = Counter()
+    for key in ("ambiguous_or_unparsed_issuance_time", "duplicate_products", "no_central_park_block",
+                "products_with_unaligned_values", "suffixed_products_never_used"):
+        stats[key] = 0  # record zeros explicitly: "0 suffixed" is a claim, not an absence
     seen: set[str] = set()
     out: list[Issuance] = []
     for path in sorted(G3.glob("pfm_extracts_*.jsonl.gz")):

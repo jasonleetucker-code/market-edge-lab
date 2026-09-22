@@ -31,7 +31,7 @@ def test_frozen_spec_pins_dataset_design_and_code():
     paths = {p for p, _ in _pins()}
     assert "experiments/EXP-001-kxhighny-nws-vs-market/gate3/dataset.csv" in paths
     assert "experiments/EXP-001-kxhighny-nws-vs-market/gate3/DESIGN.md" in paths
-    assert {"src/edge_lab/fees.py", "src/edge_lab/stats.py"} <= paths
+    assert {"src/edge_lab/fees.py", "src/edge_lab/stats.py", "src/edge_lab/settlement.py"} <= paths
 
 
 def test_pinned_files_are_unchanged():

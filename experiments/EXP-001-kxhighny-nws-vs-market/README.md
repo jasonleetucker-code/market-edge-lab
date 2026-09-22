@@ -42,7 +42,9 @@ claims an edge. Next: Gate 4 implements the frozen baseline and evaluates it onc
     long right tail.
   - Specified the baseline (empirical error pmf, V1 pooled or V2 seasonal), the fee and
     execution models, Stage A (historical probability validation) and Stage B
-    (prospective shadow trading), and the power check. Froze the preregistration.
+    (prospective shadow trading), and the power check. Froze the preregistration (re-frozen once before merge after a second
+    independent review corrected a DESIGN sentence and a Stage B definition; no
+    validation or test error was computed at any point).
   - Found and fixed during the build: pre-March-2017 products use upper-case labels, and
     the WMO header often trails the local issuance line by 1 minute. Parser v2/v3
     handles both (v3 also refuses suffixed products); this was found before any error
