@@ -15,3 +15,21 @@ single underlying value and are not independent observations.
 Pass rule for gate 2: in each window, every event's expected outcome (from the deterministic
 parser and the applicable evidence) matches Kalshi's recorded `result` for every bracket, or
 the mismatch has a documented, evidence-backed explanation. UNKNOWN is never counted as a match.
+
+## Amendment 1 (2026-09-22, before window C was evaluated)
+
+**Why.** The independent review pointed out that window B tuned the procedure. Two
+report-selection rules were added after they failed or were needed on window B events:
+skipping a final report without a value (25FEB21), and NHIGH delayed determination
+(25DEC03, which was a mis-prediction under the original "first final" procedure). So window
+B is **not** a clean held-out test of the final procedure. Its result under the original
+procedure is reported alongside it.
+
+**Window C (fresh validation).** Target dates 2024-01-01 → 2024-12-31. The population is
+every HIGHNY and KXHIGHNY event returned by `GET /historical/markets?series_ticker=HIGHNY`
+and `?series_ticker=KXHIGHNY`, deduplicated by market ticker. The procedure is **frozen at
+commit 9f28602** (`edge_lab.settlement`, `edge_lab.nws_cli.settlement_value`,
+`edge_lab.settlement_audit`). It is evaluated once, and it is not changed in response to
+window C's results. Any mismatch is reported as-is. Window C outcomes, values and CLI
+comparisons had not been examined when this amendment was written; only the fact that 2024
+market records exist had been checked.
