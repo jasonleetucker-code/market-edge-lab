@@ -116,7 +116,7 @@ def load_kalshi() -> dict[date, KalshiEvent]:
 
 
 def _pfm_responses() -> int:
-    requests = json.loads((G3 / "fetch_manifest.json").read_text())["requests"]
+    requests = json.loads((G3 / "fetch_manifest.json").read_text(encoding="utf-8"))["requests"]
     return sum("pil=PFMOKX" in r["url"] for r in requests)
 
 
@@ -255,7 +255,7 @@ def build() -> dict[str, str]:
     issuances, pfm_stats = load_issuances()
     rows = build_rows(issuances, load_cli(), load_kalshi())
     csv_text = to_csv(rows)
-    inputs = {str(p.relative_to(ROOT)): _sha(p) for p in input_files()}
+    inputs = {p.relative_to(ROOT).as_posix(): _sha(p) for p in input_files()}
     m = manifest(rows, csv_text, inputs)
     m["pfm_archive_stats"] = dict(sorted(pfm_stats.items()))
     return {
@@ -274,10 +274,10 @@ def main() -> int:
     for name, content in build().items():
         path = OUT / name
         if args.check:
-            if not path.exists() or path.read_text() != content:
+            if not path.exists() or path.read_text(encoding="utf-8") != content:
                 stale.append(name)
         else:
-            path.write_text(content)
+            path.write_text(content, encoding="utf-8", newline="\n")
     if stale:
         print("stale EXP-001 dataset outputs (run scripts/build_exp001_dataset.py):", ", ".join(stale))
         return 1
