@@ -71,7 +71,7 @@ a scheduled deployment.
 - [x] Re-running collection adds new snapshots instead of replacing old ones. *(2026-09-22: 2 runs → 36 rows)*
 - [x] Raw payload hashes are retained. *(`payload_sha256` and `raw_sha256` on every new row)*
 - [x] Recent snapshot metadata can be inspected from the CLI. *(`edge-lab recent`)*
-- [x] Failure of a network call marks the collection run failed without deleting earlier snapshots. *(Unit tests: `tests/test_cli.py`; deletes are blocked by `tests/invariants/test_evidence_immutability.py`)*
+- [x] Failure of a network call is recorded without deleting earlier snapshots. *(Refined 2026-09-22: the failing source is marked `failed`, or `partial` if it stored some records. The run is `failed` only if every source failed, and `partial` otherwise. `collect` exits non-zero in both cases. See `tests/test_cli.py`. Deletes are blocked, see `tests/invariants/test_evidence_immutability.py`.)*
 - [x] No code path can submit an order. *(`tests/invariants/test_no_execution_paths.py`)*
 
 ## Next milestone

@@ -7,12 +7,13 @@ scope for this repository until an explicit owner decision changes that.
 
 from __future__ import annotations
 
+import http.client
 import json
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Callable
-from urllib.error import HTTPError, URLError
+from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
 DEFAULT_USER_AGENT = "market-edge-lab/0.1"
@@ -28,6 +29,10 @@ class HttpFetchError(RuntimeError):
         super().__init__(message)
         self.status = status
         self.attempts = attempts
+
+
+class ResponseDecodeError(HttpFetchError):
+    """The server answered, but the body was not the JSON object we expected."""
 
 
 @dataclass(frozen=True)
@@ -105,21 +110,21 @@ def fetch(
                 attempts=attempt,
             )
         except HTTPError as exc:
+            exc.close()
             if exc.code not in RETRYABLE_STATUS or attempt > retries:
                 raise HttpFetchError(
                     f"HTTP {exc.code} fetching {url}", status=exc.code, attempts=attempt
                 ) from exc
             retry_after = _retry_after_seconds(exc)
             sleep(retry_after if retry_after is not None else delay)
-        except URLError as exc:
+        except (OSError, http.client.HTTPException) as exc:
+            # URLError, timeouts, resets, RemoteDisconnected, IncompleteRead, SSL
+            # errors: all transport failures, all transient.
             if attempt > retries:
+                reason = getattr(exc, "reason", None) or f"{type(exc).__name__}: {exc}"
                 raise HttpFetchError(
-                    f"Network error fetching {url}: {exc.reason}", attempts=attempt
+                    f"Network error fetching {url}: {reason}", attempts=attempt
                 ) from exc
-            sleep(delay)
-        except TimeoutError as exc:
-            if attempt > retries:
-                raise HttpFetchError(f"Timeout fetching {url}", attempts=attempt) from exc
             sleep(delay)
 
 
@@ -128,10 +133,13 @@ def decode_json_object(result: FetchResult) -> dict[str, Any]:
     try:
         payload = json.loads(result.body)
     except (json.JSONDecodeError, UnicodeDecodeError) as exc:
-        raise HttpFetchError(f"Invalid JSON returned by {url}", attempts=result.attempts) from exc
+        raise ResponseDecodeError(
+            f"Invalid JSON returned by {url}", status=result.http_status, attempts=result.attempts
+        ) from exc
     if not isinstance(payload, dict):
-        raise HttpFetchError(
+        raise ResponseDecodeError(
             f"Expected a JSON object from {url}, got {type(payload).__name__}",
+            status=result.http_status,
             attempts=result.attempts,
         )
     return payload

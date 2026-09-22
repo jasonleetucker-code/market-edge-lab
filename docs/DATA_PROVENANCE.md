@@ -32,7 +32,9 @@ Each fetched payload is one immutable row in `snapshots` (SQLite, `edge_lab.stor
 
 Evidence rules:
 
-- **Rows are immutable.** SQLite triggers abort any `UPDATE` or `DELETE` on `snapshots`.
+- **Rows are immutable.** SQLite triggers abort any `UPDATE`, `DELETE`, or `INSERT OR REPLACE`
+  of an existing row in `snapshots`. The triggers guard against mistakes, not against someone
+  with direct database access.
 - **Repeated identical payloads are kept.** They prove the information stayed available.
 - **Canonical JSON is stored.** The exact bytes are not. `raw_sha256` proves which bytes were
   received but cannot recreate them. See ADR 0002 for why, and for when to revisit.
@@ -57,7 +59,12 @@ start/complete timestamps, `duration_ms`, `status`, `records`, `payload_bytes`, 
 - **Anomalies** are completeness or shape problems that are not exceptions. Examples: a
   paginated market list where later pages were not fetched, or an empty market list.
 - `edge-lab health [--json]` shows the latest status, last success, last error, anomalies,
-  and per-kind freshness for each active source.
+  and per-kind freshness for each active source. It exits non-zero unless every kind is fresh.
+  Per-kind freshness is based on the *latest receipt of any entity of that kind*. It is a
+  collector-liveness signal, not a guarantee that every entity is fresh. Decision code checks
+  its own inputs with `require_fresh`.
+- Retries spent on a fetch that ultimately failed are counted in `retries`. Undecodable
+  responses are errors, but they are not counted as `http_errors`.
 
 The event shape is kept flat and stable on purpose. A metrics exporter (Prometheus or cloud
 monitoring) can later read `source_health` without changing any collector.

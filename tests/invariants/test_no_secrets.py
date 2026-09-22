@@ -22,7 +22,7 @@ def _tracked_files():
     try:
         out = subprocess.run(
             ["git", "ls-files"], cwd=ROOT, capture_output=True, text=True, check=True
-        ).stdout.split()
+        ).stdout.splitlines()
     except (OSError, subprocess.CalledProcessError):
         out = [str(p.relative_to(ROOT)) for p in ROOT.rglob("*") if p.is_file() and ".git" not in p.parts]
     return [ROOT / f for f in out]

@@ -11,6 +11,7 @@ from __future__ import annotations
 import re
 import tomllib
 from dataclasses import dataclass
+from datetime import date
 from pathlib import Path
 from typing import Any
 
@@ -87,6 +88,8 @@ def validate(exp: Experiment) -> list[str]:
         value = d.get(key)
         if not isinstance(value, list) or not value:
             problems.append(f"missing or empty list field '{key}'")
+        elif not all(isinstance(item, str) and item.strip() for item in value):
+            problems.append(f"list field '{key}' must contain only non-empty strings")
     for key in REQUIRED_TABLES:
         if not isinstance(d.get(key), dict):
             problems.append(f"missing table [{key}]")
@@ -98,18 +101,24 @@ def validate(exp: Experiment) -> list[str]:
     if exp.status and exp.status not in STATUSES:
         problems.append(f"status '{exp.status}' not in {', '.join(STATUSES)}")
     created = d.get("created")
-    if isinstance(created, str) and not DATE_PATTERN.match(created):
-        problems.append("created must be YYYY-MM-DD")
+    if isinstance(created, str):
+        try:
+            if not DATE_PATTERN.match(created):
+                raise ValueError
+            date.fromisoformat(created)
+        except ValueError:
+            problems.append("created must be a real date in YYYY-MM-DD form")
 
     periods = d.get("periods")
     if isinstance(periods, dict):
         for key in PERIOD_KEYS:
             if key not in periods:
                 problems.append(f"[periods] missing '{key}' (use \"TBD\" while DRAFT)")
-        if exp.status in LOCKED:
-            tbd = [k for k in PERIOD_KEYS if str(periods.get(k, "TBD")).upper() == "TBD"]
-            if tbd:
-                problems.append(f"{exp.status} experiment has undefined periods: {tbd}")
+
+    if exp.status in LOCKED:
+        # Once preregistered, nothing the decision depends on may be left open.
+        for label in _undefined_locked_fields(d):
+            problems.append(f"{exp.status} experiment has undefined '{label}' (still TBD)")
 
     amendments = d.get("amendments", [])
     if not isinstance(amendments, list):
@@ -135,6 +144,22 @@ def validate(exp: Experiment) -> list[str]:
                 problems.append(f"[result] report '{report}' does not exist")
 
     return problems
+
+
+def _is_tbd(value: Any) -> bool:
+    return isinstance(value, str) and value.strip().upper().startswith("TBD")
+
+
+def _undefined_locked_fields(d: dict[str, Any]) -> list[str]:
+    labels = [key for key in ("decision_time", "model") if _is_tbd(d.get(key))]
+    for table in ("periods", "costs", "execution"):
+        section = d.get(table)
+        if isinstance(section, dict):
+            labels += [f"{table}.{k}" for k, v in section.items() if _is_tbd(v)]
+    periods = d.get("periods")
+    if isinstance(periods, dict):
+        labels += [f"periods.{k}" for k in PERIOD_KEYS if k not in periods]
+    return labels
 
 
 def discover(root: Path) -> list[Path]:

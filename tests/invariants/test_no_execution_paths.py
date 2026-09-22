@@ -15,6 +15,8 @@ FORBIDDEN = {
     "order endpoint": re.compile(r"/portfolio/orders|/orders\b|create_order|place_order|submit_order", re.I),
     "non-GET HTTP method": re.compile(r"""method\s*=\s*["'](POST|PUT|PATCH|DELETE)["']""", re.I),
     "auth header": re.compile(r"""["'](Authorization|KALSHI-ACCESS-KEY|KALSHI-ACCESS-SIGNATURE)["']""", re.I),
+    "request body (implies POST)": re.compile(r"\b(Request|urlopen)\([^)]*\bdata\s*="),
+    "client write call": re.compile(r"\.(post|put|patch|delete)\(", re.I),
     "request signing": re.compile(r"\b(hmac|rsa|private_key|sign_request)\b", re.I),
 }
 

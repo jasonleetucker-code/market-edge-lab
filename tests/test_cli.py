@@ -76,3 +76,31 @@ def test_health_report_marks_uncollected_kinds_unknown(tmp_path):
     assert kalshi["markets"] == "unknown"  # never collected is not fresh
     assert set(report["nws_api"]["freshness"].values()) == {"unknown"}
     assert report["kalshi_public"]["last_status"] is None
+
+
+def test_failed_fetch_retries_are_counted(tmp_path, monkeypatch, capsys):
+    def flaky(store, *, run_id, anomalies, **kwargs):
+        raise HttpFetchError("HTTP 503 fetching x", status=503, attempts=3)
+
+    monkeypatch.setattr(cli, "collect_series", flaky)
+    db = tmp_path / "e.sqlite3"
+    cli.main(["collect", "--source", "kalshi", "--db", str(db)])
+    (row,) = SnapshotStore(db).latest_source_health()
+    assert row["retries"] == 2 and row["http_errors"] == 1
+
+
+def test_aborted_collection_never_leaves_run_running(tmp_path, monkeypatch):
+    import sqlite3
+
+    import pytest
+
+    def boom(*args, **kwargs):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(cli, "_run_source", boom)
+    db = tmp_path / "e.sqlite3"
+    with pytest.raises(KeyboardInterrupt):
+        cli.main(["collect", "--source", "kalshi", "--db", str(db)])
+    with sqlite3.connect(db) as conn:
+        (status,) = conn.execute("SELECT status FROM collection_runs").fetchone()
+    assert status == "failed"

@@ -17,3 +17,8 @@ def test_assess_fresh_and_stale():
 
 def test_boundary_is_fresh():
     assert assess("2026-09-22T17:55:00Z", max_age=timedelta(minutes=5), now=NOW) is Freshness.FRESH
+
+
+def test_non_string_timestamps_are_unparseable():
+    assert parse_utc(1695400000) is None
+    assert assess(1695400000, max_age=timedelta(days=1), now=NOW) is Freshness.UNKNOWN

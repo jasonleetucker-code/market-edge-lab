@@ -30,12 +30,14 @@ class StaleDataError(RuntimeError):
     """Raised when decision-grade code receives data that is not provably fresh."""
 
 
-def parse_utc(value: str | datetime | None) -> datetime | None:
+def parse_utc(value: object) -> datetime | None:
     """Parse an ISO-8601 timestamp. Naive or unparseable values return None."""
     if value is None:
         return None
     if isinstance(value, datetime):
         parsed = value
+    elif not isinstance(value, str):
+        return None
     else:
         text = value.strip()
         if not text:

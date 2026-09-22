@@ -17,10 +17,14 @@ ACCEPTANCE:
     immutability, missing is not zero, instruction parity, valid experiments)
   - A news/web ingestion design and the Brisket reuse audit
 EVIDENCE:
-  - python -m pytest: all tests pass locally on Python 3.11
+  - python -m pytest: 80 passed on Python 3.11.15 and 3.12.3 (local)
+  - An independent read-only review found 2 major issues (INSERT OR REPLACE bypassed
+    immutability; the validator accepted TBD fields once locked) and 4 minor ones. All are
+    fixed and have regression tests.
   - Live read-only collection on 2026-09-22 (sandbox, scratch DB): Kalshi 12 markets,
-    2 events, 12 order books; NWS 4 payloads. A rerun appended rows (36 total). An UPDATE
-    was blocked by the trigger. `edge-lab health` reported all kinds fresh.
+    2 events, 12 order books; NWS 4 payloads. Two runs on a fresh schema-v2 DB gave 40 rows,
+    all source_health rows were ok, and `edge-lab health` reported every kind fresh (exit 0).
+    UPDATE and INSERT OR REPLACE on snapshots were blocked.
   - CI: see the PR checks. It is not claimed here until the run is green.
 UNRESOLVED:
   - KXHIGHNY settlement source. The captured live rules name The Weather Company
@@ -28,6 +32,9 @@ UNRESOLVED:
     Gate 2 is blocked on resolving this (EXP-001 README).
   - The collector only fetches the first page of /markets. A cursor is flagged as a
     `partial` anomaly but not followed.
+  - Kalshi throttling: live runs needed 1 to 3 retries across 16 requests (recorded in
+    source_health.retries). Consider pacing order-book requests before any scheduled
+    collection.
   - No scheduled or recurring collection exists, so the dataset is only as large as
     manual runs make it.
 BLOCKERS: NONE for engineering. Merging the PR needs owner review.

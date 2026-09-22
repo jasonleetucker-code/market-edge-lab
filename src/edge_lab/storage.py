@@ -66,6 +66,15 @@ _SNAPSHOT_V2_COLUMNS = (
 )
 
 _SCHEMA_V2 = """
+-- INSERT OR REPLACE would otherwise delete-and-reinsert an existing row
+-- without firing the delete trigger.
+CREATE TRIGGER IF NOT EXISTS snapshots_no_replace
+BEFORE INSERT ON snapshots
+WHEN NEW.id IS NOT NULL AND EXISTS (SELECT 1 FROM snapshots WHERE id = NEW.id)
+BEGIN
+    SELECT RAISE(ABORT, 'snapshots are immutable evidence');
+END;
+
 CREATE TRIGGER IF NOT EXISTS snapshots_no_update
 BEFORE UPDATE ON snapshots
 BEGIN
@@ -116,6 +125,8 @@ class SnapshotStore:
         conn = sqlite3.connect(self.path)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA foreign_keys = ON")
+        # Make REPLACE conflict resolution fire delete triggers too.
+        conn.execute("PRAGMA recursive_triggers = ON")
         conn.execute("PRAGMA journal_mode = WAL")
         return conn
 
@@ -131,7 +142,12 @@ class SnapshotStore:
                 existing = {row["name"] for row in conn.execute("PRAGMA table_info(snapshots)")}
                 for name, sql_type in _SNAPSHOT_V2_COLUMNS:
                     if name not in existing:
-                        conn.execute(f"ALTER TABLE snapshots ADD COLUMN {name} {sql_type}")
+                        try:
+                            conn.execute(f"ALTER TABLE snapshots ADD COLUMN {name} {sql_type}")
+                        except sqlite3.OperationalError as exc:
+                            # Another process migrated concurrently.
+                            if "duplicate column" not in str(exc):
+                                raise
                 conn.executescript(_SCHEMA_V2)
                 conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
 

@@ -12,7 +12,7 @@ from typing import Callable
 
 from . import experiments
 from .freshness import Freshness, assess
-from .http import HttpFetchError
+from .http import HttpFetchError, ResponseDecodeError
 from .kalshi import collect_series
 from .nws import DEFAULT_LAT, DEFAULT_LON, collect_reference_forecast
 from .sources import REGISTRY, SourceStatus, get_source
@@ -73,6 +73,7 @@ def _run_source(
     started = time.monotonic()
     error: str | None = None
     http_errors = 0
+    failed_fetch_retries = 0
     counts: dict[str, int] | None = None
 
     try:
@@ -80,9 +81,14 @@ def _run_source(
     except Exception as exc:  # noqa: BLE001 - isolation boundary; error is recorded
         error = f"{type(exc).__name__}: {exc}"
         if isinstance(exc, HttpFetchError):
-            http_errors = 1
+            # Retries spent on the fetch that ultimately failed are not in any
+            # stored snapshot, so count them here.
+            failed_fetch_retries = max(exc.attempts - 1, 0)
+            if not isinstance(exc, ResponseDecodeError):
+                http_errors = 1
 
     records, payload_bytes, retries = store.run_source_totals(run_id, spec.legacy_name)
+    retries += failed_fetch_retries
     if error is not None:
         status = "partial" if records else "failed"
     elif anomalies:
@@ -123,47 +129,53 @@ def _collect(args: argparse.Namespace) -> int:
 
     result: dict[str, object] = {"run_id": run_id, "db": str(args.db)}
     outcomes: dict[str, dict[str, object]] = {}
-
-    if args.source in {"all", "kalshi"}:
-        outcomes["kalshi_public"] = _run_source(
-            store,
-            run_id=run_id,
-            source_id="kalshi_public",
-            collect=lambda anomalies: collect_series(
+    finished = False
+    try:
+        if args.source in {"all", "kalshi"}:
+            outcomes["kalshi_public"] = _run_source(
                 store,
                 run_id=run_id,
-                series_ticker=args.series,
-                status=args.market_status,
-                depth=args.depth,
-                anomalies=anomalies,
-            ),
-        )
+                source_id="kalshi_public",
+                collect=lambda anomalies: collect_series(
+                    store,
+                    run_id=run_id,
+                    series_ticker=args.series,
+                    status=args.market_status,
+                    depth=args.depth,
+                    anomalies=anomalies,
+                ),
+            )
 
-    if args.source in {"all", "nws"}:
-        outcomes["nws_api"] = _run_source(
-            store,
-            run_id=run_id,
-            source_id="nws_api",
-            collect=lambda _anomalies: collect_reference_forecast(
+        if args.source in {"all", "nws"}:
+            outcomes["nws_api"] = _run_source(
                 store,
                 run_id=run_id,
-                user_agent=args.nws_user_agent,
-                lat=args.lat,
-                lon=args.lon,
-            ),
-        )
+                source_id="nws_api",
+                collect=lambda _anomalies: collect_reference_forecast(
+                    store,
+                    run_id=run_id,
+                    user_agent=args.nws_user_agent,
+                    lat=args.lat,
+                    lon=args.lon,
+                ),
+            )
 
-    statuses = {outcome["status"] for outcome in outcomes.values()}
-    if statuses == {"ok"}:
-        run_status, run_error = "succeeded", None
-    elif statuses == {"failed"}:
-        run_status, run_error = "failed", "all sources failed"
-    else:
-        run_status = "partial"
-        run_error = "; ".join(
-            f"{sid}: {o['status']}" for sid, o in outcomes.items() if o["status"] != "ok"
-        )
-    store.finish_run(run_id, status=run_status, error=run_error)
+        statuses = {outcome["status"] for outcome in outcomes.values()}
+        if statuses == {"ok"}:
+            run_status, run_error = "succeeded", None
+        elif statuses == {"failed"}:
+            run_status, run_error = "failed", "all sources failed"
+        else:
+            run_status = "partial"
+            run_error = "; ".join(
+                f"{sid}: {o['status']}" for sid, o in outcomes.items() if o["status"] != "ok"
+            )
+        store.finish_run(run_id, status=run_status, error=run_error)
+        finished = True
+    finally:
+        if not finished:
+            # Never leave a run looking like it is still in progress.
+            store.finish_run(run_id, status="failed", error="collection aborted before completion")
 
     result["status"] = run_status
     result["sources"] = outcomes
@@ -190,10 +202,15 @@ def health_report(store: SnapshotStore, *, now: datetime) -> list[dict[str, obje
             continue
         row = latest.get(spec.source_id)
         fetched = store.latest_fetch_by_kind(spec.legacy_name)
+        # "Latest receipt of any entity of this kind". It does not guarantee
+        # that every entity of the kind is fresh; decision code must check its
+        # own inputs with require_fresh.
         kinds = {
             kind: assess(fetched.get(kind), max_age=max_age, now=now).value
             for kind, max_age in spec.max_age.items()
         }
+        for kind in fetched:
+            kinds.setdefault(kind, Freshness.UNKNOWN.value)  # collected, no max age
         report.append(
             {
                 "source_id": spec.source_id,

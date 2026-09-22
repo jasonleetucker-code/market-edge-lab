@@ -30,7 +30,30 @@ def test_missing_failure_criteria_is_rejected(tmp_path):
 
 def test_preregistered_requires_defined_periods(tmp_path):
     root = _registry(tmp_path, lambda s: s.replace('status = "DRAFT"', 'status = "PREREGISTERED"'))
-    assert any("undefined periods" in p for p in _problems(root))
+    problems = _problems(root)
+    assert any("periods.test" in p for p in problems)
+    assert any("'decision_time'" in p for p in problems)
+    assert any("costs.fee_model" in p for p in problems)
+
+
+def test_preregistered_rejects_tbd_variants(tmp_path):
+    root = _registry(
+        tmp_path,
+        lambda s: s.replace('status = "DRAFT"', 'status = "PREREGISTERED"').replace('test = "TBD"', 'test = "tbd later"'),
+    )
+    assert any("periods.test" in p for p in _problems(root))
+
+
+def test_impossible_created_date_and_blank_list_items_are_rejected(tmp_path):
+    root = _registry(
+        tmp_path,
+        lambda s: s.replace('created = "2026-09-22"', 'created = "2026-99-99"').replace(
+            "features = [", 'features = [\n  "",'
+        ),
+    )
+    problems = _problems(root)
+    assert any("created" in p for p in problems)
+    assert any("features" in p for p in problems)
 
 
 def test_concluded_requires_result_evidence(tmp_path):

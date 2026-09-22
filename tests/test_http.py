@@ -1,3 +1,4 @@
+import http.client
 from urllib.error import URLError
 
 import pytest
@@ -65,3 +66,16 @@ def test_invalid_json_is_rejected():
     opener = ScriptedOpener(b"<html>maintenance</html>")
     with pytest.raises(HttpFetchError):
         fetch_json_result("https://example.test/a", opener=opener, sleep=lambda s: None)
+
+
+def test_low_level_transport_errors_retry_and_are_wrapped():
+    opener = ScriptedOpener(
+        http.client.RemoteDisconnected("closed"), ConnectionResetError("reset"), {"ok": True}
+    )
+    result = fetch("https://example.test/a", opener=opener, retries=2, sleep=lambda s: None)
+    assert result.attempts == 3
+
+    opener = ScriptedOpener(http.client.IncompleteRead(b""), http.client.IncompleteRead(b""))
+    with pytest.raises(HttpFetchError) as info:
+        fetch("https://example.test/a", opener=opener, retries=1, sleep=lambda s: None)
+    assert info.value.attempts == 2

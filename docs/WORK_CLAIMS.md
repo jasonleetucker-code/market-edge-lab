@@ -6,4 +6,3 @@ The expiry is a UTC date no more than 7 days out. An expired row is not a live c
 
 | Claim | Agent | Branch | Paths | Expires |
 |---|---|---|---|---|
-| Agent OS + provenance/freshness foundation | claude | claude/market-edge-agent-os-ghmeha | AI_INSTRUCTIONS.md, AGENTS.md, CLAUDE.md, HANDOFF.md, docs/, experiments/, src/edge_lab/, tests/ | 2026-09-29 |
