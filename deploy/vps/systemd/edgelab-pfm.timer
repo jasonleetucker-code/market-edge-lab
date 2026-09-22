@@ -1,0 +1,12 @@
+[Unit]
+Description=Market Edge Lab: PFMOKX capture before the 18:00 ET decision
+
+[Timer]
+OnCalendar=*-*-* 17:45:00 America/New_York
+AccuracySec=1s
+# A missed window is lost, never fired late: the code rejects out-of-window runs anyway.
+Persistent=false
+Unit=edgelab-pfm.service
+
+[Install]
+WantedBy=timers.target

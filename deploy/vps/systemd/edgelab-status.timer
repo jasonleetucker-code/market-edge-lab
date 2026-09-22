@@ -1,0 +1,12 @@
+[Unit]
+Description=Market Edge Lab: daily Stage-B status after the re-check window
+
+[Timer]
+OnCalendar=*-*-* 18:30:00 America/New_York
+AccuracySec=1s
+# A missed window is lost, never fired late: the code rejects out-of-window runs anyway.
+Persistent=false
+Unit=edgelab-status.service
+
+[Install]
+WantedBy=timers.target

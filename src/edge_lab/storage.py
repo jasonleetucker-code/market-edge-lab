@@ -9,7 +9,7 @@ from typing import Any, Iterable
 from .http import FetchResult
 from .provenance import bytes_sha256, canonical_json, sha256_hex, shape_fingerprint
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 SOURCE_HEALTH_STATUSES = ("ok", "partial", "failed")
 
 
@@ -220,6 +220,73 @@ END;
 """
 
 
+# Version 4: forward Stage-B capture outcomes (ADR 0012). One row per capture attempt,
+# written once when the attempt ends. It links the attempt to the snapshots it stored, so
+# a day's validity can be re-derived from evidence. Rows are never updated: a rerun is a
+# new row.
+FORWARD_CAPTURE_STATUSES = (
+    "complete",
+    "partial",
+    "failed",
+    "skipped_duplicate",
+    "rejected_out_of_window",
+    "rejected_no_decision_capture",
+)
+
+_SCHEMA_V4 = """
+CREATE TABLE IF NOT EXISTS forward_captures (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id TEXT NOT NULL,
+    experiment TEXT NOT NULL,
+    phase TEXT NOT NULL CHECK (phase IN ('pfm', 'decision', 'recheck')),
+    -- 'smoke' rows come from tests or manual smoke checks with an injected clock and are
+    -- never evidence.
+    mode TEXT NOT NULL CHECK (mode IN ('live', 'smoke')),
+    target_date TEXT NOT NULL,
+    event_ticker TEXT NOT NULL,
+    started_at_utc TEXT NOT NULL,
+    completed_at_utc TEXT NOT NULL,
+    window_start_utc TEXT NOT NULL,
+    window_end_utc TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (status IN (
+        'complete', 'partial', 'failed', 'skipped_duplicate',
+        'rejected_out_of_window', 'rejected_no_decision_capture'
+    )),
+    reasons_json TEXT NOT NULL DEFAULT '[]',
+    links_json TEXT NOT NULL DEFAULT '{}',
+    decision_capture_id INTEGER,
+    code_version TEXT,
+    -- A complete capture has nothing to explain; anything else says why.
+    CHECK (status != 'complete' OR reasons_json = '[]'),
+    CHECK (status = 'complete' OR reasons_json != '[]'),
+    FOREIGN KEY (run_id) REFERENCES collection_runs(run_id),
+    FOREIGN KEY (decision_capture_id) REFERENCES forward_captures(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_forward_captures_day
+ON forward_captures(target_date, phase, mode);
+
+CREATE TRIGGER IF NOT EXISTS forward_captures_no_replace
+BEFORE INSERT ON forward_captures
+WHEN NEW.id IS NOT NULL AND EXISTS (SELECT 1 FROM forward_captures WHERE id = NEW.id)
+BEGIN
+    SELECT RAISE(ABORT, 'forward captures are immutable evidence');
+END;
+
+CREATE TRIGGER IF NOT EXISTS forward_captures_no_update
+BEFORE UPDATE ON forward_captures
+BEGIN
+    SELECT RAISE(ABORT, 'forward captures are immutable evidence');
+END;
+
+CREATE TRIGGER IF NOT EXISTS forward_captures_no_delete
+BEFORE DELETE ON forward_captures
+BEGIN
+    SELECT RAISE(ABORT, 'forward captures are immutable evidence');
+END;
+"""
+
+
 class SnapshotStore:
     def __init__(self, db_path: str | Path) -> None:
         self.path = Path(db_path)
@@ -227,8 +294,11 @@ class SnapshotStore:
         self._initialize()
 
     def _connect(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self.path)
+        # Scheduled captures and manual runs may overlap: wait for a lock instead of
+        # failing at once with "database is locked".
+        conn = sqlite3.connect(self.path, timeout=30.0)
         conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA busy_timeout = 30000")
         conn.execute("PRAGMA foreign_keys = ON")
         # Make REPLACE conflict resolution fire delete triggers too.
         conn.execute("PRAGMA recursive_triggers = ON")
@@ -258,6 +328,7 @@ class SnapshotStore:
             # database was first migrated.
             conn.executescript(_SCHEMA_V2)
             conn.executescript(_SCHEMA_V3)
+            conn.executescript(_SCHEMA_V4)
 
     def schema_version(self) -> int:
         with self._connect() as conn:
@@ -343,6 +414,79 @@ class SnapshotStore:
                 ),
             )
             return int(cursor.lastrowid)
+
+    def snapshots_by_id(self, ids: Iterable[int]) -> dict[int, sqlite3.Row]:
+        """Snapshots (payload included) keyed by id; ids not found are absent."""
+        wanted = sorted({int(i) for i in ids})
+        if not wanted:
+            return {}
+        with self._connect() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT id, run_id, source, kind, entity_id, fetched_at_utc, url,
+                       payload_sha256, payload_json
+                FROM snapshots WHERE id IN ({",".join("?" * len(wanted))})
+                """,
+                wanted,
+            ).fetchall()
+        return {int(row["id"]): row for row in rows}
+
+    def record_forward_capture(
+        self,
+        *,
+        run_id: str,
+        experiment: str,
+        phase: str,
+        mode: str,
+        target_date: str,
+        event_ticker: str,
+        started_at_utc: str,
+        completed_at_utc: str,
+        window_start_utc: str,
+        window_end_utc: str,
+        status: str,
+        reasons: list[str],
+        links: dict[str, Any],
+        decision_capture_id: int | None = None,
+        code_version: str | None = None,
+    ) -> int:
+        if status not in FORWARD_CAPTURE_STATUSES:
+            raise ValueError(f"Unsupported forward capture status: {status}")
+        with self._connect() as conn:
+            cursor = conn.execute(
+                """
+                INSERT INTO forward_captures(
+                    run_id, experiment, phase, mode, target_date, event_ticker,
+                    started_at_utc, completed_at_utc, window_start_utc, window_end_utc,
+                    status, reasons_json, links_json, decision_capture_id, code_version
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    run_id, experiment, phase, mode, target_date, event_ticker,
+                    started_at_utc, completed_at_utc, window_start_utc, window_end_utc,
+                    status, json.dumps(reasons), canonical_json(links),
+                    decision_capture_id, code_version,
+                ),
+            )
+            return int(cursor.lastrowid)
+
+    def forward_captures(
+        self, *, target_date: str | None = None, phase: str | None = None, mode: str = "live"
+    ) -> list[sqlite3.Row]:
+        """Capture attempts, oldest first, optionally for one target date and phase."""
+        clauses, params = ["mode = ?"], [mode]
+        if target_date is not None:
+            clauses.append("target_date = ?")
+            params.append(target_date)
+        if phase is not None:
+            clauses.append("phase = ?")
+            params.append(phase)
+        with self._connect() as conn:
+            return conn.execute(
+                f"SELECT * FROM forward_captures WHERE {' AND '.join(clauses)} ORDER BY id",
+                params,
+            ).fetchall()
 
     def recent_snapshots(self, *, limit: int = 20) -> Iterable[sqlite3.Row]:
         with self._connect() as conn:
