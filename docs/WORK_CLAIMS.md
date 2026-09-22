@@ -6,4 +6,3 @@ The expiry is a UTC date no more than 7 days out. An expired row is not a live c
 
 | Claim | Agent | Branch | Paths | Expires |
 |---|---|---|---|---|
-| #12 reliability port | ChatGPT | audit/brisket-reliability-port | scripts/agent_context.py; scripts/validate.py; src/edge_lab/backup.py; tests/test_agent_context.py; tests/test_validation_runner.py; tests/test_backup.py; docs/BRISKET_REUSE_AUDIT.md; docs/engineering/RELIABILITY_TOOLKIT.md | 2026-09-25 |
