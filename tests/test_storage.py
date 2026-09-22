@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 import sqlite3
 
+import pytest
+
 from edge_lab.storage import SnapshotStore
 
 
@@ -59,3 +61,108 @@ def test_repeated_identical_payloads_are_kept_as_separate_observations(tmp_path)
     rows = list(store.recent_snapshots(limit=10))
     assert len(rows) == 2
     assert rows[0]["payload_sha256"] == rows[1]["payload_sha256"]
+
+
+MILESTONE_1_DDL = """
+CREATE TABLE collection_runs (
+    run_id TEXT PRIMARY KEY, started_at_utc TEXT NOT NULL, finished_at_utc TEXT,
+    status TEXT NOT NULL, error TEXT
+);
+CREATE TABLE snapshots (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, run_id TEXT NOT NULL, source TEXT NOT NULL,
+    kind TEXT NOT NULL, entity_id TEXT NOT NULL, fetched_at_utc TEXT NOT NULL,
+    source_timestamp_utc TEXT, url TEXT NOT NULL, payload_sha256 TEXT NOT NULL,
+    payload_json TEXT NOT NULL, FOREIGN KEY (run_id) REFERENCES collection_runs(run_id)
+);
+"""
+
+
+def test_milestone_1_database_migrates_in_place(tmp_path):
+    db = tmp_path / "m1.sqlite3"
+    with sqlite3.connect(db) as conn:
+        conn.executescript(MILESTONE_1_DDL)
+        conn.execute("INSERT INTO collection_runs VALUES ('old', 't0', 't1', 'succeeded', NULL)")
+        conn.execute(
+            "INSERT INTO snapshots(run_id, source, kind, entity_id, fetched_at_utc, url,"
+            " payload_sha256, payload_json) VALUES ('old','kalshi','series','S','t0','u','h','{}')"
+        )
+
+    store = SnapshotStore(db)
+
+    assert store.schema_version() == 2
+    rows = list(store.recent_snapshots(limit=10))
+    assert len(rows) == 1 and rows[0]["run_id"] == "old"
+    # Reopening an already-migrated database is a no-op.
+    assert SnapshotStore(db).schema_version() == 2
+
+
+def test_database_from_newer_code_is_refused(tmp_path):
+    db = tmp_path / "future.sqlite3"
+    with sqlite3.connect(db) as conn:
+        conn.execute("PRAGMA user_version = 99")
+    with pytest.raises(RuntimeError):
+        SnapshotStore(db)
+
+
+def test_fetch_provenance_is_stored(tmp_path):
+    from edge_lab.http import FetchResult
+
+    store = SnapshotStore(tmp_path / "edge.sqlite3")
+    store.start_run("r")
+    fetch = FetchResult(
+        requested_url="https://example.test/a",
+        final_url="https://example.test/a?redirected=1",
+        http_status=200,
+        content_type="application/json",
+        body=b'{"a": 1}',
+        received_at_utc="2026-09-22T17:00:00+00:00",
+        duration_ms=12,
+        attempts=2,
+    )
+    snapshot_id = store.save_snapshot(
+        run_id="r", source="kalshi", kind="series", entity_id="S",
+        url=fetch.requested_url, payload={"a": 1}, fetch=fetch,
+        source_id="kalshi_public", parser_version="1", schema_version="1",
+    )
+    with sqlite3.connect(store.path) as conn:
+        conn.row_factory = sqlite3.Row
+        row = conn.execute("SELECT * FROM snapshots WHERE id = ?", (snapshot_id,)).fetchone()
+
+    assert row["url"] == "https://example.test/a"
+    assert row["final_url"].endswith("redirected=1")
+    assert row["fetched_at_utc"] == fetch.received_at_utc
+    assert row["payload_bytes"] == len(fetch.body)
+    assert row["attempts"] == 2 and row["http_status"] == 200
+    assert row["raw_sha256"] and row["shape_sha256"]
+    assert store.run_source_totals("r", "kalshi") == (1, len(fetch.body), 1)
+
+
+def _health(store, **overrides):
+    values = dict(
+        run_id="r", source_id="kalshi_public", started_at_utc="t0", completed_at_utc="t1",
+        duration_ms=5, status="ok", records=3,
+    )
+    values.update(overrides)
+    return store.record_source_health(**values)
+
+
+def test_source_health_invariants_are_enforced_by_schema(tmp_path):
+    store = SnapshotStore(tmp_path / "edge.sqlite3")
+    store.start_run("r")
+    _health(store)
+    _health(store, status="partial", anomalies=["paginated"])
+    _health(store, status="failed", records=0, error="HttpFetchError: HTTP 503")
+
+    with pytest.raises(sqlite3.IntegrityError):
+        _health(store, status="failed", records=0, error=None)  # failure must explain itself
+    with pytest.raises(sqlite3.IntegrityError):
+        _health(store, status="failed", records=4, error="x")  # failure never claims records
+    with pytest.raises(sqlite3.IntegrityError):
+        _health(store, status="ok", error="x")  # ok carries no error
+    with pytest.raises(sqlite3.IntegrityError):
+        _health(store, status="partial")  # partial must say why
+
+    latest = store.latest_source_health()
+    assert len(latest) == 1
+    assert latest[0]["status"] == "failed"
+    assert latest[0]["last_ok_at_utc"] == "t1"
