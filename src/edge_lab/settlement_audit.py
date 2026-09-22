@@ -17,6 +17,7 @@ import csv
 import hashlib
 import io
 import json
+import re
 from collections import Counter, defaultdict
 from dataclasses import asdict, dataclass, field
 from datetime import date, datetime
@@ -39,13 +40,43 @@ def event_date(event_ticker: str) -> date | None:
         return None
 
 
+_DATE_TEXT = re.compile(
+    r"\b(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?"
+    r"|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?) \d{1,2}, \d{4}"
+)
+_STRIKE_TEXT = re.compile(r"(greater than|less than|between) -?[\d.]+(?:-[\d.]+)?°")
+
+
+def rules_template(market: Mapping[str, Any]) -> str:
+    """Rules text with date, comparison and strike templated out: identical across the
+    brackets and days that share one wording, so versions can be grouped. (The
+    comparison is checked separately against strike_type by the resolver.)"""
+    parts = []
+    for key in ("rules_primary", "rules_secondary", "early_close_condition"):
+        text = str(market.get(key) or "")
+        text = _DATE_TEXT.sub("<DATE>", text)
+        text = _STRIKE_TEXT.sub("<COMPARISON> <STRIKE>°", text)
+        parts.append(text)
+    return "\n---\n".join(parts)
+
+
 def rules_hash(market: Mapping[str, Any]) -> str:
-    text = json.dumps(
-        {k: market.get(k) for k in ("rules_primary", "rules_secondary", "early_close_condition")},
-        sort_keys=True,
-        ensure_ascii=False,
-    )
-    return hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
+    """Version id of the rules wording (date and strike templated out)."""
+    return hashlib.sha256(rules_template(market).encode("utf-8")).hexdigest()[:16]
+
+
+def _preferred(a: Mapping[str, Any], b: Mapping[str, Any]) -> Mapping[str, Any]:
+    """Deterministic choice between duplicate records of one market (live vs historical,
+    or repeated captures): prefer one with expiration_value, then the later
+    updated_time, then the canonical-JSON larger record."""
+    def key(m):
+        return (
+            bool(m.get("expiration_value")),
+            str(m.get("updated_time") or ""),
+            json.dumps(m, sort_keys=True),
+        )
+
+    return a if key(a) >= key(b) else b
 
 
 @dataclass
@@ -120,8 +151,11 @@ def audit(
             by_event[ticker].append(market)
     # A market may appear in both the live and historical listings; keep one copy.
     for ticker, items in by_event.items():
-        unique = {m.get("ticker"): m for m in items}
-        by_event[ticker] = [unique[k] for k in sorted(unique)]
+        unique: dict[Any, Mapping[str, Any]] = {}
+        for m in items:
+            k = m.get("ticker")
+            unique[k] = _preferred(unique[k], m) if k in unique else m
+        by_event[ticker] = [unique[k] for k in sorted(unique, key=str)]
 
     summaries: list[EventSummary] = []
     rows: list[BracketRow] = []
@@ -131,7 +165,7 @@ def audit(
         final = selection.report
         cli_max = selection.value_f
         explanations: list[str] = []
-        if final is None or selection.basis != "first final report with data":
+        if final is None or not selection.basis.endswith("first final report with data"):
             explanations.append(f"NWS CLI: {selection.basis}")
         values = sorted({m.get("expiration_value") for m in by_event[ticker]} - {None, ""})
         kalshi_value = values[0] if len(values) == 1 else None
@@ -223,7 +257,9 @@ def missing_dates(summaries: list[EventSummary], start: date, end: date) -> list
     return out
 
 
-def summarize(summaries: list[EventSummary], start: date, end: date) -> dict[str, Any]:
+def summarize(
+    summaries: list[EventSummary], start: date, end: date, rows: list[BracketRow] | None = None
+) -> dict[str, Any]:
     by_source = Counter(s.rules_source for s in summaries)
     with_both = [s for s in summaries if s.value_difference is not None]
     diffs = Counter(s.value_difference for s in with_both)
@@ -242,6 +278,9 @@ def summarize(summaries: list[EventSummary], start: date, end: date) -> dict[str
             f"{sum(1 for s in with_both if s.value_difference == '0')}/{len(with_both)}"
         ),
         "events_not_exactly_one_yes": [s.event_ticker for s in summaries if s.yes_brackets != 1],
+        "rules_versions": (
+            {h: n for h, n in sorted(Counter(r.rules_hash for r in rows).items())} if rows else None
+        ),
     }
 
 

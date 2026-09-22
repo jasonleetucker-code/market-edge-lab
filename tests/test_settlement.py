@@ -83,3 +83,27 @@ def test_read_rules_recognizes_all_captured_wordings():
     assert read_rules(older).comparison == "between"
     assert read_rules(NWS.format(cond="greater than 87°")).low == Decimal("87")
     assert read_rules(TWC.format(cond="less than 85°")).source is RulesSource.WEATHER_COMPANY
+
+
+def test_rules_hash_groups_brackets_and_days_sharing_one_wording():
+    from edge_lab.settlement_audit import rules_hash
+
+    a = greater(73)
+    b = between(80, 81)
+    c = dict(greater(90), rules_primary=greater(90)["rules_primary"].replace("Sep 21, 2026", "Sep 22, 2026"))
+    assert rules_hash(a) == rules_hash(b) == rules_hash(c)
+    changed = dict(a, rules_secondary="new wording")
+    assert rules_hash(changed) != rules_hash(a)
+
+
+def test_duplicate_market_records_are_chosen_deterministically():
+    from datetime import date
+
+    from edge_lab.settlement_audit import audit
+
+    base = dict(between(80, 81), ticker="KXHIGHNY-26SEP21-B80.5", event_ticker="KXHIGHNY-26SEP21", result="yes")
+    with_value = dict(base, expiration_value="80.00", updated_time="2026-09-22T10:00:00Z")
+    without = dict(base, expiration_value="", updated_time="2026-09-23T10:00:00Z")
+    for order in ([with_value, without], [without, with_value]):
+        (summary,), _ = audit(order, [], start=date(2026, 9, 21), end=date(2026, 9, 21))
+        assert summary.kalshi_expiration_value == "80.00"

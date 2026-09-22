@@ -1,6 +1,7 @@
 """Gate 2 regression: reproduce recorded KXHIGHNY settlements from archived evidence.
 
-Fixtures are exact API/archive responses captured 2026-09-22 (see
+Fixtures: IEM archives are exact bytes; market fixtures are the captured 2026-09-22 API
+market objects filtered to the sample windows and re-serialized (see
 experiments/EXP-001-kxhighny-nws-vs-market/gate2/). Windows are defined in SAMPLE.md.
 """
 

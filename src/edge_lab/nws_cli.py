@@ -154,49 +154,79 @@ def _is_dst(day: date) -> bool:
     return nth_sunday(day.year, 3, 2) <= day < nth_sunday(day.year, 11, 1)
 
 
-def settlement_value(reports: list[CliReport], climate_date: date) -> CliSettlement:
-    """Select the CLI maximum that Kalshi's contract terms say decides settlement.
+# The GLOBALTEMPERATURE contract was "initially ... listed after close-of-business on
+# December 9, 2025" (certification filing). Target dates up to and including that day are
+# evaluated under the NHIGH terms; later dates under GLOBALTEMPERATURE. Which document
+# governed each KXHIGHNY event is an inference from these dates, not a captured fact.
+GLOBALTEMPERATURE_FIRST_DATE = date(2025, 12, 10)
 
-    1. GLOBALTEMPERATURE terms: "Only the first official non-preliminary report
-       published ... that includes the relevant data will be used". So the first
-       *final* report whose maximum parsed is selected; finals without the value
-       are skipped.
-    2. NHIGH terms: "Determination will be delayed until 11AM ET in the case of ...
-       (2) the Final report high is lower than earlier report(s)." When the first
-       final is lower than an earlier (preliminary) report for the same day, the
-       latest final issued by 11:00 AM ET the next day is used instead.
-       (Condition (1), inconsistency with METAR 6-hr/24-hr highs, needs METAR data we
-       do not collect; it is not applied, and any resulting mismatch stays visible.)
 
-    Returns value None with the reason when no qualifying report exists.
+def contract_regime(climate_date: date) -> str:
+    return "globaltemperature" if climate_date >= GLOBALTEMPERATURE_FIRST_DATE else "nhigh"
+
+
+def settlement_value(
+    reports: list[CliReport], climate_date: date, regime: str | None = None
+) -> CliSettlement:
+    """Select the CLI maximum that the applicable contract terms say decides settlement.
+
+    Both regimes: a final report without a parseable maximum cannot be the value, so the
+    first final report *with* data is used (GLOBALTEMPERATURE: "the first official
+    non-preliminary report ... that includes the relevant data").
+
+    NHIGH regime only (target dates through 2025-12-09): "Determination will be delayed
+    until 11AM ET in the case of ... (2) the Final report high is lower than earlier
+    report(s)." "Earlier report" means the latest preliminary issued before the first
+    final (a correction supersedes the report it corrects). When that preliminary is
+    higher, the latest final issued by 11:00 AM ET the next day is used. Condition (1),
+    METAR inconsistency, needs METAR data we do not collect and is not applied.
+
+    Returns value None, with the reason, whenever the evidence does not determine a value.
     """
+    regime = regime or contract_regime(climate_date)
     day_reports = [r for r in reports if r.climate_date == climate_date and r.issued_at_utc]
+    unclassified = [r for r in reports if r.climate_date == climate_date and r.kind is None]
+    note = f"; {len(unclassified)} unclassified report(s) for this date ignored" if unclassified else ""
     finals = sorted(
         (r for r in day_reports if r.kind == "final" and r.max_temp_f is not None),
         key=lambda r: r.issued_at_utc,
     )
     if not finals:
-        return CliSettlement(None, None, "no final CLI report with a maximum for this date")
+        return CliSettlement(None, None, "no final CLI report with a maximum for this date" + note)
     first = finals[0]
-    earlier = [
-        r for r in day_reports
-        if r.kind == "preliminary" and r.max_temp_f is not None and r.issued_at_utc < first.issued_at_utc
-    ]
-    if any(r.max_temp_f > first.max_temp_f for r in earlier):
-        cutoff = _eleven_am_et_next_day(climate_date)
-        eligible = [r for r in finals if r.issued_at_utc <= cutoff]
-        chosen = eligible[-1]
-        return CliSettlement(
-            chosen.max_temp_f,
-            chosen,
-            f"delayed determination: first final ({first.max_temp_f}) lower than an earlier "
-            f"report; latest final by {cutoff.isoformat()} used",
-        )
     skipped = len([r for r in day_reports if r.kind == "final" and r.max_temp_f is None])
-    basis = "first final report with data"
+    basis = f"{regime}: first final report with data"
     if skipped:
         basis += f" ({skipped} earlier final report(s) without a maximum skipped)"
-    return CliSettlement(first.max_temp_f, first, basis)
+
+    if regime == "nhigh":
+        earlier = sorted(
+            (
+                r for r in day_reports
+                if r.kind == "preliminary" and r.max_temp_f is not None
+                and r.issued_at_utc < first.issued_at_utc
+            ),
+            key=lambda r: r.issued_at_utc,
+        )
+        latest_preliminary = earlier[-1] if earlier else None
+        if latest_preliminary and latest_preliminary.max_temp_f > first.max_temp_f:
+            cutoff = _eleven_am_et_next_day(climate_date)
+            eligible = [r for r in finals if r.issued_at_utc <= cutoff]
+            if not eligible:
+                return CliSettlement(
+                    None, None,
+                    "nhigh: delayed determination required but no final report by the "
+                    f"{cutoff.isoformat()} cutoff" + note,
+                )
+            chosen = eligible[-1]
+            return CliSettlement(
+                chosen.max_temp_f,
+                chosen,
+                f"nhigh: delayed determination: first final ({first.max_temp_f}) lower than "
+                f"latest earlier report ({latest_preliminary.max_temp_f}); latest final by "
+                f"{cutoff.isoformat()} used" + note,
+            )
+    return CliSettlement(first.max_temp_f, first, basis + note)
 
 
 def first_final(reports: list[CliReport], climate_date: date) -> CliReport | None:

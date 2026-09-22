@@ -36,7 +36,7 @@ def build() -> dict[str, str]:
         ms = json.loads(gzip.decompress((FIX / markets).read_bytes()))
         text = gzip.decompress((FIX / cli).read_bytes()).decode()
         events, rows = audit(ms, [parse_cli(p) for p in split_afos_archive(text)], start=start, end=end)
-        summary = summarize(events, start, end)
+        summary = summarize(events, start, end, rows)
         summary["mispredicted_brackets"] = sum(
             1 for r in rows if r.expected_from_nws_cli != "unknown" and not r.match_nws_cli
         )

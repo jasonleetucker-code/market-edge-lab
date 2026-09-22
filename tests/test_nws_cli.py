@@ -89,3 +89,61 @@ def test_revision_after_cutoff_is_not_used():
 def test_no_final_report_is_unknown(reports_2025):
     selection = settlement_value(reports_2025, date(2025, 6, 2))
     assert selection.value_f is None and selection.report is None
+
+
+def _rep(kind, value, iso, day=date(2025, 12, 3), header="H"):
+    from datetime import datetime, timezone
+
+    from edge_lab.nws_cli import CliReport
+
+    return CliReport("CENTRAL PARK NY", day, kind, value,
+                     datetime.fromisoformat(iso).astimezone(timezone.utc), header, None)
+
+
+def test_contract_regime_follows_globaltemperature_listing_date():
+    from edge_lab.nws_cli import contract_regime
+
+    assert contract_regime(date(2025, 12, 9)) == "nhigh"
+    assert contract_regime(date(2025, 12, 10)) == "globaltemperature"
+
+
+def test_globaltemperature_regime_uses_first_final_even_if_lower():
+    day = date(2026, 8, 27)
+    reports = [
+        _rep("preliminary", 81, "2026-08-27T20:30:00+00:00", day),
+        _rep("final", 77, "2026-08-28T06:30:00+00:00", day),
+        _rep("final", 78, "2026-08-28T12:00:00+00:00", day),
+    ]
+    selection = settlement_value(reports, day)
+    assert selection.value_f == 77 and selection.basis.startswith("globaltemperature")
+
+
+def test_correction_supersedes_the_preliminary_it_corrects():
+    # Uncorrected preliminary 81, corrected preliminary 77, final 77: no delay triggered.
+    reports = [
+        _rep("preliminary", 81, "2025-12-03T20:40:00+00:00"),
+        _rep("preliminary", 77, "2025-12-03T21:48:00+00:00"),
+        _rep("final", 77, "2025-12-04T06:30:00+00:00"),
+        _rep("final", 79, "2025-12-04T14:00:00+00:00"),
+    ]
+    selection = settlement_value(reports, date(2025, 12, 3))
+    assert selection.value_f == 77 and "delayed" not in selection.basis
+
+
+def test_delay_needed_but_no_final_before_cutoff_is_unknown():
+    reports = [
+        _rep("preliminary", 45, "2025-12-03T21:00:00+00:00"),
+        _rep("final", 40, "2025-12-04T17:00:00+00:00"),  # after 11:00 AM EST (16:00Z)
+    ]
+    selection = settlement_value(reports, date(2025, 12, 3))
+    assert selection.value_f is None and "cutoff" in selection.basis
+
+
+def test_unclassified_reports_are_noted_not_silently_dropped():
+    from edge_lab.nws_cli import CliReport
+
+    reports = [
+        _rep("final", 50, "2025-12-04T06:30:00+00:00"),
+        CliReport("CENTRAL PARK NY", date(2025, 12, 3), None, 51, None, "X", None),
+    ]
+    assert "1 unclassified report" in settlement_value(reports, date(2025, 12, 3)).basis
