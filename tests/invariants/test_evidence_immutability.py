@@ -39,3 +39,24 @@ def test_insert_or_replace_cannot_overwrite_a_snapshot(store_with_row):
             )
     (row,) = store_with_row.recent_snapshots()
     assert row["payload_sha256"] != "forged"
+
+
+def test_source_health_history_cannot_be_rewritten(store_with_row):
+    store_with_row.record_source_health(
+        run_id="r", source_id="kalshi_public", started_at_utc="t0", completed_at_utc="t1",
+        duration_ms=1, status="failed", records=0, error="HTTP 503",
+    )
+    with sqlite3.connect(store_with_row.path) as conn:
+        with pytest.raises(sqlite3.IntegrityError, match="immutable"):
+            conn.execute("UPDATE source_health SET status = 'ok', error = NULL")
+        with pytest.raises(sqlite3.IntegrityError, match="immutable"):
+            conn.execute("DELETE FROM source_health")
+
+
+def test_finished_run_outcome_cannot_be_changed(store_with_row):
+    store_with_row.finish_run("r", status="failed", error="all sources failed")
+    with pytest.raises(sqlite3.IntegrityError, match="immutable"):
+        store_with_row.finish_run("r", status="succeeded")
+    with sqlite3.connect(store_with_row.path) as conn:
+        with pytest.raises(sqlite3.IntegrityError, match="immutable"):
+            conn.execute("DELETE FROM collection_runs")

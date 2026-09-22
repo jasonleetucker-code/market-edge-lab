@@ -73,3 +73,14 @@ def test_missing_markets_key_is_an_error_not_an_empty_list(tmp_path, monkeypatch
     store.start_run("r")
     with pytest.raises(ValueError):
         kalshi.collect_series(store, run_id="r")
+
+
+def test_skipped_market_entries_are_anomalies(tmp_path, monkeypatch):
+    markets = {"markets": [{"event_ticker": "KXHIGHNY-26SEP23"}, "garbage"], "cursor": ""}
+    monkeypatch.setattr(kalshi, "fetch_json_result", _fake_fetch(_routes(markets)))
+    store = SnapshotStore(tmp_path / "edge.sqlite3")
+    store.start_run("r")
+    anomalies: list[str] = []
+    kalshi.collect_series(store, run_id="r", anomalies=anomalies)
+    assert any("without ticker" in a for a in anomalies)
+    assert any("non-object" in a for a in anomalies)

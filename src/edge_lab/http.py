@@ -20,6 +20,8 @@ DEFAULT_USER_AGENT = "market-edge-lab/0.1"
 # Status codes worth retrying: throttling and transient server failures.
 RETRYABLE_STATUS = frozenset({429, 500, 502, 503, 504})
 MAX_RETRY_AFTER_SECONDS = 30.0
+# Credential-bearing headers are refused outright: this client is unauthenticated.
+_FORBIDDEN_HEADER_PARTS = ("authoriz", "cookie", "api-key", "apikey", "access-key", "signature", "token")
 
 
 class HttpFetchError(RuntimeError):
@@ -81,6 +83,9 @@ def fetch(
     """
     request_headers = {"Accept": "application/json", "User-Agent": DEFAULT_USER_AGENT}
     if headers:
+        for name in headers:
+            if any(part in name.lower() for part in _FORBIDDEN_HEADER_PARTS):
+                raise ValueError(f"credential-bearing header {name!r} is not allowed")
         request_headers.update(headers)
     request = Request(url, headers=request_headers, method="GET")
     if request.get_method() != "GET":  # defensive: this module is read-only

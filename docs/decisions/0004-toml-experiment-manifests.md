@@ -14,8 +14,9 @@ fields, the lifecycle, locked periods once preregistered, amendment structure, a
 concluded results carry the code commit, dataset version and report. It runs in CI through
 `tests/invariants/test_experiments_valid.py`.
 
-**Tradeoffs.** The validator checks that locked manifests are fully specified (no `TBD`
-decision fields). It does **not** freeze them. An agent could still edit a preregistered
+**Tradeoffs.** The validator checks that locked manifests contain no recognizable
+placeholders (`TBD`, `TODO`, `pending`, `?`, empty values, including nested ones). That is a
+heuristic, not a proof that the specification is adequate. It does **not** freeze them. An agent could still edit a preregistered
 hypothesis or criterion, and only review and git history would show it. That is
 traceability, not enforcement.
 

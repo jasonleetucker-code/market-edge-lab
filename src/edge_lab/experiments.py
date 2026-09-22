@@ -109,16 +109,17 @@ def validate(exp: Experiment) -> list[str]:
         except ValueError:
             problems.append("created must be a real date in YYYY-MM-DD form")
 
-    periods = d.get("periods")
-    if isinstance(periods, dict):
-        for key in PERIOD_KEYS:
-            if key not in periods:
-                problems.append(f"[periods] missing '{key}' (use \"TBD\" while DRAFT)")
+    for table, keys in TABLE_KEYS.items():
+        section = d.get(table)
+        if isinstance(section, dict):
+            for key in keys:
+                if key not in section:
+                    problems.append(f"[{table}] missing '{key}' (use \"TBD\" while DRAFT)")
 
     if exp.status in LOCKED:
         # Once preregistered, nothing the decision depends on may be left open.
         for label in _undefined_locked_fields(d):
-            problems.append(f"{exp.status} experiment has undefined '{label}' (still TBD)")
+            problems.append(f"{exp.status} experiment has undefined '{label}' (placeholder or empty)")
 
     amendments = d.get("amendments", [])
     if not isinstance(amendments, list):
@@ -146,19 +147,42 @@ def validate(exp: Experiment) -> list[str]:
     return problems
 
 
-def _is_tbd(value: Any) -> bool:
-    return isinstance(value, str) and value.strip().upper().startswith("TBD")
+# Values that mean "not decided yet". Matched case-insensitively at the start of
+# a string, so "TBD: candidate is ..." and "to be determined" both count.
+_PLACEHOLDER = re.compile(r"^\s*(tbd|tba|todo|to be (determined|decided|defined)|pending|unknown|n/?a\b|\?+|-+\s*$|$)", re.I)
+# Decision parameters that must be concrete once an experiment is locked.
+LOCKED_STRINGS = ("hypothesis", "economic_rationale", "market", "decision_time", "model")
+LOCKED_LISTS = ("data_sources", "features", "success_criteria", "failure_criteria")
+LOCKED_TABLES = ("periods", "costs", "execution")
+# Keys each table must define (as "TBD" while DRAFT, concretely once locked).
+TABLE_KEYS = {
+    "periods": PERIOD_KEYS,
+    "costs": ("fee_model", "spread"),
+    "execution": ("fill_model", "latency"),
+}
+
+
+def _is_placeholder(value: Any) -> bool:
+    return isinstance(value, str) and bool(_PLACEHOLDER.match(value))
+
+
+def _placeholders(value: Any, path: str) -> list[str]:
+    """Paths of every placeholder or empty value, recursing into tables and arrays."""
+    if isinstance(value, dict):
+        if not value:
+            return [path]
+        return [p for k, v in value.items() for p in _placeholders(v, f"{path}.{k}")]
+    if isinstance(value, list):
+        if not value:
+            return [path]
+        return [p for i, v in enumerate(value) for p in _placeholders(v, f"{path}[{i}]")]
+    return [path] if _is_placeholder(value) else []
 
 
 def _undefined_locked_fields(d: dict[str, Any]) -> list[str]:
-    labels = [key for key in ("decision_time", "model") if _is_tbd(d.get(key))]
-    for table in ("periods", "costs", "execution"):
-        section = d.get(table)
-        if isinstance(section, dict):
-            labels += [f"{table}.{k}" for k, v in section.items() if _is_tbd(v)]
-    periods = d.get("periods")
-    if isinstance(periods, dict):
-        labels += [f"periods.{k}" for k in PERIOD_KEYS if k not in periods]
+    labels: list[str] = []
+    for key in LOCKED_STRINGS + LOCKED_LISTS + LOCKED_TABLES:
+        labels += _placeholders(d.get(key, ""), key)
     return labels
 
 

@@ -18,13 +18,21 @@ ACCEPTANCE:
     freshness, immutability, missing is not zero, instruction parity, valid experiments)
   - A news/web ingestion design and the Brisket reuse audit
 EVIDENCE:
-  - python -m pytest: 80 passed locally on Python 3.11.15 and 3.12.3
-  - GitHub Actions `tests` workflow: pytest (3.11) and pytest (3.12) both succeeded on PR head
-    9169182 (run 35765195459). The final PR head was also required to be green on both jobs
-    before merge. See the PR #2 checks, and the post-merge `main` run, for the exact SHA.
-  - Two independent read-only reviews. The first found 2 major issues (INSERT OR REPLACE
-    bypassed immutability; the validator accepted TBD fields once locked) and 4 minor ones,
-    all fixed with regression tests. The second (pre-merge) findings are recorded in PR #2.
+  - python -m pytest: 100 passed locally on Python 3.11.15 (system) and on Python 3.12.3
+    (a scratch venv; the system python3.12 has no pytest installed)
+  - GitHub Actions `tests` workflow: pytest (3.11) and pytest (3.12) both succeeded on earlier
+    PR heads 9169182 (run 35765195459) and fb684af. This file cannot record the CI result of
+    its own commit. The merge policy for PR #2 required both jobs green on the final head;
+    that SHA and run are recorded in the PR #2 description.
+  - Two independent read-only reviews:
+    - The first found 2 major issues (INSERT OR REPLACE bypassed immutability; the validator
+      accepted TBD fields once locked) and 4 minor ones.
+    - The second (pre-merge) found 2 major issues (`edge-lab health` exited 0 after a failed
+      run; the locked-experiment check missed placeholder variants such as TODO, empty and
+      nested values) and several minor ones (source_health and collection_runs history was
+      mutable; skipped market entries were silent; credential headers were not refused;
+      news-API prices were unmarked).
+    - Every finding is fixed with a regression test.
   - Live read-only collection on 2026-09-22 (sandbox, scratch DB): Kalshi 12 markets,
     2 events, 12 order books; NWS 4 payloads. Two runs on a fresh schema-v2 DB gave 40 rows,
     every source_health row was ok, and `edge-lab health` reported every kind fresh (exit 0).
@@ -35,8 +43,8 @@ UNRESOLVED:
     (weather.com/kalshi, station CLINYC). Generic Kalshi and web descriptions mention the
     NWS Daily Climate Report. These are not necessarily equivalent. The primary evidence
     wins, and the discrepancy blocks modeling until gate 2 resolves it (EXP-001 README).
-  - Preregistration immutability. The validator rejects TBD decision fields in locked
-    experiments, but it does not prove preregistered text was never edited; git history
+  - Preregistration immutability. The validator rejects recognizable placeholders in locked
+    experiments (a heuristic), but it does not prove preregistered text was never edited; git history
     gives traceability only. A deterministic preregistration baseline (e.g. a hash of the
     locked fields) must exist before any experiment leaves DRAFT (docs/EXECUTION_PLAN.md).
   - The collector only fetches the first page of /markets. A cursor is flagged as a

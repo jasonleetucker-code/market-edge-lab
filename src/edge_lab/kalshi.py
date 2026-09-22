@@ -101,6 +101,7 @@ def collect_series(
 
     for market in markets:
         if not isinstance(market, dict):
+            anomalies.append(f"non-object market entry skipped: {type(market).__name__}")
             continue
 
         event_ticker = market.get("event_ticker")
@@ -122,6 +123,7 @@ def collect_series(
 
         market_ticker = market.get("ticker")
         if not market_ticker:
+            anomalies.append("market entry without ticker skipped; its order book was not collected")
             continue
 
         orderbook_url = _url(f"/markets/{market_ticker}/orderbook", depth=depth)

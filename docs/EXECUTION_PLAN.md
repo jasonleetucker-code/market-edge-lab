@@ -57,4 +57,4 @@ trusting a number written here.) Any proposed scheduled collector must, before a
 - **Before any experiment leaves DRAFT** (a gate-3 requirement for the experiment
   framework): implement a deterministic preregistration baseline. For example, record a
   SHA-256 of the locked fields at preregistration and have the validator check it. Today the
-  validator proves only that locked fields are fully specified, not that they are unchanged.
+  validator only rejects placeholders in locked fields. It cannot show that they are unchanged.

@@ -22,7 +22,7 @@ available (`docs/DATA_PROVENANCE.md` §1).
 | Later (filings) | SEC EDGAR (`data.sec.gov` submissions/companyfacts, Latest Filings Atom) | official API + feed | free; ≤10 requests/s; descriptive User-Agent with contact | Primary filings with exact acceptance times. |
 | Later | Agency press-release RSS (BLS, Fed, SEC) | feed | free | Release timing, captured via conditional GET. |
 | Discovery only | GDELT DOC 2.0 / GKG | public API / files | free, attribution | URLs and metadata only, and noisy. Not evidence of facts. |
-| Only with approval | NewsAPI.org, Marketaux, Alpha Vantage news, Massive/Benzinga, Reuters/AP/Dow Jones | licensed API | NewsAPI's free tier is dev-only with a 24h delay (unsuitable). Others cost roughly $29–$449+/mo; enterprise wires are far more. Storage and redistribution rights vary (UNVERIFIED per vendor). | Paid. Each needs an owner decision and a terms review about storage and ML use. |
+| Only with approval | NewsAPI.org, Marketaux, Alpha Vantage news, Massive/Benzinga, Reuters/AP/Dow Jones | licensed API | UNVERIFIED as of 2026-09-22 (from vendor pricing pages seen by a research agent, not re-checked): NewsAPI's free tier is dev-only with a 24h delay (unsuitable); others roughly $29–$449+/mo; enterprise wires far more. Storage and redistribution rights vary per vendor. Re-check before any decision. | Paid. Each needs an owner decision and a terms review about storage and ML use. |
 | Last resort | Browser automation (Playwright) | browser | — | Public pages only. Never behind a login or used to get past CAPTCHAs, paywalls or blocks. |
 
 Legal note (not advice): *hiQ v. LinkedIn* ended in a consent judgment against the scraper.

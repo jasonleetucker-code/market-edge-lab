@@ -248,7 +248,10 @@ def _health(args: argparse.Namespace) -> int:
     all_fresh = all(
         state == Freshness.FRESH.value for item in report for state in item["freshness"].values()
     )
-    return 0 if all_fresh else 1
+    # A source whose latest run was not clean (or that never ran) is unhealthy even
+    # if older snapshots are still inside their freshness window.
+    all_ok = all(item["last_status"] == "ok" for item in report)
+    return 0 if all_fresh and all_ok else 1
 
 
 def _experiments(args: argparse.Namespace) -> int:

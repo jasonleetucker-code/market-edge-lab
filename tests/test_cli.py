@@ -104,3 +104,35 @@ def test_aborted_collection_never_leaves_run_running(tmp_path, monkeypatch):
     with sqlite3.connect(db) as conn:
         (status,) = conn.execute("SELECT status FROM collection_runs").fetchone()
     assert status == "failed"
+
+
+def test_health_exits_nonzero_after_failed_run_even_if_data_still_fresh(tmp_path, monkeypatch, capsys):
+    db = tmp_path / "e.sqlite3"
+
+    def good(store, *, run_id, anomalies=None, **kwargs):
+        for kind in ("series", "markets", "event", "orderbook"):
+            _save(store, run_id, source="kalshi", kind=kind)
+        return {}
+
+    def good_nws(store, *, run_id, **kwargs):
+        for kind in ("points", "forecast", "forecast_hourly", "forecast_grid"):
+            _save(store, run_id, source="nws", kind=kind)
+        return {}
+
+    monkeypatch.setattr(cli, "collect_series", good)
+    monkeypatch.setattr(cli, "collect_reference_forecast", good_nws)
+    assert cli.main(["collect", "--db", str(db), "--nws-user-agent", "t"]) == 0
+    assert cli.main(["health", "--db", str(db)]) == 0
+
+    def bad(*args, **kwargs):
+        raise HttpFetchError("HTTP 503 fetching x", status=503)
+
+    monkeypatch.setattr(cli, "collect_series", bad)
+    cli.main(["collect", "--source", "kalshi", "--db", str(db)])
+    capsys.readouterr()
+    # Snapshots from the first run are still inside max_age, but the latest run failed.
+    assert cli.main(["health", "--db", str(db)]) == 1
+
+
+def test_health_exits_nonzero_when_a_source_never_ran(tmp_path):
+    assert cli.main(["health", "--db", str(tmp_path / "empty.sqlite3")]) == 1

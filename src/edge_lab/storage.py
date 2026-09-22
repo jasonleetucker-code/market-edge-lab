@@ -112,6 +112,33 @@ CREATE TABLE IF NOT EXISTS source_health (
 
 CREATE INDEX IF NOT EXISTS idx_source_health_lookup
 ON source_health(source_id, completed_at_utc);
+
+-- Health history is evidence too: a failure cannot be rewritten as success.
+CREATE TRIGGER IF NOT EXISTS source_health_no_update
+BEFORE UPDATE ON source_health
+BEGIN
+    SELECT RAISE(ABORT, 'source_health rows are immutable evidence');
+END;
+
+CREATE TRIGGER IF NOT EXISTS source_health_no_delete
+BEFORE DELETE ON source_health
+BEGIN
+    SELECT RAISE(ABORT, 'source_health rows are immutable evidence');
+END;
+
+-- A run may be finished once; after that its outcome is fixed.
+CREATE TRIGGER IF NOT EXISTS collection_runs_finish_once
+BEFORE UPDATE ON collection_runs
+WHEN OLD.status != 'running'
+BEGIN
+    SELECT RAISE(ABORT, 'finished collection runs are immutable evidence');
+END;
+
+CREATE TRIGGER IF NOT EXISTS collection_runs_no_delete
+BEFORE DELETE ON collection_runs
+BEGIN
+    SELECT RAISE(ABORT, 'collection runs are immutable evidence');
+END;
 """
 
 
@@ -148,8 +175,10 @@ class SnapshotStore:
                             # Another process migrated concurrently.
                             if "duplicate column" not in str(exc):
                                 raise
-                conn.executescript(_SCHEMA_V2)
                 conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+            # Idempotent (IF NOT EXISTS): also installs protections added after a
+            # database was first migrated to v2.
+            conn.executescript(_SCHEMA_V2)
 
     def schema_version(self) -> int:
         with self._connect() as conn:

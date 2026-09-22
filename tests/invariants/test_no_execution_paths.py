@@ -54,3 +54,14 @@ def test_no_registered_source_requires_credentials():
     from edge_lab.sources import REGISTRY
 
     assert not [s.source_id for s in REGISTRY.values() if s.requires_credentials]
+
+
+@pytest.mark.parametrize("header", ["Authorization", "Cookie", "X-Api-Key", "KALSHI-ACCESS-SIGNATURE", "X-Auth-Token"])
+def test_http_client_refuses_credential_headers(header):
+    from conftest import ScriptedOpener
+    from edge_lab.http import fetch
+
+    opener = ScriptedOpener({"ok": True})
+    with pytest.raises(ValueError):
+        fetch("https://example.test/x", headers={header: "x"}, opener=opener, sleep=lambda s: None)
+    assert opener.calls == []
