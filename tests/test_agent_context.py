@@ -1,10 +1,31 @@
 from __future__ import annotations
 
+import importlib.util
 import json
 import subprocess
 from pathlib import Path
 
-from scripts import agent_context as context
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def _load(name):
+    # scripts/ has no __init__.py (it is not a package), so import it by file
+    # location instead of `from scripts import ...` — the convention already
+    # used by tests/test_gate3_reproducible.py.
+    spec = importlib.util.spec_from_file_location(name, ROOT / "scripts" / f"{name}.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+context = _load("agent_context")
+
+# Local, hermetic git identity/config for throwaway test repos: never touch the
+# developer's real gpg signing, commit hooks, or global user identity.
+_GIT_TEST_CONFIG = [
+    "-c", "commit.gpgsign=false", "-c", "core.hooksPath=/dev/null",
+    "-c", "user.name=Test", "-c", "user.email=test@example.invalid",
+]
 
 
 def make_repo(tmp_path: Path) -> Path:
@@ -15,8 +36,8 @@ def make_repo(tmp_path: Path) -> Path:
         path = root / rel
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text("canonical instructions\n", encoding="utf-8")
-    subprocess.run(["git", "add", "."], cwd=root, check=True)
-    subprocess.run(["git", "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-qm", "baseline"], cwd=root, check=True)
+    subprocess.run(["git", *_GIT_TEST_CONFIG, "add", "."], cwd=root, check=True)
+    subprocess.run(["git", *_GIT_TEST_CONFIG, "commit", "-qm", "baseline"], cwd=root, check=True)
     return root
 
 
@@ -36,12 +57,31 @@ def test_receipt_identifies_head_without_claiming_remote_or_model_read(tmp_path)
 def test_working_document_fingerprint_changes_without_overwriting_head(tmp_path):
     root = make_repo(tmp_path)
     before = context.build_context(root)
-    (root / "AI_INSTRUCTIONS.md").write_text("new instructions\n")
+    (root / "AI_INSTRUCTIONS.md").write_text("new instructions\n", encoding="utf-8")
     after = context.build_context(root)
     assert before["repo_head"] == after["repo_head"]
     assert after["dirty"] is True
     assert before["instruction_fingerprints"] != after["instruction_fingerprints"]
     assert after["local_base_sha"] is None
+
+
+def test_fingerprint_is_line_ending_independent(tmp_path):
+    # A Windows checkout with core.autocrlf=true must fingerprint the same
+    # commit identically to a Linux checkout of the same content.
+    root = make_repo(tmp_path)
+    lf = context.build_context(root)
+    (root / "AI_INSTRUCTIONS.md").write_bytes(b"canonical instructions\r\n")
+    crlf = context.build_context(root)
+    assert lf["instruction_fingerprints"]["AI_INSTRUCTIONS.md"]["sha256"] == \
+        crlf["instruction_fingerprints"]["AI_INSTRUCTIONS.md"]["sha256"]
+    # The reported byte count still reflects what is actually on disk.
+    assert crlf["instruction_fingerprints"]["AI_INSTRUCTIONS.md"]["bytes"] == len(b"canonical instructions\r\n")
+
+
+def test_adapter_files_are_part_of_the_instruction_system(tmp_path):
+    root = make_repo(tmp_path)
+    assert "AGENTS.md" in context.DOCUMENTS
+    assert "CLAUDE.md" in context.DOCUMENTS
 
 
 def test_missing_repo_and_docs_do_not_look_verified(tmp_path):

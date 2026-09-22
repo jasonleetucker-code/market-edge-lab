@@ -18,6 +18,8 @@ from contextlib import closing
 from datetime import datetime, timezone
 from pathlib import Path
 
+from .storage import SCHEMA_VERSION as CURRENT_SCHEMA_VERSION
+
 DB_NAME = "database.sqlite3"
 MANIFEST_NAME = "manifest.json"
 REQUIRED_TABLES = {"collection_runs", "snapshots"}
@@ -56,7 +58,17 @@ def copy_online(source: sqlite3.Connection, destination: sqlite3.Connection, dea
     source.backup(destination, pages=128, progress=progress, sleep=0.01)
 
 
-def inspect_database(conn: sqlite3.Connection, deadline: float) -> dict:
+def inspect_database(conn: sqlite3.Connection, deadline: float, *, require_current_schema: bool = True) -> dict:
+    """Integrity-check a database and fingerprint its schema, triggers and row counts.
+
+    Fail-closed schema semantics: when ``require_current_schema`` is true (the
+    default, used everywhere in create/verify), a database whose
+    ``PRAGMA user_version`` does not equal ``edge_lab.storage.SCHEMA_VERSION`` is
+    never reported VERIFIED — it raises instead of silently passing. Row counts
+    and the trigger set are derived dynamically from ``sqlite_master``, so a
+    future schema version's tables and triggers are covered automatically
+    without editing this function.
+    """
     if time.monotonic() >= deadline:
         raise BackupError("database verification exceeded its time budget")
     conn.set_progress_handler(lambda: int(time.monotonic() >= deadline), 1000)
@@ -72,13 +84,21 @@ def inspect_database(conn: sqlite3.Connection, deadline: float) -> dict:
         tables = {name for kind, name, _, _ in schema if kind == "table"}
         if not REQUIRED_TABLES.issubset(tables):
             raise BackupError("not a Market Edge evidence database: required tables missing")
+        triggers = sorted(name for kind, name, _, _ in schema if kind == "trigger")
+        schema_version = conn.execute("PRAGMA user_version").fetchone()[0]
+        if require_current_schema and schema_version != CURRENT_SCHEMA_VERSION:
+            raise BackupError(
+                f"database schema v{schema_version} does not match the current "
+                f"edge_lab schema v{CURRENT_SCHEMA_VERSION}; refusing to report VERIFIED"
+            )
         counts = {}
         for name in sorted(tables):
             quoted = '"' + name.replace('"', '""') + '"'
             counts[name] = conn.execute(f"SELECT COUNT(*) FROM {quoted}").fetchone()[0]
         return {
-            "schema_version": conn.execute("PRAGMA user_version").fetchone()[0],
+            "schema_version": schema_version,
             "schema_sha256": hashlib.sha256(json.dumps(schema, separators=(",", ":")).encode()).hexdigest(),
+            "trigger_names": triggers,
             "row_counts": counts,
         }
     finally:
@@ -99,8 +119,20 @@ def create_backup(source: Path, output: Path, *, timeout: float = 30) -> Path:
                 copy_online(src, dst, deadline)
                 dst.execute("PRAGMA journal_mode = DELETE")
                 summary = inspect_database(dst, deadline)
+            source_summary = inspect_database(src, deadline)
+            if summary != source_summary:
+                # Covers the immutability triggers too: schema_sha256 hashes every
+                # sqlite_master row (tables, triggers, indexes, views), not just
+                # table names, so a trigger dropped or altered in transit is caught.
+                raise BackupError(
+                    "backup schema, triggers or row counts do not match the source database"
+                )
             os.chmod(db, 0o600)
-            with db.open("rb") as stream:
+            # Open read-write (not "rb") to fsync: on Windows, os.fsync requires a
+            # handle opened for writing — fsync on a read-only handle raises
+            # OSError(EBADF) there, even though POSIX allows it.
+            with db.open("r+b") as stream:
+                stream.flush()
                 os.fsync(stream.fileno())
             manifest = {
                 "format_version": 1, "database": DB_NAME,

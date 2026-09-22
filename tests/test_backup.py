@@ -69,8 +69,9 @@ def test_missing_source_never_creates_database(tmp_path):
 
 def test_wrong_database_and_corrupt_file_rejected_without_published_bundle(tmp_path):
     source = tmp_path / "wrong.sqlite3"
-    with sqlite3.connect(source) as conn:
+    with closing(sqlite3.connect(source)) as conn:
         conn.execute("CREATE TABLE unrelated(x)")
+        conn.commit()
     with pytest.raises(backup.BackupError, match="required tables"):
         backup.create_backup(source, tmp_path / "backups")
     assert list((tmp_path / "backups").iterdir()) == []
@@ -110,9 +111,9 @@ def test_manifest_cannot_redirect_verification_to_external_file(tmp_path):
     conn.close()
     bundle = backup.create_backup(source, tmp_path / "backups")
     manifest = bundle / backup.MANIFEST_NAME
-    data = json.loads(manifest.read_text())
+    data = json.loads(manifest.read_text(encoding="utf-8"))
     data["database"] = "../../source.sqlite3"
-    manifest.write_text(json.dumps(data))
+    manifest.write_text(json.dumps(data), encoding="utf-8")
     with pytest.raises(backup.BackupError, match="unsupported"):
         backup.verify_backup(bundle)
 
@@ -122,9 +123,9 @@ def test_incorrect_manifest_counts_rejected(tmp_path):
     conn.close()
     bundle = backup.create_backup(source, tmp_path / "backups")
     manifest = bundle / backup.MANIFEST_NAME
-    data = json.loads(manifest.read_text())
+    data = json.loads(manifest.read_text(encoding="utf-8"))
     data["row_counts"]["snapshots"] = 0
-    manifest.write_text(json.dumps(data))
+    manifest.write_text(json.dumps(data), encoding="utf-8")
     with pytest.raises(backup.BackupError, match="row_counts"):
         backup.verify_backup(bundle)
 
@@ -197,3 +198,84 @@ def test_expired_budget_cannot_report_verification_success(tmp_path):
             backup.file_hash(source, 0)
     finally:
         conn.close()
+
+
+def test_schema_version_mismatch_is_not_verified(tmp_path):
+    # A database that does not match edge_lab.storage.SCHEMA_VERSION must never
+    # be reported VERIFIED, even if every other check would pass. Fail closed.
+    source, conn = source_db(tmp_path)
+    conn.execute("PRAGMA user_version=1")
+    conn.commit()
+    conn.close()
+    with pytest.raises(backup.BackupError, match="does not match the current"):
+        backup.create_backup(source, tmp_path / "backups")
+    assert list((tmp_path / "backups").iterdir()) == []
+
+
+def test_backup_preserves_current_schema_triggers_and_uncheckpointed_wal(tmp_path):
+    # Build a real SnapshotStore database (main's storage.py: schema v3, with
+    # snapshots/source_health/collection_runs/document_blobs/document_retrievals
+    # and their immutability triggers) instead of the minimal synthetic schema
+    # used above, then force genuinely uncheckpointed WAL frames onto it with a
+    # raw connection (SnapshotStore reconnects per call, so its own connections
+    # cannot be told to keep auto-checkpoint off from outside).
+    from edge_lab.storage import SnapshotStore
+
+    store = SnapshotStore(tmp_path / "actual.sqlite3")
+    store.start_run("wal-check")
+    store.save_snapshot(
+        run_id="wal-check", source="kalshi", kind="series", entity_id="S1",
+        url="https://example.invalid", payload={"value": 1},
+    )
+    store.finish_run("wal-check", status="succeeded")
+
+    raw = sqlite3.connect(store.path)
+    raw.execute("PRAGMA wal_autocheckpoint=0")
+    raw.execute(
+        "INSERT INTO snapshots(run_id, source, kind, entity_id, fetched_at_utc, "
+        "url, payload_sha256, payload_json) VALUES "
+        "('wal-check','kalshi','series','S2','2026-01-01T00:00:00Z',"
+        "'https://example.invalid','deadbeef','{}')"
+    )
+    raw.commit()
+    try:
+        wal = Path(str(store.path) + "-wal")
+        assert wal.stat().st_size > 0
+
+        with closing(sqlite3.connect(store.path)) as reader:
+            source_triggers = sorted(
+                row[0] for row in reader.execute("SELECT name FROM sqlite_master WHERE type='trigger'")
+            )
+        assert source_triggers, "the real schema must install immutability triggers"
+
+        bundle = backup.create_backup(store.path, tmp_path / "backups")
+        report = backup.verify_backup(bundle)
+        assert report["status"] == "VERIFIED_BACKUP_AND_RESTORE"
+        assert report["schema_version"] == store.schema_version()
+        assert report["row_counts"]["snapshots"] == 2
+        assert report["trigger_names"] == source_triggers
+
+        with closing(sqlite3.connect(bundle / backup.DB_NAME)) as restored:
+            with pytest.raises(sqlite3.IntegrityError, match="immutable"):
+                restored.execute("DELETE FROM snapshots")
+    finally:
+        raw.close()
+
+
+def test_row_counts_dynamically_cover_a_future_table(tmp_path):
+    # row_counts must iterate every table sqlite_master reports, not a hardcoded
+    # list, so a schema v4 table this code has never heard of is still counted.
+    from edge_lab.storage import SnapshotStore
+
+    store = SnapshotStore(tmp_path / "actual.sqlite3")
+    store.start_run("future-table")
+    store.finish_run("future-table", status="succeeded")
+    assert "widgets" not in backup.REQUIRED_TABLES
+    with closing(sqlite3.connect(store.path)) as conn:
+        conn.execute("CREATE TABLE widgets(id INTEGER PRIMARY KEY, label TEXT)")
+        conn.executemany("INSERT INTO widgets(label) VALUES (?)", [("a",), ("b",), ("c",)])
+        conn.commit()
+
+    bundle = backup.create_backup(store.path, tmp_path / "backups")
+    report = backup.verify_backup(bundle)
+    assert report["row_counts"]["widgets"] == 3

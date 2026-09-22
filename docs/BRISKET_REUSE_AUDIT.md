@@ -19,8 +19,10 @@ reuse audit remains recoverable in Git history at Market Edge commit `22d217b`.
 Pinned baselines:
 - Brisket: `6932b97a297265313dbe962fb7ef1d2896cc6b63`.
 - Market Edge: `22d217b8ac37742a5adef6ea0a0f6557bdfa2952`.
-- Market Edge Gate 3 is active. Dataset construction, research splits, preregistration,
-  owner-intake integration and the root handoff belong to that workstream.
+- Market Edge Gate 3 merged (PR #14, `2f5d640`); Gate 4 (baseline model) is now the
+  active gate. Dataset construction, research splits, preregistration and owner-intake
+  integration from Gate 3 remain recoverable in Git history; the root handoff and
+  `docs/EXECUTION_PLAN.md` track the current Gate 4 workstream.
 
 ## Evidence inspected
 
@@ -225,9 +227,10 @@ part of the repository's material-change process. Source code is unchanged.
 
 ## Next integration points, without duplicate owners
 
-1. Gate 3 owner finishes #4's idea-index/front-door rule and keeps dataset/holdout
-   access controls. In particular, split before descriptive error analysis and do
-   not inspect holdout feature-label relationships while choosing a model.
+1. Gate 4 owner finishes #4's idea-index/front-door rule and keeps the Gate 3
+   dataset/holdout access controls in force. In particular, split before descriptive
+   error analysis and do not inspect holdout feature-label relationships while
+   choosing a model.
 2. Before recurring collection: use verified backup bundles plus explicitly approved
    off-host storage/retention; add crash-visible run state, host resource limits and
    availability tests to the existing ingestion/hosting lane.

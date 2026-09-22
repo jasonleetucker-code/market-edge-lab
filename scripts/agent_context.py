@@ -19,9 +19,25 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 DOCUMENTS = (
-    "AI_INSTRUCTIONS.md", "docs/AGENT_OPERATING_SYSTEM.md",
+    "AI_INSTRUCTIONS.md", "AGENTS.md", "CLAUDE.md", "docs/AGENT_OPERATING_SYSTEM.md",
     "docs/EXECUTION_PLAN.md", "HANDOFF.md", "docs/WORK_CLAIMS.md",
 )
+
+
+def _normalized(body: bytes) -> bytes:
+    """Canonical evidence representation for hashing an instruction document.
+
+    Newline-normalized (CRLF/CR -> LF) before hashing, following the convention
+    in scripts/build_exp001_dataset.py's `_sha()`: a Windows checkout with
+    core.autocrlf=true must fingerprint the same commit identically to a Linux
+    checkout. The `bytes` field alongside the fingerprint still reports the
+    actual on-disk length; only the hash is normalized.
+    """
+    try:
+        text = body.decode("utf-8").replace("\r\n", "\n").replace("\r", "\n")
+    except UnicodeDecodeError:
+        return body
+    return text.encode("utf-8")
 
 
 def git(root: Path, *args: str) -> str | None:
@@ -54,7 +70,7 @@ def build_context(root: Path, base: str = "origin/main") -> dict:
         except OSError:
             missing.append(rel)
             continue
-        fingerprints[rel] = {"sha256": hashlib.sha256(body).hexdigest(), "bytes": len(body)}
+        fingerprints[rel] = {"sha256": hashlib.sha256(_normalized(body)).hexdigest(), "bytes": len(body)}
     try:
         spec = importlib.util.find_spec("edge_lab")
         origin = Path(spec.origin).resolve() if spec and spec.origin else None
