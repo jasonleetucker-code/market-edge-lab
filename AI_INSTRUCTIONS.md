@@ -51,6 +51,7 @@ authorize something, that thing is not authorized.
 | news / web / document ingestion | `docs/NEWS_WEB_INGESTION.md` |
 | why an architecture choice was made | `docs/decisions/` |
 | reuse of patterns from the Brisket repo | `docs/BRISKET_REUSE_AUDIT.md` |
+| owner ideas, future features, backlog readiness | `docs/OWNER_IDEAS.md` |
 
 ## Authority: autonomy is not authority
 
@@ -120,6 +121,23 @@ UNRESOLVED: NONE | <specific items>   # NONE is an evidence claim, not boilerpla
 BLOCKERS: NONE | <what, and who can unblock>
 NEXT ACTION: <the single best next step>
 ```
+
+## Owner ideas (durable intake)
+
+When the owner expresses a definite, durable idea about this project, preserve it in
+GitHub, not only in chat. That covers a feature, research direction, data source, workflow
+improvement or future requirement.
+
+- Use an `[Owner Idea]` issue, or update the existing issue that covers it rather than
+  creating a duplicate.
+- Record enough context for another model to understand the idea without the chat.
+- State whether it is future intent, research, blocked, or authorized now. **An issue
+  never authorizes implementation**; `docs/EXECUTION_PLAN.md` does.
+- Later owner direction supersedes earlier direction, and the earlier version stays
+  traceable.
+- Err toward capture unless the owner says it is throwaway or asks not to preserve it.
+- At every gate transition, the planning agent reviews the open ideas and records their
+  readiness in `docs/OWNER_IDEAS.md`. Process authority: issue #4.
 
 ## No private instruction forks
 
