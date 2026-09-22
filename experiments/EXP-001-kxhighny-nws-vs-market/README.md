@@ -50,6 +50,27 @@ claims an edge. Next: Gate 4 implements the frozen baseline and evaluates it onc
     handles both (v3 also refuses suffixed products); this was found before any error
     statistic was computed.
 
+- **2026-09-22 (gate 4).** Implemented the frozen baseline (`src/edge_lab/exp001_baseline.py`,
+  `scripts/run_exp001_gate4.py`) and ran it once, in three commits on
+  `gate4/exp001-baseline`.
+  - Six dated pre-validation `[[amendments]]` (commit `e3405cf`) resolved ambiguities before
+    any validation or test score existed. None changes a model, window or threshold.
+  - Validation selection (`gate4/validation_selection.json`, commit `e1705d2`, train and
+    validation rows only): d = lnP_V2 - lnP_V1 has mean -0.0020, 95% block-bootstrap CI
+    [-0.0256, +0.0207], so the frozen rule selects **V1 (pooled)**.
+  - Stage A: V1, R0 and R1 were refitted on 2,922 train + validation days and scored once on
+    629 test days (split opened once, run at `e1705d2`, `gate4/test_split_opened.json`).
+    - Condition 1: model - R0 per-day log score +1.253, CI [+1.147, +1.362]. Met.
+    - Condition 2: randomized-PIT central coverage 0.806 (507/629), inside [0.75, 0.85]. Met.
+    - Tails: 75 days with u < 0.10 and 47 with u > 0.90.
+  - Reported only (not criteria):
+    - model - R1: +0.020, CI [-0.001, +0.039];
+    - mean Brier: model 0.892, R0 0.968, R1 0.897;
+    - mean log loss: model 2.451, R0 3.705, R1 2.471.
+  - **Stage A PASS.** Per amendment 5 the status is now `RUNNING`: Stage B is pending and
+    BLOCKED-ON-OWNER for scheduled collection. This is probability validation only. It is
+    not evidence of a trading edge. Full report: `gate4/REPORT.md`.
+
 ## Open questions
 
 1. ~~What does GLOBALTEMPERATURE.pdf specify?~~ Answered in `docs/SETTLEMENT.md`.

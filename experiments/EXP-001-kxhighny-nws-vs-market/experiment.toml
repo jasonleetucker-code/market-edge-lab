@@ -1,6 +1,6 @@
 id = "EXP-001"
 title = "KXHIGHNY: NWS-forecast-implied probability vs executable Kalshi prices"
-status = "PREREGISTERED"
+status = "RUNNING"
 owner = "jasonleetucker-code"
 created = "2026-09-22"
 
@@ -95,6 +95,9 @@ max_book_age = "5 minutes"
 [artifacts]
 spec = "experiments/EXP-001-kxhighny-nws-vs-market/experiment.toml"
 log = "experiments/EXP-001-kxhighny-nws-vs-market/README.md"
+gate4_report = "experiments/EXP-001-kxhighny-nws-vs-market/gate4/REPORT.md"
+gate4_validation_selection = "experiments/EXP-001-kxhighny-nws-vs-market/gate4/validation_selection.json"
+gate4_stage_a_result = "experiments/EXP-001-kxhighny-nws-vs-market/gate4/stage_a_result.json"
 
 # Gate 4 amendments. Recorded and committed before any validation or test score was
 # computed. None changes a model, variant, fit window, threshold, feature or distribution.

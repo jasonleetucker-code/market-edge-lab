@@ -1,0 +1,97 @@
+{
+  "bootstrap": {
+    "alpha": 0.05,
+    "block": 7,
+    "function": "edge_lab.stats.block_bootstrap_mean_ci",
+    "resamples": 10000,
+    "seed": 20260922
+  },
+  "condition_1_log_score_vs_r0": {
+    "criterion": "mean(lnP_model - lnP_R0) over usable test days > 0 and its 95% block-bootstrap lower bound > 0 (strict inequalities)",
+    "passed": true
+  },
+  "condition_2_pit_coverage": {
+    "coverage_range": [
+      0.75,
+      0.85
+    ],
+    "criterion": "randomized-PIT central coverage stats.central_coverage(pit, 0.10, 0.90) within [0.75, 0.85] (inclusive), u = F(y-1) + v*P(y) from the same clamped pmf used for scoring, v from stats.randomized_pit(seed 20260922) in date order",
+    "passed": true
+  },
+  "dataset_sha256": "1794b23cd519a4c4a952700dc97530df0f0452f070962c0cb7500fd1afcef51a",
+  "difference_model_minus_r0": {
+    "ci_lower": 1.1469870337497832,
+    "ci_upper": 1.3624492658673397,
+    "mean": 1.2534130918558297
+  },
+  "difference_model_minus_r1": {
+    "ci_lower": -0.0011197420644236664,
+    "ci_upper": 0.039443217015349315,
+    "mean": 0.019588229976516037
+  },
+  "experiment_id": "EXP-001",
+  "fit_counts": {
+    "ALL": 2922
+  },
+  "fit_window": {
+    "first": "2017-01-01",
+    "last": "2024-12-31",
+    "n_days": 2922,
+    "splits": [
+      "train",
+      "validation"
+    ]
+  },
+  "mean_brier": {
+    "R0": 0.9677380014794879,
+    "R1": 0.8965958501478628,
+    "model": 0.8916374274668089
+  },
+  "mean_log_loss": {
+    "R0": 3.7045299242103527,
+    "R1": 2.470705062331039,
+    "model": 2.451116832354523
+  },
+  "mean_log_score": {
+    "R0": -3.7045299242103527,
+    "R1": -2.470705062331039,
+    "model": -2.451116832354523
+  },
+  "n_test_days": 629,
+  "n_test_errors_clamped": 0,
+  "n_test_labels_outside_r0_support": 0,
+  "phase": "stage_a",
+  "pit": {
+    "coverage": 0.8060413354531002,
+    "high": 0.9,
+    "low": 0.1,
+    "n_above_high": 47,
+    "n_below_low": 75,
+    "n_inside": 507,
+    "seed": 20260922
+  },
+  "provenance": {
+    "code_commit": "e1705d29f66dc55ff6d49f4f8d1efdc02da26c60",
+    "command": "python scripts/run_exp001_gate4.py --phase test",
+    "python": "3.12.10",
+    "run_at_utc": "2026-09-22T23:31:35+00:00"
+  },
+  "r0_support": [
+    3,
+    108
+  ],
+  "r1_params": {
+    "mu": 0.4517453798767967,
+    "sigma": 3.097751281865496
+  },
+  "selected_variant": "V1",
+  "test_window": {
+    "first": "2025-01-01",
+    "last": "2026-09-21",
+    "n_days": 629,
+    "splits": [
+      "test"
+    ]
+  },
+  "verdict": "PASS"
+}
