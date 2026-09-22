@@ -23,6 +23,7 @@ def test_failing_source_does_not_abort_others_and_run_is_partial(tmp_path, monke
 
     monkeypatch.setattr(cli, "collect_series", good_kalshi)
     monkeypatch.setattr(cli, "collect_reference_forecast", bad_nws)
+    monkeypatch.setattr(cli, "collect_recent_cli", bad_nws)
     db = tmp_path / "edge.sqlite3"
 
     code = cli.main(["collect", "--db", str(db), "--nws-user-agent", "test"])
@@ -119,10 +120,18 @@ def test_health_exits_nonzero_after_failed_run_even_if_data_still_fresh(tmp_path
             _save(store, run_id, source="nws", kind=kind)
         return {}
 
+    def good_cli(store, *, run_id, **kwargs):
+        for kind in ("cli_list", "cli_product"):
+            _save(store, run_id, source="nws_cli", kind=kind)
+        return {}
+
     monkeypatch.setattr(cli, "collect_series", good)
     monkeypatch.setattr(cli, "collect_reference_forecast", good_nws)
+    monkeypatch.setattr(cli, "collect_recent_cli", good_cli)
     assert cli.main(["collect", "--db", str(db), "--nws-user-agent", "t"]) == 0
-    assert cli.main(["health", "--db", str(db)]) == 0
+    assert cli.main(["health", "--db", str(db)]) == 1  # settlement evidence never collected
+    live = ["--source", "kalshi_public", "--source", "nws_api", "--source", "nws_cli_central_park"]
+    assert cli.main(["health", "--db", str(db), *live]) == 0
 
     def bad(*args, **kwargs):
         raise HttpFetchError("HTTP 503 fetching x", status=503)
@@ -131,7 +140,7 @@ def test_health_exits_nonzero_after_failed_run_even_if_data_still_fresh(tmp_path
     cli.main(["collect", "--source", "kalshi", "--db", str(db)])
     capsys.readouterr()
     # Snapshots from the first run are still inside max_age, but the latest run failed.
-    assert cli.main(["health", "--db", str(db)]) == 1
+    assert cli.main(["health", "--db", str(db), *live]) == 1
 
 
 def test_health_exits_nonzero_when_a_source_never_ran(tmp_path):

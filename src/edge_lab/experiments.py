@@ -131,6 +131,8 @@ def validate(exp: Experiment) -> list[str]:
                 for k in ("date", "change", "reason")
             ):
                 problems.append(f"amendment {i} needs non-empty date, change, reason")
+            elif "field" in amendment and amendment["field"] not in FROZEN_FIELDS:
+                problems.append(f"amendment {i} names unknown field {amendment['field']!r}")
 
     if exp.status in CONCLUDED:
         result = d.get("result")
@@ -144,6 +146,7 @@ def validate(exp: Experiment) -> list[str]:
             if isinstance(report, str) and report and not (exp.path.parent / report).exists():
                 problems.append(f"[result] report '{report}' does not exist")
 
+    problems.extend(baseline_problems(exp))
     return problems
 
 
@@ -207,3 +210,109 @@ def validate_all(root: Path) -> dict[str, list[str]]:
         seen[exp.id] = path
         results[key] = problems
     return results
+
+
+# ---------------------------------------------------------------------------
+# Preregistration freeze
+# ---------------------------------------------------------------------------
+# The fields a preregistered experiment may never change in place. Changes go in
+# [[amendments]] (date, change, reason, and optionally field + value), so the
+# original text stays in the manifest and the baseline, and the effective spec is
+# original + amendments.
+FROZEN_FIELDS = (
+    "hypothesis",
+    "economic_rationale",
+    "market",
+    "decision_time",
+    "model",
+    "data_sources",
+    "features",
+    "success_criteria",
+    "failure_criteria",
+    "risk_constraints",
+    "periods",
+    "costs",
+    "execution",
+)
+BASELINE_NAME = "preregistration.json"
+FREEZE_VERSION = "1"
+
+
+def frozen_view(data: dict[str, Any]) -> dict[str, Any]:
+    return {key: data.get(key) for key in FROZEN_FIELDS}
+
+
+def frozen_hash(view: dict[str, Any]) -> str:
+    import hashlib
+    import json
+
+    text = json.dumps(view, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def freeze(exp: Experiment, *, now_utc: str) -> Path:
+    """Write the preregistration baseline for a manifest already set to PREREGISTERED.
+
+    Refuses to overwrite an existing baseline and refuses manifests that are not fully
+    specified: a freeze is a one-time act.
+    """
+    import json
+
+    target = exp.path.parent / BASELINE_NAME
+    if target.exists():
+        raise FileExistsError(f"{target} already exists; preregistration baselines are never rewritten")
+    if exp.status != "PREREGISTERED":
+        raise ValueError("set status = \"PREREGISTERED\" in the manifest before freezing")
+    problems = [p for p in validate(exp) if "preregistration baseline" not in p]
+    if problems:
+        raise ValueError("manifest is not freezable: " + "; ".join(problems))
+    view = frozen_view(exp.data)
+    baseline = {
+        "experiment_id": exp.id,
+        "frozen_at_utc": now_utc,
+        "freeze_version": FREEZE_VERSION,
+        "frozen_fields_sha256": frozen_hash(view),
+        "frozen_fields": view,
+    }
+    target.write_text(json.dumps(baseline, indent=2, sort_keys=True, ensure_ascii=False) + "\n")
+    return target
+
+
+def baseline_problems(exp: Experiment) -> list[str]:
+    """For locked experiments: the baseline must exist, be self-consistent and match."""
+    import json
+
+    if exp.status not in LOCKED:
+        return []
+    target = exp.path.parent / BASELINE_NAME
+    if not target.exists():
+        return [f"{exp.status} experiment has no preregistration baseline ({BASELINE_NAME}); run `edge-lab experiments freeze`"]
+    try:
+        baseline = json.loads(target.read_text())
+    except (OSError, ValueError) as exc:
+        return [f"preregistration baseline unreadable: {exc}"]
+    problems = []
+    recorded = baseline.get("frozen_fields")
+    if not isinstance(recorded, dict) or frozen_hash(recorded) != baseline.get("frozen_fields_sha256"):
+        problems.append("preregistration baseline does not match its own hash (edited?)")
+    if baseline.get("experiment_id") != exp.id:
+        problems.append("preregistration baseline belongs to a different experiment")
+    current = frozen_view(exp.data)
+    if isinstance(recorded, dict) and current != recorded:
+        changed = sorted(k for k in FROZEN_FIELDS if current.get(k) != recorded.get(k))
+        problems.append(
+            f"locked fields changed since preregistration: {changed} "
+            "(record changes in [[amendments]] instead of editing)"
+        )
+    return problems
+
+
+def changed_baselines(base_ref: str, *, repo: Path) -> list[str]:
+    """Baseline files modified or deleted relative to `base_ref` (additions are fine)."""
+    import subprocess
+
+    out = subprocess.run(
+        ["git", "diff", "--name-status", base_ref, "HEAD", "--", f"experiments/*/{BASELINE_NAME}"],
+        cwd=repo, capture_output=True, text=True, check=True,
+    ).stdout
+    return [line for line in out.splitlines() if line and not line.startswith("A")]

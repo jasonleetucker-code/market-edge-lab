@@ -29,6 +29,7 @@ class AccessTier(int, Enum):
 class SourceStatus(str, Enum):
     ACTIVE = "active"  # a collector exists and runs
     PLANNED = "planned"  # documented, not yet collected
+    BLOCKED = "blocked"  # must not be collected automatically (terms, access controls)
 
 
 @dataclass(frozen=True)
@@ -91,32 +92,71 @@ REGISTRY: dict[str, SourceSpec] = {
             ),
         ),
         SourceSpec(
+            source_id="kalshi_settlement",
+            legacy_name="kalshi_settlement",
+            description=(
+                "Kalshi settlement evidence: series rules and contract URLs, every page of "
+                "settled and historical markets (rules text, strikes, result, "
+                "expiration_value), and contract documents as exact bytes."
+            ),
+            access_tier=AccessTier.OFFICIAL_API,
+            base_url="https://external-api.kalshi.com/trade-api/v2",
+            status=SourceStatus.ACTIVE,
+            max_age={
+                "series": timedelta(days=7),
+                "settled_markets": timedelta(hours=36),
+                "historical_markets": timedelta(days=31),
+            },
+            license_notes="Public market data and published contract documents; research use.",
+        ),
+        SourceSpec(
             source_id="kalshi_settlement_weather_company",
             legacy_name="twc_kalshi",
             description=(
-                "The Weather Company page named as the KXHIGHNY settlement source in "
-                "live Kalshi market rules (series.settlement_sources and "
-                "markets[].rules_primary, captured 2026-09-22). Access mechanism and "
-                "terms of use not yet reviewed."
+                "The Weather Company page named in KXHIGHNY rules_primary from 2026-08-14 "
+                "(weather.com/kalshi, station CLINYC). Not collected: see license_notes."
             ),
             access_tier=AccessTier.HTTP_FETCH,
             base_url="https://weather.com/kalshi",
-            status=SourceStatus.PLANNED,
-            license_notes="UNREVIEWED: read weather.com terms before any automated retrieval.",
+            status=SourceStatus.BLOCKED,
+            license_notes=(
+                "weather.com Terms of Use (last updated 2026-04-16, reviewed 2026-09-22) forbid "
+                "monitoring/copying the Services 'through bots, spiders, scrapers, crawlers, or "
+                "other automated means' for unauthorized or commercial purposes without TWC's "
+                "express written permission. The page is a JS app with no documented public "
+                "API. Do not automate without written permission; do not bypass."
+            ),
         ),
         SourceSpec(
             source_id="nws_cli_central_park",
             legacy_name="nws_cli",
             description=(
-                "NWS Daily Climate Report (CLI) for Central Park (CLINYC). Official "
-                "observed maximum. Live rules reference station CLINYC but name The "
-                "Weather Company as the settlement source; whether CLI and the "
-                "settlement value agree must be measured, not assumed."
+                "NWS Daily Climate Report (CLI) for Central Park (CLINYC) via api.weather.gov. "
+                "Named settlement source for KXHIGHNY through 2026-08-13 and first Source Agency "
+                "in Kalshi's GLOBALTEMPERATURE contract terms."
             ),
             access_tier=AccessTier.OFFICIAL_API,
             base_url="https://api.weather.gov/products/types/CLI/locations/NYC",
+            status=SourceStatus.ACTIVE,
+            # Final CLI is issued once per morning; the list must be re-read at least daily
+            # to keep every issuance before the API drops it.
+            max_age={"cli_list": timedelta(hours=26), "cli_product": timedelta(hours=36)},
+            license_notes="US government work; public domain. Identifying User-Agent required.",
+        ),
+        SourceSpec(
+            source_id="iem_afos_clinyc",
+            legacy_name="iem_cli",
+            description=(
+                "Iowa Environmental Mesonet AFOS archive of NWS CLINYC text products "
+                "(historical backfill of the same NWS product)."
+            ),
+            access_tier=AccessTier.PERMITTED_PUBLIC_ENDPOINT,
+            base_url="https://mesonet.agron.iastate.edu/cgi-bin/afos/retrieve.py",
             status=SourceStatus.PLANNED,
-            license_notes="US government work; public domain.",
+            license_notes=(
+                "Free academic service; re-serves public-domain NWS products. Be polite "
+                "(about one request per second); cite IEM."
+            ),
         ),
     )
 }
