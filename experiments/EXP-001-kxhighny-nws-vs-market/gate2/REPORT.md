@@ -89,7 +89,9 @@ against the NWS CLI settlement value:
 - The comparison of settlement with **NWS forecasts** is gate 3 work (see
   `docs/EXECUTION_PLAN.md`).
 
-## 6. Gate 2 acceptance criteria (owner directive, 2026-09-22)
+## 6. Gate 2 acceptance criteria
+
+The criteria are the owner's, recorded verbatim in `docs/owner/2026-09-22-gate2-directive.md`.
 
 | # | Criterion | Evidence |
 |---|---|---|
@@ -100,7 +102,27 @@ against the NWS CLI settlement value:
 | 5 | Zero unexplained mismatches | final procedure: 0 mis-predictions; 4 UNKNOWN explained by archive gaps; the original procedure's one mismatch is explained (§3) |
 | 6 | Kalshi-value vs NWS differences measured | 739/739 exact (§4) |
 | 7 | Kalshi pagination complete | bounded cursor following, loop detection, every page stored (tests) |
-| 8 | All relevant tests pass | `python -m pytest` in CI on the PR head (3.11, 3.12) |
-| 9 | CI green on the exact final head | PR #8 checks |
-| 10 | Independent review: no unresolved correctness blocker | review findings addressed in PR #8 (listed in the PR description) |
+| 8 | All relevant tests pass | `python -m pytest`: all tests pass locally (3.11.15, 3.12.3) and in CI |
+| 9 | CI green on the exact final head | Before this file's last edit: head 45c02b0, run [35771310080](https://github.com/jasonleetucker-code/market-edge-lab/actions/runs/35771310080), both jobs green. The final head's run is in the PR #8 description; the merge is gated on it. This file cannot record its own commit's CI. |
+| 10 | Independent review: no unresolved correctness blocker | §7 |
 | 11 | No trading/auth capability | `tests/invariants/` |
+
+## 7. Independent review log
+
+A separate read-only reviewer agent tried to disprove completion, in two rounds. Its own
+independent resolver and parser (not repo code) reproduced every bracket in all three
+windows.
+
+| Round | Finding | Severity | Resolution |
+|---|---|---|---|
+| 1 | Window B tuned the procedure (two rules added on B events); not a held-out test | major | Window C (2024) defined before evaluation with the procedure frozen at 9f28602 (commit order verified by the reviewer): 366/366. Window B's original-procedure result is reported (§2). |
+| 1 | NHIGH delayed rule applied to all dates; conflicts with GLOBALTEMPERATURE's "first ... report" | major | Scoped by date (≤ 2025-12-09); conflict documented (`docs/SETTLEMENT.md` §4). |
+| 1 | IndexError when a delay is needed but no final exists before the cutoff | minor | Returns UNKNOWN (test). |
+| 1 | A superseded (uncorrected) preliminary drove the delay rule | minor | The latest preliminary (the correction) is used (test). |
+| 1 | "TWC vs NWS" labelling overstated | minor | Relabelled "Kalshi value vs NWS"; 39 TWC-era days stated. |
+| 1 | `rules_hash` unique per bracket, so it could not detect versions | minor | Date, comparison and strike templated out (6/2/2 versions). |
+| 1 | Final reports with "VALID AS OF" silently unclassified | minor | Noted in the selection basis (test). |
+| 1 | Nondeterministic dedupe of duplicate market records; fixture docstring | minor | Deterministic preference (test); docstring corrected. |
+| 1 | Gate 3 marked active without a recorded owner approval; PASS ahead of CI/review evidence; criterion 4 forecast clause unmet | blocker | Owner directive recorded verbatim; gate 3 active on merge; forecast clause explicitly moved to gate 3 as an amendment. |
+| 2 | The 11 criteria and CI requirements existed only in chat | major | This file's §6 and `docs/owner/2026-09-22-gate2-directive.md`. |
+| 2 | Everything else re-checked: resolved; no blockers | — | — |
