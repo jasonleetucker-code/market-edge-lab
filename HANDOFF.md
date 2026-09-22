@@ -40,8 +40,9 @@ UNRESOLVED:
 BLOCKERS: NONE for Gate 4. The VPS install and timer activation need two owner sudo
   commands. They will be handed over as exact command lines once the collector PR merges.
 NEXT ACTION: Build and merge the forward collector with the #16 fix, then hand the owner
-  the install command before the 2026-09-23 17:45 ET window. If it is not live by then, use
-  the attended laptop bridge.
+  the install command before the first capture of the next window. The PFM capture runs at
+  17:45 ET and the decision window is 17:55–18:00 ET on 2026-09-23 (D = 09-24). If it is
+  not live by then, use the attended laptop bridge.
 ```
 
 ## 30-day directive status (issue #11, target 2026-10-22)

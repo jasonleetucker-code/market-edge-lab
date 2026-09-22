@@ -6,8 +6,9 @@ Read-only. Nothing on the host was changed.
 - **Commands:** `hostname`, `nproc`, `lscpu`, `uptime`, `/proc/pressure/*`, `free -m`,
   `swapon --show`, `df -h`, `df -i`, `timedatectl`, `systemctl list-units/list-timers/show`,
   `ps`, `sar -r/-u` over the last 7 sysstat files, and `journalctl` (OOM grep).
-- **Re-run:** the same checks run again immediately before install
-  (`deploy/vps/preflight.sh`).
+- **Re-run:** the same checks run again immediately before install, through
+  `deploy/vps/preflight.sh`. That script arrives with the forward-collector PR; it does not
+  exist on `main` until that PR merges.
 
 ## Host
 
@@ -50,6 +51,11 @@ Read-only. Nothing on the host was changed.
 
 None of the heavy daily jobs (backups 02:00–03:30Z, sharp/board jobs 04:20–08:20Z) are
 near the windows.
+
+System timers `mdcheck_continue` and `mdmonitor-oneshot` run at 00:00 host time
+(Europe/Berlin). That is 22:00Z during CEST, the EDT decision instant. Both are software-RAID
+housekeeping and do next to nothing on a VM without md arrays. `preflight.sh` lists every
+timer's calendar so this can be rechecked.
 
 ## Measured history (sysstat, 2026-09-17 … 2026-09-23 files, Berlin local time)
 - **Available RAM:** the minimum was 3.9 GB, on 2026-09-17/18. Most days it stayed at
