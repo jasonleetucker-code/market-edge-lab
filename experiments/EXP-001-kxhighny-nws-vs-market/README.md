@@ -32,7 +32,7 @@ claims an edge. Next: Gate 4 implements the frozen baseline and evaluates it onc
   report-selection rules were needed and implemented: "first final report that includes
   the data", and NHIGH's delayed determination when the final is lower than earlier reports.
 
-- **2026-09-22 (gate 3).** Built `gate3/dataset.csv` (EXP-001-pit-v1): one row per
+- **2026-09-22 (gate 3).** Built `gate3/dataset.csv` (EXP-001-pit-v2): one row per
   target date 2017-01-01 → 2026-09-21, 3,551 days, all usable.
   - Forecast: the NWS PFMOKX Central Park max from the latest issuance at or before 17:30
     ET on D−1 (decision 18:00 ET).
@@ -44,8 +44,9 @@ claims an edge. Next: Gate 4 implements the frozen baseline and evaluates it onc
     execution models, Stage A (historical probability validation) and Stage B
     (prospective shadow trading), and the power check. Froze the preregistration.
   - Found and fixed during the build: pre-March-2017 products use upper-case labels, and
-    the WMO header often trails the local issuance line by 1 minute. Parser v2 handles
-    both; this was found before any error statistic was computed.
+    the WMO header often trails the local issuance line by 1 minute. Parser v2/v3
+    handles both (v3 also refuses suffixed products); this was found before any error
+    statistic was computed.
 
 ## Open questions
 

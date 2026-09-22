@@ -28,12 +28,14 @@ settlement information.
   never used (`nws_pfm.WMO_LAG_TOLERANCE`).
 - a forecast older than **24 h** at the cutoff is stale, so the row is excluded
   (`PFM_STALE_AT_CUTOFF`). No issuance at all gives `NO_PFM_BEFORE_CUTOFF`.
-- anything issued after the cutoff is never considered, including corrections (`CCx`) of
-  an earlier product. A correction issued before the cutoff is an ordinary issuance.
+- anything issued after the cutoff is never considered. Suffixed products (`CCx`, `RRx`,
+  `AAx`) are never used at all, because their transmission time is unknown. Products with
+  the same latest minute that disagree exclude the row.
 - availability time (issuance + 30 min) is recorded separately from issuance time.
 
 Reasons for (b):
-- the NWS afternoon PFM package (about 15:00–16:30 local) is out every day before 17:30;
+- the NWS afternoon PFM package (historically about 19–20Z, since 2026 about 18Z, i.e.
+  14:00–16:30 local) is out before 17:30 on essentially every day;
 - Kalshi lists D's markets around 10:00 ET on D−1, so they are open at 18:00;
 - it fits an evening human-review window for a later shadow or paper stage;
 - it gives about 24 h lead, before the morning-of observations.
@@ -41,6 +43,10 @@ Reasons for (b):
 **Tradeoffs.** Only one row per day, which keeps the sample small (see `gate3/POWER.md`).
 Early-evening updates (after 17:30) are ignored by design. The 30-minute buffer is a guess
 at dissemination delay and is conservative; it was not tuned.
+
+**Observed after the decision, before any error was computed:** NWS PFMOKX issuance
+thinned from mid-2025, so forecasts at the decision time are older in 2025–2026
+(`gate3/QUALITY.md`). The rule is unchanged.
 
 **Reconsider when** prospective collection shows markets are not reliably open or liquid at
 18:00, or an NWS product schedule change moves the afternoon package past 17:30. Any

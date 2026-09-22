@@ -23,7 +23,7 @@ import re
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 
-PARSER_VERSION = "2"
+PARSER_VERSION = "3"
 ZONE = "NYZ072"
 POINT_NAME = "Central Park-New York NY"
 
@@ -46,7 +46,7 @@ _MIN_HOUR = {"EST": 7, "EDT": 8}
 @dataclass(frozen=True)
 class PfmForecast:
     wmo_header: str | None  # e.g. "FOUS51 KOKX 102150"
-    correction: str | None  # e.g. "CCA" when the header carries a correction suffix
+    correction: str | None  # WMO header suffix (CCx/RRx/AAx); such products are never used
     issued_utc: datetime | None  # WMO header time, cross-checked against the local line
     issued_local_zone: str | None  # "EDT" | "EST"
     max_by_date: dict[date, int] = field(default_factory=dict)
@@ -137,7 +137,12 @@ def parse_pfm(text: str, zone: str = ZONE) -> PfmForecast | None:
     # Issuance time = the WMO header time (the later of the two, so conservative). If the
     # header is missing or disagrees with the local line, the product is ambiguous: None.
     issued_utc = _wmo_time(wmo.group(3), local_utc) if (wmo and local_utc) else None
-    correction = wmo.group(4) if wmo and wmo.group(4) and wmo.group(4).startswith("CC") else None
+    if wmo and wmo.group(4):
+        # Suffixed products (CCx correction, RRx delayed, AAx amendment) keep the original
+        # product's timestamp but are transmitted later: their true availability time is
+        # unknown, so they are never treated as available at the header time.
+        issued_utc = None
+    correction = wmo.group(4) if wmo and wmo.group(4) else None
 
     forecast = PfmForecast(
         wmo_header=" ".join(wmo.groups()[:3]) if wmo else None,

@@ -147,3 +147,9 @@ def test_old_upper_case_layout_parses_and_extract_keeps_it():
     assert "MIN/MAX" in ex and "DATE" in ex and "TEMP" not in ex
     g = parse_pfm(ex)
     assert (g.issued_utc, g.max_by_date, g.min_by_date) == (f.issued_utc, f.max_by_date, f.min_by_date)
+
+
+def test_suffixed_products_are_never_available_at_header_time():
+    for suffix in (" CCA", " RRA", " AAA"):
+        f = parse_pfm(_synth("Min/Max                      25          38", suffix=suffix))
+        assert f.correction == suffix.strip() and f.issued_utc is None

@@ -1,8 +1,8 @@
 {
   "availability_buffer_minutes": 30,
-  "builder_version": "1",
-  "dataset_id": "EXP-001-pit-v1",
-  "dataset_sha256": "b14efbeca8951fcf679ccf4bba1d19c81b8cd52872ba9131bef506a3ad84f0e4",
+  "builder_version": "2",
+  "dataset_id": "EXP-001-pit-v2",
+  "dataset_sha256": "1794b23cd519a4c4a952700dc97530df0f0452f070962c0cb7500fd1afcef51a",
   "date_range": [
     "2017-01-01",
     "2026-09-21"
@@ -41,7 +41,7 @@
     "products": 32699,
     "usable_issuances": 32616
   },
-  "pfm_parser_version": "2",
+  "pfm_parser_version": "3",
   "rows": 3551,
   "rows_by_split_usable": {
     "test/true": 629,

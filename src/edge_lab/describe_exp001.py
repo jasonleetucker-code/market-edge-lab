@@ -90,6 +90,7 @@ def _lag1(values: list[float]) -> float | None:
 def power_inputs(rows: list[dict[str, Any]]) -> dict[str, Any]:
     """Variance inputs for the power check: moments of the train error distribution and of
     train monthly climatology, in-sample on train. Sizing only; selects nothing."""
+    _require_train(rows)
     rows = sorted((r for r in rows if r.get("usable") == "true"), key=lambda r: r["target_date"])
     if not rows:
         return {}
@@ -109,10 +110,14 @@ def power_inputs(rows: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
-def describe(rows: list[dict[str, Any]]) -> dict[str, Any]:
+def _require_train(rows) -> None:
     bad = [r["target_date"] for r in rows if r.get("split") != "train"]
     if bad:
         raise NotTrainData(f"descriptive analysis is train-only; got non-train rows e.g. {bad[:3]}")
+
+
+def describe(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    _require_train(rows)
     rows = [r for r in rows if r.get("usable") == "true"]
     errors = _errors(rows)
     by_season = {}

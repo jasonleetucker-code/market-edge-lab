@@ -7,7 +7,7 @@ prices: historical executable order books do not exist before 2026-09-22.
 Decision time (ADR 0010): 18:00 America/New_York on D-1.
 Availability: the latest PFMOKX issuance whose issuance time is <= decision - 30 min,
 contains a Central Park maximum for D, and was issued within 24 h of that cutoff.
-Nothing issued later is ever considered, including corrections.
+Nothing issued later is ever considered. Suffixed (CCx/RRx/AAx) products are never used.
 """
 
 from __future__ import annotations
@@ -23,7 +23,7 @@ from typing import Any, Iterable
 from .nws_cli import CliReport, contract_regime, settlement_value, _is_dst
 from .nws_pfm import PARSER_VERSION as PFM_PARSER_VERSION, PfmForecast
 
-BUILDER_VERSION = "1"
+BUILDER_VERSION = "2"
 DECISION_LOCAL_HOUR = 18  # on D-1, America/New_York
 AVAILABILITY_BUFFER = timedelta(minutes=30)
 MAX_FORECAST_AGE = timedelta(hours=24)  # older than this at the cutoff = stale
@@ -45,7 +45,7 @@ COLUMNS = (
     "forecast_product_sha256", "forecast_extract_sha256", "pfm_parser_version",
     "issuances_after_cutoff_ignored",
     "label_f", "label_source", "kalshi_expiration_value", "nws_cli_value_f", "nws_cli_basis",
-    "nws_cli_wmo_header",
+    "nws_cli_wmo_header", "nws_cli_issued_utc",
     "market_price_available", "usable", "exclusion_reason",
 )
 
@@ -85,6 +85,7 @@ class KalshiEvent:
     expiration_value: str | None
     rules_source: str
     rules_hash: str
+    value_conflict: bool = False  # the event's markets report different expiration values
 
 
 def select_forecast(issuances: list[Issuance], target: date, cutoff: datetime):
@@ -102,7 +103,13 @@ def select_forecast(issuances: list[Issuance], target: date, cutoff: datetime):
         eligible.append(iss)
     if not eligible:
         return None, "NO_PFM_BEFORE_CUTOFF", after
-    chosen = max(eligible, key=lambda i: (i.forecast.issued_utc, i.product_sha256))
+    latest = max(i.forecast.issued_utc for i in eligible)
+    tied = sorted((i for i in eligible if i.forecast.issued_utc == latest), key=lambda i: i.product_sha256)
+    chosen = tied[0]
+    if len({i.forecast.max_by_date[target] for i in tied}) > 1:
+        # Two products with the same issuance minute disagree: which one a trader saw
+        # last is unknowable, so refuse to pick.
+        return None, "CONFLICTING_SIMULTANEOUS_ISSUANCES", after
     if cutoff - chosen.forecast.issued_utc > MAX_FORECAST_AGE:
         return None, "PFM_STALE_AT_CUTOFF", after
     return chosen, None, after
@@ -140,6 +147,8 @@ def build_rows(
             label, label_source = int(float(kalshi_value)), "kalshi_expiration_value"
         elif cli.value_f is not None:
             label, label_source = cli.value_f, "nws_cli_contract_rule"
+        if reason is None and ev is not None and ev.value_conflict:
+            reason = "KALSHI_VALUE_INCONSISTENT"
         if reason is None and label is None:
             reason = "NO_SETTLEMENT_LABEL"
         if (
@@ -148,7 +157,11 @@ def build_rows(
         ):
             reason = "KALSHI_CLI_CONFLICT"
         f = chosen.forecast if chosen else None
-        midnight = eastern_to_utc(datetime.combine(day, datetime.min.time()))
+        # 00:00 local on D has the UTC offset in force on D-1 (US transitions happen at
+        # 02:00), so use D-1's DST state rather than D's.
+        midnight = datetime.combine(day, datetime.min.time()).replace(
+            tzinfo=timezone(timedelta(hours=-4) if _is_dst(day - timedelta(days=1)) else timedelta(hours=-5))
+        ).astimezone(timezone.utc)
         rows.append({
             "target_date": day.isoformat(),
             "split": split_of(day),
@@ -179,6 +192,7 @@ def build_rows(
             "nws_cli_value_f": cli.value_f if cli.value_f is not None else "",
             "nws_cli_basis": cli.basis,
             "nws_cli_wmo_header": cli.report.wmo_header if cli.report else "",
+            "nws_cli_issued_utc": cli.report.issued_at_utc.isoformat() if cli.report and cli.report.issued_at_utc else "",
             "market_price_available": "false",
             "usable": "true" if reason is None else "false",
             "exclusion_reason": reason or "",

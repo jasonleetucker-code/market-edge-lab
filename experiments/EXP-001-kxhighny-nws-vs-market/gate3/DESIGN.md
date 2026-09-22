@@ -16,6 +16,11 @@ error was computed**. The binding version is `../experiment.toml`, frozen in
     typed local issuance line, otherwise the product is ambiguous and never used.
   - Later issuances and later corrections are never considered. The row records how many
     were ignored (`issuances_after_cutoff_ignored`).
+  - Suffixed products (CCx correction, RRx delayed, AAx amendment) are never used. They keep
+    the original timestamp but are sent later, so their availability time is unknown. The
+    2016-12 → 2026-09 archive contains none.
+  - If two products share the latest eligible issuance minute and disagree on D's max, the
+    row is excluded (`CONFLICTING_SIMULTANEOUS_ISSUANCES`). Picking one would be arbitrary.
   - `forecast_available_utc` = issuance + 30 min. It is recorded separately from issuance.
 - **Never used**: a forecast issued after the cutoff; a corrected value published after
   the cutoff; a later archive copy substituted for the original (products are identified
@@ -32,7 +37,7 @@ error was computed**. The binding version is `../experiment.toml`, frozen in
 | Our own `api.weather.gov` snapshots | Exist only from 2026-09-22. Usable for Stage B, not for history. |
 | Paid vendors | Not considered (free-first rule, owner idea #7). |
 
-Parsing (`edge_lab.nws_pfm`, parser v2) is positional. The Min/Max row's values are
+Parsing (`edge_lab.nws_pfm`, parser v3) is positional. The Min/Max row's values are
 right-aligned to the hour columns. The daytime max sits at 19 EST / 20 EDT, the overnight
 min at 07 EST / 08 EDT. A value in any other column, or not aligned, is not read.
 
@@ -45,15 +50,24 @@ min at 07 EST / 08 EDT. A value in any other column, or not aligned, is not read
   - the forecast's WMO header, issuance/availability time, lead, max, full-product
     SHA-256, extract SHA-256 and parser version;
   - the prior (≥ 12 h earlier) issuance for revision;
-  - the label and its source, the NWS CLI value, basis and WMO header;
+  - the label and its source, the NWS CLI value, basis, WMO header and issuance time;
   - `market_price_available=false`;
   - `usable` and `exclusion_reason`.
-- **Label**: Kalshi `expiration_value` when the date has a settled Kalshi event. Otherwise
+- **Label**: Kalshi `expiration_value` when the date's Kalshi event records one; 68 settled
+  events record none. Otherwise
   the NWS CLI value selected under the contract rules validated in Gate 2
   (`nws_cli.settlement_value`), where Kalshi and NWS agreed on 739/739 events. If both
-  exist and differ, the row is excluded (`KALSHI_CLI_CONFLICT`).
-- Exclusion codes: `NO_PFM_BEFORE_CUTOFF`, `PFM_STALE_AT_CUTOFF`, `NO_SETTLEMENT_LABEL`,
-  `KALSHI_CLI_CONFLICT`. Excluded rows stay in the file with their reason.
+  exist and differ, the row is excluded (`KALSHI_CLI_CONFLICT`). If an event's markets
+  disagree on `expiration_value`, the row is excluded (`KALSHI_VALUE_INCONSISTENT`) and
+  never silently relabelled from the CLI.
+- Exclusion codes: `NO_PFM_BEFORE_CUTOFF`, `PFM_STALE_AT_CUTOFF`,
+  `CONFLICTING_SIMULTANEOUS_ISSUANCES`, `NO_SETTLEMENT_LABEL`, `KALSHI_CLI_CONFLICT`,
+  `KALSHI_VALUE_INCONSISTENT`. Excluded rows stay in the file with their reason.
+- **Issuance regime shift (disclosed before any error was computed):** the NWS issued fewer
+  PFMOKX updates from mid-2025, and the afternoon package moved to about 18Z. In the test
+  period the chosen forecast is typically 3–5 h old at the decision time, against about
+  2.5 h in 2017–2024 (`QUALITY.md`, "regime by year"). The fit years therefore have fresher
+  forecasts than the test years. This is not corrected; it is part of what Stage A tests.
 - Identity: `dataset_sha256` is computed over the canonical CSV. Every input file's SHA-256
   is in the manifest, and CI rebuilds and byte-compares the outputs
   (`tests/test_gate3_reproducible.py`).
@@ -93,8 +107,11 @@ Notation: f = `forecast_max_f` (integer °F), y = label (integer °F), k = y −
 - **Selection on validation**: compute the per-day difference d = ln P_V2(y) − ln P_V1(y).
   Choose V2 only if mean(d) > 0 **and** the lower end of its 95% bootstrap interval is > 0.
   Otherwise choose V1.
-- **Bootstrap (all uses)**: circular moving-block bootstrap over days, block length 7,
-  10,000 resamples, seed 20260922, percentile interval.
+- **Bootstrap (all uses)**: `edge_lab.stats.block_bootstrap_mean_ci` exactly as implemented
+  and frozen. Circular moving blocks of 7 days, starts drawn by
+  `random.Random(20260922).randrange(n)`, ceil(n/7) blocks truncated to n, 10,000
+  resamples, and percentile bounds m[floor(α/2·B)] and m[ceil((1−α/2)·B)−1] with α = 0.05
+  unless stated. The input is per-day values of usable days in date order.
 - **References**:
   - R0, monthly climatology: for each calendar month m, P(y) = (c_y + 0.5) / (N_m + 0.5 × S)
     over integer support y ∈ [min_y − 10, max_y + 10], where c_y counts fit days in month m
@@ -117,8 +134,9 @@ days.
   1. mean(ln P_model(y) − ln P_R0(y)) > 0, with the 95% block-bootstrap interval's lower
      end > 0;
   2. calibration: randomized PIT u = F(y−1) + v·P(y), with v ~ U(0,1) drawn by
-     `random.Random(20260922)` in date order. The fraction of test days with
-     0.10 ≤ u ≤ 0.90 lies in [0.75, 0.85].
+     `random.Random(20260922)` in date order (`edge_lab.stats.randomized_pit`). The
+     fraction of test days with 0.10 ≤ u ≤ 0.90 (`stats.central_coverage`) lies in
+     [0.75, 0.85].
 - **FAIL** otherwise.
 - **A Stage A pass is not evidence of a trading edge.** It shows only that the
   forecast-derived probabilities are informative and calibrated. Historical market prices
@@ -138,12 +156,19 @@ days.
 
   There is one fixed threshold and it is not searched. At most one contract per bracket
   per day.
-- Unit: the day (sum of that day's shadow P&L). Evaluate first after ≥ 180 decision days
-  with valid collection.
-  - **PASS**: mean daily net P&L > 0 and the block-bootstrap 95% interval's lower end > 0.
-  - **FAIL**: the interval's upper end < 0, or Stage A failed.
-  - Otherwise continue to 365 days, then decide by the same rule, with anything
-    unresolved being INCONCLUSIVE.
+- **Valid decision day**: the collector stored the event's order books in the decision
+  window (§8) and a latency re-check snapshot 10–15 min later. Days without both are
+  excluded from Stage B and counted in its report.
+- **Daily value**: the sum of that day's net P&L over filled trades. It is 0 on a valid day
+  with no signal, or where every signal was `NO_BOOK` or `NO_FILL_UNVERIFIED`. Such days
+  stay in the mean.
+- **Exactly two looks**, at the 180th and the 365th valid decision day. Each uses the block
+  bootstrap with α = 0.025 (97.5% interval; Bonferroni for two looks). There is no
+  checking in between.
+  - **PASS** at a look: mean daily net P&L > 0 and lower bound > 0.
+  - **FAIL** at a look: upper bound < 0, or Stage A failed (in which case Stage B is not
+    run for this model).
+  - Otherwise at 180: continue to 365. Otherwise at 365: **INCONCLUSIVE**.
 - A Stage B pass would be SHADOW_POSITIVE, not EDGE_PROVEN.
 
 ## 7. Fee model (`edge_lab.fees`, version 1)
@@ -167,8 +192,8 @@ days.
 
 ## 8. Execution model (Stage B only; nothing executes)
 
-- **Book**: the KXHIGHNY order book for the bracket, captured no more than 5 min before or
-  after the decision time. A missing or older book means no trade (`NO_BOOK`), never a
+- **Book**: the KXHIGHNY order book for the bracket, captured in [decision − 5 min,
+  decision]. A missing or older book means no trade (`NO_BOOK`), never a
   mid or last price.
 - **Price**:
   - YES buys at the implied ask, 1 − best NO bid;

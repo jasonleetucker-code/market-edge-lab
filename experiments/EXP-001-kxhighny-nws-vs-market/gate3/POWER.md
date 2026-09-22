@@ -47,11 +47,20 @@ forecast error and 0.108 for the log-score difference. That is why every interva
 - At 0–3 signals a day (correlated within the day), 180 decision days give on the order of
   100–400 trades and about 180 independent days. **180 days can only detect a large edge
   (roughly ≥ $0.07–0.10 per contract). An edge of a few cents would need years of one
-  series.** That is why Stage B allows continuation to 365 days, and why an INCONCLUSIVE
-  outcome is expected and acceptable.
+  series.** That is why Stage B has exactly two looks (180 and 365 valid days), each at
+  α = 0.025 (Bonferroni) so the second look does not inflate false positives, and why an
+  INCONCLUSIVE outcome is expected and acceptable.
 - One city, one series, one decision time. Any edge found would be specific to NYC
   summer/winter regimes and to this market's liquidity. Generalization needs new
   preregistered experiments, not reuse of this one.
+
+## Non-stationarity that power cannot fix
+
+PFMOKX issuance thinned from mid-2025, so the chosen forecast is typically older at the
+decision time in the test period (median 3.5 h in 2026) than in the fit years (about 2.5 h)
+(`QUALITY.md`). If the error distribution widens as a result, Stage A's calibration check
+may fail for that reason alone, however many days there are. This is disclosed before any
+test error was computed, and is not adjusted for.
 
 ## Consequences written into the preregistration
 

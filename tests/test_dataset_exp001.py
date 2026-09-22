@@ -103,3 +103,37 @@ def test_splits_are_chronological_and_contiguous():
     assert split_of(date(2022, 12, 31)) == "train" and split_of(date(2023, 1, 1)) == "validation"
     assert split_of(date(2024, 12, 31)) == "validation" and split_of(date(2025, 1, 1)) == "test"
     assert split_of(date(2016, 12, 31)) is None
+
+
+def test_simultaneous_issuances_that_disagree_are_excluded():
+    cutoff = decision_time(D)[1] - timedelta(minutes=30)
+    t = datetime(2025, 1, 5, 20, 50, tzinfo=UTC)
+    a, b, same = iss(t, 40, sha="a"), iss(t, 42, sha="b"), iss(t, 40, sha="s")
+    assert select_forecast([a, b], D, cutoff)[1] == "CONFLICTING_SIMULTANEOUS_ISSUANCES"
+    chosen, reason, _ = select_forecast([same, a], D, cutoff)
+    assert reason is None and chosen.forecast.max_by_date[D] == 40
+
+
+def test_inconsistent_kalshi_values_are_excluded_not_silently_replaced():
+    ev = {D: KalshiEvent("KXHIGHNY-25JAN06", None, "nws_climatological_report_daily", "h", value_conflict=True)}
+    (row,) = _rows([iss(datetime(2025, 1, 5, 20, 50, tzinfo=UTC))], [cli(value=41)], ev)
+    assert row["exclusion_reason"] == "KALSHI_VALUE_INCONSISTENT" and row["usable"] == "false"
+
+
+@pytest.mark.parametrize(
+    "day, issued, lead",
+    [
+        # Spring forward on 2024-03-10: 00:00 on that day is still EST (05:00Z).
+        (date(2024, 3, 10), datetime(2024, 3, 9, 20, 30, tzinfo=UTC), "8.50"),
+        # 00:00 on 2024-03-11 is EDT (04:00Z).
+        (date(2024, 3, 11), datetime(2024, 3, 10, 20, 0, tzinfo=UTC), "8.00"),
+        # Fall back on 2024-11-03: 00:00 on that day is still EDT (04:00Z).
+        (date(2024, 11, 3), datetime(2024, 11, 2, 20, 0, tzinfo=UTC), "8.00"),
+        # 00:00 on 2024-11-04 is EST (05:00Z).
+        (date(2024, 11, 4), datetime(2024, 11, 3, 21, 0, tzinfo=UTC), "8.00"),
+    ],
+)
+def test_lead_hours_are_right_on_dst_transition_days(day, issued, lead):
+    f = PfmForecast("FOUS51 KOKX X", None, issued, "EST", {day: 50}, {}, 0)
+    (row,) = build_rows([Issuance(f, "p", "x")], [cli(day=day)], {}, start=day, end=day)
+    assert row["forecast_lead_hours"] == lead

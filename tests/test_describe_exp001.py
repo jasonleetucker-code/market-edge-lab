@@ -29,3 +29,10 @@ def test_power_inputs_are_train_only_and_finite():
     assert out["n_days"] == 24 and out["error_pmf_log_score_sd"] >= 0
     with pytest.raises(NotTrainData):
         describe(rows + [row("2023-01-01", split="validation")])
+
+
+def test_power_inputs_alone_refuse_non_train_rows():
+    from edge_lab.describe_exp001 import power_inputs
+
+    with pytest.raises(NotTrainData):
+        power_inputs([row("2020-01-01"), row("2025-02-01", split="test")])

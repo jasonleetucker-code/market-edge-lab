@@ -9,7 +9,7 @@ be written here when they are made.
 |---|---|---|
 | 1 | Data collection | **Complete.** Collectors, provenance, source health, freshness and immutable evidence (PR #2); NWS CLI and settlement-evidence collectors, pagination and pacing (PR #8). Scheduled collection needs approval (cost policy). |
 | 2 | Settlement validation | **PASSED 2026-09-22 (PR #8; merge gated on green CI on the final head).** 799 daily events audited (including a fresh 2024 validation with the procedure frozen first), 0 mis-predictions under the final procedure, 0 unexplained mismatches; see `experiments/EXP-001-kxhighny-nws-vs-market/gate2/REPORT.md` and `docs/SETTLEMENT.md`. |
-| 3 | Historical dataset | **PASSED 2026-09-22 (Gate 3 PR; effective on its merge, which the owner authorized only once all 21 criteria hold and CI is green on the final head).** Point-in-time dataset EXP-001-pit-v1 (3,551 days, 3,551 usable, SHA-256 `b14efbec…`), train-only descriptive analysis, EXP-001 PREREGISTERED and frozen; see `experiments/EXP-001-kxhighny-nws-vs-market/gate3/`. |
+| 3 | Historical dataset | **PASSED 2026-09-22 (Gate 3 PR; effective on its merge, which the owner authorized only once all 21 criteria hold and CI is green on the final head).** Point-in-time dataset EXP-001-pit-v2 (3,551 days, 3,551 usable, SHA-256 `1794b23c…`), train-only descriptive analysis, EXP-001 PREREGISTERED and frozen; see `experiments/EXP-001-kxhighny-nws-vs-market/gate3/`. |
 | 4 | Baseline model | **Active on merge of the Gate 3 PR (authorized).** Implement the frozen baseline model and evaluate it on the predeclared train/validation/test protocol. |
 | 5–10 | Market-vs-model → … → scaling | Not authorized. |
 

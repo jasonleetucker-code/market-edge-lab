@@ -16,6 +16,7 @@ import argparse
 import gzip
 import hashlib
 import json
+import statistics
 import sys
 from collections import Counter, defaultdict
 from datetime import date, datetime, timedelta
@@ -66,11 +67,12 @@ def load_issuances() -> tuple[list[Issuance], Counter]:
                 stats["no_central_park_block"] += 1
                 continue
             forecast = parse_pfm(rec["extract"])
+            if forecast is not None and forecast.correction:
+                stats["suffixed_products_never_used"] += 1
+                continue
             if forecast is None or forecast.issued_utc is None:
                 stats["ambiguous_or_unparsed_issuance_time"] += 1
                 continue
-            if forecast.correction:
-                stats["corrected_products"] += 1
             if forecast.unaligned_values:
                 stats["products_with_unaligned_values"] += 1
             out.append(Issuance(forecast, rec["product_sha256"], sha256_text(rec["extract"])))
@@ -103,6 +105,7 @@ def load_kalshi() -> dict[date, KalshiEvent]:
         events[d] = KalshiEvent(
             event_ticker=ticker,
             expiration_value=values[0] if len(values) == 1 else None,
+            value_conflict=len(values) > 1,
             rules_source=read_rules(first.get("rules_primary")).source.value,
             rules_hash=rules_hash(first),
         )
@@ -114,6 +117,15 @@ def _pfm_responses() -> int:
     return sum("pil=PFMOKX" in r["url"] for r in requests)
 
 
+def _products_by_year() -> dict[str, int]:
+    requests = json.loads((G3 / "fetch_manifest.json").read_text())["requests"]
+    out: Counter = Counter()
+    for r in requests:
+        if "pil=PFMOKX" in r["url"]:
+            out[r["url"].split("sdate=")[1][:4]] += r["products"]
+    return dict(out)
+
+
 def _span(m) -> int:
     start, end = (date.fromisoformat(d) for d in m["date_range"])
     return (end - start).days + 1
@@ -122,7 +134,7 @@ def _span(m) -> int:
 def quality_report(rows, m, pfm_stats) -> str:
     years = Counter(); usable = Counter(); reasons = defaultdict(Counter); leads = Counter()
     labels = Counter(); corrected = 0; rules = Counter(); regimes = Counter(); bases = Counter()
-    before = Counter(); both = agree = 0
+    before = Counter(); both = agree = 0; age_by_year: dict[str, list[float]] = defaultdict(list)
     for r in rows:
         rules[r["rules_source"] or "(no Kalshi event)"] += 1
         regimes[r["contract_regime"]] += 1
@@ -136,6 +148,7 @@ def quality_report(rows, m, pfm_stats) -> str:
         if r["forecast_issued_utc"]:
             gap = datetime.fromisoformat(r["decision_utc"]) - datetime.fromisoformat(r["forecast_issued_utc"])
             before[int(gap.total_seconds() // 3600)] += 1
+            age_by_year[r["target_date"][:4]].append(gap.total_seconds() / 3600)
         y = r["target_date"][:4]
         years[y] += 1
         if r["usable"] == "true":
@@ -144,7 +157,7 @@ def quality_report(rows, m, pfm_stats) -> str:
             labels[r["label_source"]] += 1
         else:
             reasons[y][r["exclusion_reason"]] += 1
-        corrected += bool(r["forecast_correction"])
+        corrected += bool(r["forecast_correction"])  # always 0: suffixed products are never used
     lines = [
         "# EXP-001 dataset quality report (generated)",
         "",
@@ -176,6 +189,22 @@ def quality_report(rows, m, pfm_stats) -> str:
         "| Hours before decision | Days |",
         "|---|---|",
         *[f"| {k}–{k + 1} | {v} |" for k, v in sorted(before.items())],
+        "",
+        "## Forecast issuance regime by year (counts and ages only)",
+        "",
+        "Hours between the chosen issuance and the decision time, and PFMOKX products archived.",
+        "The NWS issued fewer PFMOKX updates from mid-2025, so in the test period the chosen",
+        "forecast is typically older at the decision time than in train/validation. A model",
+        "fitted on earlier years is scored on older forecasts. This is a known, preregistered",
+        "limitation, not something to correct after seeing results.",
+        "",
+        "| Year | Median age (h) | Share older than 3 h | PFMOKX products |",
+        "|---|---|---|---|",
+        *[
+            f"| {y} | {statistics.median(v):.2f} | {100 * sum(a > 3 for a in v) / len(v):.1f}% | "
+            f"{_products_by_year().get(y, 0)} |"
+            for y, v in sorted(age_by_year.items())
+        ],
         "",
         "## PFM archive",
         "",
