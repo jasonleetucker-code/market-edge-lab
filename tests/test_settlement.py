@@ -107,3 +107,10 @@ def test_duplicate_market_records_are_chosen_deterministically():
     for order in ([with_value, without], [without, with_value]):
         (summary,), _ = audit(order, [], start=date(2026, 9, 21), end=date(2026, 9, 21))
         assert summary.kalshi_expiration_value == "80.00"
+
+
+def test_missing_strike_type_and_unread_comparison_is_unknown_not_a_crash():
+    # Early HIGHNY rules with no source/comparison reading and no strike_type (e.g. 22APR29).
+    market = {"strike_type": None, "floor_strike": None, "cap_strike": None,
+              "rules_primary": "If the highest temperature recorded in Central Park is 64 or above"}
+    assert resolve(market, 70).outcome is Outcome.UNKNOWN

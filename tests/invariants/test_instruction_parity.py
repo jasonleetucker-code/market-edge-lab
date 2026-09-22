@@ -55,3 +55,11 @@ def test_work_claim_rows_are_well_formed():
         cells = [c.strip() for c in row.strip("|").split("|")]
         assert len(cells) == 5 and all(cells), f"claim row needs 5 non-empty cells: {row}"
         date.fromisoformat(cells[4])  # expiry must be an ISO date
+
+
+def test_owner_idea_intake_is_routed_and_indexed():
+    text = CANONICAL.read_text()
+    assert "`docs/OWNER_IDEAS.md`" in text and "Owner ideas" in text
+    index = (ROOT / "docs/OWNER_IDEAS.md").read_text()
+    assert "issue #4" in index and "Review log" in index
+    assert "An issue is not authorization" in index or "never authorizes" in index
