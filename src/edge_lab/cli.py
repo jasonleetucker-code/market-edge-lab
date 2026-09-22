@@ -4,12 +4,19 @@ import argparse
 import json
 import os
 import sys
+import time
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
+from typing import Callable
 
+from . import experiments
+from .freshness import Freshness, assess
+from .http import HttpFetchError, ResponseDecodeError
 from .kalshi import collect_series
 from .nws import DEFAULT_LAT, DEFAULT_LON, collect_reference_forecast
-from .storage import SnapshotStore
+from .sources import REGISTRY, SourceStatus, get_source
+from .storage import SnapshotStore, utc_now_iso
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -33,7 +40,78 @@ def build_parser() -> argparse.ArgumentParser:
     recent.add_argument("--db", default="data/edge_lab.sqlite3")
     recent.add_argument("--limit", type=int, default=20)
 
+    health = subparsers.add_parser("health", help="Show latest per-source health and freshness.")
+    health.add_argument("--db", default="data/edge_lab.sqlite3")
+    health.add_argument("--json", action="store_true", help="Emit machine-readable JSON.")
+
+    exps = subparsers.add_parser("experiments", help="Experiment registry tools.")
+    exps_sub = exps.add_subparsers(dest="experiments_command", required=True)
+    validate = exps_sub.add_parser("validate", help="Validate experiments/*/experiment.toml.")
+    validate.add_argument("--root", default="experiments")
+
     return parser
+
+
+def _run_source(
+    store: SnapshotStore,
+    *,
+    run_id: str,
+    source_id: str,
+    collect: Callable[[list[str]], dict[str, int]],
+) -> dict[str, object]:
+    """Run one source in isolation and record its health.
+
+    A failing source never aborts other sources. Status is derived from what
+    was actually stored, not from what the collector reports:
+    - ok:      no error, no anomalies
+    - partial: some records stored, but an error or anomaly occurred
+    - failed:  error and nothing stored
+    """
+    spec = get_source(source_id)
+    anomalies: list[str] = []
+    started_at = utc_now_iso()
+    started = time.monotonic()
+    error: str | None = None
+    http_errors = 0
+    failed_fetch_retries = 0
+    counts: dict[str, int] | None = None
+
+    try:
+        counts = collect(anomalies)
+    except Exception as exc:  # noqa: BLE001 - isolation boundary; error is recorded
+        error = f"{type(exc).__name__}: {exc}"
+        if isinstance(exc, HttpFetchError):
+            # Retries spent on the fetch that ultimately failed are not in any
+            # stored snapshot, so count them here.
+            failed_fetch_retries = max(exc.attempts - 1, 0)
+            if not isinstance(exc, ResponseDecodeError):
+                http_errors = 1
+
+    records, payload_bytes, retries = store.run_source_totals(run_id, spec.legacy_name)
+    retries += failed_fetch_retries
+    if error is not None:
+        status = "partial" if records else "failed"
+    elif anomalies:
+        status = "partial"
+    else:
+        status = "ok"
+
+    store.record_source_health(
+        run_id=run_id,
+        source_id=source_id,
+        started_at_utc=started_at,
+        completed_at_utc=utc_now_iso(),
+        duration_ms=int((time.monotonic() - started) * 1000),
+        status=status,
+        # A failure never claims records (enforced by the schema as well).
+        records=records if status != "failed" else 0,
+        payload_bytes=payload_bytes,
+        http_errors=http_errors,
+        retries=retries,
+        anomalies=anomalies,
+        error=error,
+    )
+    return {"status": status, "counts": counts, "anomalies": anomalies, "error": error}
 
 
 def _collect(args: argparse.Namespace) -> int:
@@ -50,33 +128,60 @@ def _collect(args: argparse.Namespace) -> int:
     store.start_run(run_id)
 
     result: dict[str, object] = {"run_id": run_id, "db": str(args.db)}
-
+    outcomes: dict[str, dict[str, object]] = {}
+    finished = False
     try:
         if args.source in {"all", "kalshi"}:
-            result["kalshi"] = collect_series(
+            outcomes["kalshi_public"] = _run_source(
                 store,
                 run_id=run_id,
-                series_ticker=args.series,
-                status=args.market_status,
-                depth=args.depth,
+                source_id="kalshi_public",
+                collect=lambda anomalies: collect_series(
+                    store,
+                    run_id=run_id,
+                    series_ticker=args.series,
+                    status=args.market_status,
+                    depth=args.depth,
+                    anomalies=anomalies,
+                ),
             )
 
         if args.source in {"all", "nws"}:
-            result["nws"] = collect_reference_forecast(
+            outcomes["nws_api"] = _run_source(
                 store,
                 run_id=run_id,
-                user_agent=args.nws_user_agent,
-                lat=args.lat,
-                lon=args.lon,
+                source_id="nws_api",
+                collect=lambda _anomalies: collect_reference_forecast(
+                    store,
+                    run_id=run_id,
+                    user_agent=args.nws_user_agent,
+                    lat=args.lat,
+                    lon=args.lon,
+                ),
             )
 
-        store.finish_run(run_id, status="succeeded")
-    except Exception as exc:
-        store.finish_run(run_id, status="failed", error=f"{type(exc).__name__}: {exc}")
-        raise
+        statuses = {outcome["status"] for outcome in outcomes.values()}
+        if statuses == {"ok"}:
+            run_status, run_error = "succeeded", None
+        elif statuses == {"failed"}:
+            run_status, run_error = "failed", "all sources failed"
+        else:
+            run_status = "partial"
+            run_error = "; ".join(
+                f"{sid}: {o['status']}" for sid, o in outcomes.items() if o["status"] != "ok"
+            )
+        store.finish_run(run_id, status=run_status, error=run_error)
+        finished = True
+    finally:
+        if not finished:
+            # Never leave a run looking like it is still in progress.
+            store.finish_run(run_id, status="failed", error="collection aborted before completion")
 
+    result["status"] = run_status
+    result["sources"] = outcomes
     print(json.dumps(result, indent=2, sort_keys=True))
-    return 0
+    # Non-zero whenever evidence is missing, so schedulers notice.
+    return 0 if run_status == "succeeded" else 1
 
 
 def _recent(args: argparse.Namespace) -> int:
@@ -89,6 +194,80 @@ def _recent(args: argparse.Namespace) -> int:
     return 0
 
 
+def health_report(store: SnapshotStore, *, now: datetime) -> list[dict[str, object]]:
+    latest = {row["source_id"]: row for row in store.latest_source_health()}
+    report: list[dict[str, object]] = []
+    for spec in REGISTRY.values():
+        if spec.status is not SourceStatus.ACTIVE:
+            continue
+        row = latest.get(spec.source_id)
+        fetched = store.latest_fetch_by_kind(spec.legacy_name)
+        # "Latest receipt of any entity of this kind". It does not guarantee
+        # that every entity of the kind is fresh; decision code must check its
+        # own inputs with require_fresh.
+        kinds = {
+            kind: assess(fetched.get(kind), max_age=max_age, now=now).value
+            for kind, max_age in spec.max_age.items()
+        }
+        for kind in fetched:
+            kinds.setdefault(kind, Freshness.UNKNOWN.value)  # collected, no max age
+        report.append(
+            {
+                "source_id": spec.source_id,
+                "last_status": row["status"] if row else None,
+                "last_run_id": row["run_id"] if row else None,
+                "last_completed_at_utc": row["completed_at_utc"] if row else None,
+                "last_ok_at_utc": row["last_ok_at_utc"] if row else None,
+                "last_error": row["error"] if row else None,
+                "anomalies": json.loads(row["anomalies_json"]) if row else [],
+                # Freshness is judged per kind on receipt time; a kind never
+                # collected is unknown, not fresh.
+                "freshness": kinds,
+            }
+        )
+    return report
+
+
+def _health(args: argparse.Namespace) -> int:
+    store = SnapshotStore(Path(args.db))
+    report = health_report(store, now=datetime.now(timezone.utc))
+    if args.json:
+        print(json.dumps(report, indent=2, sort_keys=True))
+    else:
+        for item in report:
+            fresh = ", ".join(f"{k}={v}" for k, v in item["freshness"].items())
+            print(
+                f"{item['source_id']:<16} last={item['last_status'] or 'never':<8} "
+                f"last_ok={item['last_ok_at_utc'] or '-'}"
+            )
+            print(f"  freshness: {fresh}")
+            if item["last_error"]:
+                print(f"  error: {item['last_error']}")
+            for anomaly in item["anomalies"]:
+                print(f"  anomaly: {anomaly}")
+    all_fresh = all(
+        state == Freshness.FRESH.value for item in report for state in item["freshness"].values()
+    )
+    # A source whose latest run was not clean (or that never ran) is unhealthy even
+    # if older snapshots are still inside their freshness window.
+    all_ok = all(item["last_status"] == "ok" for item in report)
+    return 0 if all_fresh and all_ok else 1
+
+
+def _experiments(args: argparse.Namespace) -> int:
+    results = experiments.validate_all(Path(args.root))
+    if not results:
+        print(f"No experiments found under {args.root}", file=sys.stderr)
+        return 1
+    failed = False
+    for path, problems in results.items():
+        print(f"{'OK  ' if not problems else 'FAIL'} {path}")
+        for problem in problems:
+            print(f"     - {problem}")
+        failed = failed or bool(problems)
+    return 1 if failed else 0
+
+
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
 
@@ -96,6 +275,10 @@ def main(argv: list[str] | None = None) -> int:
         return _collect(args)
     if args.command == "recent":
         return _recent(args)
+    if args.command == "health":
+        return _health(args)
+    if args.command == "experiments":
+        return _experiments(args)
 
     raise AssertionError(f"Unhandled command: {args.command}")
 

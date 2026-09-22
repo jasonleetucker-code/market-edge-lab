@@ -1,0 +1,80 @@
+id = "EXP-001"
+title = "KXHIGHNY: NWS-forecast-implied probability vs executable Kalshi prices"
+status = "DRAFT"
+owner = "jasonleetucker-code"
+created = "2026-09-22"
+
+hypothesis = """
+At a fixed decision time before the market closes, a calibrated probability for each
+KXHIGHNY bracket, derived only from NWS forecasts available at that time, differs from the
+executable Kalshi ask/bid by more than fees plus spread, often enough and by enough to have
+positive expected value after costs.
+"""
+
+economic_rationale = """
+Retail-heavy weather markets may misprice short-horizon temperature risk relative to
+professional numerical forecasts, or react slowly to forecast updates. The rationale is
+unproven. The null hypothesis is that prices already reflect public NWS forecasts.
+"""
+
+market = "Kalshi KXHIGHNY (Highest temperature in NYC), daily brackets"
+decision_time = "TBD: candidate is a fixed local time on the day before the target date; must precede market close"
+model = "TBD: start with a simple calibrated mapping from NWS forecast high to a bracket distribution (e.g. forecast error distribution by lead time); no ML until the baseline exists"
+
+data_sources = [
+  "kalshi_public: series, markets, events, order books (snapshots)",
+  "nws_api: 12h/hourly/grid forecasts for the Central Park reference point (snapshots)",
+  "SETTLEMENT (gate 2, unresolved): live rules captured 2026-09-22 name The Weather Company (weather.com/kalshi) for station CLINYC",
+  "nws_cli_central_park (planned): official observed maximum, for comparison against the settlement value",
+]
+
+features = [
+  "NWS forecast high for the target date, by lead time, as available at decision time",
+  "forecast revision since previous issuance",
+  "bracket bounds parsed from market terms (deterministic)",
+]
+
+success_criteria = [
+  "Out-of-sample, after fees and crossing the captured spread, mean EV per contract > 0 with a 95% interval excluding 0",
+  "Model probabilities are calibrated out-of-sample (Brier score better than market-implied probabilities)",
+  "Result holds on a test period touched exactly once",
+]
+
+failure_criteria = [
+  "Market-implied probabilities are as well or better calibrated than the model out-of-sample",
+  "Any apparent edge disappears after fees and spread, or depends on mid-price fills",
+  "Settlement cannot be reproduced reliably from the named source",
+]
+
+risk_constraints = [
+  "Research only: no orders, no credentials, no funded account",
+  "Any later simulation uses executable prices and available size from captured order books only",
+]
+
+limitations = [
+  "Our own snapshot history starts 2026-09-22; historical order books before then are not available to us",
+  "Small sample: one series, around 6-12 brackets per day, so effective independent observations are about one per day",
+  "Settlement source (The Weather Company) differs from the NWS source that web references assumed; the relationship is unmeasured",
+]
+
+gates_required = [
+  "Gate 2: settlement validation (source, window, timezone, rounding, revisions, voids; reproduce 30+ settled markets)",
+  "Gate 3: point-in-time historical dataset",
+]
+
+[periods]
+train = "TBD"
+validation = "TBD"
+test = "TBD"
+
+[costs]
+fee_model = "TBD: capture the Kalshi fee schedule from a primary source with a date; never assumed"
+spread = "Cross the spread using captured order books; mid-prices are not fills"
+
+[execution]
+fill_model = "TBD: conservative taker fills at the captured best ask/bid, limited to the displayed size"
+latency = "TBD"
+
+[artifacts]
+spec = "experiments/EXP-001-kxhighny-nws-vs-market/experiment.toml"
+log = "experiments/EXP-001-kxhighny-nws-vs-market/README.md"

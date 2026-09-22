@@ -2,12 +2,22 @@ from __future__ import annotations
 
 from typing import Any
 
-from .http import fetch_json
+from .http import fetch_json_result
+from .sources import get_source
 from .storage import SnapshotStore
 
-BASE_URL = "https://api.weather.gov"
+SOURCE = get_source("nws_api")
+BASE_URL = SOURCE.base_url
 DEFAULT_LAT = 40.7812
 DEFAULT_LON = -73.9665
+
+
+def _provenance() -> dict[str, str]:
+    return {
+        "source_id": SOURCE.source_id,
+        "parser_version": SOURCE.parser_version,
+        "schema_version": SOURCE.schema_version,
+    }
 
 
 def forecast_urls(points_payload: dict[str, Any]) -> dict[str, str]:
@@ -43,7 +53,7 @@ def collect_reference_forecast(
     point_id = f"{lat:.4f},{lon:.4f}"
     points_url = f"{BASE_URL}/points/{point_id}"
 
-    points_payload = fetch_json(points_url, headers=headers)
+    points_payload, points_fetch = fetch_json_result(points_url, headers=headers)
     store.save_snapshot(
         run_id=run_id,
         source="nws",
@@ -51,13 +61,15 @@ def collect_reference_forecast(
         entity_id=point_id,
         url=points_url,
         payload=points_payload,
+        fetch=points_fetch,
+        **_provenance(),
     )
 
     urls = forecast_urls(points_payload)
     counts = {"points": 1, "forecast": 0, "forecast_hourly": 0, "forecast_grid": 0}
 
     for kind, url in urls.items():
-        payload = fetch_json(url, headers=headers)
+        payload, fetch = fetch_json_result(url, headers=headers)
         properties = payload.get("properties")
         source_timestamp = None
         if isinstance(properties, dict):
@@ -70,6 +82,8 @@ def collect_reference_forecast(
             entity_id=point_id,
             url=url,
             payload=payload,
+            fetch=fetch,
+            **_provenance(),
             source_timestamp_utc=str(source_timestamp) if source_timestamp else None,
         )
         counts[kind] += 1
