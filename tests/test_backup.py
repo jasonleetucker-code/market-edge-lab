@@ -9,6 +9,16 @@ from pathlib import Path
 import pytest
 
 from edge_lab import backup
+from edge_lab.storage import SCHEMA_VERSION
+
+# Fixtures below build a minimal synthetic schema (not the real edge_lab
+# schema) but must still stamp the CURRENT SCHEMA_VERSION: backup.py fails
+# closed on any PRAGMA user_version mismatch, and hard-coding a version number
+# here would silently break the day storage.SCHEMA_VERSION next changes (see
+# test_schema_version_mismatch_is_not_verified for the deliberate-mismatch
+# case, and test_backup_preserves_current_schema_triggers_and_uncheckpointed_wal
+# / test_row_counts_dynamically_cover_a_future_table for coverage against the
+# real, current schema).
 
 
 def source_db(tmp_path: Path, *, wal: bool = False):
@@ -17,11 +27,11 @@ def source_db(tmp_path: Path, *, wal: bool = False):
     if wal:
         conn.execute("PRAGMA journal_mode=WAL")
         conn.execute("PRAGMA wal_autocheckpoint=0")
-    conn.executescript("""
+    conn.executescript(f"""
         CREATE TABLE collection_runs(id INTEGER PRIMARY KEY);
         CREATE TABLE snapshots(id INTEGER PRIMARY KEY, run_id INTEGER REFERENCES collection_runs(id), value TEXT);
         CREATE TRIGGER immutable BEFORE UPDATE ON snapshots BEGIN SELECT RAISE(ABORT, 'immutable'); END;
-        PRAGMA user_version=3;
+        PRAGMA user_version={SCHEMA_VERSION};
         INSERT INTO collection_runs VALUES(1);
         INSERT INTO snapshots VALUES(1,1,'original');
     """)
@@ -39,7 +49,7 @@ def test_online_backup_includes_uncheckpointed_wal_and_preserves_triggers(tmp_pa
         report = backup.verify_backup(bundle)
         assert report["status"] == "VERIFIED_BACKUP_AND_RESTORE"
         assert report["row_counts"]["snapshots"] == 2
-        assert report["schema_version"] == 3
+        assert report["schema_version"] == SCHEMA_VERSION
         with closing(sqlite3.connect(bundle / backup.DB_NAME)) as restored:
             with pytest.raises(sqlite3.IntegrityError, match="immutable"):
                 restored.execute("UPDATE snapshots SET value='changed'")
@@ -203,8 +213,10 @@ def test_expired_budget_cannot_report_verification_success(tmp_path):
 def test_schema_version_mismatch_is_not_verified(tmp_path):
     # A database that does not match edge_lab.storage.SCHEMA_VERSION must never
     # be reported VERIFIED, even if every other check would pass. Fail closed.
+    # +1 (not a hard-coded literal) so this stays a genuine mismatch whatever
+    # SCHEMA_VERSION becomes in the future.
     source, conn = source_db(tmp_path)
-    conn.execute("PRAGMA user_version=1")
+    conn.execute(f"PRAGMA user_version={SCHEMA_VERSION + 1}")
     conn.commit()
     conn.close()
     with pytest.raises(backup.BackupError, match="does not match the current"):
