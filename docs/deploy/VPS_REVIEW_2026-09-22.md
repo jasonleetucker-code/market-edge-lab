@@ -83,3 +83,31 @@ Residual risks:
 2. **SSH reconnects are rate-limited.** One connection attempt timed out, which does not
    affect the service.
 3. **Shared host.** An outage affects both services (ADR 0012).
+
+## Administrative access (2026-09-23)
+
+`dynasty`'s sudo policy is `NOPASSWD` for `systemctl`, `journalctl`, `install` and `chown`
+only. Anything else needs a password the owner does not currently have.
+
+**Deploying through the allowlist is not possible without escalation.** The reviewed
+install needs `useradd` and a root shell, so it cannot run.
+- The allowlist is root-equivalent in practice. `sudo install` can write any root-owned
+  file, including unit files and `/etc/sudoers.d`. `sudo chown` can take ownership of any
+  file. `sudo systemctl` then runs whatever those placed.
+- So any deployment through it, even a sandboxed `DynamicUser=` variant, would mean using
+  `systemctl`/`install` as a privilege-escalation path. The owner ruled that out, and
+  ruled out weakening the reviewed design to install sooner.
+
+**Recommended recovery,** cleanest first:
+1. Recover root through the VPS provider. The `vmi…` hostname suggests Contabo: the
+   customer panel offers a root-password reset and a VNC console. As root, run
+   `deploy/vps/install.sh` exactly as reviewed.
+2. Better still, create a separate admin account with password-protected full sudo, used
+   only for administration. Do not widen `dynasty`'s NOPASSWD list: `dynasty` runs the
+   public web application.
+
+**Hardening follow-up (Chase Upside host, owner decision).** A compromise of the `dynasty`
+web-app account is currently equivalent to root, because of the three allowlisted commands
+above. Once admin access exists, narrow the allowlist to the exact commands Brisket's deploy
+needs, for example specific `systemctl restart dynasty*.service` invocations. That change
+belongs to the Brisket repository and host, not to this one.

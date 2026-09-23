@@ -84,14 +84,19 @@ UNRESOLVED:
     - An unparseable newest PFM product falls back to the older forecast, the same as the
       frozen historical builder.
     - Backups compare row counts, not row content.
-BLOCKERS: the owner must run two sudo commands on chaseupside (sudo needs their password).
-  1. Install:
-     sudo bash ~/edgelab-release/install.sh --sha b684f5b77242ee3b9de40d8849692c96f0d90b5c --bundle ~/edgelab-release/market-edge-lab.bundle --user-agent "market-edge-lab research (contact: <owner email>)"
-  2. After the fail-closed dry run in deploy/vps/README.md:
-     sudo systemctl enable --now edgelab-pfm.timer edgelab-decision.timer edgelab-recheck.timer edgelab-status.timer edgelab-backup.timer
-NEXT ACTION: The owner runs the install command, then the dry run and the timer
-  activation, before 2026-09-23 17:45 ET. The agent then confirms from
-  /var/lib/market-edge-lab-status/latest.json after 18:30 ET that D = 2026-09-24 is VALID.
+BLOCKERS: VPS administrative access (found 2026-09-23).
+  - dynasty's sudo is NOPASSWD only for systemctl, journalctl, install and chown. Any
+    other sudo needs a password the owner does not have, so `useradd edgelab` and
+    `sudo bash install.sh` are not possible.
+  - The owner ruled out using the allowlist (systemctl/install) as an escalation path,
+    and ruled out weakening the reviewed architecture to install anyway.
+  - Unblock: the owner recovers root or password sudo, then runs deploy/vps/install.sh as
+    reviewed (plan in docs/deploy/VPS_REVIEW_2026-09-22.md, "Administrative access").
+  - Meanwhile: the attended laptop bridge (owner-approved) captures the 2026-09-23 window
+    (D = 2026-09-24) into data/bridge.sqlite3, using the merged CLI at 9326a7a.
+NEXT ACTION: The owner recovers VPS admin access. The agent then imports the bridge
+  evidence into the VPS database and completes install, dry run and timer activation.
+  Every later window before install needs its own attended bridge run.
 ```
 
 ## 30-day directive status (issue #11, target 2026-10-22)
