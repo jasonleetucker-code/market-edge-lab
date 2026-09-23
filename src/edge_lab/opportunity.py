@@ -95,6 +95,24 @@ class Payoff:
 
 
 @dataclass(frozen=True)
+class MarketTiming:
+    """When a market's outcome, and the cash it releases, are expected, as the venue states it.
+
+    Every field is optional: unknown stays None and is never guessed. `lifecycle_status`
+    is the venue's raw status word (for example Kalshi "determined", "disputed").
+    """
+
+    event_end_utc: str | None = None  # when the underlying event/observation ends
+    close_time_utc: str | None = None  # trading closes
+    expected_resolution_utc: str | None = None  # the venue's forecast of when the outcome is known
+    latest_resolution_utc: str | None = None  # the contractual latest time (abnormal path)
+    settlement_timer_seconds: int | None = None  # dispute window after determination
+    lifecycle_status: str | None = None
+    rescheduled: bool = False  # the venue moved the event or its close
+    source: str | None = None  # evidence id of the record these fields came from
+
+
+@dataclass(frozen=True)
 class Market:
     venue: str
     market_id: str  # normalized: "<venue>:<native id>"
@@ -106,6 +124,7 @@ class Market:
     status: MarketStatus
     rules_resolved: bool  # settlement equivalence established from the captured rules
     rules_detail: str
+    timing: MarketTiming | None = None  # never part of the opportunity id; used by eligibility policies
 
 
 @dataclass(frozen=True)

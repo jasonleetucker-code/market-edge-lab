@@ -349,13 +349,11 @@ FEE_VERIFICATIONS: tuple[FeeVerificationRecord, ...] = (KALSHI_KXHIGHNY_VERIFICA
 def _base_state(schedule: Any, detail: str) -> FeeVerificationState:
     """No dated record applies: the schedule's declared base status decides (test doubles and
     replacement schedules). A declared VERIFIED schedule supports EXACT only with an exact
-    cost model; a conservative one supports a bound with no stated allowance."""
+    cost model. A conservative one has no proven rounding allowance, so, like a record without
+    one, it supports no claim."""
     status = schedule.status
-    if status is FeeScheduleStatus.VERIFIED:
-        exact = getattr(schedule, "cost_model", CostModel.CONSERVATIVE_UPPER_BOUND) is CostModel.EXACT
-        basis = ClaimBasis.EXACT if exact else ClaimBasis.CONSERVATIVE_BOUND
-        return FeeVerificationState(schedule.schedule_id, status, basis, None, exact, detail,
-                                    Decimal(0) if exact else None)
+    if status is FeeScheduleStatus.VERIFIED and getattr(schedule, "cost_model", None) is CostModel.EXACT:
+        return FeeVerificationState(schedule.schedule_id, status, ClaimBasis.EXACT, None, True, detail, Decimal(0))
     return FeeVerificationState(schedule.schedule_id, status, ClaimBasis.NONE, None, False, detail)
 
 

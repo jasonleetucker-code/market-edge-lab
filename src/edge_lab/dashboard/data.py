@@ -20,7 +20,7 @@ from functools import cached_property
 from pathlib import Path
 from typing import Any, Callable
 
-from .. import exp001_shadow, experiments as registry, fee_schedules, forward, risk
+from .. import exp001_shadow, experiments as registry, fee_schedules, forward, risk, starter_policy, venues
 from ..freshness import Freshness, assess as assess_freshness, parse_utc
 from ..outcome_board import build_board
 from ..shadow_ledger import AccountState, LedgerError, ShadowLedger
@@ -31,6 +31,8 @@ STATUS_MAX_AGE = timedelta(hours=26)
 STATUS_FILE_MAX_BYTES = 2_000_000
 COLLECTOR_STATUS_FILE = "latest.json"
 RECEIPT_FILE = "shadow_daily.json"
+NOTIFICATIONS_FILE = "notifications.jsonl"
+NOTIFICATIONS_SHOWN = 50
 FAILURE_FILE = "last_failure.json"
 RECEIPT_SCHEMA = "edge-lab-shadow-daily-receipt/1"
 
@@ -212,6 +214,32 @@ class Context:
     def last_failure(self) -> Loaded:
         return self._status_file(FAILURE_FILE)
 
+    @cached_property
+    def notifications(self) -> Loaded:
+        """The newest local-outbox notifications (JSON lines), newest first."""
+        directory = self.config.status_dir
+        if directory is None:
+            return Loaded(NO_DATA, message="no status directory configured (--status-dir)")
+        path = directory / NOTIFICATIONS_FILE
+        try:
+            if not path.exists():
+                return Loaded(NO_DATA, message="no notifications have been written yet")
+            if path.is_symlink() or not path.is_file():
+                return Loaded(ERROR, message=f"{NOTIFICATIONS_FILE} is not a regular file")
+            if path.stat().st_size > STATUS_FILE_MAX_BYTES:
+                return Loaded(ERROR, message=f"{NOTIFICATIONS_FILE} is larger than {STATUS_FILE_MAX_BYTES} bytes")
+            rows = []
+            for line in path.read_text(encoding="utf-8").splitlines():
+                try:
+                    item = json.loads(line)
+                except ValueError:
+                    continue
+                if isinstance(item, dict):
+                    rows.append(item)
+        except (OSError, UnicodeDecodeError) as exc:
+            return Loaded(ERROR, message=f"{NOTIFICATIONS_FILE} cannot be read: {short_error(exc, self.config)}")
+        return Loaded(OK, list(reversed(rows))[:NOTIFICATIONS_SHOWN])
+
     # ---- shadow ledger
 
     @cached_property
@@ -376,3 +404,21 @@ def _stage_a(exp_dir: Path) -> dict[str, Any] | None:
 def _reports(exp_dir: Path) -> list[str]:
     """Names of gate reports (Markdown) under the experiment. Names only; nothing is served."""
     return sorted(str(p.relative_to(exp_dir)) for p in exp_dir.glob("gate*/*.md") if p.is_file())
+
+
+def starter_view(view: AccountView, now: datetime) -> dict[str, Any] | None:
+    """STARTER_MAX_7D_V1 for an operational account, from its recorded fills (read-only)."""
+    account = next((a for a in exp001_shadow.ACCOUNTS if a.account_id == view.account_id), None)
+    if account is None or not account.starter_policy or view.state is None:
+        return None
+    fills = list(view.fills.values())
+    open_ids = {p.position_id for p in view.state.open_positions()}
+    return {"policy_id": starter_policy.POLICY_ID, "effective_from_utc": starter_policy.EFFECTIVE_FROM_UTC,
+            "max_hours": int(starter_policy.MAX_HORIZON.total_seconds() // 3600),
+            "verdicts": [f for f in fills if isinstance(f.get("starter_policy"), dict)],
+            "exceptions": starter_policy.policy_exceptions(fills, open_ids, now)}
+
+
+def venue_rows() -> list[dict[str, Any]]:
+    return venues.coverage_rows()
+

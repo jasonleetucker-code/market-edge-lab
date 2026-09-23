@@ -15,7 +15,7 @@ import pytest
 from edge_lab import fees
 from edge_lab.conservative import WILSON_ONE_SIDED_95, wilson_bounds
 from edge_lab.fee_schedules import (
-    KALSHI_QUADRATIC_TAKER_V1, FeeScheduleStatus, QuadraticTakerSchedule, get_fee_schedule,
+    KALSHI_QUADRATIC_TAKER_V1, CostModel, FeeScheduleStatus, QuadraticTakerSchedule, get_fee_schedule,
 )
 from edge_lab.kalshi_quotes import market_from_kalshi, quotes_from_orderbook, rules_check
 from edge_lab.opportunity import (
@@ -28,7 +28,8 @@ AS_OF = datetime(2026, 9, 23, 22, 0, tzinfo=UTC)
 EVENT = Event("weather", "weather:test:2026-09-24", "2026-09-24", None, "weather:test-cluster", "test source")
 MARKET = Market("kalshi", "kalshi:TEST-B69.5", "TEST-B69.5", EVENT.event_id, "69-70°",
                 Payoff("binary", Decimal(1), "value in [69, 70]"), "abc", MarketStatus.OPEN, True, "ok")
-VERIFIED = replace(KALSHI_QUADRATIC_TAKER_V1, schedule_id="test-verified", status=FeeScheduleStatus.VERIFIED)
+VERIFIED = replace(KALSHI_QUADRATIC_TAKER_V1, schedule_id="test-verified", status=FeeScheduleStatus.VERIFIED,
+                   cost_model=CostModel.EXACT)  # a fully verified, exact test schedule
 POLICY = Policy("test-point", "point", Decimal("0.05"), 1, timedelta(minutes=5), timedelta(hours=24), "require")
 
 
