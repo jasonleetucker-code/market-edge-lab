@@ -10,5 +10,6 @@ not reused:
 0019 venue capability registry and read-only data-feed credentials (landed); 0020 notification
 foundation (landed); 0021 ledger head anchoring (GATE7-F09).
 
-0022 is reserved for the ntfy push sink and 0023 records the binary payoff guard and per-market
-price grids (2026-09-23 production activation directive).
+0022 the ntfy push sink (landed, PR #44) and 0023 the binary payoff guard and per-market price
+grids (landed, PR #42), both under the 2026-09-23 production activation directive; 0024 the
+tailnet-only dashboard (landed, PR #46). New decisions start at 0025.

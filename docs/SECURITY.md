@@ -33,6 +33,8 @@ credential, and the registry cannot hold one.
 |---|---|---|
 | `NWS_USER_AGENT` | NWS identification with contact info | in use (not secret, but personal) |
 | `EDGE_LAB_ODDS_API_KEY` | The Odds API free-tier key (`CredentialKind.READ_ONLY_DATA_FEED`) | registered, not installed |
+| `EDGE_LAB_NTFY_TOPIC_URL` | ntfy push topic URL (`https://ntfy.sh/<topic>`); the topic name is effectively a secret (ADR 0022) | not set; the sink is disabled; sending needs owner approval |
+| `EDGE_LAB_NTFY_TOKEN` | optional ntfy access token, read only by `notify_ntfy.py` | not created |
 | `EDGE_LAB_RESEARCH_<PROVIDER>_KEY` | read-only research data API keys | not created |
 | `EDGE_LAB_TRADING_<VENUE>_KEY_ID` / `_PRIVATE_KEY_PATH` | execution credentials, execution component only | not created, not authorized |
 
