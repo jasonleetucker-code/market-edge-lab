@@ -84,6 +84,20 @@ def build_parser() -> argparse.ArgumentParser:
     f_opps.add_argument("--date", required=True, help="YYYY-MM-DD target date D")
     f_opps.add_argument("--out", help="Also write the JSON report here.")
 
+    shadow = subparsers.add_parser(
+        "shadow", help="Gate 6: EXP-001 shadow ledger (simulation only; never sends orders)."
+    )
+    shadow_sub = shadow.add_subparsers(dest="shadow_command", required=True)
+    sh_run = shadow_sub.add_parser("run", help="Record decisions and simulated fills for target date D.")
+    sh_run.add_argument("--db", default="data/edge_lab.sqlite3")
+    sh_run.add_argument("--ledger", default="data/shadow_ledger.sqlite3")
+    sh_run.add_argument("--date", required=True, help="YYYY-MM-DD target date D")
+    sh_settle = shadow_sub.add_parser("settle", help="Settle open positions from captured settlement evidence.")
+    sh_settle.add_argument("--db", default="data/edge_lab.sqlite3")
+    sh_settle.add_argument("--ledger", default="data/shadow_ledger.sqlite3")
+    sh_account = shadow_sub.add_parser("account", help="Replay the shadow account from its ledger.")
+    sh_account.add_argument("--ledger", default="data/shadow_ledger.sqlite3")
+
     settle = subparsers.add_parser("settlement", help="Gate 2 settlement evidence and audit.")
     settle_sub = settle.add_subparsers(dest="settlement_command", required=True)
     s_collect = settle_sub.add_parser(
@@ -455,6 +469,38 @@ def _forward_opportunities(args: argparse.Namespace) -> int:
     return 0
 
 
+def _shadow(args: argparse.Namespace) -> int:
+    """Exit 0 when the command ran, 2 on bad input. Simulation only."""
+    from datetime import date
+
+    from . import exp001_shadow
+    from .shadow_ledger import ShadowLedger
+
+    ledger_path = Path(args.ledger)
+    if args.shadow_command == "account":
+        if not ledger_path.is_file():
+            print(f"no ledger at {ledger_path}", file=sys.stderr)
+            return 2
+        result = ShadowLedger(ledger_path).state(exp001_shadow.ACCOUNT_ID).to_dict()
+    else:
+        db = Path(args.db)
+        if not db.is_file():
+            print(f"no database at {db}", file=sys.stderr)
+            return 2
+        store, ledger = SnapshotStore(db), ShadowLedger(ledger_path)
+        if args.shadow_command == "settle":
+            result = exp001_shadow.settle_open_positions(store, ledger)
+        else:
+            try:
+                target = date.fromisoformat(args.date)
+            except ValueError:
+                print(f"--date must be YYYY-MM-DD, got {args.date!r}", file=sys.stderr)
+                return 2
+            result = exp001_shadow.run_day(store, ledger, target)
+    print(json.dumps(result, indent=2, sort_keys=True, ensure_ascii=False))
+    return 0
+
+
 def _settlement_collect(args: argparse.Namespace) -> int:
     from datetime import date
 
@@ -588,6 +634,8 @@ def main(argv: list[str] | None = None) -> int:
         if args.forward_command == "opportunities":
             return _forward_opportunities(args)
         return _forward_status(args)
+    if args.command == "shadow":
+        return _shadow(args)
     if args.command == "settlement":
         if args.settlement_command == "collect":
             return _settlement_collect(args)
