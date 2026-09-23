@@ -19,7 +19,7 @@ never writes to any store, and never recommends a withdrawal.
 |---|---|
 | Python stdlib only (`wsgiref`, `html`, `sqlite3`) | The runtime rule is stdlib-only (`AI_INSTRUCTIONS.md`). The page count is small and needs no template engine or framework, so a dependency buys nothing. |
 | A WSGI application (`edge_lab.dashboard.app.make_app(config)`) | WSGI is the standard interface. If hosting is ever authorized, a real server (gunicorn, uWSGI, a reverse proxy) can run the same callable. We do not build our own production server. `wsgiref` is only the local development server. |
-| Server-rendered HTML, inline CSS, no JavaScript | No build step, no client code to audit. A strict CSP (`default-src 'none'; style-src 'unsafe-inline'`) forbids scripts, images, frames and forms. |
+| Server-rendered HTML; self-hosted CSS, fonts and one small script (Market Edge Terminal v1, ADR 0025) | No build step and no client framework. The design contract is `docs/design/UI_CONTRACT.md`. Assets are package data served from an exact allowlist under a content-hash path. The CSP (`default-src 'none'; script-src 'self'; style-src 'self'; font-src 'self'; img-src 'self'; form-action 'self'; frame-ancestors 'none'`) forbids inline styles and scripts, third-party origins, frames and objects. Everything works without JavaScript; `terminal.js` only adds the tape's arrow buttons. |
 | Bound to `127.0.0.1` | It is local-only. Public exposure, public tunnels, DNS/TLS and firewall changes are not authorized. The one exception is tailnet-only access through Tailscale Serve on the VPS, which proxies to this loopback bind (ADR 0024). A non-loopback `--host` is refused unless `--allow-non-loopback` is passed, and that prints a warning. |
 | Host header must be local | A request whose `Host` is not `localhost`, a 127.0.0.0/8 address or `::1` (or the explicitly approved `--host`, matched literally: with `--host 0.0.0.0` only `Host: 0.0.0.0` is accepted, not a LAN address; or the one exact `<machine>.<tailnet>.ts.net` name given with `--tailscale-serve-host`, loopback bind only) gets 400. Malformed values (a non-numeric port, text after `]`) are refused. This stops a web page from reading the dashboard by pointing its own domain at 127.0.0.1 (DNS rebinding). |
 | No authentication | Nothing is exposed publicly. On the VPS, tailnet membership (the owner's devices) is the access boundary (ADR 0024). We do not build a custom auth system. If exposure is ever authorized, authentication belongs in the front server (see "Limitations"). |
@@ -70,7 +70,7 @@ python -m edge_lab.dashboard --demo
 `--demo` builds a synthetic ledger, evidence store and status files in a **new temporary
 directory** through the real `ShadowLedger`/`SnapshotStore` APIs. It ignores `--db`, `--ledger`
 and `--status-dir`, never opens them, and deletes its temporary directory on exit. Every page
-carries a large **SYNTHETIC DEMO DATA** watermark. Synthetic market ids start with `DEMO-`.
+carries a persistent **SYNTHETIC UI DEMO** strip. The demo also writes synthetic decision and re-check book captures through the real `SnapshotStore` API and serves the component gallery at `/gallery` (demo mode only). Synthetic market ids start with `DEMO-`.
 The experiment registry in demo mode is the real, read-only repository manifest, and the page
 says so.
 
@@ -104,7 +104,7 @@ Authority: owner directive 2026-09-23
 - over the live stores, opened with SQLite `mode=ro`.
 
 Tailscale Serve publishes it at `https://<machine>.<tailnet>.ts.net/` to the owner's tailnet
-only. **Serve, never Funnel.** Setup, as root, outside 17:40�18:35 America/New_York:
+only. **Serve, never Funnel.** Setup, as root, outside 17:40–18:35 America/New_York:
 
 ```bash
 # once: official client from pkgs.tailscale.com; no firewall or resolver changes
@@ -124,31 +124,39 @@ Stop options:
 - **Remote access only:** `tailscale serve --https=443 off`.
 - **Everything:** also `systemctl disable --now edgelab-dashboard.service`.
 
-## Views
+## Views (Market Edge Terminal v1)
 
-| Route | What it shows |
-|---|---|
-| `/` Overview | Collector status file (freshness and age) and the status re-derived from the evidence DB; the pipeline receipt state, latest day, valid/closed capture days, missing capture days, settlement conflicts and evidence cutoff; per account the **notional starting bankroll**, **cost-basis shadow equity (not liquidation value)**, settled cash, committed capital, open worst-case risk, realized P&L, new-risk-allowed; blockers such as fee claim basis NONE or CONSERVATIVE_BOUND and a due fee re-check, stale inputs, pending or overdue settlements, settlement conflicts, missed or invalid capture days, risk breaches or zero-capacity halts, and RESEARCH_INVALID_CASH (a frozen-rule deviation), plus any SEVEN_DAY_POLICY_EXCEPTION; the newest local-outbox notifications (SMS is not configured). |
-| `/opportunities` | Every recorded decision from the ledger payloads: model and conservative probability, executable price, fee, all-in cost, net edge, size and binding constraint, qualification with primary and all rejection reasons, fill outcome, freshness, fee status, claim basis (as recorded at decision time), and the operational 7-day starter verdict when one was recorded. |
-| `/positions` | The accounting basis note, NO_FILL reason counts, every simulated fill (FILLED and NO_FILL with reason), open positions with settlement state (awaiting, overdue, or no time = locked), settled positions with payout and net P&L, and pending settlements and settlement evidence conflicts from the receipt. |
-| `/outcome-board` | Outcome groups ranked by account impact, with exposure, max loss and max gain labelled **upper bound, not a predicted scenario**, horizon, status, the bound method, and linked positions. |
-| `/risk` | Policy caps, the risk report (reserve floor, remaining capacity, drawdown, trailing loss windows, breaches, new_risk_allowed), capital release by horizon (best-case payout never counted as cash), exposure by event and cluster, sizing-policy parameters, binding sizing constraints, the seven-day starter policy (STARTER_MAX_7D_V1: exceptions and per-fill verdicts with every clock), and the withdrawal contract: **NOT RECOMMENDED**. |
-| `/experiments` | Registry status and manifest validation, the EXP-001 Stage A recorded result, gate report file names, source health, fee schedules with point-in-time verification, claim basis, re-check date and each verification component, the venue capability registry (stages per capability; execution authorized for none), and the full receipt (days, settlement refresh). |
-| `/healthz` | Plain `ok`. No data. |
+The page order, hierarchy and states are fixed by `docs/design/UI_CONTRACT.md` §8. Every page
+keeps the full technical record (codes, IDs, caveats, receipts, fee components) in
+disclosures.
 
-Both shadow accounts always appear. `EXP-001-stage-b-shadow` is the **operational** account
-(sizing policy and risk limits). `EXP-001-stage-b-research` is the **frozen EXP-001 research
-account**. If it has not been opened, it shows NOT STARTED.
+| Route | Label | What it shows |
+|---|---|---|
+| `/` | Terminal | Market overview: capture status (never "healthy" over an invalid capture), the selected shadow account's summary, the market board (All / Qualified / Watching / Blocked), What matters today, Activity, and a collapsed System & evidence record with every collector, receipt, blocker and account field. |
+| `/opportunities` | Markets | Search, domain strip, filters (venue, state, cash release, sort), and the board joining captured books (`data.observed_board`) with recorded decisions; every recorded decision payload in a technical disclosure. |
+| `/market?venue=&id=&side=` | Market detail | Quote, price history (two or more captured observations), our assessment, across venues, capital & timing, a read-only decision preview, rules & evidence. |
+| `/positions` | Portfolio | Balances with basis labels; Open / Settling / Closed / All positions; accounting method; ledger record; settlement evidence from the receipt. |
+| `/outcome-board` | Outcomes | What matters today: outcome groups ranked by account impact, bounds labelled as bounds. |
+| `/risk` | Risk | Capacity verdict, limit rows, capital release windows, starter rule, withdrawal not enabled, policy details. |
+| `/experiments` | Research & Data | Tabs: Research (experiments, forward valid days, next preregistered look) and Data sources (venues, source health, fees, venue registry, full receipt). |
+| `/alerts` | Alerts | Attention items from blockers, failure records and the local notification outbox; nothing is sent. |
+| `/more` | More | Links to Risk, Research & Data, Alerts, System & evidence. |
+| `/gallery` | none | Component gallery, demo mode only. |
+| `/healthz` | none | Plain `ok`. No data. |
+
+`?account=research` selects the frozen research account on account-scoped pages; operational
+is the default. The two are never shown summed.
 
 ## Security properties (tested)
 
 - GET and HEAD only; any other method answers 405. Unknown paths answer 404.
-- No endpoint takes SQL, a file path, a command or any parameter. Query strings are ignored.
+- No endpoint takes SQL, a file path, a command or a URL. Each route reads only its allowlisted query parameters (`presentation.ROUTE_PARAMS`); every value is checked against a fixed set, the venue registry or a bounded pattern. An unsupported value answers 400 with a safe message; unknown parameter names are ignored.
+- Static files: exact allowlist (`html.STATIC_FILES`), versioned path, immutable cache; traversal and unknown names answer 404.
 - Every dynamic value is escaped with `html.escape`, and ledger or receipt content is treated
   as untrusted.
 - Headers: `Content-Type: text/html; charset=utf-8`, `X-Content-Type-Options: nosniff`,
-  `Cache-Control: no-store`, a CSP without scripts, `X-Frame-Options: DENY`,
-  `Referrer-Policy: no-referrer`.
+  `Cache-Control: no-store` (pages; only versioned static assets are cacheable), the CSP above,
+  `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer`, `Cross-Origin-Resource-Policy: same-origin`.
 - Rendering every page leaves the evidence DB and ledger files byte-identical.
 - A crash while rendering a page answers 500 with a generic message. A one-line, path-stripped
   error goes to the server console.

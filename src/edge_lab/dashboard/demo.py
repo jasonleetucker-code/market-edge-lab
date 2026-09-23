@@ -14,7 +14,7 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
 
-from .. import exp001_shadow, notifications, starter_policy, venues
+from .. import exp001_shadow, forward, notifications, starter_policy, venues
 from ..fill_policy import LATENCY_CONFIRMED_V1
 from ..opportunity import MarketTiming
 from ..shadow_ledger import ShadowLedger
@@ -32,7 +32,9 @@ def _decision(account: str, n: int, at: datetime, market: str, side: str, qualif
               p: str, price: str, fee: str, cost: str, edge: str) -> dict:
     opp_id = f"demo-opp-{account[-8:]}-{n}"
     return {
-        "decision_id": f"dec-{opp_id}", "slot": f"{at.date().isoformat()}|{market}|{side}", "opportunity_id": opp_id,
+        # The slot names the target day as the real pipeline does (the day after the ET decision day).
+        "decision_id": f"dec-{opp_id}", "slot": f"{forward.target_for(at).isoformat()}|{market}|{side}",
+        "opportunity_id": opp_id,
         "as_of_utc": _iso(at), "qualification": "QUALIFY" if qualify else "REJECT", "reason": reason,
         "reasons": [] if qualify else [reason], "model_version": "demo", "quote_evidence_ids": [],
         "event_id": "kalshi:DEMO-KXHIGHNY-EVENT", "market_id": market, "side": side,
@@ -112,6 +114,66 @@ def _account(ledger: ShadowLedger, account: exp001_shadow.ShadowAccount, now: da
                              evidence={"snapshot_id": None, "note": "synthetic demo settlement"})
 
 
+# Synthetic captured books for the demo target day: (ticker, YES label, decision book, re-check book).
+# A book is (best YES bid, size, best NO bid, size); asks follow from the opposite side's bid.
+_DEMO_BOOKS = (
+    ("DEMO-B67.5", "67° to 68°", ("0.32", "140", "0.64", "90"), ("0.33", "120", "0.66", "75")),
+    ("DEMO-B69.5", "69° to 70°", ("0.20", "200", "0.78", "150"), ("0.21", "180", "0.77", "160")),
+    ("DEMO-B71.5", "71° to 72°", ("0.23", "60", "0.75", "40"), ("0.22", "55", "0.7525", "40")),
+    ("DEMO-B73.5", "73° to 74°", ("0.17", "35", "0.19", "25"), ("0.16", "30", "0.20", "25")),
+    ("DEMO-T72", "72° or above", ("0.09", "300", "0.14", "220"), None),
+)
+
+
+def _demo_captures(store: SnapshotStore, now: datetime) -> None:
+    """Decision and re-check captures through the real SnapshotStore API (DEMO- tickers only)."""
+    target = forward.target_for(now - timedelta(hours=20))
+    ticker = f"DEMO-{forward.event_ticker_for(target)}"
+    for phase, offset, index in (("decision", timedelta(hours=20), 2), ("recheck", timedelta(hours=19, minutes=48), 3)):
+        run = f"demo-{phase}"
+        at = now - offset
+        store.start_run(run)
+        markets = [{"ticker": t, "event_ticker": ticker, "status": "active", "title": "DEMO: Highest temperature in NYC?",
+                    "yes_sub_title": label, "no_sub_title": f"Not {label}", "close_time": _iso(now + timedelta(hours=6)),
+                    "rules_primary": "SYNTHETIC DEMO rules: resolves on a synthetic climate report."}
+                   for t, label, *_ in _DEMO_BOOKS]
+        links: dict = {"market_snapshots": [store.save_snapshot(
+            run_id=run, source="demo", kind="markets", entity_id=ticker, url="demo://markets",
+            payload={"markets": markets}, fetched_at_utc=_iso(at))], "books": {}}
+        for t, _, *books in _DEMO_BOOKS:
+            book = books[index - 2]
+            if book is None:
+                continue
+            yes, ysz, no, nsz = book
+            sid = store.save_snapshot(run_id=run, source="demo", kind="orderbook", entity_id=t, url=f"demo://book/{t}",
+                                      payload={"orderbook_fp": {"yes_dollars": [[yes, ysz]], "no_dollars": [[no, nsz]]}},
+                                      fetched_at_utc=_iso(at))
+            links["books"][t] = {"snapshot_id": sid}
+        store.record_forward_capture(
+            run_id=run, experiment="DEMO", phase=phase, mode="live", target_date=target.isoformat(), event_ticker=ticker,
+            started_at_utc=_iso(at - timedelta(seconds=20)), completed_at_utc=_iso(at),
+            window_start_utc=_iso(at - timedelta(minutes=5)), window_end_utc=_iso(at + timedelta(minutes=1)),
+            status="complete", reasons=[], links=links, code_version="demo")
+        store.finish_run(run, status="succeeded")
+
+
+def _demo_other_domains(ledger: ShadowLedger, now: datetime) -> None:
+    """Recorded-but-rejected SYNTHETIC decisions in other domains (no fills, no money): they show
+    that sports, politics and economics rows use the same components as weather."""
+    at = now - timedelta(hours=3)
+    for n, (domain, market, reason) in enumerate((
+            ("sports", "kalshi:DEMO-NFL-KCBUF", "MODEL_UNAVAILABLE"),
+            ("politics", "kalshi:DEMO-SENATE-VOTE", "FEE_UNSUPPORTED"),
+            ("economics", "kalshi:DEMO-CPI-SEP", "MODEL_UNAVAILABLE")), start=10):
+        dec = _decision(d.OPERATIONAL_ACCOUNT_ID, n, at, market, "YES", False, reason, "0.50", "0.48", "0.0175",
+                        "0.50", "0.00")
+        dec["event_id"] = f"{domain}:demo:{market.split(':', 1)[1]}"
+        dec["outcome_cluster"] = f"{domain}:demo"
+        dec["opportunity"].update({"model_probability": None, "conservative_probability": None, "net_edge": None,
+                                   "net_edge_conservative": None, "outcome": "SYNTHETIC"})
+        ledger.record_decision(d.OPERATIONAL_ACCOUNT_ID, dec)
+
+
 def _demo_notifications(status: Path, now: datetime) -> dict:
     """Synthetic events through the real notification pipeline into the demo's local outbox."""
     events = [
@@ -148,6 +210,8 @@ def build_demo(now: datetime | None = None, *, experiments_root: Path | None = N
                                    completed_at_utc=_iso(now - timedelta(hours=2) + timedelta(seconds=4)),
                                    duration_ms=4000, status=status, records=0 if error else 12, error=error)
     store.finish_run("demo-run", status="succeeded")
+    _demo_captures(store, now)
+    _demo_other_domains(ledger, now)
     status = root / "status"
     status.mkdir()
     (status / d.COLLECTOR_STATUS_FILE).write_text(json.dumps({

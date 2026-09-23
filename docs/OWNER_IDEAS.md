@@ -46,6 +46,7 @@ column lists which issues each primitive serves.
 | Notification system | `src/edge_lab/notifications.py` | BUILT (contract, local outbox, SMS sink disabled; ADR 0020). ntfy push sink `notify_ntfy.py` built, disabled and unwired (ADR 0022) | #33 #3 #32 |
 | Execution-ticket contract | `src/edge_lab/execution_ticket.py` | BUILT (data contract plus an ordered pre-submit control chain, PR #43; `EXECUTION_NOT_AUTHORIZED` always fails) | #32 #33 #30 |
 | Operator views | `src/edge_lab/dashboard/` | BUILT (read-only; on chaseupside reachable only on the owner's tailnet via Tailscale Serve, ADR 0024) | #3 #6 #10 |
+| Design system (Market Edge Terminal v1) | `docs/design/UI_CONTRACT.md` | BUILT (implemented in dashboard presentation.py, components.py, html.py and static/tokens.css; shell, tokens, fonts, components, honest states, gallery; ADR 0025, issue #47). Every user-visible feature reuses it per docs/design/FEATURE_INTEGRATION.md | #47 #3 #6 #9 #10 #29 #30 #32 #33 |
 
 ## Index
 
@@ -139,6 +140,15 @@ venue-specific data, then models, then (later, separately authorized) execution.
 - **ntfy moved from NEXT (build) to NEXT (activation).** The build is done (PR #44); only the
   owner decision remains.
 - The 2026-10-22 date is unchanged.
+
+**UI foundation (2026-09-23, owner directive, issue #47).** The Market Edge Terminal v1 design
+system is NOW / P0: one shell, token set, component layer and state vocabulary that every later
+page reuses. Order: shared shell and components first (done), integration of the existing pages
+second (done), future domains third (sports, politics, economics and new venues feed the same
+`MarketRow`, detail, source list, comparison and Alerts contracts; no new global navigation for
+a new sport or source). Deferred behind it: discretionary new feature screens. Not deferred:
+collection, correctness repairs and the fee re-check. Oct 22 is unchanged. Shared-primitive
+row: "Design system" above.
 
 Related owner records that are not ideas:
 - **#11 [Owner Directive] 30-day delivery plan (target 2026-10-22).** This is the active

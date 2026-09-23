@@ -18,6 +18,11 @@ edge-lab = "edge_lab.cli:main"
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+# Market Edge Terminal v1 assets: served from an exact allowlist (dashboard/html.py STATIC_FILES).
+"edge_lab.dashboard" = ["static/*.css", "static/*.js", "static/*.svg", "static/*.txt", "static/*.md",
+                        "static/fonts/*.woff2", "static/fonts/*.txt"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]

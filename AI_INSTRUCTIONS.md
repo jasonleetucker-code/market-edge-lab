@@ -52,6 +52,7 @@ authorize something, that thing is not authorized.
 | why an architecture choice was made | `docs/decisions/` |
 | reuse of patterns from the Brisket repo | `docs/BRISKET_REUSE_AUDIT.md` |
 | owner ideas, future features, backlog readiness | `docs/OWNER_IDEAS.md` |
+| any user-visible UI: pages, components, styles, fonts, icons | `docs/design/UI_CONTRACT.md`, `docs/design/COMPONENTS.md`, `docs/design/FEATURE_INTEGRATION.md` |
 
 ## Authority: autonomy is not authority
 
@@ -110,6 +111,16 @@ Research states are a separate ladder, and passing one rung proves nothing about
 - Record material architecture decisions in `docs/decisions/` (problem, alternatives, decision,
   tradeoffs, and what would make us reconsider).
 - No secrets in git, ever (`docs/SECURITY.md`).
+
+## User interface (Market Edge Terminal v1)
+
+All user-visible Market Edge work must follow docs/design/UI_CONTRACT.md and reuse the
+canonical shell, tokens, components, formatting, and state vocabulary. No agent may introduce a
+separate theme, page template, or duplicate presentation logic. A feature is not UI-complete
+until its real, empty, stale, error, unsupported, and blocked states are implemented and
+mobile/desktop evidence has been reviewed. Design changes require an explicit documented
+amendment, not an agent's stylistic preference. Backend-only changes document their existing
+UI contract or why no UI change is required.
 
 ## Handoff format (every material session ends with this in `HANDOFF.md` and the PR)
 

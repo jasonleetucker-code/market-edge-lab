@@ -21,6 +21,7 @@ from edge_lab.dashboard import Config, make_app, views
 from edge_lab.dashboard import data as dd
 from edge_lab.dashboard import server
 from edge_lab.dashboard.demo import DEMO_PREFIX, build_demo
+from edge_lab.dashboard.presentation import money
 from edge_lab.shadow_ledger import ShadowLedger
 from edge_lab.storage import SnapshotStore
 from test_daily import _settled_run
@@ -30,12 +31,14 @@ from test_forward import D, _full_day
 UTC = timezone.utc
 NOW = datetime(2026, 10, 1, 12, 0, tzinfo=UTC)  # after D's decision, fills and settlement (fixture: 09-30)
 ROUTES = ["/", "/opportunities", "/positions", "/outcome-board", "/risk", "/experiments"]
-BANNER = "SHADOW — NO REAL MONEY"
+BANNER = "SHADOW · NO REAL MONEY"
 REPO = Path(__file__).resolve().parents[1]
 
 
 def call(app, path="/", method="GET", query="", host="127.0.0.1:8765"):
     captured = {}
+    if "?" in path and not query:
+        path, query = path.split("?", 1)
 
     def start_response(status, headers):
         captured["status"], captured["headers"] = status, dict(headers)
@@ -110,9 +113,9 @@ def test_empty_state_every_route_is_explicit_no_data(tmp_path):
         assert status == "200 OK", route
         assert BANNER in body and 'name="viewport"' in body
         assert "NO DATA / NOT STARTED" in body, route
-        assert "SYNTHETIC DEMO DATA" not in body
+        assert "SYNTHETIC UI DEMO" not in body
     _, _, overview = call(app, "/")
-    main = overview.split("<main>")[1]
+    main = overview.split('<main id="main"')[1]
     assert "$" not in main, "an empty state must never show a balance (missing is not zero)"
     assert shadow.ACCOUNT_ID in main and dd.RESEARCH_ACCOUNT_ID in main
 
@@ -132,7 +135,9 @@ def test_security_headers_on_every_response(tmp_path):
         _, headers, _ = call(app, route)
         assert headers["X-Content-Type-Options"] == "nosniff"
         assert headers["Cache-Control"] == "no-store"
-        assert headers["Content-Security-Policy"].startswith("default-src 'none'; style-src 'unsafe-inline'")
+        csp = headers["Content-Security-Policy"]
+        assert csp.startswith("default-src 'none'; script-src 'self'; style-src 'self'") and "unsafe" not in csp
+        assert "frame-ancestors 'none'" in csp and "form-action 'self'" in csp and "object-src 'none'" in csp
     _, headers, _ = call(app, "/")
     assert headers["Content-Type"] == "text/html; charset=utf-8"
 
@@ -167,8 +172,9 @@ def test_query_strings_are_ignored(populated):
 
 def test_mobile_layout_rules():
     _, _, body = call(make_app(config()), "/")
-    assert '<meta name="viewport" content="width=device-width, initial-scale=1">' in body
-    assert "@media (max-width:640px)" in body and ".scroll{overflow-x:auto" in body
+    assert '<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">' in body
+    assert "user-scalable" not in body and "maximum-scale" not in body  # zoom stays enabled
+    assert 'rel="stylesheet" href="/static/' in body and "<style" not in body and 'style="' not in body
 
 
 def test_every_table_scrolls_inside_its_container(populated):
@@ -176,7 +182,7 @@ def test_every_table_scrolls_inside_its_container(populated):
     app = make_app(cfg)
     for route in ROUTES:
         body = call(app, route)[2]
-        assert body.count("<table>") == body.count('<div class="scroll"><table>'), route
+        assert body.count("<table") == body.count('<div class="scroll"'), route
 
 
 # --------------------------------------------------------------------------- populated
@@ -190,12 +196,12 @@ def test_populated_views_show_canonical_figures(populated):
 
     overview = call(app, "/")[2]
     assert "cost-basis shadow equity (not liquidation value)" in overview
-    assert "notional starting bankroll" in overview and f"${state.equity}" in overview
-    assert f"${state.starting_bankroll}" in overview
+    assert "notional starting bankroll" in overview and money(state.equity) in overview
+    assert money(state.starting_bankroll) in overview
     assert "HEALTHY_TRADED" in overview and "UNVERIFIED_CURRENT_SCHEDULE" in overview
     assert "OPERATIONAL" in overview and "RESEARCH (FROZEN EXP-001 RULE)" in overview
     research = ledger.state(dd.RESEARCH_ACCOUNT_ID)  # opened by run_day alongside the operational account
-    assert f"${research.starting_bankroll}" in overview and research.fills == state.fills
+    assert money(research.starting_bankroll) in overview and research.fills == state.fills
     assert "NOT RECOMMENDED" in overview
 
     opps = call(app, "/opportunities")[2]
@@ -205,7 +211,7 @@ def test_populated_views_show_canonical_figures(populated):
 
     positions = call(app, "/positions")[2]
     assert "Accounting basis" in positions and "FILLED" in positions
-    assert f"${state.realized_pnl}".replace("$-", "-$") in positions
+    assert money(state.realized_pnl, signed=True) in positions
 
     board = call(app, "/outcome-board")[2]
     assert "upper bound, not a predicted scenario" in board and "settled" in board
@@ -216,8 +222,10 @@ def test_populated_views_show_canonical_figures(populated):
     assert "binding constraint" in risk_page
 
     exps = call(app, "/experiments")[2]
-    assert "EXP-001" in exps and "PASS" in exps and "kalshi_public" in exps
-    assert "kalshi-quadratic-taker-v1" in exps and "REPORT.md" in exps
+    assert "EXP-001" in exps and "PASS" in exps and "REPORT.md" in exps
+    assert "not a trading edge and not profitability" in exps and "Historical validation passed" in exps
+    sources = call(app, "/experiments?tab=sources")[2]
+    assert "kalshi_public" in sources and "kalshi-quadratic-taker-v1" in sources
 
 
 def test_rendering_never_writes_to_the_stores(populated):
@@ -226,9 +234,11 @@ def test_rendering_never_writes_to_the_stores(populated):
     before = {p: sha(p) for p in watched}
     ledger_dir = sorted(p.name for p in ledger.path.parent.iterdir())
     app = make_app(cfg)
+    extra = ["/alerts", "/more", "/opportunities?state=qualified&sort=edge&q=B67", "/positions?state=all&account=research",
+             "/experiments?tab=sources", "/?account=research", "/market?venue=kalshi&id=KXHIGHNY-26SEP23-B67.5"]
     for _ in range(2):
-        for route in ROUTES + ["/healthz"]:
-            assert call(app, route)[0] == "200 OK"
+        for route in ROUTES + ["/healthz"] + extra:
+            assert call(app, route)[0] in ("200 OK", "404 Not Found"), route
     assert {p: sha(p) for p in watched} == before
     assert sorted(p.name for p in ledger.path.parent.iterdir()) == ledger_dir
 
@@ -316,7 +326,7 @@ def test_untrusted_ledger_and_receipt_content_is_escaped(tmp_path):
     app = make_app(config(ledger=ledger.path, status_dir=status_dir))
     for route in ROUTES:
         body = call(app, route)[2]
-        assert "<script" not in body, route
+        assert "<script>" not in body and "alert(1)</script>" not in body, route
     assert "&lt;script&gt;alert(1)&lt;/script&gt;" in call(app, "/opportunities")[2]
 
 
@@ -390,7 +400,7 @@ def test_demo_is_isolated_from_configured_paths(tmp_path):
         app = make_app(cfg)
         for route in ROUTES:
             status, _, body = call(app, route)
-            assert status == "200 OK" and "SYNTHETIC DEMO DATA" in body and BANNER in body
+            assert status == "200 OK" and "SYNTHETIC UI DEMO" in body and BANNER in body
         overview = call(app, "/")[2]
         assert "RESEARCH (FROZEN EXP-001 RULE)" in overview and "PENDING_SETTLEMENT" in overview
         demo_ledger = ShadowLedger.open_readonly(cfg.ledger)
@@ -416,7 +426,7 @@ def test_demo_builds_fresh_directory_each_time():
 
 def test_non_demo_pages_have_no_watermark(populated):
     cfg, _, _ = populated
-    assert "SYNTHETIC DEMO DATA" not in call(make_app(cfg), "/")[2]
+    assert "SYNTHETIC UI DEMO" not in call(make_app(cfg), "/")[2]
 
 
 def test_fee_blocker_follows_the_canonical_schedule():
@@ -439,7 +449,7 @@ def test_fee_blocker_before_the_verification_record_says_unverified():
 
 
 def test_fee_page_shows_each_verification_component():
-    body = call(make_app(config()), "/experiments")[2]
+    body = call(make_app(config()), "/experiments?tab=sources")[2]
     for component in ("COEFFICIENT", "SERIES_MULTIPLIER", "SCHEDULED_CHANGES", "ROUNDING_FOR_ACCOUNT_TYPE",
                       "ACCOUNT_TYPE", "MAKER_FEES", "OWNER_ATTESTED"):
         assert component in body
@@ -634,8 +644,8 @@ def test_real_pipeline_receipt_is_fully_rendered(real_receipt):
     app = make_app(cfg)
     overview = call(app, "/")[2]
     conflict = receipt["settlement"]["conflicts"][0]
-    assert 'class="tag err">INVALID_CAPTURE' in overview
-    assert 'class="tag err">MISSING_CAPTURE' in overview and "2026-09-24" in overview
+    assert 'class="badge k-err" title="code: INVALID_CAPTURE"' in overview
+    assert 'class="badge k-err" title="code: MISSING_CAPTURE"' in overview and "2026-09-24" in overview
     assert "SETTLEMENT_CONFLICT" in overview and conflict["position_id"] in overview
     assert "closed day(s) with no capture" in overview and "latest day 2026-09-24 is INVALID_CAPTURE" in overview
     assert receipt["settlement"]["evidence_cutoff_utc"] in overview
@@ -643,7 +653,7 @@ def test_real_pipeline_receipt_is_fully_rendered(real_receipt):
     positions = call(app, "/positions")[2]
     assert "Settlement evidence conflicts reported by the latest receipt" in positions
     assert conflict["position_id"] in positions and "none recorded" not in positions.split("conflicts reported")[1][:400]
-    experiments = call(app, "/experiments")[2]
+    experiments = call(app, "/experiments?tab=sources")[2]
     assert "risk vetoes" in experiments and "qualified" in experiments and conflict["position_id"] in experiments
     for route in ROUTES:
         assert call(app, route)[0] == "200 OK"
@@ -669,8 +679,8 @@ def test_demo_receipt_has_every_field_the_real_pipeline_writes(real_receipt):
     ("HALTED", "err"), ("NO_CAPTURE", "warn"), ("RISK_VETO", "warn"), ("INVALID_CAPTURE", "err"),
     ("HEALTHY_NO_SIGNAL", "ok"), ("something-new", "nd")])
 def test_serious_states_are_not_neutral(state, kind):
-    from edge_lab.dashboard.html import state_tag
-    assert f'class="tag {kind}"' in state_tag(state)
+    from edge_lab.dashboard.components import badge
+    assert f'class="badge k-{kind}"' in badge(state)
 
 
 def test_zero_capacity_is_halted_not_breach_and_is_a_blocker(populated, monkeypatch):
@@ -685,10 +695,11 @@ def test_zero_capacity_is_halted_not_breach_and_is_a_blocker(populated, monkeypa
     cfg, _, _ = populated
     app = make_app(cfg)
     overview = call(app, "/")[2]
-    assert 'class="tag err">HALTED' in overview and "remaining risk capacity is zero" in overview
+    assert 'class="badge k-err" title="code: HALTED"' in overview and "remaining risk capacity is zero" in overview
     assert "BREACH" not in overview
     assert f"{shadow.ACCOUNT_ID}: remaining risk capacity is zero; new risk halted" in overview
-    assert 'class="tag err">HALTED' in call(app, "/risk")[2]
+    assert 'class="badge k-err" title="code: HALTED"' in call(app, "/risk")[2]
+    assert "New positions halted" in call(app, "/risk")[2]
 
 
 def test_research_invalid_cash_is_a_blocker(tmp_path):
@@ -704,7 +715,7 @@ def test_research_invalid_cash_is_a_blocker(tmp_path):
     app = make_app(config(ledger=ledger.path))
     overview = call(app, "/")[2]
     assert "1 RESEARCH_INVALID_CASH no-fill(s)" in overview and "deviated from the frozen EXP-001 rule" in overview
-    assert 'class="tag err">RESEARCH_INVALID_CASH' in call(app, "/positions")[2]
+    assert 'class="badge k-err" title="code: RESEARCH_INVALID_CASH"' in call(app, "/positions?account=research")[2]
 
 
 def test_demo_research_account_matches_the_real_research_account():
@@ -715,7 +726,7 @@ def test_demo_research_account_matches_the_real_research_account():
         operational = ledger.state(shadow.ACCOUNT_ID)
         assert research.starting_bankroll == shadow.RESEARCH_BANKROLL
         assert operational.starting_bankroll == shadow.STARTING_BANKROLL
-        risk_page = call(make_app(cfg), "/risk")[2]
+        risk_page = call(make_app(cfg), "/risk?account=research")[2]
         assert shadow.RESEARCH_SIZING_ID in risk_page and "Frozen EXP-001 rule" in risk_page
     finally:
         shutil.rmtree(root)
@@ -742,7 +753,7 @@ def test_no_fill_counts_by_reason_are_readable(tmp_path):
     write_status(status_dir, receipt={"state": "HEALTHY_NO_SIGNAL", "days": [{"target_date": "2026-09-24",
         "accounts": {shadow.ACCOUNT_ID: {"decisions": 3, "qualified": 2, "fills": 1,
                                          "no_fills": {"RISK_VETO": 1}, "risk_vetoes": 1}}}]})
-    body = call(make_app(config(status_dir=status_dir)), "/experiments")[2]
+    body = call(make_app(config(status_dir=status_dir)), "/experiments?tab=sources")[2]
     assert "1 (RISK_VETO 1) no-fills" in body and "{" not in body.split("RISK_VETO 1")[0][-20:]
 
 

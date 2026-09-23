@@ -100,3 +100,35 @@ so the idea's origin stays traceable.
   - transitions are guarded by explicit tables with terminal states final;
   - the chain always ends in `EXECUTION_NOT_AUTHORIZED`, so no ticket can be submitted.
 - **Audit:** `docs/GITHUB_REUSE_AUDIT.md` §7.3, §7.8; `docs/audits/2026-09-23-github-reuse/D_sports.md`.
+
+## Vendored assets
+
+Binary and markup assets shipped as package data with the dashboard (Market Edge Terminal v1,
+ADR 0025). No third-party source code is included. Each file's SHA-256, size and upstream
+path are in `src/edge_lab/dashboard/static/ASSETS_PROVENANCE.md`; the licence texts sit next to
+the files, and `src/edge_lab/dashboard/static/.gitattributes` stops git from changing their
+bytes.
+
+### TPN-A001 — IBM Plex fonts (Sans, Sans Condensed, Mono)
+
+- **Where:** `src/edge_lab/dashboard/static/fonts/` (six Latin-1 split-subset WOFF2 files:
+  Sans 400/500/600, Sans Condensed 600, Mono 400/500) and `fonts/LICENSE-IBM-Plex-OFL.txt`.
+- **Upstream:** `IBM/plex`, npm packages published from it: `@ibm/plex-sans@1.1.0` at
+  `1da12f02587b630c07e92692d21492d722f53614`, `@ibm/plex-sans-condensed@2.0.0` at
+  `bb3ab6404e1881ea286f8742dc839e09057db6dd`, `@ibm/plex-mono@2.5.0` at
+  `2f9ba1b25957d958db71a849e85d72e3ecfb845a`.
+- **License:** OFL-1.1 (SIL Open Font License 1.1). Files are unmodified; the font names are
+  not changed and the fonts are not sold on their own.
+- **Why:** the owner directive fixes IBM Plex as the typographic system and forbids font CDNs.
+
+### TPN-A002 — Lucide icon subset
+
+- **Where:** `src/edge_lab/dashboard/static/icons.svg` (37 symbols, shape elements copied
+  verbatim; presentation attributes removed so CSS sets stroke) and
+  `static/LICENSE-Lucide.txt`.
+- **Upstream:** `lucide-icons/lucide` release 1.47.0 at
+  `3b9ea6d08707edc439f25a4c354cb0d6b8bee973`.
+- **License:** ISC (Lucide); icons derived from Feather are also MIT (Cole Bemis). The full
+  licence file is kept, which satisfies both.
+- **Why:** the directive asks for one consistent line-icon family from an audited static
+  subset, with no icon font or remote sprite.
