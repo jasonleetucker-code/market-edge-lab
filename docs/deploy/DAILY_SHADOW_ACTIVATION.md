@@ -24,6 +24,12 @@ cat /var/lib/market-edge-lab-status/latest.json
 
 Brisket health: `systemctl is-active nginx dynasty dynasty-frontend docker` and `/api/health`.
 
+Or run `bash verify_production.sh` (read-only). Get it with
+`git show <SHA>:deploy/vps/verify_production.sh > verify_production.sh` and copy it with the
+§1 files. It prints the checks above and the §6 evidence it can read, one
+`STATE <NAME>: <value>` line each, and reports NOT_READABLE_WITHOUT_PRIVILEGE where it
+cannot see without sudo.
+
 ## 1. Stage (agent or owner, unprivileged)
 
 From a checkout at the merged SHA:
@@ -107,6 +113,9 @@ systemctl list-timers 'edgelab-*'
 | Settlement lifecycle | a later `shadow_daily.json` with `settlement.settled` > 0 and no pending for that day |
 
 One state does not prove the next. A valid no-signal day is a legitimate result.
+`bash verify_production.sh` (read-only, no sudo) prints each of these states separately,
+including COLLECTOR_INSTALLED, TIMERS_ENABLED, PFM/DECISION/RECHECK_CAPTURE_OBSERVED and
+VALID_DAY_OBSERVED. It never infers one from another: what it cannot read is UNKNOWN.
 
 ## If the receipt says FAILED, LOCK_BUSY or SETTLEMENT_CONFLICT
 

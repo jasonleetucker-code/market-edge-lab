@@ -116,6 +116,19 @@ def build_parser() -> argparse.ArgumentParser:
     sh_risk.add_argument("--as-of", help="ISO-8601 instant with zone (default: now)")
     sh_risk.add_argument("--account", default=None, help="account id (default: the operational account)")
 
+    sh_anchor = shadow_sub.add_parser(
+        "anchor", help="Ledger head checkpoints (GATE7-F09, ADR 0021): export or verify. Read-only; "
+                       "independent only if the checkpoint is stored off the ledger writer's authority."
+    )
+    anchor_sub = sh_anchor.add_subparsers(dest="anchor_command", required=True)
+    an_export = anchor_sub.add_parser("export", help="Print a checkpoint of every account's head (JSON).")
+    an_export.add_argument("--ledger", required=True)
+    an_verify = anchor_sub.add_parser(
+        "verify", help="Compare the ledger with a checkpoint (exit 0 VERIFIED/EXTENDED, 2 mismatch, 3 unreadable)."
+    )
+    an_verify.add_argument("--ledger", required=True)
+    an_verify.add_argument("--checkpoint", required=True, help="a checkpoint JSON file from `anchor export`")
+
     subparsers.add_parser(
         "dashboard", help="Local read-only dashboard (127.0.0.1 by default; see docs/DASHBOARD.md).",
         add_help=False,
@@ -492,9 +505,52 @@ def _forward_opportunities(args: argparse.Namespace) -> int:
     return 0
 
 
+def _shadow_anchor(args: argparse.Namespace) -> int:
+    """`shadow anchor export|verify`. Reads only; never writes the ledger, schedules or fetches.
+
+    export: 0 printed, 2 nothing verifiable to anchor, 3 ledger unreadable.
+    verify: 0 VERIFIED or EXTENDED, 2 any mismatch or unusable checkpoint, 3 ledger unreadable."""
+    import sqlite3
+
+    from . import ledger_anchor
+    from .shadow_ledger import LedgerError, ShadowLedger
+
+    checkpoint = None
+    if args.anchor_command == "verify":
+        try:
+            text = Path(args.checkpoint).read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError) as exc:
+            print(f"cannot read checkpoint {args.checkpoint}: {exc}", file=sys.stderr)
+            return 2
+        try:
+            checkpoint = json.loads(text)
+        except ValueError:
+            checkpoint = None  # reported as INVALID_CHECKPOINT below
+    try:
+        ledger = ShadowLedger.open_readonly(args.ledger)
+        if args.anchor_command == "export":
+            try:
+                result = ledger_anchor.export_checkpoint(ledger, now=datetime.now(timezone.utc))
+            except LedgerError as exc:
+                print(f"{type(exc).__name__}: {exc}", file=sys.stderr)
+                return 2
+            code = 0
+        else:
+            verdict = ledger_anchor.verify_checkpoint(ledger, checkpoint)
+            result, code = verdict.to_dict(), 0 if verdict.ok else 2
+    except (LedgerError, sqlite3.Error, OSError) as exc:
+        print(f"ledger unreadable: {type(exc).__name__}: {exc}", file=sys.stderr)
+        return 3
+    print(json.dumps(result, indent=2, sort_keys=True, ensure_ascii=False))
+    return code
+
+
 def _shadow(args: argparse.Namespace) -> int:
     """Exit 0 when the command ran, 2 on bad input. Simulation only."""
     from datetime import date
+
+    if args.shadow_command == "anchor":
+        return _shadow_anchor(args)
 
     from . import exp001_shadow
     from .shadow_ledger import ShadowLedger

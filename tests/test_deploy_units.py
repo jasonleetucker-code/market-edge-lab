@@ -1,8 +1,14 @@
 """Static checks of the VPS unit files: schedule, isolation, combined budget, both backups."""
 
 import configparser
+import os
 import re
+import shutil
+import subprocess
+import sys
 from pathlib import Path
+
+import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 UNITS = ROOT / "deploy" / "vps" / "systemd"
@@ -88,3 +94,100 @@ def test_readme_install_window_matches_the_capture_window():
     assert "America/New_York" in text and "edgelab-" in text
     runbook = (ROOT / "docs/deploy/DAILY_SHADOW_ACTIVATION.md").read_text()
     assert "17:40 and 18:35 America/New_York" in runbook, "runbook and README windows diverge"
+
+
+# --------------------------------------------------------------------------- verify_production.sh
+
+VERIFY = ROOT / "deploy" / "vps" / "verify_production.sh"
+VERIFY_STATES = (
+    "NY_TIME", "IN_CAPTURE_WINDOW", "DEPLOYED_SHA", "TIMERS", "UNIT_RESULTS", "LATEST_JSON", "SHADOW_DAILY",
+    "LAST_FAILURE", "COLLECTOR_INSTALLED", "TIMERS_ENABLED", "PFM_CAPTURE_OBSERVED", "DECISION_CAPTURE_OBSERVED",
+    "RECHECK_CAPTURE_OBSERVED", "VALID_DAY_OBSERVED", "DB_SIZES", "BACKUPS", "JOURNAL_WARNINGS_24H", "OOM_30D",
+    "MEMORY", "DISK", "BRISKET_UNITS", "API_HEALTH",
+)
+MUTATING = {
+    "errexit": re.compile(r"\bset\s+-[a-z]*e|\bset\s+-o\s+errexit"),
+    "privilege": re.compile(r"\bsudo\b|\bsu\s+-|\brunuser\b"),
+    "file or attribute change": re.compile(
+        r"(^|[|;&(`]|\bthen\b|\bdo\b|\belse\b)\s*(rm|mv|cp|chattr|chmod|chown|tee|touch|truncate|dd|ln|mkdir|"
+        r"install|shred|rsync|scp|sqlite3|logger)\b"),
+    "service control": re.compile(r"\bsystemctl\s+(start|stop|restart|reload|try-restart|enable|disable|reenable|"
+                                  r"reset-failed|daemon-reload|mask|unmask|kill|edit|set-property|isolate)\b"),
+    "request with a body or method": re.compile(
+        r"\bcurl\b.*\s(-X|--request|-d|--data\S*|-F|--form|-T|--upload-file|-o|--output|-O|-K|--config)\b"),
+    "in-place edit": re.compile(r"\bsed\s+(-[a-zA-Z]*i|--in-place)"),
+    "journal maintenance": re.compile(r"\bjournalctl\b.*--(vacuum|rotate|flush|sync|relinquish)"),
+    "lab command": re.compile(r"edge_lab\.|edge-lab\s"),
+}
+
+
+@pytest.mark.parametrize("label,bad", [
+    ("errexit", "set -eu"), ("privilege", "x=$(sudo cat /etc/shadow)"), ("file or attribute change", "  rm -f x"),
+    ("file or attribute change", "a | tee out"), ("service control", "systemctl restart edgelab-pfm.service"),
+    ("request with a body or method", "curl -sS -X POST https://x"), ("request with a body or method", "curl -d a u"),
+    ("in-place edit", "sed -i s/a/b/ f"), ("journal maintenance", "journalctl --vacuum-time=1d"),
+    ("lab command", "python -m edge_lab.cli shadow daily"),
+])
+def test_mutating_patterns_are_not_vacuous(label, bad):
+    assert MUTATING[label].search(bad)
+
+
+def _verify_code_lines():
+    """Non-comment lines of the script (the embedded Python has no comments)."""
+    return [line for line in VERIFY.read_text().splitlines() if not line.lstrip().startswith("#")]
+
+
+def test_verify_production_script_exists_with_lf_and_is_not_scheduled():
+    raw = VERIFY.read_bytes()
+    assert raw.startswith(b"#!/usr/bin/env bash\n") and b"\r\n" not in raw
+    units = re.search(r"UNITS=\(([^)]*)\)", INSTALL).group(1).split()
+    assert not [u for u in units if "verify" in u]
+    assert "verify_production" not in INSTALL
+    assert not [p.name for p in UNITS.iterdir() if "verify_production" in p.read_text()]
+
+
+def test_verify_production_script_parses():
+    bash = shutil.which("bash")
+    if bash is None:
+        pytest.skip("bash not available")
+    result = subprocess.run([bash, "-n", str(VERIFY)], capture_output=True, text=True, timeout=30)
+    assert result.returncode == 0, result.stderr
+
+
+def test_verify_production_reports_every_state_separately():
+    text = VERIFY.read_text()
+    for name in VERIFY_STATES:
+        assert re.search(rf"\b(state|observed) {name}\b", text), f"no STATE line for {name}"
+    assert "STATE %s: %s" in text and "SUMMARY" in text and "One state does not imply the next" in text
+    assert "NOT_READABLE_WITHOUT_PRIVILEGE" in text
+    for timer in ("pfm", "decision", "recheck", "status", "backup", "shadow", "settlement"):
+        assert re.search(rf"NAMES=\([^)]*\b{timer}\b", text)
+    assert "set -u" in text
+
+
+def test_verify_production_contains_no_mutating_command():
+    lines = _verify_code_lines()
+    hits = [f"{label}: {line.strip()}" for line in lines for label, rx in MUTATING.items() if rx.search(line)]
+    assert not hits, "\n".join(hits)
+    allowed = re.compile(r"2>/dev/null|>/dev/null|2>&1|>&2")
+    redirects = [line.strip() for line in lines if ">" in allowed.sub("", line)]
+    assert not redirects, "output redirection to a file:\n" + "\n".join(redirects)
+    curls = [line for line in lines if re.search(r"\bcurl\s+-", line)]
+    assert len(curls) == 1 and "https://chaseupside.com/api/health" in curls[0]
+
+
+def test_verify_production_runs_to_the_summary_without_network(tmp_path):
+    """Smoke run on this host with `curl` stubbed: every state is printed and it exits 0."""
+    bash = shutil.which("bash")
+    if bash is None or sys.platform != "linux" or shutil.which("python3") is None:
+        pytest.skip("needs bash and python3 on Linux")
+    stub = tmp_path / "curl"
+    stub.write_text("#!/bin/sh\nprintf '{\"status\":\"stub\"}\\n200'\n", encoding="utf-8")
+    stub.chmod(0o755)
+    env = {**os.environ, "PATH": f"{tmp_path}{os.pathsep}{os.environ.get('PATH', '')}"}
+    result = subprocess.run([bash, str(VERIFY)], capture_output=True, text=True, timeout=120, env=env)
+    assert result.returncode == 0, result.stderr
+    summary = result.stdout[result.stdout.index("== SUMMARY"):]
+    for name in VERIFY_STATES:
+        assert f"STATE {name}: " in result.stdout and f"  {name}: " in summary, name
+    assert "STATE API_HEALTH: HTTP 200" in result.stdout
