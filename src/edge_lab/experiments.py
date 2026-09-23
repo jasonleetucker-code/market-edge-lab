@@ -274,7 +274,8 @@ def freeze(exp: Experiment, *, now_utc: str) -> Path:
         "frozen_fields_sha256": frozen_hash(view),
         "frozen_fields": view,
     }
-    target.write_text(json.dumps(baseline, indent=2, sort_keys=True, ensure_ascii=False) + "\n")
+    target.write_text(json.dumps(baseline, indent=2, sort_keys=True, ensure_ascii=False) + "\n",
+                      encoding="utf-8", newline="\n")
     return target
 
 
@@ -288,7 +289,7 @@ def baseline_problems(exp: Experiment) -> list[str]:
     if not target.exists():
         return [f"{exp.status} experiment has no preregistration baseline ({BASELINE_NAME}); run `edge-lab experiments freeze`"]
     try:
-        baseline = json.loads(target.read_text())
+        baseline = json.loads(target.read_text(encoding="utf-8"))
     except (OSError, ValueError) as exc:
         return [f"preregistration baseline unreadable: {exc}"]
     problems = []

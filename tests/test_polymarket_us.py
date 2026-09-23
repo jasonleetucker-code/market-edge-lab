@@ -20,9 +20,9 @@ from edge_lab.venues import Capability, ConnectivityStage
 FIXTURES = Path(__file__).parent / "fixtures" / "polymarket_us"
 SMOKE = FIXTURES / "markets_limit5_2026-09-23T140738Z.json"
 SMOKE_SHA256 = "55de7665830ee28c8653da2b952a670a8d8b79c710c7c26e82d854768dab2900"
-BOOK = json.loads((FIXTURES / "book_documented_example.json").read_text())
-BBO = json.loads((FIXTURES / "bbo_documented_example.json").read_text())
-EVENTS = json.loads((FIXTURES / "events_schema_constructed.json").read_text())
+BOOK = json.loads((FIXTURES / "book_documented_example.json").read_text(encoding="utf-8"))
+BBO = json.loads((FIXTURES / "bbo_documented_example.json").read_text(encoding="utf-8"))
+EVENTS = json.loads((FIXTURES / "events_schema_constructed.json").read_text(encoding="utf-8"))
 UTC = timezone.utc
 REPO = Path(__file__).resolve().parents[1]
 
@@ -34,12 +34,12 @@ class Pacer:
 
 def test_smoke_capture_is_the_recorded_bytes():
     assert hashlib.sha256(SMOKE.read_bytes()).hexdigest() == SMOKE_SHA256
-    note = (REPO / "experiments/multi_venue/polymarket_us_smoke_2026-09-23.md").read_text()
+    note = (REPO / "experiments/multi_venue/polymarket_us_smoke_2026-09-23.md").read_text(encoding="utf-8")
     assert SMOKE_SHA256 in note and "https://gateway.polymarket.us/v1/markets?limit=5" in note
 
 
 def test_smoke_markets_map_to_generic_markets_without_rule_equivalence():
-    rows = pm.parse_markets_page(json.loads(SMOKE.read_text()))
+    rows = pm.parse_markets_page(json.loads(SMOKE.read_text(encoding="utf-8")))
     assert len(rows) == 5
     market, meta = pm.market_from_polymarket(rows[0])
     assert market.venue == "polymarket_us" and market.market_id == "polymarket_us:aec-nfl-lac-ten-2025-11-02"
@@ -132,7 +132,7 @@ def test_missing_book_and_bbo_never_become_quotes():
 
 
 def test_settlement_value():
-    assert pm.settlement_value(json.loads((FIXTURES / "settlement_documented_example.json").read_text())) == 1
+    assert pm.settlement_value(json.loads((FIXTURES / "settlement_documented_example.json").read_text(encoding="utf-8"))) == 1
     assert pm.settlement_value({"slug": "x"}) is None
     assert pm.settlement_value({"settlement": "nan"}) is None
 
@@ -206,7 +206,7 @@ def test_coverage_from_stored_pages():
 def test_only_the_public_gateway_is_used_and_it_is_not_polymarket_international():
     assert pm.BASE_URL == "https://gateway.polymarket.us"
     assert pm.book_url("a b") == "https://gateway.polymarket.us/v1/markets/a%20b/book"
-    source = Path(pm.__file__).read_text()
+    source = Path(pm.__file__).read_text(encoding="utf-8")
     assert "api.polymarket.us" not in source  # never the authenticated host
     assert "polymarket.com" not in source
     assert venues.get_venue("polymarket_us").stage(Capability.ORDER_WRITE) is ConnectivityStage.NEEDS_ACCESS

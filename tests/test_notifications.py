@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import sys
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -188,6 +189,8 @@ def test_every_persisted_field_is_scanned_for_secrets():
     assert n.dispatch([ev(key="session_id=abc")], [n.DisabledSmsSink()], now=NOW)[0]["status"] == "REFUSED_SECRET"
 
 
+@pytest.mark.skipif(sys.platform == "win32",
+                    reason="POSIX umask/mode bits; Windows has no group/other permission bits (st_mode is 0o666)")
 def test_outbox_is_world_readable_under_a_strict_umask(tmp_path):
     import os
     import stat
