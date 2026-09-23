@@ -24,6 +24,9 @@ RETRYABLE_STATUS = frozenset({429, 500, 502, 503, 504})
 MAX_RETRY_AFTER_SECONDS = 30.0
 # Credential-bearing headers are refused outright: this client is unauthenticated.
 _FORBIDDEN_HEADER_PARTS = ("authoriz", "cookie", "api-key", "apikey", "access-key", "signature", "token")
+# Response headers kept on a FetchResult. Only this allowlist, lowercased: quota counters
+# (The Odds API) carry no secret. Everything else, cookies included, is dropped.
+RESPONSE_HEADER_ALLOWLIST = ("x-requests-remaining", "x-requests-used", "x-requests-last")
 
 
 class HttpFetchError(RuntimeError):
@@ -76,6 +79,24 @@ class FetchResult:
     attempts: int
     # One entry per failed attempt before success, e.g. "http_429", "URLError".
     retry_reasons: tuple[str, ...] = ()
+    # Allowlisted response headers only (RESPONSE_HEADER_ALLOWLIST), as (lowercase name, value).
+    response_headers: tuple[tuple[str, str], ...] = ()
+
+
+def allowlisted_headers(headers: Any) -> tuple[tuple[str, str], ...]:
+    """The allowlisted headers of a response, lowercased, in allowlist order; first value wins."""
+    if not headers:
+        return ()
+    try:
+        items = list(headers.items())
+    except AttributeError:
+        return ()
+    found: dict[str, str] = {}
+    for name, value in items:
+        key = str(name).lower()
+        if key in RESPONSE_HEADER_ALLOWLIST and key not in found:
+            found[key] = str(value)
+    return tuple((name, found[name]) for name in RESPONSE_HEADER_ALLOWLIST if name in found)
 
 
 Opener = Callable[[Request, float], Any]
@@ -139,6 +160,7 @@ def fetch(
                 status = int(getattr(response, "status", 200))
                 final_url = response.geturl() if hasattr(response, "geturl") else url
                 content_type = response.headers.get("Content-Type") if response.headers else None
+                kept_headers = allowlisted_headers(response.headers)
             return FetchResult(
                 requested_url=url,
                 final_url=final_url,
@@ -149,6 +171,7 @@ def fetch(
                 duration_ms=int((time.monotonic() - started) * 1000),
                 attempts=attempt,
                 retry_reasons=tuple(reasons),
+                response_headers=kept_headers,
             )
         except HTTPError as exc:
             exc.close()

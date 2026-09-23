@@ -26,6 +26,19 @@ class AccessTier(int, Enum):
     BROWSER_AUTOMATION = 6  # last resort; never to bypass access controls
 
 
+class CredentialKind(str, Enum):
+    """What kind of credential a source needs. There is deliberately no trading kind.
+
+    READ_ONLY_DATA_FEED is a key that can only read a data feed (The Odds API free key,
+    directive 2026-09-23 section 10, issue #29). Only the owner installs it, in environment
+    configuration; agents never create, request, see or commit it. A credential that can
+    trade, withdraw or touch an account is out of scope for this registry altogether.
+    """
+
+    NONE = "none"
+    READ_ONLY_DATA_FEED = "read_only_data_feed"
+
+
 class SourceStatus(str, Enum):
     ACTIVE = "active"  # a collector exists and runs
     PLANNED = "planned"  # documented, not yet collected
@@ -57,6 +70,13 @@ class SourceSpec:
     # `edge-lab health` checks one profile at a time, so a successful routine run is not
     # reported unhealthy because a deliberately separate collector has not run.
     collected_by: tuple[str, ...] = ()
+    # Credential contract (ADR 0019 adapters addendum). A source with a credential names the
+    # environment variable the owner installs it in and how it travels (never a header:
+    # `edge_lab.http` refuses credential-bearing headers), plus the owner approval on record.
+    credential_kind: CredentialKind = CredentialKind.NONE
+    credential_env_var: str | None = None
+    credential_transport: str | None = None  # "query_param" is the only transport allowed
+    owner_approval_ref: str | None = None
 
 
 HEALTH_PROFILES = ("routine", "settlement", "forward")
@@ -206,6 +226,81 @@ REGISTRY: dict[str, SourceSpec] = {
             license_notes=(
                 "Free academic service; re-serves public-domain NWS products. Be polite "
                 "(about one request per second); cite IEM. One-time manual backfill only."
+            ),
+        ),
+        SourceSpec(
+            source_id="polymarket_us_public",
+            legacy_name="polymarket_us",
+            description=(
+                "Polymarket US public gateway (the US CFTC-regulated exchange, not Polymarket "
+                "International): markets, events, order books, BBO and settlement prices. "
+                "Adapter: edge_lab.polymarket_us (fixtures plus one bounded smoke read)."
+            ),
+            access_tier=AccessTier.OFFICIAL_API,
+            base_url="https://gateway.polymarket.us",
+            status=SourceStatus.PLANNED,
+            max_age={
+                "markets": timedelta(minutes=15),
+                "events": timedelta(minutes=15),
+                "book": timedelta(minutes=5),
+            },
+            license_notes=(
+                "docs.polymarket.us API Introduction (read 2026-09-23): the public API at "
+                "gateway.polymarket.us needs no key and is meant for reading and displaying "
+                "market data. Rate Limits page: public endpoints 20 requests/s per IP; on 429 "
+                "stop, wait >= 1 s, back off. The docs publish no separate data licence; the "
+                "polymarket.us Terms of Service page is a JavaScript app whose text was not "
+                "readable without a browser and was not reviewed. Research storage only; do not "
+                "redistribute. No authenticated endpoint (api.polymarket.us) is used. No VPN or "
+                "geolocation circumvention."
+            ),
+        ),
+        SourceSpec(
+            source_id="the_odds_api",
+            legacy_name="the_odds_api",
+            description=(
+                "The Odds API v4 (free tier): sportsbook odds per bookmaker, sports list and "
+                "scores. Offered odds are never executable prices. Adapter: edge_lab.odds_api "
+                "(fixtures only until the owner installs the key and approves activation)."
+            ),
+            access_tier=AccessTier.OFFICIAL_API,
+            base_url="https://api.the-odds-api.com",
+            status=SourceStatus.PLANNED,
+            max_age={"odds": timedelta(minutes=10), "sports": timedelta(days=1)},
+            requires_credentials=True,
+            credential_kind=CredentialKind.READ_ONLY_DATA_FEED,
+            credential_env_var="EDGE_LAB_ODDS_API_KEY",
+            credential_transport="query_param",
+            owner_approval_ref="docs/owner/2026-09-23-integration-production-directive.md",
+            license_notes=(
+                "Issue #29 (as summarized by the coordinator): the free tier allows storing "
+                "responses and deriving analytics; raw data must not be redistributed; historical "
+                "odds are not in the free tier (the v4 guide, read 2026-09-23, says historical "
+                "endpoints are paid plans only). 500 credits a month on the free tier; this "
+                "repository keeps a protective ceiling below it (edge_lab.odds_api.QuotaLedger). "
+                "The key travels only as the apiKey query parameter and is redacted everywhere."
+            ),
+        ),
+        SourceSpec(
+            source_id="novig_public_data",
+            legacy_name="novig_data",
+            description=(
+                "Novig exchange data: anonymized end-of-day CSVs per trading day (trades.csv, "
+                "markets.csv) and their index.json manifest at data.novig.com. End of day, "
+                "research only, never executable. Adapter: edge_lab.novig_data."
+            ),
+            access_tier=AccessTier.OFFICIAL_DOWNLOAD,
+            base_url="https://data.novig.com/reporting/trade-data",
+            status=SourceStatus.PLANNED,
+            max_age={"index": timedelta(hours=36), "trades": timedelta(hours=36),
+                     "markets": timedelta(hours=36)},
+            license_notes=(
+                "docs.novig.com Exchange Data (read 2026-09-23): static files behind a CDN, no "
+                "API, no authentication; each day publishes shortly after midnight Eastern; a "
+                "day that fails validation is withheld; past files are immutable except "
+                "announced corrections. No licence terms are stated on that page: research use "
+                "only, no redistribution. The live NBX API needs OAuth client credentials "
+                "(NEEDS_ACCESS)."
             ),
         ),
     )

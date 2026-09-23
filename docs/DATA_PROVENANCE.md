@@ -177,6 +177,35 @@ Chase Upside VPS (`deploy/vps/`).
 - **Smoke rows:** rows with `mode = 'smoke'` (injected clocks in tests or manual smoke
   checks) are never evidence.
 
+## 6b. Planned multi-venue sources (read-only adapters; 2026-09-23 directive)
+
+Three sources are registered as `PLANNED`, with `collected_by=()`. Each has adapter code and
+fixture tests, but no collector job, no timer and no health profile. Evidence is in
+`experiments/multi_venue/`.
+
+| Source id | Adapter | Access | What it is not |
+|---|---|---|---|
+| `polymarket_us_public` | `edge_lab.polymarket_us` | the public gateway `gateway.polymarket.us`, keyless, 20 req/s per IP. One bounded smoke GET was recorded | Not Polymarket International; no authenticated host. BBO is never a quote; fees are UNSUPPORTED |
+| `the_odds_api` | `edge_lab.odds_api` | The Odds API v4, free tier, a `READ_ONLY_DATA_FEED` key in `EDGE_LAB_ODDS_API_KEY` (not installed). Fixtures only | Offered odds and de-vigged probabilities are never executable prices |
+| `novig_public_data` | `edge_lab.novig_data` | data.novig.com daily CSVs, no authentication. One manual read of the index and one day | End-of-day research data, never an executable quote. The live API is NEEDS_ACCESS |
+
+Provenance rules specific to these adapters:
+
+- **Catalog coverage.** A listing read is COMPLETE only when every page succeeded, the last
+  page came back empty, and no filter was applied. A short page is not proof of the end,
+  because a server may cap the page size. A filtered scan is PARTIAL and names its filter.
+  A PARTIAL or FAILED read is never evidence that a market does not exist
+  (`discovery.CatalogCoverage`).
+- **Units.** Units are recorded as the source states them. Polymarket US prices are USD per
+  YES contract, and its quantities are contracts that may be fractional. Novig trade prices
+  are `cost/qty`, but its market OHLC is in cents. The Odds API keeps raw American or decimal
+  odds.
+- **Credentials.** A credentialed source stores only redacted URLs. For example, `url` and
+  `final_url` in `snapshots` read `apiKey=REDACTED` (`docs/SECURITY.md`).
+- **Terms.** Recorded in each `license_notes`. The Polymarket US website Terms of Service
+  could not be read without a browser and are not reviewed. Until they are, data is for
+  research storage only and is not redistributed.
+
 ## 7. Adding a source
 
 1. Choose the highest access tier available. Read the terms and write them in `license_notes`.
