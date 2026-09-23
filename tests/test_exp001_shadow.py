@@ -68,7 +68,8 @@ def test_full_lifecycle_decision_fill_settle(store, ledger, monkeypatch, model):
     # Settle on 67°F: B67.5 YES wins, B65.5 YES loses, T72 NO wins.
     _settled(store, 67, _result(67))
     report = shadow.settle_open_positions(store, ledger)
-    assert len(report["settled"]) == len(qualified) and report["pending"] == []
+    assert len(report["settled"]) == 2 * len(qualified) and report["pending"] == []  # research + operational
+    assert {r["account_id"] for r in report["settled"]} == {shadow.ACCOUNT_ID, shadow.RESEARCH_ACCOUNT_ID}
     state = ledger.state(shadow.ACCOUNT_ID)
     expected = sum((Decimal(1) if (o.side == "YES") == o.market_id.endswith("B67.5") else Decimal(0)) - o.all_in_cost
                    for o in qualified)
@@ -211,7 +212,8 @@ def test_open_day_is_refused_and_a_day_is_never_traded_twice(store, ledger, monk
     again = shadow.run_day(store, ledger, D, model=model, now=at(23, 0))
     state = ledger.state(shadow.ACCOUNT_ID)
     assert state.decisions == 12 and state.fills == 3 and again["decisions"] == 0
-    assert len([p for p in again["problems"] if "already decided" in p]) == 12
+    assert len([p for p in again["problems"] if "already decided" in p and p.startswith(shadow.ACCOUNT_ID)]) == 12
+    assert len([p for p in again["problems"] if "already decided" in p]) == 24  # both accounts refuse
 
 
 def test_settlement_time_missing_stays_pending(store, ledger, monkeypatch, model):

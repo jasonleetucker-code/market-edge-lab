@@ -120,6 +120,7 @@ REGISTRY: dict[str, SourceSpec] = {
                 "series": timedelta(days=7),
                 "settled_markets": timedelta(hours=36),
                 "historical_markets": timedelta(days=31),
+                "event_settlement_markets": timedelta(hours=36),
             },
             license_notes="Public market data and published contract documents; research use.",
             collected_by=("settlement",),

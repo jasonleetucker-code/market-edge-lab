@@ -43,7 +43,10 @@ class FeeQuote:
 
 
 def valid_price(price: Decimal) -> bool:
-    """A binary-contract price strictly inside (0, 1) on the 1/100-cent grid."""
+    """A binary-contract price strictly inside (0, 1) on the 1/100-cent grid. Non-finite
+    (NaN, infinity) or non-Decimal values are invalid, never an exception."""
+    if not isinstance(price, Decimal) or not price.is_finite():
+        return False
     return Decimal("0") < price < Decimal("1") and price == price.quantize(PRICE_GRID)
 
 

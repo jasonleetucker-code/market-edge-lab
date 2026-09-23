@@ -1,0 +1,12 @@
+[Unit]
+Description=Market Edge Lab: combined resource budget for every edgelab unit
+Documentation=file:///opt/market-edge-lab/app/deploy/vps/README.md
+
+[Slice]
+# The per-service caps (256M, 25% CPU) bound each run; this slice bounds all of them
+# together, so overlapping or back-to-back units can never exceed one budget next to
+# Chase Upside. Units are also serialized by file locks, so normally one runs at a time.
+MemoryHigh=320M
+MemoryMax=384M
+CPUQuota=25%
+TasksMax=64

@@ -1,0 +1,14 @@
+[Unit]
+Description=Market Edge Lab: daily shadow bookkeeping after the Stage-B status run
+
+[Timer]
+# After the 18:30 status run and well after the 18:05-18:20 re-check window; never inside
+# 17:40-18:35 America/New_York. The run itself refuses days whose windows are not closed.
+OnCalendar=*-*-* 18:40:00 America/New_York
+AccuracySec=1s
+# Catch-up is idempotent, so a missed run is simply done by the next one.
+Persistent=false
+Unit=edgelab-shadow.service
+
+[Install]
+WantedBy=timers.target

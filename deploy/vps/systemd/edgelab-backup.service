@@ -1,5 +1,5 @@
 [Unit]
-Description=Market Edge Lab: verified SQLite backup (no automatic deletion)
+Description=Market Edge Lab: verified SQLite backups of the evidence DB and shadow ledger (no automatic deletion)
 Documentation=file:///opt/market-edge-lab/app/deploy/vps/README.md
 After=network-online.target
 Wants=network-online.target
@@ -7,11 +7,18 @@ OnFailure=edgelab-alert@%n.service
 
 [Service]
 Type=oneshot
+Slice=edgelab.slice
 User=edgelab
 Group=edgelab
 EnvironmentFile=/etc/market-edge-lab/env
 WorkingDirectory=/var/lib/market-edge-lab
-ExecStart=/opt/market-edge-lab/venv/bin/python -m edge_lab.backup create --db /var/lib/market-edge-lab/db/edge_lab.sqlite3 --out /var/lib/market-edge-lab/backups
+# Both stores: the evidence DB and the shadow ledger. Each runs even if the other fails, and
+# the unit fails (and alerts) if either did. The ledger is skipped, not failed, until its
+# first run creates it; its copy holds the ledger lock shared with ledger writers.
+ExecStart=/bin/sh -c 'rc=0; \
+  /opt/market-edge-lab/venv/bin/python -m edge_lab.backup create --kind evidence --db /var/lib/market-edge-lab/db/edge_lab.sqlite3 --out /var/lib/market-edge-lab/backups || rc=1; \
+  /opt/market-edge-lab/venv/bin/python -m edge_lab.backup create --kind ledger --if-exists --db /var/lib/market-edge-lab/ledger/shadow_ledger.sqlite3 --lock-file /var/lib/market-edge-lab/ledger/shadow_ledger.sqlite3.lock --out /var/lib/market-edge-lab/backups/ledger || rc=1; \
+  exit $$rc'
 # Oneshot: the whole run is the start job. On timeout systemd sends SIGTERM, which the
 # collector turns into a recorded failed run.
 TimeoutStartSec=20min

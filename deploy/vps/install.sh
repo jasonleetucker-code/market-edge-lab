@@ -37,7 +37,7 @@ DATA=/var/lib/market-edge-lab
 STATUS=/var/lib/market-edge-lab-status
 ETC=/etc/market-edge-lab
 ENV_FILE=$ETC/env
-UNITS=(edgelab-pfm edgelab-decision edgelab-recheck edgelab-status edgelab-backup)
+UNITS=(edgelab-pfm edgelab-decision edgelab-recheck edgelab-status edgelab-backup edgelab-shadow edgelab-settlement)
 # The unprivileged account that must NOT read private data (the Chase Upside app user).
 OTHER_USER=${EDGELAB_OTHER_USER:-dynasty}
 
@@ -48,7 +48,7 @@ id -u edgelab >/dev/null 2>&1 || useradd --system --gid edgelab --home-dir "$DAT
 
 echo "== 2/7 directories"
 install -d -o root -g root -m 0755 "$APP_ROOT"
-install -d -o edgelab -g edgelab -m 0700 "$DATA" "$DATA/db" "$DATA/backups"
+install -d -o edgelab -g edgelab -m 0700 "$DATA" "$DATA/db" "$DATA/ledger" "$DATA/backups" "$DATA/backups/ledger"
 install -d -o edgelab -g edgelab -m 0755 "$STATUS"
 install -d -o root -g edgelab -m 0750 "$ETC"
 
@@ -87,12 +87,13 @@ tmp=$(mktemp "$ETC/env.XXXXXX")
 chown root:edgelab "$tmp"; chmod 0640 "$tmp"; mv -f "$tmp" "$ENV_FILE"
 
 echo "== 6/7 systemd units (installed, NOT enabled)"
-install -o root -g root -m 0644 "$APP_ROOT/app/deploy/vps/systemd/"edgelab-* /etc/systemd/system/
+install -o root -g root -m 0644 "$APP_ROOT/app/deploy/vps/systemd/"edgelab-* "$APP_ROOT/app/deploy/vps/systemd/edgelab.slice" /etc/systemd/system/
 systemctl daemon-reload
 for u in "${UNITS[@]}"; do
   systemd-analyze verify "/etc/systemd/system/$u.service" "/etc/systemd/system/$u.timer" || die "unit $u does not verify"
 done
 systemd-analyze verify "/etc/systemd/system/edgelab-alert@.service" 2>/dev/null || true
+systemd-analyze verify "/etc/systemd/system/edgelab.slice" || die "edgelab.slice does not verify"
 
 echo "== 7/7 permission and runtime checks"
 # First run as the service account creates the database (schema migration) and the status file.
@@ -110,6 +111,7 @@ mode() { stat -c '%U:%G %a' "$1"; }
 expect "env file is root:edgelab 640" test "$(mode "$ENV_FILE")" = "root:edgelab 640"
 expect "data dir is edgelab:edgelab 700" test "$(mode "$DATA")" = "edgelab:edgelab 700"
 expect "db dir is edgelab:edgelab 700" test "$(mode "$DATA/db")" = "edgelab:edgelab 700"
+expect "ledger dir is edgelab:edgelab 700" test "$(mode "$DATA/ledger")" = "edgelab:edgelab 700"
 expect "backups dir is edgelab:edgelab 700" test "$(mode "$DATA/backups")" = "edgelab:edgelab 700"
 expect "status dir is edgelab:edgelab 755" test "$(mode "$STATUS")" = "edgelab:edgelab 755"
 expect "database created" test -f "$DATA/db/edge_lab.sqlite3"
@@ -120,6 +122,7 @@ if id -u "$OTHER_USER" >/dev/null 2>&1; then
   expect_not "$OTHER_USER cannot list private data" runuser -u "$OTHER_USER" -- ls "$DATA"
   expect_not "$OTHER_USER cannot read the database" runuser -u "$OTHER_USER" -- test -r "$DATA/db/edge_lab.sqlite3"
   expect_not "$OTHER_USER cannot list backups" runuser -u "$OTHER_USER" -- ls "$DATA/backups"
+  expect_not "$OTHER_USER cannot list the shadow ledger" runuser -u "$OTHER_USER" -- ls "$DATA/ledger"
   expect "$OTHER_USER can read the status file" runuser -u "$OTHER_USER" -- cat "$STATUS/latest.json"
 fi
 [ "$fails" -eq 0 ] || die "permission/runtime checks failed (see above)"

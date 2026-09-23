@@ -2,6 +2,7 @@
 Description=Market Edge Lab: failure alert for %i
 
 [Service]
+Slice=edgelab.slice
 Type=oneshot
 User=edgelab
 Group=edgelab

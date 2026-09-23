@@ -287,13 +287,49 @@ END;
 """
 
 
+class ReadOnlyStoreError(RuntimeError):
+    """The evidence store cannot be opened read-only as required (missing, wrong schema)."""
+
+
 class SnapshotStore:
+    _read_only = False
+
     def __init__(self, db_path: str | Path) -> None:
         self.path = Path(db_path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._initialize()
 
+    @classmethod
+    def open_readonly(cls, db_path: str | Path) -> "SnapshotStore":
+        """Open an existing evidence store for analysis without creating, migrating or
+        changing it: no mkdir, no schema script, no journal-mode PRAGMA, SQLite `mode=ro`
+        plus `query_only`. Refuses a missing file, a symlink, or a schema version other
+        than this code's (an older store must be migrated by the collector's write path,
+        never by an analysis run)."""
+        path = Path(db_path)
+        if path.is_symlink() or not path.is_file():
+            raise ReadOnlyStoreError(f"evidence store {path} is missing or not a regular file")
+        store = cls.__new__(cls)
+        store.path = path
+        store._read_only = True
+        version = store.schema_version()
+        if version != SCHEMA_VERSION:
+            raise ReadOnlyStoreError(
+                f"evidence store schema v{version} != code v{SCHEMA_VERSION}; refusing to analyse"
+            )
+        return store
+
+    @property
+    def read_only(self) -> bool:
+        return self._read_only
+
     def _connect(self) -> sqlite3.Connection:
+        if self._read_only:
+            conn = sqlite3.connect(f"{self.path.resolve().as_uri()}?mode=ro", uri=True, timeout=30.0)
+            conn.row_factory = sqlite3.Row
+            conn.execute("PRAGMA busy_timeout = 30000")
+            conn.execute("PRAGMA query_only = ON")
+            return conn
         # Scheduled captures and manual runs may overlap: wait for a lock instead of
         # failing at once with "database is locked".
         conn = sqlite3.connect(self.path, timeout=30.0)

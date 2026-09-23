@@ -17,7 +17,13 @@ is Europe/Berlin.
 | `edgelab-decision` | 17:55:05 | the D event, its full market list, one order book per open bracket, all received in [17:55, 18:00] |
 | `edgelab-recheck` | 18:05 | every bracket's book again, 10–15 min after that bracket's decision book |
 | `edgelab-status` | 18:30 | re-derives the day's validity from evidence; writes `/var/lib/market-edge-lab-status/latest.json` |
-| `edgelab-backup` | 04:40 UTC | verified SQLite backup into `/var/lib/market-edge-lab/backups` (no automatic deletion) |
+| `edgelab-backup` | 04:40 UTC | verified SQLite backups of the evidence DB **and** the shadow ledger (`backups/`, `backups/ledger/`; no automatic deletion) |
+| `edgelab-settlement` | 11:15, 16:15 | bounded settlement refresh for due pending events, then shadow bookkeeping (ADR 0016) |
+| `edgelab-shadow` | 18:40 | daily shadow bookkeeping from stored evidence, no network; writes `shadow_daily.json` |
+
+All edgelab units run inside `edgelab.slice` (MemoryMax 384M, CPUQuota 25% combined), as
+well as their per-run caps. Activation, verification and rollback for the daily shadow
+units: `docs/deploy/DAILY_SHADOW_ACTIVATION.md`.
 
 - **Timing:** each capture checks its own window before any network request. A run outside
   it records `rejected_out_of_window` and exits 1. The timer is never trusted, and

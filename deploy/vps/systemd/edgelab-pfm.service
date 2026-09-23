@@ -7,6 +7,7 @@ OnFailure=edgelab-alert@%n.service
 
 [Service]
 Type=oneshot
+Slice=edgelab.slice
 User=edgelab
 Group=edgelab
 EnvironmentFile=/etc/market-edge-lab/env

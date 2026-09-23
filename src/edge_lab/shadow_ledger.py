@@ -158,8 +158,30 @@ class AccountState:
         return out
 
 
-def replay(entries: Iterable[sqlite3.Row | dict[str, Any]]) -> AccountState:
-    """Rebuild one account from its journal, from zero. Raises if an invariant is broken."""
+def knowledge_time(row: sqlite3.Row | dict[str, Any]) -> datetime | None:
+    """When the fact an entry records was known (modeled time, not processing time).
+
+    - account/decision/fill: the entry's effective time (decision as-of, fill confirmation).
+    - settlement: when its settlement evidence became available (`evidence_available_utc`
+      in the evidence). Entries written before that field existed fall back to the later
+      of the settlement time and the append (processing) time, which is never earlier than
+      the truth."""
+    if row["kind"] != "settlement":
+        return _utc(row["effective_at_utc"])
+    evidence = json.loads(row["payload_json"]).get("evidence") or {}
+    known = _utc(evidence.get("evidence_available_utc"))
+    if known is not None:
+        return known
+    candidates = [t for t in (_utc(row["effective_at_utc"]), _utc(row["appended_at_utc"])) if t is not None]
+    return max(candidates) if candidates else None
+
+
+def replay(entries: Iterable[sqlite3.Row | dict[str, Any]], *, as_of: datetime | None = None) -> AccountState:
+    """Rebuild one account from its journal, from zero. Raises if an invariant is broken.
+
+    With `as_of`, only entries whose `knowledge_time` is at or before `as_of` count: the
+    account as it could have been known then (a settlement learned later never funds an
+    earlier fill). Hash-chain checks still cover every row."""
     state: AccountState | None = None
     decisions: dict[str, dict[str, Any]] = {}
     positions: dict[str, Position] = {}
@@ -173,6 +195,10 @@ def replay(entries: Iterable[sqlite3.Row | dict[str, Any]]) -> AccountState:
                 row["payload_sha256"]) != row["entry_hash"]:
             raise LedgerError(f"entry {row['seq']} does not match its hash")
         prev = row["entry_hash"]
+        if as_of is not None and kind != "account_opened":
+            known = knowledge_time(row)
+            if known is None or known > as_of:
+                continue
         if kind == "account_opened":
             if state is not None:
                 raise LedgerError("account opened twice")
@@ -262,27 +288,83 @@ def replay(entries: Iterable[sqlite3.Row | dict[str, Any]]) -> AccountState:
 # --------------------------------------------------------------------------- store
 
 
+LOCK_TIMEOUT_S = 5.0  # a held lock fails an append fast and explicitly, never hangs
+
+
+def _reference_triggers() -> frozenset[str]:
+    with closing(sqlite3.connect(":memory:")) as conn:
+        conn.executescript(_SCHEMA)
+        return frozenset(r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type = 'trigger'"))
+
+
+REFERENCE_TRIGGERS = _reference_triggers()
+
+
+class _locked:
+    """Turn SQLite's lock/busy errors into an explicit LedgerError."""
+
+    def __init__(self, path: Path) -> None:
+        self.path = path
+
+    def __enter__(self) -> None:
+        return None
+
+    def __exit__(self, exc_type, exc, tb) -> bool:
+        if isinstance(exc, sqlite3.OperationalError) and any(w in str(exc).lower() for w in ("locked", "busy")):
+            raise LedgerError(f"ledger {self.path.name} is locked or busy (waited {LOCK_TIMEOUT_S:.0f}s): {exc}") from exc
+        return False
+
+
 class ShadowLedger:
     """A shadow-account journal in its own SQLite file."""
 
     def __init__(self, path: str | Path) -> None:
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        with closing(self._connect()) as conn, conn:
+        with _locked(self.path), closing(self._connect()) as conn, conn:
             conn.executescript(_SCHEMA)
             version = conn.execute("PRAGMA user_version").fetchone()[0]
             if version not in (0, LEDGER_SCHEMA_VERSION):
                 raise LedgerError(f"unsupported ledger schema {version}")
             conn.execute(f"PRAGMA user_version = {LEDGER_SCHEMA_VERSION}")
 
+    _read_only = False
+
+    @classmethod
+    def open_readonly(cls, path: str | Path) -> "ShadowLedger":
+        """Open an existing ledger for reporting: no file or schema creation, SQLite
+        `mode=ro` + `query_only`. Appends fail. Refuses a missing file or another schema."""
+        p = Path(path)
+        if p.is_symlink() or not p.is_file():
+            raise LedgerError(f"shadow ledger {p} is missing or not a regular file")
+        ledger = cls.__new__(cls)
+        ledger.path = p
+        ledger._read_only = True
+        with closing(ledger._connect()) as conn:
+            version = conn.execute("PRAGMA user_version").fetchone()[0]
+        if version != LEDGER_SCHEMA_VERSION:
+            raise LedgerError(f"unsupported ledger schema {version}")
+        return ledger
+
+    @property
+    def read_only(self) -> bool:
+        return self._read_only
+
     def _connect(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self.path, timeout=30.0, isolation_level=None)
+        if self._read_only:
+            conn = sqlite3.connect(f"{self.path.resolve().as_uri()}?mode=ro", uri=True,
+                                   timeout=LOCK_TIMEOUT_S, isolation_level=None)
+            conn.row_factory = sqlite3.Row
+            conn.execute(f"PRAGMA busy_timeout = {int(LOCK_TIMEOUT_S * 1000)}")
+            conn.execute("PRAGMA query_only = ON")
+            return conn
+        conn = sqlite3.connect(self.path, timeout=LOCK_TIMEOUT_S, isolation_level=None)
         conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA busy_timeout = 30000")
+        conn.execute(f"PRAGMA busy_timeout = {int(LOCK_TIMEOUT_S * 1000)}")
         return conn
 
     def entries(self, account_id: str) -> list[sqlite3.Row]:
-        with closing(self._connect()) as conn:
+        with _locked(self.path), closing(self._connect()) as conn:
             return conn.execute("SELECT * FROM ledger_entries WHERE account_id = ? ORDER BY seq",
                                 (account_id,)).fetchall()
 
@@ -294,9 +376,24 @@ class ShadowLedger:
     def state(self, account_id: str) -> AccountState:
         return replay(self.entries(account_id))
 
+    def state_as_of(self, account_id: str, as_of: datetime) -> AccountState:
+        """The account as it could have been known at `as_of` (see `knowledge_time`)."""
+        return replay(self.entries(account_id), as_of=as_of)
+
+    def verify_schema(self) -> None:
+        """The append-only triggers must all be present (a dropped trigger is tampering)."""
+        with closing(self._connect()) as conn:
+            present = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type = 'trigger'")}
+        missing = sorted(REFERENCE_TRIGGERS - present)
+        if missing:
+            raise LedgerError(f"append-only triggers missing: {missing}")
+
     def verify_chain(self, account_id: str) -> str:
-        """Replays the account (which checks every hash); returns the head hash."""
-        return self.state(account_id).last_entry_hash
+        """Replays the account (which checks every hash), then checks the append-only
+        triggers are all present; returns the head hash."""
+        head = self.state(account_id).last_entry_hash
+        self.verify_schema()
+        return head
 
     def find(self, account_id: str, kind: str, key: str) -> dict[str, Any] | None:
         with closing(self._connect()) as conn:
@@ -313,7 +410,7 @@ class ShadowLedger:
             raise ValueError(f"unknown kind {kind!r}")
         text = canonical(payload)
         payload_sha = _sha(text)
-        with closing(self._connect()) as conn:
+        with _locked(self.path), closing(self._connect()) as conn:
             conn.execute("BEGIN IMMEDIATE")
             try:
                 existing = conn.execute(
@@ -327,12 +424,13 @@ class ShadowLedger:
                 rows = [dict(r) for r in conn.execute(
                     "SELECT * FROM ledger_entries WHERE account_id = ? ORDER BY seq", (account_id,))]
                 if check is not None:
-                    check(replay(rows) if rows else None)
+                    check(replay(rows) if rows else None, rows)
                 prev = rows[-1]["entry_hash"] if rows else GENESIS
                 entry_hash = _entry_hash(prev, account_id, kind, key, effective_at, payload_sha)
                 candidate = {"seq": "candidate", "account_id": account_id, "kind": kind, "entry_key": key,
                              "effective_at_utc": effective_at, "payload_json": text, "payload_sha256": payload_sha,
-                             "prev_hash": prev, "entry_hash": entry_hash}
+                             "prev_hash": prev, "entry_hash": entry_hash,
+                             "appended_at_utc": datetime.now(timezone.utc).isoformat()}
                 replay(rows + [candidate])  # the account must stay readable after this entry
                 conn.execute(
                     "INSERT INTO ledger_entries (account_id, kind, entry_key, effective_at_utc, payload_json, "
@@ -354,7 +452,7 @@ class ShadowLedger:
                    "strategy": strategy, "sizing_policy_id": sizing_policy_id, "fill_policy_id": fill_policy_id,
                    "fee_schedule_id": fee_schedule_id, "opened_at_utc": opened_at_utc, "simulation_only": True}
 
-        def check(state: AccountState | None) -> None:
+        def check(state: AccountState | None, rows: list[dict[str, Any]]) -> None:
             if state is not None:
                 raise LedgerConflict(f"account {account_id} already opened")
         return self._append(account_id, "account_opened", account_id, opened_at_utc, payload, check)
@@ -367,7 +465,7 @@ class ShadowLedger:
         if payload["qualification"] not in ("QUALIFY", "REJECT"):
             raise LedgerError("qualification must be QUALIFY or REJECT")
 
-        def check(state: AccountState | None) -> None:
+        def check(state: AccountState | None, rows: list[dict[str, Any]]) -> None:
             if state is None:
                 raise LedgerError("account not opened")
         return self._append(account_id, "decision", payload["decision_id"], payload["as_of_utc"], payload, check)
@@ -391,15 +489,30 @@ class ShadowLedger:
             if quantity <= 0 or not (Decimal(0) < price < Decimal(1)) or cost < quantity * price:
                 raise LedgerError("FILLED needs quantity > 0, a price in (0, 1) and total_cost >= quantity * price")
 
-        def check(state: AccountState | None) -> None:
+        def check(state: AccountState | None, rows: list[dict[str, Any]]) -> None:
             if state is None:
                 raise LedgerError("account not opened")
-            if payload["status"] == "FILLED" and _d(payload["total_cost"]) > state.settled_cash:
-                raise LedgerError("insufficient settled cash: record NO_FILL INSUFFICIENT_CASH instead")
+            if payload["status"] == "FILLED":
+                if _d(payload["total_cost"]) > state.settled_cash:
+                    raise LedgerError("insufficient settled cash: record NO_FILL INSUFFICIENT_CASH instead")
+                known_at = _utc(payload["filled_at_utc"])
+                # Cash-moving entries must arrive in knowledge-time order: a fill known earlier
+                # than an already-recorded fill or settlement could otherwise be funded, at
+                # some instant, by cash learned after it (out-of-order catch-up or a retried
+                # older day). Such a fill is refused; the day needs attention, not a quiet pass.
+                latest = max((knowledge_time(r) for r in rows if r["kind"] == "settlement" or (
+                    r["kind"] == "fill" and json.loads(r["payload_json"]).get("status") == "FILLED")),
+                    default=None, key=lambda t: t or datetime.min.replace(tzinfo=timezone.utc))
+                if known_at is not None and latest is not None and known_at < latest:
+                    raise LedgerError(f"out-of-order fill: known at {known_at.isoformat()} but the account already "
+                                      f"records cash movements known at {latest.isoformat()}")
+                if known_at is None or _d(payload["total_cost"]) > replay(rows, as_of=known_at).settled_cash:
+                    raise LedgerError("cash known at the fill time does not cover it (a later settlement cannot "
+                                      "fund an earlier fill): record NO_FILL INSUFFICIENT_CASH instead")
         return self._append(account_id, "fill", payload["decision_id"], payload["filled_at_utc"], payload, check)
 
     def record_settlement(self, account_id: str, *, fill_id: str, outcome: str, evidence: dict[str, Any],
-                          settled_at_utc: str) -> tuple[str, bool]:
+                          settled_at_utc: str, fee: dict[str, Any] | None = None) -> tuple[str, bool]:
         """Settle one open position on an official outcome. P&L is computed here, from the fill."""
         if outcome not in ("YES", "NO"):
             raise LedgerError("outcome must be YES or NO (an unknown outcome is not settled)")
@@ -413,9 +526,17 @@ class ShadowLedger:
             "side": fill["side"], "outcome": outcome, "quantity": quantity, "payout": str(payout),
             "gross_pnl": str(payout - quantity * price), "fees": str(cost - quantity * price),
             "net_pnl": str(payout - cost), "evidence": evidence, "settled_at_utc": settled_at_utc,
+            **(fee or {}),
         }
 
-        def check(state: AccountState | None) -> None:
+        known = _utc(evidence.get("evidence_available_utc")) if isinstance(evidence, dict) else None
+        if known is not None:
+            settled, filled = _utc(settled_at_utc), _utc(fill["filled_at_utc"])
+            if settled is None or settled > known or (filled is not None and known < filled):
+                raise LedgerError("settlement evidence must be received at or after both the settlement time "
+                                  "and the fill")
+
+        def check(state: AccountState | None, rows: list[dict[str, Any]]) -> None:
             position = next((p for p in state.positions if p.position_id == fill_id), None) if state else None
             if position is None or position.status != "OPEN":
                 raise LedgerError(f"position {fill_id} is not open")
