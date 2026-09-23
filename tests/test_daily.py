@@ -251,20 +251,26 @@ def test_formatting_differences_are_not_settlement_conflicts(store, tmp_path, mo
     assert receipt["settlement"]["conflicts"] == [] and receipt["settlement"]["settled"] == 6
 
 
-def test_contradicting_settlement_evidence_alerts(store, tmp_path, monkeypatch, model):
+def test_contradicting_settlement_evidence_alerts_once(store, tmp_path, monkeypatch, model):
+    # Evidence received before D+1's window closes, so no missed day interferes.
     _full_day(store, monkeypatch)
-    _settled(store, 67, _result(67))
-    _run(store, tmp_path, model, now=datetime(2026, 9, 24, 15, tzinfo=UTC))
-    _settled_run(store, 70, _result(70), "later")  # a later capture contradicts the recorded outcomes
-    receipt, code = _run(store, tmp_path, model, now=datetime(2026, 9, 24, 16, tzinfo=UTC))
+    _settled_run(store, 67, _result(67), "first", received="2026-09-23T12:00:00+00:00")
+    _run(store, tmp_path, model, now=datetime(2026, 9, 23, 20, tzinfo=UTC))
+    _settled_run(store, 70, _result(70), "later", received="2026-09-23T13:00:00+00:00")
+    receipt, code = _run(store, tmp_path, model, now=datetime(2026, 9, 23, 21, tzinfo=UTC))
     assert (receipt["state"], code) == ("SETTLEMENT_CONFLICT", 1) and receipt["settlement"]["conflicts"]
+    again, code2 = _run(store, tmp_path, model, now=datetime(2026, 9, 23, 21, 30, tzinfo=UTC))
+    assert (again["state"], code2) == ("SETTLEMENT_CONFLICT", 0) and again["repeat_of_previous_alert"]
+    # Once D+1's window closes with no capture, the invalid day wins (and alerts); conflicts stay listed.
+    later, code3 = _run(store, tmp_path, model, now=datetime(2026, 9, 24, 16, tzinfo=UTC))
+    assert (later["state"], code3) == ("INVALID_CAPTURE", 3) and later["settlement"]["conflicts"]
 
 
-def _settled_run(store, value, result_for, run_id):
+def _settled_run(store, value, result_for, run_id, received="2026-09-24T14:30:00+00:00"):
     from edge_lab.kalshi import SETTLEMENT_SOURCE, _save
     markets = [dict(m, status="settled", expiration_value=str(value), result=result_for(m)) for m in MARKETS["markets"]]
     payload = {"markets": markets, "cursor": None}
-    fetch = FetchResult("u", "u", 200, "application/json", json.dumps(payload).encode(), "2026-09-24T14:30:00+00:00", 1, 1)
+    fetch = FetchResult("u", "u", 200, "application/json", json.dumps(payload).encode(), received, 1, 1)
     store.start_run(run_id)
     _save(store, run_id=run_id, kind="settled_markets", entity_id="KXHIGHNY", url="u", payload=payload,
           fetch=fetch, spec=SETTLEMENT_SOURCE)
@@ -281,3 +287,24 @@ def test_a_day_that_can_never_fill_does_not_hold_settlement_back(store, tmp_path
     receipt, _ = _run(store, tmp_path, model, now=datetime(2026, 9, 24, 15, tzinfo=UTC))
     assert receipt["settlement"]["settled"] == 6
     assert receipt["settlement"]["evidence_cutoff_utc"] == "2026-09-24T15:00:00+00:00"
+
+
+def test_sigterm_during_shadow_daily_writes_a_failed_receipt(store, tmp_path, monkeypatch, model):
+    import os
+    import signal
+
+    from edge_lab import cli
+    _full_day(store, monkeypatch)
+
+    def killed(*a, **k):
+        os.kill(os.getpid(), signal.SIGTERM)
+    monkeypatch.setattr(daily, "_run_locked", killed)
+    old = signal.getsignal(signal.SIGTERM)
+    try:
+        with pytest.raises(SystemExit):
+            cli.main(["shadow", "daily", "--db", str(store.path), "--ledger", str(tmp_path / "l.sqlite3"),
+                      "--status-dir", str(tmp_path / "st")])
+    finally:
+        signal.signal(signal.SIGTERM, old)
+    receipt = json.loads((tmp_path / "st" / daily.RECEIPT_NAME).read_text())
+    assert receipt["state"] == "FAILED" and "interrupted" in receipt["problems"][-1]

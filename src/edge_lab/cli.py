@@ -500,7 +500,13 @@ def _shadow(args: argparse.Namespace) -> int:
 
     ledger_path = Path(args.ledger)
     if args.shadow_command == "daily":
+        import signal
+
         from . import daily
+
+        def _terminate(signum, frame):  # systemd stop/timeout: raise so a FAILED receipt is written
+            raise SystemExit(128 + signum)
+        signal.signal(signal.SIGTERM, _terminate)
 
         receipt, code = daily.run(Path(args.db), ledger_path,
                                   status_dir=Path(args.status_dir) if args.status_dir else None,

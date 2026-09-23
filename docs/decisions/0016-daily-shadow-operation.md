@@ -51,7 +51,12 @@ found five gaps:
     (`daily.settlement_cutoff`). Otherwise later-known cash would be recorded ahead of that
     day's fills and wedge it permanently.
   - Contradicting settlement captures (compared on parsed values) end the run as
-    `SETTLEMENT_CONFLICT` (exit 1).
+    `SETTLEMENT_CONFLICT` (exit 1). An invalid capture day takes precedence in the state, and each
+    invalid day or conflict set alerts once.
+  - A day that could never fill does not hold settlement back. But a code or model change
+    that makes such an old day produce a qualifying opportunity would find its fills out of
+    order and stop the pipeline at that day. So such a change must come with an explicit,
+    reviewed decision on those days: exclude them or restate them. Never a silent re-run.
   - A settlement's evidence must be received at or after both the settlement time and the
     fill.
   - A settlement's effective time is clamped to its evidence receipt, and the reported

@@ -272,14 +272,21 @@ def run(db: Path, ledger_path: Path, *, status_dir: Path | None = None, now: dat
     return _finish(status_dir, receipt)
 
 
+def _alert_key(receipt: dict[str, Any]) -> Any:
+    if receipt.get("state") == "INVALID_CAPTURE":
+        return (receipt.get("latest_day") or {}).get("target_date")
+    conflicts = (receipt.get("settlement") or {}).get("conflicts") or []
+    return sorted((c.get("account_id"), c.get("position_id"), json.dumps(c.get("variants"), sort_keys=True))
+                  for c in conflicts)
+
+
 def _finish(status_dir: Path | None, receipt: dict[str, Any]) -> tuple[dict[str, Any], int]:
     receipt["exit_code"] = EXIT[receipt["state"]]
-    if receipt["state"] == "INVALID_CAPTURE":
-        # Alert once per invalid day: the 11:15 and 16:15 runs re-derive the same state.
+    if receipt["state"] in ("INVALID_CAPTURE", "SETTLEMENT_CONFLICT"):
+        # Alert once per condition: later runs re-derive the same invalid day or the same set
+        # of conflicts. A new invalid day or a changed conflict set alerts again.
         previous = _previous_receipt(status_dir) or {}
-        if (previous.get("state") == "INVALID_CAPTURE"
-                and (previous.get("latest_day") or {}).get("target_date")
-                == (receipt.get("latest_day") or {}).get("target_date")):
+        if previous.get("state") == receipt["state"] and _alert_key(previous) == _alert_key(receipt):
             receipt["exit_code"] = 0
             receipt["repeat_of_previous_alert"] = True
     try:
@@ -364,12 +371,12 @@ def _run_locked(db: Path, ledger_path: Path, now: datetime, receipt: dict[str, A
                                                            ("target_date", "result", "capture_status")}
     if failed or refresh_status == "failed":
         receipt["state"] = "FAILED"
+    elif days and latest is not None and latest["result"] == "INVALID_CAPTURE":
+        receipt["state"] = "INVALID_CAPTURE"  # conflicts, if any, are still listed in settlement.conflicts
     elif report["conflicts"]:
         receipt["state"] = "SETTLEMENT_CONFLICT"
     elif not days:
         receipt["state"] = "NO_CAPTURE" if not store.forward_captures() else "NOT_CLOSED"
-    elif latest is not None and latest["result"] == "INVALID_CAPTURE":
-        receipt["state"] = "INVALID_CAPTURE"
     elif report["pending"]:
         receipt["state"] = "PENDING_SETTLEMENT"
     elif latest is not None and latest["result"] == "HEALTHY_TRADED":
