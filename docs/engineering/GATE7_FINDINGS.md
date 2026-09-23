@@ -101,9 +101,16 @@ manual unless the owner separately approves a scheduled anchor.
    `anchor verify` ran there from a clean checkout at the reviewed SHA `247fe80`: VERIFIED
    twice.
 
-What this does **not** cover: the anchored history is only the two account openings. Every
-real shadow entry is appended after it. A newer checkpoint after the first real shadow day,
-stored and verified the same way, is the next step (`HANDOFF.md`).
+The first anchored history was only the two account openings. **Second checkpoint, after the
+first real shadow day** (`docs/deploy/PRODUCTION_ACTIVATION_2026-09-23.md` §9):
+- `89581b5a…e7d2`, 30 ledger entries, stored the same two ways (laptop +
+  `docs/engineering/ledger_checkpoints/2026-09-23T224720Z.json`);
+- the production ledger VERIFIED against it on the VPS;
+- off-host from a clean checkout at the deployed SHA: VERIFIED, and the first checkpoint
+  EXTENDED (history intact, 14 appended).
+
+Residual, per ADR 0021: entries after 2026-09-23T22:47:20Z are covered only by the next
+manual checkpoint.
 
 Reporting findings from the independent review of the local dashboard (PR #28, area D). All
 are fixed and tested in `tests/test_dashboard.py`:
