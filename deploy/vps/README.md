@@ -55,7 +55,9 @@ Nothing is enabled by install. Do not update between 17:40 and 18:25 ET.
 
 1. **Agent (unprivileged):**
    - bundle the merged `main` commit;
-   - copy `install.sh` and the bundle to `~dynasty/edgelab-release/`;
+   - copy the bundle and `install.sh` to `~dynasty/edgelab-release/`. Take `install.sh` from
+     git (`git show <SHA>:deploy/vps/install.sh`), not from a Windows working tree:
+     `.gitattributes` keeps `deploy/**` LF, but a copied CRLF file would fail at once;
    - run `bash preflight.sh`.
 2. **Owner (sudo):**
 

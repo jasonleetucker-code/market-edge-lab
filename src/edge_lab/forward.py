@@ -57,6 +57,8 @@ RECHECK_AIM = timedelta(seconds=5)
 # Never start a request with less time than this before its deadline.
 MIN_REQUEST_BUDGET = timedelta(seconds=3)
 REQUEST_TIMEOUT_S = 10.0
+# The pfm phase must be done before the decision capture starts (they share one host lock).
+PFM_END_BEFORE_DECISION = timedelta(minutes=6)
 PFM_LOOKBACK = timedelta(hours=36)
 BOOK_DEPTH = 100
 MAX_MARKET_PAGES = 5
@@ -320,7 +322,7 @@ def gate(phase: str, store: SnapshotStore, now: datetime, *, mode: str = "live")
     decision = None
     wait_s = 0.0
     if phase == "pfm":
-        window = (w["cutoff"], w["decision"])
+        window = (w["cutoff"], w["decision"] - PFM_END_BEFORE_DECISION)
         if not (window[0] <= now < window[1]):
             return Gate(phase, target, window, "rejected_out_of_window",
                         (f"now {_iso(now)} outside [{_iso(window[0])}, {_iso(window[1])})",))
@@ -343,16 +345,16 @@ def gate(phase: str, store: SnapshotStore, now: datetime, *, mode: str = "live")
         books = json.loads(decision["links_json"])["books"]
         times = sorted(_parse(b["fetched_at_utc"]) for b in books.values())
         window = (times[0] + RECHECK_MIN, times[-1] + RECHECK_MAX)
+        prior = [r for r in store.forward_captures(target_date=target.isoformat(), phase="recheck", mode=mode)
+                 if r["status"] == "complete" and r["decision_capture_id"] == decision["id"]]
+        if prior:
+            return Gate(phase, target, window, "skipped_duplicate", ("complete recheck already exists",),
+                        decision=decision)
         # Too late for the last bracket's window means nothing can be captured. Starting
         # early is fine: each bracket waits for its own window.
         if not (times[0] <= now <= window[1] - MIN_REQUEST_BUDGET):
             return Gate(phase, target, window, "rejected_out_of_window",
                         (f"now {_iso(now)} outside the recheck windows [{_iso(window[0])}, {_iso(window[1])}]",),
-                        decision=decision)
-        prior = [r for r in store.forward_captures(target_date=target.isoformat(), phase="recheck", mode=mode)
-                 if r["status"] == "complete" and r["decision_capture_id"] == decision["id"]]
-        if prior:
-            return Gate(phase, target, window, "skipped_duplicate", ("complete recheck already exists",),
                         decision=decision)
         return Gate(phase, target, window, decision=decision)
     else:
@@ -386,26 +388,34 @@ def would_proceed(phase: str, store: SnapshotStore, now: datetime, *, mode: str 
 # --------------------------------------------------------------------------- pfm
 
 
-def _pfm_issuances(store: SnapshotStore, *, received_by: datetime) -> tuple[list[Issuance], dict[str, int]]:
-    """Every stored PFMOKX product received by `received_by`, parsed, plus sha -> snapshot id."""
-    issuances, ids = [], {}
+ParsedPfm = list[tuple[datetime, Issuance, int]]  # (received, issuance, snapshot id)
+
+
+def parse_stored_pfm(store: SnapshotStore) -> ParsedPfm:
+    """Every stored PFMOKX product, parsed once (callers filter by receipt time)."""
+    parsed: ParsedPfm = []
     for row in store.snapshots_of_kind(source=PFM_SOURCE.legacy_name, kind="pfm_product"):
-        if _parse(row["fetched_at_utc"]) > received_by:
-            continue
         text = json.loads(row["payload_json"]).get("productText") or ""
         forecast = parse_pfm(text)
         if forecast is None:
             continue
-        sha = sha256_text(text)
-        ids.setdefault(sha, int(row["id"]))
-        issuances.append(Issuance(forecast=forecast, product_sha256=sha, extract_sha256=sha256_text(extract(text) or "")))
-    return issuances, ids
+        issuance = Issuance(forecast=forecast, product_sha256=sha256_text(text),
+                            extract_sha256=sha256_text(extract(text) or ""))
+        parsed.append((_parse(row["fetched_at_utc"]), issuance, int(row["id"])))
+    return parsed
 
 
-def select_pfm(store: SnapshotStore, target: date) -> tuple[dict[str, Any] | None, str | None]:
+def select_pfm(
+    store: SnapshotStore, target: date, *, parsed: ParsedPfm | None = None
+) -> tuple[dict[str, Any] | None, str | None]:
     """The frozen availability rule applied to the products we received before the decision."""
     w = windows(target)
-    issuances, ids = _pfm_issuances(store, received_by=w["decision"])
+    parsed = parse_stored_pfm(store) if parsed is None else parsed
+    issuances, ids = [], {}
+    for received, issuance, snapshot_id in parsed:
+        if received <= w["decision"]:
+            issuances.append(issuance)
+            ids.setdefault(issuance.product_sha256, snapshot_id)
     chosen, reason, after = select_forecast(issuances, target, w["cutoff"])
     if chosen is None:
         return None, reason
@@ -452,19 +462,25 @@ def capture_pfm(
             product_id = item.get("id") if isinstance(item, dict) else None
             issued = item.get("issuanceTime") if isinstance(item, dict) else None
             if not product_id or not issued:
-                anomalies.append("PFM list entry without id/issuanceTime skipped")
+                outcome.reasons.append("PFM list entry without id/issuanceTime skipped")
                 continue
             try:
                 issued_at = _parse(issued)
             except ValueError:
-                anomalies.append(f"PFM list entry {product_id} has unparseable issuanceTime")
+                outcome.reasons.append(f"PFM list entry {product_id} has unparseable issuanceTime")
                 continue
             if issued_at < started - PFM_LOOKBACK or store.has_snapshot(
                 source=PFM_SOURCE.legacy_name, kind="pfm_product", entity_id=product_id
             ):
                 continue
             url = PFM_PRODUCT_URL.format(product_id=product_id)
-            product, product_fetch = budget.get(url, pacer=NWS_PACER, headers=headers)
+            try:
+                product, product_fetch = budget.get(url, pacer=NWS_PACER, headers=headers)
+            except HttpFetchError as exc:
+                # Keep fetching the others; the missing product makes this capture
+                # incomplete, so the day cannot be VALID on an older forecast.
+                outcome.reasons.append(f"product {product_id}: {type(exc).__name__}: {exc}")
+                continue
             _save(store, run_id=run_id, spec=PFM_SOURCE, kind="pfm_product", entity_id=product_id,
                   url=url, payload=product, fetch=product_fetch)
             outcome.records += 1
@@ -672,14 +688,20 @@ def capture_recheck(
 # --------------------------------------------------------------------------- validity
 
 
-def day_status(store: SnapshotStore, target: date, *, mode: str = "live") -> dict[str, Any]:
+def day_status(
+    store: SnapshotStore, target: date, *, mode: str = "live", parsed_pfm: ParsedPfm | None = None
+) -> dict[str, Any]:
     """Re-derive one Stage B day from stored evidence: VALID only if every requirement holds."""
     w = windows(target)
     reasons: list[str] = []
     result: dict[str, Any] = {"target_date": target.isoformat(), "event_ticker": event_ticker_for(target),
                               "decision_utc": _iso(w["decision"])}
 
-    chosen, why = select_pfm(store, target)
+    # The forecast counts only if a pfm capture for D completed: it fetched every product
+    # the list showed, so no newer issuance before the cutoff can be missing.
+    if _latest_complete(store, target, "pfm", mode) is None:
+        reasons.append("forecast: no complete pfm capture (a newer issuance may be missing)")
+    chosen, why = select_pfm(store, target, parsed=parsed_pfm)
     if chosen is None:
         reasons.append(f"forecast: {why}")
     result["forecast"] = chosen
@@ -737,7 +759,8 @@ def day_status(store: SnapshotStore, target: date, *, mode: str = "live") -> dic
             again_snaps = store.snapshots_by_id(b["snapshot_id"] for b in again.values())
             for bracket, info in books.items():
                 snap = again_snaps.get(again[bracket]["snapshot_id"]) if bracket in again else None
-                if snap is None or snap["entity_id"] != bracket or snap["run_id"] != recheck["run_id"]:
+                if (snap is None or snap["entity_id"] != bracket or snap["kind"] != "orderbook"
+                        or snap["run_id"] != recheck["run_id"]):
                     reasons.append(f"{bracket}: recheck book missing")
                     continue
                 book_at, received = _parse(info["fetched_at_utc"]), _parse(snap["fetched_at_utc"])
@@ -764,9 +787,10 @@ def summary(store: SnapshotStore, *, now_utc: datetime, mode: str = "live") -> d
     """Status of the last closed day plus the count of VALID days captured so far."""
     last = last_closed_target(now_utc)
     days = sorted({date.fromisoformat(r["target_date"]) for r in store.forward_captures(mode=mode)})
-    statuses = {d.isoformat(): day_status(store, d, mode=mode) for d in days if d <= last}
+    parsed = parse_stored_pfm(store)
+    statuses = {d.isoformat(): day_status(store, d, mode=mode, parsed_pfm=parsed) for d in days if d <= last}
     valid = [d for d, s in statuses.items() if s["status"] == "VALID"]
-    latest = statuses.get(last.isoformat()) or day_status(store, last, mode=mode)
+    latest = statuses.get(last.isoformat()) or day_status(store, last, mode=mode, parsed_pfm=parsed)
     return {
         "generated_at_utc": _iso(now_utc),
         "experiment": EXPERIMENT,

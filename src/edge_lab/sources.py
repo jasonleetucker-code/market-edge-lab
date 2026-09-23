@@ -82,7 +82,9 @@ REGISTRY: dict[str, SourceSpec] = {
                 "Unauthenticated public market-data endpoints only. Review Kalshi "
                 "terms before any redistribution of stored data."
             ),
-            collected_by=("routine", "forward"),
+            # Forward captures also fetch these endpoints, but they are judged by
+            # `forward_captures` (cadence-aware), not by this source's health rows.
+            collected_by=("routine",),
         ),
         SourceSpec(
             source_id="nws_api",

@@ -493,3 +493,118 @@ def test_forward_captures_are_immutable(store, monkeypatch):
             conn.execute("UPDATE forward_captures SET status = 'complete'")
         with pytest.raises(sqlite3.DatabaseError, match="immutable"):
             conn.execute("DELETE FROM forward_captures")
+
+
+# --------------------------------------------------------------------------- review fixes (PR #19)
+
+
+def test_newer_listed_forecast_that_failed_to_fetch_invalidates_the_day(store, monkeypatch):
+    """Frozen rule: the latest issuance before the cutoff. If the list shows a newer product
+    that could not be fetched, the older stored one must not make the day VALID."""
+    newer = "11111111-2222-3333-4444-555555555555"
+    routes = default_routes()
+    routes["/products/types/PFM/locations/OKX"] = {"@graph": [
+        {"id": newer, "issuanceTime": "2026-09-22T20:30:00+00:00"},
+        {"id": PFM_ID, "issuanceTime": "2026-09-22T18:53:00+00:00"},
+    ]}
+    routes = {f"/products/{newer}": HttpFetchError("HTTP 503", status=503, attempts=3), **routes}
+    clock = Clock(at(21, 45))
+    api = FakeApi(clock, routes)
+    assert _run(store, "pfm", clock, api, monkeypatch).status == "partial"
+    clock.now = at(21, 55, 5)
+    assert _run(store, "decision", clock, api, monkeypatch).status == "complete"
+    clock.now = at(22, 5)
+    assert _run(store, "recheck", clock, api, monkeypatch).status == "complete"
+    status = forward.day_status(store, D)
+    assert status["status"] == "INVALID"
+    assert any("no complete pfm capture" in r for r in status["reasons"])
+
+
+def test_malformed_pfm_list_entry_makes_the_capture_incomplete(store, monkeypatch):
+    routes = default_routes()
+    routes["/products/types/PFM/locations/OKX"] = {"@graph": [
+        {"id": PFM_ID, "issuanceTime": "2026-09-22T18:53:00+00:00"}, {"issuanceTime": "x"},
+    ]}
+    clock = Clock(at(21, 45))
+    assert _run(store, "pfm", clock, FakeApi(clock, routes), monkeypatch).status == "partial"
+
+
+def test_pfm_phase_ends_before_the_decision_window(store, monkeypatch):
+    clock = Clock(at(21, 54, 30))
+    api = FakeApi(clock)
+    outcome = _run(store, "pfm", clock, api, monkeypatch)
+    assert outcome.status == "rejected_out_of_window" and api.calls == []
+    # A slow NWS never runs past 17:54 ET, so the shared lock is free for the decision.
+    slow_clock = Clock(at(21, 53, 50))
+    slow = FakeApi(slow_clock, latency=4.0)
+    _run(SnapshotStore(store.path.with_name("slow.sqlite3")), "pfm", slow_clock, slow, monkeypatch)
+    assert slow_clock.now <= at(21, 54, 4)
+
+
+def test_day_status_rejects_a_decision_book_stored_outside_the_window(store):
+    """day_status re-checks receipt times itself; it does not trust a capture row's status."""
+    store.start_run("forged")
+    ticker = forward.event_ticker_for(D)
+    event_id = store.save_snapshot(run_id="forged", source="kalshi", kind="event", entity_id=ticker,
+                                   url="u", payload=EVENT, fetched_at_utc=at(21, 56).isoformat())
+    markets_id = store.save_snapshot(run_id="forged", source="kalshi", kind="markets", entity_id=ticker,
+                                     url="u", payload=MARKETS, fetched_at_utc=at(21, 56).isoformat())
+    books = {}
+    for i, bracket in enumerate(BRACKETS):
+        when = at(22, 1) if i == 0 else at(21, 57)  # the first book is late
+        sid = store.save_snapshot(run_id="forged", source="kalshi", kind="orderbook", entity_id=bracket,
+                                  url="u", payload=BOOK, fetched_at_utc=when.isoformat())
+        books[bracket] = {"snapshot_id": sid, "fetched_at_utc": when.isoformat()}
+    store.record_forward_capture(
+        run_id="forged", experiment="EXP-001", phase="decision", mode="live", target_date=D.isoformat(),
+        event_ticker=ticker, started_at_utc=at(21, 56).isoformat(), completed_at_utc=at(21, 57).isoformat(),
+        window_start_utc=at(21, 55).isoformat(), window_end_utc=at(22, 0).isoformat(), status="complete",
+        reasons=[], links={"event_snapshot": event_id, "market_snapshots": [markets_id], "books": books},
+    )
+    status = forward.day_status(store, D)
+    assert status["status"] == "INVALID"
+    assert any("outside the decision window" in r for r in status["reasons"])
+
+
+def test_late_duplicate_recheck_is_skipped_not_alerted(store, monkeypatch):
+    decision, recheck, api, clock = _full_day(store, monkeypatch)
+    api.calls.clear()
+    clock.now = at(22, 25)
+    again = _run(store, "recheck", clock, api, monkeypatch)
+    assert again.status == "skipped_duplicate" and again.exit_code == 0 and api.calls == []
+
+
+def test_summary_parses_stored_forecasts_once(store, monkeypatch):
+    _full_day(store, monkeypatch)
+    calls = {"n": 0}
+    real = forward.parse_stored_pfm
+
+    def counting(s):
+        calls["n"] += 1
+        return real(s)
+
+    monkeypatch.setattr(forward, "parse_stored_pfm", counting)
+    assert forward.summary(store, now_utc=at(22, 30))["valid_days"] == 1
+    assert calls["n"] == 1
+
+
+def test_cli_lock_busy_is_a_nonzero_exit_without_a_run(tmp_path, capsys):
+    db = tmp_path / "e.sqlite3"
+    with forward.exclusive_lock(db.with_name(db.name + ".forward.lock")):
+        code = cli.main(["forward", "capture", "--phase", "decision", "--db", str(db), "--lock-timeout", "0.2"])
+    assert code == 1
+    assert "lock_busy" in capsys.readouterr().err
+    with sqlite3.connect(db) as conn:
+        assert conn.execute("SELECT COUNT(*) FROM forward_captures").fetchone()[0] == 0
+
+
+def test_forward_runs_do_not_change_routine_health(tmp_path, monkeypatch, capsys):
+    """Issue #16 in both directions: forward captures never write kalshi_public health."""
+    from edge_lab.sources import get_source
+
+    assert get_source("kalshi_public").collected_by == ("routine",)
+    db = tmp_path / "e.sqlite3"
+    store = SnapshotStore(db)
+    _full_day(store, monkeypatch)
+    rows = {r["source_id"] for r in store.latest_source_health()}
+    assert "kalshi_public" not in rows

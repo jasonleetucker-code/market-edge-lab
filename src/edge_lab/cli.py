@@ -353,7 +353,9 @@ def _forward_capture(args: argparse.Namespace) -> int:
     db = Path(args.db)
     store = SnapshotStore(db)
     run_id = str(uuid.uuid4())
-    source_id = "nws_pfm_okx" if args.phase == "pfm" else "kalshi_public"
+    # Only the pfm phase writes source health (nws_pfm_okx is a forward-only source). The
+    # Kalshi phases are judged by their forward_captures rows, so a forward run never
+    # changes the routine profile's view of kalshi_public (issue #16).
     capture = {
         "pfm": lambda anomalies: forward.capture_pfm(
             store, run_id=run_id, user_agent=args.nws_user_agent, anomalies=anomalies
@@ -367,19 +369,19 @@ def _forward_capture(args: argparse.Namespace) -> int:
             store.start_run(run_id)
             finished = False
             try:
-                if forward.would_proceed(args.phase, store, datetime.now(timezone.utc)):
+                if args.phase == "pfm" and forward.would_proceed(args.phase, store, datetime.now(timezone.utc)):
 
                     def collect(anomalies: list[str]) -> dict[str, int]:
                         nonlocal outcome
                         outcome = capture(anomalies)
                         return {"records": outcome.records}
 
-                    health = _run_source(store, run_id=run_id, source_id=source_id, collect=collect)
+                    health = _run_source(store, run_id=run_id, source_id="nws_pfm_okx", collect=collect)
                     if outcome is None:
                         raise RuntimeError(health["error"] or "capture did not complete")
                 else:
-                    # Rejected or duplicate: recorded without any network work, so no
-                    # source-health row claims the source was exercised.
+                    # Kalshi phases, or a rejected/duplicate pfm run (recorded without any
+                    # network work, so no source-health row claims the source was used).
                     outcome = capture([])
                 run_status = (
                     "succeeded" if outcome.status in ("complete", "skipped_duplicate")
