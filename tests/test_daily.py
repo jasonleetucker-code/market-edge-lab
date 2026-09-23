@@ -30,7 +30,8 @@ def model():
 
 def _hashes(db):
     return {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted(db.parent.glob(db.name + "*"))
-            if not p.name.endswith((".lock", "-shm"))}  # -shm: WAL read-mark index, holds no data
+            if not p.name.endswith((".lock", "-shm"))  # -shm: WAL read-mark index, holds no data
+            and not (p.name.endswith("-wal") and p.stat().st_size == 0)}  # an empty WAL holds no frames
 
 
 def _run(store, tmp_path, model, **kw):
@@ -292,14 +293,15 @@ def test_a_day_that_can_never_fill_does_not_hold_settlement_back(store, tmp_path
 
 
 def test_sigterm_during_shadow_daily_writes_a_failed_receipt(store, tmp_path, monkeypatch, model):
-    import os
     import signal
 
     from edge_lab import cli
     _full_day(store, monkeypatch)
 
     def killed(*a, **k):
-        os.kill(os.getpid(), signal.SIGTERM)
+        # raise_signal runs the installed handler on every platform; os.kill(getpid, SIGTERM)
+        # is TerminateProcess on Windows and would end the whole test run with exit code 15.
+        signal.raise_signal(signal.SIGTERM)
     monkeypatch.setattr(daily, "_run_locked", killed)
     old = signal.getsignal(signal.SIGTERM)
     try:

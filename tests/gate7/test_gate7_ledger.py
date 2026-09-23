@@ -227,7 +227,9 @@ def test_same_fill_id_under_two_decisions_is_refused(tmp_path):
 def test_concurrent_appends_from_processes_lose_nothing_and_duplicate_nothing(tmp_path):
     path = tmp_path / "concurrent.sqlite3"
     acct(path)
-    ctx = multiprocessing.get_context("fork")
+    # fork where available (Linux CI); spawn elsewhere (Windows has no fork). The worker lives in
+    # an importable module, so spawn children can unpickle it.
+    ctx = multiprocessing.get_context("fork" if "fork" in multiprocessing.get_all_start_methods() else "spawn")
     queue = ctx.Queue()
     workers, per = 4, 12
     procs = [ctx.Process(target=concurrent_worker, args=(str(path), ACC, w, per, T0.isoformat(), queue))

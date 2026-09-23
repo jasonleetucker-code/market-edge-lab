@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from contextlib import closing
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
@@ -324,25 +325,31 @@ class SnapshotStore:
         return self._read_only
 
     def _connect(self) -> sqlite3.Connection:
+        """A configured connection. Callers close it (`closing`); if configuring it fails, it
+        is closed here, so a failed PRAGMA never leaks a handle."""
         if self._read_only:
             conn = sqlite3.connect(f"{self.path.resolve().as_uri()}?mode=ro", uri=True, timeout=30.0)
+        else:
+            # Scheduled captures and manual runs may overlap: wait for a lock instead of
+            # failing at once with "database is locked".
+            conn = sqlite3.connect(self.path, timeout=30.0)
+        try:
             conn.row_factory = sqlite3.Row
             conn.execute("PRAGMA busy_timeout = 30000")
-            conn.execute("PRAGMA query_only = ON")
-            return conn
-        # Scheduled captures and manual runs may overlap: wait for a lock instead of
-        # failing at once with "database is locked".
-        conn = sqlite3.connect(self.path, timeout=30.0)
-        conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA busy_timeout = 30000")
-        conn.execute("PRAGMA foreign_keys = ON")
-        # Make REPLACE conflict resolution fire delete triggers too.
-        conn.execute("PRAGMA recursive_triggers = ON")
-        conn.execute("PRAGMA journal_mode = WAL")
+            if self._read_only:
+                conn.execute("PRAGMA query_only = ON")
+            else:
+                conn.execute("PRAGMA foreign_keys = ON")
+                # Make REPLACE conflict resolution fire delete triggers too.
+                conn.execute("PRAGMA recursive_triggers = ON")
+                conn.execute("PRAGMA journal_mode = WAL")
+        except BaseException:
+            conn.close()
+            raise
         return conn
 
     def _initialize(self) -> None:
-        with self._connect() as conn:
+        with closing(self._connect()) as conn, conn:
             version = int(conn.execute("PRAGMA user_version").fetchone()[0])
             if version > SCHEMA_VERSION:
                 raise RuntimeError(
@@ -367,11 +374,11 @@ class SnapshotStore:
             conn.executescript(_SCHEMA_V4)
 
     def schema_version(self) -> int:
-        with self._connect() as conn:
+        with closing(self._connect()) as conn, conn:
             return int(conn.execute("PRAGMA user_version").fetchone()[0])
 
     def start_run(self, run_id: str) -> None:
-        with self._connect() as conn:
+        with closing(self._connect()) as conn, conn:
             conn.execute(
                 """
                 INSERT INTO collection_runs(run_id, started_at_utc, status)
@@ -383,7 +390,7 @@ class SnapshotStore:
     def finish_run(self, run_id: str, *, status: str, error: str | None = None) -> None:
         if status not in {"succeeded", "failed", "partial"}:
             raise ValueError(f"Unsupported run status: {status}")
-        with self._connect() as conn:
+        with closing(self._connect()) as conn, conn:
             conn.execute(
                 """
                 UPDATE collection_runs
@@ -413,7 +420,7 @@ class SnapshotStore:
         digest = sha256_hex(canonical)
         fetched = fetched_at_utc or (fetch.received_at_utc if fetch else None) or utc_now_iso()
 
-        with self._connect() as conn:
+        with closing(self._connect()) as conn, conn:
             cursor = conn.execute(
                 """
                 INSERT INTO snapshots(
@@ -456,7 +463,7 @@ class SnapshotStore:
         wanted = sorted({int(i) for i in ids})
         if not wanted:
             return {}
-        with self._connect() as conn:
+        with closing(self._connect()) as conn, conn:
             rows = conn.execute(
                 f"""
                 SELECT id, run_id, source, kind, entity_id, fetched_at_utc, url,
@@ -488,7 +495,7 @@ class SnapshotStore:
     ) -> int:
         if status not in FORWARD_CAPTURE_STATUSES:
             raise ValueError(f"Unsupported forward capture status: {status}")
-        with self._connect() as conn:
+        with closing(self._connect()) as conn, conn:
             cursor = conn.execute(
                 """
                 INSERT INTO forward_captures(
@@ -518,14 +525,14 @@ class SnapshotStore:
         if phase is not None:
             clauses.append("phase = ?")
             params.append(phase)
-        with self._connect() as conn:
+        with closing(self._connect()) as conn, conn:
             return conn.execute(
                 f"SELECT * FROM forward_captures WHERE {' AND '.join(clauses)} ORDER BY id",
                 params,
             ).fetchall()
 
     def recent_snapshots(self, *, limit: int = 20) -> Iterable[sqlite3.Row]:
-        with self._connect() as conn:
+        with closing(self._connect()) as conn, conn:
             rows = conn.execute(
                 """
                 SELECT id, run_id, source, kind, entity_id, fetched_at_utc,
@@ -539,7 +546,7 @@ class SnapshotStore:
         return rows
 
     def has_snapshot(self, *, source: str, kind: str, entity_id: str) -> bool:
-        with self._connect() as conn:
+        with closing(self._connect()) as conn, conn:
             row = conn.execute(
                 "SELECT 1 FROM snapshots WHERE source = ? AND kind = ? AND entity_id = ? LIMIT 1",
                 (source, kind, entity_id),
@@ -548,7 +555,7 @@ class SnapshotStore:
 
     def snapshots_of_kind(self, *, source: str, kind: str) -> list[sqlite3.Row]:
         """Every stored snapshot of one kind, oldest first (payload included)."""
-        with self._connect() as conn:
+        with closing(self._connect()) as conn, conn:
             return conn.execute(
                 """
                 SELECT id, run_id, entity_id, fetched_at_utc, source_timestamp_utc, url,
@@ -573,7 +580,7 @@ class SnapshotStore:
         Returns (retrieval_id, sha256, is_new_version). Old versions are never touched.
         """
         digest = bytes_sha256(fetch.body)
-        with self._connect() as conn:
+        with closing(self._connect()) as conn, conn:
             previous = conn.execute(
                 """
                 SELECT sha256 FROM document_retrievals
@@ -616,7 +623,7 @@ class SnapshotStore:
 
     def document_versions(self, requested_url: str) -> list[sqlite3.Row]:
         """Distinct content versions of one URL, with first/last time each was seen."""
-        with self._connect() as conn:
+        with closing(self._connect()) as conn, conn:
             return conn.execute(
                 """
                 SELECT sha256, byte_length, MIN(fetched_at_utc) AS first_seen_utc,
@@ -629,7 +636,7 @@ class SnapshotStore:
 
     def document_hashes(self, *, doc_type: str) -> list[str]:
         """Distinct content hashes stored for a document type, oldest first."""
-        with self._connect() as conn:
+        with closing(self._connect()) as conn, conn:
             rows = conn.execute(
                 "SELECT sha256 FROM document_retrievals WHERE doc_type = ? GROUP BY sha256 ORDER BY MIN(id)",
                 (doc_type,),
@@ -637,7 +644,7 @@ class SnapshotStore:
         return [row["sha256"] for row in rows]
 
     def document_bytes(self, sha256: str) -> bytes | None:
-        with self._connect() as conn:
+        with closing(self._connect()) as conn, conn:
             row = conn.execute(
                 "SELECT body FROM document_blobs WHERE sha256 = ?", (sha256,)
             ).fetchone()
@@ -651,7 +658,7 @@ class SnapshotStore:
         Records count JSON snapshots under the legacy `source` name plus raw documents
         stored under `source_id`.
         """
-        with self._connect() as conn:
+        with closing(self._connect()) as conn, conn:
             row = conn.execute(
                 """
                 SELECT COUNT(*), COALESCE(SUM(payload_bytes), 0),
@@ -692,7 +699,7 @@ class SnapshotStore:
     ) -> int:
         if status not in SOURCE_HEALTH_STATUSES:
             raise ValueError(f"Unsupported source health status: {status}")
-        with self._connect() as conn:
+        with closing(self._connect()) as conn, conn:
             cursor = conn.execute(
                 """
                 INSERT INTO source_health(
@@ -721,7 +728,7 @@ class SnapshotStore:
 
     def latest_source_health(self) -> list[sqlite3.Row]:
         """Most recent health row per source, plus its last successful completion."""
-        with self._connect() as conn:
+        with closing(self._connect()) as conn, conn:
             return conn.execute(
                 """
                 SELECT h.*,
@@ -737,7 +744,7 @@ class SnapshotStore:
 
     def latest_fetch_by_kind(self, source: str) -> dict[str, str]:
         """Latest receipt timestamp per payload kind for one legacy source name."""
-        with self._connect() as conn:
+        with closing(self._connect()) as conn, conn:
             rows = conn.execute(
                 """
                 SELECT kind, MAX(fetched_at_utc) AS latest

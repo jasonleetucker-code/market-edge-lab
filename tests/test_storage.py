@@ -166,3 +166,38 @@ def test_source_health_invariants_are_enforced_by_schema(tmp_path):
     assert len(latest) == 1
     assert latest[0]["status"] == "failed"
     assert latest[0]["last_ok_at_utc"] == "t1"
+
+
+def test_every_connection_the_store_opens_is_closed(tmp_path, monkeypatch):
+    """A `with conn:` block commits but does not close. Unclosed connections leak file handles
+    (and on Windows keep the database from being moved or deleted), so each use must close."""
+    import sqlite3
+
+    from edge_lab.http import FetchResult
+    from edge_lab.storage import SnapshotStore
+
+    opened: list[sqlite3.Connection] = []
+    original = SnapshotStore._connect
+
+    def recording(self):
+        conn = original(self)
+        opened.append(conn)
+        return conn
+
+    monkeypatch.setattr(SnapshotStore, "_connect", recording)
+    store = SnapshotStore(tmp_path / "e.sqlite3")
+    store.start_run("r")
+    fetch = FetchResult("https://x.test/a", "https://x.test/a", 200, "application/json", b"{}",
+                        "2026-09-23T18:00:00+00:00", 1, 1)
+    store.save_snapshot(run_id="r", source="s", kind="k", entity_id="e", url="https://x.test/a",
+                        payload={"a": 1}, fetch=fetch)
+    store.save_document(run_id="r", source_id="s", doc_type="t", fetch=fetch)
+    store.finish_run("r", status="succeeded")
+    store.recent_snapshots()
+    store.snapshots_of_kind(source="s", kind="k")
+    store.latest_source_health()
+    store.schema_version()
+    assert len(opened) >= 8
+    for conn in opened:
+        with pytest.raises(sqlite3.ProgrammingError):
+            conn.execute("SELECT 1")  # closed connections refuse every statement

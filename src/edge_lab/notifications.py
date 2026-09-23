@@ -189,8 +189,11 @@ class JsonlOutbox:
         if self.path.exists() and self.path.stat().st_size + len(line.encode("utf-8")) > self.max_bytes:
             os.replace(self.path, self.path.with_name(self.path.name + ".1"))
         fd = os.open(self.path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o644)
-        os.fchmod(fd, 0o644)  # readable like the receipt, whatever the service umask
-        with closing(os.fdopen(fd, "a", encoding="utf-8")) as fh:
+        with closing(os.fdopen(fd, "a", encoding="utf-8", newline="\n")) as fh:
+            # Readable like the receipt, whatever the service umask. os.fchmod does not exist on
+            # Windows before Python 3.13; there the mode bits are not meaningful anyway.
+            if hasattr(os, "fchmod"):
+                os.fchmod(fd, 0o644)
             fh.write(line)
             fh.flush()
             os.fsync(fh.fileno())

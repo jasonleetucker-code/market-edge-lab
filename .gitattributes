@@ -2,3 +2,7 @@
 *.sh text eol=lf
 deploy/** text eol=lf
 *.pdf binary
+# Captured evidence and test fixtures are hashed byte-for-byte (MANIFEST.json, capture notes).
+# Never convert their line endings on checkout or commit: the committed blob is the evidence.
+experiments/** -text
+tests/fixtures/** -text
