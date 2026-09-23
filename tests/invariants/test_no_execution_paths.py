@@ -132,25 +132,44 @@ def test_the_notification_file_imports_nothing_that_can_trade():
             modules |= {a.name for a in node.names}
         elif isinstance(node, ast.ImportFrom):
             modules.add("." * node.level + (node.module or ""))
-    allowed = {"__future__", "hashlib", "http.client", "os", "re", "time", "dataclasses", "datetime", "typing",
-               "urllib.error", "urllib.parse", "urllib.request", ".freshness", ".notifications", ".redaction",
-               ".sources"}
+    allowed = {"__future__", "hashlib", "http.client", "ipaddress", "os", "re", "ssl", "time", "dataclasses",
+               "datetime", "typing", "urllib.error", "urllib.parse", "urllib.request", ".freshness", ".notifications",
+               ".redaction"}
     assert modules <= allowed, modules - allowed
 
 
-@pytest.mark.parametrize("url", [
-    "https://external-api.kalshi.com/topic", "https://kalshi.com/orders", "https://trading.kalshi.co/x",
-    "https://gateway.polymarket.us/topic", "https://polymarket.com/topic", "https://data.novig.com/topic",
-    "https://api.novig.us/topic", "https://api.the-odds-api.com/topic", "https://api.weather.gov/topic",
-    "http://ntfy.sh/topic", "https://ntfy.sh/topic/extra", "https://ntfy.sh/", "https://ntfy.sh/topic?auth=x",
-    "https://user:pass@ntfy.sh/topic", "https://ntfy.sh/topic#x", "https://ntfy.sh/to pic", "ftp://ntfy.sh/topic",
-    "https://ntfy.sh/" + "a" * 65,
-])
-def test_the_notification_file_refuses_venue_hosts_and_non_topic_urls(url):
-    from edge_lab.notify_ntfy import NtfyConfigError, parse_topic_url
+def test_the_notification_host_allowlist_is_reviewed_code():
+    """Publishing goes only to ntfy.sh. A self-hosted server is added here and in the module,
+    in the same reviewed PR; configuration can never add a host."""
+    from edge_lab import notify_ntfy
 
+    assert notify_ntfy.DEFAULT_HOSTS == ("ntfy.sh",)
+    assert notify_ntfy.SELF_HOSTED_HOSTS == ()
+
+
+_TOPIC16 = "mel-alerts-0123456789"
+
+
+@pytest.mark.parametrize("url", [
+    "https://external-api.kalshi.com/{t}", "https://kalshi.com/orders", "https://gateway.polymarket.us/{t}",
+    "https://polymarket.com/{t}", "https://data.novig.com/{t}", "https://api.the-odds-api.com/{t}",
+    "https://api.betfair.com/{t}", "https://api.pinnacle.com/{t}", "https://www.predictit.org/{t}",
+    "https://169.254.169.254/{t}", "https://127.0.0.1/{t}", "https://[::1]/{t}", "https://[fe80::1]/{t}",
+    "https://ntfy.sh.evil.com/{t}", "https://evil.com/ntfy.sh", "https://evil.com/{t}?h=ntfy.sh",
+    "https://user@ntfy.sh/{t}", "https://user:pass@ntfy.sh/{t}", "https://ntfy.sh@evil.com/{t}",
+    "https://ntfy.sh:443@evil.com/{t}", "https://ntfy.sh:8443/{t}", "https://ntfy.sh:443/{t}", "https://ntfy.sh./{t}",
+    "https://sub.ntfy.sh/{t}", "https://xntfy.sh/{t}", "http://ntfy.sh/{t}", "http://localhost/{t}",
+    "ftp://ntfy.sh/{t}", "https://ntfy.sh/{t}/extra", "https://ntfy.sh/", "https://ntfy.sh/{t}?auth=x",
+    "https://ntfy.sh/{t}#x", "https://ntfy.sh/to pic", "https://ntfy.sh/short-topic", "https://ntfy.sh/" + "a" * 65,
+])
+def test_the_notification_file_refuses_everything_but_an_allowlisted_topic(url):
+    from edge_lab.notify_ntfy import NtfyConfigError, Target, parse_topic_url
+
+    url = url.format(t=_TOPIC16)
     with pytest.raises(NtfyConfigError):
         parse_topic_url(url)
+    with pytest.raises(NtfyConfigError):
+        Target(url)  # building a Target directly validates too
 
 
 def test_every_registered_source_host_is_refused_as_a_notification_target():
@@ -161,14 +180,18 @@ def test_every_registered_source_host_is_refused_as_a_notification_target():
 
     for spec in REGISTRY.values():
         with pytest.raises(NtfyConfigError):
-            parse_topic_url(f"https://{urlsplit(spec.base_url).hostname}/topic")
+            parse_topic_url(f"https://{urlsplit(spec.base_url).hostname}/{_TOPIC16}")
 
 
-def test_ntfy_style_hosts_from_config_are_accepted():
-    from edge_lab.notify_ntfy import parse_topic_url
+def test_only_allowlisted_hosts_are_accepted(monkeypatch):
+    from edge_lab import notify_ntfy
 
-    for url in ("https://ntfy.sh/market-edge_Alerts-1", "https://ntfy.example.org:8443/t", "http://127.0.0.1:8080/t"):
-        assert parse_topic_url(url).url == url
+    assert notify_ntfy.parse_topic_url(f"https://ntfy.sh/{_TOPIC16}").url == f"https://ntfy.sh/{_TOPIC16}"
+    assert notify_ntfy.parse_topic_url(f"https://NTFY.sh/{_TOPIC16}").host == "ntfy.sh"
+    with pytest.raises(notify_ntfy.NtfyConfigError):
+        notify_ntfy.parse_topic_url(f"https://ntfy.example.org/{_TOPIC16}")
+    monkeypatch.setattr(notify_ntfy, "SELF_HOSTED_HOSTS", ("ntfy.example.org",))  # as a reviewed change would
+    assert notify_ntfy.parse_topic_url(f"https://ntfy.example.org/{_TOPIC16}").host == "ntfy.example.org"
 
 
 def test_http_client_only_issues_get():

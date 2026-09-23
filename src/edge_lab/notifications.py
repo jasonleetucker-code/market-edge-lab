@@ -263,9 +263,10 @@ def dispatch(events: Iterable[NotificationEvent], sinks: Iterable[Sink], *, now:
                 try:
                     status = sink.deliver(event)
                     # A sink that retries and handles its own failures (ntfy) reports its
-                    # redacted reason and its own attempt count here.
+                    # redacted reason and its own attempt count (0 if it refused before sending).
                     error = getattr(sink, "last_error", None)
-                    attempts = getattr(sink, "last_attempts", None) or attempts
+                    own_attempts = getattr(sink, "last_attempts", None)
+                    attempts = own_attempts if isinstance(own_attempts, int) else attempts
                     break
                 except Exception as exc:  # noqa: BLE001 - a sink failure is recorded, never raised
                     error = f"{type(exc).__name__}: {exc}"[:200]
