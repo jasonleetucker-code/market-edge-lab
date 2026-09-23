@@ -1,7 +1,7 @@
 """Gate 7 B — ledger and timing: crashes, duplicates, concurrency, tampering, locks, replay,
 delayed and out-of-order settlement. Every destructive test runs on a tmp_path ledger.
 
-Planned behaviour encoded by the xfail tests (coordinator fixes 3, 5, 6):
+Behaviour pinned by these regression tests (written as strict xfails before the fixes) (coordinator fixes 3, 5, 6):
 - `ShadowLedger.state_as_of(t)` replays excluding settlements whose
   `evidence["evidence_available_utc"]` is after t; pre-fill checks use the state as of the
   decision time, so a settlement learned later can never finance an earlier fill;
@@ -315,13 +315,16 @@ def test_known_limit_head_truncation_and_appended_at_are_not_detected(tmp_path):
     the head hash, removing the newest entries leaves a valid shorter chain; appended_at_utc is
     outside the hash by design. GATE7-F09 tracks the missing anchor."""
     path, lg = _tampered(tmp_path)
-    full_head = lg.verify_chain(ACC)
+    full_head = lg.state(ACC).last_entry_hash
     with closing(raw(path)) as conn:
         conn.execute("UPDATE ledger_entries SET appended_at_utc = 'forged'")
         last = conn.execute("SELECT max(seq) FROM ledger_entries").fetchone()[0]
         conn.execute("DELETE FROM ledger_entries WHERE seq = ?", (last,))
-    head = lg.verify_chain(ACC)  # still verifies
+    head = lg.state(ACC).last_entry_hash  # the hash chain alone still replays
     assert head != full_head and lg.state(ACC).fills == 1
+    # ...but the tampering needed to do it (dropping the append-only triggers) is detected.
+    with pytest.raises(LedgerError, match="triggers missing"):
+        lg.verify_chain(ACC)
 
 
 def test_reopening_for_write_restores_dropped_triggers(tmp_path):
@@ -331,8 +334,6 @@ def test_reopening_for_write_restores_dropped_triggers(tmp_path):
     assert {"ledger_entries_no_update", "ledger_entries_no_delete"} <= triggers(path)
 
 
-@pytest.mark.xfail(strict=True, reason="GATE7-F08: read-only verification does not notice missing "
-                                       "immutability triggers")
 def test_readonly_verification_reports_missing_triggers(tmp_path):
     path, _ = _tampered(tmp_path)
     with pytest.raises(LedgerError, match="trigger"):
@@ -370,8 +371,6 @@ def test_readers_are_not_blocked_by_a_pending_writer(tmp_path):
 LOCK_BOUND_S = 8
 
 
-@pytest.mark.xfail(strict=True, reason="GATE7-F06: an append against a held write lock blocks for the "
-                                       "30 s busy timeout and then raises raw sqlite3.OperationalError")
 def test_append_against_held_lock_fails_fast_with_ledger_error(tmp_path):
     path = tmp_path / "locked.sqlite3"
     acct(path)
@@ -436,11 +435,10 @@ def test_delayed_settlement_stays_open_locked_and_uncredited(full_day, ledger, m
     assert {g.horizon for g in build_board(ledger.state(OPS), late)} == {"overdue"}
     store_settled_markets(full_day, settled_copy(MARKETS["markets"], 67), run_id="late-settle",
                           fetched_at="2026-09-25T04:00:00+00:00")
-    assert len(shadow.settle_open_positions(full_day, ledger)["settled"]) == 3
+    settled = shadow.settle_open_positions(full_day, ledger)["settled"]
+    assert len([s for s in settled if s["account_id"] == OPS]) == 3
 
 
-@pytest.mark.xfail(strict=True, reason="GATE7-F05: settlement evidence does not record when it became "
-                                       "available (evidence_available_utc)")
 def test_settlement_evidence_records_when_it_became_available(full_day, ledger, model):
     shadow.run_day(full_day, ledger, D, model=model, now=CLOSED)
     store_settled_markets(full_day, settled_copy(MARKETS["markets"], 67), run_id="settle",
@@ -453,8 +451,6 @@ def test_settlement_evidence_records_when_it_became_available(full_day, ledger, 
         assert s["evidence"]["evidence_available_utc"] == snap["fetched_at_utc"]
 
 
-@pytest.mark.xfail(strict=True, reason="GATE7-F10: a later settled-market capture that contradicts a "
-                                       "recorded settlement is silently ignored")
 def test_contradicting_later_settlement_capture_is_reported(full_day, ledger, model):
     shadow.run_day(full_day, ledger, D, model=model, now=CLOSED)
     store_settled_markets(full_day, settled_copy(MARKETS["markets"], 67), run_id="s1",
@@ -481,26 +477,21 @@ def _pit_ledger(tmp_path):
     return lg
 
 
-@pytest.mark.xfail(strict=True, reason="GATE7-F04: no point-in-time state (ShadowLedger.state_as_of)")
 def test_state_as_of_excludes_settlements_not_yet_known(tmp_path):
     lg = _pit_ledger(tmp_path)
-    between = lg.state_as_of(T0 + timedelta(days=1, hours=12))  # settled, but evidence not yet available
+    between = lg.state_as_of(ACC, T0 + timedelta(days=1, hours=12))  # settled, but evidence not yet available
     assert between.settled_cash == Decimal("0.01") and between.open_positions()[0].position_id == "seed-f-a"
-    known = lg.state_as_of(T0 + timedelta(days=2))
+    known = lg.state_as_of(ACC, T0 + timedelta(days=2))
     assert known.settled_cash == Decimal("1.01") and known.open_positions() == []
-    assert lg.state_as_of(T0 + timedelta(days=30)).settled_cash == lg.state(ACC).settled_cash
+    assert lg.state_as_of(ACC, T0 + timedelta(days=30)).settled_cash == lg.state(ACC).settled_cash
 
 
-@pytest.mark.xfail(strict=True, reason="GATE7-F11: record_fill checks cash by append order, so a later "
-                                       "settlement can finance an earlier-dated fill")
 def test_ledger_refuses_fill_financed_by_a_later_settlement(tmp_path):
     lg = _pit_ledger(tmp_path)
     with pytest.raises(LedgerError):  # at T0+1h settled cash was 0.01 < 0.42
         seed(lg, ACC, "b", price="0.40", filled_at=T0 + timedelta(hours=1), event="e2", cluster="c2")
 
 
-@pytest.mark.xfail(strict=True, reason="GATE7-F04: catch-up run_day sizes and cash-checks against the full "
-                                       "ledger, so settlement cash learned after D's decision finances D's fills")
 def test_catch_up_settlement_cannot_finance_an_earlier_day(full_day, ledger, model):
     shadow.ensure_account(ledger)
     # Before D's decision: one position spends all but 0.02 of the notional bankroll.
@@ -513,12 +504,11 @@ def test_catch_up_settlement_cannot_finance_an_earlier_day(full_day, ledger, mod
     shadow.run_day(full_day, ledger, D, model=model, now=CLOSED)
     got = day_fills(ledger)
     assert len(got) == 3 and all(f["status"] == "NO_FILL" for f in got)
-    assert {f["reason"] for f in got} <= {"RISK_VETO", "INSUFFICIENT_CASH"}
+    # Sizing already sees only the cash known at D's decision (0.02), so it sizes to zero;
+    # a pre-fill risk veto or cash refusal would be equally correct.
+    assert {f["reason"] for f in got} <= {"ZERO_SIZE", "RISK_VETO", "INSUFFICIENT_CASH"}
 
 
-@pytest.mark.xfail(strict=True, reason="GATE7-F12: without settlement_ts the settlement is stamped at "
-                                       "expiration_time (latest possible expiry), after the evidence was "
-                                       "captured; risk reports then refuse every as_of before that time")
 def test_settlement_is_never_stamped_after_its_evidence_was_captured(full_day, ledger, model):
     from edge_lab.freshness import parse_utc
     shadow.run_day(full_day, ledger, D, model=model, now=CLOSED)

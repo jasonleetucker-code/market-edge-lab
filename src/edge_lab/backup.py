@@ -83,7 +83,9 @@ def _ledger_chain_heads(conn: sqlite3.Connection) -> dict[str, str]:
             try:
                 heads[account] = replay(rows).last_entry_hash
             except LedgerError as exc:
-                raise BackupError(f"ledger account {account} fails replay: {exc}") from exc
+                # Recorded, not raised: a ledger with a broken chain must still be copied
+                # (it is the forensic evidence). The report is never VERIFIED then.
+                heads[account] = f"REPLAY_FAILED: {exc}"
         return heads
     finally:
         conn.row_factory = None
@@ -286,7 +288,9 @@ def verify_backup(bundle: Path, *, timeout: float = 30) -> dict:
                 replay = inspect_database(restored, deadline, kind=kind)
                 if replay != original:
                     raise BackupError("restored schema or row counts differ")
-    return {"status": "VERIFIED_BACKUP_AND_RESTORE", **original, "database_sha256": manifest["database_sha256"]}
+    chain_failures = sorted(a for a, h in (original.get("chain_heads") or {}).items() if str(h).startswith("REPLAY_FAILED"))
+    status = "BACKED_UP_LEDGER_CHAIN_INVALID" if chain_failures else "VERIFIED_BACKUP_AND_RESTORE"
+    return {"status": status, **original, "database_sha256": manifest["database_sha256"]}
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -324,7 +328,7 @@ def main(argv: list[str] | None = None) -> int:
         else:
             report = verify_backup(args.bundle, timeout=args.timeout)
         print(json.dumps(report, indent=2, sort_keys=True))
-        return 0
+        return 0 if report["status"] == "VERIFIED_BACKUP_AND_RESTORE" else 1
     except (BackupError, sqlite3.Error, OSError, ValueError) as exc:
         print(json.dumps({"status": "FAILED", "error": str(exc)}))
         return 1

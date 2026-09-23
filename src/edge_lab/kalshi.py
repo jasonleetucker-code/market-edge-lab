@@ -305,11 +305,13 @@ def refresh_event_settlements(
     """Targeted settlement refresh: `/markets?event_ticker=E` for each pending event only.
 
     Bounded: at most `max_events` events and 2 pages each, the shared Kalshi pacer, the
-    fetch layer's bounded retries, and a run deadline checked before every event. Every
+    fetch layer's bounded retries, and a run deadline checked before every event (the
+    systemd TimeoutStartSec is the hard cap). A failing event is recorded and skipped. Every
     page is stored as an immutable `event_settlement_markets` snapshot; an unsettled market
     simply has no result yet and leaves its positions pending. No full-history download."""
     anomalies = anomalies if anomalies is not None else []
-    counts = {"events_requested": 0, "events_fetched": 0, "markets": 0, "settled_markets": 0}
+    counts = {"events_requested": 0, "events_fetched": 0, "events_failed": 0, "markets": 0, "settled_markets": 0}
+    last_error: Exception | None = None
     tickers = sorted(set(event_tickers))
     if len(tickers) > max_events:
         anomalies.append(f"{len(tickers) - max_events} pending events deferred to the next run (max {max_events})")
@@ -320,10 +322,19 @@ def refresh_event_settlements(
             anomalies.append(f"deadline {deadline_s:.0f}s reached; remaining events deferred")
             break
         counts["events_requested"] += 1
-        markets, _ = paginate_markets(store, run_id=run_id, path="/markets", kind="event_settlement_markets",
-                                      entity_id=ticker, max_pages=2, spec=SETTLEMENT_SOURCE, event_ticker=ticker,
-                                      limit=PAGE_LIMIT)
+        try:
+            markets, _ = paginate_markets(store, run_id=run_id, path="/markets", kind="event_settlement_markets",
+                                          entity_id=ticker, max_pages=2, spec=SETTLEMENT_SOURCE,
+                                          event_ticker=ticker, limit=PAGE_LIMIT)
+        except (HttpFetchError, PaginationError, ValueError) as exc:
+            # One failing event must not starve the others: record it and continue.
+            counts["events_failed"] += 1
+            anomalies.append(f"event {ticker}: {type(exc).__name__}: {exc}")
+            last_error = exc
+            continue
         counts["events_fetched"] += 1
         counts["markets"] += len(markets)
         counts["settled_markets"] += sum(1 for m in markets if isinstance(m, dict) and m.get("result") in ("yes", "no"))
+    if last_error is not None and counts["events_fetched"] == 0:
+        raise last_error  # nothing at all was refreshed: the source failed this run
     return counts

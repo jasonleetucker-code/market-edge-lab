@@ -246,7 +246,7 @@ def test_event_settlement_refresh_is_targeted_and_bounded(tmp_path, monkeypatch)
     anomalies: list[str] = []
     counts = kalshi.refresh_event_settlements(store, run_id="r", event_tickers=["KXHIGHNY-26SEP24"] * 2 + ["E2", "E3"],
                                               max_events=2, anomalies=anomalies)
-    assert counts == {"events_requested": 2, "events_fetched": 2, "markets": 4, "settled_markets": 2}
+    assert counts == {"events_requested": 2, "events_fetched": 2, "events_failed": 0, "markets": 4, "settled_markets": 2}
     assert len(urls) == 2 and all("event_ticker=" in u and "status=" not in u and "historical" not in u for u in urls)
     assert any("deferred" in a for a in anomalies)
     ticks = iter([0.0, 0.0, 999.0, 999.0])
@@ -255,3 +255,23 @@ def test_event_settlement_refresh_is_targeted_and_bounded(tmp_path, monkeypatch)
                                               anomalies=anomalies, clock=lambda: next(ticks))
     assert counts["events_fetched"] == 1 and any("deadline" in a for a in anomalies)
     assert kalshi.event_ticker_of("KXHIGHNY-26SEP24-B67.5") == "KXHIGHNY-26SEP24"
+
+
+def test_one_failing_event_does_not_starve_the_refresh(tmp_path, monkeypatch):
+    from edge_lab.http import HttpFetchError
+
+    def fake_json(url, **kwargs):
+        if "event_ticker=AAA" in url:
+            raise HttpFetchError("HTTP 404", status=404, attempts=1)
+        return ({"markets": [{"ticker": "BBB-T1", "result": "no"}], "cursor": ""},
+                FetchResult(url, url, 200, "application/json", b"{}", "2026-09-25T15:00:00+00:00", 1, 1))
+
+    monkeypatch.setattr(kalshi, "fetch_json_result", fake_json)
+    store = SnapshotStore(tmp_path / "edge.sqlite3")
+    store.start_run("r")
+    anomalies: list[str] = []
+    counts = kalshi.refresh_event_settlements(store, run_id="r", event_tickers=["AAA", "BBB"], anomalies=anomalies)
+    assert counts["events_failed"] == 1 and counts["events_fetched"] == 1 and counts["settled_markets"] == 1
+    assert any("AAA" in a and "404" in a for a in anomalies)
+    with pytest.raises(HttpFetchError):
+        kalshi.refresh_event_settlements(store, run_id="r", event_tickers=["AAA"])

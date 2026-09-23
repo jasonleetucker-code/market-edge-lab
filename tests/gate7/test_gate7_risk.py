@@ -4,7 +4,7 @@ Question under test: are loss, drawdown, capacity and exposure limits enforced *
 simulated fill, or only displayed afterwards? Fixture evidence only; nothing here is
 evidence about profitability.
 
-Planned behaviour encoded by the xfail tests (coordinator fix 1/2):
+Behaviour pinned by these regression tests (written as strict xfails before the fixes) (coordinator fix 1/2):
 - before a FILLED fill on the operational account `EXP-001-stage-b-shadow`,
   `risk.assess(point-in-time state, RISK_POLICY, as_of=decision time)` is checked; if
   `new_risk_allowed` is false or the candidate's worst-case cost exceeds
@@ -143,8 +143,6 @@ def test_open_worst_case_counts_against_loss_headroom(tmp_path):
     assert r.breaches == () and r.remaining_risk_capacity == 0
 
 
-@pytest.mark.xfail(strict=True, reason="GATE7-F02: risk.assess reports new_risk_allowed=True while "
-                                       "remaining_risk_capacity is 0 (no breach)")
 def test_zero_capacity_never_reports_new_risk_allowed(tmp_path):
     lg = acct(tmp_path)
     for n in ("a", "b"):
@@ -249,8 +247,6 @@ def _assert_veto(fill, binding=None):
         assert veto["binding"] == binding
 
 
-@pytest.mark.xfail(strict=True, reason="GATE7-F01: run_day never calls risk.assess; a day at exactly the "
-                                       "daily-loss limit (capacity 0, no breach) still fills")
 def test_zero_capacity_without_breach_vetoes_every_fill(full_day, ledger, model):
     before, summary, got = _run_with_losses(full_day, ledger, model, ["0.99"] * 10, "10.00")
     assert before.breaches == () and before.remaining_risk_capacity == 0
@@ -260,30 +256,28 @@ def test_zero_capacity_without_breach_vetoes_every_fill(full_day, ledger, model)
     assert ledger.state(OPS).open_positions() == []
 
 
-@pytest.mark.xfail(strict=True, reason="GATE7-F01: concurrent candidates are not checked against remaining "
-                                       "risk capacity; their sum crosses the daily-loss headroom")
 def test_concurrent_candidates_stop_at_exact_capacity(full_day, ledger, model):
     # capacity 0.30: B67.5 (0.15) fits, B65.5 (0.15) fits exactly at the boundary, T72 NO (0.88) is vetoed.
     before, summary, got = _run_with_losses(full_day, ledger, model, ["0.99"] * 9 + ["0.68"], "9.70")
     assert before.remaining_risk_capacity == Decimal("0.30") and before.new_risk_allowed
     assert got[B675_YES]["status"] == got[B655_YES]["status"] == "FILLED"
     _assert_veto(got[T72_NO])
-    after = assess(ledger.state(OPS), shadow.RISK_POLICY, DECISION)
+    after = assess(ledger.state(OPS), shadow.RISK_POLICY, CLOSED)  # fills are stamped at confirmation (~22:05Z)
     assert after.remaining_risk_capacity == 0 and after.open_worst_case_risk == Decimal("0.30")
 
 
-@pytest.mark.xfail(strict=True, reason="GATE7-F01: a candidate one cent over remaining capacity still fills")
 def test_one_cent_over_capacity_is_vetoed(full_day, ledger, model):
-    # capacity 0.29: B67.5 (0.15) fits; then 0.14 < 0.15 so B65.5 and T72 NO are vetoed.
+    # capacity 0.29: one 0.15 bracket fits; then 0.14 < 0.15 so the other and T72 NO are vetoed.
     before, summary, got = _run_with_losses(full_day, ledger, model, ["0.99"] * 9 + ["0.69"], "9.71")
     assert before.remaining_risk_capacity == Decimal("0.29")
-    assert got[B675_YES]["status"] == "FILLED"
-    _assert_veto(got[B655_YES])
+    # Fills are applied in confirmation-time order, so whichever 0.15 bracket confirmed first
+    # takes the capacity; the other (0.14 left < 0.15) and T72 NO are vetoed.
+    small = [got[B675_YES], got[B655_YES]]
+    assert sorted(f["status"] for f in small) == ["FILLED", "NO_FILL"]
+    _assert_veto(next(f for f in small if f["status"] == "NO_FILL"))
     _assert_veto(got[T72_NO])
 
 
-@pytest.mark.xfail(strict=True, reason="GATE7-F01: a daily-loss breach is displayed by risk.assess but "
-                                       "does not stop run_day from filling")
 def test_daily_loss_breach_vetoes_and_names_the_breach(full_day, ledger, model):
     before, summary, got = _run_with_losses(full_day, ledger, model, ["0.99"] * 9 + ["0.68", "0.29"], "10.01")
     assert before.breaches == ("DAILY_LOSS_LIMIT",) and before.new_risk_allowed is False
@@ -292,8 +286,6 @@ def test_daily_loss_breach_vetoes_and_names_the_breach(full_day, ledger, model):
         _assert_veto(got[key], binding="DAILY_LOSS_LIMIT")
 
 
-@pytest.mark.xfail(strict=True, reason="GATE7-F01: open worst-case risk that exhausts loss headroom "
-                                       "(capacity 0, no breach) does not stop a fill")
 def test_open_exposure_exhausting_headroom_vetoes(full_day, ledger, model):
     shadow.ensure_account(ledger)
     for n in range(10):  # $10.00 open across two other clusters: daily headroom 10 - 0 - 10 = 0
@@ -307,8 +299,6 @@ def test_open_exposure_exhausting_headroom_vetoes(full_day, ledger, model):
         _assert_veto(f)
 
 
-@pytest.mark.xfail(strict=True, reason="GATE7-F03: no separate research account records the frozen "
-                                       "1-contract rule independently of operational vetoes")
 def test_research_account_keeps_the_frozen_rule_when_operations_veto(full_day, ledger, model):
     before, summary, got = _run_with_losses(full_day, ledger, model, ["0.99"] * 10, "10.00")
     research = ledger.state(RESEARCH)

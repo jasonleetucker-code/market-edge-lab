@@ -35,17 +35,28 @@ found five gaps:
       binding constraint.
     - Exactly at a limit is allowed.
     - Zero capacity never authorizes risk.
-- **Point-in-time cash.**
+- **Point-in-time cash and time order.**
   - A settlement records `evidence_available_utc`, the receipt time of its evidence.
   - `replay(as_of=…)` and `ShadowLedger.state_as_of` count only entries known by then.
   - A fill is refused unless the cash known at its time covers it. The fill time is the
     receipt of its confirmation book.
+  - Cash-moving entries must be appended in knowledge-time order. A fill known earlier
+    than an already-recorded fill or settlement is refused: out-of-order catch-up, or a
+    retried older day, is a FAILED day that needs attention, never a quiet pass.
+  - Within a day, all decisions are recorded first and then fills in confirmation-time
+    order, so each fill's point-in-time state includes every earlier fill of that day.
+  - The orchestrator stops at a failed day rather than running later days ahead of it.
+  - A settlement's evidence must be received at or after both the settlement time and the
+    fill.
   - A settlement's effective time is clamped to its evidence receipt, and the reported
     Kalshi field is kept.
 - **Read-only analysis.** `SnapshotStore.open_readonly` and `ShadowLedger.open_readonly`
   use SQLite `mode=ro` and `query_only`, with no mkdir, no schema script and no journal
-  PRAGMA, and they refuse a wrong schema. The only file SQLite itself updates is the WAL
-  `-shm` read-mark index, which holds no data.
+  PRAGMA, and they refuse a wrong schema. The database contents never change. SQLite
+  itself maintains the WAL side files: a reader updates the `-shm` read-mark index and
+  creates `-wal`/`-shm` if they are absent. Analysis must therefore run as the store's
+  owner (`edgelab`), never as root, so those files keep the right owner. Only the final
+  path component is checked for a symlink.
 - **One orchestrator** (`edge_lab.daily`, `edge-lab shadow daily`).
   - It takes the collector lock and then the ledger lock.
   - It processes closed capture days in date order. Before each day it settles only on
@@ -68,8 +79,10 @@ found five gaps:
   publication time. Too early costs one wasted GET, never a wrong settlement.
 
 **Rollback.** No schema change in either store (evidence v4, ledger v1). New fields live
-in JSON payloads, which the older code ignores. Code rollback is therefore safe with no
-migration. The one behavior older code would lose is point-in-time cash checking.
+in JSON payloads, which the older code ignores, so no migration is needed. Code and unit
+files roll back **together**: the new backup unit uses flags older code rejects
+(`docs/deploy/DAILY_SHADOW_ACTIVATION.md`, "Rollback"). The rolled-back code loses
+point-in-time cash checking.
 
 **Reconsider when** a second strategy or market family shares the ledger (move to
 per-strategy accounts from a registry), or ledger replay time matters.

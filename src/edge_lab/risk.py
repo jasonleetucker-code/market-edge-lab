@@ -233,7 +233,8 @@ def assess(state: AccountState, policy: RiskPolicy, as_of: datetime) -> RiskRepo
         risk_per_event=per_event, cluster_exposure=per_cluster, peak_equity=peak, drawdown=drawdown,
         daily_loss=daily, weekly_loss=weekly, reserve_floor=policy.reserve_floor,
         remaining_risk_capacity=capacity, capital_release=capital_release(state, as_of_utc),
-        breaches=tuple(breaches), new_risk_allowed=not breaches,
+        # Zero capacity never authorizes new risk, breach or not.
+        breaches=tuple(breaches), new_risk_allowed=not breaches and capacity > ZERO,
         notes=("worst case for a long binary is its full cost; committed capital settling later is not cash",),
     )
 

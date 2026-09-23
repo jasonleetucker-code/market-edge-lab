@@ -106,9 +106,9 @@ def test_fills_are_stamped_at_confirmation_and_carry_fee_status(store, ledger, m
     for acct in (shadow.ACCOUNT_ID, shadow.RESEARCH_ACCOUNT_ID):
         for s in _payloads(ledger, acct, "settlement"):
             ev = s["evidence"]
-            assert ev["claimable"] is False and ev["fee_status"] == "UNVERIFIED_CURRENT_SCHEDULE"
+            assert s["claimable"] is False and s["fee_status"] == "UNVERIFIED_CURRENT_SCHEDULE"
             assert ev["evidence_available_utc"] == "2026-09-24T14:00:00+00:00"
-            assert ev["processed_at_utc"] == "2026-09-24T15:00:00+00:00"
+            assert "processed_at_utc" not in ev  # processing time is the row's appended_at_utc
 
 
 def test_settlement_evidence_received_later_is_ignored_in_catch_up(store, ledger, monkeypatch, model):
@@ -147,6 +147,31 @@ def test_a_settlement_learned_later_never_funds_an_earlier_fill(tmp_path):
     lg.record_decision("A", _decision("b", "2026-09-04T22:00:00+00:00"))
     assert lg.state("A").settled_cash == Decimal("1.40")
     assert lg.state_as_of("A", datetime(2026, 9, 4, 22, 10, tzinfo=UTC)).settled_cash == Decimal("0.40")
-    with pytest.raises(LedgerError, match="later settlement cannot fund"):
+    with pytest.raises(LedgerError, match="out-of-order fill"):
         lg.record_fill("A", _fill("b", "2026-09-04T22:10:00+00:00"))
     lg.record_fill("A", _fill("b", "2026-09-05T00:10:00+00:00"))  # once the win was known, it is spendable
+
+
+def test_cash_from_a_later_settlement_cannot_reach_back_even_via_in_order_times(tmp_path):
+    """The reviewer's B1 scenario: F2 at t2, S2 known after t2, then F1 at t1 < t2 is refused."""
+    lg = ShadowLedger(tmp_path / "b1.sqlite3")
+    lg.open_account("A", **{**ACCT, "starting_bankroll": Decimal("11.50")})  # full-state cash covers F1
+    lg.record_decision("A", _decision("f2", "2026-01-05T22:00:00+00:00"))
+    lg.record_fill("A", _fill("f2", "2026-01-05T22:10:00+00:00", cost="6.00"))
+    lg.record_settlement("A", fill_id="f-f2", outcome="YES", settled_at_utc="2026-01-06T12:00:00+00:00",
+                         evidence={"evidence_available_utc": "2026-01-06T15:00:00+00:00"})
+    lg.record_decision("A", _decision("f1", "2026-01-03T22:00:00+00:00"))
+    with pytest.raises(LedgerError, match="out-of-order fill"):
+        lg.record_fill("A", _fill("f1", "2026-01-03T22:10:00+00:00", cost="6.00"))
+    for t in ("2026-01-03T23:00:00+00:00", "2026-01-05T23:00:00+00:00", "2026-01-06T16:00:00+00:00"):
+        lg.state_as_of("A", datetime.fromisoformat(t))  # every instant stays consistent
+
+
+def test_settlement_evidence_before_the_fill_or_settlement_time_is_refused(tmp_path):
+    lg = ShadowLedger(tmp_path / "n2.sqlite3")
+    lg.open_account("A", **ACCT)
+    lg.record_decision("A", _decision("a", "2026-09-02T22:00:00+00:00"))
+    lg.record_fill("A", _fill("a", "2026-09-02T22:10:00+00:00"))
+    with pytest.raises(LedgerError, match="evidence must be received"):
+        lg.record_settlement("A", fill_id="f-a", outcome="YES", settled_at_utc="2026-09-03T12:00:00+00:00",
+                             evidence={"evidence_available_utc": "2026-09-03T11:00:00+00:00"})

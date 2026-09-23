@@ -122,8 +122,8 @@ def risk_veto(state, cost: Decimal, opp: Opportunity, policy: RiskPolicy, as_of:
     report = risk.assess(state, policy, as_of)
     base = {"policy_id": policy.policy_id, "as_of_utc": report.as_of_utc, "candidate_worst_case": str(cost),
             "remaining_risk_capacity": str(report.remaining_risk_capacity), "breaches": list(report.breaches)}
-    if report.breaches or not report.new_risk_allowed:
-        return {**base, "binding": report.breaches[0] if report.breaches else "NEW_RISK_NOT_ALLOWED"}
+    if report.breaches:
+        return {**base, "binding": report.breaches[0]}
     checks = (
         ("MAX_POSITION_RISK", cost, policy.max_position_risk),
         ("MAX_EVENT_RISK", state.event_exposure(opp.event_id) + cost, policy.max_event_risk),
@@ -202,9 +202,13 @@ def run_day(store: SnapshotStore, ledger: ShadowLedger, target: date, *, model=N
 def _run_account(ledger: ShadowLedger, account: ShadowAccount, opportunities, target: date, day_status: str,
                  valid: bool, entry_quotes, confirmations, expected_settlement: str,
                  problems: list[str]) -> dict[str, Any]:
+    """Two passes: every decision first (sized as of the decision time), then the fills in
+    confirmation-time order, so each fill's point-in-time state already contains every
+    earlier fill of the day (exposure and cash) and nothing learned later."""
     acct = account.account_id
     out: dict[str, Any] = {"decisions": 0, "qualified": 0, "filled": 0, "no_fill": {}, "vetoes": []}
     taken = ledger.state(acct).decision_slots
+    decided: list[tuple[Opportunity, dict[str, Any]]] = []
     for opp in opportunities:
         did = decision_id(opp)
         existing = ledger.find(acct, "decision", did)
@@ -237,41 +241,54 @@ def _run_account(ledger: ShadowLedger, account: ShadowAccount, opportunities, ta
                 "event_id": opp.event_id, "market_id": opp.market_id, "side": opp.side,
                 "outcome_cluster": opp.outcome_cluster, "policy_id": opp.policy_id,
                 "opportunity": opp.to_dict(), "sizing": sizing,
-                "stage_b_day_status": day_status, **fee_fields(),
+                "stage_b_day_status": day_status, "opportunity_claimable": opp.claimable, **fee_fields(),
             }
             ledger.record_decision(acct, existing)
         out["decisions"] += 1
-        if opp.qualification != "QUALIFY":
-            continue
-        out["qualified"] += 1
-        fill = ledger.find(acct, "fill", did)
+        if opp.qualification == "QUALIFY":
+            out["qualified"] += 1
+            decided.append((opp, existing))
+
+    pending: list[tuple[Opportunity, dict[str, Any]]] = []
+    for opp, decision in decided:
+        fill = ledger.find(acct, "fill", decision_id(opp))
         if fill is None:
-            quantity = int((existing.get("sizing") or {}).get("final_size") or 0)
+            quantity = int((decision.get("sizing") or {}).get("final_size") or 0)
             fill = _fill_payload(opp, quantity, valid, entry_quotes, confirmations, expected_settlement)
-            if fill["status"] == FILLED:
-                known_at = parse_utc(fill["filled_at_utc"])
-                state = ledger.state_as_of(acct, known_at)
-                cost = Decimal(fill["total_cost"])
-                veto = risk_veto(state, cost, opp, account.risk_policy, known_at) if account.risk_policy else None
-                if veto is not None:
-                    fill.update(status="NO_FILL", reason="RISK_VETO", quantity=0, price=None, total_cost=None,
-                                fee=None, risk_veto=veto,
-                                detail=f"operational risk veto: {veto['binding']} (candidate worst case {cost})")
-                elif cost > state.settled_cash:
-                    reason = "INSUFFICIENT_CASH" if account.risk_policy else "RESEARCH_INVALID_CASH"
-                    fill.update(status="NO_FILL", reason=reason, quantity=0, price=None, total_cost=None, fee=None,
-                                detail="cash known at the fill time is below the fill's cost")
-                    if account.risk_policy is None:
-                        problems.append(f"{acct}: research record deviates from the frozen rule on {did} "
-                                        "(notional cash exhausted)")
-            ledger.record_fill(acct, fill)
-        if fill["status"] == FILLED:
-            out["filled"] += 1
+            pending.append((opp, fill))
         else:
-            out["no_fill"][fill["reason"]] = out["no_fill"].get(fill["reason"], 0) + 1
-            if fill.get("risk_veto"):
-                out["vetoes"].append({"decision_id": did, **fill["risk_veto"]})
+            _count(out, fill)
+    # NO_FILLs first (they move no cash), then FILLED in confirmation-time order.
+    pending.sort(key=lambda item: (item[1]["status"] == FILLED, item[1]["filled_at_utc"], item[1]["fill_id"]))
+    for opp, fill in pending:
+        if fill["status"] == FILLED:
+            known_at = parse_utc(fill["filled_at_utc"])
+            state = ledger.state_as_of(acct, known_at)
+            cost = Decimal(fill["total_cost"])
+            veto = risk_veto(state, cost, opp, account.risk_policy, known_at) if account.risk_policy else None
+            if veto is not None:
+                fill.update(status="NO_FILL", reason="RISK_VETO", quantity=0, price=None, total_cost=None,
+                            fee=None, risk_veto=veto,
+                            detail=f"operational risk veto: {veto['binding']} (candidate worst case {cost})")
+            elif cost > state.settled_cash:
+                reason = "INSUFFICIENT_CASH" if account.risk_policy else "RESEARCH_INVALID_CASH"
+                fill.update(status="NO_FILL", reason=reason, quantity=0, price=None, total_cost=None, fee=None,
+                            detail="cash known at the fill time is below the fill's cost")
+                if account.risk_policy is None:
+                    problems.append(f"{acct}: research record deviates from the frozen rule on "
+                                    f"{fill['decision_id']} (notional cash exhausted)")
+        ledger.record_fill(acct, fill)
+        _count(out, fill)
     return out
+
+
+def _count(out: dict[str, Any], fill: dict[str, Any]) -> None:
+    if fill["status"] == FILLED:
+        out["filled"] += 1
+        return
+    out["no_fill"][fill["reason"]] = out["no_fill"].get(fill["reason"], 0) + 1
+    if fill.get("risk_veto"):
+        out["vetoes"].append({"decision_id": fill["decision_id"], **fill["risk_veto"]})
 
 
 def _decision_quotes(store: SnapshotStore, evaluation, mode: str) -> dict[tuple[str, str], ExecutableQuote]:
@@ -339,9 +356,15 @@ def settlement_index(store: SnapshotStore, *, known_by: datetime | None = None) 
                 if not isinstance(market, dict) or not isinstance(market.get("ticker"), str):
                     continue
                 current = index.get(market["ticker"])
+                variant = (market.get("result"), str(market.get("expiration_value")))
+                variants = (current or {}).get("variants", set())
+                if variant[0] in ("yes", "no"):
+                    variants = variants | {variant}
                 if current is None or int(row["id"]) > current["snapshot_id"]:
                     index[market["ticker"]] = {"market": market, "snapshot_id": int(row["id"]),
-                                               "evidence_available_utc": row["fetched_at_utc"]}
+                                               "evidence_available_utc": row["fetched_at_utc"], "variants": variants}
+                else:
+                    current["variants"] = variants
     return index
 
 
@@ -372,18 +395,39 @@ def settle_open_positions(store: SnapshotStore, ledger: ShadowLedger, *, account
     `known_by` limits the evidence to what had been received by then (used by catch-up so a
     settlement learned later never funds an earlier fill). Missing, unsettled or conflicting
     evidence leaves the position open and listed as pending, never guessed."""
-    now = now or datetime.now(timezone.utc)
-    index = settlement_index(store, known_by=known_by)
-    report: dict[str, Any] = {"settled": [], "pending": []}
+    # Evidence counts only once received: by `known_by` in catch-up, else by `now` if given.
+    index = settlement_index(store, known_by=known_by if known_by is not None else now)
+    report: dict[str, Any] = {"settled": [], "pending": [], "conflicts": []}
     for account in accounts:
         ensure_account(ledger, account)
         acct = account.account_id
-        for position in ledger.state(acct).open_positions():
+        state = ledger.state(acct)
+        # Already-settled positions: a later capture that contradicts the recorded outcome is
+        # reported (never silently rewritten; a rebuild would book different P&L).
+        for position in state.positions:
+            if position.status != "SETTLED":
+                continue
+            found = index.get(position.market_id.split(":", 1)[1])
+            if found is None:
+                continue
+            latest, _ = official_outcome(found["market"])
+            if len(found["variants"]) > 1 or (latest is not None and latest != position.outcome):
+                report["conflicts"].append({"account_id": acct, "position_id": position.position_id,
+                                            "recorded_outcome": position.outcome, "latest_evidence_outcome": latest,
+                                            "variants": sorted(map(list, found["variants"]))})
+        for position in state.open_positions():
             native = position.market_id.split(":", 1)[1]
             found = index.get(native)
             if found is None:
                 report["pending"].append({"account_id": acct, "position_id": position.position_id,
                                           "reason": "no settlement evidence yet"})
+                continue
+            if len(found["variants"]) > 1:
+                why = f"conflicting settlement evidence across captures: {sorted(map(list, found['variants']))}"
+                report["pending"].append({"account_id": acct, "position_id": position.position_id, "reason": why})
+                report["conflicts"].append({"account_id": acct, "position_id": position.position_id,
+                                            "recorded_outcome": None, "latest_evidence_outcome": None,
+                                            "variants": sorted(map(list, found["variants"]))})
                 continue
             market = found["market"]
             outcome, why = official_outcome(market)
@@ -398,8 +442,9 @@ def settle_open_positions(store: SnapshotStore, ledger: ShadowLedger, *, account
             evidence = {"snapshot_id": found["snapshot_id"], "expiration_value": market.get("expiration_value"),
                         "kalshi_result": market.get("result"), "resolver": why,
                         "evidence_available_utc": found["evidence_available_utc"],
-                        "reported_settlement_time": str(settled_at),
-                        "processed_at_utc": now.isoformat(), **fee_fields()}
+                        "reported_settlement_time": str(settled_at)}
+            # Processing time is the ledger's appended_at_utc (outside the hash), so replays of
+            # the same evidence stay byte-identical.
             # A settlement cannot have happened after we received it as settled. The field used
             # (settlement_ts, else the scheduled expiration/close time) can be later, so the
             # effective time is clamped to the evidence receipt; the reported value is kept.
@@ -409,7 +454,7 @@ def settle_open_positions(store: SnapshotStore, ledger: ShadowLedger, *, account
                 evidence["settlement_time_clamped_to_evidence"] = True
             try:
                 ledger.record_settlement(acct, fill_id=position.position_id, outcome=outcome,
-                                         settled_at_utc=str(settled_at), evidence=evidence)
+                                         settled_at_utc=str(settled_at), evidence=evidence, fee=fee_fields())
             except LedgerError as exc:
                 report["pending"].append({"account_id": acct, "position_id": position.position_id,
                                           "reason": str(exc)})

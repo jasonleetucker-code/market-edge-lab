@@ -55,12 +55,14 @@ def seed_realized_losses(lg: ShadowLedger, prices: list[str], *, settled_at: dat
     """Open and lose one position per price on the operational account (each settles NO)."""
     shadow.ensure_account(lg)
     total = Decimal(0)
+    # All fills first, then all settlements: cash movements must be appended in knowledge-time
+    # order (the ledger refuses a fill known before an already-recorded settlement).
     for i, price in enumerate(prices):
-        n = f"loss-{i}"
-        total += seed(lg, OPS, n, price=price, filled_at=settled_at - timedelta(hours=8),
+        total += seed(lg, OPS, f"loss-{i}", price=price, filled_at=settled_at - timedelta(hours=8),
                       event=f"weather:seed-event-{i}", cluster=f"weather:seed-cluster-{i}",
                       expected_settlement=settled_at)
-        settle_seed(lg, OPS, n, "NO", settled_at=settled_at)
+    for i in range(len(prices)):
+        settle_seed(lg, OPS, f"loss-{i}", "NO", settled_at=settled_at)
     return total
 
 

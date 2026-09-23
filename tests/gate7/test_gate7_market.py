@@ -171,8 +171,6 @@ def test_nonsense_bid_levels_never_become_valid_asks(yes_bid):
     assert run(side="NO", quote=no).rejection_reason in ("INVALID_PRICE", "INSUFFICIENT_SIZE")
 
 
-@pytest.mark.xfail(strict=True, reason="GATE7-F07: a NaN Decimal ask reaching the engine raises "
-                                       "InvalidOperation instead of INVALID_PRICE")
 def test_nan_ask_from_any_adapter_is_invalid_price_not_a_crash():
     o = run(quote=q(ask="NaN", bid=None))
     assert o.rejection_reason == "INVALID_PRICE"

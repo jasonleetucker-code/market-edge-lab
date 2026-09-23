@@ -73,8 +73,11 @@ def test_rerun_is_idempotent_and_settles_when_evidence_exists(store, tmp_path, m
     assert {a: len(ledger.entries(a)) for a in ledger.accounts()} == n
     _settled(store, 67, _result(67))  # evidence received 2026-09-24T14:00Z
     receipt, code = _run(store, tmp_path, model, now=datetime(2026, 9, 24, 15, tzinfo=UTC))
-    assert code == 0, receipt["problems"] + [d["problems"] for d in receipt["days"]]
-    assert receipt["state"] == "HEALTHY_TRADED" and receipt["settlement"]["settled"] == 6
+    # 2026-09-24's own window has closed with no capture stored: that day is lost -> INVALID.
+    assert receipt["state"] == "INVALID_CAPTURE" and code == 3 and receipt["settlement"]["settled"] == 6
+    assert receipt["missing_capture_days"] == ["2026-09-24"]
+    assert receipt["latest_day"] == {"target_date": "2026-09-24", "result": "INVALID_CAPTURE",
+                                     "capture_status": "MISSING_CAPTURE"}
     assert receipt["settlement"]["pending"] == []
     assert receipt["accounts"][shadow.RESEARCH_ACCOUNT_ID]["settlements"] == 3
 
@@ -149,7 +152,7 @@ def test_settlement_refresh_is_targeted_and_settles(store, tmp_path, monkeypatch
     receipt, code = _run(store, tmp_path, model, now=due, refresh_settlements=True)
     assert len(urls) == 1 and "event_ticker=KXHIGHNY-26SEP23" in urls[0]
     assert receipt["settlement"]["refresh"]["status"] == "ok" and receipt["settlement"]["settled"] == 6
-    assert (receipt["state"], code) == ("HEALTHY_TRADED", 0)
+    assert receipt["settlement"]["pending"] == []
 
 
 def test_failed_refresh_keeps_bookkeeping_and_reports_failed(store, tmp_path, monkeypatch, model):
@@ -163,3 +166,51 @@ def test_failed_refresh_keeps_bookkeeping_and_reports_failed(store, tmp_path, mo
     assert receipt["settlement"]["refresh"]["status"] == "failed"
     assert receipt["days"][0]["result"] == "HEALTHY_TRADED"  # decisions and fills were still recorded
     assert len(receipt["settlement"]["pending"]) == 6
+
+
+def test_evidence_received_after_now_is_not_used_yet(store, tmp_path, monkeypatch, model):
+    _full_day(store, monkeypatch)
+    _settled(store, 67, _result(67))  # stored with receipt time 2026-09-24T14:00Z
+    receipt, code = _run(store, tmp_path, model, now=datetime(2026, 9, 23, 21, tzinfo=UTC))
+    assert (receipt["state"], code) == ("PENDING_SETTLEMENT", 0) and receipt["missing_capture_days"] == []
+    assert receipt["settlement"]["settled"] == 0
+
+
+def test_invalid_day_alerts_once_not_every_run(store, tmp_path, monkeypatch, model):
+    routes = {f"/markets/{BRACKETS[0]}/orderbook": HttpFetchError("HTTP 500", status=500, attempts=3),
+              **default_routes()}
+    _full_day(store, monkeypatch, routes)
+    first, code1 = _run(store, tmp_path, model)
+    again, code2 = _run(store, tmp_path, model, now=CLOSED + timedelta(hours=12))
+    assert (first["state"], code1) == ("INVALID_CAPTURE", 3)
+    assert (again["state"], code2) == ("INVALID_CAPTURE", 0) and again["repeat_of_previous_alert"] is True
+
+
+def test_unexpected_errors_still_write_a_failed_receipt(store, tmp_path, monkeypatch, model):
+    _full_day(store, monkeypatch)
+    monkeypatch.setattr(daily, "closed_capture_days", lambda *a, **k: (_ for _ in ()).throw(KeyError("boom")))
+    receipt, code = _run(store, tmp_path, model)
+    assert (receipt["state"], code) == ("FAILED", 1) and "KeyError" in receipt["problems"][0]
+    assert json.loads((tmp_path / "status" / daily.RECEIPT_NAME).read_text())["state"] == "FAILED"
+
+
+def test_crash_between_decision_and_fill_is_completed_later(store, tmp_path, monkeypatch, model):
+    _full_day(store, monkeypatch)
+    ledger = ShadowLedger(tmp_path / "ledger.sqlite3")
+    real = ShadowLedger.record_fill
+    calls = {"n": 0}
+
+    def crash_once(self, account, payload):
+        calls["n"] += 1
+        if calls["n"] == 2:
+            raise OSError("simulated crash mid-day")
+        return real(self, account, payload)
+    monkeypatch.setattr(ShadowLedger, "record_fill", crash_once)
+    first, _ = _run(store, tmp_path, model)
+    assert first["state"] == "FAILED"
+    monkeypatch.setattr(ShadowLedger, "record_fill", real)
+    assert daily.incomplete_days(ledger, shadow.RESEARCH_ACCOUNT_ID) | daily.incomplete_days(ledger, shadow.ACCOUNT_ID)
+    second, code = _run(store, tmp_path, model, now=CLOSED + timedelta(minutes=30))
+    assert code == 0 and not (daily.incomplete_days(ledger, shadow.RESEARCH_ACCOUNT_ID)
+                              | daily.incomplete_days(ledger, shadow.ACCOUNT_ID))
+    assert ledger.state(shadow.RESEARCH_ACCOUNT_ID).fills == 3

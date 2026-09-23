@@ -110,6 +110,9 @@ One state does not prove the next. A valid no-signal day is a legitimate result.
 
 ## Rollback
 
+Code and unit files must go back **together**: the new `edgelab-backup.service` passes
+flags (`--kind`, `--if-exists`, `--lock-file`) that older `backup.py` rejects.
+
 1. Stop the new units:
    ```bash
    sudo systemctl disable --now edgelab-shadow.timer edgelab-settlement.timer
@@ -118,9 +121,20 @@ One state does not prove the next. A valid no-signal day is a legitimate result.
    ```bash
    sudo mv /opt/market-edge-lab/app /opt/market-edge-lab/app.bad
    sudo mv /opt/market-edge-lab/app.prev /opt/market-edge-lab/app
+   ```
+3. Restore the previous unit files and remove the new ones:
+   ```bash
+   sudo install -o root -g root -m 0644 /opt/market-edge-lab/app/deploy/vps/systemd/edgelab-* /etc/systemd/system/
+   sudo rm -f /etc/systemd/system/edgelab-shadow.* /etc/systemd/system/edgelab-settlement.* /etc/systemd/system/edgelab.slice
    sudo systemctl daemon-reload
    ```
+4. Verify the backup path works on the old code:
+   ```bash
+   sudo systemctl start edgelab-backup.service && sudo journalctl -u edgelab-backup -n 20 --no-pager
+   ```
+   Expect `VERIFIED_BACKUP_AND_RESTORE` for the evidence DB.
 
-Neither store's schema changed, so rolled-back code reads both. The ledger and backups are
-kept; nothing is deleted. To stop all collection (the data is kept):
+Neither store's schema changed (evidence v4, ledger v1), so rolled-back code reads both;
+nothing is migrated or deleted. The shadow ledger and its backups stay in place and
+unused. To stop all collection (the data is kept):
 `sudo systemctl disable --now 'edgelab-*.timer'`.

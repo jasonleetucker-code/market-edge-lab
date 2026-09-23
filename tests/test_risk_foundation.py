@@ -29,12 +29,13 @@ def ledger(tmp_path):
     return lg
 
 
-def open_position(lg, n, *, qty=1, price="0.40", side="YES", event="ev1", cluster="cl1", settles=T0 + timedelta(hours=20)):
+def open_position(lg, n, *, qty=1, price="0.40", side="YES", event="ev1", cluster="cl1", settles=T0 + timedelta(hours=20),
+                  at=T0):
     lg.record_decision(ACC, {"decision_id": f"d{n}", "opportunity_id": f"o{n}", "as_of_utc": T0.isoformat(),
                              "qualification": "QUALIFY", "reason": "QUALIFY"})
     cost = FEES.taker_buy(qty, Decimal(price))
     lg.record_fill(ACC, {"fill_id": f"f{n}", "decision_id": f"d{n}", "venue": "kalshi", "market_id": f"kalshi:M{n}",
-                         "event_id": event, "outcome_cluster": cluster, "side": side, "filled_at_utc": T0.isoformat(),
+                         "event_id": event, "outcome_cluster": cluster, "side": side, "filled_at_utc": at.isoformat(),
                          "status": "FILLED", "reason": "FILLED", "quantity": qty, "price": price,
                          "fee": str(cost.fee), "total_cost": str(cost.total_cost),
                          "expected_settlement_utc": None if settles is None else settles.isoformat()})
@@ -216,7 +217,8 @@ def test_cli_shadow_risk(ledger, tmp_path, capsys, monkeypatch):
 def test_capacity_respects_loss_and_drawdown_headroom(ledger):
     open_position(ledger, 1, qty=5, price="0.80", event="e1", cluster="c1")  # cost 4.07
     settle(ledger, 1, "NO", T0 + timedelta(hours=1))  # realized loss 4.07 of a 5.00 daily limit
-    open_position(ledger, 2, qty=1, price="0.20", event="e2", cluster="c2")  # open risk 0.22 (filled at T0)
+    # Filled after the loss was known: fills must follow cash movements in knowledge time.
+    open_position(ledger, 2, qty=1, price="0.20", event="e2", cluster="c2", at=T0 + timedelta(minutes=90))
     r = assess(ledger.state(ACC), POLICY, T0 + timedelta(hours=2))
     assert r.breaches == () and r.new_risk_allowed
     daily_headroom = POLICY.daily_loss_limit - r.daily_loss - r.open_worst_case_risk

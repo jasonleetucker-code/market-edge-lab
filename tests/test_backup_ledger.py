@@ -51,8 +51,26 @@ def test_ledger_without_triggers_or_with_a_broken_chain_is_never_verified(tmp_pa
     conn.execute("UPDATE ledger_entries SET payload_json = replace(payload_json, 'REJECT', 'QUALIFY') WHERE seq = 2")
     conn.commit()
     conn.close()
+    # Triggers are also missing here, so it is refused; a broken chain alone is covered below.
     with pytest.raises(backup.BackupError):
         backup.create_backup(path2, tmp_path / "b2", kind="ledger")
+
+
+def test_a_ledger_with_a_broken_chain_is_still_copied_but_never_verified(tmp_path, capsys):
+    path, _ = _ledger(tmp_path)
+    conn = sqlite3.connect(path)
+    triggers = conn.execute("SELECT name, sql FROM sqlite_master WHERE type='trigger'").fetchall()
+    for name, _ in triggers:
+        conn.execute(f'DROP TRIGGER "{name}"')
+    conn.execute("UPDATE ledger_entries SET payload_json = replace(payload_json, 'REJECT', 'QUALIFY') WHERE seq = 2")
+    for _, sql in triggers:
+        conn.execute(sql)  # triggers restored, chain still broken
+    conn.commit()
+    conn.close()
+    assert backup.main(["create", "--db", str(path), "--out", str(tmp_path / "bk"), "--kind", "ledger"]) == 1
+    report = json.loads(capsys.readouterr().out)
+    assert report["status"] == "BACKED_UP_LEDGER_CHAIN_INVALID"
+    assert report["chain_heads"]["A"].startswith("REPLAY_FAILED") and (tmp_path / "bk").exists()
 
 
 def test_cli_backs_up_both_stores_and_skips_a_ledger_not_created_yet(tmp_path, capsys):

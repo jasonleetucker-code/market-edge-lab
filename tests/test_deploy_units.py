@@ -64,10 +64,12 @@ def test_shadow_bookkeeping_has_no_network_and_settlement_refresh_is_bounded():
 
 
 def test_backup_covers_both_stores():
-    execs = _parse("edgelab-backup.service")[("Service", "ExecStart")]
-    assert len(execs) == 2
-    assert "--kind evidence" in execs[0] and "edge_lab.sqlite3" in execs[0]
-    assert "--kind ledger" in execs[1] and "--if-exists" in execs[1] and "--lock-file" in execs[1]
+    text = (UNITS / "edgelab-backup.service").read_text()
+    exec_line = text[text.index("ExecStart="):text.index("exit $$rc")]  # $$: systemd would expand $rc itself
+    # One shell step runs both copies, so a failed evidence backup never skips the ledger one.
+    assert exec_line.count("edge_lab.backup create") == 2 and exec_line.count("|| rc=1") == 2
+    assert "--kind evidence" in exec_line and "--kind ledger" in exec_line
+    assert "--if-exists" in exec_line and "--lock-file" in exec_line
 
 
 def test_install_script_knows_every_timer_and_keeps_the_ledger_private():

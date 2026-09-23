@@ -1,7 +1,7 @@
 """Gate 7 D — reporting: cost-basis equity, no hypothetical cash, locked horizons, and
 outcome-board bounds that are labelled as upper bounds, not attainable scenarios.
 
-Planned behaviour encoded by the xfail test (coordinator fix 4): fill and settlement payloads
+Behaviour pinned by this regression test (written as a strict xfail before the fix) (coordinator fix 4): fill and settlement payloads
 carry `fee_schedule_id`, `fee_status` and `claimable` (false while the schedule is
 UNVERIFIED_CURRENT_SCHEDULE).
 """
@@ -100,8 +100,6 @@ def test_board_bounds_are_upper_bounds_and_labelled(traded):
     assert group.max_account_gain > max(scenarios)  # strictly loose here: not an attainable outcome
 
 
-@pytest.mark.xfail(strict=True, reason="GATE7-F13: fill and settlement payloads lack fee_status and "
-                                       "claimable (fills carry only fee_schedule_id)")
 def test_fill_and_settlement_payloads_carry_fee_status(traded):
     store, ledger = traded
     store_settled_markets(store, settled_copy(MARKETS["markets"], 67), run_id="settle",
