@@ -175,8 +175,8 @@ def receipt_panel(ctx: d.Context, *, detail: bool = False) -> str:
         ("settlement evidence cutoff", esc(_get(settlement, "evidence_cutoff_utc"))),
         ("settlement refresh", state_tag(_get(refresh, "status")) if refresh is not None else esc(None)),
         ("fee schedule", esc(_get(fee, "schedule_id")) + " " + (state_tag(_get(fee, "status")) if fee else "")),
-        ("fee claim basis", state_tag(_get(fee, "claim_basis")) if fee else esc(None)),
-        ("fee claimable", esc(_get(fee, "claimable"))),
+        ("fee claim basis (at this run)", state_tag(_get(fee, "claim_basis")) if fee else esc(None)),
+        ("fee claim allowed (lower bound only)", esc(_get(fee, "claimable"))),
         ("problems", ul(_list(r.get("problems")))),
     ]
     body = kv(pairs)
@@ -258,10 +258,15 @@ def blockers(ctx: d.Context) -> list[str]:
             out.append(f"Fee schedule {fee['schedule_id']} is {fee['status']}: claimable = false, no "
                        "net-profitability claim may rest on shadow results.")
         elif fee["claim_basis"] == "CONSERVATIVE_BOUND":
-            out.append(f"Fee schedule {fee['schedule_id']}: claim basis CONSERVATIVE_BOUND. Net results are lower "
-                       "bounds (costs over-stated), not exact figures.")
+            out.append(f"Fee schedule {fee['schedule_id']}: claim basis CONSERVATIVE_BOUND for decisions from "
+                       f"{fee['checked_at_utc']} (current view). A claim uses net minus "
+                       f"{fee['claim_allowance_per_contract']} USD per contract, a lower bound, never an exact figure; "
+                       "earlier decisions keep the basis recorded with them.")
         recheck = parse_utc(fee.get("recheck_by_utc"))
-        if recheck is not None and recheck - ctx.now <= RECHECK_WARNING:
+        if recheck is not None and ctx.now > recheck:
+            out.append(f"Fee verification {fee['verification_id']} is OVERDUE for re-check (due "
+                       f"{fee['recheck_by_utc']}): new decisions carry claim basis NONE until a new record lands.")
+        elif recheck is not None and recheck - ctx.now <= RECHECK_WARNING:
             out.append(f"Fee verification {fee['verification_id']} must be re-checked by {fee['recheck_by_utc']}; "
                        "after that date new decisions carry claim basis NONE.")
     for label, loaded in (("collector status file", ctx.collector_status), ("pipeline receipt", ctx.receipt)):
@@ -632,8 +637,10 @@ def experiments_view(ctx: d.Context) -> str:
                  state_tag(f["status"]), state_tag(f["claim_basis"]), esc(f["checked_at_utc"]),
                  esc(f["recheck_by_utc"]), esc(f["detail"]), esc(f["evidence"])]
                 for f in fees]
-    body = table(["schedule", "venue", "verification", "claim basis", "verified at", "re-check by", "detail",
-                  "evidence"], fee_rows, wrap=(6, 7))
+    body = ('<p class="note">Current view: the verification known now. Each decision carries the basis known '
+            'when it was made; nothing earlier is restated.</p>'
+            + table(["schedule", "venue", "verification", "claim basis", "verified at", "re-check by", "detail",
+                     "evidence"], fee_rows, wrap=(6, 7)))
     for f in fees:
         if f["components"]:
             body += (f"<h3>Components of {esc(f['verification_id'])}</h3>" + table(
@@ -644,7 +651,9 @@ def experiments_view(ctx: d.Context) -> str:
         fee = ctx.receipt.value["fee"]
         body += "<h3>As reported by the latest pipeline receipt</h3>" + kv([
             ("schedule", esc(fee.get("schedule_id"))), ("status", state_tag(fee.get("status"))),
-            ("claim basis", state_tag(fee.get("claim_basis"))), ("claimable", esc(fee.get("claimable")))])
+            ("claim basis", state_tag(fee.get("claim_basis"))),
+            ("claim allowed (lower bound only)", esc(fee.get("claimable"))),
+            ("allowance per contract", esc(fee.get("claim_allowance_per_contract")))])
     out.append(panel("Fee schedule verification", body))
     out.append(receipt_panel(ctx, detail=True))
     return "".join(out)

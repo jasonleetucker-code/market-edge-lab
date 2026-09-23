@@ -11,9 +11,10 @@ gives the point-in-time view:
 - an unverified schedule may price research opportunities, but no net-profitability claim
   may rest on it (`claim_basis` NONE, `Opportunity.claimable` false);
 - `CONSERVATIVE_BOUND` means the coefficient, series multiplier, scheduled changes and
-  rounding mechanics are verified from primary sources, and the schedule's cost is proven
-  to be at least the exact venue debit for every account type. A net result is then a
-  lower bound, never an exact figure;
+  rounding mechanics are verified from primary sources, for a direct-member account. The
+  real debit of an order is proven to be below the schedule's cost plus a documented
+  per-contract rounding allowance (`rounding_allowance_per_contract`). A net result minus
+  that allowance is a lower bound (`claim_adjusted_net`), never an exact figure;
 - `EXACT` additionally needs the account type verified and an exact cost model.
 
 The verification is a record beside the schedule, not a new schedule id, because the cost
@@ -29,7 +30,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from decimal import ROUND_CEILING, ROUND_FLOOR, Decimal
 from enum import Enum
-from typing import Any
+from typing import Any, Iterable, Mapping
 
 from . import fees
 from .freshness import parse_utc
@@ -51,8 +52,15 @@ class ClaimBasis(str, Enum):
     """What kind of net-result claim the fee evidence supports."""
 
     NONE = "NONE"  # no net-profitability claim may rest on this fee
-    CONSERVATIVE_BOUND = "CONSERVATIVE_BOUND"  # fees verified; the cost over-states the debit
+    CONSERVATIVE_BOUND = "CONSERVATIVE_BOUND"  # net minus the rounding allowance is a lower bound
     EXACT = "EXACT"  # every component verified and the cost is the exact venue debit
+
+    @classmethod
+    def weakest(cls, bases) -> "ClaimBasis":
+        """The weakest basis among `bases` (NONE if any is NONE or unknown; NONE if empty)."""
+        order = {cls.NONE: 0, cls.CONSERVATIVE_BOUND: 1, cls.EXACT: 2}
+        found = [cls(b) if b in {m.value for m in cls} else cls.NONE for b in bases]
+        return min(found, key=order.__getitem__) if found else cls.NONE
 
 
 class VerificationComponent(str, Enum):
@@ -117,12 +125,16 @@ class QuadraticTakerSchedule:
     checked_at_utc: str
     cost_model: CostModel = CostModel.CONSERVATIVE_UPPER_BOUND
 
+    @staticmethod
+    def _scope(venue: str, native_id: str | None) -> str | None:
+        if venue != "kalshi" or not native_id:
+            return None
+        return native_id.split("-", 1)[0] or None
+
     def scope_of(self, native_id: str | None) -> str | None:
         """The fee scope of a native market id. Kalshi fees are set per series, and a
         Kalshi market ticker starts with its series ticker. Other venues: unknown."""
-        if self.venue != "kalshi" or not native_id:
-            return None
-        return native_id.split("-", 1)[0] or None
+        return self._scope(self.venue, native_id)
 
     def taker_buy(self, contracts: int, price: Decimal) -> FeeQuote:
         if not isinstance(contracts, int) or isinstance(contracts, bool) or contracts <= 0:
@@ -185,6 +197,9 @@ class FeeVerificationRecord:
 
     `knowledge_time_utc` is when every component was in hand; before it the record did not
     exist, so it never changes what a decision recorded earlier could have known.
+    `account_type` is the account the rounding component was verified for.
+    `rounding_allowance_per_contract` bounds, per contract, how much a real order split into
+    several fills can cost above the schedule's single-fill cost (ADR 0017).
     `applies_from_utc` is the effective date of the primary source: trades before it are not
     covered. `recheck_by_utc` bounds how long the "no scheduled change" check is trusted;
     after it the record stops supporting claims until a new record is added ("stale is not
@@ -199,6 +214,8 @@ class FeeVerificationRecord:
     applies_from_utc: str
     recheck_by_utc: str
     components: tuple[ComponentEvidence, ...]
+    account_type: str = "direct"
+    rounding_allowance_per_contract: Decimal | None = None
 
     def component(self, component: VerificationComponent) -> ComponentEvidence:
         for c in self.components:
@@ -219,7 +236,12 @@ class FeeVerificationRecord:
             return ClaimBasis.NONE
         if cost_model is CostModel.EXACT and self.full_schedule_verified:
             return ClaimBasis.EXACT
-        if cost_model is CostModel.CONSERVATIVE_UPPER_BOUND:
+        # The bound is proven only for a direct member (the non-direct bound is loose, and an
+        # FCM may add its own fees, PDF p.3), with a stated per-contract rounding allowance.
+        account = self.component(VerificationComponent.ACCOUNT_TYPE).state
+        if (cost_model is CostModel.CONSERVATIVE_UPPER_BOUND and self.account_type == "direct"
+                and account in (ComponentState.VERIFIED, ComponentState.OWNER_ATTESTED)
+                and self.rounding_allowance_per_contract is not None):
             return ClaimBasis.CONSERVATIVE_BOUND
         return ClaimBasis.NONE
 
@@ -234,6 +256,7 @@ class FeeVerificationState:
     verification_id: str | None
     full_schedule_verified: bool
     detail: str
+    rounding_allowance_per_contract: Decimal | None = None
 
     @property
     def claimable(self) -> bool:
@@ -246,13 +269,30 @@ class FeeVerificationState:
         out: dict[str, Any] = {"fee_schedule_id": self.schedule_id, "fee_status": self.status.value,
                                "claimable": self.claimable}
         if self.verification_id is not None:
-            out.update(claim_basis=self.claim_basis.value, fee_verification_id=self.verification_id)
+            out.update(claim_basis=self.claim_basis.value, fee_verification_id=self.verification_id,
+                       claim_allowance_per_contract=_s(self.rounding_allowance_per_contract))
         return out
 
     def to_dict(self) -> dict[str, Any]:
         return {"schedule_id": self.schedule_id, "status": self.status.value, "claimable": self.claimable,
                 "claim_basis": self.claim_basis.value, "verification_id": self.verification_id,
-                "full_schedule_verified": self.full_schedule_verified, "detail": self.detail}
+                "full_schedule_verified": self.full_schedule_verified, "detail": self.detail,
+                "claim_allowance_per_contract": _s(self.rounding_allowance_per_contract)}
+
+
+def _s(value: Decimal | None) -> str | None:
+    return None if value is None else str(value)
+
+
+def claim_adjusted_net(net: Decimal, contracts: Decimal | int, state: FeeVerificationState) -> Decimal | None:
+    """The net result a claim may use: None when no claim is possible; under
+    CONSERVATIVE_BOUND, the recorded net minus the rounding allowance for every contract."""
+    if not state.claimable:
+        return None
+    allowance = state.rounding_allowance_per_contract or Decimal(0)
+    if state.claim_basis is ClaimBasis.CONSERVATIVE_BOUND and state.rounding_allowance_per_contract is None:
+        return None
+    return net - allowance * Decimal(contracts)
 
 
 _EVIDENCE_DIR = "experiments/EXP-001-kxhighny-nws-vs-market/fee_verification"
@@ -260,15 +300,22 @@ _EVIDENCE_DIR = "experiments/EXP-001-kxhighny-nws-vs-market/fee_verification"
 # Evidence: the owner-supplied Kalshi fee-schedule PDF (received 2026-09-23T12:54:30Z,
 # "Last updated and effective: July 7, 2026"), the public series and fee-change API
 # captures and the Fee Rounding docs page, all under `_EVIDENCE_DIR` (MANIFEST.json,
-# VERIFICATION.md). The record is complete at the last capture, 2026-09-23T13:18:03Z.
+# VERIFICATION.md). The record is complete at the last capture (fill granularity), 2026-09-23T13:39:48Z.
 KALSHI_KXHIGHNY_VERIFICATION_2026_09_23 = FeeVerificationRecord(
     verification_id="kalshi-kxhighny-fee-verification-2026-09-23",
     schedule_id="kalshi-quadratic-taker-v1",
     venue="kalshi",
     scope=("KXHIGHNY",),
-    knowledge_time_utc="2026-09-23T13:18:03Z",
+    knowledge_time_utc="2026-09-23T13:39:48Z",
     applies_from_utc="2026-07-07T00:00:00-04:00",
-    recheck_by_utc="2026-10-23T13:18:03Z",
+    recheck_by_utc="2026-10-23T13:39:48Z",
+    account_type="direct",
+    # A direct member's order of C contracts fills in at most 100*C fills (minimum granularity
+    # 0.01 contracts, docs Fixed-Point Representation). Each fill adds under $0.000001 of fee
+    # rounding and under $0.0001 of balance rounding, and rebates only lower that. So the real
+    # debit is below the frozen single-fill cost + $0.0101 per contract, whatever the price
+    # grid and even if a rebate cap applies (ADR 0017; tests/test_fee_verification.py).
+    rounding_allowance_per_contract=Decimal("0.0101"),
     components=(
         ComponentEvidence(VerificationComponent.COEFFICIENT, ComponentState.VERIFIED,
                           f"{_EVIDENCE_DIR}/kalshi-fee-schedule_effective-2026-07-07_received-2026-09-23.pdf p.2",
@@ -284,7 +331,9 @@ KALSHI_KXHIGHNY_VERIFICATION_2026_09_23 = FeeVerificationRecord(
                           f"PDF p.2 (fee + positionCost rounded up to a centicent); "
                           f"{_EVIDENCE_DIR}/docs_kalshi_fee_rounding_2026-09-23T131803Z.md",
                           "trade fee ceil $0.000001; direct-member balance aligned to $0.0001 (non-direct $0.01); "
-                          "rounding overpayment rebated per order; the $0.01-floor, no-rebate model is an upper bound"),
+                          "rounding overpayment rebated per order (capped). Fill granularity 0.01 contracts: "
+                          f"{_EVIDENCE_DIR}/docs_kalshi_fixed_point_2026-09-23T133948Z.md. The frozen cost bounds "
+                          "a single fill; a split order is bounded with a $0.0101-per-contract allowance"),
         ComponentEvidence(VerificationComponent.ACCOUNT_TYPE, ComponentState.OWNER_ATTESTED,
                           "docs/owner/2026-09-23-integration-production-directive.md (owner answer 1)",
                           "direct member (account held at kalshi.com); not verified through an account read"),
@@ -297,15 +346,23 @@ KALSHI_KXHIGHNY_VERIFICATION_2026_09_23 = FeeVerificationRecord(
 FEE_VERIFICATIONS: tuple[FeeVerificationRecord, ...] = (KALSHI_KXHIGHNY_VERIFICATION_2026_09_23,)
 
 
-def _base_state(schedule: QuadraticTakerSchedule, detail: str) -> FeeVerificationState:
-    exact = schedule.status is FeeScheduleStatus.VERIFIED
-    return FeeVerificationState(schedule.schedule_id, schedule.status,
-                                ClaimBasis.EXACT if exact else ClaimBasis.NONE, None, exact, detail)
+def _base_state(schedule: Any, detail: str) -> FeeVerificationState:
+    """No dated record applies: the schedule's declared base status decides (test doubles and
+    replacement schedules). A declared VERIFIED schedule supports EXACT only with an exact
+    cost model; a conservative one supports a bound with no stated allowance."""
+    status = schedule.status
+    if status is FeeScheduleStatus.VERIFIED:
+        exact = getattr(schedule, "cost_model", CostModel.CONSERVATIVE_UPPER_BOUND) is CostModel.EXACT
+        basis = ClaimBasis.EXACT if exact else ClaimBasis.CONSERVATIVE_BOUND
+        return FeeVerificationState(schedule.schedule_id, status, basis, None, exact, detail,
+                                    Decimal(0) if exact else None)
+    return FeeVerificationState(schedule.schedule_id, status, ClaimBasis.NONE, None, False, detail)
 
 
-def _records_for(schedule: QuadraticTakerSchedule, scope: str | None) -> list[FeeVerificationRecord]:
+def _records_for(schedule: Any, scope: str | None) -> list[FeeVerificationRecord]:
     return [r for r in FEE_VERIFICATIONS
-            if r.schedule_id == schedule.schedule_id and r.venue == schedule.venue and scope in r.scope]
+            if r.schedule_id == schedule.schedule_id and r.venue == getattr(schedule, "venue", None)
+            and scope in r.scope]
 
 
 def _state_from(schedule: QuadraticTakerSchedule, record: FeeVerificationRecord, at: datetime) -> FeeVerificationState:
@@ -318,13 +375,23 @@ def _state_from(schedule: QuadraticTakerSchedule, record: FeeVerificationRecord,
     pending = [c.component.value for c in record.components
                if c.state not in (ComponentState.VERIFIED, ComponentState.NOT_APPLICABLE)]
     detail = f"{record.verification_id}: claim basis {basis.value}"
+    if basis is ClaimBasis.CONSERVATIVE_BOUND:
+        detail += f" (subtract {record.rounding_allowance_per_contract} USD per contract before any claim)"
     if pending:
         detail += f"; not venue-verified: {', '.join(pending)}"
     return FeeVerificationState(schedule.schedule_id, status, basis, record.verification_id,
-                                record.full_schedule_verified, detail)
+                                record.full_schedule_verified, detail,
+                                record.rounding_allowance_per_contract if basis is not ClaimBasis.NONE else None)
 
 
-def verification_at(schedule: QuadraticTakerSchedule, as_of: datetime | str, native_id: str | None = None,
+def _scope_of(schedule: Any, native_id: str | None) -> str | None:
+    scope_of = getattr(schedule, "scope_of", None)
+    if callable(scope_of):
+        return scope_of(native_id)
+    return QuadraticTakerSchedule._scope(getattr(schedule, "venue", ""), native_id)
+
+
+def verification_at(schedule: Any, as_of: datetime | str, native_id: str | None = None,
                     *, scope: str | None = None) -> FeeVerificationState:
     """What was known about `schedule` for this market's fee scope at `as_of`.
 
@@ -335,7 +402,7 @@ def verification_at(schedule: QuadraticTakerSchedule, as_of: datetime | str, nat
     at = parse_utc(as_of)
     if at is None:
         raise ValueError("as_of must be a timezone-aware time")
-    scope = scope if scope is not None else schedule.scope_of(native_id)
+    scope = scope if scope is not None else _scope_of(schedule, native_id)
     usable = [r for r in _records_for(schedule, scope)
               if parse_utc(r.knowledge_time_utc) <= at and parse_utc(r.applies_from_utc) <= at]
     if not usable:
@@ -343,7 +410,7 @@ def verification_at(schedule: QuadraticTakerSchedule, as_of: datetime | str, nat
     return _state_from(schedule, max(usable, key=lambda r: parse_utc(r.knowledge_time_utc)), at)
 
 
-def restated_verification(schedule: QuadraticTakerSchedule, trade_at: datetime | str, now: datetime | str,
+def restated_verification(schedule: Any, trade_at: datetime | str, now: datetime | str,
                           native_id: str | None = None, *, scope: str | None = None) -> FeeVerificationState:
     """A reporting restatement: the evidence known at `now` applied to a trade at `trade_at`.
 
@@ -352,7 +419,7 @@ def restated_verification(schedule: QuadraticTakerSchedule, trade_at: datetime |
     trade, known = parse_utc(trade_at), parse_utc(now)
     if trade is None or known is None:
         raise ValueError("times must be timezone-aware")
-    scope = scope if scope is not None else schedule.scope_of(native_id)
+    scope = scope if scope is not None else _scope_of(schedule, native_id)
     usable = [r for r in _records_for(schedule, scope)
               if parse_utc(r.knowledge_time_utc) <= known and parse_utc(r.applies_from_utc) <= trade]
     if not usable:
@@ -433,7 +500,8 @@ KALSHI_NONSTANDARD_SERIES = frozenset({
 
 @dataclass(frozen=True)
 class UnsupportedFeeSchedule:
-    """No verified fee model for this venue or scope. It never prices anything."""
+    """No verified fee model for this venue or scope. It never prices anything, and an
+    opportunity priced against it is rejected (FEE_UNSUPPORTED)."""
 
     venue: str
     scope: str | None
@@ -444,6 +512,12 @@ class UnsupportedFeeSchedule:
         return f"unsupported:{self.venue}:{self.scope or '*'}"
 
     status = FeeScheduleStatus.UNSUPPORTED
+
+    def scope_of(self, native_id: str | None) -> str | None:
+        return self.scope
+
+    def taker_buy(self, contracts: int, price: Decimal) -> FeeQuote:
+        raise ValueError(f"{self.schedule_id}: {self.reason}")
 
 
 def schedule_for(venue: str, scope: str | None = None) -> QuadraticTakerSchedule | UnsupportedFeeSchedule:
@@ -459,10 +533,25 @@ def schedule_for(venue: str, scope: str | None = None) -> QuadraticTakerSchedule
     return KALSHI_QUADRATIC_TAKER_V1
 
 
+def recorded_claim_basis(fills: Iterable[Mapping[str, Any]]) -> ClaimBasis:
+    """The weakest claim basis over an account's FILLED fills, as recorded at their decision
+    times. A fill with no `claim_basis` (recorded before any verification record) is NONE.
+    With no fills there is nothing to claim: NONE."""
+    return ClaimBasis.weakest(f.get("claim_basis", "NONE") for f in fills if f.get("status") == "FILLED")
+
+
 def recheck_due(now: datetime | str) -> list[str]:
-    """Verification records whose re-check date has passed at `now`."""
+    """The newest record per (schedule, scope) whose re-check date has passed at `now`.
+    A record superseded by a newer one for the same scope is not due."""
     at = parse_utc(now)
-    return [r.verification_id for r in FEE_VERIFICATIONS if at is not None and at > parse_utc(r.recheck_by_utc)]
+    if at is None:
+        return []
+    newest: dict[tuple[str, tuple[str, ...]], FeeVerificationRecord] = {}
+    for r in FEE_VERIFICATIONS:
+        key = (r.schedule_id, r.scope)
+        if key not in newest or parse_utc(r.knowledge_time_utc) > parse_utc(newest[key].knowledge_time_utc):
+            newest[key] = r
+    return [r.verification_id for r in newest.values() if at > parse_utc(r.recheck_by_utc)]
 
 
 RECHECK_WARNING = timedelta(days=7)

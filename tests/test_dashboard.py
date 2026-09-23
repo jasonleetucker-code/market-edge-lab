@@ -426,7 +426,10 @@ def test_fee_blocker_follows_the_canonical_schedule():
     if not state.claimable:
         assert f"is {state.status.value}: claimable = false" in body
     elif state.claim_basis.value == "CONSERVATIVE_BOUND":
-        assert "claim basis CONSERVATIVE_BOUND" in body and "lower" in body
+        assert "claim basis CONSERVATIVE_BOUND" in body and "lower bound" in body
+        assert f"{state.rounding_allowance_per_contract} USD per contract" in body
+    else:
+        assert state.claim_basis.value == "EXACT" and "claimable = false" not in body
 
 
 def test_fee_blocker_before_the_verification_record_says_unverified():

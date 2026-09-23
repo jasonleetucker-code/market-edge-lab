@@ -39,6 +39,8 @@ def test_pdf_bytes_match_the_manifest():
     for doc in manifest["documents"]:
         data = (EVIDENCE / doc["path"]).read_bytes()
         assert hashlib.sha256(data).hexdigest() == doc["sha256"], doc["path"]
+    for doc in manifest["transcriptions"]:
+        assert hashlib.sha256((EVIDENCE / doc["path"]).read_bytes()).hexdigest() == doc["sha256"], doc["path"]
     pdf = manifest["documents"][0]
     assert pdf["sha256"] == "c326a69f596a11e8f8be2620402d39a8d4823920c21cc97c93a114d862699601"
     assert pdf["bytes"] == 281129 and pdf["effective_date"] == "2026-07-07"
@@ -174,7 +176,8 @@ def test_ledger_fields_are_legacy_before_the_record_and_extended_after():
         "claimable": False}
     assert shadow.fee_fields("2026-09-23T22:00:00+00:00", "kalshi:" + NATIVE) == {
         "fee_schedule_id": "kalshi-quadratic-taker-v1", "fee_status": "PARTIALLY_VERIFIED", "claimable": True,
-        "claim_basis": "CONSERVATIVE_BOUND", "fee_verification_id": RECORD.verification_id}
+        "claim_basis": "CONSERVATIVE_BOUND", "fee_verification_id": RECORD.verification_id,
+        "claim_allowance_per_contract": "0.0101"}
 
 
 def test_receipt_fee_block_has_fixed_keys_at_any_time():
@@ -251,3 +254,140 @@ def test_engine_claimability_follows_the_record_known_at_as_of():
 def test_engine_never_claims_for_an_uncovered_series():
     other = _evaluate(KNOWN + timedelta(hours=8), native="KXHIGHCHI-26SEP24-B70.5")
     assert other.rejection_reason == "FEE_UNVERIFIED" and not other.claimable
+
+
+# ---------------------------------------------------------------- split orders (review B1)
+
+def _real_order_debit(fills: list[Decimal], price: Decimal, precision: Decimal) -> Decimal:
+    """Kalshi's documented per-fill mechanics (Fee Rounding docs): trade fee ceil $0.000001,
+    balance change floored to the account precision, the rounding fee accumulated per order,
+    and rebates paid in whole precision units, capped so a fill's net fee is not negative."""
+    from decimal import ROUND_CEILING, ROUND_FLOOR
+    k = Decimal("0.07") * price * (1 - price)
+    acc = total = Decimal(0)
+    for c in fills:
+        trade_fee = (k * c).quantize(Decimal("0.000001"), ROUND_CEILING)
+        change = -(price * c) - trade_fee
+        aligned = change.quantize(precision, ROUND_FLOOR)
+        rounding = change - aligned
+        acc += rounding
+        rebate = min(acc.quantize(precision, ROUND_FLOOR), (trade_fee + rounding).quantize(precision, ROUND_FLOOR))
+        acc -= rebate
+        total += -aligned - rebate
+    return total
+
+
+def _split(rng: random.Random, contracts: int, max_pieces: int) -> list[Decimal]:
+    units = contracts * 100  # Kalshi's minimum fill granularity is 0.01 contracts
+    cuts = sorted(rng.sample(range(1, units), rng.randint(0, min(max_pieces, units - 1))))
+    return [Decimal(b - a) / 100 for a, b in zip([0, *cuts], [*cuts, units])]
+
+
+def test_split_orders_can_exceed_the_single_fill_cost_so_an_allowance_is_needed():
+    fills = [Decimal(x) for x in ("0.36", "0.24", "0.04", "0.26", "0.17", "0.03", "0.09", "0.04", "0.53", "0.13",
+                                  "0.1", "0.31", "0.1", "0.02", "0.08", "0.06", "0.16", "0.04", "0.02", "0.15", "0.07")]
+    price = Decimal("0.9963")
+    real = _real_order_debit(fills, price, Decimal("0.0001"))
+    frozen = fees.taker_buy_cost(3, price)
+    assert real > frozen  # the plain frozen cost is NOT an upper bound for a split order
+    assert real < frozen + RECORD.rounding_allowance_per_contract * 3
+
+
+def test_direct_member_debit_is_below_frozen_plus_allowance_for_any_split():
+    rng = random.Random(20260923)
+    allowance = RECORD.rounding_allowance_per_contract
+    for _ in range(3000):
+        contracts = rng.randint(1, 4)
+        price = Decimal(rng.randint(1, 9999)) / Decimal(10000)
+        fills = _split(rng, contracts, rng.choice((0, 3, 30, 400)))
+        real = _real_order_debit(fills, price, Decimal("0.0001"))
+        assert real < fees.taker_buy_cost(contracts, price) + allowance * contracts, (contracts, price, fills)
+
+
+def test_worst_case_split_into_minimum_fills_stays_inside_the_allowance():
+    # 100 fills of 0.01 per contract at prices where fees are tiny (the rebate cap binds).
+    for price in (Decimal("0.0001"), Decimal("0.0137"), Decimal("0.5"), Decimal("0.9999")):
+        for contracts in (1, 3):
+            fills = [Decimal("0.01")] * (100 * contracts)
+            real = _real_order_debit(fills, price, Decimal("0.0001"))
+            assert real < fees.taker_buy_cost(contracts, price) + RECORD.rounding_allowance_per_contract * contracts
+
+
+def test_claim_basis_requires_a_direct_account_and_an_allowance():
+    assert replace(RECORD, account_type="non_direct").claim_basis(CostModel.CONSERVATIVE_UPPER_BOUND) is ClaimBasis.NONE
+    assert replace(RECORD, rounding_allowance_per_contract=None).claim_basis(
+        CostModel.CONSERVATIVE_UPPER_BOUND) is ClaimBasis.NONE
+    unattested = replace(RECORD, components=tuple(
+        replace(c, state=ComponentState.UNVERIFIED) if c.component is VerificationComponent.ACCOUNT_TYPE else c
+        for c in RECORD.components))
+    assert unattested.claim_basis(CostModel.CONSERVATIVE_UPPER_BOUND) is ClaimBasis.NONE
+
+
+def test_claim_adjusted_net_subtracts_the_allowance_per_contract():
+    from edge_lab.fee_schedules import claim_adjusted_net
+    after = verification_at(KALSHI, KNOWN + timedelta(hours=1), NATIVE)
+    assert claim_adjusted_net(Decimal("0.50"), 3, after) == Decimal("0.50") - Decimal("0.0303")
+    before = verification_at(KALSHI, KNOWN - timedelta(hours=1), NATIVE)
+    assert claim_adjusted_net(Decimal("0.50"), 3, before) is None
+
+
+# ---------------------------------------------------------------- unsupported fees never qualify (review S1)
+
+@pytest.mark.parametrize("policy", ["flag", "require"])
+def test_unsupported_fee_schedule_rejects_instead_of_crashing_or_qualifying(policy):
+    from test_opportunity import MARKET, POLICY, estimate, quote, run
+    as_of = KNOWN + timedelta(hours=8)
+    o = run(q=quote(received=as_of - timedelta(minutes=2)), e=estimate(observed=as_of - timedelta(hours=3), generated=as_of),
+            market=replace(MARKET, native_id="KXNFLGAME-26SEP24-X"), schedule=schedule_for("kalshi", "KXNFLGAME"),
+            policy=replace(POLICY, fee_verification=policy), as_of=as_of)
+    assert o.qualification == "REJECT" and "FEE_UNSUPPORTED" in o.reasons
+    assert o.fee is None and o.net_edge is None and not o.claimable
+
+
+def test_a_declared_verified_conservative_schedule_is_not_exact():
+    from edge_lab.fee_schedules import QuadraticTakerSchedule
+    verified = replace(KALSHI, schedule_id="test-verified", status=FeeScheduleStatus.VERIFIED)
+    assert verification_at(verified, KNOWN, NATIVE).claim_basis is ClaimBasis.CONSERVATIVE_BOUND
+    exact = replace(verified, cost_model=CostModel.EXACT)
+    assert verification_at(exact, KNOWN, NATIVE).claim_basis is ClaimBasis.EXACT
+    assert isinstance(exact, QuadraticTakerSchedule)
+
+
+def test_recorded_claim_basis_is_the_weakest_filled_basis():
+    from edge_lab.fee_schedules import recorded_claim_basis
+    assert recorded_claim_basis([]) is ClaimBasis.NONE
+    legacy = {"status": "FILLED", "claimable": False}
+    bound = {"status": "FILLED", "claim_basis": "CONSERVATIVE_BOUND"}
+    assert recorded_claim_basis([bound]) is ClaimBasis.CONSERVATIVE_BOUND
+    assert recorded_claim_basis([bound, legacy]) is ClaimBasis.NONE
+    assert recorded_claim_basis([bound, {"status": "NO_FILL"}]) is ClaimBasis.CONSERVATIVE_BOUND
+
+
+# ---------------------------------------------------------------- a day decided after the record (review S4)
+
+def test_day_decided_after_the_record_carries_the_bound_end_to_end(tmp_path, monkeypatch):
+    from edge_lab import fee_schedules
+    from test_exp001_shadow import CLOSED, _result, _settled
+    from test_forward import D, _full_day
+
+    early = replace(RECORD, knowledge_time_utc="2026-09-22T00:00:00Z")  # as if known before D's decision
+    monkeypatch.setattr(fee_schedules, "FEE_VERIFICATIONS", (early,))
+    store = SnapshotStore(tmp_path / "fwd.sqlite3")
+    ledger = ShadowLedger(tmp_path / "ledger.sqlite3")
+    _full_day(store, monkeypatch)
+    model = stageb.load_model()
+    shadow.run_day(store, ledger, D, model=model, now=CLOSED)
+    shadow.run_day(store, ledger, D, model=model, now=CLOSED)  # re-run: idempotent, no conflict
+    _settled(store, 70, _result(70))
+    shadow.settle_open_positions(store, ledger, now=datetime(2026, 9, 24, 15, tzinfo=UTC))
+    shadow.settle_open_positions(store, ledger, now=datetime(2026, 9, 24, 16, tzinfo=UTC))
+    kinds = {"decision": 0, "fill": 0, "settlement": 0}
+    for acct in ledger.accounts():
+        for row in ledger.entries(acct):
+            payload = json.loads(row["payload_json"])
+            if row["kind"] in ("decision", "fill", "settlement"):
+                kinds[row["kind"]] += 1
+                assert payload["claim_basis"] == "CONSERVATIVE_BOUND"
+                assert payload["fee_verification_id"] == RECORD.verification_id
+                assert payload["claim_allowance_per_contract"] == "0.0101"
+    assert all(kinds.values())

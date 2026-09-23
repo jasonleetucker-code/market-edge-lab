@@ -48,7 +48,24 @@
       "url": "https://docs.kalshi.com/getting_started/fee_rounding.md",
       "retrieved_utc": "2026-09-23T13:18:03Z",
       "observed": "trade fee rounded up to $0.000001; direct-member balances aligned to $0.0001, non-direct to $0.01; rounding fee; per-order accumulator rebates in balance-precision increments"
+    },
+    {
+      "path": "docs_kalshi_fixed_point_2026-09-23T133948Z.md",
+      "sha256": "f2669602e88a6a42f92a1608775e90a6881de115d6539686d12b0e8f07d94a76",
+      "url": "https://docs.kalshi.com/getting_started/fixed_point_migration.md",
+      "retrieved_utc": "2026-09-23T13:39:48Z",
+      "observed": "contract quantities have up to 2 decimals; minimum granularity is 0.01 contracts; fills can be fractional even for whole-contract orders; sub-cent ticks exist on some markets; rounding fee and accumulator rebates apply"
     }
   ],
-  "verification_record": "src/edge_lab/fee_schedules.py KALSHI_KXHIGHNY_VERIFICATION_2026_09_23 (ADR 0017)"
+  "verification_record": "src/edge_lab/fee_schedules.py KALSHI_KXHIGHNY_VERIFICATION_2026_09_23 (ADR 0017)",
+  "transcriptions": [
+    {
+      "path": "pdf_table_rows.json",
+      "sha256": "d8a59da578229c0faa07fe59dda2333f56c7c6c7356a038184ccbde1c62a1c53"
+    },
+    {
+      "path": "pdf_nonstandard_series.json",
+      "sha256": "baaca6edb8255b2edd1fde7a9fdbb772f7954e9bdc5ba6886bcd76fbdd6d4778"
+    }
+  ]
 }

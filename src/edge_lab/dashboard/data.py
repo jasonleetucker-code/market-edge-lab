@@ -290,7 +290,8 @@ class Context:
             return Loaded(NO_DATA, message="needs a risk report")
         return Loaded(OK, risk.withdrawal_assessment(
             view.state, view.risk.value, simulation=True, edge_verified=False,
-            fee_claim_basis=fee_state(self.now).claim_basis.value, owner_policy_approved=False))
+            fee_claim_basis=fee_schedules.recorded_claim_basis(view.fills.values()).value,
+            owner_policy_approved=False))
 
     def _board(self, view: AccountView) -> Loaded:
         try:
@@ -340,6 +341,8 @@ def fee_rows(now: datetime) -> list[dict[str, Any]]:
         record = next((r for r in fee_schedules.FEE_VERIFICATIONS if r.verification_id == v.verification_id), None)
         rows.append({"schedule_id": s.schedule_id, "venue": s.venue, "status": v.status.value,
                      "claimable": v.claimable, "claim_basis": v.claim_basis.value,
+                     "claim_allowance_per_contract": None if v.rounding_allowance_per_contract is None
+                     else str(v.rounding_allowance_per_contract),
                      "verification_id": v.verification_id, "detail": v.detail,
                      "recheck_by_utc": record.recheck_by_utc if record else None,
                      "components": [{"component": c.component.value, "state": c.state.value,

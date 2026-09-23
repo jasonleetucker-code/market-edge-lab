@@ -115,7 +115,8 @@ def fee_receipt(now: str | datetime) -> dict[str, Any]:
     return verification_at(stageb.FEE_SCHEDULE, now, scope=forward.SERIES).to_dict()
 
 
-FEE_FIELD_KEYS = ("fee_schedule_id", "fee_status", "claimable", "claim_basis", "fee_verification_id")
+FEE_FIELD_KEYS = ("fee_schedule_id", "fee_status", "claimable", "claim_basis", "fee_verification_id",
+                  "claim_allowance_per_contract")
 
 
 def _fill_fee_fields(fill: dict[str, Any] | None) -> dict[str, Any]:

@@ -63,6 +63,7 @@ class Reason(str, Enum):
     INVALID_PRICE = "INVALID_PRICE"
     INSUFFICIENT_SIZE = "INSUFFICIENT_SIZE"
     FEE_UNVERIFIED = "FEE_UNVERIFIED"
+    FEE_UNSUPPORTED = "FEE_UNSUPPORTED"  # no fee model exists for this venue/scope: never qualifies
     NO_EDGE = "NO_EDGE"
 
 
@@ -144,7 +145,10 @@ class ModelEstimate:
 
 class FeeSchedule(Protocol):
     schedule_id: str
+    venue: str
     status: FeeScheduleStatus
+
+    def scope_of(self, native_id: str | None) -> str | None: ...
 
     def taker_buy(self, contracts: int, price: Decimal) -> FeeQuote: ...
 
@@ -343,7 +347,10 @@ def evaluate(
     # Fee verification is point-in-time: only evidence known at as_of counts (ADR 0017).
     fee_state = verification_at(fee_schedule, as_of_utc, market.native_id)
     fee_quote = None
-    if price is not None and fee_state.status is not FeeScheduleStatus.UNSUPPORTED:
+    if fee_state.status is FeeScheduleStatus.UNSUPPORTED:
+        # No cost can be computed, so no edge exists to qualify on, whatever the policy.
+        fail(Reason.FEE_UNSUPPORTED, f"no fee model for {fee_schedule.schedule_id}")
+    elif price is not None:
         fee_quote = fee_schedule.taker_buy(policy.quantity, price)
     if not fee_state.claimable and policy.fee_verification == "require":
         fail(Reason.FEE_UNVERIFIED, f"fee schedule {fee_schedule.schedule_id} is {fee_state.status.value}")

@@ -39,9 +39,9 @@ def _decision(account: str, n: int, at: datetime, market: str, side: str, qualif
         "opportunity": {"model_probability": p, "conservative_probability": str(Decimal(p) - Decimal("0.03")),
                         "executable_price": price, "fee": fee, "all_in_cost": cost, "net_edge": edge,
                         "net_edge_conservative": str(Decimal(edge) - Decimal("0.03")), "freshness": "fresh",
-                        "fee_status": "UNVERIFIED_CURRENT_SCHEDULE"},
+                        "fee_status": exp001_shadow.fee_fields(_iso(at), market)["fee_status"]},
         "sizing": {"final_size": 1, "binding_constraint": "fixed_contracts"} if qualify else None,
-        "stage_b_day_status": "VALID", "claimable": False,
+        "stage_b_day_status": "VALID", **exp001_shadow.fee_fields(_iso(at), market),
     }
 
 

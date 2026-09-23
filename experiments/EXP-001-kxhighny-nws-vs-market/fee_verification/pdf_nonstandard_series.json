@@ -229,7 +229,8 @@
       "series": "KXMVE",
       "title": "Combos (excluding uncorrelated NFL combos)",
       "maker_multiplier": 2,
-      "taker_multiplier": 1
+      "taker_multiplier": 1,
+      "transcription_note": "rendered p.8 shows maker 2, taker 1; the PDF text layer reads '1 2' for this row, so the column order is uncertain. Not used for KXHIGHNY."
     },
     {
       "series": "KXNASDAQ100Y",

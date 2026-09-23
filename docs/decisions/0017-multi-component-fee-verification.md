@@ -32,9 +32,14 @@ it, throwing away verified evidence. Three more constraints apply:
 - **Claim basis.** A schedule declares its `cost_model` relative to the real venue debit.
   - **NONE**: a core component (coefficient, multiplier, scheduled changes, rounding) is
     not verified. No net claim is possible.
-  - **CONSERVATIVE_BOUND**: the core components are verified, and the schedule's cost is
-    proven to be at least the exact debit for every account type. A net result is a lower
-    bound. This is the owner's decision of 2026-09-23.
+  - **CONSERVATIVE_BOUND**: the core components are verified, for a **direct** member (owner-attested
+    or verified). The frozen cost bounds a single fill. An order split into several fills (the minimum
+    granularity is 0.01 contracts) is proven to cost less than the frozen cost plus **0.0101 USD per
+    contract**. So a claim uses net minus that allowance (`claim_adjusted_net`), which is a lower
+    bound. This follows the owner's decision of 2026-09-23. The first review of the PR found that
+    the plain frozen cost is *not* an upper bound for split orders.
+  - A **non-direct** account gets NONE: each fill can add up to 0.01 USD, and an FCM may add its
+    own fees.
   - **EXACT**: every component is verified, including the account type, and the cost model
     is exact.
 - **Point in time.** A record counts for a decision only when both its
@@ -42,8 +47,12 @@ it, throwing away verified evidence. Three more constraints apply:
   `as_of`. So:
   - earlier ledger entries rebuild byte-identically (a golden digest test guards this);
   - a fill's fee fields travel to its settlement unchanged.
-- **Restatement.** Reports may restate trades from on or after the effective date using
-  `restated_verification`. It is labelled as a restatement and never written to the ledger.
+- **Current view vs recorded basis.** The dashboard and receipt show the record known now and
+  label it "current view". Each decision keeps the basis recorded with it. Withdrawal checks use
+  the weakest recorded basis. `restated_verification` exists for labelled restatements later; it
+  never writes to the ledger.
+- **Unsupported fees** (another venue, or a non-standard Kalshi series) reject an opportunity with
+  `FEE_UNSUPPORTED` under every policy. No cost means no edge.
 - **Staleness.** A record carries `recheck_by_utc` (30 days). After it, the "no scheduled
   change" check is stale and the claim basis falls to NONE until a new record lands.
   Stale is not current.
@@ -55,11 +64,10 @@ it, throwing away verified evidence. Three more constraints apply:
   for reporting only.
 
 **Tradeoffs.**
-- A claim needs the component vocabulary, not just a boolean.
+- A claim needs the component vocabulary and the allowance, not just a boolean.
 - Someone must re-check scheduled changes monthly, or claims lapse. This is intended.
-- The Stage B receipt and the dashboard show both what was known at the decision and the
-  current restated view. Readers must not confuse the two, so the restatement is always
-  labelled.
+- The 0.0101 USD per-contract allowance is loose: the real excess is usually far smaller. It is
+  what can be proven from the documented granularity.
 
 **Reconsider when:**
 - the account type is verified through a read-only account source;

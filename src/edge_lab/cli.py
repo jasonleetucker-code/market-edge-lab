@@ -534,6 +534,7 @@ def _shadow(args: argparse.Namespace) -> int:
             result = state.to_dict()
         else:
             from . import outcome_board, risk
+            from .fee_schedules import recorded_claim_basis
             from .freshness import parse_utc
 
             as_of = parse_utc(args.as_of) if args.as_of else datetime.now(timezone.utc)
@@ -547,7 +548,10 @@ def _shadow(args: argparse.Namespace) -> int:
                 return 2
             result = {
                 "risk": report.to_dict(),
-                "withdrawal": risk.withdrawal_assessment(state, report).to_dict(),
+                "withdrawal": risk.withdrawal_assessment(
+                    state, report, fee_claim_basis=recorded_claim_basis(
+                        json.loads(r["payload_json"]) for r in ledger.entries(account_id) if r["kind"] == "fill"
+                    ).value).to_dict(),
                 "outcome_board": [g.to_dict() for g in outcome_board.build_board(state, as_of)],
             }
     else:
