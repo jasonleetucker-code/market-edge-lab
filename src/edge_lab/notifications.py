@@ -2,9 +2,11 @@
 
 Collector failures, invalid captures, qualified opportunities, risk vetoes, settlements,
 starter-policy exceptions and future approval tickets all produce the same
-`NotificationEvent`. Sinks deliver the events. Today the only sinks are:
+`NotificationEvent`. Sinks deliver the events. Today the sinks are:
 - a local JSONL outbox, readable by the operator and the dashboard;
-- a disabled SMS sink that records that no provider exists.
+- a disabled SMS sink that records that no provider exists;
+- an optional ntfy push sink (`edge_lab.notify_ntfy`, ADR 0022). It is disabled by default,
+  exists only when an owner configures a topic URL, and nothing constructs it yet.
 
 The shell webhook in `deploy/vps/alert.sh` is unchanged. A paid carrier (Twilio, Telnyx,
 SNS or similar) needs a separate owner approval, and no provider code exists here.
@@ -72,6 +74,9 @@ class ActionMode(str, Enum):
 
 class DeliveryStatus(str, Enum):
     DELIVERED = "DELIVERED"  # accepted by the sink (for the outbox: written and flushed)
+    # A remote push server (ntfy) accepted the message. That is not proof a phone showed it:
+    # push has no delivery receipt, so a remote sink never reports DELIVERED (ADR 0022).
+    SUBMITTED = "SUBMITTED"
     DEDUPED = "DEDUPED"
     RATE_LIMITED = "RATE_LIMITED"
     EXPIRED = "EXPIRED"
@@ -256,7 +261,11 @@ def dispatch(events: Iterable[NotificationEvent], sinks: Iterable[Sink], *, now:
             status, error, attempts = DeliveryStatus.FAILED, None, 0
             for attempts in range(1, limits.max_attempts + 1):
                 try:
-                    status, error = sink.deliver(event), None
+                    status = sink.deliver(event)
+                    # A sink that retries and handles its own failures (ntfy) reports its
+                    # redacted reason and its own attempt count here.
+                    error = getattr(sink, "last_error", None)
+                    attempts = getattr(sink, "last_attempts", None) or attempts
                     break
                 except Exception as exc:  # noqa: BLE001 - a sink failure is recorded, never raised
                     error = f"{type(exc).__name__}: {exc}"[:200]

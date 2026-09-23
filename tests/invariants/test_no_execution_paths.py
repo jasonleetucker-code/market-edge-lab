@@ -2,6 +2,11 @@
 
 If a future, owner-approved gate needs execution code, it goes in a separate
 component with its own review, and this test changes in the same PR as that decision.
+
+One narrow exception exists (ADR 0022): the ntfy notification sink may POST a text body,
+with an optional Bearer token, to the one topic URL the owner configures. It is exempt
+from exactly three rules, in exactly one file. The order, client-write and signing rules
+still apply to it, and the tests below prove the exception cannot spread.
 """
 
 import re
@@ -21,8 +26,30 @@ FORBIDDEN = {
 }
 
 
+# The single notification delivery file allowed to publish (ADR 0022), and the only rules
+# it is exempt from. Path-exact: a copy, a rename or a subpackage file gets no exception.
+NOTIFICATION_DELIVERY_EXCEPTION = {
+    "edge_lab/notify_ntfy.py": frozenset({"non-GET HTTP method", "request body (implies POST)", "auth header"}),
+}
+# These rules have no exception anywhere, the notification file included.
+NEVER_EXEMPT = frozenset({"order endpoint", "client write call", "request signing"})
+
+
 def _source_files():
     return sorted(SRC.rglob("*.py"))
+
+
+def _rel(path: Path) -> str:
+    return path.relative_to(SRC).as_posix()
+
+
+def _violations(label: str, rel: str, text: str) -> list[str]:
+    """Lines of `text` (the file at `rel`, relative to src/) that break rule `label`."""
+    if label in NOTIFICATION_DELIVERY_EXCEPTION.get(rel, frozenset()):
+        return []
+    pattern = FORBIDDEN[label]
+    return [f"{rel}:{lineno}: {line.strip()}" for lineno, line in enumerate(text.splitlines(), 1)
+            if pattern.search(line)]
 
 
 def test_source_tree_is_scanned():
@@ -31,14 +58,117 @@ def test_source_tree_is_scanned():
 
 @pytest.mark.parametrize("label", sorted(FORBIDDEN))
 def test_no_execution_or_auth_code(label):
-    pattern = FORBIDDEN[label]
-    hits = [
-        f"{path.relative_to(SRC)}:{lineno}: {line.strip()}"
-        for path in _source_files()
-        for lineno, line in enumerate(path.read_text().splitlines(), 1)
-        if pattern.search(line)
-    ]
+    hits = [hit for path in _source_files() for hit in _violations(label, _rel(path), path.read_text())]
     assert not hits, f"{label} found:\n" + "\n".join(hits)
+
+
+# ---------------------------------------------------------------- the notification exception (ADR 0022)
+
+NTFY_REL = "edge_lab/notify_ntfy.py"
+_POST_LINES = {
+    "non-GET HTTP method": 'request = Request(url, method="POST")',
+    "request body (implies POST)": "request = Request(url, data=body)",
+    "auth header": 'headers["Authorization"] = "Bearer x"',
+}
+
+
+def test_the_post_exception_covers_exactly_one_file_and_three_rules():
+    assert set(NOTIFICATION_DELIVERY_EXCEPTION) == {NTFY_REL}
+    assert (SRC / NTFY_REL).is_file()
+    exempt = NOTIFICATION_DELIVERY_EXCEPTION[NTFY_REL]
+    assert exempt == set(_POST_LINES) and exempt <= set(FORBIDDEN)
+    assert not exempt & NEVER_EXEMPT and NEVER_EXEMPT == set(FORBIDDEN) - exempt
+    text = (SRC / NTFY_REL).read_text()
+    for label in exempt:  # the exception is in use, so it cannot linger after the sink is removed
+        assert FORBIDDEN[label].search(text), f"{label}: exception no longer needed; remove it"
+
+
+@pytest.mark.parametrize("rel", ["edge_lab/notify_ntfy_extra.py", "edge_lab/sub/notify_ntfy.py", "notify_ntfy.py",
+                                 "edge_lab/notifications.py", "edge_lab/http.py", "edge_lab/NOTIFY_NTFY.py"])
+def test_the_exception_is_bound_to_the_exact_path(rel):
+    text = (SRC / NTFY_REL).read_text()
+    for label in _POST_LINES:
+        assert _violations(label, rel, text), f"{rel} would inherit the {label} exception"
+
+
+@pytest.mark.parametrize("label", sorted(_POST_LINES))
+def test_every_other_source_file_still_fails_on_post_or_body(label):
+    others = [p for p in _source_files() if _rel(p) != NTFY_REL]
+    assert others
+    for path in others:
+        text = path.read_text() + "\n" + _POST_LINES[label] + "\n"
+        assert _violations(label, _rel(path), text), f"{_rel(path)} accepted {label}"
+
+
+@pytest.mark.parametrize("line", ['URL = "/portfolio/orders"', "create_order(x)", "place_order(x)",
+                                  "submit_order(x)", 'path = base + "/orders"', "client.post(url)",
+                                  "session.put(url)", "import hmac", "sign_request(req)", "private_key = 1"])
+def test_order_execution_patterns_stay_forbidden_in_the_notification_file(line):
+    text = (SRC / NTFY_REL).read_text() + "\n" + line + "\n"
+    assert any(_violations(label, NTFY_REL, text) for label in NEVER_EXEMPT), line
+
+
+# Venue, data-source and trading words that must never appear in the notification file. Its
+# refused-host list is derived at run time from the registries, so it needs none of them.
+_VENUE_TEXT = re.compile(r"kalshi|polymarket|novig|odds[-_ ]?api|the-odds|pinnacle|betfair|draftkings|fanduel"
+                         r"|/orders|\borders?\b|create_order|place_order|trade-api|portfolio|balance|withdraw"
+                         r"|deposit|https?://", re.I)
+
+
+def test_the_notification_file_names_no_venue_host_order_path_or_url():
+    text = (SRC / NTFY_REL).read_text()
+    hits = [f"{lineno}: {line.strip()}" for lineno, line in enumerate(text.splitlines(), 1)
+            if _VENUE_TEXT.search(line)]
+    assert not hits, "the notification file must take its only host from configuration:\n" + "\n".join(hits)
+
+
+def test_the_notification_file_imports_nothing_that_can_trade():
+    import ast
+
+    tree = ast.parse((SRC / NTFY_REL).read_text())
+    modules = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            modules |= {a.name for a in node.names}
+        elif isinstance(node, ast.ImportFrom):
+            modules.add("." * node.level + (node.module or ""))
+    allowed = {"__future__", "hashlib", "http.client", "os", "re", "time", "dataclasses", "datetime", "typing",
+               "urllib.error", "urllib.parse", "urllib.request", ".freshness", ".notifications", ".redaction",
+               ".sources"}
+    assert modules <= allowed, modules - allowed
+
+
+@pytest.mark.parametrize("url", [
+    "https://external-api.kalshi.com/topic", "https://kalshi.com/orders", "https://trading.kalshi.co/x",
+    "https://gateway.polymarket.us/topic", "https://polymarket.com/topic", "https://data.novig.com/topic",
+    "https://api.novig.us/topic", "https://api.the-odds-api.com/topic", "https://api.weather.gov/topic",
+    "http://ntfy.sh/topic", "https://ntfy.sh/topic/extra", "https://ntfy.sh/", "https://ntfy.sh/topic?auth=x",
+    "https://user:pass@ntfy.sh/topic", "https://ntfy.sh/topic#x", "https://ntfy.sh/to pic", "ftp://ntfy.sh/topic",
+    "https://ntfy.sh/" + "a" * 65,
+])
+def test_the_notification_file_refuses_venue_hosts_and_non_topic_urls(url):
+    from edge_lab.notify_ntfy import NtfyConfigError, parse_topic_url
+
+    with pytest.raises(NtfyConfigError):
+        parse_topic_url(url)
+
+
+def test_every_registered_source_host_is_refused_as_a_notification_target():
+    from urllib.parse import urlsplit
+
+    from edge_lab.notify_ntfy import NtfyConfigError, parse_topic_url
+    from edge_lab.sources import REGISTRY
+
+    for spec in REGISTRY.values():
+        with pytest.raises(NtfyConfigError):
+            parse_topic_url(f"https://{urlsplit(spec.base_url).hostname}/topic")
+
+
+def test_ntfy_style_hosts_from_config_are_accepted():
+    from edge_lab.notify_ntfy import parse_topic_url
+
+    for url in ("https://ntfy.sh/market-edge_Alerts-1", "https://ntfy.example.org:8443/t", "http://127.0.0.1:8080/t"):
+        assert parse_topic_url(url).url == url
 
 
 def test_http_client_only_issues_get():
@@ -133,6 +263,18 @@ def test_source_reads_no_secret_environment_variable_except_registered_credentia
     assert not literal_secret_reads, literal_secret_reads
     # The only non-literal read is odds_api.load_key, which reads the registered variable.
     assert all(w.startswith("edge_lab/odds_api.py:") for w in dynamic_reads), dynamic_reads
+
+
+def test_the_notification_token_is_read_only_by_the_notification_file():
+    """ADR 0022: `EDGE_LAB_NTFY_TOKEN` is an optional publish token for one ntfy topic, not a
+    data-feed or trading credential. It is read through an injectable mapping in exactly one
+    file, sent only as that file's Bearer header, and never logged."""
+    users = [_rel(p) for p in _source_files() if "EDGE_LAB_NTFY_TOKEN" in p.read_text()]
+    assert users == [NTFY_REL], users
+    text = (SRC / NTFY_REL).read_text()
+    assert "os.environ[" not in text and "os.getenv" not in text and "os.environ.get" not in text
+    assert set(re.findall(r"\benv\.get\((\w+)\)", text)) == {"ENV_TOPIC_URL", "ENV_TOKEN"}
+    assert len(re.findall(r"\benv\b[.\[]", text)) == 2  # no other lookup through the mapping
 
 
 @pytest.mark.parametrize("header", ["Authorization", "Cookie", "X-Api-Key", "KALSHI-ACCESS-SIGNATURE", "X-Auth-Token"])
