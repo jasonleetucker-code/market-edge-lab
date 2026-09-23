@@ -159,4 +159,4 @@ wired) merged. Neither is on a production code path. Production was brought to m
 
 ## 8. First real window (2026-09-23 17:45–18:30 ET, target 2026-09-24)
 
-_Recorded after the window; see below._
+_Pending. A follow-up docs PR records it after the window (claim: `docs/WORK_CLAIMS.md`)._
