@@ -1,7 +1,7 @@
 # Public GitHub reuse audit
 
 **Audit date:** 2026-09-23. **Owner record:** issue #36. **Delivery plan:** #11 (2026-10-22).
-**Market Edge baseline:** `main` at `879e770`. **Evidence:** `docs/audits/2026-09-23-github-reuse/`.
+**Market Edge baseline:** `main` at `879e770`, rebased onto `566f352` (PRs #37 and #38). **Evidence:** `docs/audits/2026-09-23-github-reuse/`.
 
 This is research. It authorizes nothing. `docs/EXECUTION_PLAN.md` alone says what may be
 built. No repository reviewed here was installed or executed, and no credential was used.
@@ -24,8 +24,9 @@ built. No repository reviewed here was installed or executed, and no credential 
      inferred from price ≥ 0.99.
    - It hard-codes fees.
 
-   Its `has`-style capability map is the one idea worth taking into `venues.py`.
-   Recommendation: **COPY_ADAPTER_IDEAS**, not a dependency (§7.1).
+   Its `has`-style capability map was the one idea worth taking, and `venues.py` (PR #38,
+   ADR 0019) already goes further, with a stage per capability and execution never
+   authorized. Recommendation: **COPY_ADAPTER_IDEAS**, not a dependency (§7.1).
 3. **Polymarket US: write our own stdlib adapter, and use the official SDK as its spec.**
    - `Polymarket/polymarket-us-python` is the only repository for Polymarket US. Every other
      Polymarket repository is International, which must stay separate.
@@ -382,9 +383,10 @@ third-party code was copied, no dependency was added, and the runtime is still s
 Not adopted, and why:
 - **No new dependency.** CCXT, pmxt, the Polymarket SDKs, Apprise and nautilus each fail the
   stdlib-only policy for less value than a small reimplementation.
-- **No notification, venue or ticket code.** Those modules are claimed by the active
-  integration coordinator (`docs/WORK_CLAIMS.md`). §7 gives them the audit's
-  recommendations instead of a parallel implementation.
+- **No notification, venue or ticket code.** The integration coordinator owns those
+  modules. They were built in PR #38 while this audit ran (`notifications.py` ADR 0020,
+  `venues.py` ADR 0019, `execution_ticket.py`, `starter_policy.py` ADR 0018). §7 gives
+  recommendations for extending them instead of a parallel implementation.
 
 ## 7. Answers to the directive's questions
 
@@ -411,8 +413,8 @@ Polymarket, Limitless and Myriad. The Python side is async only.
 - **Polymarket there is International.**
 - **Kalshi:** uses the current v2 API with RSA-PSS signing.
 - **Weight:** about 19 MB and 22 pinned dependencies.
-- **Verdict:** our small venue adapters stay safer and simpler. Take the `has` capability
-  map idea into `venues.py`, with every flag false by default.
+- **Verdict:** our small venue adapters stay safer and simpler. The `has` capability-map
+  idea is already realized, and exceeded, by `venues.py` (ADR 0019).
 
 ### 7.2 Polymarket SDKs
 
@@ -586,7 +588,9 @@ mark exists, so a missing bid can never be marked at 0.50.
 
 ### 7.9 ntfy and one notification event model
 
-ntfy is usable now as a free push channel.
+ntfy is usable now as a free push channel. `notifications.py` (ADR 0020) already provides
+the contract, dedupe keys, a local outbox and a disabled SMS sink. An ntfy sink would be one
+more sink behind that contract.
 - **It is not carrier SMS:** it needs the app installed and online, and gives no delivery
   receipt.
 - **Neutral fields** (report E has the full mapping to ntfy, SMS, email and in-app):
@@ -597,7 +601,9 @@ ntfy is usable now as a free push channel.
     already-stale alerts are never sent as current;
   - `links`: public https only, never a 127.0.0.1 dashboard link;
   - `sensitivity`: PRIVATE is never sent to ntfy.sh;
-  - per-sink `delivery_state`: SUBMITTED, never DELIVERED without a receipt.
+  - per-sink `delivery_state`: for a remote push or SMS sink, "accepted by the server" is
+    all we know, so report it as submitted rather than delivered unless a receipt exists.
+    For the local outbox, DELIVERED (written and flushed) is accurate.
 - **Two gates before a real ntfy sink:**
   - The no-execution invariant forbids any POST and any request body in `src/`. An ntfy sink
     needs a deliberate, narrow invariant change in the same PR: a notification-only module,
@@ -681,7 +687,7 @@ plug into it rather than growing their own stacks.
 ```
 SOURCE REGISTRY + PROVENANCE (sources.py, storage.py)      [BUILT]
         │
-VENUE CAPABILITY REGISTRY (venues.py; CCXT-style `has`, all execution false)   [PLANNED, coordinator]
+VENUE CAPABILITY REGISTRY (venues.py; stage per capability, execution never authorized) [BUILT, #38]
         │
  ┌──────┼──────────────┬───────────────┐
 Kalshi  Polymarket US   Novig daily CSV  The Odds API (fixtures)
@@ -695,11 +701,11 @@ EVENT / SETTLEMENT IDENTITY + RULES EQUIVALENCE (deterministic; LLM may only pro
         │
 BEST-PRICE-FOR-SIZE COMPARATOR + UNIQUE-MARKET DISCOVERY (#30)                  [NEXT, needs 2 venues]
         │
-OPPORTUNITY ENGINE → SHADOW LEDGER → RISK / STARTER POLICY → OUTCOME BOARD       [BUILT / PLANNED]
+OPPORTUNITY ENGINE → SHADOW LEDGER → RISK / STARTER POLICY → OUTCOME BOARD       [BUILT]
         │
-NOTIFICATION EVENTS (notifications.py → local sinks → ntfy [NEXT] → SMS [BLOCKED])
+NOTIFICATION EVENTS (notifications.py [BUILT, #38] → local outbox → ntfy [NEXT] → SMS [BLOCKED])
         │
-EXECUTION TICKET (data only; flumine control chain + Hummingbot lifecycle lessons) [PLANNED; execution BLOCKED]
+EXECUTION TICKET (execution_ticket.py [BUILT, data only]; add flumine checks + Hummingbot lifecycle) [execution BLOCKED]
 ```
 
 Other shared layers the audit touches, and their owners:
@@ -726,8 +732,8 @@ Shared primitives now unlock several ideas at once:
 | #36 reuse audit | this PR (audit, depth ladder, provenance guard, F14) | issue #36 updated with the adoption plan | re-audit before any execution or streaming work | — |
 | #30 multi-venue | depth ladder (done) | Polymarket US adapter to §7.2 spec; tick-grid check; comparator once 2 venues exist | ProphetX / IBKR feasibility | Novig live API (owner credentials) |
 | #29 Odds API | — | fixtures adapter: Decimal odds conversions that reject −100 < x < +100, key redaction everywhere, quota from all three headers | consensus (median across fresh books) | live pulls (owner key + activation plan) |
-| #33 notifications | coordinator's contract (claimed) | ntfy sink behind the contract, after the invariant change | Apprise if ≥3 channels | first real send (owner approval); SMS (paid provider) |
-| #32 starter policy / tickets | coordinator (claimed) | flumine control checklist in the ticket contract | Hummingbot lifecycle states | any execution (no authority) |
+| #33 notifications | contract, outbox and disabled SMS sink (built, #38) | ntfy sink behind the contract, after the invariant change | Apprise if ≥3 channels | first real send (owner approval); SMS (paid provider) |
+| #32 starter policy / tickets | `STARTER_MAX_7D_V1` and ticket contract (built, #38) | flumine control checklist in the ticket contract | Hummingbot lifecycle states | any execution (no authority) |
 | #9 / #5 sports | — | — | sportsbook consensus research | sports models (preregistration) |
 | #27 Action PRO | — | — | schema design (§7.10) | purchase, login (owner) |
 | #6 / #3 | — | risk and board read depth-aware costs | — | real-money policy |
