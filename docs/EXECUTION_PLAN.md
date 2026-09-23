@@ -13,7 +13,7 @@ be written here when they are made.
 | 4 | Baseline model | **EXIT CRITERIA MET 2026-09-22 (PR #18).** The frozen baseline was implemented; validation selected V1; the test split was opened once; **Stage A PASS** (model − R0 +1.253, 95% CI [+1.147, +1.362]; PIT coverage 0.806 ∈ [0.75, 0.85]). EXP-001 is `RUNNING` (Stage B pending). A Stage A pass is not evidence of an edge; see `experiments/EXP-001-kxhighny-nws-vs-market/gate4/REPORT.md`. Closed: the owner approved Gate 5 on 2026-09-22. |
 | 5 | Market-vs-model | **PASSED 2026-09-23 (PR #22).** The domain-neutral opportunity engine (ADR 0013): contracts for event, market, executable quote, model estimate and opportunity; executable Kalshi prices (never mid or last); versioned fees (`kalshi-quadratic-taker-v1`, `UNVERIFIED_CURRENT_SCHEDULE`, so no result is claimable); fail-closed freshness; explicit liquidity; machine-readable rejection reasons. EXP-001 probabilities and forward books plug in (`edge-lab forward opportunities`). An independent review found one blocker (settlement equivalence), which was fixed and re-reviewed with no blocker. CI is green on the exact head. |
 | 6 | Simulated / shadow trading | **PASSED 2026-09-23 (PR #23).** Append-only, hash-chained shadow ledger with all account state derived by replay (ADR 0014). The fill policy is deterministic (`latency-confirmed-v1`, the frozen EXP-001 execution model). The sizing foundation has hard caps and fractional Kelly. `edge-lab shadow run|settle|account`. No real-order path. The independent review found no blocker; 4 should-fix items were fixed and re-reviewed. CI is green on the exact head. The P0 risk/capital foundation (issue #6) and the Outcome Board backend (issue #3) were then built under the same directive (PR #24, ADR 0015): shadow only, with no withdrawal recommendation. Gate 7 engineering was authorized on 2026-09-23. |
-| 7 | Adversarial validation | **Engineering authorized 2026-09-23** (daily-shadow directive): adversarial software tests on disposable stores, risk/ledger/timing/execution fault handling. **Engineering suite merged (PR #26):** `tests/gate7/`, `docs/engineering/GATE7_FINDINGS.md`. F01–F08 and F10–F13 are FIXED; F09 (no external anchor for the ledger head) is an open, documented limitation. The dashboard review (PR #28) added reporting fixes. **Production evidence: none** (the daily pipeline is not yet deployed). **Research evidence: none.** Gate 7 research needs real Stage B days; the EXP-001 180/365-valid-day looks are unaffected. **Not passed.** |
+| 7 | Adversarial validation | **Engineering authorized 2026-09-23** (daily-shadow directive): adversarial software tests on disposable stores, risk/ledger/timing/execution fault handling. **Engineering suite merged (PR #26):** `tests/gate7/`, `docs/engineering/GATE7_FINDINGS.md`. F01–F08 and F10–F13 are FIXED; F09 (no external anchor for the ledger head) is an open, documented limitation; checkpoint export/verify support landed in PR #37 (ADR 0021), and F09 stays OPEN until an independent checkpoint is stored and verified off-host. The dashboard review (PR #28) added reporting fixes. **Production evidence: none** (the daily pipeline is not yet deployed). **Research evidence: none.** Gate 7 research needs real Stage B days; the EXP-001 180/365-valid-day looks are unaffected. **Not passed.** |
 | 8–10 | Paper/shadow → tiny real money → scaling | Not authorized. |
 
 ## Owner authorization record
@@ -170,6 +170,13 @@ be written here when they are made.
   - sports models or sports strategy. This directive supersedes the earlier sports and
     sportsbook exclusion only for the read-only data foundations listed above (§12);
   - any gate advance. The current gate stays at 7.
+
+  **Status (end of 2026-09-23 session):**
+  - Repository work merged in PRs #34, #35, #37, #38 and #39.
+  - Production verification and deployment NOT DONE (no SSH route from the cloud session).
+    They are owner-run, with the command sheet in `HANDOFF.md`.
+  - F09 OPEN.
+  - Gate unchanged at 7.
 
   Fee claims distinguish `claim_basis` NONE, CONSERVATIVE_BOUND and EXACT (ADR 0017).
   KXHIGHNY decisions from 2026-09-23T13:39:48Z carry CONSERVATIVE_BOUND for a direct
