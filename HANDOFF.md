@@ -7,102 +7,95 @@ _Last updated: 2026-09-22 (evening ET), by the Gate 4 PR (#18) at the end of the
 mission in `docs/owner/2026-09-22-gate4-collection-directive.md`._
 
 ```
-STATUS: PARTIAL. Code is DONE and MERGED in all three lanes. Deployment is waiting on two
-  owner sudo commands on the VPS.
-  - Gate 4: Stage A PASS (PR #18).
-  - PR #13: merged.
-  - Forward collector and the #16 fix: merged (PR #19).
-  - The collector is staged on the VPS but not installed. No Stage B day has been captured.
-ACCEPTANCE: the owner's 2026-09-22 directive (Lanes A, B, C, #16, repository state), recorded
-  verbatim in docs/owner/2026-09-22-gate4-collection-directive.md
+STATUS: DONE for the mission's code, merges and deployment. The forward collector is
+  DEPLOYED and PRODUCTION_VERIFIED for the fail-closed path. The first live capture window is
+  2026-09-23 17:45–18:15 ET (target D = 2026-09-24). Valid Stage B days so far: 0; none has
+  been possible yet.
+ACCEPTANCE: the owner's 2026-09-22 directive (docs/owner/2026-09-22-gate4-collection-directive.md)
+  and the owner's 2026-09-23 deployment instruction: compare the staged SHA with main; install
+  as the separate `edgelab` service; fail-closed dry run; verify permissions, identity,
+  limits, logs and status path; enable the reviewed timers; verify the next ET times.
 EVIDENCE:
   - Merged to main:
-    - #17 docs/authorization (3cab670)
+    - #17 authorization (3cab670)
     - #13 reliability port (cb33738)
     - #19 collector + #16 (b684f5b)
-    - #18 Gate 4 (squash of this PR)
-    Each PR merged only after an independent read-only review found no unresolved blocker
-    and CI was green on its exact final head. The reviews and CI runs are linked in each PR.
-  - Gate 4 (EXP-001, frozen spec, no tuning):
-    - Validation (731 days): V2 − V1 = −0.0020, CI [−0.0256, +0.0207], so the rule
-      selects V1 (pooled).
-    - Test (629 days, opened once): model − R0 +1.2534, CI [+1.1470, +1.3624]; PIT central
-      coverage 0.8060, inside [0.75, 0.85]. Stage A PASS.
-    - Reported only: model − R1 +0.0196, CI [−0.0011, +0.0394]. The interval includes 0.
-      Brier: model 0.892, R0 0.968, R1 0.897. Log loss: model 2.451, R0 3.705, R1 2.471.
-    - The independent reviewer reproduced every headline number bit-for-bit.
-    - EXP-001 status is RUNNING. Six pre-validation amendments, none changing the
-      model/window/threshold.
+    - #18 Gate 4, Stage A PASS (9326a7a)
+    Each PR had an independent read-only review with no unresolved blocker, and CI green
+    on its exact head. On main at 9326a7a: 359 passed, 1 skipped.
+  - Gate 4:
+    - V1 selected on validation.
+    - Test opened once: model − R0 +1.2534, CI [+1.1470, +1.3624]; PIT coverage 0.8060.
+      PASS.
+    - EXP-001 status RUNNING.
     - Full record: experiments/EXP-001-kxhighny-nws-vs-market/gate4/REPORT.md
-  - PR #13, reconciled with Gate 3 and #15:
-    - Windows fsync fix.
-    - The backup refuses unsupported schemas and any missing immutability trigger, and
-      supports pre-migration backups.
-    - validate.py fails closed on a dirty tree, on PYTHONOPTIMIZE, and on
-      narrowing environment variables.
-    - Fingerprints are CRLF-normalized.
-    - A backup of a v4 database is VERIFIED, including forward_captures and 16 triggers.
-  - Forward collector (edge_lab.forward, schema v4 forward_captures):
-    - A timing gate runs before any network call; out-of-window runs are rejected with
-      zero requests.
-    - All brackets and the recheck are required; no partial valid days. DST-correct (checked
-      against zoneinfo, 2026–2035).
-    - Duplicate, interrupted and restarted runs, timeouts and rate limits are bounded by the
-      deadline.
-    - The day is VALID only if a complete PFM capture exists. That was the review blocker,
-      now fixed.
-  - #16 closed: `health --profile routine|settlement|forward|all`, default routine. Stale
-    sources still fail their profile. Forward runs no longer touch routine health.
-  - Tests: python -m pytest gave 331 passed, 1 skipped on main at b684f5b, and 359 passed,
-    1 skipped with this PR merged in (Windows, Py 3.12;
-    the skip is a symlink test). CI is green on 3.11 and 3.12 for every merged head.
-    `experiments validate` OK; check-frozen OK.
-  - VPS (chaseupside, vmi3454985):
-    - Read-only preflight PASS twice: 5.9 GB of 7.9 GB RAM available; ≥ 3.9 GB free at
-      the worst point in 7 days; 65 GB disk free; systemd 255; NTP synced; no OOM kills
-      in 30 days. Details in docs/deploy/VPS_REVIEW_2026-09-22.md.
-    - Release staged in ~dynasty/edgelab-release: bundle of main b684f5b, sha256 a050ff49…;
-      install.sh taken from git, LF.
-    - On the host runtime the timing gate rejected an out-of-window run with no network
-      calls. Timer calendars resolve to 17:45, 17:55:05, 18:05 and 18:30 America/New_York.
-  - Live read-only smoke run (smoke DB, never evidence):
-    - The KXHIGHNY-26SEP23 event returned 6 open brackets and 6 books.
-    - PFMOKX FOUS51 KOKX 221853 gives 67 °F.
+  - Deployed revision: main 9326a7a077fac7f352e0e6a5b686e6de98e1e978.
+    - Deployed on 2026-09-23 at 02:09 UTC, on chaseupside (vmi3454985), via root SSH
+      restored by the owner.
+    - Recorded in /opt/market-edge-lab/app/REVISION and EDGE_LAB_CODE_VERSION.
+    - Why current main rather than the staged b684f5b: they differ in runtime code only by
+      the Gate 4 analysis module src/edge_lab/exp001_baseline.py, which the collector
+      never imports. src/edge_lab/forward.py, cli.py, storage.py, sources.py, backup.py and
+      deploy/ are byte-identical. Deploying main makes the running code equal main.
+    - Bundle sha256 cf7cc419…; install.sh sha256 f342b3de….
+  - Install (deploy/vps/install.sh as reviewed): INSTALL OK, all 13 permission checks ok:
+    - env file root:edgelab 640; private data, db and backups edgelab 700; status dir 755;
+    - edgelab can read the env file; dynasty cannot read the env file, database or
+      backups, and cannot list private data; dynasty can read the status file.
+  - Fail-closed dry run (edgelab-decision.service at 02:09:55Z, outside the window):
+    - exit 1, `rejected_out_of_window`;
+    - 0 snapshots and 0 source-health rows (no network work);
+    - 1 capture row and 1 run marked failed;
+    - the OnFailure alert fired and wrote last_failure.json.
+  - Identity and limits:
+    - The collector logs as UID 999 (edgelab).
+    - Every unit: MemoryHigh 192M, MemoryMax 256M, CPUQuota 25%, TasksMax 32, Nice 5,
+      NoNewPrivileges, ProtectSystem=strict, ProtectHome; UMask 0077 (0022 for the status
+      unit).
+    - ReadWritePaths = /var/lib/market-edge-lab and /var/lib/market-edge-lab-status.
+    - The database is schema v4.
+  - Timers enabled; next fire times (America/New_York):
+    - pfm 2026-09-23 17:45:00 EDT
+    - decision 17:55:05 EDT
+    - recheck 18:05:00 EDT
+    - status 18:30:00 EDT
+    - backup 04:40 UTC daily
+  - Chase Upside after the install: nginx, dynasty and dynasty-frontend active;
+    /api/health status ok. No Brisket unit was modified. No apt changes, no reboot by the
+    agent.
+  - Redundancy for the first window: the attended laptop bridge (owner-approved) also
+    captures D = 2026-09-24 into the laptop's data/bridge.sqlite3 and exits afterwards.
 UNRESOLVED:
-  - The collector is not installed. Valid Stage B days captured: 0.
-  - If the timers are enabled before 2026-09-23 17:45 ET, the first possible valid target
-    date is D = 2026-09-24. Otherwise, run the attended laptop bridge for that window.
-  - The alert channel is journald and the status file only, until the owner optionally sets
-    EDGE_LAB_ALERT_URL, e.g. a private ntfy topic.
-  - Fee coefficient 0.07: re-verify against Kalshi's fee schedule before any Stage B result.
-  - PFMOKX issuance thinned from mid-2025. This is disclosed, and Stage A passed anyway.
-  - Test-period protection is procedural (dataset.csv contains test rows).
+  - Live-window behaviour is not verified yet. The first real capture is 2026-09-23 17:45 ET.
+    Check /var/lib/market-edge-lab-status/latest.json after 18:30 ET.
+  - Alerts go only to journald and the status file. The optional EDGE_LAB_ALERT_URL is not
+    set.
+  - The NWS User-Agent is a neutral identifier without a contact address. The owner may
+    supply one: rerun install.sh with --user-agent.
+  - Importing the bridge evidence into the VPS database is not built. The bridge DB is kept
+    as separate immutable evidence.
+  - Fee coefficient 0.07: re-verify before any Stage B result.
+  - PFMOKX thinning since mid-2025 (disclosed).
+  - Test-period protection is procedural.
   - Carried from Gate 2: TWC cannot be checked directly; the NHIGH delayed-determination
     rule rests on one observation.
-  - Review NITs left open (no correctness impact):
-    - Forward Kalshi snapshots can refresh routine per-kind freshness for up to 5–60 min.
-    - An unparseable newest PFM product falls back to the older forecast, the same as the
-      frozen historical builder.
-    - Backups compare row counts, not row content.
-BLOCKERS: the owner must run two sudo commands on chaseupside (sudo needs their password).
-  1. Install:
-     sudo bash ~/edgelab-release/install.sh --sha b684f5b77242ee3b9de40d8849692c96f0d90b5c --bundle ~/edgelab-release/market-edge-lab.bundle --user-agent "market-edge-lab research (contact: <owner email>)"
-  2. After the fail-closed dry run in deploy/vps/README.md:
-     sudo systemctl enable --now edgelab-pfm.timer edgelab-decision.timer edgelab-recheck.timer edgelab-status.timer edgelab-backup.timer
-NEXT ACTION: The owner runs the install command, then the dry run and the timer
-  activation, before 2026-09-23 17:45 ET. The agent then confirms from
-  /var/lib/market-edge-lab-status/latest.json after 18:30 ET that D = 2026-09-24 is VALID.
+  - Hardening follow-up for the Chase Upside host (not this repo): dynasty's NOPASSWD
+    allowlist (systemctl, install, chown) is root-equivalent (docs/deploy/VPS_REVIEW_2026-09-22.md).
+  - Cosmetic: the alert instance name doubles the suffix (edgelab-alert@<unit>.service.service).
+BLOCKERS: NONE
+NEXT ACTION: After 2026-09-23 18:30 ET, confirm the VPS status file reports D = 2026-09-24
+  VALID, compare it with the laptop bridge, then ask the owner whether Gate 5 may begin.
 ```
 
 ## 30-day directive status (issue #11, target 2026-10-22)
 
 - **Remaining calendar days:** 30.
-- **Critical path:** collector live (owner sudo) → accumulate valid Stage B days → Gate 5
+- **Critical path:** collector live (deployed 2026-09-23; first window that evening) → accumulate valid Stage B days → Gate 5
   (market-vs-model engine: opportunity schema, executable prices, fees) → shadow ledger →
   risk foundation → dashboard → deployment.
 - **Blockers:**
-  - The owner's sudo install on the VPS.
   - Owner approval to move to Gate 5. The Gate 4 exit criteria are met.
+  - The collector is deployed (2026-09-23).
 - **Scope changes:**
   - None to the deadline.
   - #10 is authorized for the headless collector only. Dashboard, DNS, TLS and auth are
