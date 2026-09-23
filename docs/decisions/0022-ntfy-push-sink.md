@@ -70,7 +70,11 @@ timer or deploy file each need a separate owner approval recorded in the repo.
   A plain SHA-256 was used at first, but review showed it can be brute-forced: dedupe keys
   such as `veto:<account>:<date>` are guessable, and the reviewer recovered one from the
   hash. The keyed hash is stable per topic, so dedupe still works, and it differs across
-  topics. Without the topic, which is already the secret, it cannot be reversed. The
+  topics. It resists guessing only for someone who sees the id without the topic. The ntfy.sh
+  operator and every subscriber hold the topic, so for them it is no stronger than a plain
+  hash, and the guessable parts of a dedupe key (account label, date) must be treated as
+  visible to them. Keying with a separate local secret would close that, at the cost of one
+  more secret to manage; it is not needed while activation stays owner-approved. The
   signing invariant forbids the word for the standard keyed-hash construction, so BLAKE2b's
   built-in key mode is used instead.
 

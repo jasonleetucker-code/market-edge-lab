@@ -18,8 +18,10 @@ Rules:
 - **Nothing identifying leaves the host.** Only the event type, the severity and a fixed
   headline chosen by event type are sent. The caller's summary, values, venue, market and
   event refs, deep link and action mode are never sent. The sequence id is a BLAKE2b hash
-  of the dedupe key keyed with the topic, so it is stable per topic for dedupe but cannot
-  be brute-forced from a guessable key (a date, an account label) without the topic.
+  of the dedupe key keyed with the topic, so it is stable per topic for dedupe. It resists
+  guessing only for someone who sees the id WITHOUT the topic. The ntfy.sh operator and
+  every subscriber hold the topic, so for them it is no stronger than a plain hash; dedupe
+  keys stay low-entropy by design, so treat them as visible to anyone with the topic.
 - **Honest status.** A 2xx answer means the ntfy server accepted the message. It does not
   mean a phone showed it, so the sink returns SUBMITTED, never DELIVERED.
 - **Expiry.** An event already expired at send time, or whose expiry does not parse, is
@@ -178,7 +180,8 @@ def sequence_id(dedupe_key: str, key: bytes) -> str | None:
     """BLAKE2b-256 hex of `dedupe_key`, keyed with the topic. Stable per topic, valid for ntfy.
 
     A plain hash of a guessable key (for example an account label plus a date) can be
-    brute-forced by anyone who sees it; without the topic, this one cannot. None if empty."""
+    brute-forced by anyone who sees it. This one resists that only for someone who sees the
+    id without the topic; the ntfy operator and subscribers hold the topic. None if empty."""
     if not dedupe_key:
         return None
     if not 16 <= len(key) <= 64:
