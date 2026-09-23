@@ -20,9 +20,9 @@ never writes to any store, and never recommends a withdrawal.
 | Python stdlib only (`wsgiref`, `html`, `sqlite3`) | The runtime rule is stdlib-only (`AI_INSTRUCTIONS.md`). The page count is small and needs no template engine or framework, so a dependency buys nothing. |
 | A WSGI application (`edge_lab.dashboard.app.make_app(config)`) | WSGI is the standard interface. If hosting is ever authorized, a real server (gunicorn, uWSGI, a reverse proxy) can run the same callable. We do not build our own production server. `wsgiref` is only the local development server. |
 | Server-rendered HTML, inline CSS, no JavaScript | No build step, no client code to audit. A strict CSP (`default-src 'none'; style-src 'unsafe-inline'`) forbids scripts, images, frames and forms. |
-| Bound to `127.0.0.1` | It is local-only. Public exposure, tunnels, DNS/TLS and firewall changes are not authorized. A non-loopback `--host` is refused unless `--allow-non-loopback` is passed, and that prints a warning. |
-| Host header must be local | A request whose `Host` is not `localhost`, a 127.0.0.0/8 address or `::1` (or the explicitly approved `--host`, matched literally: with `--host 0.0.0.0` only `Host: 0.0.0.0` is accepted, not a LAN address) gets 400. Malformed values (a non-numeric port, text after `]`) are refused. This stops a web page from reading the dashboard by pointing its own domain at 127.0.0.1 (DNS rebinding). |
-| No authentication | Nothing is exposed, so there is no one to authenticate. We do not build a custom auth system. If exposure is ever authorized, authentication belongs in the front server (see "Limitations"). |
+| Bound to `127.0.0.1` | It is local-only. Public exposure, public tunnels, DNS/TLS and firewall changes are not authorized. The one exception is tailnet-only access through Tailscale Serve on the VPS, which proxies to this loopback bind (ADR 0024). A non-loopback `--host` is refused unless `--allow-non-loopback` is passed, and that prints a warning. |
+| Host header must be local | A request whose `Host` is not `localhost`, a 127.0.0.0/8 address or `::1` (or the explicitly approved `--host`, matched literally: with `--host 0.0.0.0` only `Host: 0.0.0.0` is accepted, not a LAN address; or the one exact `<machine>.<tailnet>.ts.net` name given with `--tailscale-serve-host`, loopback bind only) gets 400. Malformed values (a non-numeric port, text after `]`) are refused. This stops a web page from reading the dashboard by pointing its own domain at 127.0.0.1 (DNS rebinding). |
+| No authentication | Nothing is exposed publicly. On the VPS, tailnet membership (the owner's devices) is the access boundary (ADR 0024). We do not build a custom auth system. If exposure is ever authorized, authentication belongs in the front server (see "Limitations"). |
 
 ## Data sources (all read-only, all optional)
 
@@ -90,8 +90,39 @@ open port, and do not expose it.
 3. Run the dashboard locally on `127.0.0.1`.
 
 Never: bind `0.0.0.0` on the VPS, open a firewall port, use an SSH `-R`/`-L` tunnel or any
-tunnel service, or publish a database. The private stores stay private
+public tunnel service (Tailscale Funnel included), or publish a database. The one approved
+remote path is the next section. The private stores stay private
 (`docs/SECURITY.md`).
+
+## Private phone access (Tailscale Serve, VPS)
+
+Authority: owner directive 2026-09-23
+(`docs/owner/2026-09-23-tailscale-private-dashboard-directive.md`). Design: ADR 0024.
+
+`edgelab-dashboard.service` runs the dashboard on the VPS:
+- as `edgelab`, read-only, bound to `127.0.0.1:8765`;
+- over the live stores, opened with SQLite `mode=ro`.
+
+Tailscale Serve publishes it at `https://<machine>.<tailnet>.ts.net/` to the owner's tailnet
+only. **Serve, never Funnel.** Setup, as root, outside 17:40–18:35 America/New_York:
+
+```bash
+# once: official client from pkgs.tailscale.com; no firewall or resolver changes
+tailscale up --netfilter-mode=off --accept-dns=false   # owner approves the login URL
+NAME=$(tailscale status --json | python3 -c 'import json,sys; print(json.load(sys.stdin)["Self"]["DNSName"].rstrip("."))')
+install -o root -g edgelab -m 0640 /dev/null /etc/market-edge-lab/dashboard.env
+echo "EDGE_LAB_TAILSCALE_SERVE_HOST=$NAME" > /etc/market-edge-lab/dashboard.env
+systemctl enable --now edgelab-dashboard.service
+curl -s http://127.0.0.1:8765/healthz                   # ok
+tailscale serve --bg 8765                              # tailnet only; owner enables HTTPS once
+tailscale serve status; tailscale funnel status        # funnel must show no config
+```
+
+The phone opens `https://<machine>.<tailnet>.ts.net/` with the Tailscale app connected.
+
+Stop options:
+- **Remote access only:** `tailscale serve --https=443 off`.
+- **Everything:** also `systemctl disable --now edgelab-dashboard.service`.
 
 ## Views
 
@@ -129,7 +160,7 @@ account**. If it has not been opened, it shows NOT STARTED.
 - `--host ::1` binds an IPv6 socket. If the port is taken or the address is unavailable, the
   command prints one line and exits 2 instead of a traceback. SIGTERM stops the server like
   Ctrl+C, so the demo's temporary directory is removed either way.
-- No authentication or TLS, by design (not exposed). If hosting is ever authorized, put the WSGI
+- No authentication or TLS in the app, by design. On the VPS, TLS is Tailscale Serve's and access is tailnet membership. If hosting is ever authorized, put the WSGI
   app behind an authenticated reverse proxy with TLS, as a separately reviewed change.
 - The research account's risk figures appear only if code registers a risk policy for it
   (`exp001_shadow.RESEARCH_RISK_POLICY`). Otherwise the dashboard says the figures are not

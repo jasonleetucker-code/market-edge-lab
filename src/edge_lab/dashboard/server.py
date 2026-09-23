@@ -3,6 +3,10 @@
 Binds to 127.0.0.1 by default. A non-loopback bind is refused unless
 `--allow-non-loopback` is passed, and even then a warning is printed: the owner has not
 authorized exposing this dashboard (docs/DASHBOARD.md).
+
+`--tailscale-serve-host` accepts one exact `<machine>.<tailnet>.ts.net` name in the Host
+header, for private tailnet access through Tailscale Serve (ADR 0024). The bind stays
+loopback: only the local tailscaled proxy can reach the port.
 """
 
 from __future__ import annotations
@@ -10,6 +14,7 @@ from __future__ import annotations
 import argparse
 import dataclasses
 import ipaddress
+import re
 import shutil
 import signal
 import socket
@@ -52,6 +57,19 @@ def check_bind_host(host: str, allow_non_loopback: bool) -> str | None:
             "data. There is no authentication. Public exposure is NOT authorized.")
 
 
+# One MagicDNS name, <machine>.<tailnet>.ts.net: DNS labels only, no wildcard, port or other domain.
+_TS_LABEL = r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?"
+_TAILSCALE_SERVE_NAME = re.compile(rf"{_TS_LABEL}\.{_TS_LABEL}\.ts\.net")
+
+
+def check_tailscale_serve_host(name: str) -> str:
+    """The normalized MagicDNS name to accept in Host; ValueError unless it is exactly one."""
+    text = name.strip().lower().rstrip(".")
+    if not _TAILSCALE_SERVE_NAME.fullmatch(text):
+        raise ValueError(f"not a Tailscale MagicDNS name (<machine>.<tailnet>.ts.net): {name!r}")
+    return text
+
+
 def default_experiments_root() -> Path | None:
     """The repository's experiments/ directory when running from a checkout (editable install)."""
     candidate = Path(__file__).resolve().parents[3] / "experiments"
@@ -70,6 +88,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--port", type=int, default=DEFAULT_PORT, help="port (default 8765)")
     p.add_argument("--allow-non-loopback", action="store_true",
                    help="permit a non-loopback --host (needs owner approval; prints a warning)")
+    p.add_argument("--tailscale-serve-host", metavar="NAME",
+                   help="also accept Host: NAME, this node's exact <machine>.<tailnet>.ts.net name, when "
+                        "Tailscale Serve proxies the tailnet to this loopback server (loopback bind only)")
     p.add_argument("--demo", action="store_true",
                    help="serve SYNTHETIC data built in a fresh temp directory; configured paths are ignored")
     return p
@@ -116,9 +137,22 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 2
     if warning:
         print(f"dashboard: {warning}", file=sys.stderr)
-    config, demo_root = config_from_args(args)
+    allowed: list[str] = []
     if warning:  # an explicitly approved non-loopback bind: accept its own name in Host
-        config = dataclasses.replace(config, allowed_hosts=(args.host,))
+        allowed.append(args.host)
+    if args.tailscale_serve_host is not None:
+        if warning:
+            print("dashboard: --tailscale-serve-host needs a loopback --host: Tailscale Serve proxies to "
+                  "loopback, so the port is never opened to a network", file=sys.stderr)
+            return 2
+        try:
+            allowed.append(check_tailscale_serve_host(args.tailscale_serve_host))
+        except ValueError as exc:
+            print(f"dashboard: {exc}", file=sys.stderr)
+            return 2
+    config, demo_root = config_from_args(args)
+    if allowed:
+        config = dataclasses.replace(config, allowed_hosts=tuple(allowed))
     if demo_root is not None:
         print(f"dashboard: SYNTHETIC DEMO DATA in a temporary directory ({demo_root.name}); "
               "configured --db/--ledger/--status-dir are ignored", file=sys.stderr)

@@ -94,6 +94,9 @@ for u in "${UNITS[@]}"; do
 done
 systemd-analyze verify "/etc/systemd/system/edgelab-alert@.service" 2>/dev/null || true
 systemd-analyze verify "/etc/systemd/system/edgelab.slice" || die "edgelab.slice does not verify"
+# The read-only dashboard (ADR 0024) is installed, never enabled here: enabling it and
+# Tailscale Serve are the owner-approved steps in docs/DASHBOARD.md.
+systemd-analyze verify "/etc/systemd/system/edgelab-dashboard.service" || die "edgelab-dashboard does not verify"
 
 echo "== 7/7 permission and runtime checks"
 # First run as the service account creates the database (schema migration) and the status file.

@@ -1,0 +1,46 @@
+[Unit]
+Description=Market Edge Lab: read-only shadow dashboard on 127.0.0.1:8765 (tailnet-only via Tailscale Serve)
+Documentation=file:///opt/market-edge-lab/app/docs/DASHBOARD.md
+After=network.target
+
+# Long-running, read-only, loopback-only (ADR 0024). Tailscale Serve on this host proxies
+# https://<machine>.<tailnet>.ts.net to it for tailnet devices only. Never Funnel.
+# /etc/market-edge-lab/dashboard.env sets EDGE_LAB_TAILSCALE_SERVE_HOST to that exact name.
+# Without it the dashboard refuses to start.
+[Service]
+Type=simple
+Slice=edgelab.slice
+User=edgelab
+Group=edgelab
+EnvironmentFile=/etc/market-edge-lab/dashboard.env
+WorkingDirectory=/var/lib/market-edge-lab
+ExecStart=/opt/market-edge-lab/venv/bin/python -m edge_lab.dashboard --host 127.0.0.1 --port 8765 --db /var/lib/market-edge-lab/db/edge_lab.sqlite3 --ledger /var/lib/market-edge-lab/ledger/shadow_ledger.sqlite3 --status-dir /var/lib/market-edge-lab-status --experiments-root /opt/market-edge-lab/app/experiments --tailscale-serve-host ${EDGE_LAB_TAILSCALE_SERVE_HOST}
+Restart=on-failure
+RestartSec=30
+UMask=0077
+# Resource caps: well inside edgelab.slice, so it can never starve the collector or Chase Upside.
+MemoryHigh=96M
+MemoryMax=128M
+CPUQuota=10%
+TasksMax=8
+Nice=10
+# Read-only everywhere: ProtectSystem=strict and no ReadWritePaths. The stores are opened
+# with SQLite mode=ro as well. Loopback traffic only, enforced by the kernel.
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+RestrictAddressFamilies=AF_INET AF_UNIX
+IPAddressAllow=localhost
+IPAddressDeny=any
+
+[Install]
+WantedBy=multi-user.target
