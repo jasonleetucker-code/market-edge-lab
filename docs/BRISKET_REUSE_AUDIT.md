@@ -87,8 +87,10 @@ No Brisket files, deployments, configuration or credentials are changed by this 
 | Immutable builds/locks/dependency audits | NEXT ENGINEERING CHECKPOINT | Source backlog is guidance, not evidence it is already solved |
 | New external efficiency suggestions | EVALUATE PROMPTLY | Record source, check fit, test against actual task evidence, then promote |
 
-The deadline is unchanged. This small reliability tranche supports #11; it does not
-activate sports, a dashboard, paid feeds, scheduled collectors, Gate 4, or live orders.
+The deadline is unchanged. This small reliability tranche supports #11. The tranche itself
+activates nothing: no sports, dashboard, paid feeds, scheduling or live orders. Gate 4 and
+scheduled read-only collection were authorized separately on 2026-09-22
+(`docs/EXECUTION_PLAN.md`).
 
 ## Concrete portability findings
 
@@ -216,14 +218,18 @@ limits and the cross-model work loop.
 Tests cover failure propagation, interpreter choice, missing/changed documents,
 no hidden network commands, WAL contents, source protection, repeated backups,
 corrupt bundles, invalid manifests, foreign-key violations and real SnapshotStore
-integration. Local testing here used Python 3.13 / pytest 9; supported 3.11/3.12 and
-the complete existing suite must be verified by the PR's actual GitHub Actions run.
-The local runtime cannot clone GitHub (DNS unavailable), so it is not represented
-as a full local checkout test. CI evidence belongs to the exact checked head.
+integration. The original port was tested locally with Python 3.13 / pytest 9. After
+reconciling with Gate 3 and PR #15 (2026-09-22), the full suite ran on Windows / Python
+3.12 and on the PR's GitHub Actions matrix (3.11/3.12). CI evidence belongs to the exact
+checked head.
 
-No independent reviewer agent or live host inspection is claimed. This author
-performed adversarial self-review and regressions. Independent PR review remains
-part of the repository's material-change process. Source code is unchanged.
+A read-only adversarial reviewer agent reviewed the reconciled PR on 2026-09-22. It found
+no blocker. Its three SHOULD-FIX items were fixed before merge:
+- pytest-narrowing environment variables are removed from child processes;
+- a database missing required immutability triggers is not VERIFIED;
+- an older supported schema stays backup-able before a migration.
+
+No live host inspection is claimed for this document.
 
 ## Next integration points, without duplicate owners
 

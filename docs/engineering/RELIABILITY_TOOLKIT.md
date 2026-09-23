@@ -58,7 +58,9 @@ output is a FAILED check, never a crash with no report. The package-identity che
 uses an explicit `if ...: sys.exit(1)` rather than a bare `assert`, so it still catches
 a wrong-checkout install when Python runs with `-O`/`PYTHONOPTIMIZE` (which strips
 `assert` statements). No command failure is ignored. Full mode cannot be narrowed
-with `--test`. A timeout, missing environment, missing base or dependency failure
+with `--test`, and environment variables that could narrow or disable a check
+(`PYTEST_ADDOPTS`, `PYTEST_PLUGINS`, `PYTEST_DISABLE_PLUGIN_AUTOLOAD`, `PYTHONOPTIMIZE`)
+are removed from every child process. A timeout, missing environment, missing base or dependency failure
 needs repair; do not relabel it as a passing check. The tool never automatically
 installs packages, fetches refs or updates locks, and performs no network operations
 of its own (`pip check` and `git status`/`rev-parse` are local-only).
@@ -90,11 +92,16 @@ only after verification. Source files, existing backups and live DBs are never
 overwritten. A missing or wrong source is an error, not a successful empty backup.
 Only the unique incomplete bundle created by the failed operation is cleaned up.
 
-Fail-closed schema semantics: a database whose `PRAGMA user_version` does not equal
-`edge_lab.storage.SCHEMA_VERSION` is never reported `VERIFIED` — `create`/`verify`
-raise instead of silently passing. This means backup and current code must be
-upgraded together; a stale backup tool cannot rubber-stamp a newer (or older)
-schema as fine. Row counts and the immutability-trigger set are derived dynamically
+Fail-closed schema semantics. `create` and `verify` raise, and never report
+`VERIFIED`, in these cases:
+- `PRAGMA user_version` is newer than `edge_lab.storage.SCHEMA_VERSION`, or older than
+  v2 (the first schema with immutability triggers);
+- any required immutability trigger is missing. At the current version, the required set
+  is every trigger a freshly created `SnapshotStore` has (built at run time, not
+  hardcoded). At an older supported version, it is the v2 trigger set.
+
+An older supported schema can still be backed up, so a backup taken just before a
+migration is always possible. Row counts and the immutability-trigger set are derived dynamically
 from `sqlite_master`, not a hardcoded table/trigger list, so a future schema
 version's tables and triggers are covered automatically. `create_backup` also
 re-inspects the source database after copying and compares its full schema

@@ -173,3 +173,20 @@ def test_wrong_checkout_package_fails_before_tests(tmp_path, monkeypatch):
     report = validate.run_checks(tree(tmp_path), "full", [], "HEAD")
     assert report["status"] == "FAILED"
     assert report["checks"][-1]["name"] == "package_identity"
+
+
+def test_environment_cannot_narrow_the_checks(tmp_path, monkeypatch):
+    # PYTEST_ADDOPTS="--collect-only" (or -k/-m/--deselect) would otherwise make
+    # `full` green without running the suite.
+    monkeypatch.setenv("PYTEST_ADDOPTS", "--collect-only")
+    monkeypatch.setenv("PYTHONOPTIMIZE", "1")
+    seen = []
+
+    def run(argv, **kwargs):
+        seen.append(kwargs["env"])
+        stdout = "" if argv == validate._WORKING_TREE_CLEAN_CHECK else "passed"
+        return subprocess.CompletedProcess(argv, 0, stdout, "")
+
+    monkeypatch.setattr(validate.subprocess, "run", run)
+    assert validate.run_checks(tree(tmp_path), "full", [], "HEAD")["status"] == "REQUESTED_CHECKS_PASSED"
+    assert seen and all(not (validate.NARROWING_ENV & env.keys()) for env in seen)

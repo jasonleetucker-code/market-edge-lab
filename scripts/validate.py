@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import ast
 import json
+import os
 import subprocess
 import sys
 import time
@@ -17,6 +18,9 @@ import tokenize
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+# Environment variables that could silently narrow or disable a check; removed
+# from every child process.
+NARROWING_ENV = frozenset({"PYTEST_ADDOPTS", "PYTEST_PLUGINS", "PYTEST_DISABLE_PLUGIN_AUTOLOAD", "PYTHONOPTIMIZE"})
 
 
 def syntax_check(root: Path) -> list[str]:
@@ -113,12 +117,16 @@ def run_checks(root: Path, level: str, targets: list[str], base: str, timeout: f
     report["checks"].append({"name": "python_syntax", "exit_code": 1 if errors else 0, "errors": errors})
     if errors:
         return report
+    # The caller's environment must not narrow or disable what a check runs: e.g.
+    # PYTEST_ADDOPTS="--collect-only" (or -k/-m/--deselect) would otherwise turn
+    # `full` green without running the suite.
+    env = {k: v for k, v in os.environ.items() if k not in NARROWING_ENV}
     for name, argv in plan:
         started = time.monotonic()
         try:
             done = subprocess.run(
                 argv, cwd=root, capture_output=True, timeout=timeout, check=False,
-                encoding="utf-8", errors="replace",
+                encoding="utf-8", errors="replace", env=env,
             )
             exit_code = done.returncode
             entry = {"name": name, "exit_code": exit_code, "seconds": round(time.monotonic() - started, 3)}

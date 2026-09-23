@@ -27,10 +27,16 @@ def source_db(tmp_path: Path, *, wal: bool = False):
     if wal:
         conn.execute("PRAGMA journal_mode=WAL")
         conn.execute("PRAGMA wal_autocheckpoint=0")
+    # The synthetic schema carries every trigger name the current schema requires
+    # (backup.reference_triggers), because a database missing any of them is refused.
+    triggers = "\n".join(
+        f'CREATE TRIGGER "{name}" BEFORE UPDATE ON snapshots BEGIN SELECT RAISE(ABORT, \'immutable\'); END;'
+        for name in sorted(backup.reference_triggers())
+    )
     conn.executescript(f"""
         CREATE TABLE collection_runs(id INTEGER PRIMARY KEY);
         CREATE TABLE snapshots(id INTEGER PRIMARY KEY, run_id INTEGER REFERENCES collection_runs(id), value TEXT);
-        CREATE TRIGGER immutable BEFORE UPDATE ON snapshots BEGIN SELECT RAISE(ABORT, 'immutable'); END;
+        {triggers}
         PRAGMA user_version={SCHEMA_VERSION};
         INSERT INTO collection_runs VALUES(1);
         INSERT INTO snapshots VALUES(1,1,'original');
@@ -219,9 +225,63 @@ def test_schema_version_mismatch_is_not_verified(tmp_path):
     conn.execute(f"PRAGMA user_version={SCHEMA_VERSION + 1}")
     conn.commit()
     conn.close()
-    with pytest.raises(backup.BackupError, match="does not match the current"):
+    with pytest.raises(backup.BackupError, match="outside the supported range"):
         backup.create_backup(source, tmp_path / "backups")
     assert list((tmp_path / "backups").iterdir()) == []
+
+
+@pytest.mark.parametrize("version", [0, 1])
+def test_pre_trigger_schema_versions_are_not_verified(tmp_path, version):
+    source, conn = source_db(tmp_path)
+    conn.execute(f"PRAGMA user_version={version}")
+    conn.commit()
+    conn.close()
+    with pytest.raises(backup.BackupError, match="outside the supported range"):
+        backup.create_backup(source, tmp_path / "backups")
+    assert list((tmp_path / "backups").iterdir()) == []
+
+
+def _real_store(tmp_path):
+    from edge_lab.storage import SnapshotStore
+    store = SnapshotStore(tmp_path / "real.sqlite3")
+    store.start_run("r")
+    store.save_snapshot(run_id="r", source="kalshi", kind="series", entity_id="S",
+                        url="https://example.invalid", payload={"v": 1})
+    store.finish_run("r", status="succeeded")
+    return store.path
+
+
+def test_current_schema_without_its_triggers_is_not_verified(tmp_path):
+    path = _real_store(tmp_path)
+    with closing(sqlite3.connect(path)) as conn:
+        names = [r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='trigger'")]
+        for name in names:
+            conn.execute(f'DROP TRIGGER "{name}"')
+        conn.commit()
+    with pytest.raises(backup.BackupError, match="immutability triggers missing"):
+        backup.create_backup(path, tmp_path / "backups")
+    assert list((tmp_path / "backups").iterdir()) == []
+
+
+def test_one_missing_trigger_is_not_verified(tmp_path):
+    path = _real_store(tmp_path)
+    victim = sorted(backup.reference_triggers())[-1]
+    with closing(sqlite3.connect(path)) as conn:
+        conn.execute(f'DROP TRIGGER "{victim}"')
+        conn.commit()
+    with pytest.raises(backup.BackupError, match=victim):
+        backup.create_backup(path, tmp_path / "backups")
+
+
+def test_older_supported_schema_can_be_backed_up_before_migration(tmp_path):
+    # A database at an older supported version (v2+, with the v2 immutability
+    # triggers) must stay backup-able, so a pre-migration backup is always possible.
+    path = _real_store(tmp_path)
+    with closing(sqlite3.connect(path)) as conn:
+        conn.execute(f"PRAGMA user_version={backup.MIN_SCHEMA_VERSION}")
+        conn.commit()
+    bundle = backup.create_backup(path, tmp_path / "backups")
+    assert backup.verify_backup(bundle)["schema_version"] == backup.MIN_SCHEMA_VERSION
 
 
 def test_backup_preserves_current_schema_triggers_and_uncheckpointed_wal(tmp_path):

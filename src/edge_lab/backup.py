@@ -18,11 +18,35 @@ from contextlib import closing
 from datetime import datetime, timezone
 from pathlib import Path
 
-from .storage import SCHEMA_VERSION as CURRENT_SCHEMA_VERSION
+from .storage import SCHEMA_VERSION as CURRENT_SCHEMA_VERSION, SnapshotStore
 
 DB_NAME = "database.sqlite3"
 MANIFEST_NAME = "manifest.json"
 REQUIRED_TABLES = {"collection_runs", "snapshots"}
+# Schema v2 introduced the immutability triggers; a database without them (v1) is
+# never evidence-grade, so it is never reported VERIFIED.
+MIN_SCHEMA_VERSION = 2
+V2_IMMUTABILITY_TRIGGERS = frozenset({
+    "snapshots_no_replace", "snapshots_no_update", "snapshots_no_delete",
+    "source_health_no_update", "source_health_no_delete",
+    "collection_runs_finish_once", "collection_runs_no_delete",
+})
+_reference_triggers_cache: frozenset[str] | None = None
+
+
+def reference_triggers() -> frozenset[str]:
+    """Every trigger a database created by the current code has (built, not hardcoded,
+    so a future schema's triggers are required automatically)."""
+    global _reference_triggers_cache
+    if _reference_triggers_cache is None:
+        with tempfile.TemporaryDirectory(prefix="edge-schema-ref-", ignore_cleanup_errors=True) as temp:
+            path = Path(temp) / "reference.sqlite3"
+            SnapshotStore(path)
+            with closing(sqlite3.connect(path)) as conn:
+                _reference_triggers_cache = frozenset(
+                    row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'trigger'")
+                )
+    return _reference_triggers_cache
 
 
 class BackupError(RuntimeError):
@@ -61,13 +85,19 @@ def copy_online(source: sqlite3.Connection, destination: sqlite3.Connection, dea
 def inspect_database(conn: sqlite3.Connection, deadline: float, *, require_current_schema: bool = True) -> dict:
     """Integrity-check a database and fingerprint its schema, triggers and row counts.
 
-    Fail-closed schema semantics: when ``require_current_schema`` is true (the
-    default, used everywhere in create/verify), a database whose
-    ``PRAGMA user_version`` does not equal ``edge_lab.storage.SCHEMA_VERSION`` is
-    never reported VERIFIED — it raises instead of silently passing. Row counts
-    and the trigger set are derived dynamically from ``sqlite_master``, so a
-    future schema version's tables and triggers are covered automatically
-    without editing this function.
+    Fail-closed schema semantics when ``require_current_schema`` is true (the
+    default, used everywhere in create/verify). The database is never reported
+    VERIFIED if either of these holds:
+
+    - ``PRAGMA user_version`` is newer than this code, or older than v2 (the first
+      schema with immutability triggers);
+    - it lacks any immutability trigger its version must have. At the current
+      version, that is every trigger a freshly created ``SnapshotStore`` has
+      (``reference_triggers``). At an older supported version, it is the v2 set.
+
+    Older supported versions stay backup-able, so a pre-migration backup is always
+    possible. Row counts and the trigger set are derived from ``sqlite_master``, so
+    a future schema's tables and triggers are covered automatically.
     """
     if time.monotonic() >= deadline:
         raise BackupError("database verification exceeded its time budget")
@@ -86,11 +116,22 @@ def inspect_database(conn: sqlite3.Connection, deadline: float, *, require_curre
             raise BackupError("not a Market Edge evidence database: required tables missing")
         triggers = sorted(name for kind, name, _, _ in schema if kind == "trigger")
         schema_version = conn.execute("PRAGMA user_version").fetchone()[0]
-        if require_current_schema and schema_version != CURRENT_SCHEMA_VERSION:
-            raise BackupError(
-                f"database schema v{schema_version} does not match the current "
-                f"edge_lab schema v{CURRENT_SCHEMA_VERSION}; refusing to report VERIFIED"
+        if require_current_schema:
+            if not MIN_SCHEMA_VERSION <= schema_version <= CURRENT_SCHEMA_VERSION:
+                raise BackupError(
+                    f"database schema v{schema_version} is outside the supported range "
+                    f"v{MIN_SCHEMA_VERSION}..v{CURRENT_SCHEMA_VERSION}; refusing to report VERIFIED"
+                )
+            expected = (
+                reference_triggers() if schema_version == CURRENT_SCHEMA_VERSION
+                else V2_IMMUTABILITY_TRIGGERS
             )
+            missing = sorted(expected - set(triggers))
+            if missing:
+                raise BackupError(
+                    f"immutability triggers missing for schema v{schema_version}: {missing}; "
+                    "refusing to report VERIFIED"
+                )
         counts = {}
         for name in sorted(tables):
             quoted = '"' + name.replace('"', '""') + '"'
