@@ -159,4 +159,93 @@ wired) merged. Neither is on a production code path. Production was brought to m
 
 ## 8. First real window (2026-09-23 17:45–18:30 ET, target 2026-09-24)
 
-_Pending. A follow-up docs PR records it after the window (claim: `docs/WORK_CLAIMS.md`)._
+Code running the window: `7aac49c` (equal to `main` at the time). Read at 18:46–18:48 EDT,
+as root, read-only; the evidence DB and ledger were opened `mode=ro` as `edgelab`.
+
+**Captures (target 2026-09-24, event `KXHIGHNY-26SEP24`):**
+
+| Unit | Result | Evidence |
+|---|---|---|
+| `edgelab-pfm` 17:45 ET | success | capture 6 `complete` at 21:45:05Z, window [21:30, 21:54]Z. 1 `pfm_list` plus 6 `pfm_product` snapshots; selected forecast max 68 °F (extract sha256 `05eb07dd…`) |
+| `edgelab-decision` 17:55:05 ET | success | capture 7 `complete` at 21:55:11Z, window [21:55:00, 22:00:00]Z. 1 event, 1 market list, 6 order books (one per bracket) |
+| `edgelab-recheck` 18:05 ET | success | capture 8 `complete` at 22:05:16Z, window [22:05:08, 22:10:11]Z. 6 order books |
+| `edgelab-status` 18:30 ET | success | `latest.json`: `last_closed_target_date` 2026-09-24 **VALID**, `last_closed_reasons` [], `first_valid_day` 2026-09-24, `valid_days` 1; `invalid_days` [2026-09-23] (the pre-install day) |
+
+**Shadow bookkeeping (`edgelab-shadow` 18:40 ET, receipt `shadow_daily.json`, code 7aac49c):**
+receipt state `PENDING_SETTLEMENT`, exit 0; latest day 2026-09-24 VALID, `HEALTHY_TRADED`;
+problems none.
+
+| | research (frozen EXP-001 rule) | operational shadow |
+|---|---|---|
+| decisions | 12 (6 brackets × 2 sides) | 12 |
+| qualified | 2 | 2 |
+| fills | 2 | 2 |
+| NO_FILL by reason | none | none |
+| risk vetoes | 0 | 0 |
+| starter-policy (policy) vetoes | n/a | 0: not yet in effect (the decision was 2026-09-23T21:55Z; `STARTER_MAX_7D_V1` applies from 2026-09-24T00:00Z) |
+| pending settlement | 2 positions | 2 positions |
+| committed / settled cash | 0.67 / 99,999.33 | 0.67 / 999.33; risk: no breaches, remaining capacity 9.33 |
+
+Qualified and filled (1 contract each, at the decision ask, confirmed by the recheck):
+- **B66.5 NO** at 0.56: model 0.747, net edge +0.167, fee 0.017248, cost 0.58.
+- **B70.5 YES** at 0.08: model 0.187, net edge +0.097, fee 0.005152, cost 0.09.
+
+Rejected:
+- 9 decisions with NO_EDGE;
+- T73 NO with INSUFFICIENT_SIZE (nothing offered).
+
+Every decision is `claimable` under the fee record's CONSERVATIVE_BOUND basis (ADR 0017),
+which subtracts 0.0101 USD per contract from any claim. Settlement: none yet. The
+settlement timer refreshes 11:15 and 16:15 ET once positions are due.
+
+This is one day of pipeline evidence, not evidence of an edge.
+
+## 9. Second F09 checkpoint (after the first real shadow day, 18:47–18:48 EDT)
+
+- **Backup first:** `edge-backup-h0wn8olk` (evidence: forward_captures 8, snapshots 21) and
+  `ledger/edge-backup-sdi31qqw` (ledger_entries 30), both VERIFIED_BACKUP_AND_RESTORE.
+- **Export** as `edgelab`, read-only (ledger sha256 unchanged):
+  - checkpoint `89581b5af4d1498fb6632247d9b6186b93cb4edb2fbf3d287b4c13a34fb0e7d2`;
+  - created 2026-09-23T22:47:20Z;
+  - research 15 entries (head seq 16), shadow 15 entries (head seq 30).
+- **Stored off-host:**
+  - (c) the owner's laptop folder `market-edge-anchors/2026-09-23/` (outside the repository
+    and the production tree);
+  - (d) this repository, `docs/engineering/ledger_checkpoints/2026-09-23T224720Z.json`.
+
+  The temporary VPS copy was deleted.
+- **Verify, live production ledger vs the off-host copy (on the VPS):** VERIFIED, "head
+  unchanged"; ledger sha256 unchanged.
+- **Verify off-host:** backup `sdi31qqw` copied to the laptop (database sha256
+  `1facc7a8…772f`, equal to its manifest). `anchor verify` from a clean checkout at the
+  deployed SHA `7aac49c`:
+  - against the new checkpoint: **VERIFIED**;
+  - against the first checkpoint: **EXTENDED** ("history intact; 14 entries appended since
+    the checkpoint").
+
+## 10. Dashboard deploy by the Terminal v1 session (after 18:50 EDT)
+
+Reported by the Terminal v1 session (PR #49); the Brisket state was independently re-read
+by this session at 18:56 ET.
+
+| Step | Result |
+|---|---|
+| DEPLOYED_SHA | before `7aac49c`, after `f646481ef3d095d877ee9de814bbd9edec021f10` (INSTALL OK 18:52 ET); `app.prev` = `7aac49c`; release files kept in `prev-7aac49c/` |
+| Backup before install (18:51:49 ET) | `edge-backup-36jle2zs` and `ledger/edge-backup-b37xdtvk` (ledger_entries 30): VERIFIED_BACKUP_AND_RESTORE |
+| **FAIL_CLOSED_VERIFIED** | 18:52:32 ET `rejected_out_of_window`; reset-failed. `last_failure.json` now names this test |
+| Dashboard | restarted; all routes 200 on loopback, foreign Host 400, POST 405; tailnet URL serves the new release; Serve unchanged (tailnet only, no Funnel) |
+| Verifier (18:55 ET) | DEPLOYED_SHA f646481; 7/7 timers; no failed units; **COLLECTOR_HEALTH VALID** (last closed 2026-09-24); **PFM/DECISION/RECHECK_CAPTURE_OBSERVED YES**; BACKUP/RESTORE both stores VERIFIED; OOM 0 |
+| **CHASE_UPSIDE_HEALTH** | **UNHEALTHY**: `/api/health` HTTP 503 `"status":"degraded"` |
+
+**Brisket degradation (not Market Edge; not touched).**
+- **Cause:** the health body says `"contract_ok": false`, Brisket's own data-contract check.
+  Everything else reads healthy:
+  - `data_stale` false, last Brisket scrape 22:47:44Z;
+  - circuit breakers closed, startup checks 8/8 ok;
+  - nginx, dynasty, dynasty-frontend and docker all active.
+- **When:** it was HEALTHY at this session's 14:59 ET verifier and already degraded at the
+  Terminal session's 18:51 pre-install verifier, so it began before that install. The timing
+  fits the Brisket scrape that finished at 22:47:44Z.
+- **Host:** memory PSI 0.00, MemAvailable 6451 MB, no OOM, `edgelab.slice` 23.6 MiB.
+  Nothing in the host resources points to Market Edge.
+- **For the owner:** Brisket's data-contract failure needs its own look.
