@@ -1,0 +1,44 @@
+repository	reviewed_sha	sha_committed_at	default_branch	license_spdx_api	archived	owner_type	stars	size_kb	language
+ccxt/ccxt	10ad2b51b9bf5d8c01c706755b0b0ec18a0cb693	2026-09-23T14:01:21Z	master	MIT	false	Organization	44121	8531764	Python
+pmxt-dev/pmxt	4a367d812541154002eedda36b0916a3cf68e0f2	2026-07-18T01:45:52Z	main	MIT	false	Organization	2164	9392	TypeScript
+Polymarket/polymarket-us-python	b44e4c8e7d34cb72582faec68d765fda50afca79	2026-09-23T00:05:19Z	main	MIT	false	Organization	29	121	Python
+Polymarket/py-sdk	1f5ca055d31a29a4fa0ad7955ee4a8bf8aaab3e6	2026-09-23T13:19:22Z	main	MIT	false	Organization	129	2827	Python
+Polymarket/real-time-data-client	c937d9c11cdd2b771aa4818392a1b6dda65c25de	2026-03-03T18:38:55Z	main	MIT	false	Organization	228	137	TypeScript
+Polymarket/py-clob-client-v2	215fc63a8fd6ec3a10c7edb73997c9772d8686d3	2026-07-17T12:55:44Z	main	MIT	false	Organization	167	187	Python
+Polymarket/py-clob-client	b076b04d61135657e25dccc1bbd6866a96bd8c6e	2026-05-25T18:13:30Z	main	MIT	true	Organization	1232	286	Python
+Polymarket/polymarket-cli	9b18b5faf5493b945c48ca22efaf9645f0c69ab8	2026-05-26T15:37:55Z	main	NONE	false	Organization	2882	179	Rust
+Polymarket/agents	081f2b5594c37edeb9d3780a778c084d5b6f2743	2024-11-05T15:40:29Z	main	MIT	true	Organization	3803	107	Python
+Polymarket/agent-skills	91ee44ae113e958affd20cd505c6e9d9d6100e0b	2026-02-19T15:59:35Z	main	NONE	false	Organization	189	25	
+dev-polymarket/clob-client-v2	8d0df58a6e54563891947053b0a0d83ce26b0c0f	2026-09-18T12:05:18Z	main	MIT	false	User	512	122	
+betcode-org/flumine	54854495b45accae614b23d10859047d582c3ecf	2026-09-07T16:58:51Z	master	MIT	false	Organization	246	10234	Python
+betcode-org/betfair	b00072113e9a1017d5b9cc705e9d1d3444a91036	2026-09-04T07:42:05Z	master	MIT	false	Organization	513	2371	Python
+SpartanLabsXyz/simmer-sdk	84e678315ae2ffbc820638faee2bd58d4c3453cf	2026-09-23T04:07:49Z	main	MIT	false	Organization	49	4025	Python
+mrnicholasbcarter-code/prediction-market-sdk	e02150819de6e5234c1719fb92449054212e2c96	2026-07-14T17:00:14Z	master	MIT	false	User	0	121	Python
+Oddpool/PredictionMarketBench	611d66941717310858683278940df21c33c406f2	2026-01-26T02:45:17Z	main	NONE	false	Organization	27	24425	Python
+evan-kolberg/prediction-market-backtesting	c76e77af00ef53472a9da8f66dae7fdd2d3e5928	2026-05-16T21:24:44Z	v4.1-alpha	NOASSERTION	false	User	1202	164736	Python
+chainstacklabs/polymarket-alpha-bot	1f4f366b9c677574c8034a8720eaca917a53715b	2026-07-28T13:26:06Z	main	Apache-2.0	false	Organization	181	3109	Python
+Kalshi/kalshi-starter-code-python	08fd693c0ff0080179d97126536436f0498df036	2025-03-07T18:17:48Z	main	NONE	false	Organization	99	18	Python
+Kalshi/tools-and-analysis	6f82520f23ba89f0b4bf80d323f33c404990d798	2023-05-08T23:18:54Z	main	MIT	false	Organization	22	87	Jupyter Notebook
+arshka/pykalshi	e42d9f3c491c5037cfe51c7f69ad35074d097255	2026-07-29T06:07:04Z	main	MIT	false	User	125	2185	Python
+rodlaf/KalshiMarketMaker	af660af885d20c089c37901e1110c38dc4c12e01	2026-04-14T13:21:11Z	main	MIT	false	User	401	83	Python
+the-odds-api/samples-python	dc344b7e93b70003d0fef35584c8edd78a4c40fb	2025-06-16T13:26:23Z	master	NONE	false	User	106	18	Python
+carterlasalle/SportsArbFinder	b8b6f2a3f31c5cb46a89dc66baf35b38bb3a026f	2024-10-29T21:14:41Z	main	MIT	false	User	16	147	Python
+robbiehaynes/arbitrage-finder	87fac7f22a59d8ce4c5c8af5dd906fa3274a4827	2024-05-12T14:11:40Z	main	BSD-3-Clause	false	User	23	42	Python
+hummingbot/hummingbot-api	d276034aee978d826bf05afcc2197eb1360c4a6a	2026-09-22T20:17:38Z	main	MIT	false	Organization	142	2149	Python
+hummingbot/hummingbot	9af100d6822da7d2d0291a906c730ef172284ee2	2026-09-22T08:53:54Z	master	Apache-2.0	false	Organization	20170	566871	Python
+hummingbot/condor	d89e74f2e3e273bea102c64e4977118e6a88084f	2026-09-16T13:36:52Z	main	MIT	false	Organization	189	17916	Python
+nautechsystems/nautilus_trader	3adf5a8dc0c9e676eb1e131911a73ad693ea7b42	2026-09-23T13:14:56Z	develop	LGPL-3.0	false	Organization	29301	280042	Rust
+binwiederhier/ntfy	10cb6506f836dbb00bb77e3b52669f6ace37f555	2026-08-27T20:16:48Z	main	Apache-2.0	false	User	34387	42846	Go
+caronc/apprise	2e72688d0526614980316b483c36d525441b9a4b	2026-09-23T02:12:56Z	master	BSD-2-Clause	false	User	17376	15192	Python
+suislanchez/polymarket-kalshi-weather-bot	e406394d59c208cc035c4fdf37ebb26636e15a47	2026-03-02T01:18:58Z	main	NONE	false	User	761	1058	Python
+timsonater/action-network-scraper	6607b1f2bf592276f445bda1a331b164ac0f9720	2018-08-06T00:03:52Z	master	NONE	false	User	3	19	Python
+Jon-Becker/prediction-market-analysis	7fbbb1ebefedf20ce8dda7fe4ee6ecb05e80e9d8	2026-09-21T13:56:51Z	main	MIT	false	User	3856	162013	Python
+guzus/dr-manhattan	7c15fad9ab32749fc7bcc6679ab6a22d9200c328	2026-07-12T15:05:44Z	main	NONE	false	User	203	11603	Jupyter Notebook
+nahrek/polyledger	62b889a9f4cc329d5a42d0d2daa7cfccb3b7bc34	2026-09-22T16:41:35Z	main	MIT	false	User	623	136	Python
+properscoring/properscoring	a465b5578d4b661e662933e84fa7673a70e75e94	2022-10-12T16:31:29Z	master	Apache-2.0	true	Organization	188	41	Python
+kernc/backtesting.py	ca2e2611621e472542ba90f7243a1fa06a7d7108	2026-08-05T12:39:16Z	master	AGPL-3.0	false	User	8986	17483	Python
+polakowo/vectorbt	a3c0f40979648585b4581fc4694fd6e92b3fffca	2026-09-17T20:12:21Z	master	NOASSERTION	false	User	9162	715252	Python
+warproxxx/poly_data	136e129735c73bce3a3d59f20354417b188e47fd	2026-09-08T18:45:13Z	main	GPL-3.0	false	User	2343	4585	Python
+caiovicentino/polymarket-mcp-server	21f65f319ff0fc4250ea1e5094581761906839e1	2026-09-20T16:03:09Z	main	MIT	false	User	676	1573	Python
+machina-sports/sports-skills	74a5da7c6c884dfbd9d900aa7f674cd2d9e70dc2	2026-09-23T00:47:31Z	main	MIT	false	Organization	234	7200	Python
+Noisyxl/brier	c8f167209dc20bdd7bd584f18c90c06d36c63fb2	2026-09-20T11:03:46Z	main	MIT	false	User	117	37426	HTML

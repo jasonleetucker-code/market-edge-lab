@@ -3,8 +3,10 @@
 Kalshi publishes a bid-only binary book: `yes_dollars` and `no_dollars` are lists of
 [price, size] bids. A YES buyer crosses the best NO bid, so the executable YES price is
 1 − (best NO bid) and the size offered there is that NO bid's size. The NO side mirrors
-this. Only captured book levels are used. There is no midpoint, no last price, and no
-depth walk beyond the best level.
+this. Only captured book levels are used. There is no midpoint and no last price.
+`quotes_from_orderbook` gives the best level only (the frozen EXP-001 path);
+`ladders_from_orderbook` gives every captured level for depth walks
+(`opportunity.walk_ladder`).
 """
 
 from __future__ import annotations
@@ -14,7 +16,9 @@ from decimal import Decimal, InvalidOperation
 from typing import Any, Mapping
 
 from . import settlement
-from .opportunity import Event, ExecutableQuote, Market, MarketStatus, MarketTiming, Payoff
+from .opportunity import (
+    DepthLadder, DepthLevel, Event, ExecutableQuote, Market, MarketStatus, MarketTiming, Payoff,
+)
 
 VENUE = "kalshi"
 OPEN_STATUSES = ("active", "open")
@@ -179,6 +183,54 @@ def quotes_from_orderbook(
             best_ask=None if yes_bid is None else Decimal(1) - yes_bid,
             displayed_size=yes_bid_size if yes_bid is not None else Decimal(0),
             received_at_utc=received_at_utc, source_timestamp_utc=None, evidence_id=evidence_id, anomaly=anomaly),
+    }
+
+
+def _ask_ladder(opposite_bids: list[tuple[Decimal, Decimal]]) -> tuple[DepthLevel, ...]:
+    """Asks for one side from the other side's bids: price 1 − bid, sizes summed per price."""
+    sizes: dict[Decimal, Decimal] = {}
+    for price, size in opposite_bids:
+        if size > 0:
+            ask = Decimal(1) - price
+            sizes[ask] = sizes.get(ask, Decimal(0)) + size
+    return tuple(DepthLevel(p, sizes[p]) for p in sorted(sizes))
+
+
+def ladders_from_orderbook(
+    native_id: str,
+    payload: Mapping[str, Any] | None,
+    *,
+    received_at_utc: str | None,
+    evidence_id: str | None,
+    depth_limit: int | None,
+) -> dict[str, DepthLadder]:
+    """YES and NO ask ladders from one captured order-book payload.
+
+    The top of each ladder is exactly what `quotes_from_orderbook` reports. `depth_limit`
+    is the `depth` the book was requested with (`forward.BOOK_DEPTH`), or None if the
+    request was not depth-limited. A side whose opposite bids reached that limit is marked
+    truncated. Returns {} when there is no book; malformed or crossed books carry `anomaly`.
+    """
+    book = payload.get("orderbook_fp") if isinstance(payload, Mapping) else None
+    if not isinstance(book, Mapping):
+        return {}
+    mid = market_id(native_id)
+
+    def ladder(side: str, asks: tuple[DepthLevel, ...], truncated: bool, anomaly: str | None) -> DepthLadder:
+        return DepthLadder(VENUE, mid, side, asks, truncated, received_at_utc, None, evidence_id, anomaly)
+
+    try:
+        yes_bids, no_bids = _levels(book.get("yes_dollars")), _levels(book.get("no_dollars"))
+    except ValueError as exc:
+        return {side: ladder(side, (), False, f"malformed book: {exc}") for side in ("YES", "NO")}
+    yes_bid, _ = _best(yes_bids)
+    no_bid, _ = _best(no_bids)
+    anomaly = None
+    if yes_bid is not None and no_bid is not None and yes_bid + no_bid >= 1:
+        anomaly = f"crossed book: yes bid {yes_bid} + no bid {no_bid} >= 1"
+    return {
+        "YES": ladder("YES", _ask_ladder(no_bids), depth_limit is not None and len(no_bids) >= depth_limit, anomaly),
+        "NO": ladder("NO", _ask_ladder(yes_bids), depth_limit is not None and len(yes_bids) >= depth_limit, anomaly),
     }
 
 

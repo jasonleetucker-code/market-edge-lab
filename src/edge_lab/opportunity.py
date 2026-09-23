@@ -30,7 +30,7 @@ import hashlib
 import json
 from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta
-from decimal import Decimal
+from decimal import ROUND_CEILING, Decimal
 from enum import Enum
 from typing import Any, Iterable, Mapping, Protocol, Sequence
 
@@ -145,6 +145,70 @@ class ExecutableQuote:
     source_timestamp_utc: str | None
     evidence_id: str | None
     anomaly: str | None = None  # malformed or crossed book, detected by the adapter
+
+
+class DepthStatus(str, Enum):
+    FILLABLE = "FILLABLE"  # the captured ladder covers the whole quantity
+    INSUFFICIENT_DEPTH = "INSUFFICIENT_DEPTH"  # the complete captured ladder offers less
+    DEPTH_UNKNOWN = "DEPTH_UNKNOWN"  # the ladder ran out, but the capture was truncated
+    INVALID_BOOK = "INVALID_BOOK"  # anomaly or malformed ladder: nothing is computed
+
+
+@dataclass(frozen=True)
+class DepthLevel:
+    price: Decimal
+    size: Decimal
+
+
+@dataclass(frozen=True)
+class DepthLadder:
+    """Every captured offer to sell one side of a market, cheapest first.
+
+    `asks` holds one level per price, with the sizes at that price summed by the adapter.
+    `truncated` means the source returned as many levels as it was asked for, so more depth
+    may exist past the last level: running out of levels is then unknown, not insufficient.
+    Like `ExecutableQuote`, there is deliberately no midpoint or last-price field.
+    """
+
+    venue: str
+    market_id: str
+    side: str  # "YES" | "NO"
+    asks: tuple[DepthLevel, ...]
+    truncated: bool
+    received_at_utc: str | None
+    source_timestamp_utc: str | None
+    evidence_id: str | None
+    anomaly: str | None = None
+
+
+@dataclass(frozen=True)
+class DepthFill:
+    """What taking `quantity` contracts from a ladder would cost, before fees.
+
+    All or nothing: unless `status` is FILLABLE, `takes` is empty and every cost field is
+    None, so a partial fill can never be priced by accident. `available` is how much the
+    ladder offers up to `quantity` (None for an invalid book).
+    """
+
+    status: DepthStatus
+    quantity: Decimal
+    available: Decimal | None
+    takes: tuple[DepthLevel, ...]  # (price, size taken), cheapest first
+    gross_cost: Decimal | None  # sum of price * size over `takes`; fees excluded
+    average_price: Decimal | None  # gross_cost / quantity, rounded up at 1e-12
+    limit_price: Decimal | None  # the worst price taken: the limit a taker order would need
+    detail: str
+
+
+@dataclass(frozen=True)
+class DepthCost:
+    """A fillable ladder walk priced under one fee schedule, each take as its own taker fill."""
+
+    fill: DepthFill
+    fee_quotes: tuple[FeeQuote, ...]
+    fee: Decimal
+    total_cost: Decimal  # cash that leaves the balance, fees included
+    cost_per_contract: Decimal  # total_cost / quantity, rounded up at 1e-12
 
 
 @dataclass(frozen=True)
@@ -471,6 +535,85 @@ def evaluate_event(
         for side in SIDES
     ]
     return rank(out)
+
+
+# --------------------------------------------------------------------------- depth
+
+
+_AVERAGE_GRID = Decimal("1e-12")
+
+
+def _ladder_problem(ladder: DepthLadder) -> str | None:
+    if ladder.anomaly:
+        return ladder.anomaly
+    previous = None
+    for level in ladder.asks:
+        if not valid_price(level.price):
+            return f"ask {level.price} is not a valid contract price"
+        if not isinstance(level.size, Decimal) or not level.size.is_finite() or level.size <= 0:
+            return f"level at {level.price} has invalid size {level.size}"
+        if previous is not None and level.price <= previous:
+            return f"asks not strictly ascending: {level.price} after {previous}"
+        previous = level.price
+    return None
+
+
+def walk_ladder(ladder: DepthLadder, quantity: Decimal | int) -> DepthFill:
+    """Take `quantity` contracts from the cheapest asks upward.
+
+    Only captured levels are used. The walk never extrapolates past the last level, and it
+    never prices a partial fill (see `DepthFill`). The result depends only on its inputs.
+    """
+    qty = Decimal(quantity) if isinstance(quantity, int) and not isinstance(quantity, bool) else quantity
+    if not isinstance(qty, Decimal) or not qty.is_finite() or qty <= 0:
+        raise ValueError("quantity must be a positive, finite number of contracts")
+
+    def unfilled(status: DepthStatus, available: Decimal | None, detail: str) -> DepthFill:
+        return DepthFill(status, qty, available, (), None, None, None, detail)
+
+    problem = _ladder_problem(ladder)
+    if problem:
+        return unfilled(DepthStatus.INVALID_BOOK, None, problem)
+    remaining, takes = qty, []
+    for level in ladder.asks:
+        if remaining <= 0:
+            break
+        size = min(remaining, level.size)
+        takes.append(DepthLevel(level.price, size))
+        remaining -= size
+    if remaining > 0:
+        available = qty - remaining
+        if ladder.truncated:
+            return unfilled(DepthStatus.DEPTH_UNKNOWN, available,
+                            f"truncated capture offers {available} < {qty}; deeper levels were not captured")
+        return unfilled(DepthStatus.INSUFFICIENT_DEPTH, available, f"complete capture offers {available} < {qty}")
+    gross = sum((t.price * t.size for t in takes), Decimal(0))
+    return DepthFill(DepthStatus.FILLABLE, qty, qty, tuple(takes), gross,
+                     (gross / qty).quantize(_AVERAGE_GRID, rounding=ROUND_CEILING), takes[-1].price,
+                     f"{len(takes)} level(s)")
+
+
+def price_depth_fill(fill: DepthFill, fee_schedule: FeeSchedule) -> tuple[DepthCost | None, str]:
+    """Fees for a fillable walk, each take priced as its own taker fill.
+
+    Returns (None, why) when no cost can be stated: the walk is not fillable, or a take is
+    a fractional number of contracts (no fee rule for fractional fills is modelled). This
+    makes no new fee claim: claimability stays with `verification_at` (ADR 0017), whose
+    rounding allowance already covers an order that executes as several fills.
+    """
+    if fill.status is not DepthStatus.FILLABLE:
+        return None, f"walk is {fill.status.value}: {fill.detail}"
+    if any(t.size != t.size.to_integral_value() for t in fill.takes):
+        return None, "a take is a fractional number of contracts; no fee rule for it is modelled"
+    quotes = tuple(fee_schedule.taker_buy(int(t.size), t.price) for t in fill.takes)
+    total = sum((q.total_cost for q in quotes), Decimal(0))
+    return DepthCost(
+        fill=fill,
+        fee_quotes=quotes,
+        fee=sum((q.fee for q in quotes), Decimal(0)),
+        total_cost=total,
+        cost_per_contract=(total / fill.quantity).quantize(_AVERAGE_GRID, rounding=ROUND_CEILING),
+    ), "priced"
 
 
 def reason_counts(opportunities: Iterable[Opportunity]) -> dict[str, int]:

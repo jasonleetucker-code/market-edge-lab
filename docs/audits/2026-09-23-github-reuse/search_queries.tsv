@@ -1,0 +1,73 @@
+F01_prediction_markets	prediction market trading
+F01_prediction_markets	prediction market backtesting
+F01_prediction_markets	prediction market arbitrage
+F01_prediction_markets	event contracts
+F01_prediction_markets	forecast market
+F02_kalshi	kalshi
+F02_kalshi	kalshi api python
+F03_polymarket	polymarket
+F03_polymarket	polymarket us
+F03_polymarket	polymarket clob
+F04_other_venues	novig
+F04_other_venues	prophetx
+F04_other_venues	limitless exchange prediction
+F04_other_venues	myriad markets
+F05_sports	sports betting odds
+F05_sports	odds api
+F05_sports	sports arbitrage
+F05_sports	value betting
+F05_sports	closing line value
+F05_sports	sportsbook scraper
+F06_exchanges	betfair
+F06_exchanges	betfair trading framework
+F06_exchanges	betdaq
+F07_orderbook	order book replay
+F07_orderbook	limit order book simulator
+F07_orderbook	market making bot
+F07_orderbook	fill simulation backtest
+F08_execution	exchange connector unified api
+F08_execution	order management system trading
+F08_execution	multi venue trading engine
+F09_risk_ledger	kelly criterion betting
+F09_risk_ledger	trade ledger event sourcing
+F09_risk_ledger	portfolio position accounting
+F10_backtest	event driven backtesting python
+F10_backtest	walk forward backtest
+F10_backtest	point in time data
+F11_calibration	forecast calibration brier score
+F11_calibration	probabilistic forecast evaluation
+F12_weather	weather prediction market
+F12_weather	ensemble weather forecast trading
+F13_news_llm	prediction market agent llm
+F13_news_llm	market equivalence prediction markets
+F13_news_llm	logical arbitrage prediction markets
+F14_notify	push notifications self hosted
+F14_notify	sms alerts python
+F14_notify	webhook notifications apprise
+F15_dashboards	trading dashboard
+F15_dashboards	market scanner
+F16_agents	trading mcp server
+F16_agents	ai trading agent
+F16_agents	human in the loop trading
+F04_other_venues	limitless prediction
+F06_exchanges	betfairlightweight
+F06_exchanges	betfair bot
+F07_orderbook	backtest orderbook
+F07_orderbook	orderbook websocket
+F08_execution	unified exchange api
+F08_execution	trading order management
+F09_risk_ledger	double entry ledger python
+F09_risk_ledger	position accounting
+F10_backtest	backtesting engine
+F10_backtest	algorithmic trading platform
+F11_calibration	calibration curve
+F11_calibration	proper scoring rules
+F12_weather	weather kalshi
+F13_news_llm	polymarket agent
+F13_news_llm	polymarket arbitrage
+F13_news_llm	kalshi polymarket arbitrage
+F14_notify	ntfy
+F14_notify	notification service
+F15_dashboards	polymarket dashboard
+F16_agents	mcp kalshi
+F16_agents	mcp polymarket

@@ -453,6 +453,31 @@ def official_outcome(market: dict[str, Any]) -> tuple[str | None, str]:
     return resolved.outcome.value.upper(), resolved.reason
 
 
+def event_settlement_problems(index: dict[str, dict[str, Any]]) -> dict[str, str]:
+    """Events whose captured settlement evidence is incoherent, with the reason (GATE7-F14).
+
+    Gate 2 settles an event only when exactly one bracket resolves YES and every bracket
+    carries the same expiration value (`settlement_audit`). Each market can be internally
+    consistent while the event as a whole is not; such an event settles nothing until
+    coherent evidence arrives."""
+    by_event: dict[str, list[dict[str, Any]]] = {}
+    for found in index.values():
+        by_event.setdefault(str(found["market"].get("event_ticker") or ""), []).append(found["market"])
+    problems: dict[str, str] = {}
+    for event, markets in by_event.items():
+        yes = sum(1 for m in markets if official_outcome(m)[0] == "YES")
+        # A bracket with no value yet is unknown, not a disagreement; only stated values conflict.
+        values = {str(v.normalize()) for m in markets
+                  if (v := settlement.parse_value(m.get("expiration_value"))) is not None}
+        if not event:
+            problems[event] = "settlement record has no event_ticker"
+        elif yes != 1:
+            problems[event] = f"event {event}: {yes} YES brackets in the captured settlement evidence (expected exactly 1)"
+        elif len(values) > 1:
+            problems[event] = f"event {event}: brackets disagree on expiration_value {sorted(values)}"
+    return problems
+
+
 def settle_open_positions(store: SnapshotStore, ledger: ShadowLedger, *, accounts: tuple[ShadowAccount, ...] = ACCOUNTS,
                           known_by: datetime | None = None, now: datetime | None = None) -> dict[str, Any]:
     """Settle every open position that has conclusive settlement evidence; report the rest.
@@ -462,6 +487,7 @@ def settle_open_positions(store: SnapshotStore, ledger: ShadowLedger, *, account
     evidence leaves the position open and listed as pending, never guessed."""
     # Evidence counts only once received: by `known_by` in catch-up, else by `now` if given.
     index = settlement_index(store, known_by=known_by if known_by is not None else now)
+    incoherent = event_settlement_problems(index)
     report: dict[str, Any] = {"settled": [], "pending": [], "conflicts": []}
     for account in accounts:
         ensure_account(ledger, account)
@@ -495,6 +521,14 @@ def settle_open_positions(store: SnapshotStore, ledger: ShadowLedger, *, account
                                             "variants": sorted(map(list, found["variants"]))})
                 continue
             market = found["market"]
+            event_problem = incoherent.get(str(market.get("event_ticker") or ""))
+            if event_problem:
+                report["pending"].append({"account_id": acct, "position_id": position.position_id,
+                                          "reason": event_problem})
+                report["conflicts"].append({"account_id": acct, "position_id": position.position_id,
+                                            "recorded_outcome": None, "latest_evidence_outcome": None,
+                                            "variants": [], "reason": event_problem})
+                continue
             outcome, why = official_outcome(market)
             if outcome is None:
                 report["pending"].append({"account_id": acct, "position_id": position.position_id, "reason": why})
