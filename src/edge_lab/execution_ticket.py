@@ -93,6 +93,7 @@ class ExecutionTicket:
     execution_enabled: bool = False
     event_id: str | None = None  # exposure grouping keys; None is unknown and fails closed
     outcome_cluster: str | None = None
+    quote_evidence_id: str | None = None  # the book snapshot the ticket was priced from
 
     def __post_init__(self) -> None:
         if self.execution_enabled:
@@ -159,7 +160,7 @@ def draft_ticket(opportunity: Opportunity, *, venue: VenueSpec, route_id: str | 
         probability=opportunity.model_probability, conservative_probability=opportunity.conservative_probability,
         quote_received_at_utc=opportunity.quote_received_at_utc, starter_policy=verdict.to_dict(),
         risk_constraints=dict(risk_constraints or {}), action_mode=action_mode, event_id=opportunity.event_id,
-        outcome_cluster=opportunity.outcome_cluster,
+        outcome_cluster=opportunity.outcome_cluster, quote_evidence_id=opportunity.quote_evidence_id,
     )
 
 
@@ -184,7 +185,8 @@ class Control(str, Enum):
     ORDER_TIME_UNKNOWN = "ORDER_TIME_UNKNOWN"  # an order without a creation time: counts cannot be trusted
     DUPLICATE_TICKET = "DUPLICATE_TICKET"
     DUPLICATE_OPEN_ORDER = "DUPLICATE_OPEN_ORDER"  # an order on this market and side is still open
-    RISK_REPORT_BLOCKS = "RISK_REPORT_BLOCKS"  # a supplied `risk.assess` report forbids this new risk
+    RISK_REPORT_MISSING = "RISK_REPORT_MISSING"  # account-level limits cannot be judged without one
+    RISK_REPORT_BLOCKS = "RISK_REPORT_BLOCKS"  # the `risk.assess` report is not current or forbids this risk
     EXPOSURE_UNKNOWN = "EXPOSURE_UNKNOWN"
     EXPOSURE_PER_POSITION = "EXPOSURE_PER_POSITION"  # one market and side, this ticket included
     EXPOSURE_PER_EVENT = "EXPOSURE_PER_EVENT"
@@ -247,10 +249,11 @@ class TicketLimits:
     """Ticket-specific limits. Money limits are `risk.RiskPolicy`'s, never copied here."""
 
     max_book_age: timedelta  # a quote exactly this old is still current
-    max_order_state_age: timedelta  # also bounds the age of a supplied risk report
+    max_order_state_age: timedelta
     max_orders_per_window: int  # every order created in the window counts, failed ones too
     order_window: timedelta  # an order exactly this old has left the window
     market_cooldown: timedelta  # minimum gap between orders on one market; exactly this gap is allowed
+    max_risk_report_age: timedelta | None = None  # None: the same as max_order_state_age
 
 
 @dataclass(frozen=True)
@@ -259,19 +262,26 @@ class Violation:
     detail: str
 
 
+def _finite(value: object) -> bool:
+    return isinstance(value, Decimal) and value.is_finite()
+
+
 def _known_loss(value: object) -> bool:
-    return isinstance(value, Decimal) and value.is_finite() and value >= 0
+    return _finite(value) and value >= 0
 
 
 def pre_submit_checks(ticket: ExecutionTicket, *, now: datetime, market: Market | None,
                       quote: ExecutableQuote | None, order_state_as_of_utc: str | None,
                       orders: tuple[OrderRecord, ...], limits: TicketLimits, risk_policy: RiskPolicy,
-                      risk_report: RiskReport | None = None,
+                      account_id: str, risk_report: RiskReport | None,
                       price_grid: PriceGrid | None = None) -> tuple[Violation, ...]:
     """Every failing control, in `Control` order; the first is the primary reason. Never empty.
+    Malformed inputs fail a named control; nothing here raises except for a naive `now`.
 
-    `price_grid` defaults to the market's own published grid. A supplied `risk_report` is
-    used as computed (breaches, capacity), never recomputed here.
+    `price_grid` defaults to the ticket's market's own published grid. `risk_report` is the
+    `risk.assess` report for `account_id`, used as computed (breaches, capacity), never
+    recomputed; None fails closed. Its capacity must also cover our own open orders, which
+    the ledger-based report cannot see.
 
     Future timestamps (quote, order state, risk report, orders) are rejected outright. That
     is stricter than `freshness.assess`, which tolerates 5 minutes of clock skew: a check just
@@ -298,29 +308,36 @@ def pre_submit_checks(ticket: ExecutionTicket, *, now: datetime, market: Market 
     if not q_ok:
         fail(Control.QTY_INVALID, f"quantity {q!r} is not a positive whole number of contracts")
     price_ok = valid_price(price)  # Decimal, finite, inside (0, 1), on the 1/100-cent grid
-    grid = price_grid if price_grid is not None else (market.price_grid if market is not None else None)
+    same_market = market is not None and market.market_id == ticket.market_id
+    grid = price_grid if price_grid is not None else (market.price_grid if same_market else None)
     if not price_ok:
         fail(Control.PRICE_INVALID, f"limit {price!r}")
     elif grid is not None and not grid.contains(price):
         fail(Control.PRICE_OFF_GRID, f"limit {price} is not on the grid from {grid.source}")
     if q_ok and price_ok and _known_loss(max_loss) and max_loss < q * price:
         fail(Control.MAX_LOSS_UNDERSTATED, f"max_loss {max_loss} < {q} x {price}")
-    if market is None or market.market_id != ticket.market_id:
+    if not same_market:
         fail(Control.MARKET_UNKNOWN, ticket.market_id)
     elif market.status is not MarketStatus.OPEN:
         fail(Control.MARKET_NOT_OPEN, market.status.value)
     if (quote is None or quote.market_id != ticket.market_id or quote.side != ticket.side
-            or quote.best_ask is None or quote.anomaly):
+            or not _finite(quote.best_ask) or quote.anomaly):
         fail(Control.BOOK_MISSING, "no usable book for this market and side")
     else:
         received, created = parse_utc(quote.received_at_utc), parse_utc(ticket.created_at_utc)
+        priced = parse_utc(ticket.quote_received_at_utc)
+        new_evidence = (quote.evidence_id is not None and ticket.quote_evidence_id is not None
+                        and quote.evidence_id != ticket.quote_evidence_id)
         if age_bad(quote.received_at_utc, limits.max_book_age):
             fail(Control.BOOK_STALE, f"received {quote.received_at_utc}")
         elif created is None or received < created:
             fail(Control.BOOK_STALE, f"the quote ({quote.received_at_utc}) predates the ticket "
                                      f"({ticket.created_at_utc}): a re-check needs a new book")
-        if quote.best_ask != price or quote.displayed_size is None or (q_ok and quote.displayed_size < q):
-            fail(Control.QUOTE_CHANGED, f"ask {quote.best_ask} x {quote.displayed_size}; ticket {price} x {q}")
+        elif not ((priced is not None and received > priced) or new_evidence):
+            fail(Control.BOOK_STALE, f"re-check is the pricing quote ({quote.evidence_id} at {quote.received_at_utc})")
+        size = quote.displayed_size
+        if not price_ok or quote.best_ask != price or not _finite(size) or (q_ok and size < q):
+            fail(Control.QUOTE_CHANGED, f"ask {quote.best_ask} x {size}; ticket {price} x {q}")
     if age_bad(order_state_as_of_utc, limits.max_order_state_age):
         fail(Control.ORDER_STATE_UNHEALTHY, f"order state as of {order_state_as_of_utc}")
     timed = [(parse_utc(o.created_at_utc), o) for o in orders]
@@ -329,24 +346,41 @@ def pre_submit_checks(ticket: ExecutionTicket, *, now: datetime, market: Market 
     timed = [(c, o) for c, o in timed if c is not None]
     if any(o.ticket_id == ticket.ticket_id for o in orders):
         fail(Control.DUPLICATE_TICKET, ticket.ticket_id)
-    if any(o.state in OPEN_ORDER_STATES and o.market_id == ticket.market_id and o.side == ticket.side
-           for o in orders):
+    typed = [o for o in orders if isinstance(o.state, OrderState)]
+    open_orders = [o for o in typed if o.state in OPEN_ORDER_STATES]
+    if any(o.market_id == ticket.market_id and o.side == ticket.side
+           for o in open_orders):
         fail(Control.DUPLICATE_OPEN_ORDER, f"{ticket.market_id} {ticket.side}")
 
-    if risk_report is not None:
-        if risk_report.policy_id != risk_policy.policy_id or age_bad(risk_report.as_of_utc, limits.max_order_state_age):
-            fail(Control.RISK_REPORT_BLOCKS, f"report {risk_report.policy_id} as of {risk_report.as_of_utc} "
-                                             f"is not current for {risk_policy.policy_id}")
-        elif not risk_report.new_risk_allowed:
-            fail(Control.RISK_REPORT_BLOCKS, (risk_report.breaches or ("NO_REMAINING_RISK_CAPACITY",))[0])
-        elif _known_loss(max_loss) and max_loss > risk_report.remaining_risk_capacity:
-            fail(Control.RISK_REPORT_BLOCKS, f"REMAINING_RISK_CAPACITY: {max_loss} > "
-                                             f"{risk_report.remaining_risk_capacity}")
+    report = risk_report
+    if report is None:
+        fail(Control.RISK_REPORT_MISSING, "reserve, loss-limit and drawdown controls cannot be judged")
+    else:
+        report_at, state_at = parse_utc(report.as_of_utc), parse_utc(order_state_as_of_utc)
+        capacity = report.remaining_risk_capacity
+        report_age = limits.max_order_state_age if limits.max_risk_report_age is None else limits.max_risk_report_age
+        breaches = report.breaches if isinstance(report.breaches, (tuple, list)) else ()
+        open_losses = [o.worst_case_loss for o in open_orders]
+        if report.account_id != account_id or report.policy_id != risk_policy.policy_id:
+            fail(Control.RISK_REPORT_BLOCKS, f"report is for {report.account_id}/{report.policy_id}, "
+                                             f"not {account_id}/{risk_policy.policy_id}")
+        elif age_bad(report.as_of_utc, report_age):
+            fail(Control.RISK_REPORT_BLOCKS, f"report as of {report.as_of_utc} is not current")
+        elif state_at is None or report_at < state_at:
+            fail(Control.RISK_REPORT_BLOCKS, f"report older than order state ({order_state_as_of_utc})")
+        elif report.new_risk_allowed is not True:
+            fail(Control.RISK_REPORT_BLOCKS, str((tuple(breaches) or ("NO_REMAINING_RISK_CAPACITY",))[0]))
+        elif not _finite(capacity):
+            fail(Control.RISK_REPORT_BLOCKS, f"remaining risk capacity {capacity!r} is unknown")
+        elif _known_loss(max_loss) and all(_known_loss(v) for v in open_losses):
+            need = max_loss + sum(open_losses, Decimal(0))  # the report sees fills, not our open orders
+            if need > capacity:
+                fail(Control.RISK_REPORT_BLOCKS, f"REMAINING_RISK_CAPACITY: {need} with open orders > {capacity}")
 
     counted = [o for o in orders if o.state is not OrderState.REJECTED]
-    if (not _known_loss(max_loss) or not ticket.event_id or not ticket.outcome_cluster
+    if (len(typed) != len(orders) or not _known_loss(max_loss) or not ticket.event_id or not ticket.outcome_cluster
             or any(not _known_loss(o.worst_case_loss) or not o.event_id or not o.outcome_cluster for o in counted)):
-        fail(Control.EXPOSURE_UNKNOWN, "a worst-case loss, event or outcome cluster is missing or invalid")
+        fail(Control.EXPOSURE_UNKNOWN, "an order state, worst-case loss, event or cluster is missing or invalid")
     else:
         def total(keep) -> Decimal:
             return max_loss + sum((o.worst_case_loss for o in counted if keep(o)), Decimal(0))

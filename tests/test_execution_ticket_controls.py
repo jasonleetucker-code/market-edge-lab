@@ -66,7 +66,7 @@ def report(**kw):
 def check(t=None, **kw):
     now = kw.pop("now", NOW)
     args = dict(market=MARKET, quote=fresh(), order_state_as_of_utc=now.isoformat(), orders=(), limits=LIMITS,
-                risk_policy=POLICY)
+                risk_policy=POLICY, account_id="acct", risk_report=report(as_of_utc=now.isoformat()))
     args.update(kw)
     return [v.control for v in pre_submit_checks(t or ticket(), now=now, **args)]
 
@@ -74,8 +74,8 @@ def check(t=None, **kw):
 def test_a_clean_ticket_still_fails_execution_not_authorized_and_nothing_else():
     t = ticket()
     assert t.status is TicketStatus.DRAFT and t.event_id == EVENT.event_id and t.outcome_cluster == CLUSTER, t.reasons
-    assert check(t) == [E]
-    assert check(t, risk_report=report()) == [E]
+    assert t.quote_evidence_id == "snapshot:1"
+    assert check(t) == [E]  # with a fresh, allowing risk report for this account
 
 
 GRID_TENTHS = PriceGrid((PriceRange(Decimal("0.1"), Decimal("0.9"), Decimal("0.1")),), "test tenths")
@@ -113,9 +113,10 @@ CASES = [
     (K(quote=fresh(ask="0.47")), [C.QUOTE_CHANGED]),  # any move re-prices
     (K(quote=fresh(size="0.5")), [C.QUOTE_CHANGED]),
     (K(quote=fresh(size=None)), [C.QUOTE_CHANGED]),
-    (K(order_state_as_of_utc=None), [C.ORDER_STATE_UNHEALTHY]),
+    (K(order_state_as_of_utc=None), [C.ORDER_STATE_UNHEALTHY, C.RISK_REPORT_BLOCKS]),  # report not newer
     (K(order_state_as_of_utc=(NOW - timedelta(seconds=11)).isoformat()), [C.ORDER_STATE_UNHEALTHY]),
-    (K(order_state_as_of_utc=(NOW + timedelta(seconds=1)).isoformat()), [C.ORDER_STATE_UNHEALTHY]),
+    (K(order_state_as_of_utc=(NOW + timedelta(seconds=1)).isoformat()), [C.ORDER_STATE_UNHEALTHY,
+                                                                         C.RISK_REPORT_BLOCKS]),
     (K(orders=(order(created=None),)), [C.ORDER_TIME_UNKNOWN]),
     (K(orders=(order(created=None, market_id="kalshi:OTHER"),)), [C.ORDER_TIME_UNKNOWN]),
     (K(orders=(order(OrderState.RESTING),)), [C.DUPLICATE_OPEN_ORDER]),
@@ -131,6 +132,35 @@ CASES = [
     (K(orders=(order(cluster=None),)), [C.EXPOSURE_UNKNOWN]),
     (K(orders=(order(created=NOW - timedelta(seconds=30)),)), [C.COOLDOWN_ACTIVE]),
     *[(K(orders=(order(loss=bad),)), [C.EXPOSURE_UNKNOWN]) for bad in BAD_LOSSES],
+    # the re-check must be a newer book than the one the ticket was priced from
+    ((T(quote_received_at_utc=AS_OF.isoformat()), {"quote": fresh(received=AS_OF)}), [C.BOOK_STALE]),
+    ((T(quote_received_at_utc=AS_OF.isoformat()), {"quote": replace(fresh(received=AS_OF), evidence_id="snapshot:2")}),
+     []),
+    ((T(quote_received_at_utc=None, quote_evidence_id=None), {}), [C.BOOK_STALE]),  # cannot prove it is newer
+    # malformed quote numbers fail a named control and never raise
+    *[(K(quote=replace(fresh(), best_ask=bad)), [C.BOOK_MISSING])
+      for bad in (Decimal("NaN"), Decimal("sNaN"), Decimal("Infinity"), 0.48, "0.48")],
+    *[(K(quote=replace(fresh(), displayed_size=bad)), [C.QUOTE_CHANGED])
+      for bad in (Decimal("NaN"), Decimal("sNaN"), Decimal("Infinity"), 10.0, "10")],
+    ((T(limit_price=Decimal("sNaN")), {}), [C.PRICE_INVALID, C.QUOTE_CHANGED]),
+    # the market's grid applies only to the ticket's own market
+    (K(market=replace(MARKET, market_id="kalshi:OTHER", price_grid=GRID_TENTHS)), [C.MARKET_UNKNOWN]),
+    # an order state that is not an OrderState is unknown exposure
+    (K(orders=(order(state="RESTING"),)), [C.EXPOSURE_UNKNOWN]),
+    (K(orders=(order(state=None),)), [C.EXPOSURE_UNKNOWN]),
+    (K(orders=(order(state=["RESTING"]),)), [C.EXPOSURE_UNKNOWN]),
+    # the account-level risk report: required, current, for this account, at least as new as the order view
+    (K(risk_report=None), [C.RISK_REPORT_MISSING]),
+    (K(risk_report=report(account_id="another-account")), [C.RISK_REPORT_BLOCKS]),
+    (K(risk_report=report(as_of_utc=(NOW - timedelta(seconds=1)).isoformat())), [C.RISK_REPORT_BLOCKS]),
+    (K(risk_report=report(new_risk_allowed=None)), [C.RISK_REPORT_BLOCKS]),
+    (K(risk_report=report(new_risk_allowed=False, breaches=None)), [C.RISK_REPORT_BLOCKS]),
+    *[(K(risk_report=report(remaining_risk_capacity=bad)), [C.RISK_REPORT_BLOCKS])
+      for bad in (None, Decimal("NaN"), Decimal("sNaN"), Decimal("Infinity"), 5.0, "5")],
+    # capacity must cover our own open orders too; fills are already in the report
+    (K(orders=(order(OrderState.PENDING, loss=Decimal("4.6"), market_id="kalshi:OTHER"),)), [C.RISK_REPORT_BLOCKS]),
+    (K(orders=(order(OrderState.RESTING, loss=Decimal("4.6"), market_id="kalshi:OTHER"),)), [C.RISK_REPORT_BLOCKS]),
+    (K(orders=(order(OrderState.FILLED, loss=Decimal("4.6"), market_id="kalshi:OTHER"),)), []),
     *[((T(max_loss=bad), {}), [C.EXPOSURE_UNKNOWN]) for bad in BAD_LOSSES],
 ]
 
@@ -149,7 +179,7 @@ def test_duplicate_ticket_is_named():
 
 def test_every_failure_is_listed_in_evaluation_order():
     got = check(replace(ticket(), quantity=0), market=None, quote=None, order_state_as_of_utc=None)
-    assert got == [C.QTY_INVALID, C.MARKET_UNKNOWN, C.BOOK_MISSING, C.ORDER_STATE_UNHEALTHY, E]
+    assert got == [C.QTY_INVALID, C.MARKET_UNKNOWN, C.BOOK_MISSING, C.ORDER_STATE_UNHEALTHY, C.RISK_REPORT_BLOCKS, E]
     assert got == sorted(got, key=list(C).index)
 
 
@@ -177,6 +207,23 @@ def test_boundaries_are_explicit():
     exact = replace(POLICY, max_position_risk=t.max_loss)
     assert check(t, risk_policy=exact) == [E]  # exactly at a risk limit is allowed
     assert check(t, risk_report=report(remaining_risk_capacity=t.max_loss)) == [E]
+
+
+def test_risk_report_age_has_its_own_limit():
+    limits = replace(LIMITS, max_order_state_age=timedelta(minutes=2), max_risk_report_age=timedelta(seconds=30))
+    stale_state = (NOW - timedelta(seconds=90)).isoformat()
+    older = report(as_of_utc=(NOW - timedelta(seconds=60)).isoformat())
+    assert check(limits=limits, order_state_as_of_utc=stale_state, risk_report=older) == [C.RISK_REPORT_BLOCKS, E]
+    fallback = replace(limits, max_risk_report_age=None)  # None: the order-state age applies
+    assert check(limits=fallback, order_state_as_of_utc=stale_state, risk_report=older) == [E]
+
+
+def test_capacity_counts_open_orders_exactly_at_the_limit():
+    t = ticket()
+    o = order(OrderState.RESTING, loss=Decimal("2"), market_id="kalshi:OTHER")
+    assert check(t, orders=(o,), risk_report=report(remaining_risk_capacity=t.max_loss + 2)) == [E]
+    assert check(t, orders=(o,), risk_report=report(remaining_risk_capacity=t.max_loss + Decimal("1.99"))) == [
+        C.RISK_REPORT_BLOCKS, E]
 
 
 def test_max_loss_at_the_pre_fee_cost_floor_is_not_understated():
@@ -278,7 +325,8 @@ def test_no_force_or_bypass_argument(fn):
 
 def test_money_limits_come_from_risk_policy_not_ticket_limits():
     names = {f.name for f in fields(TicketLimits)}
-    assert not any(re.search(r"loss|risk|exposure|reserve", n) for n in names), names
+    assert not names & {f.name for f in fields(RiskPolicy)}, names
+    assert not any(re.search(r"loss|exposure|reserve|capacity|_risk$", n) for n in names), names
 
 
 def test_ticket_id_is_the_content_derived_idempotency_key():
