@@ -91,6 +91,9 @@ research evidence.
 - With the fee schedule unverified, no net Stage B result is claimable until the owner
   supplies the fee-schedule PDF.
 
+**Update 2026-09-23 (ADR 0017).** Fee verification is now dated, component-level evidence
+beside the schedule. `Opportunity.claimable` follows the claim basis known at `as_of`.
+
 **Reconsider when:**
 - a second venue or domain needs a contract field that is missing here;
 - the fee schedule is verified (add a VERIFIED schedule id);

@@ -9,6 +9,7 @@ from dataclasses import fields as dc_fields
 from typing import Any
 
 from .. import exp001_shadow
+from ..fee_schedules import RECHECK_WARNING
 from ..freshness import parse_utc
 from . import data as d
 from .html import age, error, esc, kv, money, no_data, panel, state_tag, table, tag, ul
@@ -19,8 +20,10 @@ BOUND_LABEL = "upper bound, not a predicted scenario"
 ACCOUNTING_NOTE = (
     "Accounting basis: open positions are carried at cost (cash paid, fees included). No mark-to-market: "
     "unrealized gains are never counted, and hypothetical winnings are never available cash. Realized P&L "
-    "moves only when a position settles on official evidence. Fees come from the recorded fee schedule; while "
-    "it is UNVERIFIED no net-profitability claim is possible (claimable = false)."
+    "moves only when a position settles on official evidence. Fees come from the recorded fee schedule. Each "
+    "decision carries the fee verification known when it was made: claim basis NONE allows no net-profitability "
+    "claim; CONSERVATIVE_BOUND means fees are verified and costs are over-stated, so net results are lower "
+    "bounds, never exact figures."
 )
 MAX_ROWS = 1000
 
@@ -172,6 +175,7 @@ def receipt_panel(ctx: d.Context, *, detail: bool = False) -> str:
         ("settlement evidence cutoff", esc(_get(settlement, "evidence_cutoff_utc"))),
         ("settlement refresh", state_tag(_get(refresh, "status")) if refresh is not None else esc(None)),
         ("fee schedule", esc(_get(fee, "schedule_id")) + " " + (state_tag(_get(fee, "status")) if fee else "")),
+        ("fee claim basis", state_tag(_get(fee, "claim_basis")) if fee else esc(None)),
         ("fee claimable", esc(_get(fee, "claimable"))),
         ("problems", ul(_list(r.get("problems")))),
     ]
@@ -247,10 +251,19 @@ def _account_summary(view: d.AccountView) -> str:
 
 def blockers(ctx: d.Context) -> list[str]:
     out = []
-    for fee in d.fee_rows():
-        if fee["active"] and not fee["claimable"]:
+    for fee in d.fee_rows(ctx.now):
+        if not fee["active"]:
+            continue
+        if not fee["claimable"]:
             out.append(f"Fee schedule {fee['schedule_id']} is {fee['status']}: claimable = false, no "
                        "net-profitability claim may rest on shadow results.")
+        elif fee["claim_basis"] == "CONSERVATIVE_BOUND":
+            out.append(f"Fee schedule {fee['schedule_id']}: claim basis CONSERVATIVE_BOUND. Net results are lower "
+                       "bounds (costs over-stated), not exact figures.")
+        recheck = parse_utc(fee.get("recheck_by_utc"))
+        if recheck is not None and recheck - ctx.now <= RECHECK_WARNING:
+            out.append(f"Fee verification {fee['verification_id']} must be re-checked by {fee['recheck_by_utc']}; "
+                       "after that date new decisions carry claim basis NONE.")
     for label, loaded in (("collector status file", ctx.collector_status), ("pipeline receipt", ctx.receipt)):
         if loaded.status != d.OK:
             out.append(f"{label}: {loaded.status.replace('_', ' ')} — {loaded.message}")
@@ -344,7 +357,8 @@ def opportunities(ctx: d.Context) -> str:
                 esc(_get(opp, "net_edge")), esc(_get(opp, "net_edge_conservative")),
                 esc(_get(sizing, "final_size")), esc(_get(sizing, "binding_constraint")),
                 (state_tag(fill.get("status")) + " " + esc(fill.get("reason"))) if fill else esc(None),
-                esc(_get(opp, "freshness")), esc(_get(opp, "fee_status")), esc(dec.get("claimable")),
+                esc(_get(opp, "freshness")), esc(_get(opp, "fee_status")),
+                state_tag(dec.get("claim_basis") or ("NONE" if dec.get("claimable") is False else None)),
             ])
         note = (f'<p class="note">{esc(len(view.decisions))} decisions recorded'
                 + (f"; newest {MAX_ROWS} shown" if len(view.decisions) > MAX_ROWS else "") + ". Figures are the "
@@ -353,7 +367,7 @@ def opportunities(ctx: d.Context) -> str:
         headers = ["decided (UTC)", "target", "market", "side", "qualification", "primary reason", "all reasons",
                    "model P", "conservative P", "exec price", "fee", "all-in cost/contract", "net edge",
                    "net edge (conservative)", "size", "binding constraint", "fill", "freshness", "fee status",
-                   "claimable"]
+                   "claim basis"]
         out.append(panel(_account_heading(view), _account_intro(view) + note + table(headers, rows, wrap=(6,))))
     return "".join(out)
 
@@ -613,15 +627,24 @@ def experiments_view(ctx: d.Context) -> str:
         out.append(panel("Source health (latest per source)", table(
             ["source", "status", "completed", "age", "freshness (26 h)", "last ok", "records", "http errors",
              "retries", "error"], rows, wrap=(9,))))
+    fees = d.fee_rows(ctx.now)
     fee_rows = [[esc(f["schedule_id"]) + (" " + tag("ACTIVE", "nd") if f["active"] else ""), esc(f["venue"]),
-                 state_tag(f["status"]), esc(f["claimable"]), esc(f["checked_at_utc"]), esc(f["evidence"])]
-                for f in d.fee_rows()]
-    body = table(["schedule", "venue", "verification", "claimable", "checked at", "evidence"], fee_rows, wrap=(5,))
+                 state_tag(f["status"]), state_tag(f["claim_basis"]), esc(f["checked_at_utc"]),
+                 esc(f["recheck_by_utc"]), esc(f["detail"]), esc(f["evidence"])]
+                for f in fees]
+    body = table(["schedule", "venue", "verification", "claim basis", "verified at", "re-check by", "detail",
+                  "evidence"], fee_rows, wrap=(6, 7))
+    for f in fees:
+        if f["components"]:
+            body += (f"<h3>Components of {esc(f['verification_id'])}</h3>" + table(
+                ["component", "state", "detail", "evidence"],
+                [[esc(c["component"]), state_tag(c["state"]), esc(c["detail"]), esc(c["evidence"])]
+                 for c in f["components"]], wrap=(2, 3)))
     if ctx.receipt.status == d.OK and isinstance(ctx.receipt.value.get("fee"), dict):
         fee = ctx.receipt.value["fee"]
         body += "<h3>As reported by the latest pipeline receipt</h3>" + kv([
             ("schedule", esc(fee.get("schedule_id"))), ("status", state_tag(fee.get("status"))),
-            ("claimable", esc(fee.get("claimable")))])
+            ("claim basis", state_tag(fee.get("claim_basis"))), ("claimable", esc(fee.get("claimable")))])
     out.append(panel("Fee schedule verification", body))
     out.append(receipt_panel(ctx, detail=True))
     return "".join(out)

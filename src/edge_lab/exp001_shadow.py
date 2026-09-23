@@ -20,9 +20,11 @@ Rules:
 - **One decision per (market, side, target date)**, enforced by the ledger through a
   decision `slot`. Re-running an already traded day, even under a new engine or model
   version, can never record or fill it a second time.
-- The fee schedule is UNVERIFIED_CURRENT_SCHEDULE, so every decision carries
-  `claimable = false`. No net-profitability claim may rest on this account until the
-  schedule is verified.
+- Every decision and fill carries the fee verification known at its decision time
+  (ADR 0017). Before the 2026-09-23 verification record that is UNVERIFIED, with
+  `claimable = false`. From then on it is PARTIALLY_VERIFIED with claim basis
+  CONSERVATIVE_BOUND: fees are verified and the frozen cost over-states the debit, so a
+  net result is a lower bound, never an exact figure.
 """
 
 from __future__ import annotations
@@ -41,7 +43,7 @@ from .kalshi import SETTLEMENT_SOURCE
 from .kalshi_quotes import quotes_from_orderbook
 from .opportunity import ExecutableQuote, Opportunity
 from . import risk
-from .fee_schedules import FeeScheduleStatus
+from .fee_schedules import verification_at
 from .risk import RiskPolicy
 from .shadow_ledger import LedgerError, ShadowLedger
 from .sizing import SizingPolicy, suggest_position_size
@@ -99,11 +101,26 @@ RESEARCH = ShadowAccount(RESEARCH_ACCOUNT_ID, RESEARCH_STRATEGY, RESEARCH_BANKRO
 ACCOUNTS = (RESEARCH, OPERATIONAL)
 
 
-def fee_fields() -> dict[str, Any]:
-    """The provisional-fee status carried on every decision, fill and settlement entry."""
-    schedule = stageb.FEE_SCHEDULE
-    return {"fee_schedule_id": schedule.schedule_id, "fee_status": schedule.status.value,
-            "claimable": schedule.status is FeeScheduleStatus.VERIFIED}
+def fee_fields(as_of: str | datetime, market_id: str | None = None) -> dict[str, Any]:
+    """The fee-verification fields carried on decisions and fills: what was known at the
+    decision time `as_of` for this market (ADR 0017). Before any verification record they
+    are the three legacy keys, so earlier entries are rebuilt byte-identically."""
+    native = market_id.split(":", 1)[1] if market_id and ":" in market_id else market_id
+    return verification_at(stageb.FEE_SCHEDULE, as_of, native).ledger_fields()
+
+
+def fee_receipt(now: str | datetime) -> dict[str, Any]:
+    """The fee block of the daily receipt: the verification known at `now` for the
+    EXP-001 series. Fixed keys, so the receipt shape never depends on the date."""
+    return verification_at(stageb.FEE_SCHEDULE, now, scope=forward.SERIES).to_dict()
+
+
+FEE_FIELD_KEYS = ("fee_schedule_id", "fee_status", "claimable", "claim_basis", "fee_verification_id")
+
+
+def _fill_fee_fields(fill: dict[str, Any] | None) -> dict[str, Any]:
+    """A settlement carries its fill's fee fields: the fee was fixed when the fill was made."""
+    return {k: fill[k] for k in FEE_FIELD_KEYS if fill is not None and k in fill}
 
 
 def ensure_account(ledger: ShadowLedger, account: ShadowAccount = OPERATIONAL) -> None:
@@ -241,7 +258,7 @@ def _run_account(ledger: ShadowLedger, account: ShadowAccount, opportunities, ta
                 "event_id": opp.event_id, "market_id": opp.market_id, "side": opp.side,
                 "outcome_cluster": opp.outcome_cluster, "policy_id": opp.policy_id,
                 "opportunity": opp.to_dict(), "sizing": sizing,
-                "stage_b_day_status": day_status, "opportunity_claimable": opp.claimable, **fee_fields(),
+                "stage_b_day_status": day_status, "opportunity_claimable": opp.claimable, **fee_fields(opp.as_of_utc, opp.market_id),
             }
             ledger.record_decision(acct, existing)
         out["decisions"] += 1
@@ -312,7 +329,7 @@ def _fill_payload(opp: Opportunity, quantity: int, valid: bool, entries, confirm
         "fill_policy_id": LATENCY_CONFIRMED_V1.policy_id,
         "latency": {"confirm_min_s": LATENCY_CONFIRMED_V1.confirm_min.total_seconds(),
                     "confirm_max_s": LATENCY_CONFIRMED_V1.confirm_max.total_seconds()},
-        "expected_settlement_utc": expected_settlement, **fee_fields(),
+        "expected_settlement_utc": expected_settlement, **fee_fields(opp.as_of_utc, opp.market_id),
     }
     if not valid:
         return {**base, "status": "NO_FILL", "reason": "STAGE_B_DAY_INVALID", "quantity": 0, "price": None,
@@ -455,8 +472,9 @@ def settle_open_positions(store: SnapshotStore, ledger: ShadowLedger, *, account
                 settled_at = found["evidence_available_utc"]
                 evidence["settlement_time_clamped_to_evidence"] = True
             try:
+                fee = _fill_fee_fields(ledger.find(acct, "fill", position.decision_id))
                 ledger.record_settlement(acct, fill_id=position.position_id, outcome=outcome,
-                                         settled_at_utc=str(settled_at), evidence=evidence, fee=fee_fields())
+                                         settled_at_utc=str(settled_at), evidence=evidence, fee=fee)
             except LedgerError as exc:
                 report["pending"].append({"account_id": acct, "position_id": position.position_id,
                                           "reason": str(exc)})

@@ -18,8 +18,9 @@ domain-neutral contracts in `edge_lab.opportunity`.
     the decision.
   The edge basis is the point probability, because that is the frozen rule. The
   conservative probability is computed and reported for every opportunity.
-- **Fees** are flagged, not required: the schedule is UNVERIFIED_CURRENT_SCHEDULE, so
-  opportunities evaluate but carry `claimable = False`.
+- **Fees** are flagged, not required. Each opportunity carries the fee verification known
+  at its decision time (ADR 0017): `claimable = False` before the verification record, and
+  claim basis CONSERVATIVE_BOUND after it.
 - **Only VALID Stage B days** can produce a qualified opportunity. On an INVALID day every
   opportunity is still evaluated, and all of them carry EVIDENCE_INCOMPLETE.
 - **Settlement equivalence:** a market whose rules do not name D, the event or the
@@ -46,7 +47,7 @@ from typing import Any
 from . import exp001_baseline as base
 from . import forward, settlement
 from .conservative import wilson_bounds
-from .fee_schedules import KALSHI_QUADRATIC_TAKER_V1
+from .fee_schedules import KALSHI_QUADRATIC_TAKER_V1, verification_at
 from .kalshi_quotes import check_event_identity, market_from_kalshi, quotes_from_orderbook
 from .opportunity import (
     Event, ExecutableQuote, Market, ModelEstimate, Opportunity, Policy, evaluate_event, reason_counts,
@@ -200,7 +201,7 @@ class DayEvaluation:
                 "max_model_input_age_s": STAGE_B_POLICY.max_model_input_age.total_seconds(),
                 "fee_verification": STAGE_B_POLICY.fee_verification,
             },
-            "fee_schedule": {"schedule_id": FEE_SCHEDULE.schedule_id, "status": FEE_SCHEDULE.status.value,
+            "fee_schedule": {**verification_at(FEE_SCHEDULE, self.as_of_utc, scope=forward.SERIES).to_dict(),
                              "evidence": FEE_SCHEDULE.evidence},
             "problems": self.problems,
             "counts": {

@@ -1,0 +1,529 @@
+{
+  "source": "kalshi-fee-schedule_effective-2026-07-07_received-2026-09-23.pdf pp.6-11 'Non-Standard Fees'",
+  "transcribed_by": "agent, from the rendered pages, 2026-09-23",
+  "kxhighny_listed": false,
+  "series": [
+    {
+      "series": "KXAAAGASM",
+      "title": "US gas price",
+      "maker_multiplier": 1,
+      "taker_multiplier": 1
+    },
+    {
+      "series": "KXATPMATCH",
+      "title": "ATP Tennis Match",
+      "maker_multiplier": 1,
+      "taker_multiplier": 1
+    },
+    {
+      "series": "KXBALLONDOR",
+      "title": "Ballon d'Or",
+      "maker_multiplier": 1,
+      "taker_multiplier": 1
+    },
+    {
+      "series": "KXBTCMAX150",
+      "title": "When will bitcoin hit 150k?",
+      "maker_multiplier": 1,
+      "taker_multiplier": 1
+    },
+    {
+      "series": "KXBTCY",
+      "title": "BTC price range EOY",
+      "maker_multiplier": 0,
+      "taker_multiplier": 0
+    },
+    {
+      "series": "KXCITRINI",
+      "title": "Will the Citrini scenario materialize?",
+      "maker_multiplier": 0,
+      "taker_multiplier": 0
+    },
+    {
+      "series": "KXCPI",
+      "title": "CPI",
+      "maker_multiplier": 1,
+      "taker_multiplier": 1
+    },
+    {
+      "series": "KXCPIYOY",
+      "title": "Inflation",
+      "maker_multiplier": 1,
+      "taker_multiplier": 1
+    },
+    {
+      "series": "KXDOED",
+      "title": "DOE eliminated",
+      "maker_multiplier": 0,
+      "taker_multiplier": 0
+    },
+    {
+      "series": "KXEGGS",
+      "title": "Egg prices",
+      "maker_multiplier": 1,
+      "taker_multiplier": 1
+    },
+    {
+      "series": "KXELECTIRAN",
+      "title": "Will Iran hold a presidential election?",
+      "maker_multiplier": 0,
+      "taker_multiplier": 0
+    },
+    {
+      "series": "KXEMMYCACTO",
+      "title": "Emmys Award for Lead Comedy Actor",
+      "maker_multiplier": 1,
+      "taker_multiplier": 1
+    },
+    {
+      "series": "KXEMMYCACTR",
+      "title": "Emmys Award for Lead Comedy Actress",
+      "maker_multiplier": 1,
+      "taker_multiplier": 1
+    },
+    {
+      "series": "KXEMMYCSERIES",
+      "title": "Emmys Award for Comedy Series",
+      "maker_multiplier": 1,
+      "taker_multiplier": 1
+    },
+    {
+      "series": "KXEMMYDACTO",
+      "title": "Emmys Award for Lead Drama Actor",
+      "maker_multiplier": 1,
+      "taker_multiplier": 1
+    },
+    {
+      "series": "KXEMMYDACTR",
+      "title": "Emmys Award for Lead Drama Actress",
+      "maker_multiplier": 1,
+      "taker_multiplier": 1
+    },
+    {
+      "series": "KXEMMYDSERIES",
+      "title": "Emmys Award for Drama Series",
+      "maker_multiplier": 1,
+      "taker_multiplier": 1
+    },
+    {
+      "series": "KXETHY",
+      "title": "ETH price EOY",
+      "maker_multiplier": 0,
+      "taker_multiplier": 0
+    },
+    {
+      "series": "KXFED",
+      "title": "Fed funds rate",
+      "maker_multiplier": 1,
+      "taker_multiplier": 1
+    },
+    {
+      "series": "KXFEDDECISION",
+      "title": "Fed meeting",
+      "maker_multiplier": 1,
+      "taker_multiplier": 1
+    },
+    {
+      "series": "KXGAMBLINGREPEAL",
+      "title": "Gambling Repeal",
+      "maker_multiplier": 0,
+      "taker_multiplier": 0
+    },
+    {
+      "series": "KXGDP",
+      "title": "US GDP growth",
+      "maker_multiplier": 1,
+      "taker_multiplier": 1
+    },
+    {
+      "series": "KXGREENLAND",
+      "title": "Greenland purchase",
+      "maker_multiplier": 0,
+      "taker_multiplier": 0
+    },
+    {
+      "series": "KXHEISMAN",
+      "title": "Heisman Trophy Winner",
+      "maker_multiplier": 1,
+      "taker_multiplier": 1
+    },
+    {
+      "series": "KXINXY",
+      "title": "S&P 500 yearly range",
+      "maker_multiplier": 1,
+      "taker_multiplier": 1
+    },
+    {
+      "series": "KXIPO",
+      "title": "IPOs",
+      "maker_multiplier": 1,
+      "taker_multiplier": 1
+    },
+    {
+      "series": "KXIRANDEMOCRACY",
+      "title": "Will Iran become a democracy in 2026?",
+      "maker_multiplier": 0,
+      "taker_multiplier": 0
+    },
+    {
+      "series": "KXLALIGA",
+      "title": "LA LIGA",
+      "maker_multiplier": 1,
+      "taker_multiplier": 1
+    },
+    {
+      "series": "KXLAYOFFSYINFO",
+      "title": "Tech layoffs",
+      "maker_multiplier": 0,
+      "taker_multiplier": 0
+    },
+    {
+      "series": "KXLLM1",
+      "title": "Year-end top LLM",
+      "maker_multiplier": 1,
+      "taker_multiplier": 1
+    },
+    {
+      "series": "KXMARMAD",
+      "title": "College Basketball Champion",
+      "maker_multiplier": 1,
+      "taker_multiplier": 1
+    },
+    {
+      "series": "KXMENWORLDCUP",
+      "title": "Men's World Cup winner",
+      "maker_multiplier": 1,
+      "taker_multiplier": 1
+    },
+    {
+      "series": "KXMLB",
+      "title": "World Series",
+      "maker_multiplier": 1,
+      "taker_multiplier": 1
+    },
+    {
+      "series": "KXMLBAL",
+      "title": "MLB American League Championship",
+      "maker_multiplier": 1,
+      "taker_multiplier": 1
+    },
+    {
+      "series": "KXMLBASGAME",
+      "title": "Professional Baseball All-Star Game",
+      "maker_multiplier": 1,
+      "taker_multiplier": 1
+    },
+    {
+      "series": "KXMLBGAME",
+      "title": "Professional Baseball Game",
+      "maker_multiplier": 1,
+      "taker_multiplier": 1
+    },
+    {
+      "series": "KXMLBNL",
+      "title": "MLB National League Championship",
+      "maker_multiplier": 1,
+      "taker_multiplier": 1
+    },
+    {
+      "series": "KXMVE",
+      "title": "Combos (excluding uncorrelated NFL combos)",
+      "maker_multiplier": 2,
+      "taker_multiplier": 1
+    },
+    {
+      "series": "KXNASDAQ100Y",
+      "title": "Nasdaq yearly range",
+      "maker_multiplier": 1,
+      "taker_multiplier": 1
+    },
+    {
+      "series": "KXNBA",
+      "title": "Pro Basketball Champion",
+      "maker_multiplier": 1,
+      "taker_multiplier": 1
+    },
+    {
+      "series": "KXNBAEAST",
+      "title": "Pro Basketball Eastern Conference Champion",
+      "maker_multiplier": 1,
+      "taker_multiplier": 1
+    },
+    {
+      "series": "KXNBAMVP",
+      "title": "Pro Basketball MVP",
+      "maker_multiplier": 1,
+      "taker_multiplier": 1
+    },
+    {
+      "series": "KXNBAROY",
+      "title": "Pro Basketball Rookie of the Year",
+      "maker_multiplier": 1,
+      "taker_multiplier": 1
+    },
+    {
+      "series": "KXNBAWEST",
+      "title": "Pro Basketball Western Conference Champion",
+      "maker_multiplier": 1,
+      "taker_multiplier": 1
+    },
+    {
+      "series": "KXNCAAF",
+      "title": "NCAAF Championship",
+      "maker_multiplier": 1,
+      "taker_multiplier": 1
+    },
+    {
+      "series": "KXNCAAFACC",
+      "title": "ACC Champion",
+      "maker_multiplier": 1,
+      "taker_multiplier": 1
+    },
+    {
+      "series": "KXNCAAFB10",
+      "title": "Big Ten Champion",
+      "maker_multiplier": 1,
+      "taker_multiplier": 1
+    },
+    {
+      "series": "KXNCAAFB12",
+      "title": "Big 12 Champion",
+      "maker_multiplier": 1,
+      "taker_multiplier": 1
+    },
+    {
+      "series": "KXNCAAFGAME",
+      "title": "College Football Game",
+      "maker_multiplier": 1,
+      "taker_multiplier": 1
+    },
+    {
+      "series": "KXNCAAFPLAYOFF",
+      "title": "College Football Playoff Qualifiers",
+      "maker_multiplier": 1,
+      "taker_multiplier": 1
+    },
+    {
+      "series": "KXNCAAFSEC",
+      "title": "SEC Champion",
+      "maker_multiplier": 1,
+      "taker_multiplier": 1
+    },
+    {
+      "series": "KXNFLAFCCHAMP",
+      "title": "American Football Conference Champion",
+      "maker_multiplier": 1,
+      "taker_multiplier": 1
+    },
+    {
+      "series": "KXNFLAFCEAST",
+      "title": "American Football Conference East Winner",
+      "maker_multiplier": 1,
+      "taker_multiplier": 1
+    },
+    {
+      "series": "KXNFLAFCNORTH",
+      "title": "American Football Conference North Winner",
+      "maker_multiplier": 1,
+      "taker_multiplier": 1
+    },
+    {
+      "series": "KXNFLAFCSOUTH",
+      "title": "American Football Conference South Winner",
+      "maker_multiplier": 1,
+      "taker_multiplier": 1
+    },
+    {
+      "series": "KXNFLAFCWEST",
+      "title": "American Football Conference West Winner",
+      "maker_multiplier": 1,
+      "taker_multiplier": 1
+    },
+    {
+      "series": "KXNFLCOTY",
+      "title": "AP Pro Football Coach Of The Year",
+      "maker_multiplier": 1,
+      "taker_multiplier": 1
+    },
+    {
+      "series": "KXNFLCPOTY",
+      "title": "AP Pro Football Comeback Player of the Year",
+      "maker_multiplier": 1,
+      "taker_multiplier": 1
+    },
+    {
+      "series": "KXNFLDPOTY",
+      "title": "AP Pro Football Defensive Player Of The Year",
+      "maker_multiplier": 1,
+      "taker_multiplier": 1
+    },
+    {
+      "series": "KXNFLDROTY",
+      "title": "AP Pro Football Defensive Rookie of the Year",
+      "maker_multiplier": 1,
+      "taker_multiplier": 1
+    },
+    {
+      "series": "KXNFLGAME",
+      "title": "Professional Football Game",
+      "maker_multiplier": 1,
+      "taker_multiplier": 1
+    },
+    {
+      "series": "KXNFLMVP",
+      "title": "AP Pro Football Regular Season MVP",
+      "maker_multiplier": 1,
+      "taker_multiplier": 1
+    },
+    {
+      "series": "KXNFLNFCCHAMP",
+      "title": "National Football Conference Champion",
+      "maker_multiplier": 1,
+      "taker_multiplier": 1
+    },
+    {
+      "series": "KXNFLNFCEAST",
+      "title": "National Football Conference East Winner",
+      "maker_multiplier": 1,
+      "taker_multiplier": 1
+    },
+    {
+      "series": "KXNFLNFCNORTH",
+      "title": "National Football Conference North Winner",
+      "maker_multiplier": 1,
+      "taker_multiplier": 1
+    },
+    {
+      "series": "KXNFLNFCSOUTH",
+      "title": "National Football Conference South Winner",
+      "maker_multiplier": 1,
+      "taker_multiplier": 1
+    },
+    {
+      "series": "KXNFLNFCWEST",
+      "title": "National Football Conference West Winner",
+      "maker_multiplier": 1,
+      "taker_multiplier": 1
+    },
+    {
+      "series": "KXNFLOPOTY",
+      "title": "AP Pro Football Offensive Player Of The Year",
+      "maker_multiplier": 1,
+      "taker_multiplier": 1
+    },
+    {
+      "series": "KXNFLOROTY",
+      "title": "AP Pro Football Offensive Rookie of the Year",
+      "maker_multiplier": 1,
+      "taker_multiplier": 1
+    },
+    {
+      "series": "KXNHL",
+      "title": "Stanley Cup",
+      "maker_multiplier": 1,
+      "taker_multiplier": 1
+    },
+    {
+      "series": "KXNHLEAST",
+      "title": "Eastern Conference Championship",
+      "maker_multiplier": 1,
+      "taker_multiplier": 1
+    },
+    {
+      "series": "KXNHLWEST",
+      "title": "Western Conference Champion",
+      "maker_multiplier": 1,
+      "taker_multiplier": 1
+    },
+    {
+      "series": "KXPAHLAVIHEAD",
+      "title": "Will Pahlavi lead Iran?",
+      "maker_multiplier": 0,
+      "taker_multiplier": 0
+    },
+    {
+      "series": "KXPAYROLLS",
+      "title": "Jobs numbers",
+      "maker_multiplier": 1,
+      "taker_multiplier": 1
+    },
+    {
+      "series": "KXPGARYDER",
+      "title": "Ryder Cup",
+      "maker_multiplier": 1,
+      "taker_multiplier": 1
+    },
+    {
+      "series": "KXPGASOLHEIM",
+      "title": "Solheim Cup",
+      "maker_multiplier": 1,
+      "taker_multiplier": 1
+    },
+    {
+      "series": "KXPGATOUR",
+      "title": "PGA Tour",
+      "maker_multiplier": 1,
+      "taker_multiplier": 1
+    },
+    {
+      "series": "KXRATECUTCOUNT",
+      "title": "Number of rate cuts",
+      "maker_multiplier": 1,
+      "taker_multiplier": 1
+    },
+    {
+      "series": "KXSB",
+      "title": "Super Bowl",
+      "maker_multiplier": 1,
+      "taker_multiplier": 1
+    },
+    {
+      "series": "KXSUPERBOWLHEADLINE",
+      "title": "Who will headline super bowl LX",
+      "maker_multiplier": 1,
+      "taker_multiplier": 1
+    },
+    {
+      "series": "KXU3",
+      "title": "Unemployment",
+      "maker_multiplier": 1,
+      "taker_multiplier": 1
+    },
+    {
+      "series": "KXUCL",
+      "title": "UEFA Champions League",
+      "maker_multiplier": 1,
+      "taker_multiplier": 1
+    },
+    {
+      "series": "KXUCLGAME",
+      "title": "UEFA Champions League Game",
+      "maker_multiplier": 1,
+      "taker_multiplier": 1
+    },
+    {
+      "series": "KXWCGAME",
+      "title": "World Cup Game",
+      "maker_multiplier": 1,
+      "taker_multiplier": 1
+    },
+    {
+      "series": "KXWNBA",
+      "title": "WNBA Championship",
+      "maker_multiplier": 1,
+      "taker_multiplier": 1
+    },
+    {
+      "series": "KXWNBAGAME",
+      "title": "Women's Pro Basketball Game",
+      "maker_multiplier": 1,
+      "taker_multiplier": 1
+    },
+    {
+      "series": "KXWTAMATCH",
+      "title": "WTA Tennis Match",
+      "maker_multiplier": 1,
+      "taker_multiplier": 1
+    }
+  ]
+}

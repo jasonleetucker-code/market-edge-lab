@@ -258,7 +258,7 @@ class WithdrawalAssessment:
 
 
 def withdrawal_assessment(state: AccountState, report: RiskReport, *, simulation: bool = True,
-                          edge_verified: bool = False, fees_verified: bool = False,
+                          edge_verified: bool = False, fee_claim_basis: str = "NONE",
                           owner_policy_approved: bool = False) -> WithdrawalAssessment:
     """The withdrawal contract. It never recommends a draw until every precondition holds."""
     technical = max(ZERO, state.settled_cash)
@@ -268,7 +268,9 @@ def withdrawal_assessment(state: AccountState, report: RiskReport, *, simulation
         missing.append("SHADOW_ACCOUNT: no real money exists")
     if not edge_verified:
         missing.append("EDGE_NOT_VERIFIED")
-    if not fees_verified:
+    if fee_claim_basis not in ("CONSERVATIVE_BOUND", "EXACT"):
+        # Only verified fees support a claim; a conservative bound under-states profit,
+        # so it is enough for a withdrawal floor (ADR 0017).
         missing.append("FEE_SCHEDULE_UNVERIFIED")
     if not owner_policy_approved:
         missing.append("NO_OWNER_APPROVED_WITHDRAWAL_POLICY")

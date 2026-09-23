@@ -65,7 +65,7 @@ limitations = [
   "Small sample: one series, one decision per day; about 470 effective test days; Stage B can detect only large edges within 180-365 days (gate3/POWER.md)",
   "Rules name The Weather Company from 2026-08-14 while certified terms name NWS; Kalshi values matched NWS on 39/39 TWC-era days but TWC data itself cannot be checked (terms prohibit automated access)",
   "PFM daytime max (7 AM-7 PM LST) differs in definition from the CLI calendar-day max; the empirical error pmf absorbs this, it is not corrected",
-  "Fee coefficient 0.07 is taken from Kalshi's documented worked example; the fee-schedule PDF was behind a bot checkpoint and not retrieved; re-verify before any Stage B result",
+  "Fee evidence (2026-09-23, fee_verification/VERIFICATION.md): coefficient 0.07, the KXHIGHNY general-schedule multiplier 1 and the rounding mechanics are verified from the owner-supplied Kalshi PDF (effective 2026-07-07), the API and the docs. The account type is owner-attested only, so the frozen cost model is a conservative upper bound: a net result is a lower bound (claim basis CONSERVATIVE_BOUND), never exact. The no-scheduled-change check must be re-done by 2026-10-23",
   "Full PFM products are not in git (exact extracts + hashes only; ADR 0011)",
   "PFMOKX issuance thinned from mid-2025: chosen forecasts are older at the decision time in later test years (median ~2.4-2.5 h in 2017-2024, 2.8 h in 2025, 3.5 h in 2026; ~3.0 h over the test period; gate3/QUALITY.md); disclosed before any validation/test error was computed and not adjusted for",
   "Test-period protection is procedural: dataset.csv holds test forecasts and labels; no validation/test error is computed before Gate 4",
@@ -135,3 +135,8 @@ date = "2026-09-22"
 field = "execution"
 change = "Gate 4 pre-validation (6/6): Stage B operational definitions. (a) The latency re-check window is measured per bracket from that bracket's decision-snapshot receipt time: [+10 min, +15 min]. (b) If several complete in-window decision captures exist, the latest complete one counts. (c) 'Open bracket' = a market of the target event whose status is active/open in the decision-time market list. (d) The live forecast input is NWS PFMOKX from api.weather.gov (/products/types/PFM/locations/OKX) under the same WMO-header, cutoff, age and suffix rules as the historical dataset. (e) Forward collection runs regardless of the Stage A outcome as research evidence, but Stage B evaluation for EXP-001 remains conditional on a Stage A PASS."
 reason = "Decided before any Stage B data exists, to remove ambiguity in the frozen execution and valid-day text. The fill model, latency, book age, signal threshold, looks and intervals are unchanged. Forward collection itself still needs owner approval for scheduling (ADR 0008)."
+
+[[amendments]]
+date = "2026-09-23"
+change = "Fee verification evidence added (fee_verification/VERIFICATION.md, MANIFEST.json; ADR 0017). The frozen [costs] fee model, fees.py and the schedule id kalshi-quadratic-taker-v1 are unchanged. Decisions from 2026-09-23T13:18:03Z carry claim basis CONSERVATIVE_BOUND (point in time); earlier decisions keep UNVERIFIED_CURRENT_SCHEDULE."
+reason = "The owner supplied the official Kalshi fee schedule (effective 2026-07-07). It verifies the assumptions of the frozen cost model and shows that the model over-states cost for both account types. No model, threshold, window, execution rule or cost figure changes."

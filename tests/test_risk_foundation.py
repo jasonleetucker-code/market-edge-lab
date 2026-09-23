@@ -147,7 +147,7 @@ def test_withdrawal_contract_never_recommends_a_draw_yet(ledger):
     assert {"SHADOW_ACCOUNT: no real money exists", "EDGE_NOT_VERIFIED", "FEE_SCHEDULE_UNVERIFIED",
             "NO_OWNER_APPROVED_WITHDRAWAL_POLICY"} <= set(w.reasons)
     everything = withdrawal_assessment(state, assess(state, POLICY, T0), simulation=False, edge_verified=True,
-                                       fees_verified=True, owner_policy_approved=True)
+                                       fee_claim_basis="EXACT", owner_policy_approved=True)
     assert everything.recommended_owner_draw is None and everything.reasons == ("DRAW_FORMULA_NOT_DEFINED",)
 
 

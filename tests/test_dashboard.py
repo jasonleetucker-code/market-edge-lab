@@ -420,9 +420,26 @@ def test_non_demo_pages_have_no_watermark(populated):
 
 
 def test_fee_blocker_follows_the_canonical_schedule():
-    body = call(make_app(config()), "/")[2]
-    status = stageb.FEE_SCHEDULE.status.value
-    assert f"is {status}: claimable = false" in body or status == "VERIFIED"
+    cfg = config()
+    body = call(make_app(cfg), "/")[2]
+    state = dd.fee_state(NOW)
+    if not state.claimable:
+        assert f"is {state.status.value}: claimable = false" in body
+    elif state.claim_basis.value == "CONSERVATIVE_BOUND":
+        assert "claim basis CONSERVATIVE_BOUND" in body and "lower" in body
+
+
+def test_fee_blocker_before_the_verification_record_says_unverified():
+    before = datetime(2026, 9, 23, 12, 0, tzinfo=timezone.utc)
+    body = call(make_app(config(clock=lambda: before)), "/")[2]
+    assert "is UNVERIFIED_CURRENT_SCHEDULE: claimable = false" in body
+
+
+def test_fee_page_shows_each_verification_component():
+    body = call(make_app(config()), "/experiments")[2]
+    for component in ("COEFFICIENT", "SERIES_MULTIPLIER", "SCHEDULED_CHANGES", "ROUNDING_FOR_ACCOUNT_TYPE",
+                      "ACCOUNT_TYPE", "MAKER_FEES", "OWNER_ATTESTED"):
+        assert component in body
 
 
 def test_no_demo_money_in_real_render(populated):

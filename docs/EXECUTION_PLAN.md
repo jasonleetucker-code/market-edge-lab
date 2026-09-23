@@ -171,8 +171,9 @@ be written here when they are made.
     sportsbook exclusion only for the read-only data foundations listed above (§12);
   - any gate advance. The current gate stays at 7.
 
-  When the fee-evidence PR merges (ADR 0017), fee claims will distinguish `claim_basis`
-  NONE, CONSERVATIVE_BOUND and EXACT.
+  Fee claims distinguish `claim_basis` NONE, CONSERVATIVE_BOUND and EXACT (ADR 0017).
+  KXHIGHNY decisions from 2026-09-23T13:18:03Z carry CONSERVATIVE_BOUND. The
+  no-scheduled-change check must be re-done by 2026-10-23.
 
 ## Standing merge rule: docs-only and test-only PRs
 

@@ -56,8 +56,10 @@ def test_valid_signal_day_is_recorded_pending_and_evidence_untouched(store, tmp_
     assert day["result"] == "HEALTHY_TRADED" and day["decision_time_utc"] == "2026-09-22T22:00:00+00:00"
     assert day["accounts"][shadow.RESEARCH_ACCOUNT_ID]["fills"] == 3
     assert receipt["accounts"][shadow.ACCOUNT_ID]["equity_basis"].startswith("cost basis")
-    assert receipt["fee"] == {"schedule_id": "kalshi-quadratic-taker-v1", "status": "UNVERIFIED_CURRENT_SCHEDULE",
-                              "claimable": False}
+    # Run at 2026-09-22T23:00Z, before the fee verification record existed (ADR 0017).
+    assert {k: receipt["fee"][k] for k in ("schedule_id", "status", "claimable", "claim_basis", "verification_id")} == {
+        "schedule_id": "kalshi-quadratic-taker-v1", "status": "UNVERIFIED_CURRENT_SCHEDULE", "claimable": False,
+        "claim_basis": "NONE", "verification_id": None}
     assert receipt["generated_at_utc"] == CLOSED.isoformat() and receipt["valid_days"] == 1
     assert _hashes(store.path) == before  # analysis never changes the evidence store
     stored = json.loads((tmp_path / "status" / daily.RECEIPT_NAME).read_text())

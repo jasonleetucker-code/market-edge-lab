@@ -35,7 +35,7 @@ from enum import Enum
 from typing import Any, Iterable, Mapping, Protocol, Sequence
 
 from .conservative import ProbabilityBounds
-from .fee_schedules import FeeQuote, FeeScheduleStatus, valid_price
+from .fee_schedules import FeeQuote, FeeScheduleStatus, valid_price, verification_at
 from .freshness import Freshness, assess, combine, parse_utc
 
 ENGINE_VERSION = "1"
@@ -201,7 +201,7 @@ class Opportunity:
     freshness: str  # worst of the two
     fee_schedule_id: str
     fee_status: str
-    claimable: bool  # a net result may be claimed only on a verified fee schedule
+    claimable: bool  # fee evidence supports a net-result claim (claim basis not NONE) at as_of
     qualification: str  # "QUALIFY" | "REJECT"
     rejection_reason: str  # primary reason (Reason.QUALIFY when qualified)
     reasons: tuple[str, ...]  # every failed check, precedence order
@@ -340,11 +340,13 @@ def evaluate(
                 fail(Reason.INSUFFICIENT_SIZE, f"displayed {size} < quantity {policy.quantity}")
 
     # Costs and edges exist only for a valid executable price.
+    # Fee verification is point-in-time: only evidence known at as_of counts (ADR 0017).
+    fee_state = verification_at(fee_schedule, as_of_utc, market.native_id)
     fee_quote = None
-    if price is not None:
+    if price is not None and fee_state.status is not FeeScheduleStatus.UNSUPPORTED:
         fee_quote = fee_schedule.taker_buy(policy.quantity, price)
-    if fee_schedule.status is not FeeScheduleStatus.VERIFIED and policy.fee_verification == "require":
-        fail(Reason.FEE_UNVERIFIED, f"fee schedule {fee_schedule.schedule_id} is {fee_schedule.status.value}")
+    if not fee_state.claimable and policy.fee_verification == "require":
+        fail(Reason.FEE_UNVERIFIED, f"fee schedule {fee_schedule.schedule_id} is {fee_state.status.value}")
 
     gross = net_point = net_cons = net = None
     if fee_quote is not None and p_side is not None:
@@ -394,8 +396,8 @@ def evaluate(
         model_freshness=model_state.value,
         freshness=combine(book_state, model_state).value,
         fee_schedule_id=fee_schedule.schedule_id,
-        fee_status=fee_schedule.status.value,
-        claimable=fee_schedule.status is FeeScheduleStatus.VERIFIED,
+        fee_status=fee_state.status.value,
+        claimable=fee_state.claimable,
         qualification="QUALIFY" if qualified else "REJECT",
         rejection_reason=Reason.QUALIFY.value if qualified else ordered[0].value,
         reasons=tuple(r.value for r in ordered),

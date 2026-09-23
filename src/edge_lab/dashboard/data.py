@@ -290,7 +290,7 @@ class Context:
             return Loaded(NO_DATA, message="needs a risk report")
         return Loaded(OK, risk.withdrawal_assessment(
             view.state, view.risk.value, simulation=True, edge_verified=False,
-            fees_verified=fee_verified(), owner_policy_approved=False))
+            fee_claim_basis=fee_state(self.now).claim_basis.value, owner_policy_approved=False))
 
     def _board(self, view: AccountView) -> Loaded:
         try:
@@ -326,16 +326,28 @@ class Context:
         return Loaded(OK, out)
 
 
-def fee_verified() -> bool:
-    return exp001_shadow.stageb.FEE_SCHEDULE.status is fee_schedules.FeeScheduleStatus.VERIFIED
+def fee_state(now: datetime) -> fee_schedules.FeeVerificationState:
+    """The active schedule's verification for the EXP-001 series as known at `now`."""
+    return fee_schedules.verification_at(exp001_shadow.stageb.FEE_SCHEDULE, now, scope=forward.SERIES)
 
 
-def fee_rows() -> list[dict[str, Any]]:
+def fee_rows(now: datetime) -> list[dict[str, Any]]:
+    """One row per schedule with the verification known at `now` (ADR 0017)."""
     active = exp001_shadow.stageb.FEE_SCHEDULE.schedule_id
-    return [{"schedule_id": s.schedule_id, "venue": s.venue, "status": s.status.value,
-             "claimable": s.status is fee_schedules.FeeScheduleStatus.VERIFIED, "checked_at_utc": s.checked_at_utc,
-             "evidence": s.evidence, "active": s.schedule_id == active}
-            for s in fee_schedules.FEE_SCHEDULES.values()]
+    rows = []
+    for s in fee_schedules.FEE_SCHEDULES.values():
+        v = fee_schedules.verification_at(s, now, scope=forward.SERIES)
+        record = next((r for r in fee_schedules.FEE_VERIFICATIONS if r.verification_id == v.verification_id), None)
+        rows.append({"schedule_id": s.schedule_id, "venue": s.venue, "status": v.status.value,
+                     "claimable": v.claimable, "claim_basis": v.claim_basis.value,
+                     "verification_id": v.verification_id, "detail": v.detail,
+                     "recheck_by_utc": record.recheck_by_utc if record else None,
+                     "components": [{"component": c.component.value, "state": c.state.value,
+                                     "detail": c.detail, "evidence": c.evidence}
+                                    for c in (record.components if record else ())],
+                     "checked_at_utc": record.knowledge_time_utc if record else s.checked_at_utc,
+                     "evidence": s.evidence, "active": s.schedule_id == active})
+    return rows
 
 
 def _stage_a(exp_dir: Path) -> dict[str, Any] | None:
