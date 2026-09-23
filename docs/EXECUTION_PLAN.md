@@ -10,8 +10,10 @@ be written here when they are made.
 | 1 | Data collection | **Complete.** Collectors, provenance, source health, freshness and immutable evidence (PR #2); NWS CLI and settlement-evidence collectors, pagination and pacing (PR #8). Scheduled read-only forward collection **authorized 2026-09-22** (see below; ADR 0012). |
 | 2 | Settlement validation | **PASSED 2026-09-22 (PR #8, merged 22d217b).** 799 daily events audited (including a fresh 2024 validation with the procedure frozen first), 0 mis-predictions under the final procedure, 0 unexplained mismatches; see `experiments/EXP-001-kxhighny-nws-vs-market/gate2/REPORT.md` and `docs/SETTLEMENT.md`. |
 | 3 | Historical dataset | **PASSED 2026-09-22 (PR #14, merged 2f5d640; Windows portability fixes PR #15, 7c93f78).** Point-in-time dataset EXP-001-pit-v2 (3,551 days, 3,551 usable, SHA-256 `1794b23c…`), train-only descriptive analysis, EXP-001 PREREGISTERED and frozen; see `experiments/EXP-001-kxhighny-nws-vs-market/gate3/`. |
-| 4 | Baseline model | **EXIT CRITERIA MET 2026-09-22 (PR #18).** The frozen baseline was implemented; validation selected V1; the test split was opened once; **Stage A PASS** (model − R0 +1.253, 95% CI [+1.147, +1.362]; PIT coverage 0.806 ∈ [0.75, 0.85]). EXP-001 is `RUNNING` (Stage B pending). A Stage A pass is not evidence of an edge; see `experiments/EXP-001-kxhighny-nws-vs-market/gate4/REPORT.md`. Gate 4 stays the current gate until the owner approves moving to Gate 5. |
-| 5–10 | Market-vs-model → … → scaling | Not authorized. Moving to Gate 5 needs explicit owner approval. |
+| 4 | Baseline model | **EXIT CRITERIA MET 2026-09-22 (PR #18).** The frozen baseline was implemented; validation selected V1; the test split was opened once; **Stage A PASS** (model − R0 +1.253, 95% CI [+1.147, +1.362]; PIT coverage 0.806 ∈ [0.75, 0.85]). EXP-001 is `RUNNING` (Stage B pending). A Stage A pass is not evidence of an edge; see `experiments/EXP-001-kxhighny-nws-vs-market/gate4/REPORT.md`. Closed: the owner approved Gate 5 on 2026-09-22. |
+| 5 | Market-vs-model | **ACTIVE** (owner-authorized 2026-09-22, `docs/owner/2026-09-22-overnight-build-directive.md`). Build the domain-neutral opportunity engine: contracts for event, market, executable quote, model estimate and opportunity; executable Kalshi prices; versioned fees; fail-closed freshness; explicit liquidity; machine-readable rejection reasons. Exit criteria below. |
+| 6 | Simulated / shadow trading | **Authorized only once Gate 5 passes** (same directive). Append-only shadow ledger, deterministic fill policy, position-sizing foundation. No real orders. |
+| 7–10 | Adversarial validation → … → scaling | Not authorized. |
 
 ## Owner authorization record
 
@@ -60,6 +62,52 @@ be written here when they are made.
     and withdrawals, funded accounts, paid APIs, subscriptions or hosting, and automatic
     financial decisions.
 
+- **2026-09-22 (late ET), overnight build directive.** Recorded verbatim in
+  `docs/owner/2026-09-22-overnight-build-directive.md`. In summary:
+  - **Gates:**
+    - Gate 5 (market-vs-model) is authorized now.
+    - Gate 6 (simulated/shadow trading) is authorized only if Gate 5 passes.
+    - The P0 risk/capital foundation (issue #6) is authorized only if Gate 6 passes.
+    - The Outcome Board backend/domain layer (issue #3) is authorized only if the ledger
+      and risk contracts are stable.
+  - **Merge authority for this directive's PRs.** Agents may squash-merge only when all of
+    these hold:
+    - the PR is reconciled with current `main`;
+    - the frozen EXP-001 artifacts are not improperly altered;
+    - an independent read-only review finds no unresolved blocker;
+    - CI is green on the exact final head;
+    - the PR is mergeable;
+    - the gate's acceptance criteria are actually met.
+    Do not weaken a gate to meet the 30-day schedule.
+  - **Laptop bridge:** it is a manual emergency fallback only, run when the VPS collector
+    fails and the owner explicitly invokes it. No laptop scheduler is allowed.
+    Runbook: `docs/deploy/EMERGENCY_LAPTOP_BRIDGE.md`.
+  - **Still excluded:**
+    - real orders, authenticated trading APIs, trading credentials;
+    - funded accounts, deposits and withdrawals;
+    - paid APIs, data or services;
+    - real-money risk and automatic financial execution;
+    - sports, sportsbook, crypto, equities, generic web/news scraping, dashboard styling,
+      DNS/TLS/subdomains, and automatic withdrawals.
+
+## Standing merge rule: docs-only and test-only PRs
+
+Owner rule of 2026-09-22 (verbatim source: `docs/owner/2026-09-22-overnight-build-directive.md`).
+It is standing and not limited to one directive. A docs-only or test-only PR may merge
+without another approval when **all** of these hold:
+
+- it is reconciled with current `main`;
+- CI is green on the exact head;
+- it is mergeable;
+- no review blocker is open;
+- it changes no runtime code;
+- it advances no gate;
+- it weakens no acceptance criterion;
+- it changes no credentials or deployment;
+- it changes no financial authority.
+
+A PR that fails any of these needs the usual authority: a directive grant or the owner.
+
 ## Authorized now (no further approval needed)
 
 - Read-only collection from free, public, unauthenticated sources that the registry lists
@@ -73,6 +121,18 @@ be written here when they are made.
   rule; evaluate Stage A on the test split **once**; report the result whatever it is.
   Any change to the frozen spec is a dated `[[amendments]]` entry made *before* the test
   evaluation, or a new experiment.
+- **Gate 5 work:** the market-vs-model opportunity engine as scoped in the 2026-09-22
+  overnight directive.
+  - Everything is computed from stored evidence; nothing places, simulates against live
+    endpoints, or authenticates.
+  - The fee schedule is versioned. A schedule that has not been verified against a
+    primary source is labelled `UNVERIFIED_CURRENT_SCHEDULE`, and no claim of proven net
+    profitability may rest on it.
+  - Historical executable prices are never manufactured.
+- **Gate 6 work, once Gate 5 has passed and merged:** the append-only shadow ledger,
+  deterministic simulated fills, the shadow account, and the position-sizing foundation.
+  Simulation only. Then, conditionally, the risk/capital foundation and the Outcome Board
+  backend, as described in the directive.
 - **Forward Stage-B collection (read-only, scheduled)** on the Chase Upside VPS, as scoped
   in the 2026-09-22 authorization above and ADR 0012. It covers:
   - the KXHIGHNY event, markets and order books in the EXP-001 decision window, plus the
@@ -133,9 +193,32 @@ trusting a number written here.) Any proposed scheduled collector must, before a
   known at decision time (forecast issuance, receipt time, freshness); a settlement label
   from Kalshi `expiration_value` or the §4 CLI value; documented gaps; and a frozen EXP-001
   preregistration.
-- **Gate 4 → 5 (proposed; the owner may revise):** the frozen baseline is implemented with tests, validation selection is
+- **Gate 4 → 5 (the owner approved the transition on 2026-09-22):** the frozen baseline is implemented with tests, validation selection is
   recorded, Stage A on test is run once and reported (pass or fail) in EXP-001's log, and
   the owner decides whether and how Stage B collection proceeds. *(All met on 2026-09-22:
   PR #18 implemented and tested the baseline, recorded the V1 selection, ran Stage A once
   (PASS) and logged it; the owner authorized read-only scheduled collection on the Chase
-  Upside VPS. Activating Gate 5 still needs the owner's explicit approval.)*
+  Upside VPS. The owner approved Gate 5 in the overnight directive.)*
+- **Gate 5 → 6 (the owner's criteria, verbatim list in the overnight directive):** Gate 5
+  passes only if all of these hold:
+  - reusable contracts exist;
+  - EXP-001 probabilities plug into them;
+  - forward Kalshi books plug into them;
+  - executable prices are correct;
+  - fees are explicit;
+  - freshness fails closed;
+  - liquidity is explicit;
+  - deterministic rejection reasons exist;
+  - no historical quote is fabricated;
+  - tests pass;
+  - independent read-only review finds no blocker;
+  - CI is green on the exact final head.
+- **Gate 6 → risk foundation:** Gate 6 passes only if all of these hold:
+  - the lifecycle works end to end;
+  - the portfolio reconstructs from the ledger;
+  - the fill policy is deterministic;
+  - risk sizing is explicit;
+  - no real-order path exists;
+  - tests pass;
+  - independent review finds no blocker;
+  - CI is green on the exact head.
