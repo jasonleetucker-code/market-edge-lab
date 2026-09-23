@@ -53,6 +53,9 @@ UNRESOLVED:
     against synthetic journal lines only.
   - Polymarket US website terms could not be read (a JavaScript app). One bounded GET was
     made on the strength of the API docs.
+  - Follow-up (code): `opportunity.evaluate` does not yet reject a non-binary `Payoff.kind`.
+    It is safe today because sportsbook odds never become quotes, but the check belongs in
+    the engine before any non-binary venue is evaluated.
   - Carried over: TWC cannot be checked directly; PFMOKX thinning; the NWS User-Agent has no
     contact address; dynasty's NOPASSWD allowlist is root-equivalent (Chase Upside, not this
     repo).
