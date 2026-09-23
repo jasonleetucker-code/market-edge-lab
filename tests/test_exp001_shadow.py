@@ -13,7 +13,9 @@ from edge_lab.http import FetchResult, HttpFetchError
 from edge_lab.kalshi import SETTLEMENT_SOURCE, _save
 from edge_lab.shadow_ledger import ShadowLedger
 from edge_lab.storage import SnapshotStore
-from test_forward import BRACKETS, MARKETS, D, _full_day, default_routes
+from test_forward import BRACKETS, MARKETS, D, _full_day, at, default_routes
+
+CLOSED = at(23, 0)  # D's re-check windows closed (2026-09-22 23:00Z)
 
 
 @pytest.fixture
@@ -49,7 +51,7 @@ def _result(value):
 
 def test_full_lifecycle_decision_fill_settle(store, ledger, monkeypatch, model):
     _full_day(store, monkeypatch)
-    summary = shadow.run_day(store, ledger, D, model=model)
+    summary = shadow.run_day(store, ledger, D, model=model, now=CLOSED)
     evaluation = stageb.evaluate_day(store, D, model=model)
     qualified = [o for o in evaluation.opportunities if o.qualification == "QUALIFY"]
     assert summary["stage_b_day_status"] == "VALID"
@@ -76,10 +78,10 @@ def test_full_lifecycle_decision_fill_settle(store, ledger, monkeypatch, model):
 
 def test_rerun_and_restart_are_idempotent(store, ledger, monkeypatch, model):
     _full_day(store, monkeypatch)
-    shadow.run_day(store, ledger, D, model=model)
+    shadow.run_day(store, ledger, D, model=model, now=CLOSED)
     before = ledger.state(shadow.ACCOUNT_ID).to_dict()
     n = len(ledger.entries(shadow.ACCOUNT_ID))
-    shadow.run_day(store, ShadowLedger(ledger.path), D, model=model)  # restart: new handle, same file
+    shadow.run_day(store, ShadowLedger(ledger.path), D, model=model, now=CLOSED)  # restart: new handle, same file
     assert len(ledger.entries(shadow.ACCOUNT_ID)) == n
     assert ledger.state(shadow.ACCOUNT_ID).to_dict() == before
     _settled(store, 67, _result(67))
@@ -93,7 +95,7 @@ def test_deterministic_replay_across_ledgers(store, tmp_path, monkeypatch, model
     _full_day(store, monkeypatch)
     a, b = ShadowLedger(tmp_path / "a.sqlite3"), ShadowLedger(tmp_path / "b.sqlite3")
     for lg in (a, b):
-        shadow.run_day(store, lg, D, model=model)
+        shadow.run_day(store, lg, D, model=model, now=CLOSED)
     assert a.verify_chain(shadow.ACCOUNT_ID) == b.verify_chain(shadow.ACCOUNT_ID)
     assert a.state(shadow.ACCOUNT_ID).to_dict() == b.state(shadow.ACCOUNT_ID).to_dict()
 
@@ -102,7 +104,7 @@ def test_invalid_day_is_excluded_never_traded(store, ledger, monkeypatch, model)
     routes = {f"/markets/{BRACKETS[0]}/orderbook": HttpFetchError("HTTP 500", status=500, attempts=3),
               **default_routes()}
     _full_day(store, monkeypatch, routes)
-    summary = shadow.run_day(store, ledger, D, model=model)
+    summary = shadow.run_day(store, ledger, D, model=model, now=CLOSED)
     state = ledger.state(shadow.ACCOUNT_ID)
     assert summary["stage_b_day_status"] == "INVALID" and summary["filled"] == 0 and state.fills == 0
     assert summary["qualified"] == 0 and state.qualified_decisions == 0  # EVIDENCE_INCOMPLETE
@@ -116,7 +118,7 @@ def test_missing_recheck_is_invalid_day_no_fill(store, ledger, monkeypatch, mode
     _run(store, "pfm", clock, api, monkeypatch)
     clock.now = at(21, 55, 5)
     _run(store, "decision", clock, api, monkeypatch)  # no recheck
-    summary = shadow.run_day(store, ledger, D, model=model)
+    summary = shadow.run_day(store, ledger, D, model=model, now=CLOSED)
     assert summary["stage_b_day_status"] == "INVALID" and ledger.state(shadow.ACCOUNT_ID).fills == 0
 
 
@@ -132,7 +134,7 @@ def test_price_moved_away_at_recheck_is_no_fill(store, ledger, monkeypatch, mode
     routes = default_routes()
     routes["/orderbook"] = book
     _full_day(store, monkeypatch, routes)
-    summary = shadow.run_day(store, ledger, D, model=model)
+    summary = shadow.run_day(store, ledger, D, model=model, now=CLOSED)
     assert summary["stage_b_day_status"] == "VALID" and summary["filled"] == 0
     assert set(summary["no_fill"]) == {"PRICE_MOVED_AWAY"}
     assert ledger.state(shadow.ACCOUNT_ID).settled_cash == shadow.STARTING_BANKROLL
@@ -140,7 +142,7 @@ def test_price_moved_away_at_recheck_is_no_fill(store, ledger, monkeypatch, mode
 
 def test_conflicting_settlement_evidence_stays_pending(store, ledger, monkeypatch, model):
     _full_day(store, monkeypatch)
-    shadow.run_day(store, ledger, D, model=model)
+    shadow.run_day(store, ledger, D, model=model, now=CLOSED)
     _settled(store, 67, lambda m: "yes")  # Kalshi says YES everywhere: contradicts the resolver
     report = shadow.settle_open_positions(store, ledger)
     state = ledger.state(shadow.ACCOUNT_ID)
@@ -150,14 +152,14 @@ def test_conflicting_settlement_evidence_stays_pending(store, ledger, monkeypatc
 
 def test_no_settlement_evidence_stays_open(store, ledger, monkeypatch, model):
     _full_day(store, monkeypatch)
-    shadow.run_day(store, ledger, D, model=model)
+    shadow.run_day(store, ledger, D, model=model, now=CLOSED)
     report = shadow.settle_open_positions(store, ledger)
     assert report["settled"] == [] and all(p["reason"] == "no settlement evidence yet" for p in report["pending"])
 
 
 def test_decisions_carry_sizing_and_fee_status(store, ledger, monkeypatch, model):
     _full_day(store, monkeypatch)
-    shadow.run_day(store, ledger, D, model=model)
+    shadow.run_day(store, ledger, D, model=model, now=CLOSED)
     rows = [json.loads(r["payload_json"]) for r in ledger.entries(shadow.ACCOUNT_ID) if r["kind"] == "decision"]
     for d in rows:
         assert d["claimable"] is False and d["opportunity"]["fee_status"] == "UNVERIFIED_CURRENT_SCHEDULE"
@@ -214,7 +216,7 @@ def test_open_day_is_refused_and_a_day_is_never_traded_twice(store, ledger, monk
 
 def test_settlement_time_missing_stays_pending(store, ledger, monkeypatch, model):
     _full_day(store, monkeypatch)
-    shadow.run_day(store, ledger, D, model=model)
+    shadow.run_day(store, ledger, D, model=model, now=CLOSED)
     markets = [dict(m, status="settled", expiration_value="67", result=_result(67)(m)) for m in MARKETS["markets"]]
     for m in markets:
         for k in ("settlement_ts", "expiration_time", "close_time"):

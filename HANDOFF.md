@@ -7,7 +7,8 @@ _Last updated: 2026-09-22 late ET (2026-09-23 about 02:30 UTC), by the PR that r
 overnight build directive (`docs/owner/2026-09-22-overnight-build-directive.md`)._
 
 ```
-STATUS: PARTIAL. The overnight directive is recorded. Gate 5 PASSED (PR #22) and Gate 6 is ACTIVE. The forward
+STATUS: PARTIAL. The overnight directive is recorded. Gate 5 PASSED (PR #22) and Gate 6 PASSED (PR #23).
+  The risk/capital foundation is next. The forward
   collector is DEPLOYED on chaseupside and PRODUCTION_VERIFIED for the fail-closed path,
   backup and restore. No live window has run yet. Valid Stage B days: 0.
 ACCEPTANCE: the owner's overnight build directive, recorded verbatim. Its first items are
@@ -53,6 +54,11 @@ EVIDENCE:
     - 60+ new tests.
     - The independent review found 1 blocker (a market for another day could qualify). It
       was fixed and re-reviewed with no blocker.
+  - Gate 6 (PR #23): append-only shadow ledger (ADR 0014).
+    - Decision → simulated fill → settlement. Account state comes only from replay.
+    - Deterministic latency-confirmed fills. Sizing under hard caps.
+    - The EXP-001 shadow account is notional ($1,000). A day is refused until it closes,
+      and it is never traded twice (ledger slots).
   - Fee schedule, re-checked 2026-09-23 02:20 UTC:
     - The public API reports KXHIGHNY fee_type "quadratic", fee_multiplier 1,
       last_updated 2026-09-17; /series/fee_changes is empty.
@@ -77,8 +83,8 @@ UNRESOLVED:
     root-equivalent.
   - Cosmetic: the alert instance name doubles the suffix (edgelab-alert@<unit>.service.service).
 BLOCKERS: NONE
-NEXT ACTION: Gate 6 shadow ledger PR. After 2026-09-23 18:30 ET, confirm that
-  D = 2026-09-24 is VALID on the VPS.
+NEXT ACTION: Risk/capital foundation PR (issue #6), then the Outcome Board backend
+  (issue #3). After 2026-09-23 18:30 ET, confirm that D = 2026-09-24 is VALID on the VPS.
 ```
 
 ## 30-day directive status (issue #11, target 2026-10-22)
