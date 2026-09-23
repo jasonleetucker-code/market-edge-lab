@@ -22,9 +22,9 @@ EVIDENCE:
     - #37 GATE7-F09 checkpoint support (ADR 0021) and read-only production verifier (18cd8b3);
     - #38 STARTER_MAX_7D_V1, venue registry, execution-ticket contract, notifications,
       ADRs 0018-0020 (566f352);
-    - #39 read-only adapters: Polymarket US, The Odds API (fixtures), Novig, discovery (see
-      git log for the squash SHA).
-  - Tests: python -m pytest -o addopts="" -> 1091 passed at the #39 head (Python 3.11,
+    - #39 read-only adapters: Polymarket US, The Odds API (fixtures), Novig, discovery
+      (9f05c87).
+  - Tests: python -m pytest -o addopts="" -> 1108 passed on main 9f05c87 plus this PR (Python 3.11,
     local). CI covers 3.11 and 3.12. Windows was not available.
   - Reachability checks from this session (2026-09-23): TCP/22 to 169.58.50.224
     unreachable; https://chaseupside.com/api/health returned HTTP 200 (public endpoint only,
