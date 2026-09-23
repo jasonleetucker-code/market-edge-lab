@@ -138,6 +138,23 @@ improvement or future requirement.
 - Err toward capture unless the owner says it is throwaway or asks not to preserve it.
 - At every gate transition, the planning agent reviews the open ideas and records their
   readiness in `docs/OWNER_IDEAS.md`. Process authority: issue #4.
+- **Every material new idea triggers re-planning in the same session**, not just storage.
+  Record the idea's:
+  - priority;
+  - dependencies;
+  - overlap with or supersession of other ideas;
+  - shared infrastructure;
+  - safe parallel lanes;
+  - roadmap effect, including the 2026-10-22 plan;
+  - classification: **NOW / NEXT / LATER / BLOCKED**.
+
+  Always ask: *"Can this idea be implemented through an already-needed shared primitive,
+  so that several owner ideas are unlocked at once without later rework?"* Each primitive
+  has one canonical owner, listed in the Shared primitives table of `docs/OWNER_IDEAS.md`.
+  Extend that owner rather than building a feature-specific copy. Parallel lanes share
+  one contract and build independent, bounded implementations. They never produce
+  competing versions of the same abstraction. Re-prioritizing never authorizes
+  implementation.
 
 ## No private instruction forks
 

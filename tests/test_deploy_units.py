@@ -78,3 +78,9 @@ def test_install_script_knows_every_timer_and_keeps_the_ledger_private():
     assert sorted(units) == timers
     assert '"$DATA/ledger"' in INSTALL and "cannot list the shadow ledger" in INSTALL
     assert "edgelab.slice" in INSTALL
+
+
+def test_readme_install_window_matches_the_capture_window():
+    text = (ROOT / "deploy/vps/README.md").read_text()
+    for end in re.findall(r"17:40 and (?:\*\*)?18:(\d\d)", text):
+        assert int(end) >= 35, "README install window must cover 17:40-18:35 America/New_York"

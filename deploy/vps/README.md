@@ -57,7 +57,7 @@ directory. `install.sh` checks this and refuses to finish otherwise.
 
 ## Install or update
 
-Nothing is enabled by install. Do not update between 17:40 and 18:25 ET.
+Nothing is enabled by install. Do not install, update or restart between 17:40 and 18:35 America/New_York, or while any `edgelab-*` unit is running (the shadow bookkeeping runs at 18:40).
 
 1. **Agent (unprivileged):**
    - bundle the merged `main` commit;
