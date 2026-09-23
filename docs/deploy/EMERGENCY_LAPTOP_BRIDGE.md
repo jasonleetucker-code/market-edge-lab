@@ -45,8 +45,12 @@ python -m edge_lab.cli forward capture --phase decision --db data/bridge.sqlite3
 # at 18:05 ET (per-bracket 10-15 min after each decision book)
 python -m edge_lab.cli forward capture --phase recheck --db data/bridge.sqlite3
 # after 18:20 ET
-python -m edge_lab.cli forward status --db data/bridge.sqlite3 --date D
+python -m edge_lab.cli forward status --db data/bridge.sqlite3 --date YYYY-MM-DD   # the target date D
 ```
+
+On the Windows laptop (PowerShell), set the environment first with
+`$env:PYTHONPATH = "src"; $env:NWS_USER_AGENT = "market-edge-lab research collector (emergency bridge)"`
+and then run the same `python -m edge_lab.cli ...` lines.
 
 - Keep the laptop plugged in and awake for the whole window.
 - Record in `HANDOFF.md` that the window was bridged, with the reason and the `forward
