@@ -497,7 +497,11 @@ def _shadow(args: argparse.Namespace) -> int:
             if as_of is None:
                 print(f"--as-of must be an ISO-8601 instant with a zone, got {args.as_of!r}", file=sys.stderr)
                 return 2
-            report = risk.assess(state, exp001_shadow.RISK_POLICY, as_of)
+            try:
+                report = risk.assess(state, exp001_shadow.RISK_POLICY, as_of)
+            except ValueError as exc:
+                print(str(exc), file=sys.stderr)
+                return 2
             result = {
                 "risk": report.to_dict(),
                 "withdrawal": risk.withdrawal_assessment(state, report).to_dict(),

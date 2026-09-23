@@ -34,6 +34,16 @@ real-world outcome, not by contract.
   time is `locked`.
 - **Breaches.** Any breach (reserve floor, per-position/event/cluster/portfolio risk,
   daily/weekly loss, drawdown) sets capacity to zero. This is the simulation's kill switch.
+- **Remaining capacity** is the tightest of these headrooms:
+  - portfolio risk;
+  - cash above the reserve;
+  - daily loss, weekly loss and drawdown, each measured as if every open position also
+    lost.
+  Loss windows are trailing 24 h and 7 d of net realized P&L, not calendar periods.
+- **Point in time.** Reports refuse an `as_of` earlier than the ledger's latest fill or
+  settlement, because the replayed state would contain the future.
+- **Overdue positions.** A position past its expected settlement and still open is `locked`
+  (the board shows `overdue`), never "releasing soon".
 - **Withdrawal contract.** `withdrawal_assessment` returns:
   - `technically_withdrawable`: settled cash;
   - `policy_safe_withdrawable`: settled cash above the reserve floor, and zero during a
@@ -52,8 +62,8 @@ real-world outcome, not by contract.
   - the earliest settlement and its horizon;
   - status (OPEN, PARTIALLY_SETTLED, SETTLED).
   Groups are ranked by account impact, then settlement time, then cluster id. The maximum
-  loss is the sum of the positions' worst cases, and the board states that method because
-  it is an upper bound for mutually exclusive brackets.
+  loss and the maximum gain are sums of the positions' worst and best cases. Both are
+  upper bounds for mutually exclusive brackets, and the board states both methods.
 - **EXP-001 wiring:**
   - The notional shadow account gets `EXP-001-shadow-risk-v1`, with limits the frozen
     1-contract rule never reaches. They are not tuned to any result.

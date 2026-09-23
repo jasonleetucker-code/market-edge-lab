@@ -47,7 +47,9 @@ class RiskPolicy:
     max_event_risk: Decimal
     max_cluster_risk: Decimal
     max_portfolio_risk: Decimal
-    daily_loss_limit: Decimal  # realized loss over the trailing day that halts new risk
+    # Loss limits are measured over trailing windows (24 h, 7 d) of *net* realized P&L, not
+    # calendar periods: a win inside the window offsets losses in it.
+    daily_loss_limit: Decimal  # net realized loss over the trailing 24 h that halts new risk
     weekly_loss_limit: Decimal
     max_drawdown: Decimal  # $ below peak equity that halts new risk
 
@@ -139,11 +141,17 @@ def _realized_since(state: AccountState, since: datetime, until: datetime) -> De
 
 
 def capital_release(state: AccountState, as_of: datetime) -> tuple[HorizonBucket, ...]:
+    """Committed capital by when it is expected to settle. Overdue or unknown -> `locked`."""
+    as_of = parse_utc(as_of)
+    if as_of is None:
+        raise ValueError("as_of must be timezone-aware")
     buckets = {h: [] for h in HORIZONS[1:]}
     for p in state.open_positions():
         expected = parse_utc(p.expected_settlement_utc)
         horizon = "locked"
-        if expected is not None:
+        # A position past its expected settlement and still open is stuck or disputed:
+        # it is locked, never "about to release".
+        if expected is not None and expected >= as_of:
             for name, width in _BOUNDS:
                 if expected <= as_of + width:
                     horizon = name
@@ -157,10 +165,28 @@ def capital_release(state: AccountState, as_of: datetime) -> tuple[HorizonBucket
     return tuple(out)
 
 
-def assess(state: AccountState, policy: RiskPolicy, as_of: datetime) -> RiskReport:
+def latest_activity(state: AccountState) -> datetime | None:
+    """The latest fill or settlement time in the replayed state."""
+    times = [parse_utc(p.opened_at_utc) for p in state.positions]
+    times += [parse_utc(p.settled_at_utc) for p in state.positions if p.status == "SETTLED"]
+    known = [t for t in times if t is not None]
+    return max(known) if known else None
+
+
+def require_point_in_time(state: AccountState, as_of: datetime) -> datetime:
+    """Refuse an `as_of` earlier than the ledger's activity: the state would contain the future."""
     as_of_utc = parse_utc(as_of)
     if as_of_utc is None:
         raise ValueError("as_of must be timezone-aware")
+    latest = latest_activity(state)
+    if latest is not None and as_of_utc < latest:
+        raise ValueError(f"as_of {as_of_utc.isoformat()} precedes ledger activity at {latest.isoformat()}; "
+                         "the replayed state is not point-in-time for that instant")
+    return as_of_utc
+
+
+def assess(state: AccountState, policy: RiskPolicy, as_of: datetime) -> RiskReport:
+    as_of_utc = require_point_in_time(state, as_of)
     curve = equity_curve(state)
     peak = max(e for _, e in curve)
     drawdown = peak - state.equity
@@ -187,8 +213,16 @@ def assess(state: AccountState, policy: RiskPolicy, as_of: datetime) -> RiskRepo
     if drawdown > policy.max_drawdown:
         breaches.append("MAX_DRAWDOWN")
 
-    capacity = max(ZERO, min(policy.max_portfolio_risk - state.open_worst_case_risk,
-                             state.settled_cash - policy.reserve_floor))
+    # New risk may only use the tightest headroom. Loss and drawdown limits are measured as
+    # if every open position lost too: new risk must fit after the current worst case.
+    open_risk = state.open_worst_case_risk
+    capacity = max(ZERO, min(
+        policy.max_portfolio_risk - open_risk,
+        state.settled_cash - policy.reserve_floor,
+        policy.daily_loss_limit - daily - open_risk,
+        policy.weekly_loss_limit - weekly - open_risk,
+        policy.max_drawdown - drawdown - open_risk,
+    ))
     if breaches:
         capacity = ZERO
     return RiskReport(

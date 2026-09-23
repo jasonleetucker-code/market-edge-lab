@@ -51,7 +51,8 @@ def settle(lg, n, outcome, at):
 def test_fresh_account_has_full_capacity(ledger):
     r = assess(ledger.state(ACC), POLICY, T0)
     assert r.equity == r.settled_cash == Decimal("100.00") and r.committed_capital == 0
-    assert r.remaining_risk_capacity == Decimal("30") and r.new_risk_allowed and r.breaches == ()
+    # Tightest headroom: the 5.00 daily loss limit (portfolio 30, cash above reserve 80, weekly 10, drawdown 15).
+    assert r.remaining_risk_capacity == Decimal("5") and r.new_risk_allowed and r.breaches == ()
     assert [b.horizon for b in r.capital_release] == list(HORIZONS)
 
 
@@ -64,7 +65,7 @@ def test_open_risk_per_position_event_and_cluster(ledger):
     assert r.risk_per_event == {"ev1": a + b, "ev2": c}
     assert r.cluster_exposure == {"btc": c, "nyc": a + b}
     assert r.open_worst_case_risk == r.total_portfolio_exposure == a + b + c == r.committed_capital
-    assert r.remaining_risk_capacity == Decimal("30") - (a + b + c)
+    assert r.remaining_risk_capacity == POLICY.daily_loss_limit - (a + b + c)
 
 
 def test_capital_release_never_counts_winnings_as_cash(ledger):
@@ -117,8 +118,8 @@ def test_breaches_halt_new_risk(ledger):
 
 
 def test_reserve_floor_limits_capacity(ledger):
-    r = assess(ledger.state(ACC), replace(POLICY, reserve_floor=Decimal("95")), T0)
-    assert r.remaining_risk_capacity == Decimal("5.00")
+    r = assess(ledger.state(ACC), replace(POLICY, reserve_floor=Decimal("97")), T0)
+    assert r.remaining_risk_capacity == Decimal("3.00")  # cash above the reserve binds
 
 
 def test_report_is_deterministic_and_serializable(ledger):
@@ -182,10 +183,10 @@ def test_board_status_and_settled_groups(ledger):
     settle(ledger, 1, "YES", T0 + timedelta(hours=1))
     settle(ledger, 3, "NO", T0 + timedelta(hours=1))
     state = ledger.state(ACC)
-    board = build_board(state, T0)
+    board = build_board(state, T0 + timedelta(hours=2))
     assert [g.outcome_cluster for g in board] == ["c1"] and board[0].status == "PARTIALLY_SETTLED"
     assert board[0].realized_pnl == next(p.net_pnl for p in state.positions if p.position_id == "f1")
-    full = {g.outcome_cluster: g for g in build_board(state, T0, include_settled=True)}
+    full = {g.outcome_cluster: g for g in build_board(state, T0 + timedelta(hours=2), include_settled=True)}
     assert full["c2"].status == "SETTLED" and full["c2"].horizon == "settled" and full["c2"].account_impact == 0
 
 
@@ -207,3 +208,44 @@ def test_cli_shadow_risk(ledger, tmp_path, capsys, monkeypatch):
     assert out["withdrawal"]["recommended_owner_draw"] is None and out["outcome_board"] == []
     assert cli.main(["shadow", "risk", "--ledger", str(lg.path), "--as-of", "yesterday"]) == 2
     assert cli.main(["shadow", "risk", "--ledger", str(tmp_path / "none.sqlite3")]) == 2
+
+
+# --------------------------------------------------------------------------- review hardening
+
+
+def test_capacity_respects_loss_and_drawdown_headroom(ledger):
+    open_position(ledger, 1, qty=5, price="0.80", event="e1", cluster="c1")  # cost 4.07
+    settle(ledger, 1, "NO", T0 + timedelta(hours=1))  # realized loss 4.07 of a 5.00 daily limit
+    open_position(ledger, 2, qty=1, price="0.20", event="e2", cluster="c2")  # open risk 0.22 (filled at T0)
+    r = assess(ledger.state(ACC), POLICY, T0 + timedelta(hours=2))
+    assert r.breaches == () and r.new_risk_allowed
+    daily_headroom = POLICY.daily_loss_limit - r.daily_loss - r.open_worst_case_risk
+    assert r.remaining_risk_capacity == daily_headroom < Decimal("1")
+
+
+def test_overdue_positions_are_locked_not_releasing(ledger):
+    open_position(ledger, 1, settles=T0 - timedelta(days=2))
+    r = assess(ledger.state(ACC), POLICY, T0)
+    buckets = {b.horizon: b for b in r.capital_release}
+    assert buckets["locked"].positions == 1 and buckets["within_1_hour"].positions == 0
+    assert build_board(ledger.state(ACC), T0)[0].horizon == "overdue"
+
+
+def test_as_of_before_ledger_activity_is_refused(ledger, tmp_path, capsys):
+    open_position(ledger, 1)
+    settle(ledger, 1, "YES", T0 + timedelta(hours=5))
+    with pytest.raises(ValueError, match="point-in-time"):
+        assess(ledger.state(ACC), POLICY, T0 + timedelta(hours=1))
+    with pytest.raises(ValueError, match="point-in-time"):
+        build_board(ledger.state(ACC), T0)
+    from edge_lab.risk import capital_release
+    with pytest.raises(ValueError):
+        capital_release(ledger.state(ACC), datetime(2026, 9, 23))
+
+
+def test_board_keeps_known_times_with_unknown_ones_and_labels_gain(ledger):
+    open_position(ledger, 1, cluster="c1", settles=None)
+    open_position(ledger, 2, cluster="c1", settles=T0 + timedelta(hours=3))
+    g = build_board(ledger.state(ACC), T0)[0]
+    assert g.settles_by_utc == (T0 + timedelta(hours=3)).isoformat() and g.unknown_settlement_positions == 1
+    assert "upper bound" in g.best_case_method
