@@ -10,13 +10,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
 
-from . import experiments
+from . import experiments, forward
 from .freshness import Freshness, assess
 from .http import HttpFetchError, ResponseDecodeError
 from .kalshi import collect_series, collect_settlement_evidence
 from .nws import DEFAULT_LAT, DEFAULT_LON, collect_reference_forecast
 from .nws_cli import collect_cli_archive, collect_recent_cli
-from .sources import REGISTRY, SourceStatus, get_source
+from .sources import HEALTH_PROFILES, REGISTRY, SourceStatus, get_source
 from .storage import SnapshotStore, utc_now_iso
 
 
@@ -45,9 +45,36 @@ def build_parser() -> argparse.ArgumentParser:
     health.add_argument("--db", default="data/edge_lab.sqlite3")
     health.add_argument("--json", action="store_true", help="Emit machine-readable JSON.")
     health.add_argument(
-        "--source", action="append", dest="sources",
-        help="Only report these source ids (repeatable); default: every active source.",
+        "--profile", choices=(*HEALTH_PROFILES, "all"), default="routine",
+        help=(
+            "Which collection job to judge (issue #16). routine (default): the sources "
+            "`collect --source all` runs; settlement: `settlement collect`; forward: the "
+            "EXP-001 Stage-B schedule (cadence-aware, via `forward status`); all: every "
+            "active source against its max_age."
+        ),
     )
+    health.add_argument(
+        "--source", action="append", dest="sources",
+        help="Only report these active source ids (repeatable); overrides --profile.",
+    )
+
+    fwd = subparsers.add_parser(
+        "forward", help="EXP-001 forward Stage-B collection (read-only; ADR 0012)."
+    )
+    fwd_sub = fwd.add_subparsers(dest="forward_command", required=True)
+    f_capture = fwd_sub.add_parser(
+        "capture", help="Run one capture phase; it refuses to run outside its own window."
+    )
+    f_capture.add_argument("--phase", choices=("pfm", "decision", "recheck"), required=True)
+    f_capture.add_argument("--db", default="data/edge_lab.sqlite3")
+    f_capture.add_argument("--nws-user-agent", default=os.getenv("NWS_USER_AGENT"))
+    f_capture.add_argument("--lock-timeout", type=float, default=60.0)
+    f_status = fwd_sub.add_parser(
+        "status", help="Validity of the last closed Stage-B day (exit 1 unless VALID)."
+    )
+    f_status.add_argument("--db", default="data/edge_lab.sqlite3")
+    f_status.add_argument("--date", help="YYYY-MM-DD target date D (default: last closed day)")
+    f_status.add_argument("--status-file", help="Also write the non-sensitive summary JSON here.")
 
     settle = subparsers.add_parser("settlement", help="Gate 2 settlement evidence and audit.")
     settle_sub = settle.add_subparsers(dest="settlement_command", required=True)
@@ -235,11 +262,16 @@ def _recent(args: argparse.Namespace) -> int:
     return 0
 
 
-def health_report(store: SnapshotStore, *, now: datetime) -> list[dict[str, object]]:
+def health_report(
+    store: SnapshotStore, *, now: datetime, profile: str = "all"
+) -> list[dict[str, object]]:
+    """Per-source health for the active sources a profile owns ("all" = every one)."""
     latest = {row["source_id"]: row for row in store.latest_source_health()}
     report: list[dict[str, object]] = []
     for spec in REGISTRY.values():
         if spec.status is not SourceStatus.ACTIVE:
+            continue
+        if profile != "all" and profile not in spec.collected_by:
             continue
         row = latest.get(spec.source_id)
         fetched = store.latest_fetch_by_kind(spec.legacy_name)
@@ -271,7 +303,14 @@ def health_report(store: SnapshotStore, *, now: datetime) -> list[dict[str, obje
 
 def _health(args: argparse.Namespace) -> int:
     store = SnapshotStore(Path(args.db))
-    report = health_report(store, now=datetime.now(timezone.utc))
+    now = datetime.now(timezone.utc)
+    if args.profile == "forward" and not args.sources:
+        # Scheduled once a day, so per-kind max_age (minutes for order books) says nothing
+        # useful between runs. Judge the schedule instead: was the last closed day VALID?
+        status = forward.summary(store, now_utc=now)
+        print(json.dumps(status, indent=2, sort_keys=True))
+        return 0 if status["last_closed_status"] == "VALID" else 1
+    report = health_report(store, now=now, profile="all" if args.sources else args.profile)
     if args.sources:
         unknown = set(args.sources) - {item["source_id"] for item in report}
         if unknown:
@@ -299,6 +338,88 @@ def _health(args: argparse.Namespace) -> int:
     # if older snapshots are still inside their freshness window.
     all_ok = all(item["last_status"] == "ok" for item in report)
     return 0 if all_fresh and all_ok else 1
+
+
+def _forward_capture(args: argparse.Namespace) -> int:
+    if args.phase == "pfm" and not args.nws_user_agent:
+        print("NWS_USER_AGENT is required for the pfm phase.", file=sys.stderr)
+        return 2
+    import signal
+
+    def _terminate(signum, _frame):  # systemd stop / RuntimeMaxSec: finish the run as failed
+        raise SystemExit(128 + signum)
+
+    signal.signal(signal.SIGTERM, _terminate)
+    db = Path(args.db)
+    store = SnapshotStore(db)
+    run_id = str(uuid.uuid4())
+    # Only the pfm phase writes source health (nws_pfm_okx is a forward-only source). The
+    # Kalshi phases are judged by their forward_captures rows, so a forward run never
+    # changes the routine profile's view of kalshi_public (issue #16).
+    capture = {
+        "pfm": lambda anomalies: forward.capture_pfm(
+            store, run_id=run_id, user_agent=args.nws_user_agent, anomalies=anomalies
+        ),
+        "decision": lambda anomalies: forward.capture_decision(store, run_id=run_id, anomalies=anomalies),
+        "recheck": lambda anomalies: forward.capture_recheck(store, run_id=run_id, anomalies=anomalies),
+    }[args.phase]
+    outcome: forward.CaptureOutcome | None = None
+    try:
+        with forward.exclusive_lock(db.with_name(db.name + ".forward.lock"), timeout_s=args.lock_timeout):
+            store.start_run(run_id)
+            finished = False
+            try:
+                if args.phase == "pfm" and forward.would_proceed(args.phase, store, datetime.now(timezone.utc)):
+
+                    def collect(anomalies: list[str]) -> dict[str, int]:
+                        nonlocal outcome
+                        outcome = capture(anomalies)
+                        return {"records": outcome.records}
+
+                    health = _run_source(store, run_id=run_id, source_id="nws_pfm_okx", collect=collect)
+                    if outcome is None:
+                        raise RuntimeError(health["error"] or "capture did not complete")
+                else:
+                    # Kalshi phases, or a rejected/duplicate pfm run (recorded without any
+                    # network work, so no source-health row claims the source was used).
+                    outcome = capture([])
+                run_status = (
+                    "succeeded" if outcome.status in ("complete", "skipped_duplicate")
+                    else "partial" if outcome.status == "partial" else "failed"
+                )
+                error = None if run_status == "succeeded" else f"{outcome.status}: {'; '.join(outcome.reasons[:3])}"
+                store.finish_run(run_id, status=run_status, error=error)
+                finished = True
+            finally:
+                if not finished:
+                    store.finish_run(run_id, status="failed", error="forward capture aborted before completion")
+    except forward.LockBusy as exc:
+        print(json.dumps({"phase": args.phase, "status": "lock_busy", "error": str(exc)}), file=sys.stderr)
+        return 1
+    print(json.dumps({"run_id": run_id, **outcome.as_dict()}, indent=2, sort_keys=True))
+    return outcome.exit_code
+
+
+def _forward_status(args: argparse.Namespace) -> int:
+    from datetime import date
+
+    store = SnapshotStore(Path(args.db))
+    now = datetime.now(timezone.utc)
+    if args.date:
+        result = forward.day_status(store, date.fromisoformat(args.date))
+        ok = result["status"] == "VALID"
+    else:
+        result = forward.summary(store, now_utc=now)
+        ok = result["last_closed_status"] == "VALID"
+    text = json.dumps(result, indent=2, sort_keys=True) + "\n"
+    if args.status_file:
+        target = Path(args.status_file)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        tmp = target.with_name(target.name + ".tmp")
+        tmp.write_text(text, encoding="utf-8", newline="\n")
+        os.replace(tmp, target)
+    print(text, end="")
+    return 0 if ok else 1
 
 
 def _settlement_collect(args: argparse.Namespace) -> int:
@@ -428,6 +549,10 @@ def main(argv: list[str] | None = None) -> int:
         return _recent(args)
     if args.command == "health":
         return _health(args)
+    if args.command == "forward":
+        if args.forward_command == "capture":
+            return _forward_capture(args)
+        return _forward_status(args)
     if args.command == "settlement":
         if args.settlement_command == "collect":
             return _settlement_collect(args)

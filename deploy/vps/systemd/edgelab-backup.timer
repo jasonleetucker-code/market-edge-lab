@@ -1,0 +1,12 @@
+[Unit]
+Description=Market Edge Lab: daily verified backup, clear of Chase Upside jobs
+
+[Timer]
+OnCalendar=*-*-* 04:40:00 UTC
+AccuracySec=1s
+# A missed window is lost, never fired late: the code rejects out-of-window runs anyway.
+Persistent=false
+Unit=edgelab-backup.service
+
+[Install]
+WantedBy=timers.target

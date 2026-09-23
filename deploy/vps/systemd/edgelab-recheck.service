@@ -1,0 +1,39 @@
+[Unit]
+Description=Market Edge Lab: EXP-001 10-15 min re-check capture (read-only)
+Documentation=file:///opt/market-edge-lab/app/deploy/vps/README.md
+After=network-online.target
+Wants=network-online.target
+OnFailure=edgelab-alert@%n.service
+
+[Service]
+Type=oneshot
+User=edgelab
+Group=edgelab
+EnvironmentFile=/etc/market-edge-lab/env
+WorkingDirectory=/var/lib/market-edge-lab
+ExecStart=/opt/market-edge-lab/venv/bin/python -m edge_lab.cli forward capture --phase recheck --db /var/lib/market-edge-lab/db/edge_lab.sqlite3
+# Oneshot: the whole run is the start job. On timeout systemd sends SIGTERM, which the
+# collector turns into a recorded failed run.
+TimeoutStartSec=17min
+UMask=0077
+# Resource caps: the collector must never starve Chase Upside (ADR 0012).
+MemoryHigh=192M
+MemoryMax=256M
+CPUQuota=25%
+TasksMax=32
+Nice=5
+# Filesystem and privilege hardening: writes only its own data and status directories.
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+ReadWritePaths=/var/lib/market-edge-lab /var/lib/market-edge-lab-status

@@ -1,0 +1,17 @@
+[Unit]
+Description=Market Edge Lab: failure alert for %i
+
+[Service]
+Type=oneshot
+User=edgelab
+Group=edgelab
+EnvironmentFile=/etc/market-edge-lab/env
+ExecStart=/opt/market-edge-lab/app/deploy/vps/alert.sh %i
+TimeoutStartSec=60
+UMask=0022
+MemoryMax=64M
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/lib/market-edge-lab-status

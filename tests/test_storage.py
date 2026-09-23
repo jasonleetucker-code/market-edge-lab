@@ -89,11 +89,11 @@ def test_milestone_1_database_migrates_in_place(tmp_path):
 
     store = SnapshotStore(db)
 
-    assert store.schema_version() == 3
+    assert store.schema_version() == 4
     rows = list(store.recent_snapshots(limit=10))
     assert len(rows) == 1 and rows[0]["run_id"] == "old"
     # Reopening an already-migrated database is a no-op.
-    assert SnapshotStore(db).schema_version() == 3
+    assert SnapshotStore(db).schema_version() == 4
 
 
 def test_database_from_newer_code_is_refused(tmp_path):
