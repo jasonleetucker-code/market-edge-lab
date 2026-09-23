@@ -164,11 +164,11 @@ def inspect_database(conn: sqlite3.Connection, deadline: float, *, require_curre
                 raise BackupError("not a Market Edge shadow ledger: ledger_entries missing")
             if schema_version != LEDGER_SCHEMA_VERSION:
                 raise BackupError(f"ledger schema v{schema_version} != v{LEDGER_SCHEMA_VERSION}; refusing to report VERIFIED")
+            # Missing triggers are recorded, not raised: a tampered ledger must still be copied
+            # as forensic evidence. The report is then never VERIFIED.
             missing = sorted(ledger_reference_triggers() - set(triggers))
-            if missing:
-                raise BackupError(f"ledger append-only triggers missing: {missing}; refusing to report VERIFIED")
             counts = {"ledger_entries": conn.execute("SELECT COUNT(*) FROM ledger_entries").fetchone()[0]}
-            return {
+            return {"missing_triggers": missing,
                 "store_kind": "ledger", "schema_version": schema_version,
                 "schema_sha256": hashlib.sha256(json.dumps(schema, separators=(",", ":")).encode()).hexdigest(),
                 "trigger_names": triggers, "row_counts": counts, "chain_heads": _ledger_chain_heads(conn),
@@ -289,7 +289,8 @@ def verify_backup(bundle: Path, *, timeout: float = 30) -> dict:
                 if replay != original:
                     raise BackupError("restored schema or row counts differ")
     chain_failures = sorted(a for a, h in (original.get("chain_heads") or {}).items() if str(h).startswith("REPLAY_FAILED"))
-    status = "BACKED_UP_LEDGER_CHAIN_INVALID" if chain_failures else "VERIFIED_BACKUP_AND_RESTORE"
+    status = ("BACKED_UP_LEDGER_TAMPERED_TRIGGERS" if original.get("missing_triggers")
+              else "BACKED_UP_LEDGER_CHAIN_INVALID" if chain_failures else "VERIFIED_BACKUP_AND_RESTORE")
     return {"status": status, **original, "database_sha256": manifest["database_sha256"]}
 
 

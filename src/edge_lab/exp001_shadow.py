@@ -356,7 +356,9 @@ def settlement_index(store: SnapshotStore, *, known_by: datetime | None = None) 
                 if not isinstance(market, dict) or not isinstance(market.get("ticker"), str):
                     continue
                 current = index.get(market["ticker"])
-                variant = (market.get("result"), str(market.get("expiration_value")))
+                # Compare parsed values ("67" and "67.00" are the same outcome, not a conflict).
+                parsed = settlement.parse_value(market.get("expiration_value"))
+                variant = (market.get("result"), str(parsed.normalize()) if parsed is not None else None)
                 variants = (current or {}).get("variants", set())
                 if variant[0] in ("yes", "no"):
                     variants = variants | {variant}

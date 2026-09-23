@@ -41,8 +41,9 @@ def test_ledger_without_triggers_or_with_a_broken_chain_is_never_verified(tmp_pa
     conn.execute(f'DROP TRIGGER "{trigger}"')
     conn.commit()
     conn.close()
-    with pytest.raises(backup.BackupError, match="triggers missing"):
-        backup.create_backup(path, tmp_path / "b1", kind="ledger")
+    # Copied as forensic evidence, never VERIFIED.
+    report = backup.verify_backup(backup.create_backup(path, tmp_path / "b1", kind="ledger"))
+    assert report["status"] == "BACKED_UP_LEDGER_TAMPERED_TRIGGERS" and trigger in report["missing_triggers"]
 
     path2, _ = _ledger(tmp_path / "x")
     conn = sqlite3.connect(path2)
@@ -51,9 +52,8 @@ def test_ledger_without_triggers_or_with_a_broken_chain_is_never_verified(tmp_pa
     conn.execute("UPDATE ledger_entries SET payload_json = replace(payload_json, 'REJECT', 'QUALIFY') WHERE seq = 2")
     conn.commit()
     conn.close()
-    # Triggers are also missing here, so it is refused; a broken chain alone is covered below.
-    with pytest.raises(backup.BackupError):
-        backup.create_backup(path2, tmp_path / "b2", kind="ledger")
+    report = backup.verify_backup(backup.create_backup(path2, tmp_path / "b2", kind="ledger"))
+    assert report["status"] == "BACKED_UP_LEDGER_TAMPERED_TRIGGERS" and report["chain_heads"]["A"].startswith("REPLAY_FAILED")
 
 
 def test_a_ledger_with_a_broken_chain_is_still_copied_but_never_verified(tmp_path, capsys):

@@ -108,6 +108,19 @@ systemctl list-timers 'edgelab-*'
 
 One state does not prove the next. A valid no-signal day is a legitimate result.
 
+## If the receipt says FAILED, LOCK_BUSY or SETTLEMENT_CONFLICT
+
+1. Read `problems` and `days[].problems` in
+   `/var/lib/market-edge-lab-status/shadow_daily.json`. Then read the journal:
+   `sudo journalctl -u edgelab-shadow -u edgelab-settlement -n 50 --no-pager`.
+2. A transient cause (lock busy, host load) heals itself: the next run retries the same day
+   first. Settlement is held at that day's decision time until it succeeds, so nothing gets
+   out of order.
+3. `SETTLEMENT_CONFLICT` means two captures disagree on an outcome. Positions stay pending
+   or keep their recorded outcome. Report it; never edit the ledger by hand.
+4. Never delete or edit ledger rows. The ledger is append-only, and backups keep every
+   copy.
+
 ## Rollback
 
 Code and unit files must go back **together**: the new `edgelab-backup.service` passes

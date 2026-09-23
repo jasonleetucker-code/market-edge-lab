@@ -214,3 +214,58 @@ def test_crash_between_decision_and_fill_is_completed_later(store, tmp_path, mon
     assert code == 0 and not (daily.incomplete_days(ledger, shadow.RESEARCH_ACCOUNT_ID)
                               | daily.incomplete_days(ledger, shadow.ACCOUNT_ID))
     assert ledger.state(shadow.RESEARCH_ACCOUNT_ID).fills == 3
+
+
+def test_a_transient_failure_never_wedges_the_pipeline(store, tmp_path, monkeypatch, model):
+    """Review NB1: a failed day must not let later-received settlements be recorded before its
+    fills, or the knowledge-time rule would refuse those fills forever."""
+    _full_day(store, monkeypatch)
+    _settled(store, 67, _result(67))  # evidence received 2026-09-24T14:00Z, already on file
+    ledger = ShadowLedger(tmp_path / "ledger.sqlite3")
+    real = ShadowLedger.record_fill
+    calls = {"n": 0}
+
+    def flaky(self, account, payload):
+        calls["n"] += 1
+        if calls["n"] == 5:  # the operational account's second fill
+            from edge_lab.shadow_ledger import LedgerError
+            raise LedgerError("ledger shadow_ledger.sqlite3 is locked or busy (waited 5s)")
+        return real(self, account, payload)
+    monkeypatch.setattr(ShadowLedger, "record_fill", flaky)
+    at = datetime(2026, 9, 24, 15, tzinfo=UTC)
+    first, _ = _run(store, tmp_path, model, now=at)
+    assert first["state"] == "FAILED"
+    assert first["settlement"]["evidence_cutoff_utc"] == "2026-09-22T22:00:00+00:00"  # held back
+    assert first["settlement"]["settled"] == 0
+    monkeypatch.setattr(ShadowLedger, "record_fill", real)
+    second, _ = _run(store, tmp_path, model, now=at + timedelta(minutes=5))
+    assert second["days"][0]["result"] == "HEALTHY_TRADED" and second["settlement"]["settled"] == 6
+    assert not (daily.incomplete_days(ledger, shadow.RESEARCH_ACCOUNT_ID) | daily.incomplete_days(ledger, shadow.ACCOUNT_ID))
+
+
+def test_formatting_differences_are_not_settlement_conflicts(store, tmp_path, monkeypatch, model):
+    _full_day(store, monkeypatch)
+    _settled(store, 67, _result(67))
+    _settled_run(store, "67.00", _result(67), "again")  # the same outcome, formatted differently
+    receipt, _ = _run(store, tmp_path, model, now=datetime(2026, 9, 24, 15, tzinfo=UTC))
+    assert receipt["settlement"]["conflicts"] == [] and receipt["settlement"]["settled"] == 6
+
+
+def test_contradicting_settlement_evidence_alerts(store, tmp_path, monkeypatch, model):
+    _full_day(store, monkeypatch)
+    _settled(store, 67, _result(67))
+    _run(store, tmp_path, model, now=datetime(2026, 9, 24, 15, tzinfo=UTC))
+    _settled_run(store, 70, _result(70), "later")  # a later capture contradicts the recorded outcomes
+    receipt, code = _run(store, tmp_path, model, now=datetime(2026, 9, 24, 16, tzinfo=UTC))
+    assert (receipt["state"], code) == ("SETTLEMENT_CONFLICT", 1) and receipt["settlement"]["conflicts"]
+
+
+def _settled_run(store, value, result_for, run_id):
+    from edge_lab.kalshi import SETTLEMENT_SOURCE, _save
+    markets = [dict(m, status="settled", expiration_value=str(value), result=result_for(m)) for m in MARKETS["markets"]]
+    payload = {"markets": markets, "cursor": None}
+    fetch = FetchResult("u", "u", 200, "application/json", json.dumps(payload).encode(), "2026-09-24T14:30:00+00:00", 1, 1)
+    store.start_run(run_id)
+    _save(store, run_id=run_id, kind="settled_markets", entity_id="KXHIGHNY", url="u", payload=payload,
+          fetch=fetch, spec=SETTLEMENT_SOURCE)
+    store.finish_run(run_id, status="succeeded")

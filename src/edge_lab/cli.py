@@ -559,7 +559,11 @@ def _shadow(args: argparse.Namespace) -> int:
             with forward.exclusive_lock(ledger_path.with_name(ledger_path.name + ".lock"), timeout_s=60):
                 ledger = ShadowLedger(ledger_path)
                 if args.shadow_command == "settle":
-                    result = exp001_shadow.settle_open_positions(store, ledger)
+                    from . import daily
+
+                    # Same cap as the daily run: never settle past an unprocessed closed day.
+                    result = exp001_shadow.settle_open_positions(
+                        store, ledger, known_by=daily.settlement_cutoff(store, ledger, datetime.now(timezone.utc)))
                 else:
                     result = exp001_shadow.run_day(store, ledger, target)
         except forward.LockBusy as exc:

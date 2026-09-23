@@ -46,6 +46,12 @@ found five gaps:
   - Within a day, all decisions are recorded first and then fills in confirmation-time
     order, so each fill's point-in-time state includes every earlier fill of that day.
   - The orchestrator stops at a failed day rather than running later days ahead of it.
+    While any closed capture day is unprocessed or incomplete, settlement (daily run and the
+    `shadow settle` CLI) only uses evidence received by that day's decision time
+    (`daily.settlement_cutoff`). Otherwise later-known cash would be recorded ahead of that
+    day's fills and wedge it permanently.
+  - Contradicting settlement captures (compared on parsed values) end the run as
+    `SETTLEMENT_CONFLICT` (exit 1).
   - A settlement's evidence must be received at or after both the settlement time and the
     fill.
   - A settlement's effective time is clamped to its evidence receipt, and the reported

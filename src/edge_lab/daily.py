@@ -56,7 +56,7 @@ from .storage import SnapshotStore
 RECEIPT_SCHEMA = "edge-lab-shadow-daily-receipt/1"
 RECEIPT_NAME = "shadow_daily.json"
 EXIT = {"HEALTHY_TRADED": 0, "HEALTHY_NO_SIGNAL": 0, "PENDING_SETTLEMENT": 0, "NO_CAPTURE": 0, "NOT_CLOSED": 0,
-        "INVALID_CAPTURE": 3, "FAILED": 1, "LOCK_BUSY": 1}
+        "INVALID_CAPTURE": 3, "SETTLEMENT_CONFLICT": 1, "FAILED": 1, "LOCK_BUSY": 1}
 # Settlement for D is normally published the morning after D. Asking earlier wastes
 # requests, so an event becomes "due" 30 h after its decision time (about 00:00 ET on D+1).
 SETTLEMENT_DUE_AFTER = timedelta(hours=30)
@@ -107,6 +107,20 @@ def missing_capture_days(days: list[date], last_closed: date) -> list[date]:
             out.append(d)
         d += timedelta(days=1)
     return out
+
+
+def settlement_cutoff(store: SnapshotStore, ledger: ShadowLedger, now: datetime) -> datetime:
+    """The latest evidence-receipt time settlements may use now.
+
+    While any closed capture day is unprocessed or incomplete in either account, settling on
+    evidence received after that day's decision would record cash movements its fills must
+    precede, and the ledger (knowledge-time order) would then refuse those fills forever.
+    So settlement is capped at the earliest such day's decision time until it is done."""
+    days = closed_capture_days(store, now)
+    done = processed_days(ledger, shadow.RESEARCH_ACCOUNT_ID) & processed_days(ledger, shadow.ACCOUNT_ID)
+    broken = incomplete_days(ledger, shadow.RESEARCH_ACCOUNT_ID) | incomplete_days(ledger, shadow.ACCOUNT_ID)
+    waiting = [d for d in days if d not in done or d in broken]
+    return forward.windows(min(waiting))["decision"] if waiting else now
 
 
 def _previous_receipt(status_dir: Path | None) -> dict[str, Any] | None:
@@ -240,6 +254,11 @@ def run(db: Path, ledger_path: Path, *, status_dir: Path | None = None, now: dat
         except Exception as exc:  # noqa: BLE001 - every failure ends in an explicit FAILED receipt
             receipt["state"] = "FAILED"
             receipt["problems"].append(f"{type(exc).__name__}: {exc}")
+        except BaseException as exc:  # SIGTERM/timeout (SystemExit), Ctrl+C: receipt first, then stop
+            receipt["state"] = "FAILED"
+            receipt["problems"].append(f"interrupted: {type(exc).__name__}")
+            _finish(status_dir, receipt)
+            raise
     return _finish(status_dir, receipt)
 
 
@@ -308,7 +327,12 @@ def _run_locked(db: Path, ledger_path: Path, now: datetime, receipt: dict[str, A
         except Exception as exc:  # noqa: BLE001 - a failed refresh must not lose the bookkeeping
             receipt["settlement"]["refresh"] = {"status": "failed", "errors": [f"{type(exc).__name__}: {exc}"]}
         store = SnapshotStore.open_readonly(db)  # fresh read-only view including the new evidence
-    report = shadow.settle_open_positions(store, ledger, now=now)
+    cutoff = settlement_cutoff(store, ledger, now)
+    if cutoff < now:
+        receipt["problems"].append(f"settlement held at evidence received by {_iso(cutoff)} until the earliest "
+                                   "unfinished capture day is processed")
+    receipt["settlement"]["evidence_cutoff_utc"] = _iso(cutoff)
+    report = shadow.settle_open_positions(store, ledger, known_by=cutoff)
     receipt["settlement"]["settled"] = len(report["settled"])
     receipt["settlement"]["pending"] = report["pending"]
     receipt["settlement"]["conflicts"] = report["conflicts"]
@@ -330,6 +354,8 @@ def _run_locked(db: Path, ledger_path: Path, now: datetime, receipt: dict[str, A
                                                            ("target_date", "result", "capture_status")}
     if failed or refresh_status == "failed":
         receipt["state"] = "FAILED"
+    elif report["conflicts"]:
+        receipt["state"] = "SETTLEMENT_CONFLICT"
     elif not days:
         receipt["state"] = "NO_CAPTURE" if not store.forward_captures() else "NOT_CLOSED"
     elif latest is not None and latest["result"] == "INVALID_CAPTURE":
