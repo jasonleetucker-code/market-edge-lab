@@ -194,13 +194,15 @@ def stamp_key(run):
     except (TypeError, ValueError):
         return 0
 
-latest, total = {}, 0
+latest, total, newest_stores, newest_run = {}, 0, set(), None
 for run in sorted(order, key=stamp_key):
+    newest_run, newest_stores = run, set()
     for position, report in enumerate(reports("\n".join(runs[run]["lines"]))):
         total += 1
         store, note = store_of(report, position)
         if store is not None:
             latest[store] = (report, when(runs[run]["t"]), note)
+            newest_stores.add(store)
 emit("BACKUP_REPORTS_8D", f"{total} report(s) in {len(order)} run(s)")
 for store, backup_name, restore_name in (("evidence", "BACKUP_EVIDENCE_DB", "RESTORE_EVIDENCE_DB"),
                                          ("ledger", "BACKUP_SHADOW_LEDGER", "RESTORE_SHADOW_LEDGER")):
@@ -210,6 +212,12 @@ for store, backup_name, restore_name in (("evidence", "BACKUP_EVIDENCE_DB", "RES
         continue
     report, at, note = latest[store]
     status = report["status"]
+    if newest_run is not None and store not in newest_stores:
+        # The newest backup run has no report for this store (for example it crashed before
+        # printing one): an older result must not read as current.
+        stale = f"NOT_IN_LATEST_RUN (the latest backup run, {when(runs[newest_run]['t'])}, has no {store} report); last seen: "
+    else:
+        stale = ""
     if isinstance(report.get("bundle"), str):
         backup = f"CREATED at {at}: {report['bundle']}{note}"
     elif status == "SKIPPED_NO_SOURCE":
@@ -230,8 +238,8 @@ for store, backup_name, restore_name in (("evidence", "BACKUP_EVIDENCE_DB", "RES
         restore = f"FAILED_OR_NOT_RUN at {at}: {report.get('error')}{note}"
     else:
         restore = f"UNKNOWN at {at}: status {status}"
-    emit(backup_name, backup)
-    emit(restore_name, restore)
+    emit(backup_name, stale + backup)
+    emit(restore_name, stale + restore)
 PY
 
 # --------------------------------------------------------------------------- access checks

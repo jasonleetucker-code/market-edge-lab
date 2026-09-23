@@ -356,6 +356,21 @@ def test_verify_production_backup_verified_without_restore_fields_is_not_restore
     assert states["BACKUP_SHADOW_LEDGER"].startswith("NONE_IN_WINDOW")
 
 
+def test_verify_production_marks_a_store_missing_from_the_newest_run(tmp_path):
+    """An older VERIFIED ledger report must not read as current when the newest run has none
+    (for example the ledger step crashed before printing a report)."""
+    ok = {"status": "VERIFIED_BACKUP_AND_RESTORE", "row_counts": {"t": 1}, "schema_sha256": "0" * 64}
+    old = json.dumps({**ok, "bundle": "/var/lib/market-edge-lab/backups/e1"}, indent=2) + "\n" + json.dumps(
+        {**ok, "bundle": "/var/lib/market-edge-lab/backups/ledger/l1"}, indent=2)
+    new = json.dumps({**ok, "bundle": "/var/lib/market-edge-lab/backups/e2"}, indent=2) + "\nTraceback (most recent call last):"
+    states, _ = _run_verify(tmp_path, EDGE_LAB_VERIFY_BACKUP_JOURNAL=str(_journal(tmp_path / "j.json",
+                                                                                   [("old", old), ("new", new)])))
+    assert states["BACKUP_EVIDENCE_DB"].startswith("CREATED at ") and "/e2" in states["BACKUP_EVIDENCE_DB"]
+    assert states["BACKUP_SHADOW_LEDGER"].startswith("NOT_IN_LATEST_RUN")
+    assert states["RESTORE_SHADOW_LEDGER"].startswith("NOT_IN_LATEST_RUN")
+    assert states["RESTORE_EVIDENCE_DB"].startswith("VERIFIED at ")
+
+
 def test_verify_production_no_valid_day_and_no_capture_receipt(tmp_path):
     from test_forward import at
 
