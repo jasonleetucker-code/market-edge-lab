@@ -112,12 +112,12 @@ def sources_tab(ctx: d.Context) -> str:
             if stage not in ("UNSUPPORTED", "PLANNED"):
                 by_stage.setdefault(pr.state_word(stage).label.lower(), []).append(cap.value.split("_")[0])
         caps = "; ".join(f"{', '.join(names)}: {label}" for label, names in by_stage.items())
-        last = max((s.last_verified_utc for s in v.capabilities.values() if s.last_verified_utc), default=None)
+        last = v.capabilities[venues.Capability.QUOTE_READ].last_verified_utc  # the quote read itself
         rows.append(c.row(esc(pr.venue_label(v.venue_id)),
                           sub=f"{v.kind.value.capitalize()} · {caps or 'no capability built'}",
                           body=c.facts([
                               ("Access stage (quotes)", c.badge(quote)),
-                              ("Last verified read", c.txt(pr.datetime_et(last), reason="no recorded live read")),
+                              ("Last verified quote read", c.txt(pr.datetime_et(last), reason="no recorded live read")),
                               ("Orders", c.badge("NOT_RECOMMENDED", label="Not authorized")),
                               ("Outstanding requirement", esc(_requirement(quote, "quote_read", v.execution_authorized))),
                           ], text_cols=(0, 2, 3))))
@@ -144,7 +144,7 @@ def sources_tab(ctx: d.Context) -> str:
                                    ("Freshness (26 h)", c.badge(fresh, label=fresh)),
                                    ("Last successful observation", c.txt(pr.datetime_et(h.get("last_ok_at_utc")),
                                                                          reason="no successful run recorded")),
-                                   ("Outstanding requirement", esc(h.get("error") or "None recorded")),
+                                   ("Last error", esc(h.get("error")) if h.get("error") else c.txt("none recorded")),
                                ], text_cols=(1, 3))))
         detail = c.table(["source", "status", "completed", "age", "freshness (26 h)", "last ok", "records",
                           "http errors", "retries", "error"],

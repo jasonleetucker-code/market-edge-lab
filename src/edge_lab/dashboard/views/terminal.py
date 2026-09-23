@@ -40,7 +40,7 @@ def summary(ctx: d.Context, p: pr.Params) -> str:
         '<p class="summary-primary-label">Shadow equity · cost basis</p>'
         f'<p class="summary-primary">{c.money_cell(s.equity)}</p>'
         f'<p class="summary-basis" title="{esc(cm.EQUITY_LABEL)}">Notional {esc(pr.money(s.starting_bankroll))} bankroll '
-        "· simulated, not the owner's money</p></div>"
+        "· simulated</p></div>"
         f'<dl class="metrics">{"".join(cells)}</dl></div>{risk_note}</section>')
     return body
 
@@ -81,10 +81,7 @@ def board(ctx: d.Context, p: pr.Params) -> str:
 def _coverage(ctx: d.Context) -> str:
     if ctx.observed.status != d.OK:
         return "No captured books"
-    b = ctx.observed.value
-    times = [v.get("completed_at_utc") for v in b.captures.values() if v.get("completed_at_utc")]
-    latest = max(times) if times else None
-    return f"Target {pr.date_label(b.target_date)} · captured {pr.datetime_et(latest) or 'time unknown'}"
+    return cm.coverage_text(ctx.observed.value)
 
 
 def _next_capture_text(ctx: d.Context) -> str | None:
@@ -92,7 +89,7 @@ def _next_capture_text(ctx: d.Context) -> str | None:
     if not nxt:
         return None
     label, when = nxt[0]
-    return f"Next scheduled window: {label}, {pr.datetime_et(when)} (collector schedule)."
+    return f"Next collector window: {pr.datetime_et(when)} ({label.lower()}; the schedule, not proof it runs)."
 
 
 def matters(ctx: d.Context, p: pr.Params) -> str:
@@ -124,21 +121,23 @@ def activity(ctx: d.Context) -> str:
     if ctx.notifications.status == d.OK:
         for n in ctx.notifications.value:
             kind = {"CRITICAL": "err", "WARNING": "warn", "INFO": "info"}.get(str(n.get("severity")), "nd")
-            events.append((kind, str(n.get("summary") or n.get("type")), pr.state_word(n.get("type")).label,
+            events.append((kind, str(n.get("summary") or n.get("type") or "Notification"), pr.state_word(n.get("type")).label,
                            n.get("created_at_utc"), "/alerts"))
     if ctx.receipt.status == d.OK:
         r = ctx.receipt.value
         word = pr.state_word(r.get("state"))
-        events.append((word.kind, f"Daily shadow run: {word.label}", f"Receipt {r.get('state')}",
+        events.append((word.kind, f"Daily shadow run: {word.label}", f"Receipt state {r.get('state') or 'not recorded'}",
                        r.get("generated_at_utc"), None))
     if ctx.collector_status.status == d.OK:
         s = ctx.collector_status.value
         word = pr.state_word(s.get("last_closed_status"))
-        events.append((word.kind, f"Collector status report: last target {s.get('last_closed_target_date')} "
-                       f"{word.label.lower()}", "latest.json", s.get("generated_at_utc"), None))
+        day = pr.date_label(s.get("last_closed_target_date")) or "unknown day"
+        events.append((word.kind, f"Collector report: target {day} {word.label.lower()}", "latest.json",
+                       s.get("generated_at_utc"), None))
     if ctx.last_failure.status == d.OK:
         f = ctx.last_failure.value
-        events.append(("err", f"Unit failed: {f.get('unit')}", "last_failure.json", f.get("failed_at_utc"), "/alerts"))
+        events.append(("err", f"Unit failed: {f.get('unit') or 'unit not recorded'}", "last_failure.json",
+                       f.get("failed_at_utc"), "/alerts"))
     events.sort(key=lambda e: str(e[3] or ""), reverse=True)
     if not events:
         body = c.empty_state("No activity recorded yet", "Collector reports, pipeline runs and notifications appear "
@@ -311,10 +310,12 @@ def account_detail(view: d.AccountView) -> str:
 
 
 def view(ctx: d.Context, p: pr.Params) -> cm.Page:
-    now_line = f"{ctx.now:%A}, {pr.datetime_et(ctx.now)}"
+    now_line = f"{pr.to_et(ctx.now):%A}, {pr.datetime_et(ctx.now)}"  # the New York weekday, not UTC's
     switch = c.account_switch(p, "/", {"state": p.state} if p.state else None)
-    head = c.page_head("Market overview", now_line, extra=switch)
+    head = c.page_head("Market overview", now_line)
+    # Mobile order (contract §11): heading, status line, account scope, summary, board, ...
     body = (head + '<div class="ws">'
             + f'<div class="ws-status">{status_panel(ctx)}</div>'
+            + f'<div class="ws-switch">{switch}</div>'
             + summary(ctx, p) + board(ctx, p) + matters(ctx, p) + activity(ctx) + system(ctx) + "</div>")
     return cm.Page("Terminal", "terminal", body, account_scoped=True)

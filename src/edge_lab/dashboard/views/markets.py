@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from urllib.parse import urlencode
 
-from ... import venues
+from ... import exp001_stageb as stageb, venues
 from .. import components as c
 from .. import data as d
 from .. import presentation as pr
@@ -69,10 +69,7 @@ def sport_filter(p: pr.Params, rows: list[pr.MarketRow], sports: list[str]) -> s
 
 def coverage_line(ctx: d.Context, total: int, shown: int) -> str:
     if ctx.observed.status == d.OK:
-        b = ctx.observed.value
-        times = [v.get("completed_at_utc") for v in b.captures.values() if v.get("completed_at_utc")]
-        cov = (f"Books captured {pr.datetime_et(max(times))}" if times else "Capture time unknown") + \
-            f" for target {pr.date_label(b.target_date)}"
+        cov = cm.coverage_text(ctx.observed.value)
     elif ctx.observed.status == d.ERROR:
         cov = "Captured books unavailable (read error)"
     else:
@@ -87,8 +84,8 @@ def view(ctx: d.Context, p: pr.Params) -> cm.Page:
     filtered = pr.sort_rows(pr.filter_rows(all_rows, p), p.sort)
     page_rows, pages = pr.page_slice(filtered, p.page)
     sub = "Observed prices and model assessments. " + (
-        f"Coverage: {pr.datetime_et(max(v.get('completed_at_utc') or '' for v in ctx.observed.value.captures.values()))}"
-        if ctx.observed.status == d.OK and ctx.observed.value.captures else "No captured coverage yet.")
+        f"Coverage: {cm.coverage_text(ctx.observed.value)}." if ctx.observed.status == d.OK
+        else "No captured coverage yet.")
     switch = c.account_switch(p, "/opportunities", {k: v for k, v in p.filters().items() if k != "account"})
     parts = [c.page_head("Markets", sub, extra=switch)]
     if p.account == "research":
@@ -200,6 +197,7 @@ def detail(ctx: d.Context, p: pr.Params) -> cm.Page:
     if row is None:
         return not_found(p, "No captured market or recorded decision matches this venue and id. Market ids are "
                             "matched exactly against stored records.")
+    # Every section follows one side: the requested one, else the primary assessment's.
     side = p.side or (row.primary.side if row.primary and row.primary.side else "YES")
     back = p.href("/opportunities")
     crumb = f'<a class="crumb" href="{esc(back)}">{c.icon("arrow-left", "ic-sm")}<span>Markets</span></a>'
@@ -212,16 +210,29 @@ def detail(ctx: d.Context, p: pr.Params) -> cm.Page:
             f'<h1 class="page-title detail-q">{esc(pr.market_title(row))}</h1>'
             f'<p class="page-sub">{esc(row.native_id)} · target {esc(pr.date_label(row.target_date) or "unknown")}'
             f' · closes {esc(pr.datetime_et(row.close_time_utc) or "time not captured")}</p></div></div>')
-    main = [quote_section(row, side, p), history_section(ctx, row, side), assessment_section(row, side),
-            venues_section(row), rules_section(row)]
+    main = [quote_section(row, side, p, ctx.now), history_section(ctx, row, side), assessment_section(row, side),
+            venues_section(row)]
     side_col = [capital_section(row, side), ticket_section(row, side, p)]
+    # Source order = the contract's phone order; Rules & evidence comes last, after the inspector.
     body = (head + '<div class="detail"><div class="detail-main">' + "".join(main) + "</div>"
             + '<aside class="detail-side" aria-label="Capital and decision preview">' + "".join(side_col)
-            + "</aside></div>")
+            + "</aside></div>" + rules_section(row))
     return cm.Page(pr.market_title(row)[:80], "markets", body, account_scoped=True)
 
 
-def quote_section(row: pr.MarketRow, side: str, p: pr.Params) -> str:
+def quote_freshness(q: pr.QuoteSide, now) -> str:
+    """The engine's own book-age rule (Stage B policy max_book_age) applied to the capture time."""
+    if q.phase != "decision payload" and not q.capture_complete:
+        return c.badge("CAPTURE_INCOMPLETE")
+    state, _ = d.freshness(q.received_at_utc, now, max_age=stageb.STAGE_B_POLICY.max_book_age)
+    if state == "FRESH":
+        return c.badge("FRESH", label="Captured · within the engine's book-age limit")
+    if state == "STALE":
+        return c.badge("BOOK_STALE")
+    return c.badge("UNKNOWN", label="Capture time unknown")
+
+
+def quote_section(row: pr.MarketRow, side: str, p: pr.Params, now) -> str:
     tiles = "".join(c.quote_tile(row.quotes.get(s), s, c.market_href(row, p, s), current=(s == side),
                                  label=row.outcome if s == "YES" and not row.quotes.get(s) else None)
                     for s in ("YES", "NO"))
@@ -235,7 +246,7 @@ def quote_section(row: pr.MarketRow, side: str, p: pr.Params) -> str:
                                else "Decision-time executable price")),
             ("Source time", c.txt(pr.datetime_et(q.received_at_utc), reason="capture time not recorded")),
             ("Available size at ask", c.num(pr.quantity(q.size), reason="size not captured")),
-            ("Freshness", c.badge("CAPTURED", label="Captured · not live", kind="nd")),
+            ("Freshness", quote_freshness(q, now)),
             ("Change", c.num(pr.cents(q.change, signed=True), cls=c.signed_cls(q.change),
                              reason=q.change_note) + f'<span class="cell-sub">{esc(q.change_note)}</span>'),
         ], text_cols=(1, 4))
@@ -258,13 +269,22 @@ def history_section(ctx: d.Context, row: pr.MarketRow, side: str) -> str:
                      meta=f"{side} side · captured asks only", sid="hist-h")
 
 
+def history_table(items) -> str:
+    return c.table(["decided (UTC)", "target", "side", "qualification", "model P", "price", "net edge"],
+                   [[esc(a.decided_at_utc), esc(a.target_date), esc(a.side), c.code(a.qualification),
+                     esc(a.model_probability), esc(a.executable_price), esc(a.net_edge)] for a in items],
+                   caption="Earlier decisions")
+
+
 def assessment_section(row: pr.MarketRow, side: str) -> str:
-    items = [a for a in row.assessments if a.side == side] or list(row.assessments)
-    if not items:
+    a = row.for_side(side)
+    earlier = (c.disclosure(f"Decisions for earlier target days ({len(row.history)})", history_table(row.history))
+               if row.history else "")
+    if a is None:
         return c.section("Our assessment", c.empty_state(
-            "Not evaluated yet", "No decision has been recorded for this market in this account. No assessment is "
-                                 "shown rather than a guessed 50%."), sid="as-h")
-    a = max(items, key=lambda x: str(x.decided_at_utc))
+            "Not evaluated yet", f"No decision has been recorded for the {side} side of this market's current target "
+                                 "day in this account. No assessment is shown rather than a guessed 50%.") + earlier,
+            sid="as-h")
     body = c.facts([
         ("Model probability", c.num(pr.percent(a.model_probability), reason="no model probability")),
         ("Conservative probability", c.num(pr.percent(a.conservative_probability), reason="not recorded")),
@@ -278,15 +298,18 @@ def assessment_section(row: pr.MarketRow, side: str) -> str:
     ], wide=False, text_cols=(6, 7))
     verdict = c.state_text(a.qualification if a.qualification == "QUALIFY" else (a.reason or "REJECT"))
     exact = c.kv([("decision id", c.code(a.decision_id)), ("decided at (UTC)", esc(a.decided_at_utc)),
-                  ("side", esc(a.side)), ("model", esc(f"{a.model_id} v{a.model_version}")),
+                  ("side", esc(a.side)), ("target day", esc(a.target_date)),
+                  ("model", esc(a.model_id)), ("model version", esc(a.model_version)),
                   ("qualification", c.code(a.qualification)), ("all reasons", c.ul(a.reasons)),
                   ("exact model P", esc(a.model_probability)), ("exact net edge ($/contract)", esc(a.net_edge)),
                   ("exact conservative net edge", esc(a.net_edge_conservative)), ("exact fee ($)", esc(a.fee)),
                   ("freshness", esc(a.freshness))])
+    scope = ("decision for an earlier target day, not current" if row.historical
+             else "recorded decision, not a current observation")
     return c.section("Our assessment", f"<p>{verdict} <span class=\"meta\">Recorded "
                      f"{esc(pr.datetime_et(a.decided_at_utc) or 'at an unknown time')} · {esc(a.side)} side · "
-                     "historical decision, not a current observation</span></p>" + body
-                     + c.disclosure("Exact recorded values", exact), sid="as-h")
+                     f"{scope}</span></p>" + body
+                     + c.disclosure("Exact recorded values", exact) + earlier, sid="as-h")
 
 
 def venues_section(row: pr.MarketRow) -> str:
@@ -299,9 +322,10 @@ def venues_section(row: pr.MarketRow) -> str:
 
 
 def capital_section(row: pr.MarketRow, side: str) -> str:
-    a = row.primary
-    bucket, eta, hours = row.cash_release
-    verdict = a.starter if a is not None else None
+    a = row.for_side(side)  # the same side as the assessment and the ticket preview
+    verdict = a.starter if a is not None and isinstance(a.starter, dict) else None
+    eta = verdict.get("tradable_cash_release_eta_utc") if verdict else None
+    hours = verdict.get("elapsed_hours_to_tradable") if verdict else None
     if a is None:
         body = c.empty_state("Size not evaluated", "No recorded decision, so no maximum loss, quantity or cash-release "
                                                    "estimate exists for this account.")
@@ -323,8 +347,7 @@ def capital_section(row: pr.MarketRow, side: str) -> str:
 
 
 def ticket_section(row: pr.MarketRow, side: str, p: pr.Params) -> str:
-    a = next((x for x in sorted(row.assessments, key=lambda x: str(x.decided_at_utc), reverse=True)
-              if x.side == side), None)
+    a = row.for_side(side)
     flag = f'<p class="ticket-flag">{c.icon("lock", "ic-sm")}Read-only · Trading disabled</p>'
     if a is None:
         body = flag + c.empty_state("No decision to preview", "Nothing was decided for this side in this account.")

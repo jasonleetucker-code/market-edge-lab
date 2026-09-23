@@ -492,6 +492,12 @@ class ObservedBoard:
     target_date: str
     captures: dict[str, dict[str, Any]]  # phase -> {id, status, completed_at_utc, reasons}
     markets: list[ObservedMarket]
+    total_markets: int = 0  # before the MAX_OBSERVED_MARKETS cap; shown when the board is truncated
+
+    @property
+    def complete(self) -> bool:
+        """True only when every phase used is a complete capture (partial ones are labelled)."""
+        return bool(self.captures) and all(c.get("status") == "complete" for c in self.captures.values())
 
 
 def _capture_for(rows: list, phase: str) -> Any:
@@ -567,5 +573,5 @@ def observed_board(store: SnapshotStore, *, mode: str = "live") -> ObservedBoard
             market.quotes[phase] = {side: ObservedQuote(side, q.best_ask, q.best_bid, q.displayed_size,
                                                         q.received_at_utc, q.evidence_id, q.anomaly)
                                     for side, q in quotes.items()}
-    ordered = sorted(markets.values(), key=lambda m: m.market_id)[:MAX_OBSERVED_MARKETS]
-    return ObservedBoard(target, captures, ordered)
+    ordered = sorted(markets.values(), key=lambda m: m.market_id)
+    return ObservedBoard(target, captures, ordered[:MAX_OBSERVED_MARKETS], len(ordered))

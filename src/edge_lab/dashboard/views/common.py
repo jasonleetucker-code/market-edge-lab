@@ -119,9 +119,13 @@ def board_rows(ctx: d.Context, p: pr.Params) -> list[pr.MarketRow]:
     cache = ctx.__dict__.setdefault("_rows", {})
     if p.account not in cache:
         view = account_view(ctx, p)
-        observed = ctx.observed.value.markets if ctx.observed.status == d.OK else []
+        board = ctx.observed.value if ctx.observed.status == d.OK else None
         open_ids = [pos.market_id for pos in view.state.open_positions()] if view.state is not None else []
-        cache[p.account] = pr.build_rows(observed, view.account_id, view.decisions, view.fills, open_ids)
+        cache[p.account] = pr.build_rows(
+            board.markets if board else [], view.account_id, view.decisions, view.fills, open_ids,
+            current_target=board.target_date if board else None,
+            capture_status={phase: c.get("status") for phase, c in board.captures.items()} if board else None,
+            now=ctx.now)
     return cache[p.account]
 
 
@@ -304,6 +308,18 @@ def collection_status(ctx: d.Context) -> Status:
                   f"{missing or pr.state_word(status).label + '.'} {report}.")
 
 
+def coverage_text(board: Any) -> str:
+    """Which captured day the board shows, when, and whether that capture was complete."""
+    times = [v.get("completed_at_utc") for v in board.captures.values() if v.get("completed_at_utc")]
+    when = pr.datetime_et(max(times)) if times else None
+    text = f"Target {pr.date_label(board.target_date) or 'unknown day'} · captured {when or 'at an unknown time'}"
+    if not board.complete:
+        text += " · capture incomplete"
+    if board.total_markets > len(board.markets):
+        text += f" · first {len(board.markets)} of {board.total_markets} markets shown"
+    return text
+
+
 def receipt_time(ctx: d.Context) -> str | None:
     return ctx.receipt.value.get("generated_at_utc") if ctx.receipt.status == d.OK else None
 
@@ -398,6 +414,8 @@ def blocker_title(text: str) -> tuple[str, str]:
     """A short title and severity for one blocker line (the full line is always shown too)."""
     for needle, title, kind in _BLOCKER_TITLES:
         if needle in text:
+            if needle in ("collector status file", "pipeline receipt", "shadow ledger:") and ": ERROR" in text:
+                return f"{title} unreadable", "err"
             if needle == "collector status file" and "NO DATA" in text:
                 return "Collector status not available", "nd"
             if needle == "pipeline receipt" and "NO DATA" in text:

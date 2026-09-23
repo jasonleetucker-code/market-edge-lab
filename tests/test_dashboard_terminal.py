@@ -417,3 +417,98 @@ def test_single_observation_is_never_drawn_as_a_trend():
     assert "<polyline" not in out and "Not enough history for a chart" in out
     two = c.history_chart([("2026-09-23T22:00:00Z", "0.34"), ("2026-09-23T22:12:00Z", "0.36")], label="x")
     assert "<polyline" in two and "captured (ET)" in two
+
+
+# --------------------------------------------------------------------------- independent review fixes
+
+
+def _decision(market_id, target, qualify=True, side="YES", edge="0.07"):
+    return {"decision_id": f"dec-{market_id}-{target}-{side}", "slot": f"{target}|{market_id}|{side}",
+            "as_of_utc": f"{target}T22:00:00+00:00", "market_id": market_id, "side": side,
+            "event_id": "weather:x", "qualification": "QUALIFY" if qualify else "REJECT",
+            "reason": "QUALIFY" if qualify else "NO_EDGE", "reasons": [] if qualify else ["NO_EDGE"],
+            "opportunity": {"model_probability": "0.5", "net_edge": edge, "executable_price": "0.4"}}
+
+
+def _observed(market_id, target, status="complete"):
+    from edge_lab.dashboard.data import ObservedMarket, ObservedQuote
+    q = ObservedQuote("YES", Decimal("0.40"), None, Decimal(5), f"{target}T21:55:00+00:00", "s:1", None)
+    return ObservedMarket("kalshi", market_id, market_id.split(":")[1], None, "weather:x", "weather", target, "T", "o",
+                          None, None, None, None, "binary", {"decision": {"YES": q}})
+
+
+def test_decisions_for_earlier_target_days_are_never_current():
+    old = _decision("kalshi:A", "2026-09-20")
+    now_ = _decision("kalshi:B", "2026-09-23")
+    rows = {r.native_id: r for r in pr.build_rows(
+        [_observed("kalshi:A", "2026-09-23"), _observed("kalshi:B", "2026-09-23")], "acct", [old, now_], {},
+        current_target="2026-09-23")}
+    assert rows["A"].state == "watching" and rows["A"].primary is None and len(rows["A"].history) == 1
+    assert rows["B"].state == "qualified"
+    gone = pr.build_rows([], "acct", [_decision("kalshi:OLD", "2026-09-20"), _decision("kalshi:NEW", "2026-09-23")],
+                         {})
+    states = {r.native_id: r.state for r in gone}
+    assert states == {"OLD": "historical", "NEW": "qualified"}
+    ordered = pr.sort_rows(gone)
+    assert ordered[-1].native_id == "OLD" and pr.sort_rows(gone, "edge")[-1].native_id == "OLD"
+    assert [r.native_id for r in pr.filter_rows(gone, pr.Params(state="qualified"))] == ["NEW"]
+
+
+def test_demo_board_counts_only_current_day_decisions_as_qualified(demo):
+    app, _ = demo
+    body = text(call(app, "/")[2])
+    assert "Historical decision" in body or "not evaluated for this target day" in body
+
+
+def test_incomplete_captures_are_labelled_everywhere():
+    from edge_lab.dashboard.data import ObservedBoard
+    from edge_lab.dashboard.views.common import coverage_text
+    board = ObservedBoard("2026-09-23", {"decision": {"status": "partial", "completed_at_utc": "2026-09-22T22:00:00Z"}},
+                          [_observed("kalshi:A", "2026-09-23")], 1)
+    assert "capture incomplete" in coverage_text(board)
+    rows = pr.build_rows(board.markets, "acct", [], {}, capture_status={"decision": "partial"})
+    q = rows[0].quotes["YES"]
+    assert not q.capture_complete
+    assert "capture incomplete" in c.market_row(rows[0], pr.Params())
+    assert "Capture incomplete" in c.tape([(rows[0], q)], pr.Params())
+    big = ObservedBoard("2026-09-23", {"decision": {"status": "complete"}}, [], 250)
+    assert "of 250 markets shown" in coverage_text(big)
+
+
+def test_quote_labels_carry_a_date_and_the_engine_book_age_rule(demo):
+    app, _ = demo
+    detail = text(call(app, "/market?venue=kalshi&id=DEMO-B67.5&side=YES")[2])
+    assert "Stale quote — not actionable" in detail  # captured ~20 h ago, far past the engine's book-age limit
+    board = text(call(app, "/opportunities")[2])
+    assert re.search(r"Captured [A-Z][a-z]{2} \d{1,2}, \d{1,2}:\d{2} [AP]M E[DS]T", board)
+
+
+@pytest.mark.parametrize("page", ["%C2%B2", "%D9%A3", "1%00"])
+def test_unicode_digits_in_page_are_a_safe_400(demo, page):
+    app, _ = demo
+    status, _, body = call(app, f"/opportunities?page={page}")
+    assert status.startswith("400") and "Unsupported filter" in text(body)
+
+
+def test_detail_sections_follow_one_side():
+    from edge_lab.dashboard.fixtures import synthetic_rows
+    from edge_lab.dashboard.views.markets import capital_section, ticket_section
+    row = next(r for r in synthetic_rows() if r.native_id == "DEMO-HIGHNY-B67.5")
+    assert row.for_side("NO") is None and row.for_side("YES") is not None
+    assert "Size not evaluated" in capital_section(row, "NO") and "No decision to preview" in ticket_section(
+        row, "NO", pr.Params())
+
+
+def test_weekday_is_new_york_not_utc(tmp_path):
+    late = datetime(2026, 9, 24, 2, 30, tzinfo=timezone.utc)  # Wednesday 10:30 PM EDT
+    body = text(call(make_app(Config(clock=lambda: late)), "/")[2])
+    assert "Wednesday, Sep 23, 10:30 PM EDT" in body and "Thursday" not in body
+
+
+def test_cash_release_within_seven_days_needs_an_eligible_verdict():
+    from edge_lab.dashboard.fixtures import synthetic_rows
+    row = synthetic_rows()[0]
+    delayed = dataclasses.replace(row.primary, starter={"eligible": False, "reasons": ["DELAYED_OR_DISPUTED"],
+                                                        "tradable_cash_release_eta_utc": "2026-09-25T00:00:00Z"})
+    assert dataclasses.replace(row, assessments=(delayed,)).cash_release[0] == "unknown"
+    assert row.cash_release[0] == "within7"

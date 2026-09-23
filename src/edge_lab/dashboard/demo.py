@@ -14,7 +14,7 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
 
-from .. import exp001_shadow, notifications, starter_policy, venues
+from .. import exp001_shadow, forward, notifications, starter_policy, venues
 from ..fill_policy import LATENCY_CONFIRMED_V1
 from ..opportunity import MarketTiming
 from ..shadow_ledger import ShadowLedger
@@ -32,7 +32,9 @@ def _decision(account: str, n: int, at: datetime, market: str, side: str, qualif
               p: str, price: str, fee: str, cost: str, edge: str) -> dict:
     opp_id = f"demo-opp-{account[-8:]}-{n}"
     return {
-        "decision_id": f"dec-{opp_id}", "slot": f"{at.date().isoformat()}|{market}|{side}", "opportunity_id": opp_id,
+        # The slot names the target day as the real pipeline does (the day after the ET decision day).
+        "decision_id": f"dec-{opp_id}", "slot": f"{forward.target_for(at).isoformat()}|{market}|{side}",
+        "opportunity_id": opp_id,
         "as_of_utc": _iso(at), "qualification": "QUALIFY" if qualify else "REJECT", "reason": reason,
         "reasons": [] if qualify else [reason], "model_version": "demo", "quote_evidence_ids": [],
         "event_id": "kalshi:DEMO-KXHIGHNY-EVENT", "market_id": market, "side": side,
@@ -125,7 +127,6 @@ _DEMO_BOOKS = (
 
 def _demo_captures(store: SnapshotStore, now: datetime) -> None:
     """Decision and re-check captures through the real SnapshotStore API (DEMO- tickers only)."""
-    from .. import forward
     target = forward.target_for(now - timedelta(hours=20))
     ticker = f"DEMO-{forward.event_ticker_for(target)}"
     for phase, offset, index in (("decision", timedelta(hours=20), 2), ("recheck", timedelta(hours=19, minutes=48), 3)):

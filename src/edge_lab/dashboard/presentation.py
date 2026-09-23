@@ -321,6 +321,8 @@ STATES: dict[str, StateWord] = {
     "NO_DATA": StateWord("Waiting for first capture", ND_K),
     "NOT_STARTED": StateWord("Not started", ND_K),
     "NOT_EVALUATED": StateWord("Not evaluated yet", ND_K),
+    "HISTORICAL": StateWord("Historical decision", ND_K),
+    "CAPTURE_INCOMPLETE": StateWord("Capture incomplete", WARN_K),
     "UNAVAILABLE": StateWord("Unavailable", ND_K),
     "EXPIRED": StateWord("Expired", ND_K),
     "MALFORMED": StateWord("Malformed", ERR_K),
@@ -481,7 +483,7 @@ def parse_params(route: str, query_string: str, *, venues: Iterable[str] = (), s
         changes["sort"] = _choice(get("sort"), [k for k, _ in SORTS], "sort", "default")
     if "page" in allowed:
         raw = get("page") or "1"
-        if not raw.isdigit() or not 1 <= int(raw) <= MAX_PAGE:
+        if not (raw.isascii() and raw.isdigit()) or not 1 <= int(raw) <= MAX_PAGE:
             raise ParamError("unsupported value for page")
         changes["page"] = int(raw)
     if "tab" in allowed:
@@ -530,6 +532,11 @@ class QuoteSide:
     change: Decimal | None = None  # same side, same field (ask), vs `change_from_utc`; None = unavailable
     change_from_utc: str | None = None
     change_note: str = "Change unavailable: no comparable earlier observation"
+    capture_status: str | None = None  # the forward capture's own status ("complete" | "partial" | ...)
+
+    @property
+    def capture_complete(self) -> bool:
+        return self.capture_status == "complete"
 
 
 @dataclass(frozen=True)
@@ -564,6 +571,7 @@ class Assessment:
     starter: Mapping[str, Any] | None
     raw: Mapping[str, Any] = field(default_factory=dict, repr=False)
     fill_cost: Decimal | None = None  # the simulated fill's total cost (= maximum loss of a long binary)
+    target_date: str | None = None  # the target day the decision was made for (from its slot)
 
 
 @dataclass(frozen=True)
@@ -582,9 +590,17 @@ class MarketRow:
     payoff_kind: str | None
     event_id: str | None
     quotes: Mapping[str, QuoteSide]  # side -> latest quote
-    assessments: tuple[Assessment, ...]  # every decision for this market in the selected account
+    assessments: tuple[Assessment, ...]  # decisions for this market's current target day (selected account)
     observed: bool  # captured in the evidence store (not only in a decision payload)
     has_position: bool = False
+    history: tuple[Assessment, ...] = ()  # decisions recorded for an earlier target day: never current
+    historical: bool = False  # the whole row belongs to an earlier target day than the current one
+    now: datetime | None = None  # the render time, for overdue labels only
+
+    def for_side(self, side: str | None) -> Assessment | None:
+        """The latest current assessment for `side` (detail pages keep every section on one side)."""
+        items = [a for a in self.assessments if a.side == side]
+        return max(items, key=lambda a: str(a.decided_at_utc)) if items else None
 
     @property
     def primary(self) -> Assessment | None:
@@ -600,9 +616,12 @@ class MarketRow:
 
     @property
     def state(self) -> str:
-        """qualified | watching | blocked | unsupported (a display grouping of recorded verdicts)."""
+        """qualified | watching | blocked | unsupported | historical (a display grouping of recorded
+        verdicts). A decision made for an earlier target day is historical, never "qualified" now."""
         if self.payoff_kind not in (None, "binary"):
             return "unsupported"
+        if self.historical:
+            return "historical"
         a = self.primary
         if a is None:
             return "watching"
@@ -617,6 +636,8 @@ class MarketRow:
         a = self.primary
         if self.state == "unsupported":
             return "PAYOFF_UNSUPPORTED"
+        if self.historical:
+            return "HISTORICAL"
         if a is None:
             return "NOT_EVALUATED"
         if a.fill_reason in BLOCKING_FILLS:
@@ -635,9 +656,9 @@ class MarketRow:
         hours = verdict.get("elapsed_hours_to_tradable")
         if "HORIZON_OVER_7D" in reasons:
             return "over7", eta, hours
-        if eta is None or "TRADABLE_CASH_RELEASE_UNKNOWN" in reasons:
-            return "unknown", eta, hours
-        return "within7", eta, hours
+        if eta is not None and verdict.get("eligible") is True and not reasons:
+            return "within7", eta, hours
+        return "unknown", eta, hours  # missing ETA, or ineligible for another reason (delayed, disputed, ...)
 
     @property
     def search_text(self) -> str:
@@ -676,7 +697,8 @@ def assessment_from(account_id: str, decision: Mapping[str, Any], fill: Mapping[
         decision.get("model_version"), freshness=opp.get("freshness"), size=sizing.get("final_size"),
         binding_constraint=sizing.get("binding_constraint"),
         fill_status=(fill or {}).get("status"), fill_reason=(fill or {}).get("reason") if fill else None,
-        starter=_starter(decision, fill), raw=decision, fill_cost=dec((fill or {}).get("total_cost")))
+        starter=_starter(decision, fill), raw=decision, fill_cost=dec((fill or {}).get("total_cost")),
+        target_date=str(decision.get("slot") or "").split("|")[0] or None)
 
 
 def _side_label(market: Any, side: str) -> str | None:
@@ -686,8 +708,11 @@ def _side_label(market: Any, side: str) -> str | None:
     return no if no else (f"Not {market.outcome}" if getattr(market, "outcome", None) else None)
 
 
-def observed_quotes(market: Any) -> dict[str, QuoteSide]:
-    """Latest quote per side from an ObservedMarket, with change vs the earlier capture of the day."""
+def observed_quotes(market: Any, capture_status: Mapping[str, Any] | None = None) -> dict[str, QuoteSide]:
+    """Latest quote per side from an ObservedMarket, with change vs the earlier capture of the day.
+    `capture_status` maps a phase to its forward capture's status, so quotes from an incomplete
+    capture are labelled as such."""
+    capture_status = capture_status or {}
     out: dict[str, QuoteSide] = {}
     phases = [p for p in ("decision", "recheck") if p in market.quotes]
     for side in ("YES", "NO"):
@@ -704,17 +729,29 @@ def observed_quotes(market: Any) -> dict[str, QuoteSide]:
             else:
                 note = "Change unavailable: one of the two captures has no valid ask for this side"
         out[side] = QuoteSide(side, _side_label(market, side), _q(latest.ask), _q(latest.size),
-                              latest.received_at_utc, phase, latest.evidence_id, latest.anomaly, change, since, note)
+                              latest.received_at_utc, phase, latest.evidence_id, latest.anomaly, change, since, note,
+                              capture_status.get(phase))
     return out
 
 
+def _by_time(items: Iterable[Assessment]) -> tuple[Assessment, ...]:
+    return tuple(sorted(items, key=lambda a: str(a.decided_at_utc)))
+
+
 def build_rows(observed: Iterable[Any], account_id: str, decisions: Iterable[Mapping[str, Any]],
-               fills: Mapping[str, Mapping[str, Any]], open_market_ids: Iterable[str] = ()) -> list[MarketRow]:
+               fills: Mapping[str, Mapping[str, Any]], open_market_ids: Iterable[str] = (), *,
+               current_target: str | None = None, capture_status: Mapping[str, Any] | None = None,
+               now: datetime | None = None) -> list[MarketRow]:
     """Join captured markets (evidence store) with the selected account's recorded decisions.
 
-    A market known only from a decision payload is still shown, with its decision-time
-    price labelled as such. Deduplicated by venue plus native market id."""
+    Only a decision made for the market's own current target day counts as its assessment; an
+    older decision on the same id is kept as history and never makes the row "qualified".
+    `current_target` is the captured target day (or, with no captures, the latest decided
+    day). A market known only from a decision payload is still shown, its decision-time price
+    labelled as such, and it is historical unless it belongs to the current target day.
+    Deduplicated by venue plus native market id."""
     open_ids = set(open_market_ids)
+    observed = list(observed)
     by_market: dict[str, list[Assessment]] = {}
     meta: dict[str, Mapping[str, Any]] = {}
     for dec_payload in decisions:
@@ -724,15 +761,20 @@ def build_rows(observed: Iterable[Any], account_id: str, decisions: Iterable[Map
         by_market.setdefault(mid, []).append(
             assessment_from(account_id, dec_payload, fills.get(dec_payload.get("decision_id"))))
         meta.setdefault(mid, dec_payload)
+    if current_target is None:
+        days = [a.target_date for items in by_market.values() for a in items if a.target_date]
+        current_target = max(days) if days else None
     rows: dict[str, MarketRow] = {}
     for m in observed:
+        items = by_market.get(m.market_id, [])
         rows[m.market_id] = MarketRow(
             venue=m.venue, market_id=m.market_id, native_id=m.native_id, domain=domain_of(m.event_id, m.domain),
             league=None, title=m.title, outcome=m.outcome, target_date=m.target_date, status=m.status,
             close_time_utc=m.close_time_utc, rules_primary=m.rules_primary, payoff_kind=m.payoff_kind,
-            event_id=m.event_id, quotes=observed_quotes(m),
-            assessments=tuple(sorted(by_market.get(m.market_id, ()), key=lambda a: str(a.decided_at_utc))),
-            observed=True, has_position=m.market_id in open_ids)
+            event_id=m.event_id, quotes=observed_quotes(m, capture_status),
+            assessments=_by_time(a for a in items if a.target_date == m.target_date),
+            history=_by_time(a for a in items if a.target_date != m.target_date),
+            observed=True, has_position=m.market_id in open_ids, now=now)
     for mid, assessments in by_market.items():
         if mid in rows:
             continue
@@ -741,14 +783,16 @@ def build_rows(observed: Iterable[Any], account_id: str, decisions: Iterable[Map
         latest = max(assessments, key=lambda a: str(a.decided_at_utc))
         quotes = {a.side: QuoteSide(a.side, a.outcome if a.side == "YES" else None, a.executable_price,
                                     a.displayed_size, a.decided_at_utc, "decision payload", None, None)
-                  for a in sorted(assessments, key=lambda a: str(a.decided_at_utc)) if a.side in ("YES", "NO")}
-        slot = str(payload.get("slot") or "")
+                  for a in _by_time(assessments) if a.side in ("YES", "NO")}
+        target = latest.target_date
+        current = [a for a in assessments if a.target_date is not None and a.target_date == current_target]
         rows[mid] = MarketRow(
             venue=venue or "unknown", market_id=mid, native_id=native or mid, domain=domain_of(payload.get("event_id")),
-            league=None, title=None, outcome=latest.outcome, target_date=slot.split("|")[0] or None, status=None,
+            league=None, title=None, outcome=latest.outcome, target_date=target, status=None,
             close_time_utc=None, rules_primary=None, payoff_kind=None, event_id=payload.get("event_id"),
-            quotes=quotes, assessments=tuple(sorted(assessments, key=lambda a: str(a.decided_at_utc))),
-            observed=False, has_position=mid in open_ids)
+            quotes=quotes, assessments=_by_time(current or assessments),
+            history=_by_time(a for a in assessments if a not in current) if current else (),
+            observed=False, has_position=mid in open_ids, historical=not current, now=now)
     return list(rows.values())
 
 
@@ -772,13 +816,16 @@ def sort_rows(rows: Iterable[MarketRow], sort: str = "default") -> list[MarketRo
 
     def edge_key(r: MarketRow) -> tuple:
         a = r.primary
-        e = a.net_edge if a is not None else None
+        e = a.net_edge if a is not None and not r.historical else None
         return (0, -e) if e is not None else (1, Decimal(0))
     if sort == "edge":
         return sorted(rows, key=lambda r: (edge_key(r), _title_key(r)))
     qualified = sorted((r for r in rows if r.state == "qualified"), key=lambda r: (edge_key(r), _title_key(r)))
-    rest = sorted((r for r in rows if r.state != "qualified"), key=lambda r: (_release_key(r), _title_key(r)))
-    return qualified + rest
+    rest = sorted((r for r in rows if r.state not in ("qualified", "historical")),
+                  key=lambda r: (_release_key(r), _title_key(r)))
+    past = sorted((r for r in rows if r.state == "historical"),
+                  key=lambda r: (str(r.target_date or ""), r.market_id), reverse=True)
+    return qualified + rest + past  # decisions for earlier target days always last
 
 
 def filter_rows(rows: Iterable[MarketRow], p: Params) -> list[MarketRow]:

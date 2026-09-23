@@ -55,7 +55,7 @@ def view(ctx: d.Context, p: pr.Params) -> cm.Page:
     else:
         groups = list(v.board.value)
         open_groups = [g for g in groups if g.status != "SETTLED"]
-        largest = max(open_groups, key=lambda g: g.account_impact, default=None)
+        largest = max(open_groups, key=lambda g: g.current_exposure, default=None)
         parts.append(c.metric_strip([
             c.metric("Linked outcome groups", c.num(pr.count(len(open_groups))), "Open or partly settled", lead=True),
             c.metric("Open risk", c.money_cell(v.state.open_worst_case_risk), "Worst case, open positions"),

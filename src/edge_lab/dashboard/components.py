@@ -286,6 +286,9 @@ def release_value(row: pr.MarketRow) -> tuple[str, str]:
     if eta is None:
         return na("cash release not evaluated"), ("Not evaluated" if row.primary is None else "Unknown")
     sub = {"within7": "≤ 7 days", "over7": "Over 7 days", "unknown": "Unknown"}[bucket]
+    parsed = pr.parse_utc(eta)
+    if row.now is not None and parsed is not None and parsed < row.now:
+        sub = "Past its ETA · overdue"
     return f'<span class="num">{esc(pr.date_et(eta))}</span>', f"{sub} · {pr.hours_text(hours) or '—'}"
 
 
@@ -302,7 +305,9 @@ def market_row(row: pr.MarketRow, p: pr.Params) -> str:
     domain = pr.DOMAIN_LABELS.get(row.domain, "Other")
     when = row.quotes.get("YES") or next(iter(row.quotes.values()), None)
     when_text = (f"{'Decision' if when.phase == 'decision payload' else 'Captured'} "
-                 f"{pr.time_et(when.received_at_utc) or '—'}") if when else "No quote captured"
+                 f"{pr.datetime_et(when.received_at_utc) or 'time unknown'}") if when else "No quote captured"
+    if when is not None and when.phase != "decision payload" and not when.capture_complete:
+        when_text += " · capture incomplete"
     tiles = []
     if row.payoff_kind not in (None, "binary"):
         tiles.append('<p class="note">Research only: this payoff is not a simple YES/NO contract.</p>')
@@ -316,6 +321,10 @@ def market_row(row: pr.MarketRow, p: pr.Params) -> str:
     sub_bits = [f"{pr.venue_label(row.venue)} · {row.native_id}"]
     if a is not None and a.decided_at_utc:
         sub_bits.append(f"assessed {pr.datetime_et(a.decided_at_utc)}")
+    if row.historical:
+        sub_bits.append(f"decision for target {pr.date_label(row.target_date) or 'unknown day'}, not current")
+    elif not row.assessments and row.history:
+        sub_bits.append("not evaluated for this target day")
     return (
         f'<li class="mrow" data-state="{esc(row.state)}">'
         f'<p class="m-meta"><span>{esc(domain)}</span><span>{esc(pr.venue_label(row.venue))} · {esc(when_text)}</span></p>'
@@ -346,7 +355,12 @@ def tape(items: Sequence[tuple[pr.MarketRow, pr.QuoteSide]], p: pr.Params, *, em
         return ('<div class="tape" role="region" aria-label="Quote tape"><div class="tape-in"><p class="tape-empty">'
                 f'{icon("chart-candlestick", "ic-sm")}<span>No quotes captured yet.</span>'
                 f'<a href="{esc(empty_href)}">Markets</a></p></div></div>')
-    lis = []
+    first = max((q for _, q in items), key=lambda q: str(q.received_at_utc))
+    incomplete = any(not q.capture_complete for _, q in items)
+    lis = [f'<li class="tape-head"><span class="tape-label">Captured quotes</span>'
+           f'<span class="tape-sub">{esc(pr.datetime_et(first.received_at_utc) or "time unknown")}</span>'
+           + (f'<span class="tape-sub k-warn">Capture incomplete</span>' if incomplete else
+              '<span class="tape-sub">Delayed evidence, not live</span>') + "</li>"]
     for row, q in items:
         change = ""
         if q.change is not None:
@@ -361,7 +375,7 @@ def tape(items: Sequence[tuple[pr.MarketRow, pr.QuoteSide]], p: pr.Params, *, em
             f'title="{esc(full)} · captured {esc(pr.datetime_et(q.received_at_utc) or "unknown time")}">'
             f'<span class="tape-label">{esc(pr.short_label(row))}</span>'
             f'<span class="tape-price">{esc(price)}</span>'
-            f'<span class="tape-sub">{esc(pr.venue_label(row.venue))} · {esc(q.side)} · captured</span>{change}'
+            f'<span class="tape-sub">{esc(q.side)} · {esc(pr.venue_label(row.venue))}</span>{change}'
             f'<span class="sr">{esc(full)}, ask {esc(price)}, captured {esc(pr.datetime_et(q.received_at_utc) or "at an unknown time")}</span>'
             "</a></li>")
     return ('<div class="tape" role="region" aria-label="Quote tape: latest captured prices" data-tape>'

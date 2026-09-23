@@ -86,6 +86,9 @@ code, .mono { font-family: var(--me-font-mono); }
 .tape-item { height: 100%; display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-rows: auto auto;
   align-content: center; column-gap: var(--me-space-2); padding: 0 var(--me-space-3); text-decoration: none; color: var(--me-text); }
 .tape-item:hover { background: var(--me-surface-hover); }
+.tape-list > li.tape-head { width: auto; display: flex; flex-direction: column; justify-content: center;
+  padding: 0 var(--me-space-3); background: var(--me-canvas); }
+.tape-head .tape-label { color: var(--me-text-secondary); text-transform: uppercase; letter-spacing: 0.07em; font-size: 11px; }
 .tape-label { font-size: 12px; line-height: 16px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tape-sub { font-size: 11px; line-height: 14px; color: var(--me-text-muted); white-space: nowrap; overflow: hidden;
   text-overflow: ellipsis; }
@@ -250,7 +253,7 @@ code, .mono { font-family: var(--me-font-mono); }
 /* ------------------------------------------------------------------ metrics */
 .summary { padding: var(--me-space-3) var(--me-space-4) var(--me-space-2); }
 .summary .eyebrow { margin-bottom: 2px; }
-@media (max-width: 767px) { .summary .metric .basis { display: none; } .summary-basis { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; } }
+@media (max-width: 767px) { .summary .metric .basis { display: none; } }
 .summary-primary-label { font-size: 13px; line-height: 18px; color: var(--me-text-secondary); }
 .summary-primary { font: 500 var(--me-fs-balance)/var(--me-lh-balance) var(--me-font-mono); font-variant-numeric: tabular-nums;
   margin-top: 2px; overflow-wrap: anywhere; }
@@ -344,8 +347,7 @@ code, .mono { font-family: var(--me-font-mono); }
   border: 1px solid var(--me-control-line); border-radius: var(--me-radius-control); background: var(--me-canvas);
   text-decoration: none; color: var(--me-text); min-width: 0; }
 .qt:hover { background: var(--me-surface-raised); border-color: var(--me-text-muted); }
-.qt-side { font-size: 11px; line-height: 14px; color: var(--me-text-secondary); overflow: hidden; text-overflow: ellipsis;
-  white-space: nowrap; }
+.qt-side { font-size: 11px; line-height: 14px; color: var(--me-text-secondary); overflow-wrap: anywhere; }
 .qt-price { font: 500 var(--me-fs-quote)/var(--me-lh-quote) var(--me-font-mono); font-variant-numeric: tabular-nums; }
 .qt-price.small { font-size: 14px; line-height: 20px; }
 .qt[aria-current="true"] { border-color: var(--me-accent); box-shadow: inset 0 0 0 1px var(--me-accent); }
@@ -454,12 +456,14 @@ code.id { font-size: 12px; color: var(--me-text-secondary); overflow-wrap: anywh
 @media (min-width: 1200px) {
   .ws { grid-template-columns: repeat(12, minmax(0, 1fr)); align-items: start;
     grid-template-areas:
+      "swit swit swit swit swit swit swit swit swit swit swit swit"
       "band band band band band band band band band band band band"
       "main main main main main main main main stat stat stat stat"
       "main main main main main main main main matt matt matt matt"
       "main main main main main main main main acti acti acti acti"
       "syst syst syst syst syst syst syst syst syst syst syst syst"; }
   .ws-band { grid-area: band; }
+  .ws-switch { grid-area: swit; justify-self: end; }
   .ws-main { grid-area: main; }
   .ws-status { grid-area: stat; }
   .ws-matters { grid-area: matt; }
