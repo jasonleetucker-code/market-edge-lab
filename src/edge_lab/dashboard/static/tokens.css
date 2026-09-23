@@ -1,0 +1,92 @@
+/* Market Edge Terminal v1: the single token definition (docs/design/UI_CONTRACT.md §5-6).
+   Dark is the only shipped theme; the OS colour scheme never changes it. */
+:root {
+  color-scheme: dark;
+  --me-canvas: #101214;
+  --me-surface: #171A1D;
+  --me-surface-raised: #20252A;
+  --me-surface-hover: #272D33;
+  --me-line: #343B43;
+  --me-control-line: #65717E;
+  --me-text: #F4F2EC;
+  --me-text-secondary: #BEC3CA;
+  --me-text-muted: #949EA9;
+  --me-accent: #FF7A45;
+  --me-accent-ink: #101214;
+  --me-positive: #49D3A2;
+  --me-negative: #FF8088;
+  --me-warning: #E8BA65;
+  --me-info: #89B8FA;
+  --me-focus: #B8D6FF;
+  --me-radius-control: 4px;
+  --me-radius-panel: 6px;
+  --me-space-1: 4px;
+  --me-space-2: 8px;
+  --me-space-3: 12px;
+  --me-space-4: 16px;
+  --me-space-5: 24px;
+  --me-space-6: 32px;
+
+  /* Typography (IBM Plex, self-hosted; system fonts are failure fallbacks only). */
+  --me-font-sans: "IBM Plex Sans", "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --me-font-cond: "IBM Plex Sans Condensed", "IBM Plex Sans", "Arial Narrow", sans-serif;
+  --me-font-mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Consolas, monospace;
+
+  /* Type scale, mobile first (font-size / line-height). */
+  --me-fs-wordmark: 20px; --me-lh-wordmark: 24px;
+  --me-fs-page: 26px; --me-lh-page: 30px;
+  --me-fs-section: 18px; --me-lh-section: 24px;
+  --me-fs-balance: 28px; --me-lh-balance: 34px;
+  --me-fs-quote: 18px; --me-lh-quote: 22px;
+  --me-fs-market: 15px; --me-lh-market: 20px;
+  --me-fs-body: 15px; --me-lh-body: 22px;
+  --me-fs-meta: 12px; --me-lh-meta: 16px;
+  --me-fs-input: 16px; --me-lh-input: 22px;
+
+  /* Shell geometry. */
+  --me-header-h: 56px;
+  --me-tape-h: 52px;
+  --me-tape-item-w: 184px;
+  --me-rail-w: 0px;
+  --me-tabbar-h: 64px;
+  --me-content-max: 1600px;
+  --me-motion-fast: 120ms;
+  --me-motion-disclose: 160ms;
+}
+
+@media (min-width: 768px) {
+  :root {
+    --me-header-h: 64px;
+    --me-tape-h: 48px;
+    --me-tape-item-w: 216px;
+    --me-rail-w: 72px;
+    --me-fs-wordmark: 22px; --me-lh-wordmark: 26px;
+    --me-fs-page: 30px; --me-lh-page: 34px;
+    --me-fs-section: 20px; --me-lh-section: 26px;
+    --me-fs-balance: 32px; --me-lh-balance: 38px;
+    --me-fs-market: 14px; --me-lh-market: 20px;
+    --me-fs-body: 14px; --me-lh-body: 21px;
+    --me-fs-input: 14px; --me-lh-input: 20px;
+  }
+}
+
+@media (min-width: 1200px) {
+  :root { --me-rail-w: 192px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root { --me-motion-fast: 0ms; --me-motion-disclose: 0ms; }
+}
+
+@font-face { font-family: "IBM Plex Sans"; font-style: normal; font-weight: 400; font-display: swap;
+  src: url("fonts/plex-sans-400.woff2") format("woff2"); }
+@font-face { font-family: "IBM Plex Sans"; font-style: normal; font-weight: 500; font-display: swap;
+  src: url("fonts/plex-sans-500.woff2") format("woff2"); }
+@font-face { font-family: "IBM Plex Sans"; font-style: normal; font-weight: 600; font-display: swap;
+  src: url("fonts/plex-sans-600.woff2") format("woff2"); }
+@font-face { font-family: "IBM Plex Sans Condensed"; font-style: normal; font-weight: 600; font-display: swap;
+  src: url("fonts/plex-sans-condensed-600.woff2") format("woff2"); }
+@font-face { font-family: "IBM Plex Mono"; font-style: normal; font-weight: 400; font-display: swap;
+  src: url("fonts/plex-mono-400.woff2") format("woff2"); }
+@font-face { font-family: "IBM Plex Mono"; font-style: normal; font-weight: 500; font-display: swap;
+  src: url("fonts/plex-mono-500.woff2") format("woff2"); }

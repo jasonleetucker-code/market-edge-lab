@@ -327,6 +327,25 @@ class Context:
         except ValueError as exc:
             return Loaded(ERROR, message=short_error(exc, self.config))
 
+    # ---- observed quotes
+
+    @cached_property
+    def observed(self) -> Loaded:
+        """The latest captured market list and books (`observed_board`)."""
+        if self.store.status != OK:
+            return self.store
+        try:
+            board = observed_board(self.store.value)
+        except Exception as exc:  # noqa: BLE001
+            return Loaded(ERROR, message=short_error(exc, self.config))
+        if board is None:
+            return Loaded(NO_DATA, message="no market books have been captured in the evidence database yet")
+        return Loaded(OK, board)
+
+    def account(self, account_id: str) -> AccountView:
+        """One account's view (both known accounts always exist, possibly NOT_STARTED)."""
+        return next(v for v in self.accounts if v.account_id == account_id)
+
     # ---- experiments
 
     @cached_property
@@ -347,9 +366,12 @@ class Context:
                     out.append({"key": key, "id": None, "title": None, "status": None,
                                 "problems": [short_error(exc, self.config)], "stage_a": None, "reports": []})
                     continue
+                periods = exp.data.get("periods") if isinstance(exp.data.get("periods"), dict) else {}
                 out.append({"key": key, "id": exp.id, "title": exp.data.get("title"), "status": exp.status,
                             "problems": problems.get(key, []), "stage_a": _stage_a(path.parent),
-                            "reports": _reports(path.parent)})
+                            "reports": _reports(path.parent), "stage_b_plan": periods.get("stage_b"),
+                            "limitations": exp.data.get("limitations") if isinstance(exp.data.get("limitations"),
+                                                                                    list) else []})
         except Exception as exc:  # noqa: BLE001
             return Loaded(ERROR, message=short_error(exc, self.config))
         return Loaded(OK, out)
@@ -422,3 +444,128 @@ def starter_view(view: AccountView, now: datetime) -> dict[str, Any] | None:
 def venue_rows() -> list[dict[str, Any]]:
     return venues.coverage_rows()
 
+
+
+# --------------------------------------------------------------------------- observed quotes (evidence store)
+
+QUOTE_PHASES = ("decision", "recheck")  # the forward collector's two book captures per target day
+MAX_OBSERVED_MARKETS = 200
+
+
+@dataclass(frozen=True)
+class ObservedQuote:
+    """One side of one captured book, normalized by `kalshi_quotes.quotes_from_orderbook`.
+
+    `ask` is the executable buy price for `side` as captured; nothing here is a midpoint,
+    last trade or mark."""
+
+    side: str
+    ask: Any  # Decimal | None
+    bid: Any
+    size: Any  # quantity offered at exactly `ask`
+    received_at_utc: str | None
+    evidence_id: str | None
+    anomaly: str | None
+
+
+@dataclass
+class ObservedMarket:
+    venue: str
+    market_id: str  # "<venue>:<native id>"
+    native_id: str
+    event_ticker: str | None
+    event_id: str | None
+    domain: str | None
+    target_date: str
+    title: str | None
+    outcome: str | None  # the YES outcome label as the venue states it
+    no_outcome: str | None
+    status: str | None  # venue lifecycle word as captured
+    close_time_utc: str | None
+    rules_primary: str | None
+    payoff_kind: str | None
+    quotes: dict[str, dict[str, ObservedQuote]] = field(default_factory=dict)  # phase -> side -> quote
+
+
+@dataclass
+class ObservedBoard:
+    target_date: str
+    captures: dict[str, dict[str, Any]]  # phase -> {id, status, completed_at_utc, reasons}
+    markets: list[ObservedMarket]
+
+
+def _capture_for(rows: list, phase: str) -> Any:
+    """The complete capture of a phase if there is one, else the latest that stored any books."""
+    mine = [r for r in rows if r["phase"] == phase]
+    complete = [r for r in mine if r["status"] == "complete"]
+    if complete:
+        return complete[-1]
+    with_books = [r for r in mine if (json.loads(r["links_json"] or "{}").get("books"))]
+    return with_books[-1] if with_books else None
+
+
+def observed_board(store: SnapshotStore, *, mode: str = "live") -> ObservedBoard | None:
+    """The latest target day's captured markets and books, read-only. None when nothing is captured.
+
+    Market metadata comes from the decision capture's market snapshots; books from each
+    phase's own snapshots (only snapshots written by that capture's run count, as in
+    `exp001_stageb.evaluate_day`). Quotes are normalized by the canonical Kalshi adapter."""
+    from ..exp001_stageb import event_for
+    from ..kalshi_quotes import VENUE, market_from_kalshi, quotes_from_orderbook
+
+    rows = [r for r in store.forward_captures(mode=mode) if r["phase"] in QUOTE_PHASES]
+    targets = sorted({r["target_date"] for r in rows if json.loads(r["links_json"] or "{}").get("books")})
+    if not targets:
+        return None
+    target = targets[-1]
+    day_rows = [r for r in rows if r["target_date"] == target]
+    try:
+        event = event_for(datetime.fromisoformat(target).date())
+        domain, event_id = event.domain, event.event_id
+    except ValueError:
+        domain = event_id = None
+    markets: dict[str, ObservedMarket] = {}
+    captures: dict[str, dict[str, Any]] = {}
+    for phase in QUOTE_PHASES:
+        row = _capture_for(day_rows, phase)
+        if row is None:
+            continue
+        links = json.loads(row["links_json"] or "{}")
+        captures[phase] = {"id": int(row["id"]), "status": row["status"], "completed_at_utc": row["completed_at_utc"],
+                           "reasons": json.loads(row["reasons_json"] or "[]")}
+        books = links.get("books") or {}
+        ids = [*links.get("market_snapshots", []), *(b.get("snapshot_id") for b in books.values())]
+        snaps = {sid: s for sid, s in store.snapshots_by_id(i for i in ids if i is not None).items()
+                 if s["run_id"] == row["run_id"]}
+        for sid in links.get("market_snapshots", []):
+            snap = snaps.get(sid)
+            if snap is None:
+                continue
+            for raw in json.loads(snap["payload_json"]).get("markets") or []:
+                if not isinstance(raw, dict) or not raw.get("ticker"):
+                    continue
+                m = market_from_kalshi(raw, event_id_for_ticker={})
+                markets.setdefault(m.market_id, ObservedMarket(
+                    venue=VENUE, market_id=m.market_id, native_id=m.native_id,
+                    event_ticker=raw.get("event_ticker"), event_id=event_id, domain=domain, target_date=target,
+                    title=raw.get("title"), outcome=raw.get("yes_sub_title") or m.outcome,
+                    no_outcome=raw.get("no_sub_title"), status=raw.get("status"), close_time_utc=raw.get("close_time"),
+                    rules_primary=raw.get("rules_primary"), payoff_kind=m.payoff.kind))
+        for native, info in books.items():
+            snap = snaps.get(info.get("snapshot_id"))
+            if snap is None or snap["entity_id"] != native or snap["kind"] != "orderbook":
+                continue
+            quotes = quotes_from_orderbook(native, json.loads(snap["payload_json"]),
+                                           received_at_utc=snap["fetched_at_utc"], evidence_id=f"snapshot:{snap['id']}")
+            if not quotes:
+                continue
+            mid = next(iter(quotes.values())).market_id
+            market = markets.setdefault(mid, ObservedMarket(
+                venue=VENUE, market_id=mid, native_id=native, event_ticker=None, event_id=event_id, domain=domain,
+                target_date=target, title=None, outcome=None, no_outcome=None, status=None, close_time_utc=None,
+                rules_primary=None, payoff_kind=None))
+            market.quotes[phase] = {side: ObservedQuote(side, q.best_ask, q.best_bid, q.displayed_size,
+                                                        q.received_at_utc, q.evidence_id, q.anomaly)
+                                    for side, q in quotes.items()}
+    ordered = sorted(markets.values(), key=lambda m: m.market_id)[:MAX_OBSERVED_MARKETS]
+    return ObservedBoard(target, captures, ordered)

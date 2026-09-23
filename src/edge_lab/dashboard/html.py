@@ -1,63 +1,20 @@
-"""HTML building blocks. Every dynamic value passes through `esc` (html.escape, quotes too).
+"""Document shell, common navigation and static assets for Market Edge Terminal v1.
 
-Missing values render as an explicit "—" marked `unknown`, never as 0.
+Every dynamic value passes through `esc` (html.escape, quotes too). Styles and scripts are
+self-hosted files served from an exact allowlist (`STATIC_FILES`); pages carry no inline
+style or script, so the Content-Security-Policy can forbid both.
 """
 
 from __future__ import annotations
 
+import hashlib
 import html
-from datetime import timedelta
-from decimal import Decimal, InvalidOperation
-from typing import Any, Iterable
+from dataclasses import dataclass
+from functools import lru_cache
+from importlib import resources
+from typing import Any
 
-NAV = (
-    ("/", "Overview"),
-    ("/opportunities", "Opportunities"),
-    ("/positions", "Positions"),
-    ("/outcome-board", "Outcome Board"),
-    ("/risk", "Risk & capital"),
-    ("/experiments", "Experiments & sources"),
-)
-
-CSS = """
-:root{--bg:#f6f7f9;--fg:#15181d;--muted:#5b6270;--card:#fff;--line:#d9dde3;--warn:#8a5a00;--warnbg:#fff4d6;
---err:#8f1d1d;--errbg:#fde8e8;--ok:#1d6b35;--okbg:#e5f5ea;--nd:#3c4a5c;--ndbg:#e9eef5;--banner:#6b0f0f}
-@media (prefers-color-scheme:dark){:root{--bg:#111418;--fg:#e8eaee;--muted:#9aa3b2;--card:#1a1e24;--line:#2d333c;
---warn:#f2c46b;--warnbg:#3a2e10;--err:#f3a3a3;--errbg:#3d1717;--ok:#8fd6a5;--okbg:#14301d;--nd:#b8c4d6;
---ndbg:#1f2733;--banner:#b32222}}
-*{box-sizing:border-box}
-body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.45 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
-.banner{background:var(--banner);color:#fff;text-align:center;font-weight:800;letter-spacing:.06em;padding:10px 16px;
-font-size:18px}
-.demo{background:repeating-linear-gradient(45deg,#ffd400,#ffd400 18px,#111 18px,#111 36px);padding:6px}
-.demo span{display:block;background:#ffd400;color:#111;text-align:center;font-weight:900;font-size:22px;padding:8px}
-nav{display:flex;flex-wrap:wrap;gap:4px;padding:8px 16px;background:var(--card);border-bottom:1px solid var(--line)}
-nav a{padding:6px 10px;border-radius:6px;color:var(--fg);text-decoration:none}
-nav a.on{background:var(--ndbg);font-weight:700}
-main{max-width:1180px;margin:0 auto;padding:16px}
-h1{font-size:22px;margin:4px 0 12px}h2{font-size:18px;margin:0 0 8px}h3{font-size:15px;margin:12px 0 6px}
-.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:12px}
-.panel{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:12px;margin-bottom:12px;
-min-width:0}
-.panel.nodata{background:var(--ndbg);color:var(--nd)}.panel.error{background:var(--errbg);color:var(--err)}
-.panel.stale{border:2px solid var(--warn)}
-.tag{display:inline-block;padding:1px 7px;border-radius:10px;font-size:12px;font-weight:700;border:1px solid}
-.tag.ok{color:var(--ok);background:var(--okbg)}.tag.warn{color:var(--warn);background:var(--warnbg)}
-.tag.err{color:var(--err);background:var(--errbg)}.tag.nd{color:var(--nd);background:var(--ndbg)}
-.scroll{overflow-x:auto;-webkit-overflow-scrolling:touch;max-width:100%}
-table{border-collapse:collapse;width:100%;font-size:13px}
-th,td{border-bottom:1px solid var(--line);padding:5px 7px;text-align:left;vertical-align:top;white-space:nowrap}
-td.wrap{white-space:normal;min-width:180px}
-dl.kv{display:grid;grid-template-columns:max-content 1fr;gap:3px 12px;margin:0}dl.kv dt{color:var(--muted)}
-dl.kv dd{margin:0;overflow-wrap:anywhere}
-.na{color:var(--muted)}.note{color:var(--muted);font-size:13px}
-ul.tight{margin:4px 0;padding-left:20px}
-footer{max-width:1180px;margin:0 auto;padding:8px 16px 24px;color:var(--muted);font-size:12px}
-@media (max-width:640px){main{padding:10px}.grid{grid-template-columns:1fr}.banner{font-size:16px}
-dl.kv{grid-template-columns:1fr}dl.kv dt{margin-top:4px}nav a{padding:6px 8px}}
-"""
-
-UNKNOWN = '<span class="na" title="unknown / not recorded">—</span>'
+UNKNOWN = '<span class="na" title="unknown / not recorded" aria-label="unknown / not recorded">—</span>'
 
 
 def esc(value: Any) -> str:
@@ -69,100 +26,174 @@ def esc(value: Any) -> str:
     return html.escape(str(value), quote=True)
 
 
-def money(value: Any) -> str:
-    """A dollar figure from a Decimal or decimal string; exact, never rounded here."""
-    if value is None:
-        return UNKNOWN
-    try:
-        d = Decimal(str(value))
-    except (InvalidOperation, ValueError):
-        return esc(value)
-    return esc(f"-${-d}" if d < 0 else f"${d}")
+# --------------------------------------------------------------------------- static assets
+
+# The only files the server will ever read from static/: exact names, fixed content types.
+STATIC_FILES: dict[str, str] = {
+    "tokens.css": "text/css; charset=utf-8",
+    "terminal.css": "text/css; charset=utf-8",
+    "terminal.js": "text/javascript; charset=utf-8",
+    "favicon.svg": "image/svg+xml",
+    "fonts/plex-sans-400.woff2": "font/woff2",
+    "fonts/plex-sans-500.woff2": "font/woff2",
+    "fonts/plex-sans-600.woff2": "font/woff2",
+    "fonts/plex-sans-condensed-600.woff2": "font/woff2",
+    "fonts/plex-mono-400.woff2": "font/woff2",
+    "fonts/plex-mono-500.woff2": "font/woff2",
+}
+SPRITE_FILE = "icons.svg"  # inlined into every page (an external <use> would need a looser CSP)
+FIRST_VIEW_FONTS = ("fonts/plex-sans-400.woff2", "fonts/plex-sans-500.woff2", "fonts/plex-sans-condensed-600.woff2",
+                    "fonts/plex-mono-500.woff2")
 
 
-def age(delta: timedelta | None) -> str:
-    if delta is None:
-        return UNKNOWN
-    seconds = int(delta.total_seconds())
-    sign, seconds = ("in the future: ", -seconds) if seconds < 0 else ("", seconds)
-    days, rem = divmod(seconds, 86400)
-    hours, rem = divmod(rem, 3600)
-    minutes = rem // 60
-    parts = ([f"{days} d"] if days else []) + ([f"{hours} h"] if hours or days else []) + [f"{minutes} min"]
-    return esc(sign + " ".join(parts))
+def _static_root():
+    return resources.files("edge_lab.dashboard").joinpath("static")
 
 
-def tag(text: str, kind: str = "nd") -> str:
-    return f'<span class="tag {esc(kind)}">{esc(text)}</span>'
+@lru_cache(maxsize=None)
+def static_bytes(name: str) -> bytes:
+    """The bytes of one allowlisted asset (package data, so it works from an installed wheel)."""
+    if name not in STATIC_FILES and name != SPRITE_FILE:
+        raise KeyError(name)
+    node = _static_root()
+    for part in name.split("/"):
+        node = node.joinpath(part)
+    return node.read_bytes()
 
 
-def state_tag(value: Any) -> str:
-    """Colour a status word by meaning. Unknown words are neutral, never green."""
-    text = "UNKNOWN" if value is None else str(value)
-    good = {"OK", "FRESH", "VALID", "HEALTHY_NO_SIGNAL", "HEALTHY_TRADED", "SETTLED", "FILLED", "QUALIFY", "PASS",
-            "ok", "RUNNING", "CONCLUDED_PASS", "VERIFIED", "EXACT", "ELIGIBLE",
-            "LIVE_DATA_VERIFIED", "INFO"}
-    bad = {"ERROR", "STALE", "INVALID", "INVALID_CAPTURE", "FAILED", "failed", "REJECT", "NO_FILL", "LOCK_BUSY",
-           "CONCLUDED_FAIL", "BREACH", "NOT_RECOMMENDED", "UNVERIFIED_CURRENT_SCHEDULE", "overdue", "FAIL",
-           "SETTLEMENT_CONFLICT", "MISSING_CAPTURE", "RESEARCH_INVALID_CASH", "HALTED", "UNVERIFIED",
-           "UNSUPPORTED", "SEVEN_DAY_POLICY_EXCEPTION", "CRITICAL"}
-    kind = "ok" if text in good else "err" if text in bad else "warn" if text in {
-        "PENDING_SETTLEMENT", "NOT_CLOSED", "partial", "UNKNOWN", "OPEN", "PARTIALLY_SETTLED", "NO_CAPTURE",
-        "RISK_VETO", "not_run", "PARTIALLY_VERIFIED", "CONSERVATIVE_BOUND", "OWNER_ATTESTED",
-        "STARTER_POLICY_INELIGIBLE", "HORIZON_OVER_7D", "TRADABLE_CASH_RELEASE_UNKNOWN", "SETTLEMENT_TIMING_UNVERIFIED",
-        "POST_SETTLEMENT_HOLD", "DELAYED_OR_DISPUTED", "EXIT_DEPENDS_ON_LIQUIDITY", "WARNING", "NEEDS_ACCESS",
-        "PLANNED", "IMPLEMENTED", "TESTED", "PARTIAL", "STALE"} else "nd"
-    return tag(text, kind)
+@lru_cache(maxsize=None)
+def asset_version() -> str:
+    """One fingerprint over every served asset: any change yields new URLs (immutable caching)."""
+    h = hashlib.sha256()
+    for name in sorted(STATIC_FILES):
+        h.update(name.encode())
+        h.update(static_bytes(name))
+    return h.hexdigest()[:12]
 
 
-def kv(pairs: Iterable[tuple[str, str]]) -> str:
-    """Pairs of (label, already-escaped HTML)."""
-    return '<dl class="kv">' + "".join(f"<dt>{esc(k)}</dt><dd>{v}</dd>" for k, v in pairs) + "</dl>"
+@lru_cache(maxsize=None)
+def sprite() -> str:
+    """The icon sprite without its XML comment (license and provenance: static/ASSETS_PROVENANCE.md)."""
+    text = static_bytes(SPRITE_FILE).decode("utf-8")
+    start = text.index("<svg")
+    return text[start:].replace("<svg ", '<svg class="sprite" ', 1).strip()
 
 
-def table(headers: Iterable[str], rows: Iterable[Iterable[str]], wrap: Iterable[int] = ()) -> str:
-    """Cells are already-escaped HTML. Wrapped in a horizontal scroll container."""
-    wrap = set(wrap)
-    head = "".join(f"<th>{esc(h)}</th>" for h in headers)
-    body = "".join("<tr>" + "".join(f'<td{" class=wrap" if i in wrap else ""}>{c}</td>' for i, c in enumerate(r))
-                   + "</tr>" for r in rows)
-    if not body:
-        return '<p class="na">none recorded</p>'
-    return f'<div class="scroll"><table><thead><tr>{head}</tr></thead><tbody>{body}</tbody></table></div>'
+def asset_url(name: str) -> str:
+    return f"/static/{asset_version()}/{name}"
 
 
-def ul(items: Iterable[Any]) -> str:
-    items = list(items)
-    if not items:
-        return '<p class="na">none</p>'
-    return '<ul class="tight">' + "".join(f"<li>{esc(i)}</li>" for i in items) + "</ul>"
+# --------------------------------------------------------------------------- navigation
+
+@dataclass(frozen=True)
+class NavItem:
+    key: str
+    href: str
+    label: str
+    icon: str
+    group: int
 
 
-def panel(title: str, body: str, kind: str = "") -> str:
-    return f'<section class="panel {esc(kind)}"><h2>{esc(title)}</h2>{body}</section>'
+NAV = (
+    NavItem("terminal", "/", "Terminal", "layout-dashboard", 1),
+    NavItem("markets", "/opportunities", "Markets", "chart-candlestick", 1),
+    NavItem("portfolio", "/positions", "Portfolio", "briefcase-business", 1),
+    NavItem("outcomes", "/outcome-board", "Outcomes", "target", 1),
+    NavItem("risk", "/risk", "Risk", "shield", 2),
+    NavItem("research", "/experiments", "Research & Data", "flask-conical", 2),
+    NavItem("alerts", "/alerts", "Alerts", "bell", 2),
+)
+MORE = NavItem("more", "/more", "More", "menu", 1)
+TABBAR = ("terminal", "markets", "portfolio", "outcomes", "more")
+UNDER_MORE = {"risk", "research", "alerts", "more"}
 
 
-def no_data(title: str, message: str) -> str:
-    return panel(title, f"<p>{tag('NO DATA / NOT STARTED', 'nd')}</p><p>{esc(message)}</p>", "nodata")
+def _icon(name: str) -> str:
+    return f'<svg class="ic" aria-hidden="true" focusable="false"><use href="#i-{esc(name)}"></use></svg>'
 
 
-def error(title: str, message: str) -> str:
-    return panel(title, f"<p>{tag('ERROR', 'err')}</p><p>{esc(message)}</p>", "error")
+def _link(item: NavItem, current: bool) -> str:
+    cur = ' aria-current="page"' if current else ""
+    return f'<a href="{esc(item.href)}"{cur}>{_icon(item.icon)}<span>{esc(item.label)}</span></a>'
 
 
-def page(title: str, path: str, body: str, *, demo: bool, generated_at: str) -> str:
-    nav = "".join(f'<a href="{esc(href)}"{" class=on" if href == path else ""}>{esc(label)}</a>'
-                  for href, label in NAV)
-    watermark = ('<div class="demo"><span>SYNTHETIC DEMO DATA — NOT REAL, NOT FROM ANY LEDGER OR COLLECTOR'
-                 '</span></div>') if demo else ""
+def rail(nav: str) -> str:
+    groups = []
+    for g in (1, 2):
+        groups.append('<ul class="rail-grp">' + "".join(
+            f"<li>{_link(i, i.key == nav)}</li>" for i in NAV if i.group == g) + "</ul>")
+    return f'<nav class="rail" aria-label="Primary">{"".join(groups)}</nav>'
+
+
+def tabbar(nav: str) -> str:
+    items = {i.key: i for i in NAV}
+    items["more"] = MORE
+    links = []
+    for key in TABBAR:
+        current = key == nav or (key == "more" and nav in UNDER_MORE)
+        links.append(f"<li>{_link(items[key], current)}</li>")
+    return f'<nav class="tabbar" aria-label="Primary (mobile)"><ul>{"".join(links)}</ul></nav>'
+
+
+# --------------------------------------------------------------------------- document
+
+
+@dataclass(frozen=True)
+class Shell:
+    title: str
+    nav: str  # a NAV key, "more", or "" for none
+    body: str  # already-escaped page HTML
+    demo: bool
+    rendered_utc: str
+    rendered_et: str | None = None
+    account_label: str | None = None  # desktop header: the selected account, when the page is scoped
+    tape: str = ""
+    alerts: int | None = None  # real locally available attention items; None = unknown
+
+
+MODE_TEXT = "SHADOW · NO REAL MONEY"
+DEMO_TEXT = "SYNTHETIC UI DEMO — NOT REAL, NOT FROM ANY LEDGER OR COLLECTOR"
+
+
+def page(shell: Shell) -> str:
+    bell_label = ("Alerts" if shell.alerts is None else
+                  f"Alerts: {shell.alerts} item{'s' if shell.alerts != 1 else ''} need attention" if shell.alerts
+                  else "Alerts: nothing needs attention")
+    bell_count = f'<span class="bell-n" aria-hidden="true">{esc(shell.alerts)}</span>' if shell.alerts else ""
+    bell_cur = ' aria-current="page"' if shell.nav == "alerts" else ""
+    demo = (f'<div class="demo-strip" role="note"><p class="demo-strip-in">{esc(DEMO_TEXT)}</p></div>'
+            if shell.demo else "")
+    account = f'<span class="hdr-acct">{esc(shell.account_label)}</span>' if shell.account_label else ""
+    rendered = f"{esc(shell.rendered_et)} ({esc(shell.rendered_utc)})" if shell.rendered_et else esc(shell.rendered_utc)
     return (
-        "<!doctype html><html lang=en><head><meta charset=utf-8>"
-        '<meta name="viewport" content="width=device-width, initial-scale=1">'
-        '<meta name="robots" content="noindex, nofollow">'
-        f"<title>{esc(title)} · edge-lab shadow dashboard</title><style>{CSS}</style></head><body>"
-        '<div class="banner" role="banner">SHADOW — NO REAL MONEY</div>'
-        f"{watermark}<nav>{nav}</nav><main><h1>{esc(title)}</h1>{body}</main>"
-        f"<footer>Read-only local view. Rendered {esc(generated_at)}. "
-        "— marks an unknown or unrecorded value (never zero). All balances are simulated.</footer>"
-        f"{watermark}</body></html>"
+        '<!doctype html><html lang="en"><head><meta charset="utf-8">'
+        '<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">'
+        '<meta name="robots" content="noindex, nofollow"><meta name="color-scheme" content="dark">'
+        '<meta name="theme-color" content="#101214">'
+        f"<title>{esc(shell.title)} · Market Edge</title>"
+        f'<link rel="icon" href="{asset_url("favicon.svg")}" type="image/svg+xml">'
+        f'<link rel="preload" href="{asset_url("fonts/plex-sans-400.woff2")}" as="font" type="font/woff2" crossorigin>'
+        f'<link rel="stylesheet" href="{asset_url("tokens.css")}">'
+        f'<link rel="stylesheet" href="{asset_url("terminal.css")}">'
+        f'<script src="{asset_url("terminal.js")}" defer></script>'
+        "</head><body>"
+        f"{sprite()}"
+        '<a class="skip" href="#main">Skip to content</a>'
+        '<header class="hdr"><div class="hdr-in">'
+        '<a class="brand" href="/" aria-label="Market Edge, Terminal home">'
+        '<span class="brand-rule" aria-hidden="true"></span><span class="brand-word">MARKET EDGE</span></a>'
+        '<span class="hdr-desc">Lab · research terminal</span>'
+        f'<div class="hdr-right">{account}<span class="mode" role="note">{esc(MODE_TEXT)}</span>'
+        f'<a class="bell" href="/alerts" aria-label="{esc(bell_label)}"{bell_cur}>{_icon("bell")}{bell_count}</a>'
+        "</div></div></header>"
+        f"{demo}{shell.tape}"
+        f'<div class="app">{rail(shell.nav)}<main id="main" class="main" tabindex="-1">{shell.body}'
+        '<footer class="foot">'
+        f"<p>Read-only view of stored evidence. Rendered {rendered}. Refreshing reloads stored data; it never "
+        "starts a new scan.</p>"
+        "<p>— marks a value that is unknown or not recorded, never zero. All balances are simulated shadow figures; "
+        "no real money exists here and nothing on this site can place an order.</p>"
+        "</footer></main></div>"
+        f"{tabbar(shell.nav)}"
+        "</body></html>"
     )
