@@ -21,11 +21,11 @@ Readiness vocabulary: **NOT READY** (prerequisites absent) · **READY FOR RESEAR
 | Issue | Idea | Readiness | Why / prerequisites |
 |---|---|---|---|
 | #4 | Durable idea intake and readiness backlog (process) | **Implemented** 2026-09-22 (Gate 3 PR) | `AI_INSTRUCTIONS.md` rule + this index |
-| #3 | Outcome Board / What Matters Today dashboard | **BACKEND FOUNDATION IMPLEMENTED** 2026-09-23 (overnight directive); UI NOT READY | `edge_lab.outcome_board`: shadow positions grouped by outcome cluster, ranked by account impact (ADR 0015). The dashboard UI, hosting, auth and live marks are unauthorized and not built. |
+| #3 | Outcome Board / What Matters Today dashboard | **BACKEND + LOCAL VIEW IMPLEMENTED** 2026-09-23 (PR #28); hosting NOT READY | `edge_lab.outcome_board` (ADR 0015) plus the `/outcome-board` view of the local read-only dashboard (127.0.0.1 only). Hosting, auth and live marks are unauthorized and not built. |
 | #5 | Sports prediction-market and sports-modeling expansion | READY FOR RESEARCH (not in Gate 3 scope) | Core framework is proving out on weather. Implementation needs the shared market-identity and execution layers. |
 | #9 | Sportsbook odds aggregation, consensus pricing, best-venue comparison | NOT READY | Sub-idea of #5. Needs sports authorization, market equivalence and verified access terms. |
-| #6 | Dynamic bankroll, position sizing, withdrawal guidance | **P0 FOUNDATION IMPLEMENTED** 2026-09-23 (shadow only) | Shadow ledger (ADR 0014), `suggest_position_size`, and the risk/capital report with a withdrawal contract (ADR 0015). The withdrawal contract never recommends a draw. A real-money policy, a verified edge and verified fees are all still missing. |
-| #10 | Host privately on existing Chase Upside infrastructure (separate service/subdomain, real access control) | **PARTLY AUTHORIZED** 2026-09-22: headless read-only collector only | Forward collector authorized on the VPS as a separate service (ADR 0012; headroom review `docs/deploy/VPS_REVIEW_2026-09-22.md` PASS). Dashboard/API, subdomain, DNS/TLS and auth remain NOT READY and unauthorized. |
+| #6 | Dynamic bankroll, position sizing, withdrawal guidance | **P0 FOUNDATION IMPLEMENTED** 2026-09-23 (shadow only) | Shadow ledger (ADR 0014), `suggest_position_size`, and the risk/capital report with a withdrawal contract (ADR 0015). The withdrawal contract never recommends a draw. Since PR #26 the operational shadow account enforces the risk limits **before** each fill (NO_FILL RISK_VETO); the frozen research account is separate. A real-money policy, a verified edge and verified fees are all still missing. |
+| #10 | Host privately on existing Chase Upside infrastructure (separate service/subdomain, real access control) | **PARTLY AUTHORIZED** 2026-09-22: headless read-only collector only | Forward collector authorized on the VPS as a separate service (ADR 0012; headroom review `docs/deploy/VPS_REVIEW_2026-09-22.md` PASS). Daily shadow and settlement units are staged in the repo (PR #26) under the 2026-09-23 authorization but not yet installed (owner SSH step). Dashboard hosting, subdomain, DNS/TLS and auth remain NOT READY and unauthorized; the dashboard is local only. |
 | #7 | Free-first multi-domain ingestion with paid-source ROI gate | APPLY SELECTIVELY NOW | Gate 3 applied it: the free IEM archive of NWS forecasts was chosen and paid weather data was not considered. The general ingestion platform is not built. |
 
 Related owner records that are not ideas:
@@ -36,6 +36,13 @@ Related owner records that are not ideas:
   its own branch and file claim. It does not touch Gate 3 files.
 
 ## Review log
+
+- **2026-09-23: daily-shadow directive (PRs #25, #26, #28).**
+  - #3: the local read-only view now exists; hosting is still not authorized.
+  - #6: risk limits are now enforced before each fill; still no real-money policy.
+  - #10: units are staged but not installed. Dashboard hosting is NOT READY (no DNS/TLS or
+    exposure authorization).
+  - #5, #7 and #9 unchanged. There was no sports work and no paid source.
 
 - **2026-09-23: Gate 4 → 5 → 6 and the risk foundation (overnight directive, PRs #21–#24).**
   - #6 and #3 moved to foundation-implemented (shadow and backend only).
