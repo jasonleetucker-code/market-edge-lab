@@ -17,7 +17,8 @@ from typing import Any, Mapping
 
 from . import settlement
 from .opportunity import (
-    DepthLadder, DepthLevel, Event, ExecutableQuote, Market, MarketStatus, MarketTiming, Payoff,
+    DepthLadder, DepthLevel, Event, ExecutableQuote, Market, MarketStatus, MarketTiming, Payoff, PriceGrid,
+    PriceRange,
 )
 
 VENUE = "kalshi"
@@ -87,6 +88,22 @@ def timing_from_kalshi(raw: Mapping[str, Any], *, source: str | None = None) -> 
     )
 
 
+def price_grid_from_kalshi(raw: Mapping[str, Any]) -> PriceGrid | None:
+    """The market's tick grid from Kalshi's `price_ranges` ([{start, end, step}] in dollars).
+
+    None when the field is absent or malformed: an unknown grid is never assumed to be the
+    cent grid."""
+    ranges = raw.get("price_ranges")
+    if not isinstance(ranges, list) or not ranges:
+        return None
+    try:
+        parsed = tuple(PriceRange(Decimal(str(r["start"])), Decimal(str(r["end"])), Decimal(str(r["step"])))
+                       for r in ranges)
+        return PriceGrid(parsed, source=f"kalshi price_ranges ({raw.get('price_level_structure') or 'unnamed'})")
+    except (KeyError, TypeError, InvalidOperation, ValueError):
+        return None
+
+
 def market_from_kalshi(raw: Mapping[str, Any], *, event_id_for_ticker: Mapping[str, str],
                        timing_source: str | None = None) -> Market:
     """Build a `Market`. `event_id_for_ticker` maps Kalshi event tickers to normalized ids.
@@ -116,6 +133,7 @@ def market_from_kalshi(raw: Mapping[str, Any], *, event_id_for_ticker: Mapping[s
         rules_resolved=resolved,
         rules_detail=detail,
         timing=timing_from_kalshi(raw, source=timing_source),
+        price_grid=price_grid_from_kalshi(raw),
     )
 
 

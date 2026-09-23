@@ -71,3 +71,16 @@ so the idea's origin stays traceable.
   queue, no partial fills, no maker fees, no default marks), and that an event settles
   only on coherent evidence.
 - **Audit:** `docs/GITHUB_REUSE_AUDIT.md`.
+
+### TPN-R003 — per-market price grid from venue-published tick ranges
+
+- **Where:** `src/edge_lab/opportunity.py` (`PriceGrid`, `PriceRange`, `walk_ladder(price_grid=...)`);
+  `src/edge_lab/kalshi_quotes.py` (`price_grid_from_kalshi`); `src/edge_lab/polymarket_us.py`
+  (`price_grid_from_market`); `tests/test_payoff_and_grid.py`; ADR 0023.
+- **Upstream studied:** `arshka/pykalshi` at `e42d9f3c491c5037cfe51c7f69ad35074d097255`
+  (a price check against Kalshi's `price_ranges`).
+- **License:** MIT. Nothing was copied.
+- **What differs from upstream:** Decimal throughout; a missing or malformed grid is None
+  and never assumed to be the cent grid; the grid is enforced in depth walks, not in the
+  frozen opportunity engine.
+- **Audit:** `docs/GITHUB_REUSE_AUDIT.md`.

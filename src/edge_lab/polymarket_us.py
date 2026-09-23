@@ -50,7 +50,9 @@ from urllib.parse import quote, urlencode
 
 from . import http
 from .discovery import CatalogCoverage, CoverageState
-from .opportunity import Event, ExecutableQuote, Market, MarketStatus, MarketTiming, Payoff
+from .opportunity import (
+    DepthLadder, DepthLevel, Event, ExecutableQuote, Market, MarketStatus, MarketTiming, Payoff, PriceGrid, PriceRange,
+)
 
 VENUE = "polymarket_us"
 SOURCE_ID = "polymarket_us_public"
@@ -150,6 +152,17 @@ def status_of(raw: Mapping[str, Any]) -> MarketStatus:
     return MarketStatus.UNKNOWN  # includes MARKET_STATUS_UNSPECIFIED and values newer than the docs
 
 
+def price_grid_from_market(raw: Mapping[str, Any]) -> PriceGrid | None:
+    """The market's tick grid from `orderPriceMinTickSize` (one step over (0, 1)); None when
+    absent or malformed. It is never assumed from another market or venue."""
+    try:
+        step = Decimal(str(raw.get("orderPriceMinTickSize")))
+        return PriceGrid((PriceRange(Decimal(0), Decimal(1), step),),
+                         source="polymarket_us orderPriceMinTickSize") if raw.get("orderPriceMinTickSize") else None
+    except (InvalidOperation, ValueError):
+        return None
+
+
 def market_from_polymarket(raw: Mapping[str, Any], *, event_id_for_market: Mapping[str, str] | None = None,
                            timing_source: str | None = None) -> tuple[Market, MarketMeta]:
     """A generic `Market` plus the raw metadata. Markets carry no event reference in the
@@ -172,6 +185,7 @@ def market_from_polymarket(raw: Mapping[str, Any], *, event_id_for_market: Mappi
         rules_resolved=False,
         rules_detail=RULES_NOT_ESTABLISHED,
         timing=timing_from_market(raw, source=timing_source),
+        price_grid=price_grid_from_market(raw),
     )
     fee = raw.get("feeCoefficient")
     meta = MarketMeta(
@@ -299,6 +313,57 @@ def quotes_from_book(slug: str, payload: Mapping[str, Any] | None, *, received_a
                               received_at_utc=received_at_utc, source_timestamp_utc=source_ts,
                               evidence_id=evidence_id, anomaly=anomaly),
     }
+
+
+def _ask_ladder(levels: list[tuple[Decimal, Decimal]], *, invert: bool) -> tuple[DepthLevel, ...]:
+    """Ascending asks, sizes summed per price. `invert` turns YES bids into NO asks (1 − bid)."""
+    sizes: dict[Decimal, Decimal] = {}
+    for price, qty in levels:
+        if qty > 0:
+            ask = Decimal(1) - price if invert else price
+            sizes[ask] = sizes.get(ask, Decimal(0)) + qty
+    return tuple(DepthLevel(p, sizes[p]) for p in sorted(sizes))
+
+
+def ladders_from_book(slug: str, payload: Mapping[str, Any] | None, *, received_at_utc: str | None,
+                      evidence_id: str | None, complete_book: bool = False) -> dict[str, DepthLadder]:
+    """YES and NO ask ladders from one captured GET /v1/markets/{slug}/book payload.
+
+    Side semantics follow `quotes_from_book`: YES buys from the YES `offers`; NO buys by
+    selling YES into the YES `bids`, at 1 − bid for the bid's quantity. When the book is
+    valid, each ladder's top level is exactly that function's quote. Native precision is
+    kept (Decimal from the venue's strings). The docs do not say that the book returns every
+    level, so by default each ladder is marked truncated: running out of levels is then
+    DEPTH_UNKNOWN, never INSUFFICIENT_DEPTH. Pass `complete_book=True` only with evidence.
+    {} when there is no book; a malformed, crossed, mismatched or not-open book carries
+    `anomaly`, exactly as the quote path does."""
+    data = payload.get("marketData") if isinstance(payload, Mapping) else None
+    if not isinstance(data, Mapping):
+        return {}
+    mid = market_id(slug)
+    source_ts = _text(data, "transactTime")
+    truncated = not complete_book
+
+    def ladder(side: str, asks: tuple[DepthLevel, ...], anomaly: str | None) -> DepthLadder:
+        return DepthLadder(VENUE, mid, side, asks, truncated, received_at_utc, source_ts, evidence_id, anomaly)
+
+    if data.get("marketSlug") not in (None, slug):
+        anomaly = f"book is for {data.get('marketSlug')!r}, not {slug!r}"
+        return {s: ladder(s, (), anomaly) for s in ("YES", "NO")}
+    try:
+        bids, offers = _levels(data.get("bids")), _levels(data.get("offers"))
+    except ValueError as exc:
+        return {s: ladder(s, (), f"malformed book: {exc}") for s in ("YES", "NO")}
+    bid, _ = _best(bids, highest=True)
+    ask, _ = _best(offers, highest=False)
+    anomaly = None
+    if bid is not None and ask is not None and bid >= ask:
+        anomaly = f"crossed book: bid {bid} >= offer {ask}"
+    state = data.get("state")
+    if anomaly is None and state != "MARKET_STATE_OPEN":
+        anomaly = f"book state {state or 'missing'} is not open"
+    return {"YES": ladder("YES", _ask_ladder(offers, invert=False), anomaly),
+            "NO": ladder("NO", _ask_ladder(bids, invert=True), anomaly)}
 
 
 @dataclass(frozen=True)
