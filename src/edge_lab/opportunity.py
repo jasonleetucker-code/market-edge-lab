@@ -30,7 +30,7 @@ import hashlib
 import json
 from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta
-from decimal import ROUND_CEILING, Decimal
+from decimal import ROUND_CEILING, Decimal, InvalidOperation
 from enum import Enum
 from typing import Any, Iterable, Mapping, Protocol, Sequence
 
@@ -57,6 +57,7 @@ class Reason(str, Enum):
     EVIDENCE_INCOMPLETE = "EVIDENCE_INCOMPLETE"  # the evidence set it belongs to is incomplete
     MARKET_CLOSED = "MARKET_CLOSED"
     RULES_UNRESOLVED = "RULES_UNRESOLVED"
+    PAYOFF_UNSUPPORTED = "PAYOFF_UNSUPPORTED"  # the engine prices binary contracts paying 1 only
     BOOK_MISSING = "BOOK_MISSING"
     BOOK_STALE = "BOOK_STALE"
     MODEL_STALE = "MODEL_STALE"
@@ -95,6 +96,48 @@ class Payoff:
 
 
 @dataclass(frozen=True)
+class PriceRange:
+    start: Decimal
+    end: Decimal
+    step: Decimal
+
+
+@dataclass(frozen=True)
+class PriceGrid:
+    """The prices a venue accepts for one market, as the venue publishes them (ADR 0023).
+
+    A price is on the grid when it lies in some range, ends included, at a whole number of
+    steps from that range's start. The grid is market metadata read by depth walks and
+    tickets. `evaluate` keeps the universal 1/100-cent check (`valid_price`), so the frozen
+    EXP-001 decisions do not change. Idea provenance: TPN-R003."""
+
+    ranges: tuple[PriceRange, ...]
+    source: str
+
+    def __post_init__(self) -> None:
+        if not self.ranges:
+            raise ValueError("a price grid needs at least one range")
+        for r in self.ranges:
+            values = (r.start, r.end, r.step)
+            if not all(isinstance(v, Decimal) and v.is_finite() for v in values):
+                raise ValueError(f"non-finite price range {r}")
+            if not (Decimal(0) <= r.start < r.end <= Decimal(1)) or not (0 < r.step <= r.end - r.start):
+                raise ValueError(f"invalid price range {r}")
+            try:
+                (r.end - r.start) % r.step  # a step too fine for Decimal arithmetic is refused here
+            except InvalidOperation:
+                raise ValueError(f"price range step {r.step} is too fine to evaluate") from None
+
+    def contains(self, price: Decimal) -> bool:
+        if not isinstance(price, Decimal) or not price.is_finite():
+            return False
+        try:
+            return any(r.start <= price <= r.end and (price - r.start) % r.step == 0 for r in self.ranges)
+        except InvalidOperation:
+            return False  # fail closed: a price that cannot be checked is not on the grid
+
+
+@dataclass(frozen=True)
 class MarketTiming:
     """When a market's outcome, and the cash it releases, are expected, as the venue states it.
 
@@ -125,6 +168,7 @@ class Market:
     rules_resolved: bool  # settlement equivalence established from the captured rules
     rules_detail: str
     timing: MarketTiming | None = None  # never part of the opportunity id; used by eligibility policies
+    price_grid: PriceGrid | None = None  # venue-published tick grid; None = not published (never assumed)
 
 
 @dataclass(frozen=True)
@@ -391,6 +435,11 @@ def evaluate(
         fail(Reason.MARKET_CLOSED, f"market status {market.status.value}")
     if not market.rules_resolved:
         fail(Reason.RULES_UNRESOLVED, market.rules_detail)
+    if market.payoff.kind != "binary" or market.payoff.amount != 1:
+        # Edges below are probability minus price per contract, which is only a dollar edge
+        # for a binary contract paying exactly 1. Anything else is refused, never reinterpreted.
+        fail(Reason.PAYOFF_UNSUPPORTED,
+             f"payoff kind {market.payoff.kind!r} paying {market.payoff.amount}: only binary contracts paying 1")
 
     # Model.
     model_state = Freshness.UNKNOWN
@@ -550,13 +599,15 @@ def evaluate_event(
 _AVERAGE_GRID = Decimal("1e-12")
 
 
-def _ladder_problem(ladder: DepthLadder) -> str | None:
+def _ladder_problem(ladder: DepthLadder, grid: PriceGrid | None) -> str | None:
     if ladder.anomaly:
         return ladder.anomaly
     previous = None
     for level in ladder.asks:
         if not valid_price(level.price):
             return f"ask {level.price} is not a valid contract price"
+        if grid is not None and not grid.contains(level.price):
+            return f"ask {level.price} is off the market's price grid ({grid.source})"
         if not isinstance(level.size, Decimal) or not level.size.is_finite() or level.size <= 0:
             return f"level at {level.price} has invalid size {level.size}"
         if previous is not None and level.price <= previous:
@@ -565,11 +616,12 @@ def _ladder_problem(ladder: DepthLadder) -> str | None:
     return None
 
 
-def walk_ladder(ladder: DepthLadder, quantity: Decimal | int) -> DepthFill:
+def walk_ladder(ladder: DepthLadder, quantity: Decimal | int, *, price_grid: PriceGrid | None = None) -> DepthFill:
     """Take `quantity` contracts from the cheapest asks upward.
 
     Only captured levels are used. The walk never extrapolates past the last level, and it
-    never prices a partial fill (see `DepthFill`). The result depends only on its inputs.
+    never prices a partial fill (see `DepthFill`). With the market's `price_grid`, a level off
+    that grid makes the whole ladder INVALID_BOOK. The result depends only on its inputs.
     """
     qty = Decimal(quantity) if isinstance(quantity, int) and not isinstance(quantity, bool) else quantity
     if not isinstance(qty, Decimal) or not qty.is_finite() or qty <= 0:
@@ -579,7 +631,7 @@ def walk_ladder(ladder: DepthLadder, quantity: Decimal | int) -> DepthFill:
         return DepthFill(ladder.venue, ladder.market_id, ladder.side, status, qty, available, (), None, None, None,
                          detail)
 
-    problem = _ladder_problem(ladder)
+    problem = _ladder_problem(ladder, price_grid)
     if problem:
         return unfilled(DepthStatus.INVALID_BOOK, None, problem)
     remaining, takes = qty, []
