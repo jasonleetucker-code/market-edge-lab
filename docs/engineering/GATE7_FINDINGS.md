@@ -43,11 +43,44 @@ all fixed in the same PR (`tests/test_daily.py`, `tests/test_collectors.py`,
 | GATE7-F06 | B locking | SHOULD-FIX | When another connection holds a write lock, `ShadowLedger(...)` or an append blocks for the 30 s busy timeout and then raises raw `sqlite3.OperationalError`, not a ledger error. | A second writer, such as a CLI run during a daily job, stalls for 30 s and then fails with an unexplained sqlite error. The test expects `LedgerError` within 8 s. | `test_gate7_ledger.py::test_append_against_held_lock_fails_fast_with_ledger_error` | FIXED (PR #26): 5 s busy timeout, lock/busy raised as `LedgerError` |
 | GATE7-F07 | C prices | NIT | `fee_schedules.valid_price(Decimal("NaN"))` raises `InvalidOperation`. As a result `opportunity.evaluate` and `fill_policy.simulate_fill` crash on a NaN ask instead of returning INVALID_PRICE / NO_ENTRY_PRICE. The Kalshi adapter already rejects non-finite levels, so only a future adapter is exposed. | Another venue adapter passes `Decimal("NaN")`, and the evaluation of the whole event aborts. | `test_gate7_market.py::test_nan_ask_from_any_adapter_is_invalid_price_not_a_crash` | FIXED (PR #26): `valid_price` rejects non-finite values |
 | GATE7-F08 | B triggers | NIT | Nothing reports missing immutability triggers. Reopening the ledger for writing silently re-creates them (good). Read-only verification never notices they were gone. | Someone drops the triggers, edits rows, and reopens the file read-only for a report. The only detection left is the hash chain. | `test_gate7_ledger.py::test_readonly_verification_reports_missing_triggers` (formerly xfail); `::test_reopening_for_write_restores_dropped_triggers` (plain) | FIXED (PR #26): `verify_chain` also checks the append-only triggers (`verify_schema`) |
-| GATE7-F09 | B tampering | NIT (documented limitation, ADR 0014) | Without an external anchor of the head hash, deleting or consistently rewriting the newest entries leaves a valid, shorter chain. `appended_at_utc` sits outside the hash by design. Edits to middle rows, deletions, backdating and reordering are all detected. | Someone with write access truncates the last settlement. `verify_chain` still passes. | `test_gate7_ledger.py::test_known_limit_head_truncation_and_appended_at_are_not_detected` (characterization, plain) | OPEN, known limit: the hash chain alone cannot detect head truncation, but the trigger drop needed to do it is now detected by `verify_chain`; an external head anchor needs an owner decision |
+| GATE7-F09 | B tampering | NIT (documented limitation, ADR 0014) | Without an external anchor of the head hash, deleting or consistently rewriting the newest entries leaves a valid, shorter chain. `appended_at_utc` sits outside the hash by design. Edits to middle rows, deletions, backdating and reordering are all detected. | Someone with write access truncates the last settlement. `verify_chain` still passes. | `test_gate7_ledger.py::test_known_limit_head_truncation_and_appended_at_are_not_detected` (characterization, plain); `test_ledger_anchor.py::test_head_truncation_passes_the_chain_but_not_the_checkpoint` | OPEN: support code exists (`edge_lab.ledger_anchor`, `edge-lab shadow anchor export\|verify`, ADR 0021); no independent anchor has been stored, so head truncation is still undetected in production. See "Closing GATE7-F09" below |
 | GATE7-F10 | B settlement | SHOULD-FIX | A later settled-market capture that contradicts an already recorded settlement is silently ignored, because `settle_open_positions` looks only at open positions. A ledger rebuilt from the same store would settle on the latest capture and book different P&L. | Kalshi's value moves from 67 to 70 after the first capture. B67.5 YES stays booked as a win with no alert. | `test_gate7_ledger.py::test_contradicting_later_settlement_capture_is_reported` | FIXED (PR #26): `report["conflicts"]` for contradicting captures; open positions with conflicting captures stay pending |
 | GATE7-F11 | B timing / cash | SHOULD-FIX | `ShadowLedger.record_fill` enforces "settled cash never negative" in append order, not by effective or evidence time. So a direct ledger user can finance an earlier-dated fill with a later settlement. This is the ledger-level counterpart of F04. | The bankroll is $1.00, $0.99 is committed at T0, and the settlement is known at T0+2d. A fill dated T0+1h costing $0.42 is accepted. | `test_gate7_ledger.py::test_ledger_refuses_fill_financed_by_a_later_settlement` | FIXED (PR #26): cash checked as of the fill time, and fills must follow cash movements in knowledge-time order |
 | GATE7-F12 | B/D settlement time | SHOULD-FIX (becomes BLOCKER once F01 lands, unless `settlement_ts` is always captured) | When `settlement_ts` is missing, the settlement is stamped at `expiration_time`, which is the *latest possible* expiry (2026-09-30 for the 26SEP23 fixture). That time is later than the evidence capture (2026-09-24). `risk.require_point_in_time` then refuses every `as_of` before it, so the risk report fails for up to a week. A pre-fill `risk.assess` for the following days would do the same. | A settle run on 09-24 stamps 09-30. `edge-lab shadow risk --as-of 2026-09-24T15:00Z` and next-day pre-fill checks raise `ValueError`. | `test_gate7_ledger.py::test_settlement_is_never_stamped_after_its_evidence_was_captured` | FIXED (PR #26): settlement time clamped to the evidence receipt; reported time kept |
 | GATE7-F13 | D reporting / fees | SHOULD-FIX | Fill and settlement payloads carry `fee_schedule_id` (fills only) but not `fee_status` or `claimable`. Only decisions record that the P&L is not claimable while the schedule is UNVERIFIED_CURRENT_SCHEDULE. | A report built from fills or settlements alone cannot tell that the net P&L is unclaimable. | `test_gate7_reporting.py::test_fill_and_settlement_payloads_carry_fee_status` | FIXED (PR #26): fills and settlements carry `fee_schedule_id`, `fee_status`, `claimable` |
+
+### Closing GATE7-F09 (ledger head anchor)
+
+What exists: `edge_lab.ledger_anchor` and `edge-lab shadow anchor export|verify` (ADR 0021),
+tested on disposable ledgers in `tests/test_ledger_anchor.py`. A checkpoint records each
+account's entry count and head hash. Verifying against it reports TRUNCATED or REWRITTEN in
+the cases where `verify_chain` alone still passes. Nothing is scheduled, and nothing has been
+stored anywhere.
+
+The characterization test above stays: the hash chain alone still cannot see head
+truncation. F09 closes only when **all** of the following are recorded here, with dates and
+evidence:
+
+1. The code carrying `shadow anchor` is merged and deployed, and the deployed SHA is
+   recorded.
+2. A checkpoint of the production ledger was exported as `edgelab`, read-only:
+   ```bash
+   sudo -u edgelab /opt/market-edge-lab/venv/bin/python -m edge_lab.cli shadow anchor export --ledger /var/lib/market-edge-lab/ledger/shadow_ledger.sqlite3
+   ```
+3. It is stored somewhere independent of the VPS, per ADR 0021 option (c) (owner-held
+   off-host copy) and/or (d) (private Git repository), or an owner-approved (b)/(e). A copy
+   beside the ledger (option (a)) does not count.
+4. A later `shadow anchor verify` of the production ledger, against that independent copy,
+   returned VERIFIED or EXTENDED, and the output is recorded.
+5. At least one such verification ran **off-host**: from the owner's own checkout at a
+   known, reviewed SHA, against a copy of the production ledger or of a backup bundle's
+   database fetched from the VPS. Root on the VPS (ADR 0021, A2) controls whatever runs
+   there, so an on-host VERIFIED does not cover A2.
+
+Items 1 to 5 show that a truncation would now be *detectable* for the anchored history. They
+do not detect tampering with entries appended after the newest stored checkpoint. That residual
+gap is accepted in ADR 0021. Keeping it small means exporting a checkpoint regularly, which is
+manual unless the owner separately approves a scheduled anchor.
 
 Reporting findings from the independent review of the local dashboard (PR #28, area D). All
 are fixed and tested in `tests/test_dashboard.py`:

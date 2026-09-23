@@ -110,6 +110,9 @@ To list the timers:
 systemctl list-timers 'edgelab-*'
 ```
 
+To print every production state separately, read-only and with no sudo (sections needing privilege say so):
+`bash ~/edgelab-release/verify_production.sh`.
+
 To read the logs (owner):
 
 ```bash

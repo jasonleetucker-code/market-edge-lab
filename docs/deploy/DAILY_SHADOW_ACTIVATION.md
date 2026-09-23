@@ -24,6 +24,11 @@ cat /var/lib/market-edge-lab-status/latest.json
 
 Brisket health: `systemctl is-active nginx dynasty dynasty-frontend docker` and `/api/health`.
 
+Or run `bash verify_production.sh` (read-only). Use the copy staged in §1, or, once a
+version carrying it is installed, `/opt/market-edge-lab/app/deploy/vps/verify_production.sh`.
+It prints the checks above and the §6 evidence it can read, one `STATE <NAME>: <value>` line
+each, and reports NOT_READABLE_WITHOUT_PRIVILEGE where it cannot see without sudo.
+
 ## 1. Stage (agent or owner, unprivileged)
 
 From a checkout at the merged SHA:
@@ -32,9 +37,10 @@ From a checkout at the merged SHA:
 git bundle create market-edge-lab.bundle <SHA>
 git show <SHA>:deploy/vps/install.sh > install.sh
 git show <SHA>:deploy/vps/preflight.sh > preflight.sh
+git show <SHA>:deploy/vps/verify_production.sh > verify_production.sh
 ```
 
-Copy all three to `~dynasty/edgelab-release/` on the VPS, then run
+Copy all four to `~dynasty/edgelab-release/` on the VPS, then run
 `bash ~/edgelab-release/preflight.sh`. The cloud agent session of 2026-09-23 has no SSH
 route to the VPS, so a session with the owner's existing access, or the owner, does this
 step. No keys are added or copied anywhere.
@@ -107,6 +113,13 @@ systemctl list-timers 'edgelab-*'
 | Settlement lifecycle | a later `shadow_daily.json` with `settlement.settled` > 0 and no pending for that day |
 
 One state does not prove the next. A valid no-signal day is a legitimate result.
+`bash verify_production.sh` (read-only, no sudo) prints each of these states separately:
+the directive's DEPLOYED_SHA, COLLECTOR_HEALTH, SHADOW_TIMER, SETTLEMENT_TIMER,
+BACKUP_EVIDENCE_DB, BACKUP_SHADOW_LEDGER, RESTORE_EVIDENCE_DB, RESTORE_SHADOW_LEDGER and
+CHASE_UPSIDE_HEALTH, and COLLECTOR_INSTALLED, TIMERS_ENABLED,
+PFM/DECISION/RECHECK_CAPTURE_OBSERVED and VALID_DAY_OBSERVED. It never infers one from
+another: RESTORE_* comes only from the backup's temporary-restore result, and what it cannot
+read is UNKNOWN.
 
 ## If the receipt says FAILED, LOCK_BUSY or SETTLEMENT_CONFLICT
 
