@@ -1,7 +1,7 @@
 # Public GitHub reuse audit
 
 **Audit date:** 2026-09-23. **Owner record:** issue #36. **Delivery plan:** #11 (2026-10-22).
-**Market Edge baseline:** `main` at `879e770`, rebased onto `566f352` (PRs #37 and #38). **Evidence:** `docs/audits/2026-09-23-github-reuse/`.
+**Market Edge baseline:** `main` at `879e770`, rebased onto `9f05c87` (PRs #37, #38 and #39). **Evidence:** `docs/audits/2026-09-23-github-reuse/`.
 
 This is research. It authorizes nothing. `docs/EXECUTION_PLAN.md` alone says what may be
 built. No repository reviewed here was installed or executed, and no credential was used.
@@ -32,7 +32,9 @@ built. No repository reviewed here was installed or executed, and no credential 
      Polymarket repository is International, which must stay separate.
    - The SDK's public calls are one-line GETs that return raw dicts. Its response types
      were wrong until 2026-09-22, and it brings order-placement code.
-   - §7.2 has the endpoint and field spec our adapter must implement and test.
+   - §7.2 has the endpoint and field spec. The coordinator's adapter (`polymarket_us.py`,
+     PR #39) was built in parallel and matches it; §7.2 records the cross-check and one
+     correction to this audit (the NO side).
 4. **Notifications: ntfy is the best free push channel now, and it is not SMS.**
    - It needs no dependency: about 40 lines of `urllib`.
    - Our no-POST invariant must be narrowed deliberately first, and the owner must approve
@@ -429,7 +431,31 @@ Polymarket, Limitless and Myriad. The Python side is async only.
 | real-time-data-client | International RTDS | low activity |
 | polymarket-cli, agents, agent-skills | International | no license / archived / no license |
 
-**Spec for our read-only Polymarket US adapter** (GET only on `gateway.polymarket.us`, no
+**Cross-check against the adapter built in PR #39 (`src/edge_lab/polymarket_us.py`).**
+It was built in parallel from Polymarket's own docs, with captured evidence in
+`experiments/multi_venue/`. It agrees with this spec on every point below:
+- it reads `marketData.bids/offers` as Decimal `px` / `qty`;
+- `transactTime` is the source timestamp;
+- BBO is never executable;
+- only `MARKET_STATE_OPEN` is quotable, and a missing state fails closed;
+- fees are UNSUPPORTED;
+- `rules_resolved=False`;
+- a catalog scan is COMPLETE only on an empty final page with no filters.
+
+**Correction to this audit:** reviewer B marked the NO side UNVERIFIED because the SDK does
+not document it. The venue docs do: "If you want to buy NO at $0.40, you're really selling
+YES at $0.60". The adapter's NO price, 1 − best YES bid with that bid's quantity, rests on
+primary documentation, which outranks this audit's SDK-based reading.
+
+**Remaining gaps, NEXT for the adapter owner:**
+- The adapter builds top-of-book `ExecutableQuote`s only. A `DepthLadder` builder for
+  Polymarket US, with YES asks from `offers` and NO asks from 1 − `bids`, would give the #30
+  comparator two venues on one depth primitive.
+- `_amount` accepts a missing `currency` as USD. This spec asks for USD explicitly.
+
+The spec below is kept as the audit's independent reading.
+
+**Spec for the read-only Polymarket US adapter** (GET only on `gateway.polymarket.us`, no
 auth headers; record correlation ids, receipt time and body sha256 in provenance):
 
 **Endpoints:**
@@ -456,7 +482,8 @@ auth headers; record correlation ids, receipt time and body sha256 in provenance
 **Declare UNSUPPORTED:**
 - fees (US fee rates exist only on authenticated order objects), so `FEE_UNVERIFIED`;
 - structured rules (the description is prose), so `RULES_UNRESOLVED`;
-- NO/short-side quotes, until the complement rule is documented;
+- NO/short-side quotes. Superseded: the venue docs document the complement rule, see the
+  cross-check above;
 - price history, the trade tape and WebSockets. The market WebSocket needs a key.
 
 Full field list and fixture tests: report B, "Exact spec".
@@ -662,7 +689,8 @@ formatting. No license, so nothing is copied.
 - **APPLY_NOW** (done in this PR):
   - PredictionMarketBench, flumine and nautilus (test ideas);
   - CCXT, nautilus and pykalshi (depth ladder).
-- **APPLY_NOW** (as spec for the next adapter): polymarket-us-python.
+- **APPLY_NOW** (as spec, cross-checked against the adapter built in #39):
+  polymarket-us-python.
 - **NEXT:**
   - ntfy sink;
   - pmxt (Polymarket US fields);
@@ -691,7 +719,7 @@ VENUE CAPABILITY REGISTRY (venues.py; stage per capability, execution never auth
         │
  ┌──────┼──────────────┬───────────────┐
 Kalshi  Polymarket US   Novig daily CSV  The Odds API (fixtures)
-[BUILT] [NEXT: spec §7.2] [NEXT]          [NEXT; not a venue: offered odds ≠ prices]
+[BUILT] [BUILT #39; depth ladder NEXT] [BUILT #39] [BUILT #39; offered odds ≠ prices]
         │
 QUOTE + DEPTH NORMALIZATION (opportunity.py: ExecutableQuote, DepthLadder)     [BUILT in this PR]
         │                 └─ per-venue tick grid (Kalshi price_ranges)          [NEXT]
@@ -699,7 +727,8 @@ FEE INTERFACE (fee_schedules.py; per venue, UNSUPPORTED until evidenced)        
         │
 EVENT / SETTLEMENT IDENTITY + RULES EQUIVALENCE (deterministic; LLM may only propose) [PARTLY BUILT]
         │
-BEST-PRICE-FOR-SIZE COMPARATOR + UNIQUE-MARKET DISCOVERY (#30)                  [NEXT, needs 2 venues]
+BEST-PRICE-FOR-SIZE COMPARATOR (#30)   [NEXT: needs Polymarket US ladders]
+UNIQUE-MARKET DISCOVERY (#30)          [discovery.py BUILT #39]
         │
 OPPORTUNITY ENGINE → SHADOW LEDGER → RISK / STARTER POLICY → OUTCOME BOARD       [BUILT]
         │
@@ -730,8 +759,8 @@ Shared primitives now unlock several ideas at once:
 | Idea | NOW | NEXT | LATER | BLOCKED |
 |---|---|---|---|---|
 | #36 reuse audit | this PR (audit, depth ladder, provenance guard, F14) | issue #36 updated with the adoption plan | re-audit before any execution or streaming work | — |
-| #30 multi-venue | depth ladder (done) | Polymarket US adapter to §7.2 spec; tick-grid check; comparator once 2 venues exist | ProphetX / IBKR feasibility | Novig live API (owner credentials) |
-| #29 Odds API | — | fixtures adapter: Decimal odds conversions that reject −100 < x < +100, key redaction everywhere, quota from all three headers | consensus (median across fresh books) | live pulls (owner key + activation plan) |
+| #30 multi-venue | depth ladder (this PR); Polymarket US, Novig daily data and discovery (built, #39) | Polymarket US `DepthLadder` builder; Kalshi `price_ranges` tick grid; best-price-for-size comparator on two venues | ProphetX / IBKR feasibility | Novig live API (owner credentials) |
+| #29 Odds API | fixtures adapter built (#39). It already meets every point the sports review raised: Decimal conversion that rejects −100 < x < +100, `apiKey` redaction, all three quota headers, de-vig never executable | — | consensus (median across fresh books) | live pulls (owner key + activation plan) |
 | #33 notifications | contract, outbox and disabled SMS sink (built, #38) | ntfy sink behind the contract, after the invariant change | Apprise if ≥3 channels | first real send (owner approval); SMS (paid provider) |
 | #32 starter policy / tickets | `STARTER_MAX_7D_V1` and ticket contract (built, #38) | flumine control checklist in the ticket contract | Hummingbot lifecycle states | any execution (no authority) |
 | #9 / #5 sports | — | — | sportsbook consensus research | sports models (preregistration) |
@@ -742,8 +771,9 @@ Shared primitives now unlock several ideas at once:
 ## 11. 2026-10-22 impact
 
 - **Work saved:**
-  - The Polymarket US adapter starts from a verified endpoint and field spec instead of
-    discovery.
+  - The Polymarket US and Odds API adapters were built in parallel (#39). The audit
+    independently confirms their field semantics and redaction, and corrects itself on the
+    Polymarket US NO side.
   - The ntfy sink is about 40 lines, not a provider integration.
   - The ticket checklist exists before the ticket code does.
   - Several attractive dependencies were ruled out early.
