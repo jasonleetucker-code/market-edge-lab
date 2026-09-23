@@ -111,3 +111,18 @@ web-app account is currently equivalent to root, because of the three allowliste
 above. Once admin access exists, narrow the allowlist to the exact commands Brisket's deploy
 needs, for example specific `systemctl restart dynasty*.service` invocations. That change
 belongs to the Brisket repository and host, not to this one.
+
+## Deployment record (2026-09-23)
+
+- **Access:** the owner restored root SSH, so the reviewed `install.sh` ran as root
+  unchanged. Nothing used the `dynasty` allowlist.
+- **Revision:** main `9326a7a077fac7f352e0e6a5b686e6de98e1e978`.
+- **Result:** INSTALL OK, with all 13 permission checks passing.
+- **Dry run:** fail-closed, out of window. The run was rejected before any network request:
+  0 snapshots, and the alert fired.
+- **Timers:** enabled. The next fires are 17:45:00, 17:55:05, 18:05:00 and 18:30:00 EDT, plus
+  the backup at 04:40 UTC.
+- **Chase Upside:** services unaffected (nginx, dynasty, dynasty-frontend active;
+  `/api/health` ok).
+- **Details:** `HANDOFF.md`.
+
