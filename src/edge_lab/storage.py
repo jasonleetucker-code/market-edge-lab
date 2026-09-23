@@ -325,21 +325,27 @@ class SnapshotStore:
         return self._read_only
 
     def _connect(self) -> sqlite3.Connection:
+        """A configured connection. Callers close it (`closing`); if configuring it fails, it
+        is closed here, so a failed PRAGMA never leaks a handle."""
         if self._read_only:
             conn = sqlite3.connect(f"{self.path.resolve().as_uri()}?mode=ro", uri=True, timeout=30.0)
+        else:
+            # Scheduled captures and manual runs may overlap: wait for a lock instead of
+            # failing at once with "database is locked".
+            conn = sqlite3.connect(self.path, timeout=30.0)
+        try:
             conn.row_factory = sqlite3.Row
             conn.execute("PRAGMA busy_timeout = 30000")
-            conn.execute("PRAGMA query_only = ON")
-            return conn
-        # Scheduled captures and manual runs may overlap: wait for a lock instead of
-        # failing at once with "database is locked".
-        conn = sqlite3.connect(self.path, timeout=30.0)
-        conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA busy_timeout = 30000")
-        conn.execute("PRAGMA foreign_keys = ON")
-        # Make REPLACE conflict resolution fire delete triggers too.
-        conn.execute("PRAGMA recursive_triggers = ON")
-        conn.execute("PRAGMA journal_mode = WAL")
+            if self._read_only:
+                conn.execute("PRAGMA query_only = ON")
+            else:
+                conn.execute("PRAGMA foreign_keys = ON")
+                # Make REPLACE conflict resolution fire delete triggers too.
+                conn.execute("PRAGMA recursive_triggers = ON")
+                conn.execute("PRAGMA journal_mode = WAL")
+        except BaseException:
+            conn.close()
+            raise
         return conn
 
     def _initialize(self) -> None:

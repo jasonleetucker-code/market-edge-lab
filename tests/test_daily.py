@@ -293,7 +293,6 @@ def test_a_day_that_can_never_fill_does_not_hold_settlement_back(store, tmp_path
 
 
 def test_sigterm_during_shadow_daily_writes_a_failed_receipt(store, tmp_path, monkeypatch, model):
-    import os
     import signal
 
     from edge_lab import cli
