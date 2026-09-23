@@ -30,7 +30,7 @@ import hashlib
 import json
 from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta
-from decimal import ROUND_CEILING, Decimal
+from decimal import ROUND_CEILING, Decimal, InvalidOperation
 from enum import Enum
 from typing import Any, Iterable, Mapping, Protocol, Sequence
 
@@ -121,13 +121,20 @@ class PriceGrid:
             values = (r.start, r.end, r.step)
             if not all(isinstance(v, Decimal) and v.is_finite() for v in values):
                 raise ValueError(f"non-finite price range {r}")
-            if not (Decimal(0) <= r.start < r.end <= Decimal(1)) or r.step <= 0:
+            if not (Decimal(0) <= r.start < r.end <= Decimal(1)) or not (0 < r.step <= r.end - r.start):
                 raise ValueError(f"invalid price range {r}")
+            try:
+                (r.end - r.start) % r.step  # a step too fine for Decimal arithmetic is refused here
+            except InvalidOperation:
+                raise ValueError(f"price range step {r.step} is too fine to evaluate") from None
 
     def contains(self, price: Decimal) -> bool:
         if not isinstance(price, Decimal) or not price.is_finite():
             return False
-        return any(r.start <= price <= r.end and (price - r.start) % r.step == 0 for r in self.ranges)
+        try:
+            return any(r.start <= price <= r.end and (price - r.start) % r.step == 0 for r in self.ranges)
+        except InvalidOperation:
+            return False  # fail closed: a price that cannot be checked is not on the grid
 
 
 @dataclass(frozen=True)

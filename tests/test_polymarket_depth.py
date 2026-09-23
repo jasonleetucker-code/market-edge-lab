@@ -147,3 +147,19 @@ def test_fees_are_never_borrowed_from_another_venue():
     fill = walk_ladder(ladders()["YES"], 10)
     cost, why = price_depth_fill(fill, KALSHI_QUADRATIC_TAKER_V1)
     assert cost is None and "prices kalshi, not polymarket_us" in why
+
+
+def test_a_level_at_price_zero_or_one_invalidates_the_whole_ladder_not_just_the_top():
+    """Deliberate and stricter than the top-of-book path: a YES bid at 0 becomes a NO ask at 1,
+    which is not a valid contract price, so the whole NO ladder is INVALID_BOOK even though
+    the quote path, which reads only the best bid, still quotes NO."""
+    payload = book([("0.40", "5"), ("0", "3")], [("0.60", "5")])
+    out = ladders(payload)
+    assert walk_ladder(out["NO"], 1).status is DepthStatus.INVALID_BOOK
+    assert quotes_from_book(SLUG, payload, received_at_utc=AT, evidence_id=None)["NO"].best_ask == D("0.60")
+    assert walk_ladder(out["YES"], 1).status is DepthStatus.FILLABLE
+
+
+@pytest.mark.parametrize("tick", [True, 2, "1E-30"])
+def test_implausible_ticks_give_no_grid(tick):
+    assert price_grid_from_market({"orderPriceMinTickSize": tick}) is None

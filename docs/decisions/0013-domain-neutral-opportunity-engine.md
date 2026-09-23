@@ -27,8 +27,8 @@ research evidence.
   - Every (market, side) pair produces an `Opportunity`, whether it qualifies or not.
   - Each opportunity carries a primary reason and the full ordered reason list:
     `QUALIFY`, `MODEL_UNAVAILABLE`, `EVENT_MISMATCH`, `EVIDENCE_INCOMPLETE`, `MARKET_CLOSED`, `RULES_UNRESOLVED`,
-    `BOOK_MISSING`, `BOOK_STALE`, `MODEL_STALE`, `INVALID_PRICE`, `INSUFFICIENT_SIZE`,
-    `FEE_UNVERIFIED`, `NO_EDGE`.
+    `PAYOFF_UNSUPPORTED` (added by ADR 0023), `BOOK_MISSING`, `BOOK_STALE`, `MODEL_STALE`, `INVALID_PRICE`,
+    `INSUFFICIENT_SIZE`, `FEE_UNVERIFIED`, `FEE_UNSUPPORTED`, `NO_EDGE`.
   - Opportunity ids are content hashes of the inputs.
   - Ranking is a deterministic total order.
 - **Executable prices only.**

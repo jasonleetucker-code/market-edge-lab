@@ -153,12 +153,14 @@ def status_of(raw: Mapping[str, Any]) -> MarketStatus:
 
 
 def price_grid_from_market(raw: Mapping[str, Any]) -> PriceGrid | None:
-    """The market's tick grid from `orderPriceMinTickSize` (one step over (0, 1)); None when
-    absent or malformed. It is never assumed from another market or venue."""
+    """The market's tick grid from `orderPriceMinTickSize`: one step over [0, 1], ends
+    included. None when absent or malformed. It is never assumed from another market or venue."""
+    tick = raw.get("orderPriceMinTickSize")
+    if tick in (None, "") or isinstance(tick, bool):
+        return None
     try:
-        step = Decimal(str(raw.get("orderPriceMinTickSize")))
-        return PriceGrid((PriceRange(Decimal(0), Decimal(1), step),),
-                         source="polymarket_us orderPriceMinTickSize") if raw.get("orderPriceMinTickSize") else None
+        return PriceGrid((PriceRange(Decimal(0), Decimal(1), Decimal(str(tick))),),
+                         source="polymarket_us orderPriceMinTickSize")
     except (InvalidOperation, ValueError):
         return None
 

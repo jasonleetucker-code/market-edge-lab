@@ -33,8 +33,12 @@ follow-up #2 of `docs/GITHUB_REUSE_AUDIT.md`).
 
 **Tradeoffs.**
 - An off-grid captured ask can still qualify in `evaluate`. The captured Kalshi books are on
-  their market grid (tested), an off-grid level would be a venue anomaly, and a ticket or
-  depth walk rejects it.
+  their market grid (tested), and an off-grid level would be a venue anomaly.
+- The check is available but has **no production caller yet**. `walk_ladder` enforces the
+  grid only when a caller passes `price_grid=`, and no module does today (only tests). A
+  caller that omits it gets the same result as "the venue published no grid". The #30
+  best-price comparator and the execution ticket must pass `Market.price_grid` when they are
+  built. Until then, "grid enforced" is not a claim this repository can make.
 - A new reason code is added to the engine vocabulary. Opportunity ids are unaffected,
   because they hash inputs, not reasons.
 
