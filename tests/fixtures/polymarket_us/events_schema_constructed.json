@@ -1,0 +1,41 @@
+{
+  "events": [
+    {
+      "id": "9001",
+      "ticker": "aec-nfl-kc-phi-2026-02-09",
+      "slug": "aec-nfl-kc-phi-2026-02-09",
+      "title": "Chiefs vs Eagles",
+      "resolutionSource": "governing league",
+      "startDate": "2026-02-01T00:00:00Z",
+      "endDate": "2026-02-10T23:00:00Z",
+      "startTime": "2026-02-09T23:30:00Z",
+      "eventDate": "2026-02-09",
+      "category": "sports",
+      "seriesSlug": "nfl-2025-26",
+      "active": true,
+      "closed": false,
+      "markets": [
+        {
+          "id": "9101",
+          "slug": "will-team-a-win",
+          "question": "Chiefs vs Eagles",
+          "description": "If Kansas City wins, the market will resolve to \"Kansas City\".\nIf Philadelphia wins, the market will resolve to \"Philadelphia\".\nIf the game is canceled entirely, with no make-up game, this market will resolve 50-50.",
+          "category": "sports",
+          "startDate": "2026-02-01T00:00:00Z",
+          "endDate": "2026-02-10T23:30:00Z",
+          "status": "MARKET_STATUS_OPEN",
+          "active": true,
+          "closed": false,
+          "orderPriceMinTickSize": 0.001,
+          "minimumTradeQty": 1,
+          "feeCoefficient": 0.0695,
+          "outcomes": "[\"Chiefs\",\"Eagles\"]",
+          "marketSides": [
+            {"id": "1", "description": "Chiefs", "long": true, "marketId": 9101},
+            {"id": "2", "description": "Eagles", "long": false, "marketId": 9101}
+          ]
+        }
+      ]
+    }
+  ]
+}

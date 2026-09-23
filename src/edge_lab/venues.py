@@ -151,11 +151,14 @@ POLYMARKET_US = VenueSpec(
     venue_id="polymarket_us", kind=VenueKind.EXCHANGE, route_id="polymarket_us:direct",
     liquidity_pool_id="polymarket_us",
     capabilities=_caps(
-        catalog_read=CapabilityState(_P, False, "https://docs.polymarket.us/api-reference/introduction (public gateway)"),
-        quote_read=CapabilityState(_P, False, "public gateway books/BBO (docs)"),
-        depth_read=CapabilityState(_P, False, "public gateway order book (docs)"),
-        history_read=CapabilityState(_P, False, "public gateway price history (docs)"),
-        settlement_read=CapabilityState(_P, False, "public gateway settlement prices (docs)"),
+        catalog_read=CapabilityState(ConnectivityStage.TESTED, False, "edge_lab.polymarket_us + tests/test_polymarket_us.py; one live smoke "
+                                     "read recorded in experiments/multi_venue/polymarket_us_smoke_2026-09-23.md "
+                                     "(stage left at TESTED: LIVE_DATA_VERIFIED is for the coordinator to set)"),
+        quote_read=CapabilityState(ConnectivityStage.TESTED, False, "GET /v1/markets/{slug}/book -> ExecutableQuote (documented example "
+                                   "fixture); BBO has no size at the best price and is never a quote"),
+        depth_read=CapabilityState(ConnectivityStage.TESTED, False, "book levels parsed and validated; only the best level is priced"),
+        history_read=CapabilityState(_P, False, "public gateway price history (docs); not implemented"),
+        settlement_read=CapabilityState(ConnectivityStage.TESTED, False, "GET /v1/markets/{slug}/settlement parser (documented example)"),
         account_read=CapabilityState(_N, True, "api.polymarket.us portfolio endpoints (authenticated)"),
         order_write=CapabilityState(_N, True, "api.polymarket.us trading endpoints (authenticated); not authorized"),
     ),
@@ -178,7 +181,9 @@ NOVIG = VenueSpec(
         catalog_read=CapabilityState(_N, True, "https://docs.novig.com/api-reference/authentication (OAuth client credentials)"),
         quote_read=CapabilityState(_N, True, "Novig REST/WebSocket books (authenticated)"),
         depth_read=CapabilityState(_N, True, "Novig WebSocket order books (authenticated)"),
-        history_read=CapabilityState(_P, False, "https://docs.novig.com/api-reference/trade-data (public daily CSVs; end of day, not executable)"),
+        history_read=CapabilityState(ConnectivityStage.TESTED, False, "edge_lab.novig_data + tests/test_novig_data.py (public daily CSVs; end of "
+                                     "day, not executable); one manual read recorded in "
+                                     "experiments/multi_venue/novig_daily_data_capture_2026-09-23.md"),
         settlement_read=CapabilityState(_N, True, "authenticated API"),
         account_read=CapabilityState(_N, True, "authenticated API"),
         order_write=CapabilityState(_N, True, "authenticated API; not authorized"),
@@ -193,8 +198,10 @@ THE_ODDS_API = VenueSpec(
     venue_id="the_odds_api", kind=VenueKind.AGGREGATOR, route_id="the_odds_api:v4",
     liquidity_pool_id="none (republishes sportsbook prices)",
     capabilities=_caps(
-        catalog_read=CapabilityState(_N, True, "https://the-odds-api.com/liveapi/guides/v4/ (free-tier key)"),
-        quote_read=CapabilityState(_N, True, "offered odds per bookmaker; not executable and not fillable here"),
+        catalog_read=CapabilityState(ConnectivityStage.TESTED, True, "edge_lab.odds_api on documented v4 fixtures; a live read needs the "
+                                     "owner's free key (NEEDS_ACCESS) and an approved activation plan"),
+        quote_read=CapabilityState(ConnectivityStage.TESTED, True, "offered odds per bookmaker parsed from documented fixtures; never "
+                                   "executable and not fillable here; live read NEEDS_ACCESS (owner key)"),
         depth_read=CapabilityState(_U, None, "no depth or size is published"),
         history_read=CapabilityState(_U, None, "historical odds are not in the free tier"),
         settlement_read=CapabilityState(_N, True, "scores endpoint (free-tier key)"),

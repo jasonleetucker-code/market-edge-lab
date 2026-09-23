@@ -36,3 +36,39 @@ invariants: no execution, and no live-verified stage without a recorded read.
 
 **Reconsider when:** an owner decision authorizes an execution route. That needs its own ADR
 and a change to the invariant tests. It is never a flag flip.
+
+## Adapters addendum (2026-09-23, read-only multi-venue foundation)
+
+- **Credential kind.** `sources.CredentialKind` has exactly two members: `NONE` and
+  `READ_ONLY_DATA_FEED`. A credentialed source must also declare:
+  - `credential_env_var`, the only place the owner installs the key;
+  - `credential_transport="query_param"`, since `edge_lab.http` still refuses credential
+    headers;
+  - `owner_approval_ref`, a file that names the source.
+
+  There is no trading kind, so a trading credential cannot be registered by adding data.
+- **Why the invariant changed.** The old invariant was "no registered source requires
+  credentials". The Odds API free key is owner-approved (directive section 10, issue #29), so
+  that invariant could not hold. It was replaced, not deleted. Every credentialed source must
+  be READ_ONLY_DATA_FEED, use query-param transport, name an env var, not be ACTIVE, and
+  have an approval file that names it. Two more tests pin the rest:
+  - the enum has only those two members;
+  - `src/` reads no secret-looking environment variable other than a registered one.
+
+  The credential-header refusal test is unchanged.
+- **Adapters.** All three are PLANNED sources with no collector job and no timer.
+  - `polymarket_us` (public gateway). Catalog, book, depth and settlement parsing are
+    TESTED. One bounded live GET is recorded in `experiments/multi_venue/`. It stays at
+    TESTED in the registry, because `test_only_recorded_reads_are_live_data_verified`
+    currently pins LIVE_DATA_VERIFIED to Kalshi; that promotion is a coordinator decision.
+    Price history is PLANNED. Fees are UNSUPPORTED.
+  - `novig` public daily data. `history_read` is TESTED, with one manual read recorded. The
+    live API stays NEEDS_ACCESS (OAuth).
+  - `the_odds_api`. `catalog_read` and `quote_read` are TESTED on documented fixtures. A live
+    read is NEEDS_ACCESS until the owner installs the key and approves activation. Offered
+    odds are never quotes.
+  - `discovery.classify` is the one shared discovery step, and `discovery.CatalogCoverage`
+    is the shared coverage record.
+- **Reconsider when** a second credentialed source is proposed, or when any source with a
+  credential is to become ACTIVE. Either needs its own owner approval and a change to these
+  tests in the same PR.

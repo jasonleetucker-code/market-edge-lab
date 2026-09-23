@@ -1,0 +1,24 @@
+{
+  "marketData": {
+    "marketSlug": "will-team-a-win",
+    "bids": [
+      { "px": { "value": "0.55", "currency": "USD" }, "qty": "1000" },
+      { "px": { "value": "0.54", "currency": "USD" }, "qty": "500" }
+    ],
+    "offers": [
+      { "px": { "value": "0.56", "currency": "USD" }, "qty": "750" },
+      { "px": { "value": "0.57", "currency": "USD" }, "qty": "1200" }
+    ],
+    "state": "MARKET_STATE_OPEN",
+    "stats": {
+      "lastTradePx": { "value": "0.55", "currency": "USD" },
+      "openPx": { "value": "0.50", "currency": "USD" },
+      "highPx": { "value": "0.58", "currency": "USD" },
+      "lowPx": { "value": "0.48", "currency": "USD" },
+      "sharesTraded": "50000",
+      "openInterest": "125000",
+      "notionalTraded": { "value": "27500.00", "currency": "USD" }
+    },
+    "transactTime": "2025-01-20T12:30:45.123Z"
+  }
+}

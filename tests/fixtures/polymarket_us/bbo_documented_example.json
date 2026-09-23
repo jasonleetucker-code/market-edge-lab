@@ -1,0 +1,14 @@
+{
+  "marketData": {
+    "marketSlug": "will-team-a-win",
+    "currentPx": { "value": "0.55", "currency": "USD" },
+    "lastTradePx": { "value": "0.55", "currency": "USD" },
+    "bestBid": { "value": "0.54", "currency": "USD" },
+    "bestAsk": { "value": "0.56", "currency": "USD" },
+    "bidDepth": 5,
+    "askDepth": 4,
+    "sharesTraded": "50000",
+    "openInterest": "125000",
+    "settlementPx": { "value": "0.00", "currency": "USD" }
+  }
+}

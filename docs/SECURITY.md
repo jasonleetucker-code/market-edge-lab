@@ -1,7 +1,8 @@
 # Security and Credentials
 
 **Today:** the repository has no credentials, no authenticated clients, and no order-capable
-code. `tests/invariants/` enforces this.
+code. `tests/invariants/` enforces this. The only credential the code can use is The Odds
+API's free, read-only data-feed key, and it is not installed (see below).
 
 ## Rules
 
@@ -29,11 +30,36 @@ code. `tests/invariants/` enforces this.
 | Variable | Purpose | Status |
 |---|---|---|
 | `NWS_USER_AGENT` | NWS identification with contact info | in use (not secret, but personal) |
+| `EDGE_LAB_ODDS_API_KEY` | The Odds API free-tier key (`CredentialKind.READ_ONLY_DATA_FEED`) | registered, not installed |
 | `EDGE_LAB_RESEARCH_<PROVIDER>_KEY` | read-only research data API keys | not created |
 | `EDGE_LAB_TRADING_<VENUE>_KEY_ID` / `_PRIVATE_KEY_PATH` | execution credentials, execution component only | not created, not authorized |
 
 Private keys are referenced by **file path** outside the repository. Their contents never
 go in environment variables.
+
+## The Odds API key (read-only data feed)
+
+Authority: directive 2026-09-23 section 10 and issue #29, recorded in
+`docs/EXECUTION_PLAN.md`.
+
+- **What it is.** A free-tier key that can only read odds. It is
+  `CredentialKind.READ_ONLY_DATA_FEED` on the `the_odds_api` source. It is not a trading,
+  account or withdrawal credential, and the registry has no kind for one
+  (`tests/invariants/test_no_execution_paths.py`).
+- **Who handles it.** Only the owner creates it and installs it, in the host environment as
+  `EDGE_LAB_ODDS_API_KEY`, for example in a root-readable environment file for the service
+  user. Agents never create, request, see or commit it. Never paste it into chat, git, a
+  ticket or a notification.
+- **How the code uses it.** `edge_lab.odds_api.load_key` is the only reader. A missing key is
+  SETUP_NEEDED and nothing is sent. The key travels only as the documented `apiKey` query
+  parameter; `edge_lab.http` refuses credential headers. Every returned or persisted URL is
+  redacted (`redaction.redact_url`). Errors are re-raised with redacted text and no
+  exception chain. The quota ledger holds counts only.
+- **Before any live pull.** The key must be installed, **and** an owner-approved activation
+  and quota plan must be recorded. Pulls stay under a protective ceiling of 450 of the 500
+  monthly credits. No scheduled pulls are authorized.
+- **If it leaks,** follow "If a secret is committed" below. Rotating the free key at the
+  provider is the owner's step.
 
 ## If a secret is committed
 
