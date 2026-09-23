@@ -76,8 +76,10 @@ def test_owner_idea_intake_triggers_replanning():
     section = _owner_ideas_section()
     for word in ("NOW", "NEXT", "LATER", "BLOCKED"):
         assert word in section, f"owner-idea rule lacks the {word} classification"
-    assert "shared primitive" in section, "owner-idea rule lacks the shared-primitive question"
-    assert "never authorizes" in section, "re-planning must not read as authorization"
+    for dimension in ("priority", "dependencies", "overlap", "shared infrastructure", "parallel", "roadmap"):
+        assert dimension in section, f"owner-idea re-planning lacks the {dimension!r} analysis"
+    assert "already-needed shared primitive" in section, "owner-idea rule lacks the shared-primitive question"
+    assert "Re-prioritizing never authorizes" in section, "re-planning must not read as authorization"
 
 
 def test_shared_primitives_have_exactly_one_canonical_owner():
@@ -86,6 +88,11 @@ def test_shared_primitives_have_exactly_one_canonical_owner():
     table = text[start:text.index("\n## ", start + 1)]
     rows = [line for line in table.splitlines() if line.startswith("|") and not line.startswith("|---")][1:]
     assert len(rows) >= 10, "the shared primitives table is incomplete"
+    required = ("identity", "venue", "quote", "fee", "model", "source", "ledger", "risk", "notification",
+                "execution-ticket", "eligibility", "equivalence")
+    first_cells = " ".join(row.strip("|").split("|")[0].lower() for row in rows)
+    missing = [name for name in required if name not in first_cells]
+    assert not missing, f"shared primitives missing from the table: {missing}"
     names = []
     for row in rows:
         cells = [c.strip() for c in row.strip("|").split("|")]
@@ -93,7 +100,9 @@ def test_shared_primitives_have_exactly_one_canonical_owner():
         names.append(cells[0].lower())
         owners = re.findall(r"`([^`]+)`", cells[1])
         assert len(owners) == 1, f"a primitive needs exactly one canonical owner: {row}"
-        if not cells[2].startswith("PLANNED"):
+        if cells[2].startswith("PLANNED"):
+            assert not (ROOT / owners[0]).exists(), f"{owners[0]} exists: update its row from PLANNED"
+        else:
             assert (ROOT / owners[0]).exists(), f"built primitive owner is missing: {owners[0]}"
     assert len(names) == len(set(names)), "a primitive is listed twice"
 

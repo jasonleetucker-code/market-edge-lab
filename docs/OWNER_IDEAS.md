@@ -19,7 +19,8 @@ Roadmap vocabulary: **NOW** (on the current critical path and authorized) · **N
 (ready once a named prerequisite lands) · **LATER** (wanted; not on the 2026-10-22 path) ·
 **BLOCKED** (waiting on an owner decision, access or evidence, which is named).
 
-Readiness vocabulary: **NOT READY** (prerequisites absent) · **READY FOR RESEARCH** ·
+Newly classified ideas use the roadmap vocabulary in the Readiness column. Older rows keep
+the readiness vocabulary until their next review: **NOT READY** (prerequisites absent) · **READY FOR RESEARCH** ·
 **APPLY SELECTIVELY** (use the principle where current work already needs it) ·
 **READY FOR IMPLEMENTATION** (prerequisites exist and there is an authorization path) ·
 **SUPERSEDED / NOT PLANNED**.
@@ -35,11 +36,13 @@ column lists which issues each primitive serves.
 | Event / market identity | `src/edge_lab/opportunity.py` | BUILT (Event, Market, settlement_identity) | #5 #9 #30 #32 |
 | Venue and account capability registry | `src/edge_lab/venues.py` | PLANNED | #30 #32 #29 #9 |
 | Quote / order-book normalization | `src/edge_lab/opportunity.py` | BUILT (ExecutableQuote; Kalshi only) | #30 #9 #29 |
-| Fee models and fee verification | `src/edge_lab/fee_schedules.py` | BUILT (Kalshi; others unsupported) | #6 #30 #9 |
+| Fee models and fee verification | `src/edge_lab/fee_schedules.py` | BUILT (Kalshi; others unsupported). It reuses the hash-frozen EXP-001 cost model in `fees.py`, never forks it | #6 #30 #9 |
 | Model estimates | `src/edge_lab/opportunity.py` | BUILT (ModelEstimate; EXP-001 only) | #5 #9 #32 |
-| Source ingestion and provenance | `src/edge_lab/sources.py` | BUILT (registry, snapshots, health) | #7 #29 #30 #27 |
-| Shadow / live ledger boundary | `src/edge_lab/shadow_ledger.py` | BUILT (shadow only; no live ledger) | #6 #3 #32 |
-| Risk engine and eligibility policies | `src/edge_lab/risk.py` | BUILT (risk); starter policy PLANNED | #6 #32 #3 |
+| Source ingestion and provenance | `src/edge_lab/sources.py` | BUILT: the registry, fronting `storage.py` (snapshots) and `provenance.py` | #7 #29 #30 #27 |
+| Rules / settlement equivalence | `src/edge_lab/opportunity.py` | BUILT (`Event.settlement_identity`, `Market.rules_resolved`); cross-venue matching not built | #30 #9 |
+| Shadow / live ledger boundary | `src/edge_lab/shadow_ledger.py` | BUILT (shadow only; no live ledger; head checkpoint for F09 planned beside it) | #6 #3 #32 |
+| Risk engine | `src/edge_lab/risk.py` | BUILT (limits, capital release, withdrawal contract) | #6 #3 |
+| Capital-eligibility policies | `src/edge_lab/starter_policy.py` | PLANNED (`STARTER_MAX_7D_V1`); read by the risk report and the ticket | #32 #6 |
 | Notification system | `src/edge_lab/notifications.py` | PLANNED | #33 #3 #32 |
 | Execution-ticket contract | `src/edge_lab/execution_ticket.py` | PLANNED (execution disabled) | #32 #33 #30 |
 | Operator views | `src/edge_lab/dashboard/` | BUILT (local, read-only) | #3 #6 #10 |
@@ -50,14 +53,14 @@ column lists which issues each primitive serves.
 |---|---|---|---|
 | #4 | Durable idea intake and readiness backlog (process) | **Implemented** 2026-09-22 (Gate 3 PR) | `AI_INSTRUCTIONS.md` rule + this index |
 | #3 | Outcome Board / What Matters Today dashboard | **BACKEND + LOCAL VIEW IMPLEMENTED** 2026-09-23 (PR #28); hosting NOT READY | `edge_lab.outcome_board` (ADR 0015) plus the `/outcome-board` view of the local read-only dashboard (127.0.0.1 only). Hosting, auth and live marks are unauthorized and not built. |
-| #5 | Sports prediction-market and sports-modeling expansion | READY FOR RESEARCH (not in Gate 3 scope) | Core framework is proving out on weather. Implementation needs the shared market-identity and execution layers. |
-| #9 | Sportsbook odds aggregation, consensus pricing, best-venue comparison | NOT READY | Sub-idea of #5. Needs sports authorization, market equivalence and verified access terms. |
+| #5 | Sports prediction-market and sports-modeling expansion | **LATER** (discovery and data foundations NEXT via #29/#30; any sports model BLOCKED on a preregistered experiment) | Core framework is proving out on weather. Needs the shared identity, venue and equivalence layers; the 2026-09-23 directive authorizes data foundations only, not sports models. |
+| #9 | Sportsbook odds aggregation, consensus pricing, best-venue comparison | **NEXT** (The Odds API data foundation via #29); comparison LATER | Sub-idea of #5. Needs market equivalence and verified access terms. Offered odds are never executable prices. |
 | #6 | Dynamic bankroll, position sizing, withdrawal guidance | **P0 FOUNDATION IMPLEMENTED** 2026-09-23 (shadow only) | Shadow ledger (ADR 0014), `suggest_position_size`, and the risk/capital report with a withdrawal contract (ADR 0015). The withdrawal contract never recommends a draw. Since PR #26 the operational shadow account enforces the risk limits **before** each fill (NO_FILL RISK_VETO); the frozen research account is separate. A real-money policy, a verified edge and verified fees are all still missing. |
 | #10 | Host privately on existing Chase Upside infrastructure (separate service/subdomain, real access control) | **PARTLY AUTHORIZED** 2026-09-22: headless read-only collector only | Forward collector authorized on the VPS as a separate service (ADR 0012; headroom review `docs/deploy/VPS_REVIEW_2026-09-22.md` PASS). Daily shadow and settlement units are staged in the repo (PR #26) under the 2026-09-23 authorization but not yet installed (owner SSH step). Dashboard hosting, subdomain, DNS/TLS and auth remain NOT READY and unauthorized; the dashboard is local only. |
 | #7 | Free-first multi-domain ingestion with paid-source ROI gate | APPLY SELECTIVELY NOW | Gate 3 applied it: the free IEM archive of NWS forecasts was chosen and paid weather data was not considered. The general ingestion platform is not built. |
 | #32 | Starter policy: 7-day capital-release limit, broad discovery, API-first execution preference | **NOW** (starter policy, P0); discovery NEXT; execution BLOCKED (no live authority) | `STARTER_MAX_7D_V1` is authorized by the 2026-09-23 integration directive. The governing clock is venue-tradable cash within 168 h. It uses the risk primitive plus venue timing evidence. |
 | #33 | SMS-first alerting through one shared notification layer | **NOW** (provider-neutral contract); SMS delivery BLOCKED (paid provider needs owner approval) | Serves collector failures, qualification alerts, policy exceptions and future approval tickets. |
-| #30 | Multi-venue coverage, best-price comparison, unique-market discovery | **NEXT** (Kalshi, Polymarket US and Novig public data after the P0 policy work) | Needs the venue capability registry, rules equivalence and per-venue fee evidence. Polymarket US public data needs no access; Novig live API needs owner-requested credentials. |
+| #30 | Multi-venue coverage, best-price comparison, unique-market discovery | **NEXT** (Kalshi, Polymarket US and Novig public data after the P0 policy work) | Needs the venue capability registry, rules equivalence and per-venue fee evidence. Polymarket US public data needs no access; Novig live API needs owner-provided developer credentials (separate approval). |
 | #29 | The Odds API free tier (quota-capped sports odds pilot) | **NEXT** (fixtures, quota and redaction); live pulls BLOCKED (owner free key) | Sportsbook-consensus input for #5/#9. Offered odds are never executable prices. A 450-credit protective ceiling. |
 | #27 | Action PRO permission and comparative sports-data subscription value | **LATER / BLOCKED** (no purchase authorized) | Paid source; needs the #7 ROI gate and a sports experiment that would use it. |
 

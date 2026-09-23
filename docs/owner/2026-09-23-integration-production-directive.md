@@ -944,19 +944,20 @@ If a task is blocked by access, move to another independent authorized lane and 
 
 ## Owner answers to clarifying questions (same session, 2026-09-23)
 
-Recorded as the owner selected them.
+The owner's selected option is quoted first in each answer. The text after it is the agent's
+recorded interpretation, not the owner's words.
 
-1. **Kalshi account holding:** "Directly at kalshi.com/app" (a direct member, attested by the
-   owner and not verified through an account read).
-2. **Claim basis:** "Yes, as CONSERVATIVE_BOUND". A net result computed with the verified
-   coefficient and multiplier and the conservative frozen cost model may be claimable as a
-   conservative lower bound on profit. EXACT stays separate until the account-type rounding
-   is verified.
-3. **Seven-day clock for KXHIGHNY:** "Normal path + evidence buffer". The ETA is the
-   expected expiration, plus the settlement timer, plus a buffer derived from observed
-   historical settlement lags, and venue cash must be documented as reusable.
-   `latest_expiration_time` is shown as the abnormal-path bound. A real delay past 168 h
-   becomes a policy exception.
-4. **Enforcement:** "Enforce prospectively". From the policy's effective date the
-   operational shadow account records NO_FILL / STARTER_POLICY_INELIGIBLE. Earlier days and
-   the frozen research account are unchanged.
+1. **Kalshi account holding:** selected "Directly at kalshi.com/app". Interpretation: a
+   direct member, attested by the owner and not verified through an account read.
+2. **Claim basis:** selected "Yes, as CONSERVATIVE_BOUND (Recommended)".
+   Interpretation: a net result computed with the verified coefficient and multiplier and
+   the conservative frozen cost model may be claimable as a conservative lower bound.
+   EXACT stays separate until the account-type rounding is verified.
+3. **Seven-day clock for KXHIGHNY:** selected "Normal path + evidence buffer
+   (Recommended)". Interpretation: the ETA is the expected expiration, plus the settlement
+   timer, plus a buffer derived from observed historical settlement lags, and venue cash
+   must be documented as reusable. `latest_expiration_time` is shown as the abnormal-path
+   bound, and a real delay past 168 h becomes a policy exception.
+4. **Enforcement:** selected "Enforce prospectively (Recommended)". Interpretation: from
+   the policy's effective date the operational shadow account records NO_FILL /
+   STARTER_POLICY_INELIGIBLE. Earlier days and the frozen research account are unchanged.
