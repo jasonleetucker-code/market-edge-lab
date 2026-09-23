@@ -1,0 +1,159 @@
+{
+  "source": "kalshi-fee-schedule_effective-2026-07-07_received-2026-09-23.pdf pp.4-5 'General Trading Fees Table'",
+  "transcribed_by": "agent, from the rendered pages, 2026-09-23",
+  "columns": [
+    "price_1",
+    "fee_1",
+    "price_100",
+    "fee_100"
+  ],
+  "rows": [
+    {
+      "price": "0.01",
+      "fee_1_contract": "0.01",
+      "price_100_contracts": "1.00",
+      "fee_100_contracts": "0.07",
+      "page": 4
+    },
+    {
+      "price": "0.05",
+      "fee_1_contract": "0.01",
+      "price_100_contracts": "5.00",
+      "fee_100_contracts": "0.34",
+      "page": 4
+    },
+    {
+      "price": "0.10",
+      "fee_1_contract": "0.01",
+      "price_100_contracts": "10.00",
+      "fee_100_contracts": "0.63",
+      "page": 4
+    },
+    {
+      "price": "0.15",
+      "fee_1_contract": "0.01",
+      "price_100_contracts": "15.00",
+      "fee_100_contracts": "0.90",
+      "page": 4
+    },
+    {
+      "price": "0.20",
+      "fee_1_contract": "0.02",
+      "price_100_contracts": "20.00",
+      "fee_100_contracts": "1.12",
+      "page": 4
+    },
+    {
+      "price": "0.25",
+      "fee_1_contract": "0.02",
+      "price_100_contracts": "25.00",
+      "fee_100_contracts": "1.32",
+      "page": 4
+    },
+    {
+      "price": "0.30",
+      "fee_1_contract": "0.02",
+      "price_100_contracts": "30.00",
+      "fee_100_contracts": "1.47",
+      "page": 4
+    },
+    {
+      "price": "0.35",
+      "fee_1_contract": "0.02",
+      "price_100_contracts": "35.00",
+      "fee_100_contracts": "1.60",
+      "page": 4
+    },
+    {
+      "price": "0.40",
+      "fee_1_contract": "0.02",
+      "price_100_contracts": "40.00",
+      "fee_100_contracts": "1.68",
+      "page": 4
+    },
+    {
+      "price": "0.45",
+      "fee_1_contract": "0.02",
+      "price_100_contracts": "45.00",
+      "fee_100_contracts": "1.74",
+      "page": 4
+    },
+    {
+      "price": "0.50",
+      "fee_1_contract": "0.02",
+      "price_100_contracts": "50.00",
+      "fee_100_contracts": "1.75",
+      "page": 4
+    },
+    {
+      "price": "0.55",
+      "fee_1_contract": "0.02",
+      "price_100_contracts": "55.00",
+      "fee_100_contracts": "1.74",
+      "page": 4
+    },
+    {
+      "price": "0.60",
+      "fee_1_contract": "0.02",
+      "price_100_contracts": "60.00",
+      "fee_100_contracts": "1.68",
+      "page": 4
+    },
+    {
+      "price": "0.65",
+      "fee_1_contract": "0.02",
+      "price_100_contracts": "65.00",
+      "fee_100_contracts": "1.60",
+      "page": 5
+    },
+    {
+      "price": "0.70",
+      "fee_1_contract": "0.02",
+      "price_100_contracts": "70.00",
+      "fee_100_contracts": "1.47",
+      "page": 5
+    },
+    {
+      "price": "0.75",
+      "fee_1_contract": "0.02",
+      "price_100_contracts": "75.00",
+      "fee_100_contracts": "1.32",
+      "page": 5
+    },
+    {
+      "price": "0.80",
+      "fee_1_contract": "0.02",
+      "price_100_contracts": "80.00",
+      "fee_100_contracts": "1.12",
+      "page": 5
+    },
+    {
+      "price": "0.85",
+      "fee_1_contract": "0.01",
+      "price_100_contracts": "85.00",
+      "fee_100_contracts": "0.90",
+      "page": 5
+    },
+    {
+      "price": "0.90",
+      "fee_1_contract": "0.01",
+      "price_100_contracts": "90.00",
+      "fee_100_contracts": "0.63",
+      "page": 5
+    },
+    {
+      "price": "0.95",
+      "fee_1_contract": "0.01",
+      "price_100_contracts": "95.00",
+      "fee_100_contracts": "0.34",
+      "page": 5
+    },
+    {
+      "price": "0.99",
+      "fee_1_contract": "0.01",
+      "price_100_contracts": "99.00",
+      "fee_100_contracts": "0.07",
+      "page": 5
+    }
+  ]
+}

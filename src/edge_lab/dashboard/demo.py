@@ -39,9 +39,9 @@ def _decision(account: str, n: int, at: datetime, market: str, side: str, qualif
         "opportunity": {"model_probability": p, "conservative_probability": str(Decimal(p) - Decimal("0.03")),
                         "executable_price": price, "fee": fee, "all_in_cost": cost, "net_edge": edge,
                         "net_edge_conservative": str(Decimal(edge) - Decimal("0.03")), "freshness": "fresh",
-                        "fee_status": "UNVERIFIED_CURRENT_SCHEDULE"},
+                        "fee_status": exp001_shadow.fee_fields(_iso(at), market)["fee_status"]},
         "sizing": {"final_size": 1, "binding_constraint": "fixed_contracts"} if qualify else None,
-        "stage_b_day_status": "VALID", "claimable": False,
+        "stage_b_day_status": "VALID", **exp001_shadow.fee_fields(_iso(at), market),
     }
 
 
@@ -115,7 +115,6 @@ def build_demo(now: datetime | None = None, *, experiments_root: Path | None = N
         "invalid_days": [(now - timedelta(days=2)).date().isoformat()]}), encoding="utf-8")
     last_day = (now - timedelta(hours=20)).date().isoformat()
     per_account = {"decisions": 2, "qualified": 2, "fills": 2, "no_fills": {}, "risk_vetoes": 0}
-    fee = exp001_shadow.fee_fields()
     (status / d.RECEIPT_FILE).write_text(json.dumps({  # same shape as edge_lab.daily writes
         "schema": d.RECEIPT_SCHEMA, "generated_at_utc": _iso(now - timedelta(minutes=30)), "code_version": "demo",
         "state": "PENDING_SETTLEMENT", "exit_code": 0,
@@ -129,7 +128,7 @@ def build_demo(now: datetime | None = None, *, experiments_root: Path | None = N
                                     "reason": "no settlement evidence yet"}
                                    for acct in (d.RESEARCH_ACCOUNT_ID, d.OPERATIONAL_ACCOUNT_ID)],
                        "conflicts": []},
-        "fee": {"schedule_id": fee["fee_schedule_id"], "status": fee["fee_status"], "claimable": fee["claimable"]},
+        "fee": exp001_shadow.fee_receipt(now),
         "accounts": {}, "problems": [], "missing_capture_days": [], "valid_days": 2, "closed_capture_days": 3,
         "latest_day": {"target_date": last_day, "result": "HEALTHY_TRADED", "capture_status": "VALID"}}),
         encoding="utf-8")

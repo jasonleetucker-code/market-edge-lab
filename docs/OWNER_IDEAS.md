@@ -36,7 +36,7 @@ column lists which issues each primitive serves.
 | Event / market identity | `src/edge_lab/opportunity.py` | BUILT (Event, Market, settlement_identity) | #5 #9 #30 #32 |
 | Venue and account capability registry | `src/edge_lab/venues.py` | PLANNED | #30 #32 #29 #9 |
 | Quote / order-book normalization | `src/edge_lab/opportunity.py` | BUILT (ExecutableQuote; Kalshi only) | #30 #9 #29 |
-| Fee models and fee verification | `src/edge_lab/fee_schedules.py` | BUILT (Kalshi; others unsupported). It reuses the hash-frozen EXP-001 cost model in `fees.py`, never forks it | #6 #30 #9 |
+| Fee models and fee verification | `src/edge_lab/fee_schedules.py` | BUILT (Kalshi, with dated component-level verification records, ADR 0017; other venues unsupported). It reuses the hash-frozen EXP-001 cost model in `fees.py`, never forks it | #6 #30 #9 |
 | Model estimates | `src/edge_lab/opportunity.py` | BUILT (ModelEstimate; EXP-001 only) | #5 #9 #32 |
 | Source ingestion and provenance | `src/edge_lab/sources.py` | BUILT: the registry, fronting `storage.py` (snapshots) and `provenance.py` | #7 #29 #30 #27 |
 | Rules / settlement equivalence | `src/edge_lab/opportunity.py` | BUILT (`Event.settlement_identity`, `Market.rules_resolved`); cross-venue matching not built | #30 #9 |

@@ -236,10 +236,8 @@ def run(db: Path, ledger_path: Path, *, status_dir: Path | None = None, now: dat
         "state": "FAILED", "exit_code": 1, "days": [],
         "settlement": {"refresh": {"status": "not_requested" if not refresh_settlements else "not_run"},
                        "settled": 0, "pending": []},
-        "fee": shadow.fee_fields(), "accounts": {}, "problems": [],
+        "fee": shadow.fee_receipt(now), "accounts": {}, "problems": [],
     }
-    receipt["fee"]["schedule_id"] = receipt["fee"].pop("fee_schedule_id")
-    receipt["fee"]["status"] = receipt["fee"].pop("fee_status")
     if not db.is_file():
         receipt["state"] = "NO_CAPTURE"
         receipt["problems"].append("evidence store does not exist yet")

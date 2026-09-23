@@ -1,0 +1,71 @@
+{
+  "schema": "edge-lab-fee-evidence-manifest/1",
+  "venue": "kalshi",
+  "documents": [
+    {
+      "path": "kalshi-fee-schedule_effective-2026-07-07_received-2026-09-23.pdf",
+      "sha256": "c326a69f596a11e8f8be2620402d39a8d4823920c21cc97c93a114d862699601",
+      "bytes": 281129,
+      "original_filename": "kalshi-fee-schedule.pdf (uploaded as ea85772b-kalshi-fee-schedule.pdf)",
+      "source": "owner-supplied official Kalshi fee schedule, attached to the 2026-09-23 integration directive (docs/owner/2026-09-23-integration-production-directive.md); the owner downloaded it (kalshi.com/docs/kalshi-fee-schedule.pdf answers automated requests with a bot checkpoint, see ATTEMPTS_2026-09-23.md)",
+      "received_utc": "2026-09-23T12:54:30Z",
+      "effective_date": "2026-07-07",
+      "effective_text": "Last updated and effective: July 7, 2026 (footer of every page)",
+      "pages": 12,
+      "page_references": {
+        "1": "cover",
+        "2": "Trading Fees: general taker fee = round up(M x 0.07 x C x P x (1-P)), M default 1; Maker Fees: round up(M x 0.0175 x C x P x (1-P)), M default 0; round up = fee + positionCost rounded to a centicent; upcoming changes at kalshi.com/fee-schedule; the general terms apply apart from specific products with their own schedule",
+        "3": "no settlement fee; no membership fee; ACH/wire/debit/crypto/alternate-rail deposit and withdrawal fees; FCM customers may pay FCM fees",
+        "4-5": "General Trading Fees Table (display, rounded up to the cent); transcribed in pdf_table_rows.json",
+        "6-11": "Non-Standard Fees (series, maker multiplier, taker multiplier); transcribed in pdf_nonstandard_series.json; KXHIGHNY is not listed",
+        "12": "Perpetual futures fee tiers (not applicable to event contracts)"
+      },
+      "text_layer_note": "the PDF text layer of pages 8-11 repeats and garbles some rows (for example a missing multiplier for KXNASDAQ100Y and KXMLBNL); transcriptions follow the rendered pages"
+    },
+    {
+      "path": "api_series_KXHIGHNY_2026-09-23T131747Z.json",
+      "sha256": "f9657069b10f3eda28dae3960e96e81d45008bf3332600e9c3db93f5b5498842",
+      "url": "https://api.elections.kalshi.com/trade-api/v2/series/KXHIGHNY",
+      "retrieved_utc": "2026-09-23T13:17:44Z",
+      "observed": {
+        "fee_type": "quadratic",
+        "fee_multiplier": 1,
+        "last_updated_ts": "2026-09-17T13:14:19.94284Z"
+      }
+    },
+    {
+      "path": "api_series_fee_changes_KXHIGHNY_2026-09-23T131748Z.json",
+      "sha256": "6780c8eb7edbb5e1ca3b15166f17cef054befacb2cc8f4bc479c54074a9a2c18",
+      "url": "https://api.elections.kalshi.com/trade-api/v2/series/fee_changes?series_ticker=KXHIGHNY&show_historical=true",
+      "retrieved_utc": "2026-09-23T13:17:49Z",
+      "observed": {
+        "series_fee_change_arr": []
+      }
+    },
+    {
+      "path": "docs_kalshi_fee_rounding_2026-09-23T131803Z.md",
+      "sha256": "7591cf0fb277eaf8fac8aedaf1645e58b61dacb22b5fed20ba7d8ea9f76ffa22",
+      "url": "https://docs.kalshi.com/getting_started/fee_rounding.md",
+      "retrieved_utc": "2026-09-23T13:18:03Z",
+      "observed": "trade fee rounded up to $0.000001; direct-member balances aligned to $0.0001, non-direct to $0.01; rounding fee; per-order accumulator rebates in balance-precision increments"
+    },
+    {
+      "path": "docs_kalshi_fixed_point_2026-09-23T133948Z.md",
+      "sha256": "f2669602e88a6a42f92a1608775e90a6881de115d6539686d12b0e8f07d94a76",
+      "url": "https://docs.kalshi.com/getting_started/fixed_point_migration.md",
+      "retrieved_utc": "2026-09-23T13:39:48Z",
+      "observed": "contract quantities have up to 2 decimals; minimum granularity is 0.01 contracts; fills can be fractional even for whole-contract orders; sub-cent ticks exist on some markets; rounding fee and accumulator rebates apply"
+    }
+  ],
+  "verification_record": "src/edge_lab/fee_schedules.py KALSHI_KXHIGHNY_VERIFICATION_2026_09_23 (ADR 0017)",
+  "transcriptions": [
+    {
+      "path": "pdf_table_rows.json",
+      "sha256": "d8a59da578229c0faa07fe59dda2333f56c7c6c7356a038184ccbde1c62a1c53"
+    },
+    {
+      "path": "pdf_nonstandard_series.json",
+      "sha256": "baaca6edb8255b2edd1fde7a9fdbb772f7954e9bdc5ba6886bcd76fbdd6d4778"
+    }
+  ]
+}
