@@ -223,10 +223,12 @@ class DayEvaluation:
         out = {}
         for market_id in sorted({o.market_id for o in self.opportunities}):
             venue, _, native = market_id.partition(":")
-            out[market_id] = starter_policy.assess(
+            verdict = starter_policy.assess(
                 commitment=self.as_of_utc, timing=self.market_timing.get(market_id),
                 lag=starter_policy.lag_evidence(venue, native.split("-", 1)[0] or None),
                 cash=venues.cash_timing(venue)).to_dict()
+            verdict["in_effect"] = starter_policy.in_effect(self.as_of_utc)  # enforced only from EFFECTIVE_FROM
+            out[market_id] = verdict
         return out
 
 

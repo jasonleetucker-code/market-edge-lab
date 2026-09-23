@@ -81,7 +81,7 @@ class VenueCashTiming:
     tradable_hold: timedelta | None
     withdrawable_hold: timedelta | None
     bank_receipt: timedelta | None
-    status: str  # "DOCUMENTED" | "UNVERIFIED"
+    status: str  # "DOCUMENTED" | "DOCUMENTED_INFERRED" | "UNVERIFIED"
     evidence: str | None
     detail: str
 
@@ -137,10 +137,11 @@ KALSHI = VenueSpec(
     ),
     units=Units("USD per contract, 0.0001 grid", "whole contracts", "USD 1 per contract", True),
     cash_timing=VenueCashTiming(
-        tradable_hold=timedelta(0), withdrawable_hold=None, bank_receipt=None, status="DOCUMENTED",
+        tradable_hold=timedelta(0), withdrawable_hold=None, bank_receipt=None, status="DOCUMENTED_INFERRED",
         evidence=f"{_TIMING_DIR}/docs_kalshi_market_settlement_2026-09-23T133134Z.md",
-        detail=("Kalshi docs: at settlement 'Positions are automatically resolved and funds transferred'; no "
-                "post-settlement trading hold is documented. Withdrawal and bank timing are not modelled. An "
+        detail=("Kalshi docs: at settlement 'Positions are automatically resolved and funds transferred'. That the "
+                "transferred funds can fund a new trade at once is an INFERENCE (no post-settlement trading hold "
+                "is documented), not an explicit statement. Withdrawal and bank timing are not modelled. An "
                 "account-level hold cannot be seen without an account read, which is not authorized."),
     ),
     notes="Existing weather integration. Reads are public and unauthenticated.",

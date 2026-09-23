@@ -109,13 +109,16 @@ def draft_ticket(opportunity: Opportunity, *, venue: VenueSpec, route_id: str | 
         reasons.append("FEE_CLAIM_BASIS_NONE")
     if not verdict.eligible:
         reasons.append("STARTER_POLICY_INELIGIBLE: " + ",".join(verdict.reasons))
+    committed = parse_utc(verdict.commitment_utc)
+    if committed is None or abs(created - committed) > max_quote_age:
+        reasons.append("STARTER_VERDICT_NOT_CURRENT: the verdict was not assessed at this ticket's time")
     if action_mode in API_MODES:
         reasons.append(f"{action_mode.value}_NOT_AUTHORIZED: {venue.venue_id} order_write is "
                        f"{venue.stage(Capability.ORDER_WRITE).value} and execution_authorized is False")
     if opportunity.market_id.split(":", 1)[0] != venue.venue_id:
         reasons.append(f"VENUE_MISMATCH: {opportunity.market_id} is not on {venue.venue_id}")
     received = parse_utc(opportunity.quote_received_at_utc)
-    if received is None or created - received > max_quote_age:
+    if received is None or created - received > max_quote_age or received > created:
         status = TicketStatus.EXPIRED
         reasons.append("QUOTE_STALE_OR_MISSING")
     if reasons and status is TicketStatus.DRAFT:

@@ -122,3 +122,16 @@ def test_ticket_id_is_deterministic_and_venue_mismatch_rejects():
     assert draft_ticket(opp, venue=venues.KALSHI, **kw).ticket_id == draft_ticket(opp, venue=venues.KALSHI, **kw).ticket_id
     other = draft_ticket(opp, venue=venues.POLYMARKET_US, **kw)
     assert other.status is TicketStatus.REJECTED and any("VENUE_MISMATCH" in r for r in other.reasons)
+
+
+def test_stale_verdict_and_future_quote_are_refused():
+    opp = _opportunity()
+    at = datetime.fromisoformat(opp.as_of_utc)
+    old_verdict = _eligible_verdict(at - timedelta(hours=6))
+    t = draft_ticket(opp, venue=venues.KALSHI, route_id=None, verdict=old_verdict, action_mode=ActionMode.SIMULATION,
+                     now=at, ttl=timedelta(minutes=2), max_quote_age=timedelta(minutes=5))
+    assert t.status is TicketStatus.REJECTED and any("STARTER_VERDICT_NOT_CURRENT" in r for r in t.reasons)
+    early = draft_ticket(opp, venue=venues.KALSHI, route_id=None, verdict=_eligible_verdict(at - timedelta(minutes=5)),
+                         action_mode=ActionMode.SIMULATION, now=at - timedelta(minutes=5), ttl=timedelta(minutes=2),
+                         max_quote_age=timedelta(minutes=5))
+    assert early.status is TicketStatus.EXPIRED  # the quote is dated after the ticket: not current

@@ -7,7 +7,8 @@ the new commitment.
 
 Separate clocks are tracked, and only one of them governs:
 - `event_end`: when the underlying event or observation ends;
-- `resolution_eta`: when the outcome is known and settled (normal path plus a buffer);
+- `resolution_eta`: a conservative bound on when the outcome is settled (the venue's
+  expected resolution, plus its settlement timer, plus the evidence buffer);
 - `tradable_cash_release_eta`: settled cash usable for a new trade on this venue. **This is
   the governing clock.**
 - `withdrawable_cash_eta` and `bank_receipt_eta`: reported only. Bank or withdrawal delays
@@ -62,6 +63,13 @@ class StarterReason(str, Enum):
 
 
 DISPUTED_STATUSES = frozenset({"disputed", "amended"})
+# Venue lifecycle words under which a new commitment can be on the normal path. Any other
+# known status (closed, determined, finalized...) is not normal-path for a new commitment.
+OPEN_STATUSES = frozenset({"active", "open", "initialized"})
+# Venue cash-timing statuses the policy accepts. DOCUMENTED_INFERRED: the venue documents that
+# settlement moves funds into the account balance, and reusability for trading is inferred
+# from that; it is shown on every verdict so the owner can see it is an inference.
+ACCEPTED_CASH_STATUSES = frozenset({"DOCUMENTED", "DOCUMENTED_INFERRED"})
 
 
 @dataclass(frozen=True)
@@ -98,6 +106,12 @@ class StarterVerdict:
     elapsed_hours_to_tradable: str | None
     max_hours: int
     detail: tuple[str, ...]
+    # Provenance: which evidence produced the ETA, so a later change of evidence is auditable.
+    timing_source: str | None = None
+    lag_evidence_path: str | None = None
+    lag_buffer_hours: int | None = None
+    cash_timing_status: str | None = None
+    cash_timing_evidence: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         out = dict(self.__dict__)
@@ -131,12 +145,20 @@ def assess(*, commitment: datetime | str, timing: MarketTiming | None, lag: Sett
     if lag is None:
         reasons.append(StarterReason.SETTLEMENT_TIMING_UNVERIFIED)
         detail.append("no settlement-lag evidence for this series")
-    if cash is None or cash.status != "DOCUMENTED" or cash.tradable_hold is None:
+    if cash is None or cash.status not in ACCEPTED_CASH_STATUSES or cash.tradable_hold is None:
         reasons.append(StarterReason.SETTLEMENT_TIMING_UNVERIFIED)
         detail.append("the venue's post-settlement trading hold is not documented")
-    if timing is not None and ((timing.lifecycle_status or "").lower() in DISPUTED_STATUSES or timing.rescheduled):
+    status = (timing.lifecycle_status or "").lower() if timing is not None else ""
+    if timing is not None and (status in DISPUTED_STATUSES or timing.rescheduled):
         reasons.append(StarterReason.DELAYED_OR_DISPUTED)
         detail.append(f"market is {timing.lifecycle_status or 'rescheduled'}; its timing is not normal-path")
+    elif status and status not in OPEN_STATUSES:
+        reasons.append(StarterReason.DELAYED_OR_DISPUTED)
+        detail.append(f"market status {timing.lifecycle_status!r} is not open; a new commitment is not normal-path")
+    if expected is not None and timer is not None and expected + timedelta(seconds=timer) < start:
+        # Already past the venue's own expected resolution: delayed, whatever the buffer says.
+        reasons.append(StarterReason.DELAYED_OR_DISPUTED)
+        detail.append("the venue's expected resolution time has already passed: the market is delayed")
 
     resolution = tradable = withdrawable = bank = None
     if expected is not None and timer is not None and lag is not None:
@@ -170,6 +192,11 @@ def assess(*, commitment: datetime | str, timing: MarketTiming | None, lag: Sett
         bank_receipt_eta_utc=_iso(bank), abnormal_path_bound_utc=_iso(latest),
         elapsed_hours_to_tradable=None if elapsed is None else f"{elapsed.total_seconds() / 3600:.4f}",
         max_hours=int(MAX_HORIZON.total_seconds() // 3600), detail=tuple(detail),
+        timing_source=timing.source if timing else None,
+        lag_evidence_path=lag.evidence_path if lag else None,
+        lag_buffer_hours=int(lag.buffer.total_seconds() // 3600) if lag else None,
+        cash_timing_status=cash.status if cash else None,
+        cash_timing_evidence=cash.evidence if cash else None,
     )
 
 

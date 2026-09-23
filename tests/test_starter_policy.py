@@ -50,7 +50,9 @@ def test_lag_evidence_is_never_shared_across_series_or_venues():
 
 
 def test_kalshi_cash_timing_is_documented_and_only_the_tradable_clock_is_known():
-    assert CASH.status == "DOCUMENTED" and CASH.tradable_hold == timedelta(0)
+    # "funds transferred" at settlement is documented; reuse for trading is an inference.
+    assert CASH.status == "DOCUMENTED_INFERRED" and CASH.tradable_hold == timedelta(0)
+    assert "INFERENCE" in CASH.detail
     assert CASH.withdrawable_hold is None and CASH.bank_receipt is None
     assert (Path(__file__).resolve().parents[1] / CASH.evidence).is_file()
 
@@ -101,7 +103,7 @@ def test_unknown_timing_fails_closed():
 
 
 def test_missing_settlement_evidence_or_undocumented_cash_fails_closed():
-    release = T0 + timedelta(hours=40)
+    release = T0 + timedelta(hours=60)
     assert verdict(release, lag=None).reasons == ("SETTLEMENT_TIMING_UNVERIFIED",)
     assert verdict(release, cash=None).reasons == ("SETTLEMENT_TIMING_UNVERIFIED",)
     undocumented = replace(CASH, status="UNVERIFIED")
@@ -136,7 +138,7 @@ def test_a_post_settlement_trading_hold_counts_against_168h():
 
 
 def test_rescheduled_or_disputed_market_is_ineligible():
-    release = T0 + timedelta(hours=30)
+    release = T0 + timedelta(hours=60)
     assert verdict(release, rescheduled=True).reasons == ("DELAYED_OR_DISPUTED",)
     assert verdict(release, lifecycle_status="disputed").reasons == ("DELAYED_OR_DISPUTED",)
     assert verdict(release, lifecycle_status="Amended").reasons == ("DELAYED_OR_DISPUTED",)
@@ -220,13 +222,20 @@ def test_operational_fills_carry_the_verdict_and_research_is_untouched(day, monk
     operational = [f for f in _fills(ledger, shadow.ACCOUNT_ID) if f["status"] == "FILLED"]
     research = _fills(ledger, shadow.RESEARCH_ACCOUNT_ID)
     assert operational and all(f["starter_policy"]["eligible"] for f in operational)
-    assert all(f["expected_settlement_utc"] == f["starter_policy"]["tradable_cash_release_eta_utc"] for f in operational)
+    research = _fills(ledger, shadow.RESEARCH_ACCOUNT_ID)
+    # expected_settlement_utc keeps one meaning for both accounts; the tradable ETA lives in the verdict.
+    by_market = {f["market_id"]: f["expected_settlement_utc"] for f in research}
+    assert all(f["expected_settlement_utc"] == by_market[f["market_id"]] for f in operational)
+    assert all(f["starter_policy"]["timing_source"].startswith("decision_capture:") for f in operational)
+    assert all(f["starter_policy"]["lag_buffer_hours"] == 49 for f in operational)
     assert research and not any("starter_policy" in f for f in research)
     decisions = [json.loads(r["payload_json"]) for r in ledger.entries(shadow.ACCOUNT_ID) if r["kind"] == "decision"]
     assert all("starter_policy" in d for d in decisions)
-    # Idempotent re-run.
+    # Idempotent re-run: the ledger is unchanged, entry for entry.
+    before = [(r["kind"], r["entry_key"], r["payload_sha256"]) for a in ledger.accounts() for r in ledger.entries(a)]
     shadow.run_day(store, ledger, D, model=stageb.load_model(), now=CLOSED)
-    assert len(_fills(ledger, shadow.ACCOUNT_ID)) == len(_fills(ledger, shadow.ACCOUNT_ID))
+    after = [(r["kind"], r["entry_key"], r["payload_sha256"]) for a in ledger.accounts() for r in ledger.entries(a)]
+    assert before == after
 
 
 def test_unverified_venue_timing_blocks_operational_fills_but_never_research(day, monkeypatch):
@@ -254,3 +263,39 @@ def test_before_the_effective_date_nothing_changes(day):
     assert not any("starter_policy" in f for f in _fills(ledger, shadow.ACCOUNT_ID))
     summary = shadow.starter_summary(ledger, shadow.ACCOUNT_ID, CLOSED)
     assert summary["checked"] == 0 and summary["unchecked_filled_after_effective"] == 0
+
+
+def test_a_market_already_past_its_expected_resolution_is_delayed():
+    expected = T0 - timedelta(hours=3)
+    timing = MarketTiming(expected_resolution_utc=expected.isoformat(), settlement_timer_seconds=TIMER)
+    v = sp.assess(commitment=T0, timing=timing, lag=LAG, cash=CASH)
+    assert not v.eligible and "DELAYED_OR_DISPUTED" in v.reasons
+
+
+@pytest.mark.parametrize("status", ["closed", "determined", "finalized", "settled", "inactive"])
+def test_a_non_open_market_is_not_normal_path(status):
+    assert verdict(T0 + timedelta(hours=60), lifecycle_status=status).reasons == ("DELAYED_OR_DISPUTED",)
+
+
+def test_the_verdict_records_its_evidence():
+    v = verdict(T0 + timedelta(hours=60)).to_dict()
+    assert v["lag_evidence_path"] == sp.KXHIGHNY_LAG_EVIDENCE and v["lag_buffer_hours"] == 49
+    assert v["cash_timing_status"] == "DOCUMENTED_INFERRED" and v["cash_timing_evidence"] == CASH.evidence
+
+
+def test_in_effect_verdicts_rebuild_identically_from_scratch(tmp_path, monkeypatch):
+    import sqlite3
+    from test_exp001_shadow import CLOSED
+    from test_forward import D, _full_day
+    monkeypatch.setattr(sp, "EFFECTIVE_FROM_UTC", "2026-09-22T00:00:00+00:00")
+    digests = []
+    for name in ("a", "b"):
+        (tmp_path / name).mkdir()
+        store = SnapshotStore(tmp_path / name / "fwd.sqlite3")
+        _full_day(store, monkeypatch)
+        ledger = ShadowLedger(tmp_path / name / "ledger.sqlite3")
+        shadow.run_day(store, ledger, D, model=stageb.load_model(), now=CLOSED)
+        with sqlite3.connect(tmp_path / name / "ledger.sqlite3") as con:
+            digests.append(con.execute("SELECT account_id, kind, entry_key, payload_sha256 FROM ledger_entries "
+                                       "ORDER BY seq").fetchall())
+    assert digests[0] == digests[1]

@@ -320,9 +320,7 @@ def _run_account(ledger: ShadowLedger, account: ShadowAccount, opportunities, ta
         if fill["status"] == FILLED and account.starter_policy and starter_policy.in_effect(opp.as_of_utc):
             verdict = starter_verdict(opp.market_id, fill["filled_at_utc"], timing)
             fill["starter_policy"] = verdict.to_dict()
-            if verdict.eligible:
-                fill["expected_settlement_utc"] = verdict.tradable_cash_release_eta_utc
-            else:
+            if not verdict.eligible:
                 fill.update(status="NO_FILL", reason="STARTER_POLICY_INELIGIBLE", quantity=0, price=None,
                             total_cost=None, fee=None,
                             detail="STARTER_MAX_7D_V1: " + ", ".join(verdict.reasons))

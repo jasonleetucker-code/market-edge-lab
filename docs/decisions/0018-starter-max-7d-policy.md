@@ -35,21 +35,25 @@ whole weather research domain ineligible.
   - The buffer is ceil(2 × the worst observed lag of `settlement_ts` after the normal-path
     time). For KXHIGHNY that is 49 h: 698 events, maximum +24.17 h, derived reproducibly
     from the Gate 3 market capture.
-  - Kalshi's documented hold is 0: "funds transferred" at settlement.
+  - Kalshi's hold is 0 as `DOCUMENTED_INFERRED`. The docs say positions are resolved and
+    "funds transferred" at settlement. That the funds can fund a new trade at once is an
+    inference, and every verdict shows it.
 - **Owner decision (2026-09-23).** The contractual latest expiry is reported as
   `abnormal_path_bound` and never governs.
 - **Withdrawal and bank clocks** are reported only. If they are unknown they stay None.
 - **Fail closed.** Each of these makes a position ineligible with a machine-readable reason:
   - unknown timing: TRADABLE_CASH_RELEASE_UNKNOWN;
   - missing series-lag or venue-cash evidence: SETTLEMENT_TIMING_UNVERIFIED;
-  - a disputed, amended or rescheduled market: DELAYED_OR_DISPUTED;
+  - a disputed, amended, non-open or rescheduled market, or one already past its venue-stated
+    expected resolution: DELAYED_OR_DISPUTED. The Kalshi adapter cannot detect a reschedule
+    directly; the past-expected check catches a market that has run late;
   - a post-settlement hold that pushes the release past 168 h: POST_SETTLEMENT_HOLD;
   - a hoped-for early sale: EXIT_DEPENDS_ON_LIQUIDITY. It never helps eligibility.
 - **Enforcement (owner decision).** The operational shadow account enforces the policy from
   `EFFECTIVE_FROM_UTC` (2026-09-24T00:00Z) as NO_FILL `STARTER_POLICY_INELIGIBLE`, before
   the risk veto. Enforcement is prospective. The research account is never touched.
-  Decisions and fills carry the verdict, and an eligible fill's `expected_settlement_utc`
-  becomes the tradable ETA.
+  Decisions and fills carry the verdict, with its evidence provenance.
+  `expected_settlement_utc` keeps its existing meaning for both accounts.
 - **Exceptions.** An open starter position past its expected release is a
   `SEVEN_DAY_POLICY_EXCEPTION`. Its capital stays reserved, nothing is sold, and it is
   surfaced in the risk view, the overview and the notifications.

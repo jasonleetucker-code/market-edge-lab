@@ -29,6 +29,7 @@ import os
 from collections import Counter
 from contextlib import closing
 from dataclasses import dataclass, field
+from urllib.parse import urlsplit
 from datetime import datetime, timedelta
 from enum import Enum
 from pathlib import Path
@@ -124,17 +125,30 @@ def make_event(type: EventType, severity: Severity, *, created_at: datetime | st
 
 def check_event(event: NotificationEvent) -> DeliveryStatus | None:
     """A reason to refuse the event, or None. Secrets and unsafe links are never sent."""
-    text = " ".join([event.summary, *event.values.keys(), *event.values.values(), event.deep_link or ""])
-    if contains_secret(text):
+    strings = [v for v in event.to_dict().values() if isinstance(v, str)]
+    strings += [f"{k}={v}" for k, v in event.values.items()]
+    if any(contains_secret(s) for s in strings):
         return DeliveryStatus.REFUSED_SECRET
-    if event.deep_link is not None:
-        link = event.deep_link
-        host = link.split("://", 1)[-1].split("/", 1)[0].split(":", 1)[0].lower()
-        local = host in ("127.0.0.1", "localhost") and link.startswith("http://")
-        if not (link.startswith("https://") or local) or not any(
-                host == h or host.endswith("." + h) for h in LINK_HOSTS):
-            return DeliveryStatus.REFUSED_LINK
+    if event.deep_link is not None and not _safe_link(event.deep_link):
+        return DeliveryStatus.REFUSED_LINK
     return None
+
+
+def _safe_link(link: str) -> bool:
+    """https to an allowlisted host (or http to the local dashboard); no userinfo or tricks."""
+    if any(c in link for c in "\\ \t\n") or not link.isascii():
+        return False
+    try:
+        parts = urlsplit(link)
+    except ValueError:
+        return False
+    if any(c in parts.netloc for c in "@?#") or not parts.hostname:
+        return False
+    host = parts.hostname.lower()
+    local = host in ("127.0.0.1", "localhost")
+    if parts.scheme == "https":
+        return local or any(host == h or host.endswith("." + h) for h in LINK_HOSTS)
+    return parts.scheme == "http" and local
 
 
 class Sink(Protocol):
@@ -151,7 +165,7 @@ class JsonlOutbox:
 
     sink_id = "local-outbox"
 
-    def __init__(self, path: Path, *, max_bytes: int = 2_000_000) -> None:
+    def __init__(self, path: Path, *, max_bytes: int = 1_000_000) -> None:
         self.path = Path(path)
         self.max_bytes = max_bytes
 
@@ -171,10 +185,11 @@ class JsonlOutbox:
 
     def deliver(self, event: NotificationEvent) -> DeliveryStatus:
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        if self.path.exists() and self.path.stat().st_size > self.max_bytes:
-            os.replace(self.path, self.path.with_name(self.path.name + ".1"))
         line = json.dumps(event.to_dict(), sort_keys=True, ensure_ascii=False) + "\n"
+        if self.path.exists() and self.path.stat().st_size + len(line.encode("utf-8")) > self.max_bytes:
+            os.replace(self.path, self.path.with_name(self.path.name + ".1"))
         fd = os.open(self.path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o644)
+        os.fchmod(fd, 0o644)  # readable like the receipt, whatever the service umask
         with closing(os.fdopen(fd, "a", encoding="utf-8")) as fh:
             fh.write(line)
             fh.flush()

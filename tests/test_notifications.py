@@ -102,7 +102,10 @@ def test_secrets_are_refused(field, value):
 
 
 @pytest.mark.parametrize("link", ["http://kalshi.com/x", "https://evil.example/x", "javascript:alert(1)",
-                                  "https://kalshi.com.evil.example/"])
+                                  "https://kalshi.com.evil.example/", "https://evil.com?.kalshi.com",
+                                  "https://evil.com#.kalshi.com", "https://evil.com\\.kalshi.com",
+                                  "https://user@kalshi.com/", "HTTPS://evil.com/", "https://kalshi.com.xn--evil/",
+                                  "https://kаlshi.com/"])
 def test_unsafe_links_are_refused(link):
     assert n.dispatch([ev(deep_link=link)], [n.DisabledSmsSink()], now=NOW)[0]["status"] == "REFUSED_LINK"
 
@@ -177,3 +180,26 @@ def test_redact_text_and_detection():
     out = redact_text(text, ("abc",))
     assert "zzz" not in out and "abcdefghijkl" not in out and "a=1" in out
     assert contains_secret("token=abc") and not contains_secret("plain words about tokens")
+
+
+def test_every_persisted_field_is_scanned_for_secrets():
+    for kw in ({"market_id": "api_key=abc123"}, {"event_ref": "token=zzz"}, {"venue_id": "password: x"}):
+        assert n.dispatch([ev(**kw)], [n.DisabledSmsSink()], now=NOW)[0]["status"] == "REFUSED_SECRET"
+    assert n.dispatch([ev(key="session_id=abc")], [n.DisabledSmsSink()], now=NOW)[0]["status"] == "REFUSED_SECRET"
+
+
+def test_outbox_is_world_readable_under_a_strict_umask(tmp_path):
+    import os
+    import stat
+    old = os.umask(0o077)
+    try:
+        n.JsonlOutbox(tmp_path / "out.jsonl").deliver(ev())
+    finally:
+        os.umask(old)
+    assert stat.S_IMODE((tmp_path / "out.jsonl").stat().st_mode) == 0o644
+
+
+def test_outbox_stays_under_the_dashboard_read_limit(tmp_path):
+    from edge_lab.dashboard.data import STATUS_FILE_MAX_BYTES
+    outbox = n.JsonlOutbox(tmp_path / "out.jsonl")
+    assert outbox.max_bytes < STATUS_FILE_MAX_BYTES
