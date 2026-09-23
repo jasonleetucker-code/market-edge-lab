@@ -512,6 +512,65 @@ def test_main_passes_the_approved_host_to_the_app(monkeypatch):
     assert seen["server_class"] is not server.server_class_for("::1")
 
 
+def _serve_main(monkeypatch, argv):
+    seen = {}
+
+    class FakeServer:
+        server_port = 8765
+
+        def serve_forever(self):
+            raise KeyboardInterrupt
+
+        def server_close(self):
+            pass
+
+    def fake_make_server(host, port, app, **kw):
+        seen.update(host=host, app=app)
+        return FakeServer()
+    monkeypatch.setattr(server, "make_server", fake_make_server)
+    return server.main(argv), seen
+
+
+TS_NAME = "vmi1.tailabc123.ts.net"
+
+
+def test_tailscale_serve_host_is_accepted_exactly_and_bind_stays_loopback(monkeypatch):
+    code, seen = _serve_main(monkeypatch, ["--tailscale-serve-host", "VMI1.tailabc123.ts.net."])
+    assert code == 0 and seen["host"] == "127.0.0.1"
+    app = seen["app"]
+    for host in (TS_NAME, TS_NAME + ":443", TS_NAME.upper(), TS_NAME + ".", "127.0.0.1:8765", "localhost"):
+        assert call(app, "/", host=host)[0] == "200 OK", host
+    for host in ("other.tailabc123.ts.net", "vmi1.tailother.ts.net", "evil.vmi1.tailabc123.ts.net",
+                 "vmi1.tailabc123.ts.net.evil.example.com", "tailabc123.ts.net", "ts.net", "evil.example.com",
+                 "100.107.60.6", "0.0.0.0", "192.168.1.10:8765", TS_NAME + ":evil"):
+        assert call(app, "/", host=host)[0].startswith("400"), host
+
+
+@pytest.mark.parametrize("name", ["", "ts.net", "tailabc123.ts.net", "*.tailabc123.ts.net", "a.b.c.ts.net",
+                                  "vmi1.tailabc123.ts.net:443", "vmi1.tailabc123.example.com", "localhost",
+                                  "100.107.60.6", "-vmi1.tailabc123.ts.net", "vmi1.tailabc123.ts.net/x",
+                                  "vmi1..ts.net", "vmi 1.tailabc123.ts.net"])
+def test_tailscale_serve_host_must_be_one_exact_magicdns_name(monkeypatch, capsys, name):
+    def no_bind(*a, **k):
+        raise AssertionError("must not bind")
+    monkeypatch.setattr(server, "make_server", no_bind)
+    assert server.main([f"--tailscale-serve-host={name}"]) == 2
+    assert "not a Tailscale MagicDNS name" in capsys.readouterr().err
+
+
+def test_tailscale_serve_host_refuses_a_non_loopback_bind(monkeypatch, capsys):
+    def no_bind(*a, **k):
+        raise AssertionError("must not bind")
+    monkeypatch.setattr(server, "make_server", no_bind)
+    assert server.main(["--host", "0.0.0.0", "--allow-non-loopback", "--tailscale-serve-host", TS_NAME]) == 2
+    assert "needs a loopback --host" in capsys.readouterr().err
+
+
+def test_without_the_flag_a_tailnet_host_is_refused(monkeypatch):
+    code, seen = _serve_main(monkeypatch, [])
+    assert code == 0 and call(seen["app"], "/", host=TS_NAME)[0].startswith("400")
+
+
 def test_ipv6_loopback_uses_an_ipv6_socket_and_bind_errors_are_one_line(monkeypatch, capsys):
     seen = {}
 

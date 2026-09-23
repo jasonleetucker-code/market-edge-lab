@@ -45,12 +45,31 @@ def test_every_service_is_in_the_shared_slice_with_caps_and_hardening():
     for path in UNITS.glob("*.service"):
         u = _parse(path.name)
         assert u[("Service", "Slice")] == ["edgelab.slice"], path.name
-        if path.name != "edgelab-alert@.service":
+        if path.name not in ("edgelab-alert@.service", "edgelab-dashboard.service"):
             assert u[("Service", "User")] == ["edgelab"] and u[("Service", "MemoryMax")] == ["256M"], path.name
             assert u[("Service", "ProtectSystem")] == ["strict"] and u[("Service", "NoNewPrivileges")] == ["yes"]
             assert u[("Service", "ReadWritePaths")] == ["/var/lib/market-edge-lab /var/lib/market-edge-lab-status"]
     s = _parse("edgelab.slice")
     assert s[("Slice", "MemoryMax")] == ["384M"] and s[("Slice", "CPUQuota")] == ["25%"]
+
+
+def test_dashboard_is_read_only_loopback_only_and_tailnet_host_pinned():
+    u = _parse("edgelab-dashboard.service")
+    assert u[("Service", "User")] == ["edgelab"] and u[("Service", "Slice")] == ["edgelab.slice"]
+    assert u[("Service", "ProtectSystem")] == ["strict"] and u[("Service", "NoNewPrivileges")] == ["yes"]
+    assert ("Service", "ReadWritePaths") not in u  # it writes nothing
+    assert u[("Service", "IPAddressDeny")] == ["any"] and u[("Service", "IPAddressAllow")] == ["localhost"]
+    assert u[("Service", "RestrictAddressFamilies")] == ["AF_INET AF_UNIX"]
+    assert u[("Service", "MemoryMax")] == ["128M"]
+    exec_start = u[("Service", "ExecStart")]
+    assert len(exec_start) == 1
+    args = exec_start[0].split()
+    assert args[args.index("--host") + 1] == "127.0.0.1" and args[args.index("--port") + 1] == "8765"
+    assert args[args.index("--tailscale-serve-host") + 1] == "${EDGE_LAB_TAILSCALE_SERVE_HOST}"
+    assert "--allow-non-loopback" not in args and "--demo" not in args
+    # The name comes from a required file: a missing file fails the unit rather than serving without it.
+    assert u[("Service", "EnvironmentFile")] == ["/etc/market-edge-lab/dashboard.env"]
+    assert "edgelab-dashboard" in INSTALL
 
 
 def test_new_timers_avoid_the_capture_windows_and_use_new_york_time():
