@@ -275,7 +275,36 @@ class ShadowLedger:
                 raise LedgerError(f"unsupported ledger schema {version}")
             conn.execute(f"PRAGMA user_version = {LEDGER_SCHEMA_VERSION}")
 
+    _read_only = False
+
+    @classmethod
+    def open_readonly(cls, path: str | Path) -> "ShadowLedger":
+        """Open an existing ledger for reporting: no file or schema creation, SQLite
+        `mode=ro` + `query_only`. Appends fail. Refuses a missing file or another schema."""
+        p = Path(path)
+        if p.is_symlink() or not p.is_file():
+            raise LedgerError(f"shadow ledger {p} is missing or not a regular file")
+        ledger = cls.__new__(cls)
+        ledger.path = p
+        ledger._read_only = True
+        with closing(ledger._connect()) as conn:
+            version = conn.execute("PRAGMA user_version").fetchone()[0]
+        if version != LEDGER_SCHEMA_VERSION:
+            raise LedgerError(f"unsupported ledger schema {version}")
+        return ledger
+
+    @property
+    def read_only(self) -> bool:
+        return self._read_only
+
     def _connect(self) -> sqlite3.Connection:
+        if self._read_only:
+            conn = sqlite3.connect(f"{self.path.resolve().as_uri()}?mode=ro", uri=True,
+                                   timeout=30.0, isolation_level=None)
+            conn.row_factory = sqlite3.Row
+            conn.execute("PRAGMA busy_timeout = 30000")
+            conn.execute("PRAGMA query_only = ON")
+            return conn
         conn = sqlite3.connect(self.path, timeout=30.0, isolation_level=None)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA busy_timeout = 30000")
