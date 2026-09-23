@@ -1,0 +1,15 @@
+{
+  "venue": "kalshi",
+  "scope": "KXHIGHNY",
+  "n_events": 698,
+  "n_markets": 4230,
+  "min_lag_hours": -7.9203,
+  "p99_lag_hours": 3.2304,
+  "max_lag_hours": 24.1747,
+  "buffer_hours": 49,
+  "buffer_rule": "ceil(2 x max lag), whole hours",
+  "lag_definition": "settlement_ts - (expected_expiration_time + settlement_timer_seconds), per settled market",
+  "derived_from": "tests/fixtures/gate3/kalshi_markets_all_2026-09-22.json.gz",
+  "derived_by": "edge_lab.starter_policy.kxhighny_lag_from_fixture",
+  "note": "KXHIGHNY series only (the older HIGHNY series is a different regime and is excluded). A test re-derives this file from the fixture."
+}

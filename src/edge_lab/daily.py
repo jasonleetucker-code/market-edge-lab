@@ -49,12 +49,14 @@ from pathlib import Path
 from typing import Any, Callable
 
 from . import exp001_shadow as shadow
-from . import forward, outcome_board, risk
+from . import forward, notifications, outcome_board, risk
+from .freshness import parse_utc
 from .shadow_ledger import LedgerError, ShadowLedger
 from .storage import SnapshotStore
 
 RECEIPT_SCHEMA = "edge-lab-shadow-daily-receipt/1"
 RECEIPT_NAME = "shadow_daily.json"
+NOTIFICATIONS_NAME = "notifications.jsonl"
 EXIT = {"HEALTHY_TRADED": 0, "HEALTHY_NO_SIGNAL": 0, "PENDING_SETTLEMENT": 0, "NO_CAPTURE": 0, "NOT_CLOSED": 0,
         "INVALID_CAPTURE": 3, "SETTLEMENT_CONFLICT": 1, "FAILED": 1, "LOCK_BUSY": 1}
 # Settlement for D is normally published the morning after D. Asking earlier wastes
@@ -207,6 +209,8 @@ def _summaries(ledger: ShadowLedger, now: datetime) -> dict[str, Any]:
                              "new_risk_allowed": report.new_risk_allowed, "breaches": list(report.breaches),
                              "open_worst_case_risk": str(report.open_worst_case_risk)}
             entry["outcome_board_groups"] = len(outcome_board.build_board(state, now))
+        if account.starter_policy:
+            entry["starter_policy"] = shadow.starter_summary(ledger, account.account_id, now)
         out[account.account_id] = entry
     return out
 
@@ -278,6 +282,30 @@ def _alert_key(receipt: dict[str, Any]) -> Any:
                   for c in conflicts)
 
 
+def _notify(status_dir: Path | None, receipt: dict[str, Any]) -> dict[str, Any]:
+    """Turn the receipt into notification events and deliver them to the local outbox (and
+    the disabled SMS sink). Any failure is recorded here and changes nothing else: the
+    receipt's state, exit code and the ledger are already decided (ADR 0020)."""
+    if status_dir is None:
+        return {"status": "skipped", "reason": "no status directory", "events": 0, "delivered": 0, "by_status": {}}
+    try:
+        now = parse_utc(receipt.get("generated_at_utc"))
+        exceptions = [e for acct in (receipt.get("accounts") or {}).values() if isinstance(acct, dict)
+                      for e in ((acct.get("starter_policy") or {}).get("exceptions") or [])]
+        events = notifications.events_from_receipt(receipt, now=now, exceptions=exceptions)
+        outbox = notifications.JsonlOutbox(status_dir / NOTIFICATIONS_NAME)
+        results = notifications.dispatch(events, [outbox, notifications.DisabledSmsSink()], now=now,
+                                         history=outbox.history())
+        by_status: dict[str, int] = {}
+        for r in results:
+            by_status[r["status"]] = by_status.get(r["status"], 0) + 1
+        delivered = sum(r["status"] == "DELIVERED" and r["sink"] == outbox.sink_id for r in results)
+        return {"status": "ok", "events": len(events), "delivered": delivered, "by_status": by_status}
+    except Exception as exc:  # noqa: BLE001 - notification failure never alters the run's truth
+        return {"status": "failed", "reason": f"{type(exc).__name__}: {exc}"[:300], "events": 0, "delivered": 0,
+                "by_status": {}}
+
+
 def _finish(status_dir: Path | None, receipt: dict[str, Any]) -> tuple[dict[str, Any], int]:
     receipt["exit_code"] = EXIT[receipt["state"]]
     if receipt["state"] in ("INVALID_CAPTURE", "SETTLEMENT_CONFLICT"):
@@ -287,6 +315,7 @@ def _finish(status_dir: Path | None, receipt: dict[str, Any]) -> tuple[dict[str,
         if previous.get("state") == receipt["state"] and _alert_key(previous) == _alert_key(receipt):
             receipt["exit_code"] = 0
             receipt["repeat_of_previous_alert"] = True
+    receipt["notifications"] = _notify(status_dir, receipt)
     try:
         _write_receipt(status_dir, receipt)
     except OSError as exc:  # the receipt itself failing is a failure

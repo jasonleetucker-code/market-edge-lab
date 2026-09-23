@@ -14,7 +14,7 @@ from decimal import Decimal, InvalidOperation
 from typing import Any, Mapping
 
 from . import settlement
-from .opportunity import Event, ExecutableQuote, Market, MarketStatus, Payoff
+from .opportunity import Event, ExecutableQuote, Market, MarketStatus, MarketTiming, Payoff
 
 VENUE = "kalshi"
 OPEN_STATUSES = ("active", "open")
@@ -57,7 +57,34 @@ def _condition(raw: Mapping[str, Any]) -> str:
     return f"unrecognized strike_type {kind!r}"
 
 
-def market_from_kalshi(raw: Mapping[str, Any], *, event_id_for_ticker: Mapping[str, str]) -> Market:
+def _text(raw: Mapping[str, Any], key: str) -> str | None:
+    value = raw.get(key)
+    return str(value) if value not in (None, "") else None
+
+
+def timing_from_kalshi(raw: Mapping[str, Any], *, source: str | None = None) -> MarketTiming:
+    """The timing fields Kalshi publishes for a market, unchanged. Kalshi documents
+    `expected_expiration_time` as when the outcome is expected to be known and
+    `latest_expiration_time` as the latest possible expiration (docs.kalshi.com Market
+    Lifecycle). `expiration_time` is deprecated and ignored. Missing fields stay None."""
+    timer = raw.get("settlement_timer_seconds")
+    try:
+        timer = int(timer) if timer is not None else None
+    except (TypeError, ValueError):
+        timer = None
+    return MarketTiming(
+        event_end_utc=_text(raw, "occurrence_datetime"),
+        close_time_utc=_text(raw, "close_time"),
+        expected_resolution_utc=_text(raw, "expected_expiration_time"),
+        latest_resolution_utc=_text(raw, "latest_expiration_time"),
+        settlement_timer_seconds=timer if timer is None or timer >= 0 else None,
+        lifecycle_status=_text(raw, "status"),
+        source=source,
+    )
+
+
+def market_from_kalshi(raw: Mapping[str, Any], *, event_id_for_ticker: Mapping[str, str],
+                       timing_source: str | None = None) -> Market:
     """Build a `Market`. `event_id_for_ticker` maps Kalshi event tickers to normalized ids.
 
     A market whose event ticker is not in the map gets an `unmapped:` event id, so it can
@@ -84,6 +111,7 @@ def market_from_kalshi(raw: Mapping[str, Any], *, event_id_for_ticker: Mapping[s
         status=status,
         rules_resolved=resolved,
         rules_detail=detail,
+        timing=timing_from_kalshi(raw, source=timing_source),
     )
 
 

@@ -347,7 +347,7 @@ def test_unsupported_fee_schedule_rejects_instead_of_crashing_or_qualifying(poli
 def test_a_declared_verified_conservative_schedule_is_not_exact():
     from edge_lab.fee_schedules import QuadraticTakerSchedule
     verified = replace(KALSHI, schedule_id="test-verified", status=FeeScheduleStatus.VERIFIED)
-    assert verification_at(verified, KNOWN, NATIVE).claim_basis is ClaimBasis.CONSERVATIVE_BOUND
+    assert verification_at(verified, KNOWN, NATIVE).claim_basis is ClaimBasis.NONE  # no proven allowance
     exact = replace(verified, cost_model=CostModel.EXACT)
     assert verification_at(exact, KNOWN, NATIVE).claim_basis is ClaimBasis.EXACT
     assert isinstance(exact, QuadraticTakerSchedule)

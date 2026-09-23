@@ -606,7 +606,9 @@ def _shadow(args: argparse.Namespace) -> int:
                 "risk": report.to_dict(),
                 "withdrawal": risk.withdrawal_assessment(
                     state, report, fee_claim_basis=recorded_claim_basis(
-                        json.loads(r["payload_json"]) for r in ledger.entries(account_id) if r["kind"] == "fill"
+                        payload for payload in (json.loads(r["payload_json"]) for r in ledger.entries(account_id)
+                                                if r["kind"] == "fill")
+                        if (parse_utc(payload.get("filled_at_utc")) or as_of) <= as_of
                     ).value).to_dict(),
                 "outcome_board": [g.to_dict() for g in outcome_board.build_board(state, as_of)],
             }

@@ -100,14 +100,18 @@ def state_tag(value: Any) -> str:
     """Colour a status word by meaning. Unknown words are neutral, never green."""
     text = "UNKNOWN" if value is None else str(value)
     good = {"OK", "FRESH", "VALID", "HEALTHY_NO_SIGNAL", "HEALTHY_TRADED", "SETTLED", "FILLED", "QUALIFY", "PASS",
-            "ok", "RUNNING", "CONCLUDED_PASS", "VERIFIED", "EXACT"}
+            "ok", "RUNNING", "CONCLUDED_PASS", "VERIFIED", "EXACT", "ELIGIBLE",
+            "LIVE_DATA_VERIFIED", "INFO"}
     bad = {"ERROR", "STALE", "INVALID", "INVALID_CAPTURE", "FAILED", "failed", "REJECT", "NO_FILL", "LOCK_BUSY",
            "CONCLUDED_FAIL", "BREACH", "NOT_RECOMMENDED", "UNVERIFIED_CURRENT_SCHEDULE", "overdue", "FAIL",
            "SETTLEMENT_CONFLICT", "MISSING_CAPTURE", "RESEARCH_INVALID_CASH", "HALTED", "UNVERIFIED",
-           "UNSUPPORTED"}
+           "UNSUPPORTED", "SEVEN_DAY_POLICY_EXCEPTION", "CRITICAL"}
     kind = "ok" if text in good else "err" if text in bad else "warn" if text in {
         "PENDING_SETTLEMENT", "NOT_CLOSED", "partial", "UNKNOWN", "OPEN", "PARTIALLY_SETTLED", "NO_CAPTURE",
-        "RISK_VETO", "not_run", "PARTIALLY_VERIFIED", "CONSERVATIVE_BOUND", "OWNER_ATTESTED"} else "nd"
+        "RISK_VETO", "not_run", "PARTIALLY_VERIFIED", "CONSERVATIVE_BOUND", "OWNER_ATTESTED",
+        "STARTER_POLICY_INELIGIBLE", "HORIZON_OVER_7D", "TRADABLE_CASH_RELEASE_UNKNOWN", "SETTLEMENT_TIMING_UNVERIFIED",
+        "POST_SETTLEMENT_HOLD", "DELAYED_OR_DISPUTED", "EXIT_DEPENDS_ON_LIQUIDITY", "WARNING", "NEEDS_ACCESS",
+        "PLANNED", "IMPLEMENTED", "TESTED", "PARTIAL", "STALE"} else "nd"
     return tag(text, kind)
 
 

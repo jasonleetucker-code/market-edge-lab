@@ -37,7 +37,7 @@ from __future__ import annotations
 
 import json
 import math
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from datetime import date, timedelta
 from decimal import Decimal
 from functools import lru_cache
@@ -50,7 +50,7 @@ from .conservative import wilson_bounds
 from .fee_schedules import KALSHI_QUADRATIC_TAKER_V1, verification_at
 from .kalshi_quotes import check_event_identity, market_from_kalshi, quotes_from_orderbook
 from .opportunity import (
-    Event, ExecutableQuote, Market, ModelEstimate, Opportunity, Policy, evaluate_event, reason_counts,
+    Event, ExecutableQuote, Market, MarketTiming, ModelEstimate, Opportunity, Policy, evaluate_event, reason_counts,
 )
 from .storage import SnapshotStore
 
@@ -184,6 +184,9 @@ class DayEvaluation:
     model: dict[str, Any] | None
     opportunities: list[Opportunity]
     problems: list[str]
+    # Venue timing per market id, for operational eligibility (STARTER_MAX_7D_V1). It is not
+    # part of the research output and never affects qualification.
+    market_timing: dict[str, MarketTiming] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -210,7 +213,23 @@ class DayEvaluation:
                 "by_reason": reason_counts(self.opportunities),
             },
             "opportunities": [o.to_dict() for o in self.opportunities],
+            # Operational eligibility (STARTER_MAX_7D_V1) beside the research qualification. It
+            # never changes a research verdict; it says whether starter capital could be used.
+            "operational_eligibility": self.starter_verdicts(),
         }
+
+    def starter_verdicts(self) -> dict[str, dict[str, Any]]:
+        from . import starter_policy, venues  # local: the research module does not depend on them
+        out = {}
+        for market_id in sorted({o.market_id for o in self.opportunities}):
+            venue, _, native = market_id.partition(":")
+            verdict = starter_policy.assess(
+                commitment=self.as_of_utc, timing=self.market_timing.get(market_id),
+                lag=starter_policy.lag_evidence(venue, native.split("-", 1)[0] or None),
+                cash=venues.cash_timing(venue)).to_dict()
+            verdict["in_effect"] = starter_policy.in_effect(self.as_of_utc)  # enforced only from EFFECTIVE_FROM
+            out[market_id] = verdict
+        return out
 
 
 def evaluate_day(store: SnapshotStore, target: date, *, model: StageBModel | None = None,
@@ -274,7 +293,7 @@ def evaluate_day(store: SnapshotStore, target: date, *, model: StageBModel | Non
     quotes: dict[tuple[str, str], ExecutableQuote] = {}
     estimates: dict[str, ModelEstimate] = {}
     for raw in sorted(raw_markets, key=lambda m: str(m.get("ticker"))):
-        market = market_from_kalshi(raw, event_id_for_ticker=mapping)
+        market = market_from_kalshi(raw, event_id_for_ticker=mapping, timing_source=f"decision_capture:{decision['id']}")
         equivalent, why_not = settlement_equivalence(raw, target)
         if market.rules_resolved and not equivalent:
             market = replace(market, rules_resolved=False, rules_detail=f"settlement equivalence: {why_not}")
@@ -300,7 +319,8 @@ def evaluate_day(store: SnapshotStore, target: date, *, model: StageBModel | Non
                                    fee_schedule=FEE_SCHEDULE, policy=STAGE_B_POLICY, as_of=as_of,
                                    evidence_problem=invalid)
     return DayEvaluation(target.isoformat(), as_of.isoformat(), status, event, forecast,
-                         None if model is None else _model_info(model), opportunities, problems)
+                         None if model is None else _model_info(model), opportunities, problems,
+                         {m.market_id: m.timing for m in markets if m.timing is not None})
 
 
 def _decision_capture(store: SnapshotStore, target: date, complete_id: int | None, mode: str,

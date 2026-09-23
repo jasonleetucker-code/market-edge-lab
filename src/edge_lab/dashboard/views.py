@@ -269,6 +269,12 @@ def blockers(ctx: d.Context) -> list[str]:
         elif recheck is not None and recheck - ctx.now <= RECHECK_WARNING:
             out.append(f"Fee verification {fee['verification_id']} must be re-checked by {fee['recheck_by_utc']}; "
                        "after that date new decisions carry claim basis NONE.")
+    for view in ctx.accounts:
+        starter = d.starter_view(view, ctx.now) if view.status == d.OK else None
+        for exc in (starter or {}).get("exceptions", []):
+            out.append(f"SEVEN_DAY_POLICY_EXCEPTION on {view.account_id}: {exc['fill_id']} ({exc['market_id']}) is "
+                       f"still open past its expected tradable-cash release {exc['tradable_cash_release_eta_utc']}. "
+                       "Capital stays reserved; review before adding starter exposure.")
     for label, loaded in (("collector status file", ctx.collector_status), ("pipeline receipt", ctx.receipt)):
         if loaded.status != d.OK:
             out.append(f"{label}: {loaded.status.replace('_', ' ')} — {loaded.message}")
@@ -329,7 +335,21 @@ def overview(ctx: d.Context) -> str:
     body = ['<div class="grid">', collector_panels(ctx), receipt_panel(ctx), "</div>"]
     body.append(panel("Blockers and warnings", ul(blockers(ctx)), "stale" if blockers(ctx) else ""))
     body.append('<div class="grid">' + "".join(_account_summary(v) for v in ctx.accounts) + "</div>")
+    body.append(notifications_panel(ctx))
     return "".join(body)
+
+
+def notifications_panel(ctx: d.Context) -> str:
+    loaded = ctx.notifications
+    note = ('<p class="note">' + esc("Local outbox only (notifications.jsonl). SMS is the preferred urgent channel "
+                                    "but no provider is approved or configured, so nothing is texted.") + "</p>")
+    if loaded.status != d.OK:
+        return panel("Notifications", note + (no_data if loaded.status == d.NO_DATA else error)(
+            "Notifications", loaded.message))
+    return panel("Notifications", note + table(
+        ["created (UTC)", "severity", "type", "summary", "expires", "action"],
+        [[esc(n.get("created_at_utc")), state_tag(n.get("severity")), esc(n.get("type")), esc(n.get("summary")),
+          esc(n.get("expires_at_utc")), esc(n.get("action_mode"))] for n in loaded.value], wrap=(3,)))
 
 
 # --------------------------------------------------------------------------- opportunities
@@ -364,6 +384,7 @@ def opportunities(ctx: d.Context) -> str:
                 (state_tag(fill.get("status")) + " " + esc(fill.get("reason"))) if fill else esc(None),
                 esc(_get(opp, "freshness")), esc(_get(opp, "fee_status")),
                 state_tag(dec.get("claim_basis") or ("NONE" if dec.get("claimable") is False else None)),
+                _starter_cell(dec.get("starter_policy")),
             ])
         note = (f'<p class="note">{esc(len(view.decisions))} decisions recorded'
                 + (f"; newest {MAX_ROWS} shown" if len(view.decisions) > MAX_ROWS else "") + ". Figures are the "
@@ -372,7 +393,7 @@ def opportunities(ctx: d.Context) -> str:
         headers = ["decided (UTC)", "target", "market", "side", "qualification", "primary reason", "all reasons",
                    "model P", "conservative P", "exec price", "fee", "all-in cost/contract", "net edge",
                    "net edge (conservative)", "size", "binding constraint", "fill", "freshness", "fee status",
-                   "claim basis"]
+                   "claim basis", "7-day starter (operational)"]
         out.append(panel(_account_heading(view), _account_intro(view) + note + table(headers, rows, wrap=(6,))))
     return "".join(out)
 
@@ -555,9 +576,44 @@ def risk_view(ctx: d.Context) -> str:
                 counts[constraint] = counts.get(constraint, 0) + 1
         body += "<h3>Binding sizing constraints (qualified decisions)</h3>" + table(
             ["binding constraint", "decisions"], [[esc(k), esc(v)] for k, v in sorted(counts.items())])
+        body += _starter_panel(view, ctx.now)
         body += _withdrawal(view)
         out.append(panel(_account_heading(view), body))
     return "".join(out)
+
+
+def _starter_cell(verdict: Any) -> str:
+    if not isinstance(verdict, dict):
+        return esc(None)
+    if verdict.get("eligible"):
+        return state_tag("ELIGIBLE") + " " + esc(f"{verdict.get('elapsed_hours_to_tradable')} h")
+    return state_tag("STARTER_POLICY_INELIGIBLE") + " " + esc(", ".join(verdict.get("reasons") or []))
+
+
+def _starter_panel(view: d.AccountView, now) -> str:
+    s = d.starter_view(view, now)
+    if s is None:
+        return ""
+    body = (f"<h3>Seven-day starter policy ({esc(s['policy_id'])})</h3>" + '<p class="note">' + esc(
+        f"Eligible only if settled cash is expected to be tradable again on the same venue within "
+        f"{s['max_hours']} elapsed hours of the commitment (governing clock: tradable_cash_release_eta). "
+        f"Applies to operational decisions from {s['effective_from_utc']}; the research account is never "
+        "affected. A position that runs past its expected release is an exception: capital stays reserved, "
+        "nothing is force-sold.") + "</p>")
+    body += "<h4>Exceptions</h4>" + table(
+        ["fill", "market", "committed", "expected tradable cash", "past 168 h", "action"],
+        [[esc(e["fill_id"]), esc(e["market_id"]), esc(e["commitment_utc"]), esc(e["tradable_cash_release_eta_utc"]),
+          esc(e["past_168h"]), esc(e["action"])] for e in s["exceptions"]])
+    body += "<h4>Verdicts on fills</h4>" + table(
+        ["fill", "eligible", "reasons", "committed", "resolution ETA", "tradable cash ETA (governs)",
+         "hours to tradable", "abnormal-path bound (reported only)"],
+        [[esc(f.get("fill_id")), state_tag("ELIGIBLE" if f["starter_policy"].get("eligible") else
+                                           "STARTER_POLICY_INELIGIBLE"),
+          esc(", ".join(f["starter_policy"].get("reasons") or []) or None), esc(f["starter_policy"].get("commitment_utc")),
+          esc(f["starter_policy"].get("resolution_eta_utc")), esc(f["starter_policy"].get("tradable_cash_release_eta_utc")),
+          esc(f["starter_policy"].get("elapsed_hours_to_tradable")), esc(f["starter_policy"].get("abnormal_path_bound_utc"))]
+         for f in s["verdicts"][-MAX_ROWS:]], wrap=(2, 7))
+    return body
 
 
 def _withdrawal(view: d.AccountView) -> str:
@@ -655,6 +711,13 @@ def experiments_view(ctx: d.Context) -> str:
             ("claim allowed (lower bound only)", esc(fee.get("claimable"))),
             ("allowance per contract", esc(fee.get("claim_allowance_per_contract")))])
     out.append(panel("Fee schedule verification", body))
+    out.append(panel("Venue capability registry", '<p class="note">' + esc(
+        "What each venue's documented interface could do, and what this repository has shown with evidence. "
+        "Code existing is not a connection; only LIVE_DATA_VERIFIED rows rest on recorded reads. Execution is "
+        "not authorized for any venue.") + "</p>" + table(
+        ["venue", "kind", "capability", "stage", "auth required", "execution authorized", "evidence"],
+        [[esc(r["venue_id"]), esc(r["kind"]), esc(r["capability"]), state_tag(r["stage"]), esc(r["auth_required"]),
+          esc(r["execution_authorized"]), esc(r["evidence"])] for r in d.venue_rows()], wrap=(6,))))
     out.append(receipt_panel(ctx, detail=True))
     return "".join(out)
 

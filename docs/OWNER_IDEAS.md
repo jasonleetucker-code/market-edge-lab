@@ -34,7 +34,7 @@ column lists which issues each primitive serves.
 | Primitive | Canonical owner | State | Serves |
 |---|---|---|---|
 | Event / market identity | `src/edge_lab/opportunity.py` | BUILT (Event, Market, settlement_identity) | #5 #9 #30 #32 |
-| Venue and account capability registry | `src/edge_lab/venues.py` | PLANNED | #30 #32 #29 #9 |
+| Venue and account capability registry | `src/edge_lab/venues.py` | BUILT (stages per capability, cash timing; execution never authorized; ADR 0019) | #30 #32 #29 #9 |
 | Quote / order-book normalization | `src/edge_lab/opportunity.py` | BUILT (ExecutableQuote; Kalshi only) | #30 #9 #29 |
 | Fee models and fee verification | `src/edge_lab/fee_schedules.py` | BUILT (Kalshi, with dated component-level verification records, ADR 0017; other venues unsupported). It reuses the hash-frozen EXP-001 cost model in `fees.py`, never forks it | #6 #30 #9 |
 | Model estimates | `src/edge_lab/opportunity.py` | BUILT (ModelEstimate; EXP-001 only) | #5 #9 #32 |
@@ -42,9 +42,9 @@ column lists which issues each primitive serves.
 | Rules / settlement equivalence | `src/edge_lab/opportunity.py` | BUILT (`Event.settlement_identity`, `Market.rules_resolved`); cross-venue matching not built | #30 #9 |
 | Shadow / live ledger boundary | `src/edge_lab/shadow_ledger.py` | BUILT (shadow only; no live ledger; head checkpoint for F09 planned beside it) | #6 #3 #32 |
 | Risk engine | `src/edge_lab/risk.py` | BUILT (limits, capital release, withdrawal contract) | #6 #3 |
-| Capital-eligibility policies | `src/edge_lab/starter_policy.py` | PLANNED (`STARTER_MAX_7D_V1`); read by the risk report and the ticket | #32 #6 |
-| Notification system | `src/edge_lab/notifications.py` | PLANNED | #33 #3 #32 |
-| Execution-ticket contract | `src/edge_lab/execution_ticket.py` | PLANNED (execution disabled) | #32 #33 #30 |
+| Capital-eligibility policies | `src/edge_lab/starter_policy.py` | BUILT (`STARTER_MAX_7D_V1`, ADR 0018); enforced prospectively in the operational shadow account | #32 #6 |
+| Notification system | `src/edge_lab/notifications.py` | BUILT (contract, local outbox, SMS sink disabled; ADR 0020) | #33 #3 #32 |
+| Execution-ticket contract | `src/edge_lab/execution_ticket.py` | BUILT (data contract only; execution disabled) | #32 #33 #30 |
 | Operator views | `src/edge_lab/dashboard/` | BUILT (local, read-only) | #3 #6 #10 |
 
 ## Index

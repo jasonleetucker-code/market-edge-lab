@@ -41,8 +41,8 @@ from .fill_policy import FILLED, LATENCY_CONFIRMED_V1, simulate_fill
 from .freshness import parse_utc
 from .kalshi import SETTLEMENT_SOURCE
 from .kalshi_quotes import quotes_from_orderbook
-from .opportunity import ExecutableQuote, Opportunity
-from . import risk
+from .opportunity import ExecutableQuote, MarketTiming, Opportunity
+from . import risk, starter_policy, venues
 from .fee_schedules import verification_at
 from .risk import RiskPolicy
 from .shadow_ledger import LedgerError, ShadowLedger
@@ -93,10 +93,11 @@ class ShadowAccount:
     sizing_policy_id: str
     sizing: SizingPolicy | None  # None: the frozen 1-contract rule, no caps
     risk_policy: RiskPolicy | None  # None: no operational risk vetoes
+    starter_policy: bool = False  # STARTER_MAX_7D_V1 applies (operational accounts only; ADR 0018)
 
 
 OPERATIONAL = ShadowAccount(ACCOUNT_ID, STRATEGY, STARTING_BANKROLL, SIZING_POLICY.policy_id, SIZING_POLICY,
-                            RISK_POLICY)
+                            RISK_POLICY, starter_policy=True)
 RESEARCH = ShadowAccount(RESEARCH_ACCOUNT_ID, RESEARCH_STRATEGY, RESEARCH_BANKROLL, RESEARCH_SIZING_ID, None, None)
 ACCOUNTS = (RESEARCH, OPERATIONAL)
 
@@ -129,6 +130,37 @@ def ensure_account(ledger: ShadowLedger, account: ShadowAccount = OPERATIONAL) -
                         opened_at_utc=OPENED_AT, sizing_policy_id=account.sizing_policy_id,
                         fill_policy_id=LATENCY_CONFIRMED_V1.policy_id,
                         fee_schedule_id=stageb.FEE_SCHEDULE.schedule_id)
+
+
+def starter_verdict(market_id: str, commitment: str | datetime,
+                    timing: dict[str, MarketTiming]) -> starter_policy.StarterVerdict:
+    """The STARTER_MAX_7D_V1 verdict for committing capital to `market_id` at `commitment`."""
+    venue, _, native = market_id.partition(":")
+    return starter_policy.assess(commitment=commitment, timing=timing.get(market_id),
+                                 lag=starter_policy.lag_evidence(venue, native.split("-", 1)[0] or None),
+                                 cash=venues.cash_timing(venue))
+
+
+def starter_summary(ledger: ShadowLedger, account_id: str, now: datetime) -> dict[str, Any]:
+    """STARTER_MAX_7D_V1 bookkeeping for one account, read from its fills.
+
+    `unchecked_filled_after_effective` counts fills decided after the effective date that
+    carry no verdict, which happens if older code recorded them. They are reported, never
+    re-evaluated or rewritten."""
+    fills = [json.loads(r["payload_json"]) for r in ledger.entries(account_id) if r["kind"] == "fill"]
+    open_ids = {p.position_id for p in ledger.state(account_id).open_positions()}
+    after = [f for f in fills if starter_policy.in_effect(f.get("decision_as_of_utc") or f.get("filled_at_utc"))]
+    return {
+        "policy_id": starter_policy.POLICY_ID, "effective_from_utc": starter_policy.EFFECTIVE_FROM_UTC,
+        "max_hours": int(starter_policy.MAX_HORIZON.total_seconds() // 3600),
+        "governing_clock": "tradable_cash_release_eta",
+        "checked": sum("starter_policy" in f for f in fills),
+        "eligible_fills": sum(f.get("status") == FILLED and "starter_policy" in f for f in fills),
+        "ineligible_no_fills": sum(f.get("reason") == "STARTER_POLICY_INELIGIBLE" for f in fills),
+        "unchecked_filled_after_effective": sum(f.get("status") == FILLED and "starter_policy" not in f
+                                                for f in after),
+        "exceptions": starter_policy.policy_exceptions(fills, open_ids, now),
+    }
 
 
 def risk_veto(state, cost: Decimal, opp: Opportunity, policy: RiskPolicy, as_of: datetime) -> dict[str, Any] | None:
@@ -211,7 +243,7 @@ def run_day(store: SnapshotStore, ledger: ShadowLedger, target: date, *, model=N
         ensure_account(ledger, account)
         summary["accounts"][account.account_id] = _run_account(
             ledger, account, evaluation.opportunities, target, day["status"], valid, entry_quotes, confirmations,
-            expected_settlement, summary["problems"])
+            expected_settlement, summary["problems"], evaluation.market_timing)
     main = summary["accounts"].get(ACCOUNT_ID) or next(iter(summary["accounts"].values()))
     summary.update({k: main[k] for k in ("decisions", "qualified", "filled", "no_fill")})
     return summary
@@ -219,11 +251,12 @@ def run_day(store: SnapshotStore, ledger: ShadowLedger, target: date, *, model=N
 
 def _run_account(ledger: ShadowLedger, account: ShadowAccount, opportunities, target: date, day_status: str,
                  valid: bool, entry_quotes, confirmations, expected_settlement: str,
-                 problems: list[str]) -> dict[str, Any]:
+                 problems: list[str], timing: dict[str, MarketTiming] | None = None) -> dict[str, Any]:
     """Two passes: every decision first (sized as of the decision time), then the fills in
     confirmation-time order, so each fill's point-in-time state already contains every
     earlier fill of the day (exposure and cash) and nothing learned later."""
     acct = account.account_id
+    timing = timing or {}
     out: dict[str, Any] = {"decisions": 0, "qualified": 0, "filled": 0, "no_fill": {}, "vetoes": []}
     taken = ledger.state(acct).decision_slots
     decided: list[tuple[Opportunity, dict[str, Any]]] = []
@@ -261,6 +294,10 @@ def _run_account(ledger: ShadowLedger, account: ShadowAccount, opportunities, ta
                 "opportunity": opp.to_dict(), "sizing": sizing,
                 "stage_b_day_status": day_status, "opportunity_claimable": opp.claimable, **fee_fields(opp.as_of_utc, opp.market_id),
             }
+            if account.starter_policy and starter_policy.in_effect(opp.as_of_utc):
+                # Operational eligibility at the decision time, reported beside the research
+                # qualification (never changes it). The fill re-checks at its own time.
+                existing["starter_policy"] = starter_verdict(opp.market_id, opp.as_of_utc, timing).to_dict()
             ledger.record_decision(acct, existing)
         out["decisions"] += 1
         if opp.qualification == "QUALIFY":
@@ -279,6 +316,14 @@ def _run_account(ledger: ShadowLedger, account: ShadowAccount, opportunities, ta
     # NO_FILLs first (they move no cash), then FILLED in confirmation-time order.
     pending.sort(key=lambda item: (item[1]["status"] == FILLED, item[1]["filled_at_utc"], item[1]["fill_id"]))
     for opp, fill in pending:
+        verdict = None
+        if fill["status"] == FILLED and account.starter_policy and starter_policy.in_effect(opp.as_of_utc):
+            verdict = starter_verdict(opp.market_id, fill["filled_at_utc"], timing)
+            fill["starter_policy"] = verdict.to_dict()
+            if not verdict.eligible:
+                fill.update(status="NO_FILL", reason="STARTER_POLICY_INELIGIBLE", quantity=0, price=None,
+                            total_cost=None, fee=None,
+                            detail="STARTER_MAX_7D_V1: " + ", ".join(verdict.reasons))
         if fill["status"] == FILLED:
             known_at = parse_utc(fill["filled_at_utc"])
             state = ledger.state_as_of(acct, known_at)
