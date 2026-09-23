@@ -21,8 +21,24 @@ MARKER = re.compile(r"\b(copied|vendored|ported|adapted|borrowed)\s+from\b", re.
 # citation when the next word is not an article/pronoun, or when the nearby text names an
 # outside source.
 INTERNAL_START = re.compile(r"\s+(the|a|an|this|that|these|those|it|its|each|every|our|one|another)\b", re.I)
-OUTSIDE = re.compile(r"github|gitlab|\brepo|repositor|project|library|package|upstream|open[- ]source|\bsdk\b|"
-                     r"\bpypi\b|\bnpm\b|https?://", re.I)
+OUTSIDE_WORDS = (r"github|gitlab|\brepo|repositor|project|library|package|upstream|open[- ]source|\bsdk\b|"
+                 r"\bpypi\b|\bnpm\b|https?://|codebase")
+PINS = ROOT / "docs" / "audits" / "2026-09-23-github-reuse" / "deep_review_pins.tsv"
+
+
+def _audited_names() -> list[str]:
+    """Owner and repository names of every audited project, e.g. "ccxt", "nautilus_trader"."""
+    names: set[str] = set()
+    for line in PINS.read_text(encoding="utf-8").splitlines()[1:]:
+        owner, _, repo = line.split("\t", 1)[0].partition("/")
+        names |= {n.lower() for n in (owner, repo) if len(n) >= 4}
+    # Venue names and plain words also name our own code and data ("copied from the kalshi
+    # payload"), so they are not evidence of an outside source.
+    names -= {"kalshi", "polymarket", "agents", "brier", "examples"}
+    return sorted(names, key=len, reverse=True)
+
+
+OUTSIDE = re.compile(OUTSIDE_WORDS + "|" + "|".join(rf"\b{re.escape(n)}" for n in _audited_names()), re.I)
 GITHUB = re.compile(r"github\.com/([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)")
 SHA = re.compile(r"\b[0-9a-f]{40}\b")
 SPDX = re.compile(r"^- \*\*License:\*\* \S", re.M)
@@ -42,7 +58,11 @@ def test_marker_rules_on_examples():
     assert needs("Vendored from https://example.org/lib")
     assert needs("copied from the upstream project")
     assert needs("Adapted from Brisket's online-backup pattern")  # cited as first party elsewhere
+    assert needs("adapted from the nautilus_trader codebase")
+    assert needs("copied from the ccxt kalshi adapter")
+    assert needs("ported from the approach in Hummingbot")
     assert not needs("fee fields copied from the fill")
+    assert not needs("fields copied from the kalshi payload")
     assert not needs("status is derived from what was fetched")
 
 

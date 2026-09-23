@@ -469,7 +469,10 @@ def event_settlement_problems(index: dict[str, dict[str, Any]]) -> dict[str, str
             by_event.setdefault(event, []).append(found["market"])
     problems: dict[str, str] = {}
     for event, markets in by_event.items():
-        yes = sum(1 for m in markets if official_outcome(m)[0] == "YES")
+        # A bracket counts as YES if the resolver says so or Kalshi recorded it: two recorded
+        # winners are a contradiction even when one of them fails the resolver.
+        yes = sum(1 for m in markets
+                  if official_outcome(m)[0] == "YES" or settlement.kalshi_result(m) is settlement.Outcome.YES)
         values = {str(v.normalize()) for m in markets
                   if (v := settlement.parse_value(m.get("expiration_value"))) is not None}
         if yes > 1:
@@ -526,7 +529,7 @@ def settle_open_positions(store: SnapshotStore, ledger: ShadowLedger, *, account
                                             "variants": sorted(map(list, found["variants"]))})
                 continue
             market = found["market"]
-            if not market.get("event_ticker"):
+            if not isinstance(market.get("event_ticker"), str) or not market["event_ticker"]:
                 report["pending"].append({"account_id": acct, "position_id": position.position_id,
                                           "reason": "settlement record has no event_ticker; event coherence "
                                                     "cannot be checked"})

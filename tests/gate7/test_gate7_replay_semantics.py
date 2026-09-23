@@ -251,3 +251,27 @@ def test_a_later_contradiction_is_reported_for_already_settled_positions(full_da
     flagged = {c["position_id"] for c in report["conflicts"] if c["account_id"] == OPS}
     assert settled_ids <= flagged
     assert any("YES brackets" in (c.get("reason") or "") for c in report["conflicts"])
+
+
+def test_two_recorded_winners_are_a_contradiction_even_if_one_fails_the_resolver(full_day, ledger, model):
+    """Kalshi records YES on two brackets at one value; the resolver rejects the second. Two
+    recorded winners are contradictory evidence, not one winner plus a data glitch."""
+    shadow.run_day(full_day, ledger, D, model=model, now=CLOSED)
+    settled = settled_copy(MARKETS["markets"], 67)
+    loser = next(i for i, m in enumerate(settled) if m["result"] == "no")
+    settled[loser] = dict(settled[loser], result="yes")
+    store_settled_markets(full_day, settled, run_id="two-recorded", fetched_at="2026-09-24T14:00:00+00:00")
+    report = shadow.settle_open_positions(full_day, ledger)
+    assert [s for s in report["settled"] if s["account_id"] == OPS] == []
+    pending = [p["reason"] for p in report["pending"] if p["account_id"] == OPS]
+    assert pending and all("YES brackets" in why for why in pending)
+
+
+def test_a_record_without_an_event_ticker_stays_pending(full_day, ledger, model):
+    shadow.run_day(full_day, ledger, D, model=model, now=CLOSED)
+    stripped = [{k: v for k, v in m.items() if k != "event_ticker"} for m in settled_copy(MARKETS["markets"], 67)]
+    store_settled_markets(full_day, stripped, run_id="no-event", fetched_at="2026-09-24T14:00:00+00:00")
+    report = shadow.settle_open_positions(full_day, ledger)
+    assert report["settled"] == [] and report["conflicts"] == []
+    pending = [p["reason"] for p in report["pending"] if p["account_id"] == OPS]
+    assert pending and all("no event_ticker" in why for why in pending)

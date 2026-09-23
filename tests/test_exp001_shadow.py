@@ -148,7 +148,10 @@ def test_conflicting_settlement_evidence_stays_pending(store, ledger, monkeypatc
     report = shadow.settle_open_positions(store, ledger)
     state = ledger.state(shadow.ACCOUNT_ID)
     assert state.settlements < state.fills and report["pending"]
-    assert any("Kalshi recorded" in p["reason"] for p in report["pending"])
+    # Recorded YES on every bracket is also an event-level contradiction (GATE7-F14), which is
+    # checked first; either reason keeps the positions pending.
+    assert all("Kalshi recorded" in p["reason"] or "YES brackets" in p["reason"] for p in report["pending"])
+    assert report["conflicts"]
 
 
 def test_no_settlement_evidence_stays_open(store, ledger, monkeypatch, model):
