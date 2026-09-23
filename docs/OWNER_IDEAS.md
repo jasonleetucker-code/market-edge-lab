@@ -56,15 +56,18 @@ column lists which issues each primitive serves.
 | #5 | Sports prediction-market and sports-modeling expansion | **LATER** (discovery and data foundations NEXT via #29/#30; any sports model BLOCKED on a preregistered experiment) | Core framework is proving out on weather. Needs the shared identity, venue and equivalence layers; the 2026-09-23 directive authorizes data foundations only, not sports models. |
 | #9 | Sportsbook odds aggregation, consensus pricing, best-venue comparison | **NEXT** (The Odds API data foundation via #29); comparison LATER | Sub-idea of #5. Needs market equivalence and verified access terms. Offered odds are never executable prices. |
 | #6 | Dynamic bankroll, position sizing, withdrawal guidance | **P0 FOUNDATION IMPLEMENTED** 2026-09-23 (shadow only) | Shadow ledger (ADR 0014), `suggest_position_size`, and the risk/capital report with a withdrawal contract (ADR 0015). The withdrawal contract never recommends a draw. Since PR #26 the operational shadow account enforces the risk limits **before** each fill (NO_FILL RISK_VETO); the frozen research account is separate. A real-money policy, a verified edge and verified fees are all still missing. |
-| #10 | Host privately on existing Chase Upside infrastructure (separate service/subdomain, real access control) | **PARTLY AUTHORIZED** 2026-09-22: headless read-only collector only | Forward collector authorized on the VPS as a separate service (ADR 0012; headroom review `docs/deploy/VPS_REVIEW_2026-09-22.md` PASS). Daily shadow and settlement units are staged in the repo (PR #26) under the 2026-09-23 authorization but not yet installed (owner SSH step). Dashboard hosting, subdomain, DNS/TLS and auth remain NOT READY and unauthorized; the dashboard is local only. |
+| #10 | Host privately on existing Chase Upside infrastructure (separate service/subdomain, real access control) | **PARTLY AUTHORIZED** 2026-09-22: headless read-only collector only | Forward collector authorized on the VPS as a separate service (ADR 0012; headroom review `docs/deploy/VPS_REVIEW_2026-09-22.md` PASS). Daily shadow and settlement units are staged in the repo (PR #26) under the 2026-09-23 authorization; no installation known or verified from this session (owner SSH step). Dashboard hosting, subdomain, DNS/TLS and auth remain NOT READY and unauthorized; the dashboard is local only. |
 | #7 | Free-first multi-domain ingestion with paid-source ROI gate | APPLY SELECTIVELY NOW | Gate 3 applied it: the free IEM archive of NWS forecasts was chosen and paid weather data was not considered. The general ingestion platform is not built. |
-| #32 | Starter policy: 7-day capital-release limit, broad discovery, API-first execution preference | **Policy IMPLEMENTED** 2026-09-23 (PR #38, ADR 0018; enforced prospectively in the operational shadow account, not yet deployed); discovery foundation IMPLEMENTED (PR #39); execution BLOCKED (no live authority) | Governing clock: venue-tradable cash within 168 h. The ticket contract carries the verdict with execution disabled. |
-| #33 | SMS-first alerting through one shared notification layer | **Contract IMPLEMENTED** 2026-09-23 (PR #38, ADR 0020; local outbox); SMS delivery BLOCKED (provider needs owner approval) | Serves collector failures, invalid captures, risk vetoes, settlements and policy exceptions now; approval tickets later. |
+| #32 | Starter policy: 7-day capital-release limit, broad discovery, API-first execution preference | **Policy IMPLEMENTED** 2026-09-23 (PR #38, ADR 0018; enforced prospectively in the operational shadow account; no deployment known or verified from this session); discovery foundation IMPLEMENTED (PR #39); execution BLOCKED (no live authority) | Governing clock: venue-tradable cash within 168 h. The ticket contract carries the verdict with execution disabled. |
+| #33 | SMS-first alerting through one shared notification layer | **Contract IMPLEMENTED** 2026-09-23 (PR #38, ADR 0020; local outbox); SMS delivery BLOCKED (provider needs owner approval) | Serves daily-run failures, settlement conflicts, invalid captures, risk vetoes, settlements and policy exceptions now; approval tickets later. |
 | #30 | Multi-venue coverage, best-price comparison, unique-market discovery | **Foundation IMPLEMENTED** (registry PR #38; Polymarket US adapter TESTED + one smoke read, Novig daily files TESTED, discovery, PR #39); cross-venue comparison NEXT; Novig live API BLOCKED (credentials) | Best-price claims still need proven rules equivalence and per-venue fee evidence (Polymarket US fees are UNSUPPORTED today). |
 | #29 | The Odds API free tier (quota-capped sports odds pilot) | **Adapter IMPLEMENTED on fixtures** (PR #39: quota ledger, 450-credit ceiling, redaction, SETUP_NEEDED); live pulls BLOCKED (owner key + activation plan) | Sportsbook-consensus input for #5/#9. Offered odds and de-vigged values are never executable prices. |
 | #27 | Action PRO permission and comparative sports-data subscription value | **LATER / BLOCKED** (no purchase authorized) | Paid source; needs the #7 ROI gate and a sports experiment that would use it. |
 
 ## Roadmap (portfolio review, 2026-09-23 integration directive)
+
+This ordering authorizes nothing; `docs/EXECUTION_PLAN.md` does. Re-prioritizing never
+authorizes implementation.
 
 One system, built in this order: evidence, then policy, then the shared venue layer, then
 venue-specific data, then models, then (later, separately authorized) execution. Each line
@@ -72,7 +75,7 @@ names its dependency, the shared layer it uses, whether it can run in parallel, 
 effect on 2026-10-22.
 
 **NOW** (critical path; authorized)
-1. **Deploy and verify production** (#10, #11). Depends on the owner's SSH session. It reuses
+1. **Deploy and verify production** (#10, #11); NOW, but blocked on the owner's SSH session. Depends on the owner's SSH session. It reuses
    the activation sheet and `verify_production.sh`, and does not parallelize: every research
    day waits on it. Oct 22: without it there are no real Stage B shadow days at all.
 2. **Accumulate valid Stage B days and shadow bookkeeping** (EXP-001). Depends on 1. Shared

@@ -56,14 +56,26 @@ UNRESOLVED:
   - Follow-up (code): `opportunity.evaluate` does not yet reject a non-binary `Payoff.kind`.
     It is safe today because sportsbook odds never become quotes, but the check belongs in
     the engine before any non-binary venue is evaluated.
+  - Fees (carried): the full Kalshi schedule is NOT verified and EXACT is not claimable.
+    Polymarket US, Novig and sportsbook fees are UNSUPPORTED.
+  - Known limits, carried from the previous handoff:
+    - risk limits are notional-shadow constants, not an owner-approved real-money policy;
+    - the Outcome Board worst case is an upper bound;
+    - settlement_index re-reads all settlement snapshots each run (fine at current scale);
+    - the NHIGH settlement rule rests on one observation (Gate 2);
+    - forward-collector unit failures reach journald and the status file only. The
+      notification outbox covers daily-run failures, settlement conflicts, vetoes and
+      policy exceptions.
   - Carried over: TWC cannot be checked directly; PFMOKX thinning; the NWS User-Agent has no
     contact address; dynasty's NOPASSWD allowlist is root-equivalent (Chase Upside, not this
     repo).
 BLOCKERS: all owner-only; none for code.
   1. Production: run the command sheet below on chaseupside with the owner's existing access.
   2. F09: store the first off-host ledger checkpoint (below).
-  3. The Odds API: install the free key in server env config, then approve an activation
-     and quota plan (issue #29). Never paste it into chat or Git.
+  3. The Odds API: install the free key only in the host environment as
+     `EDGE_LAB_ODDS_API_KEY` (`docs/SECURITY.md`;
+     `experiments/multi_venue/odds_api_docs_2026-09-23.md` → Owner setup step), then
+     approve an activation and quota plan (issue #29). Never paste it into chat or Git.
   4. SMS: choose and approve a provider (issue #33); none is configured.
   5. Novig live API: request developer credentials if wanted (issue #30).
 NEXT ACTION: the owner runs `bash verify_production.sh`, then the activation sheet, then
@@ -72,12 +84,15 @@ NEXT ACTION: the owner runs `bash verify_production.sh`, then the activation she
 
 ## Owner command sheet (production; this session could not run it)
 
-One procedure only: `docs/deploy/DAILY_SHADOW_ACTIVATION.md`. In short:
+One deployment procedure only: `docs/deploy/DAILY_SHADOW_ACTIVATION.md`. The F09 step
+(5) comes from ADR 0021. In short:
 
 1. Check the New York time. Never install or restart between 17:40 and 18:35
    America/New_York, or while any `edgelab-*` unit is running.
 2. **Before:** stage `verify_production.sh` from the merged SHA (§1 of the sheet), run
    `bash verify_production.sh` as dynasty, then with sudo, and keep the output.
+   **Stop condition (directive §1):** if COLLECTOR_HEALTH or any collector capture state is
+   unhealthy, stop. Restore safe read-only collection first, and only then continue.
 3. Follow §1–§5 of the sheet with the **latest `main` SHA**:
    - stage the bundle and scripts, then run `preflight.sh`;
    - back up;
@@ -89,7 +104,8 @@ One procedure only: `docs/deploy/DAILY_SHADOW_ACTIVATION.md`. In short:
    Each directive state prints separately: DEPLOYED_SHA, COLLECTOR_HEALTH, SHADOW_TIMER,
    SETTLEMENT_TIMER, BACKUP_/RESTORE_ for each store, CHASE_UPSIDE_HEALTH, and the six
    collector states.
-5. **F09 checkpoint** (manual, no timer):
+5. **F09 checkpoint** (manual, no timer). Run it after the first shadow run has written
+   entries; `anchor export` refuses an empty or missing ledger:
    `sudo -u edgelab /opt/market-edge-lab/venv/bin/python -m edge_lab.cli shadow anchor export --ledger /var/lib/market-edge-lab/ledger/shadow_ledger.sqlite3 > checkpoint.json`.
    Keep a copy off the VPS, in a private repo or with the owner. Later, verify it
    **off-host** from your own checkout against a copied backup (ADR 0021).
@@ -131,7 +147,7 @@ One procedure only: `docs/deploy/DAILY_SHADOW_ACTIVATION.md`. In short:
   - Kalshi: LIVE_DATA_VERIFIED reads.
   - Polymarket US: TESTED, plus one live smoke read.
   - Novig: public daily files TESTED; the live API is NEEDS_ACCESS.
-  - The Odds API: TESTED on fixtures; NEEDS_ACCESS for a key.
+  - The Odds API: NEEDS_ACCESS (the adapter is fixture-tested; no key, no live read).
 - **F09 (ADR 0021).** `edge-lab shadow anchor export|verify` detects truncation and
   rewrites against an external checkpoint. F09 stays OPEN until one is stored and verified
   off-host.
