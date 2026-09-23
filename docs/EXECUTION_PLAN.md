@@ -231,6 +231,32 @@ be written here when they are made.
   - `edgelab-dashboard.service` runs continuously. It is exempt from the activation sheet's
     "no running `edgelab-*` unit" install check and is restarted after each install.
 
+- **2026-09-23 (~15:00 ET), Market Edge Terminal v1 UI directive.** Recorded verbatim in
+  `docs/owner/2026-09-23-terminal-v1-ui-directive.md`; owner requirement issue #47; ADR 0025.
+  - **Authorized:** the dashboard's presentation-layer redesign; its read-only presentation
+    routes (`/market`, `/alerts`, `/more`, a demo-only `/gallery`); local static assets
+    (self-hosted IBM Plex fonts and a Lucide icon subset with their licences); small
+    same-origin JavaScript enhancements; fixture-based browser testing with development-only
+    tooling; canonical design documents (`docs/design/`); reviewed squash-merge of this bounded
+    UI mission; and updating the already-private dashboard through the existing approved
+    release path after tests and review pass, outside 17:40–18:35 America/New_York and never
+    during an active capture.
+  - **Not authorized:** any change to models, qualification thresholds, fees, sizing,
+    balances, settlement, risk limits or frozen experiments; collector schedules, source
+    permissions or account connections; live orders, deposits, withdrawals or paid services;
+    Tailscale membership or policy, Funnel, public ports, DNS or SSH keys; unrelated Brisket
+    services. The application stays read-only and SHADOW / NO REAL MONEY.
+  - **Priority:** the shared UI foundation is NOW / P0, ahead of discretionary new feature
+    screens, without delaying collection or an urgent correctness repair. 2026-10-22 is
+    unchanged.
+  - **Standing UI acceptance rule (from this directive).** Every user-visible change follows
+    `docs/design/UI_CONTRACT.md`: canonical shell, tokens, components, formatting and state
+    vocabulary; real, empty, stale, error, unsupported and blocked states; semantic parity with
+    canonical results (amounts, risk verdicts, account scope, frozen outputs); reviewed
+    mobile and desktop browser evidence. The PR template
+    (`.github/pull_request_template.md`) asks for each item. Tests detect violations; reviewed
+    screenshots are still required.
+
 ## Standing merge rule: docs-only and test-only PRs
 
 Owner rule of 2026-09-22 (verbatim source: `docs/owner/2026-09-22-overnight-build-directive.md`).

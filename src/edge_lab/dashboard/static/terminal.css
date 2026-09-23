@@ -56,7 +56,17 @@ code, .mono { font-family: var(--me-font-mono); }
   background: var(--me-surface); }
 .bell { position: relative; flex: none; width: 44px; height: 44px; display: inline-flex; align-items: center; justify-content: center;
   color: var(--me-text-secondary); border-radius: var(--me-radius-control); text-decoration: none; }
-.hdr .bell { margin-right: -10px; }
+@media (max-width: 767px) { .hdr-in { padding-right: 4px; } }
+@media (max-width: 359px) {
+  /* Below the supported phone widths (zoom/reflow): the notice moves to a second row, never away. */
+  .hdr-in { height: auto; min-height: var(--me-header-h); flex-wrap: wrap; row-gap: 0; }
+  .hdr-right { margin-left: 0; flex-basis: 100%; justify-content: space-between; }
+}
+@media (max-width: 399px) {
+  /* 360px phones: the notice keeps its 12px text but drops the capsule so nothing wraps. */
+  .hdr-in { gap: 8px; }
+  .mode { border-color: transparent; padding: 0 2px; letter-spacing: 0; background: transparent; }
+}
 .bell:hover { background: var(--me-surface-hover); color: var(--me-text); }
 .bell[aria-current="page"] { color: var(--me-accent); }
 .bell-n { position: absolute; top: 6px; right: 4px; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 999px;
@@ -208,7 +218,8 @@ code, .mono { font-family: var(--me-font-mono); }
 .tabs a[aria-current="page"], .tabs a[aria-current="true"] { color: var(--me-text); border-bottom-color: var(--me-accent);
   font-weight: 500; }
 .tabs .count { font: 400 12px/16px var(--me-font-mono); color: var(--me-text-muted); }
-.filters { display: grid; gap: var(--me-space-3); grid-template-columns: 1fr; }
+.filters { display: grid; gap: var(--me-space-3); grid-template-columns: minmax(0, 1fr); margin-bottom: var(--me-space-2); }
+.filters > * { min-width: 0; }
 .field { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
 .field label, .field .lbl-t { font-size: 12px; line-height: 16px; color: var(--me-text-muted); }
 .input, .select { width: 100%; min-height: 44px; padding: 10px 12px; background: var(--me-canvas); color: var(--me-text);

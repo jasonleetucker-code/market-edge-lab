@@ -23,7 +23,9 @@ from pathlib import Path
 from wsgiref.simple_server import WSGIRequestHandler, make_server
 
 HERE = Path(__file__).resolve().parent
-sys.path[:0] = [str(HERE.parents[1] / "src"), str(HERE)]
+# `--src DIR` renders the same fixtures with another checkout's code (before/after evidence).
+_SRC = sys.argv[sys.argv.index("--src") + 1] if "--src" in sys.argv else str(HERE.parents[1] / "src")
+sys.path[:0] = [_SRC, str(HERE)]
 
 from edge_lab.dashboard import make_app  # noqa: E402
 from fixture_states import BUILDERS  # noqa: E402
@@ -62,11 +64,31 @@ AUDIT_JS = r"""
       nums.push((el.innerText || '').slice(0, 30));
     }
   }
+  // Rendered contrast: each element with its own text, against the nearest opaque background.
+  const rgb = s => (s.match(/[\d.]+/g) || []).map(Number);
+  const lum = ([r, g, b]) => [r, g, b].map(v => { v /= 255; return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4; })
+    .reduce((a, v, i) => a + v * [0.2126, 0.7152, 0.0722][i], 0);
+  const bgOf = el => { for (let n = el; n; n = n.parentElement) { const c = rgb(getComputedStyle(n).backgroundColor);
+    if (c.length >= 3 && (c.length < 4 || c[3] > 0.99)) return c; } return [16, 18, 20]; };
+  const lowContrast = [];
+  for (const el of document.querySelectorAll('body *')) {
+    if (el.closest('.sr, .sprite, svg') || !el.offsetParent && getComputedStyle(el).position !== 'fixed') continue;
+    const own = [...el.childNodes].some(n => n.nodeType === 3 && n.textContent.trim());
+    if (!own) continue;
+    const st = getComputedStyle(el);
+    const fg = rgb(st.color), bg = bgOf(el);
+    const [l1, l2] = [lum(fg), lum(bg)].sort((a, b) => b - a);
+    const ratio = (l1 + 0.05) / (l2 + 0.05);
+    const size = parseFloat(st.fontSize), bold = parseInt(st.fontWeight) >= 600;
+    const need = (size >= 24 || (size >= 18.66 && bold)) ? 3 : 4.5;
+    if (ratio < need) lowContrast.push({text: el.textContent.trim().slice(0, 30), ratio: Math.round(ratio * 100) / 100});
+  }
   const first = document.querySelector('.board .mrow, .ws-main .empty');
   const fonts = [...document.fonts].filter(f => f.status === 'loaded').map(f => `${f.family} ${f.weight}`);
   const nav = document.querySelector('.tabbar');
   const navRect = nav && getComputedStyle(nav).display !== 'none' ? nav.getBoundingClientRect() : null;
   return {viewport: vw, overflow, small: small.slice(0, 40), clipped, clippedNumbers: nums,
+          lowContrast: lowContrast.slice(0, 20),
           firstRowTop: first ? Math.round(first.getBoundingClientRect().top + window.scrollY) : null,
           fontsLoaded: fonts, tabbarHeight: navRect ? Math.round(navRect.height) : null,
           docHeight: doc.scrollHeight, title: document.title};
@@ -107,6 +129,7 @@ def main() -> int:
     ap.add_argument("--engines", nargs="+", default=["chromium"])
     ap.add_argument("--text-scale", type=float, default=1.0, help="root font-size multiplier (enlarged text)")
     ap.add_argument("--no-shots", action="store_true", help="audit only")
+    ap.add_argument("--src", help="source tree to import edge_lab from (default: this checkout)")
     args = ap.parse_args()
     args.out.mkdir(parents=True, exist_ok=True)
     report = []
@@ -149,11 +172,13 @@ def main() -> int:
             finally:
                 stop()
     (args.out / "audit.json").write_text(json.dumps(report, indent=1), encoding="utf-8")
-    bad = [r for r in report if r["overflow"] > 0 or r["clipped"] or r["foreign_requests"] or r["clippedNumbers"]]
-    print(f"{len(report)} shots; {len(bad)} with overflow, clipping or foreign requests")
+    bad = [r for r in report if r["overflow"] > 0 or r["clipped"] or r["foreign_requests"] or r["clippedNumbers"]
+           or r["lowContrast"]]
+    print(f"{len(report)} shots; {len(bad)} with overflow, clipping, low contrast or foreign requests")
     for r in bad:
         print(" ", r["state"], r["engine"], r["viewport_name"], r["page"], "overflow", r["overflow"],
-              "clipped", r["clipped"][:3], "foreign", r["foreign_requests"][:2], "nums", r["clippedNumbers"][:3])
+              "clipped", r["clipped"][:3], "foreign", r["foreign_requests"][:2], "nums", r["clippedNumbers"][:3],
+              "contrast", r["lowContrast"][:3])
     return 0
 
 
