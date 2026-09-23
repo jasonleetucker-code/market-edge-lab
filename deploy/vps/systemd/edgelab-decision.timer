@@ -1,0 +1,12 @@
+[Unit]
+Description=Market Edge Lab: decision capture, window 17:55-18:00 ET
+
+[Timer]
+OnCalendar=*-*-* 17:55:05 America/New_York
+AccuracySec=1s
+# A missed window is lost, never fired late: the code rejects out-of-window runs anyway.
+Persistent=false
+Unit=edgelab-decision.service
+
+[Install]
+WantedBy=timers.target

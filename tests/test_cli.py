@@ -129,7 +129,12 @@ def test_health_exits_nonzero_after_failed_run_even_if_data_still_fresh(tmp_path
     monkeypatch.setattr(cli, "collect_reference_forecast", good_nws)
     monkeypatch.setattr(cli, "collect_recent_cli", good_cli)
     assert cli.main(["collect", "--db", str(db), "--nws-user-agent", "t"]) == 0
-    assert cli.main(["health", "--db", str(db)]) == 1  # settlement evidence never collected
+    # Issue #16: the default (routine) profile judges exactly what `collect --source all`
+    # runs, so a clean routine run is healthy...
+    assert cli.main(["health", "--db", str(db)]) == 0
+    # ...while the separate collectors still report their own state honestly.
+    assert cli.main(["health", "--db", str(db), "--profile", "settlement"]) == 1  # never ran
+    assert cli.main(["health", "--db", str(db), "--profile", "all"]) == 1
     live = ["--source", "kalshi_public", "--source", "nws_api", "--source", "nws_cli_central_park"]
     assert cli.main(["health", "--db", str(db), *live]) == 0
 
@@ -141,6 +146,45 @@ def test_health_exits_nonzero_after_failed_run_even_if_data_still_fresh(tmp_path
     capsys.readouterr()
     # Snapshots from the first run are still inside max_age, but the latest run failed.
     assert cli.main(["health", "--db", str(db), *live]) == 1
+    assert cli.main(["health", "--db", str(db)]) == 1  # the routine profile sees it too
+
+
+def test_routine_health_still_fails_when_a_routine_source_goes_stale(tmp_path, monkeypatch, capsys):
+    """Profiles narrow *which* sources are judged, never *how*: stale stays unhealthy."""
+    from datetime import datetime, timedelta, timezone
+
+    db = tmp_path / "e.sqlite3"
+    store = cli.SnapshotStore(db)
+    store.start_run("r1")
+    old = (datetime.now(timezone.utc) - timedelta(days=3)).isoformat()
+    for source, kinds in (("kalshi", ("series", "markets", "event", "orderbook")),
+                          ("nws", ("points", "forecast", "forecast_hourly", "forecast_grid")),
+                          ("nws_cli", ("cli_list", "cli_product"))):
+        for kind in kinds:
+            store.save_snapshot(run_id="r1", source=source, kind=kind, entity_id="E",
+                                url="https://example.test", payload={"x": 1}, fetched_at_utc=old)
+    for source_id in ("kalshi_public", "nws_api", "nws_cli_central_park"):
+        store.record_source_health(
+            run_id="r1", source_id=source_id, started_at_utc=old, completed_at_utc=old,
+            duration_ms=1, status="ok", records=1, payload_bytes=1, http_errors=0, retries=0,
+            anomalies=[], error=None,
+        )
+    store.finish_run("r1", status="succeeded")
+    assert cli.main(["health", "--db", str(db)]) == 1
+    assert "stale" in capsys.readouterr().out
+
+
+def test_health_profiles_select_sources_by_owning_job():
+    from edge_lab.sources import REGISTRY, SourceStatus
+
+    active = {s.source_id: s for s in REGISTRY.values() if s.status is SourceStatus.ACTIVE}
+    # Every active source belongs to at least one collection job; otherwise no profile
+    # would ever judge it.
+    assert all(s.collected_by for s in active.values())
+    routine = {sid for sid, s in active.items() if "routine" in s.collected_by}
+    assert routine == {"kalshi_public", "nws_api", "nws_cli_central_park"}
+    assert {sid for sid, s in active.items() if "settlement" in s.collected_by} == {"kalshi_settlement"}
+    assert "kalshi_settlement" not in routine
 
 
 def test_health_exits_nonzero_when_a_source_never_ran(tmp_path):

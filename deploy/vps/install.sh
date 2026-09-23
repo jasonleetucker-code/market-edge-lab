@@ -1,0 +1,142 @@
+#!/usr/bin/env bash
+# Install or update Market Edge Lab's forward collector on the Chase Upside VPS (ADR 0012).
+#
+#   sudo bash install.sh --sha <40-hex commit> --bundle <path to git bundle> \
+#        [--user-agent "market-edge-lab (contact: you@example.com)"] [--alert-url URL]
+#
+# Idempotent. Creates the `edgelab` system user and the directories below, installs the
+# pinned code with its own venv and the systemd units, and verifies permissions. It does
+# NOT enable or start any timer; that is a separate, explicit step (see README.md).
+#
+#   /opt/market-edge-lab/app            code at the pinned commit (root-owned, read-only)
+#   /opt/market-edge-lab/venv           stdlib-only venv (no pip), .pth -> app/src
+#   /var/lib/market-edge-lab            private data: db/, backups/   (edgelab, 0700)
+#   /var/lib/market-edge-lab-status     non-sensitive status JSON     (edgelab, 0755)
+#   /etc/market-edge-lab/env            NWS_USER_AGENT etc.           (root:edgelab 0640)
+set -euo pipefail
+
+SHA="" BUNDLE="" UA="" ALERT_URL=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --sha) SHA="$2"; shift 2 ;;
+    --bundle) BUNDLE="$2"; shift 2 ;;
+    --user-agent) UA="$2"; shift 2 ;;
+    --alert-url) ALERT_URL="$2"; shift 2 ;;
+    *) echo "unknown argument: $1" >&2; exit 2 ;;
+  esac
+done
+die() { echo "INSTALL FAILED: $*" >&2; exit 1; }
+[ "$(id -u)" -eq 0 ] || die "run with sudo"
+[[ "$SHA" =~ ^[0-9a-f]{40}$ ]] || die "--sha must be a full 40-hex commit"
+[ -f "$BUNDLE" ] || die "--bundle $BUNDLE not found"
+BUNDLE=$(realpath "$BUNDLE")
+cd /  # the service account cannot enter the invoking user's home directory
+
+APP_ROOT=/opt/market-edge-lab
+DATA=/var/lib/market-edge-lab
+STATUS=/var/lib/market-edge-lab-status
+ETC=/etc/market-edge-lab
+ENV_FILE=$ETC/env
+UNITS=(edgelab-pfm edgelab-decision edgelab-recheck edgelab-status edgelab-backup)
+# The unprivileged account that must NOT read private data (the Chase Upside app user).
+OTHER_USER=${EDGELAB_OTHER_USER:-dynasty}
+
+echo "== 1/7 service identity"
+getent group edgelab >/dev/null || groupadd --system edgelab
+id -u edgelab >/dev/null 2>&1 || useradd --system --gid edgelab --home-dir "$DATA" \
+  --no-create-home --shell /usr/sbin/nologin --comment "Market Edge Lab collector" edgelab
+
+echo "== 2/7 directories"
+install -d -o root -g root -m 0755 "$APP_ROOT"
+install -d -o edgelab -g edgelab -m 0700 "$DATA" "$DATA/db" "$DATA/backups"
+install -d -o edgelab -g edgelab -m 0755 "$STATUS"
+install -d -o root -g edgelab -m 0750 "$ETC"
+
+echo "== 3/7 code at $SHA"
+rm -rf "$APP_ROOT/app.new"
+git -c safe.directory='*' clone --quiet --no-checkout "$BUNDLE" "$APP_ROOT/app.new"
+git -c safe.directory='*' -C "$APP_ROOT/app.new" -c advice.detachedHead=false checkout --quiet "$SHA"
+[ "$(git -c safe.directory='*' -C "$APP_ROOT/app.new" rev-parse HEAD)" = "$SHA" ] || die "checkout is not $SHA"
+rm -rf "$APP_ROOT/app.new/.git"
+echo "$SHA" > "$APP_ROOT/app.new/REVISION"
+chown -R root:root "$APP_ROOT/app.new"
+chmod -R u+rwX,go+rX,go-w "$APP_ROOT/app.new"
+chmod 0755 "$APP_ROOT/app.new/deploy/vps/alert.sh"
+if [ -d "$APP_ROOT/app" ]; then rm -rf "$APP_ROOT/app.prev"; mv "$APP_ROOT/app" "$APP_ROOT/app.prev"; fi
+mv "$APP_ROOT/app.new" "$APP_ROOT/app"
+
+echo "== 4/7 venv (stdlib only)"
+[ -x "$APP_ROOT/venv/bin/python" ] || python3 -m venv --without-pip "$APP_ROOT/venv"
+SITE=$("$APP_ROOT/venv/bin/python" -c 'import sysconfig; print(sysconfig.get_paths()["purelib"])')
+echo "$APP_ROOT/app/src" > "$SITE/market_edge_lab.pth"
+"$APP_ROOT/venv/bin/python" -c 'import edge_lab.forward, edge_lab.backup' || die "edge_lab does not import"
+
+echo "== 5/7 environment file"
+existing() { [ -f "$ENV_FILE" ] && sed -n "s/^$1=//p" "$ENV_FILE" | tail -1 || true; }
+UA=${UA:-$(existing NWS_USER_AGENT)}
+ALERT_URL=${ALERT_URL:-$(existing EDGE_LAB_ALERT_URL)}
+[ -n "$UA" ] || die "--user-agent is required on first install (NWS asks for contact information)"
+case "$UA$ALERT_URL" in *$'\n'*|*\"*|*\'*) die "values must be single-line without quotes" ;; esac
+tmp=$(mktemp "$ETC/env.XXXXXX")
+{
+  echo "# Market Edge Lab collector environment. Not a secret store: no credentials belong here."
+  echo "NWS_USER_AGENT=$UA"
+  echo "EDGE_LAB_CODE_VERSION=$SHA"
+  [ -n "$ALERT_URL" ] && echo "EDGE_LAB_ALERT_URL=$ALERT_URL"
+} > "$tmp"
+chown root:edgelab "$tmp"; chmod 0640 "$tmp"; mv -f "$tmp" "$ENV_FILE"
+
+echo "== 6/7 systemd units (installed, NOT enabled)"
+install -o root -g root -m 0644 "$APP_ROOT/app/deploy/vps/systemd/"edgelab-* /etc/systemd/system/
+systemctl daemon-reload
+for u in "${UNITS[@]}"; do
+  systemd-analyze verify "/etc/systemd/system/$u.service" "/etc/systemd/system/$u.timer" || die "unit $u does not verify"
+done
+systemd-analyze verify "/etc/systemd/system/edgelab-alert@.service" 2>/dev/null || true
+
+echo "== 7/7 permission and runtime checks"
+# First run as the service account creates the database (schema migration) and the status file.
+runuser -u edgelab -- "$APP_ROOT/venv/bin/python" -m edge_lab.cli forward status \
+  --db "$DATA/db/edge_lab.sqlite3" --status-file "$STATUS/latest.json" >/dev/null || true
+fails=0
+expect() { # description, command...  (command must succeed)
+  local what=$1; shift
+  if "$@" >/dev/null 2>&1; then echo "  ok   $what"; else echo "  FAIL $what"; fails=1; fi
+}
+expect_not() { local what=$1; shift
+  if "$@" >/dev/null 2>&1; then echo "  FAIL $what"; fails=1; else echo "  ok   $what"; fi
+}
+mode() { stat -c '%U:%G %a' "$1"; }
+expect "env file is root:edgelab 640" test "$(mode "$ENV_FILE")" = "root:edgelab 640"
+expect "data dir is edgelab:edgelab 700" test "$(mode "$DATA")" = "edgelab:edgelab 700"
+expect "db dir is edgelab:edgelab 700" test "$(mode "$DATA/db")" = "edgelab:edgelab 700"
+expect "backups dir is edgelab:edgelab 700" test "$(mode "$DATA/backups")" = "edgelab:edgelab 700"
+expect "status dir is edgelab:edgelab 755" test "$(mode "$STATUS")" = "edgelab:edgelab 755"
+expect "database created" test -f "$DATA/db/edge_lab.sqlite3"
+expect "edgelab can read the env file" runuser -u edgelab -- test -r "$ENV_FILE"
+expect "edgelab can write its database dir" runuser -u edgelab -- test -w "$DATA/db"
+if id -u "$OTHER_USER" >/dev/null 2>&1; then
+  expect_not "$OTHER_USER cannot read the env file" runuser -u "$OTHER_USER" -- test -r "$ENV_FILE"
+  expect_not "$OTHER_USER cannot list private data" runuser -u "$OTHER_USER" -- ls "$DATA"
+  expect_not "$OTHER_USER cannot read the database" runuser -u "$OTHER_USER" -- test -r "$DATA/db/edge_lab.sqlite3"
+  expect_not "$OTHER_USER cannot list backups" runuser -u "$OTHER_USER" -- ls "$DATA/backups"
+  expect "$OTHER_USER can read the status file" runuser -u "$OTHER_USER" -- cat "$STATUS/latest.json"
+fi
+[ "$fails" -eq 0 ] || die "permission/runtime checks failed (see above)"
+for u in "${UNITS[@]}"; do
+  echo "  info $u.timer: $(systemctl is-enabled "$u.timer" 2>/dev/null || true)"
+done
+
+cat <<EOF
+
+INSTALL OK: $SHA
+Next (owner):
+  1. Fail-closed dry run (outside the window it must be rejected before any order-book request):
+       sudo systemctl start edgelab-decision.service; sudo journalctl -u edgelab-decision -n 20 --no-pager
+     Expect "status": "rejected_out_of_window" and a failed unit (that is correct). Then:
+       sudo systemctl reset-failed 'edgelab-*'
+  2. Activate the schedule:
+       sudo systemctl enable --now ${UNITS[*]/%/.timer}
+       systemctl list-timers 'edgelab-*'
+  Stop everything at any time: sudo systemctl disable --now 'edgelab-*.timer'
+EOF

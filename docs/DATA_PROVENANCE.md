@@ -72,9 +72,23 @@ start/complete timestamps, `duration_ms`, `status`, `records`, `payload_bytes`, 
   `edge-lab collect` exits non-zero unless every source is `ok`.
 - **Anomalies** are completeness or shape problems that are not exceptions. Examples: a
   paginated market list where later pages were not fetched, or an empty market list.
-- `edge-lab health [--json]` shows the latest status, last success, last error, anomalies,
-  and per-kind freshness for each active source. It exits non-zero unless every active
-  source's latest run was `ok` **and** every kind is fresh.
+- `edge-lab health [--json] [--profile P]` shows the latest status, last success, last error,
+  anomalies, and per-kind freshness for each active source **in the chosen profile**. It
+  exits non-zero unless every one of those sources' latest run was `ok` **and** every kind
+  is fresh. Profiles follow the job that collects each source (`SourceSpec.collected_by`,
+  issue #16):
+
+  | Profile | Judges |
+  |---|---|
+  | `routine` (default) | exactly the sources `edge-lab collect --source all` runs: `kalshi_public`, `nws_api`, `nws_cli_central_park` |
+  | `settlement` | `kalshi_settlement` (`edge-lab settlement collect`) |
+  | `forward` | the EXP-001 Stage-B schedule, judged by cadence: exit 0 only if the last closed target day is VALID (`edge-lab forward status`). A 5-minute order-book `max_age` means nothing for a once-a-day job. |
+  | `all` | every active source against its `max_age` (the strict global view) |
+
+  So a clean routine run is not reported unhealthy just because a deliberately separate
+  collector did not run. Profiles narrow *which* sources are judged, never *how*: a stale
+  or failed source in the profile still fails it. `--source X` (repeatable) judges exactly
+  the listed sources.
   Per-kind freshness is based on the *latest receipt of any entity of that kind*. It is a
   collector-liveness signal, not a guarantee that every entity is fresh. Decision code checks
   its own inputs with `require_fresh`.
@@ -142,6 +156,27 @@ issuance + 30 min (ADR 0010). Derived datasets record both, plus the SHA-256 of 
 file (`experiments/EXP-001-kxhighny-nws-vs-market/gate3/dataset_manifest.json`), and CI
 rebuilds them byte for byte.
 
+## 6a. Forward Stage-B capture (scheduled, read-only; ADR 0012)
+
+`edge-lab forward capture --phase {pfm,decision,recheck}` runs from systemd timers on the
+Chase Upside VPS (`deploy/vps/`).
+- **Snapshots:** `nws_pfm` `pfm_list`/`pfm_product` and `kalshi` `event`/`markets`/`orderbook`.
+- **Capture record:** every attempt writes one immutable `forward_captures` row (schema v4)
+  with the phase, target date, window, status, reasons, and links to the snapshot ids it
+  stored.
+- **Timing gate:** each phase checks its window before any network work. An out-of-window
+  run is recorded as `rejected_out_of_window` and fetches nothing.
+- **Duplicates and reruns:** a rerun after a complete capture is `skipped_duplicate`. A
+  killed run leaves no complete row, and a restart inside the window appends a new attempt.
+  The latest complete attempt counts.
+- **Day validity:** `edge-lab forward status` re-derives each target day's validity from
+  the stored evidence alone: event identity, every open bracket booked inside [decision − 5
+  min, decision], every bracket re-checked 10–15 min after its own decision book, and the
+  forecast selected by the frozen availability rule. A day is VALID or INVALID, never
+  partial.
+- **Smoke rows:** rows with `mode = 'smoke'` (injected clocks in tests or manual smoke
+  checks) are never evidence.
+
 ## 7. Adding a source
 
 1. Choose the highest access tier available. Read the terms and write them in `license_notes`.
@@ -153,7 +188,9 @@ rebuilds them byte for byte.
    problems to `anomalies` rather than hiding them.
 4. Add fixture-based tests with recorded, non-secret sample payloads. Tests never touch the
    network.
-5. Wire the collector into `edge-lab collect` through `_run_source`. Set `status=ACTIVE`.
+5. Wire the collector into its job (`edge-lab collect`, `settlement collect` or
+   `forward capture`) through `_run_source`, set `collected_by` to that job's health
+   profile, and set `status=ACTIVE`.
    Paginated listings use `kalshi.paginate_markets`-style bounded cursor following
    (every page stored, repeated cursor = loop, page cap raises), never "page one only".
 6. If the source needs credentials, stop. That needs owner approval (`docs/SECURITY.md`).

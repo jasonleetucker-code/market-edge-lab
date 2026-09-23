@@ -50,6 +50,16 @@ class SourceSpec:
     # Bump when the upstream schema we rely on changes.
     schema_version: str = "1"
     license_notes: str = ""
+    # Which collection jobs own this source (health profiles, issue #16):
+    #   routine    - `edge-lab collect --source all`
+    #   settlement - `edge-lab settlement collect`
+    #   forward    - `edge-lab forward capture` (EXP-001 Stage B, ADR 0012)
+    # `edge-lab health` checks one profile at a time, so a successful routine run is not
+    # reported unhealthy because a deliberately separate collector has not run.
+    collected_by: tuple[str, ...] = ()
+
+
+HEALTH_PROFILES = ("routine", "settlement", "forward")
 
 
 REGISTRY: dict[str, SourceSpec] = {
@@ -72,6 +82,9 @@ REGISTRY: dict[str, SourceSpec] = {
                 "Unauthenticated public market-data endpoints only. Review Kalshi "
                 "terms before any redistribution of stored data."
             ),
+            # Forward captures also fetch these endpoints, but they are judged by
+            # `forward_captures` (cadence-aware), not by this source's health rows.
+            collected_by=("routine",),
         ),
         SourceSpec(
             source_id="nws_api",
@@ -90,6 +103,7 @@ REGISTRY: dict[str, SourceSpec] = {
                 "US government work; public domain. NWS requires an identifying "
                 "User-Agent with contact information."
             ),
+            collected_by=("routine",),
         ),
         SourceSpec(
             source_id="kalshi_settlement",
@@ -108,6 +122,7 @@ REGISTRY: dict[str, SourceSpec] = {
                 "historical_markets": timedelta(days=31),
             },
             license_notes="Public market data and published contract documents; research use.",
+            collected_by=("settlement",),
         ),
         SourceSpec(
             source_id="kalshi_settlement_weather_company",
@@ -142,6 +157,24 @@ REGISTRY: dict[str, SourceSpec] = {
             # to keep every issuance before the API drops it.
             max_age={"cli_list": timedelta(hours=26), "cli_product": timedelta(hours=36)},
             license_notes="US government work; public domain. Identifying User-Agent required.",
+            collected_by=("routine",),
+        ),
+        SourceSpec(
+            source_id="nws_pfm_okx",
+            legacy_name="nws_pfm",
+            description=(
+                "NWS OKX Point Forecast Matrices (PFMOKX) as published by api.weather.gov: the "
+                "product list and each product's full text. EXP-001 Stage B forecast input "
+                "(Central Park NYZ072 daytime max), captured before each decision time."
+            ),
+            access_tier=AccessTier.OFFICIAL_API,
+            base_url="https://api.weather.gov/products/types/PFM/locations/OKX",
+            status=SourceStatus.ACTIVE,
+            # Captured once a day before the 18:00 ET decision; PFMOKX is issued about twice
+            # a day. Decision code applies the stricter EXP-001 cutoff/age rule itself.
+            max_age={"pfm_list": timedelta(hours=26), "pfm_product": timedelta(hours=30)},
+            license_notes="US government work; public domain. Identifying User-Agent required.",
+            collected_by=("forward",),
         ),
         SourceSpec(
             source_id="iem_afos_clinyc",

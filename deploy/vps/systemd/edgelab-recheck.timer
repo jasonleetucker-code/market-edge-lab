@@ -1,0 +1,12 @@
+[Unit]
+Description=Market Edge Lab: re-check capture, 10-15 min after each decision book
+
+[Timer]
+OnCalendar=*-*-* 18:05:00 America/New_York
+AccuracySec=1s
+# A missed window is lost, never fired late: the code rejects out-of-window runs anyway.
+Persistent=false
+Unit=edgelab-recheck.service
+
+[Install]
+WantedBy=timers.target
