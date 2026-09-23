@@ -51,7 +51,7 @@ def view(ctx: d.Context, p: pr.Params) -> cm.Page:
         message = v.risk.message if v.risk else "no risk report"
         state = (c.unavailable("Risk figures not computed", "NO DATA / NOT STARTED — " + message)
                  if v.risk is not None and v.risk.status == d.NO_DATA else c.error_state("Risk report unavailable",
-                                                                                         message))
+                                                                                         "ERROR — " + message))
         parts.append(c.section("Capacity for new positions", state, sid="cap-h"))
     else:
         r = v.risk.value

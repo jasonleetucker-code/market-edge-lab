@@ -231,8 +231,8 @@ def receipt_detail(ctx: d.Context, *, days: bool = False) -> str:
         ("state", c.badge(r.get("state")) + " " + c.code(r.get("state"))
          + (" " + c.badge("REPEAT", label="REPEAT OF PREVIOUS ALERT") if r.get("repeat_of_previous_alert") else "")),
         ("exit code", esc(r.get("exit_code"))),
-        ("latest day", (f"{esc(cm.get(latest, 'target_date'))} {c.code(cm.get(latest, 'capture_status'))} "
-                        f"{c.code(cm.get(latest, 'result'))}") if isinstance(latest, dict) else esc(None)),
+        ("latest day", (f"{esc(cm.get(latest, 'target_date'))} {c.badge_code(cm.get(latest, 'capture_status'))} "
+                        f"{c.badge_code(cm.get(latest, 'result'))}") if isinstance(latest, dict) else esc(None)),
         ("valid / closed capture days", f"{esc(r.get('valid_days'))} / {esc(r.get('closed_capture_days'))}"),
         ("missing capture days", cm.list_field(r, "missing_capture_days")),
         ("freshness", c.badge(fresh, label=fresh) + " " + esc(f"generated {r.get('generated_at_utc')} (stale after 26 h)")),

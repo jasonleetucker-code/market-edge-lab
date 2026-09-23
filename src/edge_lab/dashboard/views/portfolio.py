@@ -126,7 +126,7 @@ def ledger_detail(v: d.AccountView) -> str:
         ("fills / no-fills / settlements", f"{esc(s.fills)} / {esc(s.no_fills)} / {esc(s.settlements)}"),
     ])
     body += '<h3 class="eyebrow">NO_FILL reasons</h3>' + c.table(
-        ["reason", "count"], [[c.code(k), esc(v_)] for k, v_ in sorted(s.no_fill_reasons.items())])
+        ["reason", "count"], [[c.badge_code(k), esc(v_)] for k, v_ in sorted(s.no_fill_reasons.items())])
     fills = sorted(v.fills.values(), key=lambda f: (str(f.get("filled_at_utc")), str(f.get("fill_id"))), reverse=True)
     body += '<h3 class="eyebrow">Simulated fills (FILLED and NO_FILL)</h3>' + c.table(
         ["filled at (UTC)", "fill id", "market", "side", "status", "reason", "qty", "price", "fee", "total cost",

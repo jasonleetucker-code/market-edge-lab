@@ -65,6 +65,11 @@ def state_text(code: Any, *, label: str | None = None, kind: str | None = None) 
             f"<span>{esc(label or word.label)}</span></span>")
 
 
+def badge_code(value: Any) -> str:
+    """Details view of a stored state: the semantic badge plus the exact code beside it."""
+    return na("not recorded") if value is None else f"{badge(value)} {code(value)}"
+
+
 def code(value: Any) -> str:
     return na("not recorded") if value is None else f'<code class="id">{esc(value)}</code>'
 
