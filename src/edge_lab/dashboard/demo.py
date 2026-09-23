@@ -62,6 +62,7 @@ def _demo_verdict(committed: datetime, expected_resolution: datetime) -> dict:
     """A real STARTER_MAX_7D_V1 verdict on synthetic timing (documented Kalshi cash timing and
     the committed KXHIGHNY lag evidence)."""
     timing = MarketTiming(expected_resolution_utc=_iso(expected_resolution), settlement_timer_seconds=300,
+                          lifecycle_status="active",
                           latest_resolution_utc=_iso(expected_resolution + timedelta(days=6)), source="demo")
     return starter_policy.assess(commitment=committed, timing=timing,
                                  lag=starter_policy.lag_evidence("kalshi", "KXHIGHNY"),
@@ -98,9 +99,8 @@ def _account(ledger: ShadowLedger, account: exp001_shadow.ShadowAccount, now: da
                                       reason="CONFIRMATION_MISSING"))
     ledger.record_fill(account, _fill(open_, True, "0.24", "0.0128", "0.26", now + timedelta(days=1)))
     late = _fill(overdue, True, "0.80", "0.0112", "0.82", now - timedelta(hours=2))
-    if starter:  # operational only: eligible when filled, now past its expected release (an exception)
-        late["starter_policy"] = _demo_verdict(day2, now - timedelta(hours=2) - timedelta(hours=49, minutes=5))
-        late["expected_settlement_utc"] = late["starter_policy"]["tradable_cash_release_eta_utc"]
+    if starter:  # operational only: eligible when committed (day 1), now past its expected release
+        late["starter_policy"] = _demo_verdict(day1, now - timedelta(hours=2) - timedelta(hours=49, minutes=5))
     ledger.record_fill(account, late)
     if starter:  # a long-dated market: visible, but ineligible for starter capital
         season = _fill(long_dated, False, "0", "0", "0", now + timedelta(days=40), reason="STARTER_POLICY_INELIGIBLE")

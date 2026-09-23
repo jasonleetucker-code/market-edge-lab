@@ -28,6 +28,7 @@ TIMER = 300
 def timing_for_release(release: datetime, **kw) -> MarketTiming:
     """A market whose normal-path tradable release is exactly `release` (Kalshi: no hold)."""
     expected = release - LAG.buffer - timedelta(seconds=TIMER)
+    kw.setdefault("lifecycle_status", "active")
     return MarketTiming(expected_resolution_utc=expected.isoformat(), settlement_timer_seconds=TIMER, **kw)
 
 
@@ -267,9 +268,14 @@ def test_before_the_effective_date_nothing_changes(day):
 
 def test_a_market_already_past_its_expected_resolution_is_delayed():
     expected = T0 - timedelta(hours=3)
-    timing = MarketTiming(expected_resolution_utc=expected.isoformat(), settlement_timer_seconds=TIMER)
+    timing = MarketTiming(expected_resolution_utc=expected.isoformat(), settlement_timer_seconds=TIMER,
+                          lifecycle_status="active")
     v = sp.assess(commitment=T0, timing=timing, lag=LAG, cash=CASH)
     assert not v.eligible and "DELAYED_OR_DISPUTED" in v.reasons
+
+
+def test_unknown_lifecycle_status_fails_closed():
+    assert verdict(T0 + timedelta(hours=60), lifecycle_status=None).reasons == ("TRADABLE_CASH_RELEASE_UNKNOWN",)
 
 
 @pytest.mark.parametrize("status", ["closed", "determined", "finalized", "settled", "inactive"])

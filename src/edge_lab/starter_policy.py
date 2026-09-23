@@ -142,6 +142,9 @@ def assess(*, commitment: datetime | str, timing: MarketTiming | None, lag: Sett
     if timing is None or expected is None or timer is None:
         reasons.append(StarterReason.TRADABLE_CASH_RELEASE_UNKNOWN)
         detail.append("the venue's expected resolution time or settlement timer is unknown")
+    elif not timing.lifecycle_status:
+        reasons.append(StarterReason.TRADABLE_CASH_RELEASE_UNKNOWN)
+        detail.append("the market's lifecycle status is unknown, so the normal path cannot be assumed")
     if lag is None:
         reasons.append(StarterReason.SETTLEMENT_TIMING_UNVERIFIED)
         detail.append("no settlement-lag evidence for this series")

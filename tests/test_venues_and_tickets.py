@@ -75,7 +75,7 @@ def _eligible_verdict(at: datetime):
     lag = sp.lag_evidence("kalshi", "KXHIGHNY")
     expected = at + timedelta(hours=40)
     return sp.assess(commitment=at, timing=MarketTiming(expected_resolution_utc=expected.isoformat(),
-                                                        settlement_timer_seconds=300),
+                                                        settlement_timer_seconds=300, lifecycle_status="active"),
                      lag=lag, cash=venues.cash_timing("kalshi"))
 
 

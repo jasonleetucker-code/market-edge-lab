@@ -708,3 +708,16 @@ def test_c_level_previous_sigterm_handler_falls_back_to_default(monkeypatch):
     monkeypatch.setattr(server, "make_server", lambda *a, **k: FakeServer())
     assert server.main([]) == 0
     assert calls == [server._sigterm_to_interrupt, signal.SIG_DFL]
+
+
+def test_demo_filled_starter_fills_are_eligible():
+    """The demo never shows a state real code cannot produce: a FILLED fill with an ineligible verdict."""
+    cfg, root = build_demo()
+    try:
+        ledger = ShadowLedger.open_readonly(cfg.ledger)
+        fills = [json.loads(r["payload_json"]) for a in ledger.accounts() for r in ledger.entries(a) if r["kind"] == "fill"]
+    finally:
+        shutil.rmtree(root)
+    checked = [f for f in fills if f["status"] == "FILLED" and "starter_policy" in f]
+    assert checked and all(f["starter_policy"]["eligible"] for f in checked)
+    assert any(f["reason"] == "STARTER_POLICY_INELIGIBLE" for f in fills)
