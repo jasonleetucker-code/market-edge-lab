@@ -39,6 +39,7 @@ from .freshness import parse_utc
 from .kalshi import SETTLEMENT_SOURCE
 from .kalshi_quotes import quotes_from_orderbook
 from .opportunity import ExecutableQuote, Opportunity
+from .risk import RiskPolicy
 from .shadow_ledger import LedgerError, ShadowLedger
 from .sizing import SizingPolicy, suggest_position_size
 from .storage import SnapshotStore
@@ -54,6 +55,15 @@ SIZING_POLICY = SizingPolicy(
     policy_id="EXP-001-fixed-1-v1", fixed_contracts=1, kelly_fraction=None,
     max_position_contracts=1, max_position_risk=Decimal("1.00"), max_event_risk=Decimal("6.00"),
     max_cluster_risk=Decimal("6.00"), max_portfolio_risk=Decimal("50.00"), reserve=Decimal("100.00"),
+)
+
+
+# Account-level risk limits for the notional shadow account (issue #6 foundation). They are
+# set so the frozen 1-contract rule never reaches them; they are not tuned to any result.
+RISK_POLICY = RiskPolicy(
+    policy_id="EXP-001-shadow-risk-v1", reserve_floor=Decimal("100.00"), max_position_risk=Decimal("1.00"),
+    max_event_risk=Decimal("6.00"), max_cluster_risk=Decimal("6.00"), max_portfolio_risk=Decimal("50.00"),
+    daily_loss_limit=Decimal("10.00"), weekly_loss_limit=Decimal("25.00"), max_drawdown=Decimal("50.00"),
 )
 
 

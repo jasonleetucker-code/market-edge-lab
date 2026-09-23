@@ -97,6 +97,11 @@ def build_parser() -> argparse.ArgumentParser:
     sh_settle.add_argument("--ledger", default="data/shadow_ledger.sqlite3")
     sh_account = shadow_sub.add_parser("account", help="Replay the shadow account from its ledger.")
     sh_account.add_argument("--ledger", default="data/shadow_ledger.sqlite3")
+    sh_risk = shadow_sub.add_parser(
+        "risk", help="Risk/capital report, withdrawal contract and Outcome Board for the shadow account."
+    )
+    sh_risk.add_argument("--ledger", default="data/shadow_ledger.sqlite3")
+    sh_risk.add_argument("--as-of", help="ISO-8601 instant with zone (default: now)")
 
     settle = subparsers.add_parser("settlement", help="Gate 2 settlement evidence and audit.")
     settle_sub = settle.add_subparsers(dest="settlement_command", required=True)
@@ -477,11 +482,31 @@ def _shadow(args: argparse.Namespace) -> int:
     from .shadow_ledger import ShadowLedger
 
     ledger_path = Path(args.ledger)
-    if args.shadow_command == "account":
+    if args.shadow_command in ("account", "risk"):
         if not ledger_path.is_file():
             print(f"no ledger at {ledger_path}", file=sys.stderr)
             return 2
-        result = ShadowLedger(ledger_path).state(exp001_shadow.ACCOUNT_ID).to_dict()
+        state = ShadowLedger(ledger_path).state(exp001_shadow.ACCOUNT_ID)
+        if args.shadow_command == "account":
+            result = state.to_dict()
+        else:
+            from . import outcome_board, risk
+            from .freshness import parse_utc
+
+            as_of = parse_utc(args.as_of) if args.as_of else datetime.now(timezone.utc)
+            if as_of is None:
+                print(f"--as-of must be an ISO-8601 instant with a zone, got {args.as_of!r}", file=sys.stderr)
+                return 2
+            try:
+                report = risk.assess(state, exp001_shadow.RISK_POLICY, as_of)
+            except ValueError as exc:
+                print(str(exc), file=sys.stderr)
+                return 2
+            result = {
+                "risk": report.to_dict(),
+                "withdrawal": risk.withdrawal_assessment(state, report).to_dict(),
+                "outcome_board": [g.to_dict() for g in outcome_board.build_board(state, as_of)],
+            }
     else:
         db = Path(args.db)
         if not db.is_file():
