@@ -35,12 +35,12 @@ column lists which issues each primitive serves.
 |---|---|---|---|
 | Event / market identity | `src/edge_lab/opportunity.py` | BUILT (Event, Market, settlement_identity) | #5 #9 #30 #32 |
 | Venue and account capability registry | `src/edge_lab/venues.py` | BUILT (stages per capability, cash timing; execution never authorized; ADR 0019) | #30 #32 #29 #9 |
-| Quote / order-book normalization | `src/edge_lab/opportunity.py` | BUILT (ExecutableQuote; Kalshi only) | #30 #9 #29 |
+| Quote / order-book normalization | `src/edge_lab/opportunity.py` | BUILT (ExecutableQuote: Kalshi; Polymarket US public books; sportsbook odds and Novig daily files are never executable) | #30 #9 #29 |
 | Fee models and fee verification | `src/edge_lab/fee_schedules.py` | BUILT (Kalshi, with dated component-level verification records, ADR 0017; other venues unsupported). It reuses the hash-frozen EXP-001 cost model in `fees.py`, never forks it | #6 #30 #9 |
 | Model estimates | `src/edge_lab/opportunity.py` | BUILT (ModelEstimate; EXP-001 only) | #5 #9 #32 |
-| Source ingestion and provenance | `src/edge_lab/sources.py` | BUILT: the registry, fronting `storage.py` (snapshots) and `provenance.py` | #7 #29 #30 #27 |
-| Rules / settlement equivalence | `src/edge_lab/opportunity.py` | BUILT (`Event.settlement_identity`, `Market.rules_resolved`); cross-venue matching not built | #30 #9 |
-| Shadow / live ledger boundary | `src/edge_lab/shadow_ledger.py` | BUILT (shadow only; no live ledger; head checkpoint for F09 planned beside it) | #6 #3 #32 |
+| Source ingestion and provenance | `src/edge_lab/sources.py` | BUILT: the registry (with a read-only data-feed credential kind), fronting `storage.py`, `provenance.py` and the shared `redaction.py` | #7 #29 #30 #27 |
+| Rules / settlement equivalence | `src/edge_lab/opportunity.py` | BUILT (`Event.settlement_identity`, `Market.rules_resolved`); cross-venue classification in `discovery.py` (title match is never equivalence); no equivalence proven across venues yet | #30 #9 |
+| Shadow / live ledger boundary | `src/edge_lab/shadow_ledger.py` | BUILT (shadow only; no live ledger). Head checkpoints: `ledger_anchor.py` (export/verify; no independent anchor stored yet, F09 OPEN) | #6 #3 #32 |
 | Risk engine | `src/edge_lab/risk.py` | BUILT (limits, capital release, withdrawal contract) | #6 #3 |
 | Capital-eligibility policies | `src/edge_lab/starter_policy.py` | BUILT (`STARTER_MAX_7D_V1`, ADR 0018); enforced prospectively in the operational shadow account | #32 #6 |
 | Notification system | `src/edge_lab/notifications.py` | BUILT (contract, local outbox, SMS sink disabled; ADR 0020) | #33 #3 #32 |
@@ -56,13 +56,77 @@ column lists which issues each primitive serves.
 | #5 | Sports prediction-market and sports-modeling expansion | **LATER** (discovery and data foundations NEXT via #29/#30; any sports model BLOCKED on a preregistered experiment) | Core framework is proving out on weather. Needs the shared identity, venue and equivalence layers; the 2026-09-23 directive authorizes data foundations only, not sports models. |
 | #9 | Sportsbook odds aggregation, consensus pricing, best-venue comparison | **NEXT** (The Odds API data foundation via #29); comparison LATER | Sub-idea of #5. Needs market equivalence and verified access terms. Offered odds are never executable prices. |
 | #6 | Dynamic bankroll, position sizing, withdrawal guidance | **P0 FOUNDATION IMPLEMENTED** 2026-09-23 (shadow only) | Shadow ledger (ADR 0014), `suggest_position_size`, and the risk/capital report with a withdrawal contract (ADR 0015). The withdrawal contract never recommends a draw. Since PR #26 the operational shadow account enforces the risk limits **before** each fill (NO_FILL RISK_VETO); the frozen research account is separate. A real-money policy, a verified edge and verified fees are all still missing. |
-| #10 | Host privately on existing Chase Upside infrastructure (separate service/subdomain, real access control) | **PARTLY AUTHORIZED** 2026-09-22: headless read-only collector only | Forward collector authorized on the VPS as a separate service (ADR 0012; headroom review `docs/deploy/VPS_REVIEW_2026-09-22.md` PASS). Daily shadow and settlement units are staged in the repo (PR #26) under the 2026-09-23 authorization but not yet installed (owner SSH step). Dashboard hosting, subdomain, DNS/TLS and auth remain NOT READY and unauthorized; the dashboard is local only. |
+| #10 | Host privately on existing Chase Upside infrastructure (separate service/subdomain, real access control) | **PARTLY AUTHORIZED** 2026-09-22: headless read-only collector only | Forward collector authorized on the VPS as a separate service (ADR 0012; headroom review `docs/deploy/VPS_REVIEW_2026-09-22.md` PASS). Daily shadow and settlement units are staged in the repo (PR #26) under the 2026-09-23 authorization; no installation known or verified from this session (owner SSH step). Dashboard hosting, subdomain, DNS/TLS and auth remain NOT READY and unauthorized; the dashboard is local only. |
 | #7 | Free-first multi-domain ingestion with paid-source ROI gate | APPLY SELECTIVELY NOW | Gate 3 applied it: the free IEM archive of NWS forecasts was chosen and paid weather data was not considered. The general ingestion platform is not built. |
-| #32 | Starter policy: 7-day capital-release limit, broad discovery, API-first execution preference | **NOW** (starter policy, P0); discovery NEXT; execution BLOCKED (no live authority) | `STARTER_MAX_7D_V1` is authorized by the 2026-09-23 integration directive. The governing clock is venue-tradable cash within 168 h. It uses the risk primitive plus venue timing evidence. |
-| #33 | SMS-first alerting through one shared notification layer | **NOW** (provider-neutral contract); SMS delivery BLOCKED (paid provider needs owner approval) | Serves collector failures, qualification alerts, policy exceptions and future approval tickets. |
-| #30 | Multi-venue coverage, best-price comparison, unique-market discovery | **NEXT** (Kalshi, Polymarket US and Novig public data after the P0 policy work) | Needs the venue capability registry, rules equivalence and per-venue fee evidence. Polymarket US public data needs no access; Novig live API needs owner-provided developer credentials (separate approval). |
-| #29 | The Odds API free tier (quota-capped sports odds pilot) | **NEXT** (fixtures, quota and redaction); live pulls BLOCKED (owner free key) | Sportsbook-consensus input for #5/#9. Offered odds are never executable prices. A 450-credit protective ceiling. |
+| #32 | Starter policy: 7-day capital-release limit, broad discovery, API-first execution preference | **Policy IMPLEMENTED** 2026-09-23 (PR #38, ADR 0018; enforced prospectively in the operational shadow account; no deployment known or verified from this session); discovery foundation IMPLEMENTED (PR #39); execution BLOCKED (no live authority) | Governing clock: venue-tradable cash within 168 h. The ticket contract carries the verdict with execution disabled. |
+| #33 | SMS-first alerting through one shared notification layer | **Contract IMPLEMENTED** 2026-09-23 (PR #38, ADR 0020; local outbox); SMS delivery BLOCKED (provider needs owner approval) | Serves daily-run failures, settlement conflicts, invalid captures, risk vetoes, settlements and policy exceptions now; approval tickets later. |
+| #30 | Multi-venue coverage, best-price comparison, unique-market discovery | **Foundation IMPLEMENTED** (registry PR #38; Polymarket US adapter TESTED + one smoke read, Novig daily files TESTED, discovery, PR #39); cross-venue comparison NEXT; Novig live API BLOCKED (credentials) | Best-price claims still need proven rules equivalence and per-venue fee evidence (Polymarket US fees are UNSUPPORTED today). |
+| #29 | The Odds API free tier (quota-capped sports odds pilot) | **Adapter IMPLEMENTED on fixtures** (PR #39: quota ledger, 450-credit ceiling, redaction, SETUP_NEEDED); live pulls BLOCKED (owner key + activation plan) | Sportsbook-consensus input for #5/#9. Offered odds and de-vigged values are never executable prices. |
 | #27 | Action PRO permission and comparative sports-data subscription value | **LATER / BLOCKED** (no purchase authorized) | Paid source; needs the #7 ROI gate and a sports experiment that would use it. |
+
+## Roadmap (portfolio review, 2026-09-23 integration directive)
+
+This ordering authorizes nothing; `docs/EXECUTION_PLAN.md` does. Re-prioritizing never
+authorizes implementation.
+
+One system, built in this order: evidence, then policy, then the shared venue layer, then
+venue-specific data, then models, then (later, separately authorized) execution. Each line
+names its dependency, the shared layer it uses, whether it can run in parallel, and its
+effect on 2026-10-22.
+
+**NOW** (critical path; authorized)
+1. **Deploy and verify production** (#10, #11); NOW, but blocked on the owner's SSH session. Depends on the owner's SSH session. It reuses
+   the activation sheet and `verify_production.sh`, and does not parallelize: every research
+   day waits on it. Oct 22: without it there are no real Stage B shadow days at all.
+2. **Accumulate valid Stage B days and shadow bookkeeping** (EXP-001). Depends on 1. Shared
+   layers: ledger, risk, starter policy, fees. Runs by itself once deployed. Oct 22: gives
+   pipeline evidence and early descriptive results, not a verdict (180 valid days is out of
+   reach).
+3. **Store the first off-host F09 checkpoint** (Gate 7). Depends on 1. Shared layer:
+   `ledger_anchor.py`. Can run in parallel with 2. Oct 22: needed before F09 can close.
+4. **Re-check Kalshi scheduled fee changes by 2026-10-23** (fee record). A small, calendar-
+   bound task. Shared layer: `fee_schedules.py`. Can run in parallel. Missing it
+   silently removes claimability.
+
+**NEXT** (ready once the named prerequisite lands)
+5. **#30 cross-venue weather comparison.** Kalshi KXHIGHNY against Polymarket US weather
+   markets, because weather is the only domain with a model. Depends on rules-equivalence
+   evidence per venue and Polymarket US fee evidence. Shared layers: discovery, venues,
+   opportunity. Parallel lane: yes. Oct 22: stretch.
+6. **#29 live Odds API pilot.** Depends on the owner's key and an approved activation and
+   quota plan. Shared layers: sources, snapshots, quota. Parallel lane: yes. Oct 22: a
+   first real sportsbook-consensus snapshot is possible if activated early.
+7. **#33 SMS delivery.** Depends on an owner-approved provider. It plugs into the existing
+   notification contract as one more sink. Parallel lane: yes.
+8. **#3 / #6 dashboard follow-ons on real data.** Depends on 1–2. Shared layer: the dashboard.
+
+**LATER** (wanted; not on the 2026-10-22 path)
+9. **#5 / #9 sports models and consensus comparison.** Each needs a preregistered
+   experiment. It reuses #29 data, discovery and the opportunity engine.
+10. **#10 private hosting of the dashboard** (needs DNS/TLS and an auth decision).
+11. **#32 execution modes** (APP_APPROVAL_API, BOUNDED_AUTO_API). These need a gate 8+
+    decision, credentials policy and the ticket contract already built. Real money stays out
+    of scope until then.
+12. **#27 paid sports data.** Needs the #7 ROI gate and a sports experiment that would use it.
+
+**BLOCKED** (named blocker)
+- Production verification and deployment: the owner's SSH session (this cloud session has
+  no route).
+- The Odds API live data: the owner's free key plus an activation plan.
+- Novig live API: owner-requested developer credentials.
+- SMS: provider choice and approval (cost and registration).
+- EXACT fee claims: a verified account type (an account read is not authorized) and
+  modelling of multi-fill rebates.
+- Any execution: gates 8–10.
+
+**What moved because of the newest owner ideas.**
+- #32 and #33 moved up to NOW, and are now built as shared primitives (policy, notifications,
+  ticket contract) rather than feature code.
+- #30 and #29 moved to NEXT on top of one venue registry and one discovery layer. There is no
+  source zoo.
+- #5 and #9 stay LATER, because sports needs models, not just data.
+- None of this moved the 2026-10-22 date. The binding constraint is still the production
+  deploy.
 
 Related owner records that are not ideas:
 - **#11 [Owner Directive] 30-day delivery plan (target 2026-10-22).** This is the active
@@ -72,6 +136,14 @@ Related owner records that are not ideas:
   its own branch and file claim. It does not touch Gate 3 files.
 
 ## Review log
+
+- **2026-09-23: final portfolio review of the integration directive (PRs #34, #35, #37, #38, #39).**
+  - The roadmap above replaces the chronological ordering.
+  - #32 policy, #33 contract, #30 foundation and #29 adapter moved to IMPLEMENTED at their
+    stated scope; the remaining parts are NEXT or BLOCKED with named blockers.
+  - The shared primitives table now lists every built owner. None is duplicated.
+  - Parallel lanes this session: fees, F09 and production tooling, then the policy and
+    notifications, then the adapters. Each had one writer and built on shared contracts.
 
 - **2026-09-23: integration and production directive (intake of #27, #29, #30, #32, #33).**
   - The re-planning rule was added to `AI_INSTRUCTIONS.md`, and the Shared primitives table
