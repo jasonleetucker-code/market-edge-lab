@@ -432,9 +432,14 @@ def history_chart(points: Sequence[tuple[str, Any]], *, label: str, unit: str = 
         lo, hi = lo - 1, hi + 1
     w, h, pad_l, pad_r, pad_t, pad_b = 640, 180, 52, 16, 14, 28  # drawn at up to 640 CSS px: 11px axis text
     n = len(pts)
+    times = [pr.parse_utc(t) for t, _ in pts]
+    known = all(t is not None for t in times) and times[-1] != times[0]
+    span = (times[-1] - times[0]).total_seconds() if known else 0
 
     def x(i: int) -> float:
-        return pad_l + (w - pad_l - pad_r) * (i / (n - 1))
+        # Horizontal position follows capture time, so uneven intervals are not drawn as even ones.
+        frac = (times[i] - times[0]).total_seconds() / span if known else i / (n - 1)
+        return pad_l + (w - pad_l - pad_r) * frac
 
     def y(v: Any) -> float:
         return pad_t + (h - pad_t - pad_b) * float((hi - v * 100) / (hi - lo))

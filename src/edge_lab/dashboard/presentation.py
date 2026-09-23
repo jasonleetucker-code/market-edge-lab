@@ -348,7 +348,7 @@ DOMAINS = (("all", "All"), ("weather", "Weather"), ("sports", "Sports"), ("polit
 DOMAIN_KEYS = {k for k, _ in DOMAINS}
 BOARD_STATES = (("all", "All observed"), ("qualified", "Qualified"), ("watching", "Watching"), ("blocked", "Blocked"))
 HORIZONS = (("all", "All"), ("within7", "Within 7 days"), ("over7", "Over 7 days"), ("unknown", "Unknown"))
-SORTS = (("default", "Qualified edge, then cash release"), ("edge", "Net edge"), ("release", "Cash release"),
+SORTS = (("default", "Edge, then release"), ("edge", "Net edge"), ("release", "Cash release"),
          ("title", "Market name"))
 POSITION_STATES = (("open", "Open"), ("settling", "Settling"), ("closed", "Closed"), ("all", "All"))
 RESEARCH_TABS = (("research", "Research"), ("sources", "Data sources"))

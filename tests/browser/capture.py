@@ -130,6 +130,9 @@ def main() -> int:
     ap.add_argument("--text-scale", type=float, default=1.0, help="root font-size multiplier (enlarged text)")
     ap.add_argument("--no-shots", action="store_true", help="audit only")
     ap.add_argument("--src", help="source tree to import edge_lab from (default: this checkout)")
+    ap.add_argument("--jpeg", action="store_true", help="write JPEG (quality 82) instead of PNG")
+    ap.add_argument("--color-scheme", choices=("light", "dark"), default="dark",
+                    help="emulated OS preference (Terminal v1 ignores it; the pre-v1 dashboard followed it)")
     args = ap.parse_args()
     args.out.mkdir(parents=True, exist_ok=True)
     report = []
@@ -148,7 +151,7 @@ def main() -> int:
                             mobile = w < 768
                             ctx = browser.new_context(viewport={"width": w, "height": h}, device_scale_factor=2 if
                                                       mobile else 1, is_mobile=mobile and engine == "chromium",
-                                                      has_touch=mobile)
+                                                      has_touch=mobile, color_scheme=args.color_scheme)
                             foreign: list[str] = []
                             ctx.route("**/*", lambda route: route.continue_() if route.request.url.startswith(base)
                                       else (foreign.append(route.request.url), route.abort()))
@@ -161,8 +164,9 @@ def main() -> int:
                                 audit = page.evaluate(AUDIT_JS)
                                 name = f"{state}_{engine}_{vp}_{slug(path)}"
                                 if not args.no_shots:
-                                    page.screenshot(path=str(args.out / f"{name}.png"), full_page=True)
-                                    page.screenshot(path=str(args.out / f"{name}_fold.png"), full_page=False)
+                                    ext, opts = (".jpg", {"type": "jpeg", "quality": 82}) if args.jpeg else (".png", {})
+                                    page.screenshot(path=str(args.out / f"{name}{ext}"), full_page=True, **opts)
+                                    page.screenshot(path=str(args.out / f"{name}_fold{ext}"), full_page=False, **opts)
                                 audit.update(state=state, engine=engine, page=path, viewport_name=vp,
                                              foreign_requests=list(foreign))
                                 report.append(audit)
