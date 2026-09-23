@@ -287,7 +287,7 @@ def release_value(row: pr.MarketRow) -> tuple[str, str]:
         return na("cash release not evaluated"), ("Not evaluated" if row.primary is None else "Unknown")
     sub = {"within7": "≤ 7 days", "over7": "Over 7 days", "unknown": "Unknown"}[bucket]
     parsed = pr.parse_utc(eta)
-    if row.now is not None and parsed is not None and parsed < row.now:
+    if row.has_position and row.now is not None and parsed is not None and parsed < row.now:  # open and late only
         sub = "Past its ETA · overdue"
     return f'<span class="num">{esc(pr.date_et(eta))}</span>', f"{sub} · {pr.hours_text(hours) or '—'}"
 

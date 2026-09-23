@@ -761,9 +761,19 @@ def build_rows(observed: Iterable[Any], account_id: str, decisions: Iterable[Map
         by_market.setdefault(mid, []).append(
             assessment_from(account_id, dec_payload, fills.get(dec_payload.get("decision_id"))))
         meta.setdefault(mid, dec_payload)
-    if current_target is None:
-        days = [a.target_date for items in by_market.values() for a in items if a.target_date]
-        current_target = max(days) if days else None
+    # The current target day per domain: the captured day for the observed domain, raised to the
+    # latest decided day when decisions are newer (a day whose books were not captured); each other
+    # domain uses its own latest decided day. A row is historical only when it is EARLIER.
+    domain_now: dict[str, str] = {}
+    for mid, items in by_market.items():
+        dom = domain_of(meta[mid].get("event_id"))
+        for a in items:
+            if a.target_date and a.target_date > domain_now.get(dom, ""):
+                domain_now[dom] = a.target_date
+    for m in observed:
+        dom = domain_of(m.event_id, m.domain)
+        if current_target and current_target > domain_now.get(dom, ""):
+            domain_now[dom] = current_target
     rows: dict[str, MarketRow] = {}
     for m in observed:
         items = by_market.get(m.market_id, [])
@@ -784,15 +794,17 @@ def build_rows(observed: Iterable[Any], account_id: str, decisions: Iterable[Map
         quotes = {a.side: QuoteSide(a.side, a.outcome if a.side == "YES" else None, a.executable_price,
                                     a.displayed_size, a.decided_at_utc, "decision payload", None, None)
                   for a in _by_time(assessments) if a.side in ("YES", "NO")}
-        target = latest.target_date
-        current = [a for a in assessments if a.target_date is not None and a.target_date == current_target]
+        domain = domain_of(payload.get("event_id"))
+        target = max((a.target_date for a in assessments if a.target_date), default=None)
+        current = [a for a in assessments if a.target_date is not None and a.target_date == target]
+        historical = target is None or target < domain_now.get(domain, target)
         rows[mid] = MarketRow(
-            venue=venue or "unknown", market_id=mid, native_id=native or mid, domain=domain_of(payload.get("event_id")),
+            venue=venue or "unknown", market_id=mid, native_id=native or mid, domain=domain,
             league=None, title=None, outcome=latest.outcome, target_date=target, status=None,
             close_time_utc=None, rules_primary=None, payoff_kind=None, event_id=payload.get("event_id"),
             quotes=quotes, assessments=_by_time(current or assessments),
             history=_by_time(a for a in assessments if a not in current) if current else (),
-            observed=False, has_position=mid in open_ids, historical=not current, now=now)
+            observed=False, has_position=mid in open_ids, historical=historical, now=now)
     return list(rows.values())
 
 

@@ -321,6 +321,9 @@ def venues_section(row: pr.MarketRow) -> str:
                      sid="xv-h")
 
 
+OLD_NOTE = '<p class="note">Decision for an earlier target day; not current.</p>'
+
+
 def capital_section(row: pr.MarketRow, side: str) -> str:
     a = row.for_side(side)  # the same side as the assessment and the ticket preview
     verdict = a.starter if a is not None and isinstance(a.starter, dict) else None
@@ -343,6 +346,8 @@ def capital_section(row: pr.MarketRow, side: str) -> str:
         body += f"<p>{policy} <span class=\"meta\">168-hour starter rule (same-venue tradable cash, not bank arrival)</span></p>"
         if isinstance(verdict, dict):
             body += c.disclosure("Starter verdict details", c.kv([(k, esc(v)) for k, v in sorted(verdict.items())]))
+        if row.historical:
+            body = OLD_NOTE + body
     return c.section("Capital & timing", body, sid="cap-h")
 
 
@@ -360,6 +365,8 @@ def ticket_section(row: pr.MarketRow, side: str, p: pr.Params) -> str:
         ], text_cols=(0,))
         if a.fill_reason and a.fill_reason not in ("FILLED",):
             body += f'<p class="note">Fill reason: {c.code(a.fill_reason)}</p>'
+        if row.historical:
+            body += OLD_NOTE
     body += ('<p class="note">No submit, deposit, withdrawal or approval control exists. Execution is not authorized '
              "for any venue.</p>")
     return c.section("Decision preview", body, sid="tk-h")

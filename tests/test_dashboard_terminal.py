@@ -512,3 +512,19 @@ def test_cash_release_within_seven_days_needs_an_eligible_verdict():
                                                         "tradable_cash_release_eta_utc": "2026-09-25T00:00:00Z"})
     assert dataclasses.replace(row, assessments=(delayed,)).cash_release[0] == "unknown"
     assert row.cash_release[0] == "within7"
+
+
+def test_only_earlier_days_are_historical_and_each_domain_has_its_own_day():
+    sports = dict(_decision("kalshi:GAME", "2026-09-24"), event_id="sports:x")
+    newer_weather = _decision("kalshi:W2", "2026-09-24")  # books for Sep 24 not captured yet
+    rows = {r.native_id: r for r in pr.build_rows([_observed("kalshi:A", "2026-09-23")], "acct",
+                                                  [sports, newer_weather], {}, current_target="2026-09-23")}
+    assert rows["GAME"].state == "qualified" and not rows["GAME"].historical
+    assert rows["W2"].state == "qualified" and not rows["W2"].historical
+
+
+def test_overdue_only_for_open_positions():
+    from edge_lab.dashboard.fixtures import synthetic_rows
+    row = dataclasses.replace(synthetic_rows()[0], now=datetime(2026, 10, 5, tzinfo=timezone.utc))
+    assert "overdue" not in c.release_value(row)[1]
+    assert "overdue" in c.release_value(dataclasses.replace(row, has_position=True))[1]

@@ -414,8 +414,10 @@ def blocker_title(text: str) -> tuple[str, str]:
     """A short title and severity for one blocker line (the full line is always shown too)."""
     for needle, title, kind in _BLOCKER_TITLES:
         if needle in text:
-            if needle in ("collector status file", "pipeline receipt", "shadow ledger:") and ": ERROR" in text:
-                return f"{title} unreadable", "err"
+            unreadable = {"collector status file": "Collector status unreadable",
+                          "pipeline receipt": "Pipeline receipt unreadable", "shadow ledger:": "Shadow ledger unreadable"}
+            if needle in unreadable and ": ERROR" in text:
+                return unreadable[needle], "err"
             if needle == "collector status file" and "NO DATA" in text:
                 return "Collector status not available", "nd"
             if needle == "pipeline receipt" and "NO DATA" in text:
