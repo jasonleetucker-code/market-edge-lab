@@ -13,9 +13,13 @@ For each target date D:
 
 Rules:
 
-- Only a VALID Stage B day can fill. On an INVALID day every qualified decision is
-  recorded with `NO_FILL / STAGE_B_DAY_INVALID`, so the day is excluded and counted,
-  never partially traded.
+- Only a closed, VALID Stage B day can fill. `run_day` refuses a day until its re-check
+  windows have closed, so an early run can never leave a stale set of decisions. On an
+  INVALID day the Gate 5 engine marks every opportunity EVIDENCE_INCOMPLETE, so nothing
+  qualifies. The `STAGE_B_DAY_INVALID` NO_FILL path is a second guard behind that rule.
+- **One decision per (market, side, target date)**, enforced by the ledger through a
+  decision `slot`. Re-running an already traded day, even under a new engine or model
+  version, can never record or fill it a second time.
 - The fee schedule is UNVERIFIED_CURRENT_SCHEDULE, so every decision carries
   `claimable = false`. No net-profitability claim may rest on this account until the
   schedule is verified.
@@ -24,7 +28,7 @@ Rules:
 from __future__ import annotations
 
 import json
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Any
 
@@ -67,14 +71,17 @@ def _recheck_quotes(store: SnapshotStore, day: dict[str, Any], mode: str) -> dic
     recheck_id = day.get("recheck_capture_id")
     if recheck_id is None:
         return {}
-    row = next(r for r in store.forward_captures(target_date=day["target_date"], phase="recheck", mode=mode)
-               if int(r["id"]) == recheck_id)
+    row = next((r for r in store.forward_captures(target_date=day["target_date"], phase="recheck", mode=mode)
+                if int(r["id"]) == recheck_id), None)
+    if row is None:
+        return {}
     books = json.loads(row["links_json"]).get("books") or {}
     snaps = store.snapshots_by_id(b["snapshot_id"] for b in books.values())
     out: dict[tuple[str, str], ExecutableQuote] = {}
     for native, info in books.items():
         snap = snaps.get(info["snapshot_id"])
-        if snap is None or snap["entity_id"] != native or snap["run_id"] != row["run_id"]:
+        if (snap is None or snap["entity_id"] != native or snap["kind"] != "orderbook"
+                or snap["run_id"] != row["run_id"]):
             continue
         for side, q in quotes_from_orderbook(native, json.loads(snap["payload_json"]),
                                               received_at_utc=snap["fetched_at_utc"],
@@ -83,8 +90,18 @@ def _recheck_quotes(store: SnapshotStore, day: dict[str, Any], mode: str) -> dic
     return out
 
 
-def run_day(store: SnapshotStore, ledger: ShadowLedger, target: date, *, model=None, mode: str = "live") -> dict[str, Any]:
+def slot(opportunity: Opportunity, target: date) -> str:
+    return f"{target.isoformat()}|{opportunity.market_id}|{opportunity.side}"
+
+
+def run_day(store: SnapshotStore, ledger: ShadowLedger, target: date, *, model=None, mode: str = "live",
+            now: datetime | None = None) -> dict[str, Any]:
     """Record decisions and simulated fills for D. Safe to re-run: every append is idempotent."""
+    now = now or datetime.now(timezone.utc)
+    if target > forward.last_closed_target(now):
+        return {"target_date": target.isoformat(), "stage_b_day_status": "NOT_CLOSED", "decisions": 0,
+                "qualified": 0, "filled": 0, "no_fill": {},
+                "problems": [f"target {target.isoformat()} is not closed at {now.isoformat()}; nothing recorded"]}
     ensure_account(ledger)
     evaluation = stageb.evaluate_day(store, target, model=model, mode=mode)
     day = evaluation.day_status
@@ -95,9 +112,13 @@ def run_day(store: SnapshotStore, ledger: ShadowLedger, target: date, *, model=N
     summary = {"target_date": target.isoformat(), "stage_b_day_status": day["status"], "decisions": 0,
                "qualified": 0, "filled": 0, "no_fill": {}, "problems": evaluation.problems}
 
+    taken = ledger.state(ACCOUNT_ID).decision_slots
     for opp in evaluation.opportunities:
         did = decision_id(opp)
         existing = ledger.find(ACCOUNT_ID, "decision", did)
+        if existing is None and taken.get(slot(opp, target)) not in (None, did):
+            summary["problems"].append(f"{slot(opp, target)} already decided by {taken[slot(opp, target)]}; skipped")
+            continue
         if existing is None:
             # Sized against the ledger as it stands before this decision; a re-run finds the
             # decision already recorded and reuses its size, so replays stay deterministic.
@@ -112,7 +133,8 @@ def run_day(store: SnapshotStore, ledger: ShadowLedger, target: date, *, model=N
                     total_open_risk=state.open_worst_case_risk, policy=SIZING_POLICY,
                 )
             existing = {
-                "decision_id": did, "opportunity_id": opp.opportunity_id, "as_of_utc": opp.as_of_utc,
+                "decision_id": did, "slot": slot(opp, target), "opportunity_id": opp.opportunity_id,
+                "as_of_utc": opp.as_of_utc,
                 "qualification": opp.qualification, "reason": opp.rejection_reason, "reasons": list(opp.reasons),
                 "model_version": opp.model_version,
                 "quote_evidence_ids": [opp.quote_evidence_id] if opp.quote_evidence_id else [],
@@ -224,6 +246,9 @@ def settle_open_positions(store: SnapshotStore, ledger: ShadowLedger) -> dict[st
             report["pending"].append({"position_id": position.position_id, "reason": why})
             continue
         settled_at = market.get("settlement_ts") or market.get("expiration_time") or market.get("close_time")
+        if not settled_at:
+            report["pending"].append({"position_id": position.position_id, "reason": "settlement time missing"})
+            continue
         try:
             ledger.record_settlement(ACCOUNT_ID, fill_id=position.position_id, outcome=outcome, settled_at_utc=str(settled_at),
                                      evidence={"snapshot_id": snapshot_id, "expiration_value": market.get("expiration_value"),

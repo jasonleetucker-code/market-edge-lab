@@ -98,7 +98,7 @@ def simulate_fill(
         return no("CONFIRMATION_OUTSIDE_WINDOW",
                   f"confirmation received {confirmation.received_at_utc}; window "
                   f"[{(entry_at + policy.confirm_min).isoformat()}, {(entry_at + policy.confirm_max).isoformat()}]")
-    if confirmation.anomaly or confirmation.best_ask is None:
+    if confirmation.anomaly or confirmation.best_ask is None or not valid_price(confirmation.best_ask):
         return no("CONFIRMATION_NO_OFFER", confirmation.anomaly or "nothing offered at confirmation")
     if confirmation.best_ask > entry.best_ask:
         return no("PRICE_MOVED_AWAY", f"confirmation ask {confirmation.best_ask} > entry {entry.best_ask}")

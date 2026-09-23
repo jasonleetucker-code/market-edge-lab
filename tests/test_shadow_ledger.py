@@ -186,7 +186,7 @@ def _script(lg):
     fill(lg, 1, price="0.40")
     decide(lg, 2, qualification="REJECT")
     decide(lg, 3, event="ev2", cluster="cl2")
-    fill(lg, 3, qty=3, price="0.25")
+    fill(lg, 3, qty=3, price="0.25", event="ev2", cluster="cl2")
     decide(lg, 4)
     fill(lg, 4, status="NO_FILL", reason="NO_CONFIRMATION")
     settle(lg, 1, "NO")
@@ -335,3 +335,70 @@ def test_fixed_rule_and_policy_validation():
 def test_sizing_records_every_stage():
     d = size(available_size=Decimal("3")).to_dict()
     assert {"raw_size", "risk_adjusted_size", "liquidity_capped_size", "final_size", "binding_constraint"} <= set(d)
+
+
+# --------------------------------------------------------------------------- review hardening
+
+
+def test_no_side_position_wins_when_outcome_is_no(ledger):
+    ledger.record_decision(ACC, {"decision_id": "d1", "opportunity_id": "o1", "as_of_utc": T0.isoformat(),
+                                 "qualification": "QUALIFY", "reason": "QUALIFY", "side": "NO"})
+    fill(ledger, 1, side="NO", price="0.70")
+    settle(ledger, 1, "NO")
+    p = ledger.state(ACC).positions[0]
+    assert p.payout == 1 and p.net_pnl == 1 - p.cost_basis
+
+
+def test_invalid_side_and_mismatched_fill_are_refused(ledger):
+    decide(ledger, 1)
+    with pytest.raises(LedgerError):
+        fill(ledger, 1, side="yes")
+    with pytest.raises(LedgerError, match="differs from its decision"):
+        fill(ledger, 1, event="other-event")
+    assert ledger.state(ACC).fills == 0
+
+
+def test_a_reused_fill_id_cannot_brick_the_account(ledger):
+    decide(ledger, 1)
+    decide(ledger, 2)
+    fill(ledger, 1)
+    payload = {"fill_id": "f1", "decision_id": "d2", "venue": "kalshi", "market_id": "kalshi:M2", "event_id": "ev1",
+               "outcome_cluster": "cl1", "side": "YES", "filled_at_utc": T0.isoformat(), "status": "FILLED",
+               "reason": "FILLED", "quantity": 1, "price": "0.40", "fee": "0.0168", "total_cost": "0.42"}
+    with pytest.raises(LedgerError, match="used twice"):
+        ledger.record_fill(ACC, payload)
+    assert ledger.state(ACC).fills == 1  # still readable
+
+
+def test_decision_slots_are_unique(ledger):
+    ledger.record_decision(ACC, {"decision_id": "d1", "slot": "2026-09-24|kalshi:M1|YES", "opportunity_id": "o1",
+                                 "as_of_utc": T0.isoformat(), "qualification": "QUALIFY", "reason": "QUALIFY"})
+    with pytest.raises(LedgerError, match="already decided"):
+        ledger.record_decision(ACC, {"decision_id": "d2", "slot": "2026-09-24|kalshi:M1|YES", "opportunity_id": "o2",
+                                     "as_of_utc": T0.isoformat(), "qualification": "REJECT", "reason": "NO_EDGE"})
+    assert ledger.state(ACC).decision_slots == {"2026-09-24|kalshi:M1|YES": "d1"}
+
+
+def test_settlement_before_the_fill_is_refused(ledger):
+    decide(ledger, 1)
+    fill(ledger, 1)
+    with pytest.raises(LedgerError, match="before the fill"):
+        ledger.record_settlement(ACC, fill_id="f1", outcome="YES", evidence={},
+                                 settled_at_utc=(T0 - timedelta(days=1)).isoformat())
+
+
+def test_replay_rechecks_what_append_checks(ledger):
+    import json as _json
+    from edge_lab.shadow_ledger import GENESIS, _entry_hash, _sha
+    decide(ledger, 1, qualification="REJECT")
+    rows = [dict(r) for r in ledger.entries(ACC)]
+    bad = {"fill_id": "f1", "decision_id": "d1", "venue": "kalshi", "market_id": "kalshi:M1", "event_id": "ev1",
+           "outcome_cluster": "cl1", "side": "YES", "filled_at_utc": T0.isoformat(), "status": "FILLED",
+           "reason": "FILLED", "quantity": 1, "price": "0.40", "fee": "0.0168", "total_cost": "0.42"}
+    text = _json.dumps(bad, sort_keys=True, separators=(",", ":"))
+    forged = {"seq": 3, "account_id": ACC, "kind": "fill", "entry_key": "d1", "effective_at_utc": T0.isoformat(),
+              "payload_json": text, "payload_sha256": _sha(text), "prev_hash": rows[-1]["entry_hash"]}
+    forged["entry_hash"] = _entry_hash(forged["prev_hash"], ACC, "fill", "d1", T0.isoformat(), _sha(text))
+    with pytest.raises(LedgerError, match="rejected decision"):
+        replay(rows + [forged])
+    assert GENESIS == "0" * 64

@@ -77,12 +77,17 @@ def _sha(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
-def _entry_hash(prev: str, kind: str, key: str, effective: str, payload_sha: str) -> str:
-    return _sha("|".join((prev, kind, key, effective, payload_sha)))
+def _entry_hash(prev: str, account: str, kind: str, key: str, effective: str, payload_sha: str) -> str:
+    return _sha("|".join((prev, account, kind, key, effective, payload_sha)))
 
 
 def _d(value: Any) -> Decimal:
     return Decimal(str(value))
+
+
+def _utc(value: Any) -> datetime | None:
+    from .freshness import parse_utc
+    return parse_utc(value)
 
 
 # --------------------------------------------------------------------------- replayed state
@@ -133,6 +138,7 @@ class AccountState:
     settlements: int
     positions: list[Position] = field(default_factory=list)
     no_fill_reasons: dict[str, int] = field(default_factory=dict)
+    decision_slots: dict[str, str] = field(default_factory=dict)  # slot -> decision_id
     last_entry_hash: str = GENESIS
 
     def open_positions(self) -> list[Position]:
@@ -147,7 +153,7 @@ class AccountState:
     def to_dict(self) -> dict[str, Any]:
         def plain(v: Any) -> Any:
             return str(v) if isinstance(v, Decimal) else v
-        out = {k: plain(v) for k, v in self.__dict__.items() if k != "positions"}
+        out = {k: plain(v) for k, v in self.__dict__.items() if k not in ("positions", "decision_slots")}
         out["positions"] = [{k: plain(v) for k, v in p.__dict__.items()} for p in self.positions]
         return out
 
@@ -163,7 +169,8 @@ def replay(entries: Iterable[sqlite3.Row | dict[str, Any]]) -> AccountState:
         if row["prev_hash"] != prev:
             raise LedgerError(f"hash chain broken at seq {row['seq']}")
         if _sha(row["payload_json"]) != row["payload_sha256"] or _entry_hash(
-                prev, kind, row["entry_key"], row["effective_at_utc"], row["payload_sha256"]) != row["entry_hash"]:
+                prev, row["account_id"], kind, row["entry_key"], row["effective_at_utc"],
+                row["payload_sha256"]) != row["entry_hash"]:
             raise LedgerError(f"entry {row['seq']} does not match its hash")
         prev = row["entry_hash"]
         if kind == "account_opened":
@@ -176,6 +183,13 @@ def replay(entries: Iterable[sqlite3.Row | dict[str, Any]]) -> AccountState:
         if state is None:
             raise LedgerError(f"{kind} before account_opened")
         if kind == "decision":
+            if payload.get("qualification") not in ("QUALIFY", "REJECT"):
+                raise LedgerError(f"decision {payload.get('decision_id')} has an invalid qualification")
+            slot = payload.get("slot")
+            if slot is not None:
+                if slot in state.decision_slots:
+                    raise LedgerError(f"slot {slot} already decided by {state.decision_slots[slot]}")
+                state.decision_slots[slot] = payload["decision_id"]
             decisions[payload["decision_id"]] = payload
             state.decisions += 1
             state.qualified_decisions += payload["qualification"] == "QUALIFY"
@@ -183,15 +197,27 @@ def replay(entries: Iterable[sqlite3.Row | dict[str, Any]]) -> AccountState:
             decision = decisions.get(payload["decision_id"])
             if decision is None:
                 raise LedgerError(f"fill {payload['fill_id']} for unknown decision")
+            if payload["status"] not in ("FILLED", "NO_FILL"):
+                raise LedgerError(f"fill {payload['fill_id']} has invalid status {payload['status']!r}")
             if payload["status"] == "NO_FILL":
                 state.no_fills += 1
                 state.no_fill_reasons[payload["reason"]] = state.no_fill_reasons.get(payload["reason"], 0) + 1
                 continue
-            cost = _d(payload["total_cost"])
+            if decision["qualification"] != "QUALIFY":
+                raise LedgerError(f"fill {payload['fill_id']} fills a rejected decision")
+            if payload["fill_id"] in positions:
+                raise LedgerError(f"fill id {payload['fill_id']} used twice")
+            if payload.get("side") not in ("YES", "NO"):
+                raise LedgerError(f"fill {payload['fill_id']} has invalid side {payload.get('side')!r}")
+            for name in ("market_id", "side", "event_id"):
+                if name in decision and decision[name] != payload.get(name):
+                    raise LedgerError(f"fill {payload['fill_id']} {name} differs from its decision")
+            cost, qty, price = _d(payload["total_cost"]), int(payload["quantity"]), _d(payload["price"])
+            if qty <= 0 or not (Decimal(0) < price < Decimal(1)) or cost < qty * price:
+                raise LedgerError(f"fill {payload['fill_id']} has an invalid quantity, price or cost")
             state.settled_cash -= cost
             if state.settled_cash < 0:
                 raise LedgerError(f"fill {payload['fill_id']} makes settled cash negative")
-            qty, price = int(payload["quantity"]), _d(payload["price"])
             positions[payload["fill_id"]] = Position(
                 position_id=payload["fill_id"], decision_id=payload["decision_id"], account_id=state.account_id,
                 opened_at_utc=payload["filled_at_utc"], venue=payload["venue"], market_id=payload["market_id"],
@@ -206,6 +232,11 @@ def replay(entries: Iterable[sqlite3.Row | dict[str, Any]]) -> AccountState:
             position = positions.get(payload["fill_id"])
             if position is None or position.status != "OPEN":
                 raise LedgerError(f"settlement {payload['settlement_id']} has no open position")
+            if payload.get("outcome") not in ("YES", "NO") or payload.get("market_id") != position.market_id:
+                raise LedgerError(f"settlement {payload['settlement_id']} has an invalid outcome or market")
+            settled_at, opened_at = _utc(payload.get("settled_at_utc")), _utc(position.opened_at_utc)
+            if settled_at is None or opened_at is None or settled_at < opened_at:
+                raise LedgerError(f"settlement {payload['settlement_id']} time is missing or before the fill")
             payout = _d(payload["payout"])
             if payout != (Decimal(position.quantity) if payload["outcome"] == position.side else Decimal(0)):
                 raise LedgerError(f"settlement {payload['settlement_id']} payout inconsistent with its position")
@@ -293,12 +324,16 @@ class ShadowLedger:
                     if existing["payload_sha256"] != payload_sha or existing["effective_at_utc"] != effective_at:
                         raise LedgerConflict(f"{kind} {key} already recorded with different content")
                     return existing["entry_hash"], False
-                rows = conn.execute("SELECT * FROM ledger_entries WHERE account_id = ? ORDER BY seq",
-                                    (account_id,)).fetchall()
+                rows = [dict(r) for r in conn.execute(
+                    "SELECT * FROM ledger_entries WHERE account_id = ? ORDER BY seq", (account_id,))]
                 if check is not None:
                     check(replay(rows) if rows else None)
                 prev = rows[-1]["entry_hash"] if rows else GENESIS
-                entry_hash = _entry_hash(prev, kind, key, effective_at, payload_sha)
+                entry_hash = _entry_hash(prev, account_id, kind, key, effective_at, payload_sha)
+                candidate = {"seq": "candidate", "account_id": account_id, "kind": kind, "entry_key": key,
+                             "effective_at_utc": effective_at, "payload_json": text, "payload_sha256": payload_sha,
+                             "prev_hash": prev, "entry_hash": entry_hash}
+                replay(rows + [candidate])  # the account must stay readable after this entry
                 conn.execute(
                     "INSERT INTO ledger_entries (account_id, kind, entry_key, effective_at_utc, payload_json, "
                     "payload_sha256, prev_hash, entry_hash, appended_at_utc) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
@@ -350,6 +385,8 @@ class ShadowLedger:
         if payload["status"] == "FILLED":
             if decision["qualification"] != "QUALIFY":
                 raise LedgerError("a rejected decision cannot fill")
+            if payload.get("side") not in ("YES", "NO"):
+                raise LedgerError("side must be YES or NO")
             quantity, price, cost = int(payload["quantity"]), _d(payload["price"]), _d(payload["total_cost"])
             if quantity <= 0 or not (Decimal(0) < price < Decimal(1)) or cost < quantity * price:
                 raise LedgerError("FILLED needs quantity > 0, a price in (0, 1) and total_cost >= quantity * price")

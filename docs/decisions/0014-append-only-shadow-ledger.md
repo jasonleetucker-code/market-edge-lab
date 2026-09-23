@@ -25,9 +25,19 @@ never earned would each make any later Stage B result worthless.
   - Triggers reject UPDATE and DELETE.
   - `(account, kind, key)` is unique. Re-appending identical content is a no-op; different
     content raises `LedgerConflict`.
-  - Entries are hash-chained per account over the effective time and payload hash. The
-    wall-clock append time is kept outside the hash, so the same inputs always give the
-    same chain.
+  - Entries are hash-chained per account over the account id, kind, key, effective time
+    and payload hash. The wall-clock append time is kept outside the hash, so the same
+    inputs always give the same chain.
+  - The chain is tamper-*evident*, not a MAC: it exposes any edit or reordering, but
+    anyone with write access to the file could forge a new, consistent chain. It is a
+    research ledger, not a custody system.
+  - Before each commit, the append replays the whole journal *with* the candidate entry.
+    An entry that would leave the account unreadable (for example a reused `fill_id`) is
+    refused.
+  - Replay enforces every append-time invariant, so the two checks cannot drift apart.
+  - A decision may carry a `slot`, and the ledger keeps slots unique. EXP-001 uses
+    `D|market|side`, so a day is never decided or filled twice, even if a later engine or
+    model version produces new opportunity ids.
 - **Invariants are checked before anything is written:**
   - a fill needs a decision, and FILLED needs a QUALIFY decision;
   - a FILLED entry may not make settled cash negative;
@@ -60,7 +70,16 @@ never earned would each make any later Stage B result worthless.
   - The account `EXP-001-stage-b-shadow` has a notional $1,000 bankroll, and the frozen
     1-contract rule applies.
   - Every opportunity becomes a decision, including rejected ones.
-  - Only VALID Stage B days can fill.
+  - `run_day` refuses a day until its re-check windows have closed, so an early run never
+    leaves stale decisions.
+  - Only VALID Stage B days can fill. The Gate 5 engine already makes every opportunity
+    on an INVALID day EVIDENCE_INCOMPLETE; the `STAGE_B_DAY_INVALID` no-fill is a second
+    guard.
+  - NO_FILL reasons map to the frozen execution text as follows:
+    - `NO_ENTRY_QUOTE` / `STALE_ENTRY_QUOTE` / `NO_ENTRY_PRICE` correspond to *NO_BOOK*;
+    - `NO_CONFIRMATION`, `CONFIRMATION_*` and `PRICE_MOVED_AWAY` correspond to
+      *NO_FILL_UNVERIFIED*.
+    Either way, the daily value counts the trade as 0.
   - Settlement is written only when Kalshi's recorded result and the frozen resolver agree
     on `expiration_value`. Otherwise the position stays open.
 - **CLI:** `edge-lab shadow run --date D`, `edge-lab shadow settle`, and

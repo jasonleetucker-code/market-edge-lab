@@ -187,3 +187,43 @@ def test_starting_bankroll_is_notional():
     assert shadow.STARTING_BANKROLL == Decimal("1000.00")
     assert shadow.SIZING_POLICY.fixed_contracts == 1 and shadow.SIZING_POLICY.kelly_fraction is None
     assert timedelta(minutes=10) == shadow.LATENCY_CONFIRMED_V1.confirm_min
+
+
+def test_open_day_is_refused_and_a_day_is_never_traded_twice(store, ledger, monkeypatch, model):
+    from test_forward import Clock, FakeApi, _run, at
+    clock = Clock(at(21, 45))
+    api = FakeApi(clock)
+    _run(store, "pfm", clock, api, monkeypatch)
+    clock.now = at(21, 55, 5)
+    _run(store, "decision", clock, api, monkeypatch)
+    early = shadow.run_day(store, ledger, D, model=model, now=at(22, 3))  # recheck window still open
+    assert early["stage_b_day_status"] == "NOT_CLOSED" and early["decisions"] == 0
+    assert not ledger.accounts()  # nothing recorded at all
+    clock.now = at(22, 5)
+    _run(store, "recheck", clock, api, monkeypatch)
+    done = shadow.run_day(store, ledger, D, model=model, now=at(23, 0))
+    assert done["stage_b_day_status"] == "VALID" and done["filled"] == 3
+    # A later engine/model change would give new opportunity ids; the slots still refuse them.
+    import edge_lab.opportunity as op
+    monkeypatch.setattr(op, "ENGINE_VERSION", "999")
+    again = shadow.run_day(store, ledger, D, model=model, now=at(23, 0))
+    state = ledger.state(shadow.ACCOUNT_ID)
+    assert state.decisions == 12 and state.fills == 3 and again["decisions"] == 0
+    assert len([p for p in again["problems"] if "already decided" in p]) == 12
+
+
+def test_settlement_time_missing_stays_pending(store, ledger, monkeypatch, model):
+    _full_day(store, monkeypatch)
+    shadow.run_day(store, ledger, D, model=model)
+    markets = [dict(m, status="settled", expiration_value="67", result=_result(67)(m)) for m in MARKETS["markets"]]
+    for m in markets:
+        for k in ("settlement_ts", "expiration_time", "close_time"):
+            m.pop(k, None)
+    payload = {"markets": markets, "cursor": None}
+    fetch = FetchResult("u", "u", 200, "application/json", json.dumps(payload).encode(), "2026-09-24T14:00:00+00:00", 1, 1)
+    store.start_run("s2")
+    _save(store, run_id="s2", kind="settled_markets", entity_id="KXHIGHNY", url="u", payload=payload, fetch=fetch,
+          spec=SETTLEMENT_SOURCE)
+    store.finish_run("s2", status="succeeded")
+    report = shadow.settle_open_positions(store, ledger)
+    assert report["settled"] == [] and all(p["reason"] == "settlement time missing" for p in report["pending"])

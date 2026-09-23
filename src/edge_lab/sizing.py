@@ -161,7 +161,10 @@ def suggest_position_size(
         limits.append(("EXACT_COST", final))
     binding = next(name for name, value in limits if value == final) if limits else "SIZING_RULE"
     if final == 0 and raw == 0:
-        binding = "NO_EDGE" if policy.kelly_fraction is not None else "SIZING_RULE"
+        # Kelly gives zero either because there is no edge or because the bankroll is too
+        # small for one contract; only the first is NO_EDGE.
+        no_edge = policy.kelly_fraction is not None and full_kelly == 0
+        binding = "NO_EDGE" if no_edge else "SIZING_RULE"
     total = fees.taker_buy(final, executable_price).total_cost if final > 0 else Decimal(0)
     return SizingResult(raw, risk_adjusted, capped, final, binding, c, total, full_kelly, tuple(limits),
                         policy.policy_id)
