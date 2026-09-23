@@ -20,6 +20,12 @@ domain-neutral contracts in `edge_lab.opportunity`.
   conservative probability is computed and reported for every opportunity.
 - **Fees** are flagged, not required: the schedule is UNVERIFIED_CURRENT_SCHEDULE, so
   opportunities evaluate but carry `claimable = False`.
+- **Only VALID Stage B days** can produce a qualified opportunity. On an INVALID day every
+  opportunity is still evaluated, and all of them carry EVIDENCE_INCOMPLETE.
+- **Settlement equivalence:** a market whose rules do not name D, the event or the
+  CLINYC station is RULES_UNRESOLVED.
+- **Lookahead guard:** targets before 2026-09-23 are refused, because the refit contains
+  their labels.
 
 Only stored evidence is used; nothing here fetches, and nothing trades. Historical
 executable prices do not exist for EXP-001, and none is manufactured: this adapter reads
@@ -30,7 +36,7 @@ from __future__ import annotations
 
 import json
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date, timedelta
 from decimal import Decimal
 from functools import lru_cache
@@ -52,6 +58,9 @@ EXP_DIR = Path(__file__).resolve().parents[2] / "experiments" / "EXP-001-kxhighn
 DATASET = EXP_DIR / "gate3" / "dataset.csv"
 GATE4 = EXP_DIR / "gate4"
 STAGE_B_FIT_THROUGH = "2026-09-21"
+# The refit contains every label through 2026-09-21. D = 2026-09-22 was decided on 09-21 at
+# 18:00 ET, before that day's label existed, so the first target without lookahead is 09-23.
+FIRST_STAGE_B_TARGET = date(2026, 9, 23)
 
 STAGE_B_POLICY = Policy(
     policy_id="EXP-001-stage-b-frozen-v1",
@@ -74,6 +83,7 @@ class StageBModel:
     variant: str
     pmfs: dict[str, tuple[float, ...]]
     n_fit: int
+    n_by_pmf: dict[str, int]
     dataset_sha256: str
     version: str
 
@@ -81,8 +91,15 @@ class StageBModel:
     def model_id(self) -> str:
         return f"{base.EXPERIMENT_ID}/{self.variant}"
 
+    def _key(self, target: date) -> str:
+        return "ALL" if self.variant == "V1" else base.SEASONS[target.month]
+
     def pmf_for(self, target: date) -> tuple[float, ...]:
-        return self.pmfs["ALL" if self.variant == "V1" else base.SEASONS[target.month]]
+        return self.pmfs[self._key(target)]
+
+    def n_for(self, target: date) -> int:
+        """Days behind the pmf used for `target` (V2: that season's days only)."""
+        return self.n_by_pmf[self._key(target)]
 
 
 @lru_cache(maxsize=4)
@@ -102,7 +119,7 @@ def load_model(dataset: Path = DATASET, gate4_dir: Path = GATE4) -> StageBModel:
     days = sorted((d for d in days if d.target_date <= STAGE_B_FIT_THROUGH), key=lambda d: d.target_date)
     fitted = base.fit_model(variant, days)
     return StageBModel(
-        variant=variant, pmfs=fitted.pmfs, n_fit=len(days), dataset_sha256=sha,
+        variant=variant, pmfs=fitted.pmfs, n_fit=len(days), n_by_pmf=dict(fitted.n_fit), dataset_sha256=sha,
         version=f"{base.EXPERIMENT_ID}/{variant}/fit<={STAGE_B_FIT_THROUGH}/n={len(days)}"
                 f"/dataset:{sha[:16]}/adapter:v{ADAPTER_VERSION}",
     )
@@ -120,6 +137,25 @@ def bracket_probability(model: StageBModel, raw_market: dict[str, Any], forecast
         if resolution.outcome is settlement.Outcome.YES:
             hits.append(pmf[i])
     return min(1.0, max(0.0, math.fsum(hits))), None
+
+
+def settlement_equivalence(raw: dict[str, Any], target: date) -> tuple[bool, str]:
+    """Whether a captured market settles on the same quantity the model predicts.
+
+    The model predicts the Central Park (CLINYC) daily maximum on D. The market must name
+    the same series and event, date D in its rules, and the station. Anything else is a
+    different contract, and the engine rejects it as RULES_UNRESOLVED.
+    """
+    problems = []
+    ticker = forward.event_ticker_for(target)
+    if raw.get("event_ticker") != ticker:
+        problems.append(f"event_ticker {raw.get('event_ticker')!r} is not {ticker!r}")
+    rules = str(raw.get("rules_primary") or "")
+    if not any(f"for {label}" in rules for label in forward.date_labels(target)):
+        problems.append(f"rules do not name {target.isoformat()}")
+    if "CLINYC" not in rules and "Central Park" not in rules:
+        problems.append("rules do not name the Central Park station (CLINYC)")
+    return (not problems), "; ".join(problems) or "series, date and station match"
 
 
 def event_for(target: date) -> Event:
@@ -190,11 +226,16 @@ def evaluate_day(store: SnapshotStore, target: date, *, model: StageBModel | Non
     problems: list[str] = []
     ticker = forward.event_ticker_for(target)
 
-    try:
-        model = model or load_model()
-    except StageBUnavailable as exc:
+    if target < FIRST_STAGE_B_TARGET:
         model = None
-        problems.append(f"model: {exc}")
+        problems.append(f"model: target {target.isoformat()} precedes {FIRST_STAGE_B_TARGET.isoformat()}; "
+                        "the Stage B refit contains its label (lookahead)")
+    else:
+        try:
+            model = model or load_model()
+        except StageBUnavailable as exc:
+            model = None
+            problems.append(f"model: {exc}")
 
     forecast, why = forward.select_pfm(store, target)
     if forecast is None:
@@ -233,6 +274,9 @@ def evaluate_day(store: SnapshotStore, target: date, *, model: StageBModel | Non
     estimates: dict[str, ModelEstimate] = {}
     for raw in sorted(raw_markets, key=lambda m: str(m.get("ticker"))):
         market = market_from_kalshi(raw, event_id_for_ticker=mapping)
+        equivalent, why_not = settlement_equivalence(raw, target)
+        if market.rules_resolved and not equivalent:
+            market = replace(market, rules_resolved=False, rules_detail=f"settlement equivalence: {why_not}")
         markets.append(market)
         native = market.native_id
         info = books.get(native)
@@ -245,8 +289,15 @@ def evaluate_day(store: SnapshotStore, target: date, *, model: StageBModel | Non
                 quotes[(market.market_id, side)] = quote
         estimates[market.market_id] = _estimate(model, raw, market, event, forecast, why, target, as_of.isoformat())
 
+    # Only a VALID Stage B day may produce a qualified opportunity. Other days are still
+    # evaluated in full (research evidence), but every opportunity is EVIDENCE_INCOMPLETE.
+    invalid = None
+    if status["status"] != "VALID":
+        shown = status["reasons"][:3]
+        invalid = "Stage B day INVALID: " + "; ".join(shown) + (" (and more)" if len(status["reasons"]) > 3 else "")
     opportunities = evaluate_event(event=event, markets=markets, quotes=quotes, estimates=estimates,
-                                   fee_schedule=FEE_SCHEDULE, policy=STAGE_B_POLICY, as_of=as_of)
+                                   fee_schedule=FEE_SCHEDULE, policy=STAGE_B_POLICY, as_of=as_of,
+                                   evidence_problem=invalid)
     return DayEvaluation(target.isoformat(), as_of.isoformat(), status, event, forecast,
                          None if model is None else _model_info(model), opportunities, problems)
 
@@ -260,7 +311,10 @@ def _decision_capture(store: SnapshotStore, target: date, complete_id: int | Non
     """
     rows = store.forward_captures(target_date=target.isoformat(), phase="decision", mode=mode)
     if complete_id is not None:
-        return next(r for r in rows if int(r["id"]) == complete_id)
+        chosen = next((r for r in rows if int(r["id"]) == complete_id), None)
+        if chosen is None:
+            problems.append(f"decision capture {complete_id} not found")
+        return chosen
     partial = [r for r in rows if r["status"] == "partial"
                and json.loads(r["links_json"]).get("market_snapshots")]
     if not partial:
@@ -274,7 +328,7 @@ def _decision_capture(store: SnapshotStore, target: date, complete_id: int | Non
 
 def _model_info(model: StageBModel) -> dict[str, Any]:
     return {"model_id": model.model_id, "version": model.version, "n_fit": model.n_fit,
-            "dataset_sha256": model.dataset_sha256}
+            "n_by_pmf": model.n_by_pmf, "dataset_sha256": model.dataset_sha256}
 
 
 def _estimate(model: StageBModel | None, raw: dict[str, Any], market: Market, event: Event,
@@ -294,5 +348,5 @@ def _estimate(model: StageBModel | None, raw: dict[str, Any], market: Market, ev
     p, why = bracket_probability(model, raw, int(forecast["forecast_max_f"]), target)
     if p is None:
         return ModelEstimate(probability=None, bounds=None, unavailable_reason=why, **common)
-    return ModelEstimate(probability=p, bounds=wilson_bounds(p, model.n_fit), **common)
+    return ModelEstimate(probability=p, bounds=wilson_bounds(p, model.n_for(target)), **common)
 

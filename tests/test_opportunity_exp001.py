@@ -88,11 +88,14 @@ def test_full_forward_day_plugs_into_the_engine(store, monkeypatch, model):
         assert o.fee_status == "UNVERIFIED_CURRENT_SCHEDULE" and not o.claimable
         assert o.policy_id == "EXP-001-stage-b-frozen-v1" and o.model_version == model.version
         assert o.all_in_cost is not None and o.rejection_reason in ("QUALIFY", "NO_EDGE")
-    # The frozen signal: qualify iff p_side - cost_per_contract(1, ask) >= 0.05.
+    # The frozen signal: qualify iff p_side - cost_per_contract(1, ask) >= 0.05, on exact values.
+    raw_by_id = {f"kalshi:{m['ticker']}": m for m in MARKETS["markets"]}
     for o in opps:
         cost = fees.cost_per_contract(1, o.executable_price)
         assert o.all_in_cost == cost
-        assert (o.qualification == "QUALIFY") == (o.model_probability - cost >= Decimal("0.05"))
+        p_yes, _ = stageb.bracket_probability(model, raw_by_id[o.market_id], 67, D)
+        p_side = Decimal(p_yes) if o.side == "YES" else Decimal(1.0 - p_yes)
+        assert (o.qualification == "QUALIFY") == (p_side - cost >= Decimal("0.05"))
     # YES probabilities of the event sum to one.
     assert math.isclose(sum(float(o.model_probability) for o in opps if o.side == "YES"), 1.0, abs_tol=1e-9)
 
@@ -112,10 +115,13 @@ def test_missing_bracket_book_is_book_missing_not_zero(store, monkeypatch, model
     result = stageb.evaluate_day(store, D, model=model)
     assert result.day_status["status"] == "INVALID"
     gone = [o for o in result.opportunities if o.market_id == f"kalshi:{missing}"]
-    assert len(gone) == 2 and all(o.rejection_reason == "BOOK_MISSING" for o in gone)
+    assert len(gone) == 2 and all("BOOK_MISSING" in o.reasons for o in gone)
     assert all(o.executable_price is None and o.net_edge is None for o in gone)
     others = [o for o in result.opportunities if o.market_id != f"kalshi:{missing}"]
-    assert all(o.rejection_reason != "BOOK_MISSING" for o in others)
+    assert all("BOOK_MISSING" not in o.reasons for o in others)
+    # An INVALID day never qualifies anything; every opportunity says why.
+    assert all(o.qualification == "REJECT" and o.rejection_reason == "EVIDENCE_INCOMPLETE"
+               for o in result.opportunities)
 
 
 def test_no_decision_capture_means_no_opportunities(store, model):
@@ -138,8 +144,8 @@ def test_market_of_another_event_fails_closed(store, monkeypatch, model):
     assert any("partial capture" in p for p in result.problems)
     by_market = {o.market_id: o for o in result.opportunities}
     assert by_market[f"kalshi:{foreign}"].rejection_reason == "EVENT_MISMATCH"
-    assert all(o.rejection_reason == "BOOK_MISSING" for o in result.opportunities
-               if o.market_id != f"kalshi:{foreign}")
+    assert "RULES_UNRESOLVED" in by_market[f"kalshi:{foreign}"].reasons
+    assert all("BOOK_MISSING" in o.reasons for o in result.opportunities if o.market_id != f"kalshi:{foreign}")
 
 
 def test_wrong_event_payload_fails_closed(store, monkeypatch, model):
@@ -154,7 +160,7 @@ def test_stale_forecast_is_model_stale(store, monkeypatch, model):
     _full_day(store, monkeypatch)
     monkeypatch.setattr(stageb.forward, "select_pfm", lambda *a, **k: (None, "PFM_STALE_AT_CUTOFF"))
     result = stageb.evaluate_day(store, D, model=model)
-    assert all(o.rejection_reason == "MODEL_STALE" for o in result.opportunities)
+    assert all("MODEL_STALE" in o.reasons and o.qualification == "REJECT" for o in result.opportunities)
     assert all(o.model_probability is None for o in result.opportunities)
 
 
@@ -189,3 +195,50 @@ def test_cli_opportunities_report(store, monkeypatch, tmp_path, capsys):
 
 def test_resolver_is_the_frozen_one():
     assert stageb.settlement is settlement and stageb.forward is forward
+
+
+def test_settlement_equivalence_requires_date_event_and_station():
+    raw = next(m for m in MARKETS["markets"] if m["ticker"].endswith("B67.5"))
+    assert stageb.settlement_equivalence(raw, D) == (True, "series, date and station match")
+    wrong_day = dict(raw, rules_primary=raw["rules_primary"].replace("Sep 23, 2026", "Sep 24, 2026"))
+    ok, why = stageb.settlement_equivalence(wrong_day, D)
+    assert not ok and "rules do not name 2026-09-23" in why
+    no_station = dict(raw, rules_primary=raw["rules_primary"].replace("(CLINYC)", ""))
+    assert not stageb.settlement_equivalence(no_station, D)[0]
+    assert not stageb.settlement_equivalence(dict(raw, event_ticker="KXHIGHNY-26SEP24"), D)[0]
+
+
+def test_market_for_another_day_is_rules_unresolved(store, monkeypatch, model):
+    # Rules naming D+1 on the D event: the reviewer's scenario. Such a market must never qualify.
+    shifted = {"cursor": None, "markets": [dict(m, rules_primary=m["rules_primary"].replace("Sep 23, 2026", "Sep 24, 2026"))
+                                           for m in MARKETS["markets"]]}
+    routes = default_routes()
+    routes["/markets?event_ticker=KXHIGHNY-26SEP23"] = shifted
+    _full_day(store, monkeypatch, routes)
+    result = stageb.evaluate_day(store, D, model=model)
+    assert result.opportunities
+    assert all(o.qualification == "REJECT" and "RULES_UNRESOLVED" in o.reasons for o in result.opportunities)
+
+
+def test_targets_inside_the_fit_window_are_refused(store, model):
+    from datetime import date
+    for target in (date(2026, 9, 21), date(2026, 9, 22)):
+        result = stageb.evaluate_day(store, target, model=model)
+        assert any("lookahead" in p for p in result.problems) and result.model is None
+
+
+def test_conservative_bound_uses_the_pmf_sample_size(model):
+    from edge_lab.conservative import wilson_bounds
+    assert model.n_for(D) == model.n_fit == model.n_by_pmf["ALL"]
+    v2 = replace(model, variant="V2", pmfs={s: model.pmfs["ALL"] for s in ("DJF", "MAM", "JJA", "SON")},
+                 n_by_pmf={"DJF": 800, "MAM": 900, "JJA": 950, "SON": 901})
+    assert v2.n_for(D) == 901  # September -> SON
+    assert wilson_bounds(0.3, v2.n_for(D)).lower < wilson_bounds(0.3, model.n_for(D)).lower
+
+
+def test_valid_day_counts_match_report(store, monkeypatch, model):
+    _full_day(store, monkeypatch)
+    report = stageb.evaluate_day(store, D, model=model).to_dict()
+    qualified = [o for o in report["opportunities"] if o["qualification"] == "QUALIFY"]
+    assert report["counts"]["qualified"] == len(qualified) > 0
+    assert "EVIDENCE_INCOMPLETE" not in report["counts"]["by_reason"]

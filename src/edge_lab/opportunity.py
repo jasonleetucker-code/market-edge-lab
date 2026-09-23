@@ -54,6 +54,7 @@ class Reason(str, Enum):
     QUALIFY = "QUALIFY"
     MODEL_UNAVAILABLE = "MODEL_UNAVAILABLE"
     EVENT_MISMATCH = "EVENT_MISMATCH"
+    EVIDENCE_INCOMPLETE = "EVIDENCE_INCOMPLETE"  # the evidence set it belongs to is incomplete
     MARKET_CLOSED = "MARKET_CLOSED"
     RULES_UNRESOLVED = "RULES_UNRESOLVED"
     BOOK_MISSING = "BOOK_MISSING"
@@ -262,8 +263,14 @@ def evaluate(
     fee_schedule: FeeSchedule,
     policy: Policy,
     as_of: datetime,
+    evidence_problem: str | None = None,
 ) -> Opportunity:
-    """Evaluate buying `policy.quantity` contracts of `side` in `market` as of `as_of`."""
+    """Evaluate buying `policy.quantity` contracts of `side` in `market` as of `as_of`.
+
+    `evidence_problem` names a defect in the evidence set this opportunity belongs to (for
+    example an INVALID Stage B day). The opportunity is still evaluated and reported, but
+    it can never qualify.
+    """
     if side not in SIDES:
         raise ValueError(f"unknown side {side!r}")
     as_of_utc = parse_utc(as_of)
@@ -284,6 +291,8 @@ def evaluate(
     if estimate is not None and (estimate.event_id != event.event_id or estimate.market_id != market.market_id):
         fail(Reason.EVENT_MISMATCH, f"estimate is for {estimate.event_id}/{estimate.market_id}")
 
+    if evidence_problem:
+        fail(Reason.EVIDENCE_INCOMPLETE, evidence_problem)
     if market.status is not MarketStatus.OPEN:
         fail(Reason.MARKET_CLOSED, f"market status {market.status.value}")
     if not market.rules_resolved:
@@ -351,9 +360,14 @@ def evaluate(
     return Opportunity(
         opportunity_id=opportunity_id(
             engine=ENGINE_VERSION, as_of=as_of_utc.isoformat(), policy=policy.policy_id,
-            event=event.event_id, market=market.market_id, side=side,
-            model=None if estimate is None else [estimate.model_id, estimate.version, estimate.input_version],
-            quote=None if quote is None else quote.evidence_id, fees=fee_schedule.schedule_id,
+            event=event.event_id, market=[market.market_id, market.event_id, market.status, market.rules_sha256,
+                                          market.rules_resolved],
+            side=side,
+            model=None if estimate is None else [estimate.model_id, estimate.version, estimate.input_version,
+                                                 None if estimate.probability is None else repr(estimate.probability)],
+            quote=None if quote is None else [quote.evidence_id, quote.best_bid, quote.best_ask,
+                                              quote.displayed_size, quote.received_at_utc, quote.anomaly],
+            fees=fee_schedule.schedule_id, evidence_problem=evidence_problem,
         ),
         engine_version=ENGINE_VERSION,
         as_of_utc=as_of_utc.isoformat(),
@@ -418,11 +432,13 @@ def evaluate_event(
     fee_schedule: FeeSchedule,
     policy: Policy,
     as_of: datetime,
+    evidence_problem: str | None = None,
 ) -> list[Opportunity]:
     """Every (market, side) of an event, evaluated and ranked. Nothing is dropped."""
     out = [
         evaluate(event=event, market=m, side=side, quote=quotes.get((m.market_id, side)),
-                 estimate=estimates.get(m.market_id), fee_schedule=fee_schedule, policy=policy, as_of=as_of)
+                 estimate=estimates.get(m.market_id), fee_schedule=fee_schedule, policy=policy, as_of=as_of,
+                 evidence_problem=evidence_problem)
         for m in markets
         for side in SIDES
     ]

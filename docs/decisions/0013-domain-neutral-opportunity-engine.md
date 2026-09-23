@@ -26,7 +26,7 @@ research evidence.
   function.
   - Every (market, side) pair produces an `Opportunity`, whether it qualifies or not.
   - Each opportunity carries a primary reason and the full ordered reason list:
-    `QUALIFY`, `MODEL_UNAVAILABLE`, `EVENT_MISMATCH`, `MARKET_CLOSED`, `RULES_UNRESOLVED`,
+    `QUALIFY`, `MODEL_UNAVAILABLE`, `EVENT_MISMATCH`, `EVIDENCE_INCOMPLETE`, `MARKET_CLOSED`, `RULES_UNRESOLVED`,
     `BOOK_MISSING`, `BOOK_STALE`, `MODEL_STALE`, `INVALID_PRICE`, `INSUFFICIENT_SIZE`,
     `FEE_UNVERIFIED`, `NO_EDGE`.
   - Opportunity ids are content hashes of the inputs.
@@ -70,7 +70,15 @@ research evidence.
     - forecast ≤ 24 h at the cutoff;
     - fees flagged.
   - It reads only forward captures. A partial capture is evaluated for research while the
-    Stage B day stays INVALID.
+    Stage B day stays INVALID. On any INVALID day every opportunity carries
+    `EVIDENCE_INCOMPLETE`, so only VALID days can qualify.
+  - Settlement equivalence goes beyond the resolver probe: the market's event ticker, the
+    date D in its rules, and the CLINYC station must all match. Otherwise the result is
+    `RULES_UNRESOLVED`.
+  - Targets before 2026-09-23 are refused, because the refit contains their labels
+    (lookahead).
+  - The Wilson n is the sample behind the pmf actually used: all days for V1, the season's
+    days for V2.
   - No historical executable price is manufactured.
 - **CLI:** `edge-lab forward opportunities --date D`. It is read-only and emits every
   opportunity with its reasons.

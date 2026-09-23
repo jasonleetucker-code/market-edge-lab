@@ -227,6 +227,10 @@ def test_closed_market_rejected():
 def test_all_failed_checks_are_kept_in_precedence_order():
     o = run(market=replace(MARKET, status=MarketStatus.CLOSED), q=None, e=None)
     assert o.reasons == ("MODEL_UNAVAILABLE", "MARKET_CLOSED", "BOOK_MISSING")
+    blocked = evaluate(event=EVENT, market=MARKET, side="YES", quote=quote(), estimate=estimate(),
+                       fee_schedule=VERIFIED, policy=POLICY, as_of=AS_OF, evidence_problem="day INVALID")
+    assert blocked.rejection_reason == "EVIDENCE_INCOMPLETE" and blocked.net_edge is not None
+    assert blocked.opportunity_id != run().opportunity_id
     assert o.rejection_reason == "MODEL_UNAVAILABLE"
     assert list(Reason)[0] is Reason.QUALIFY
 
@@ -343,6 +347,10 @@ def test_evaluation_is_repeatable_and_ids_are_content_addressed():
     assert a.opportunity_id.startswith("opp-")
     assert run(q=replace(quote(), evidence_id="snapshot:2")).opportunity_id != a.opportunity_id
     assert run(as_of=AS_OF - timedelta(seconds=1)).opportunity_id != a.opportunity_id
+    # Same evidence id, different content (e.g. two partial captures): ids still differ.
+    assert run(q=replace(quote(), best_ask=Decimal("0.47"))).opportunity_id != a.opportunity_id
+    assert run(market=replace(MARKET, status=MarketStatus.CLOSED)).opportunity_id != a.opportunity_id
+    assert run(e=estimate(p=0.71)).opportunity_id != a.opportunity_id
 
 
 def test_policy_validation():
