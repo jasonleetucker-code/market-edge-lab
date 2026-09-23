@@ -21,10 +21,10 @@ Readiness vocabulary: **NOT READY** (prerequisites absent) · **READY FOR RESEAR
 | Issue | Idea | Readiness | Why / prerequisites |
 |---|---|---|---|
 | #4 | Durable idea intake and readiness backlog (process) | **Implemented** 2026-09-22 (Gate 3 PR) | `AI_INSTRUCTIONS.md` rule + this index |
-| #3 | Outcome Board / What Matters Today dashboard | NOT READY | Needs a position ledger, contract/outcome identity, risk engine, and live prices with freshness |
+| #3 | Outcome Board / What Matters Today dashboard | **BACKEND FOUNDATION IMPLEMENTED** 2026-09-23 (overnight directive); UI NOT READY | `edge_lab.outcome_board`: shadow positions grouped by outcome cluster, ranked by account impact (ADR 0015). The dashboard UI, hosting, auth and live marks are unauthorized and not built. |
 | #5 | Sports prediction-market and sports-modeling expansion | READY FOR RESEARCH (not in Gate 3 scope) | Core framework is proving out on weather. Implementation needs the shared market-identity and execution layers. |
 | #9 | Sportsbook odds aggregation, consensus pricing, best-venue comparison | NOT READY | Sub-idea of #5. Needs sports authorization, market equivalence and verified access terms. |
-| #6 | Dynamic bankroll, position sizing, withdrawal guidance | NOT READY | Needs an account/position ledger, P&L, risk engine and an owner risk policy |
+| #6 | Dynamic bankroll, position sizing, withdrawal guidance | **P0 FOUNDATION IMPLEMENTED** 2026-09-23 (shadow only) | Shadow ledger (ADR 0014), `suggest_position_size`, and the risk/capital report with a withdrawal contract (ADR 0015). The withdrawal contract never recommends a draw. A real-money policy, a verified edge and verified fees are all still missing. |
 | #10 | Host privately on existing Chase Upside infrastructure (separate service/subdomain, real access control) | **PARTLY AUTHORIZED** 2026-09-22: headless read-only collector only | Forward collector authorized on the VPS as a separate service (ADR 0012; headroom review `docs/deploy/VPS_REVIEW_2026-09-22.md` PASS). Dashboard/API, subdomain, DNS/TLS and auth remain NOT READY and unauthorized. |
 | #7 | Free-first multi-domain ingestion with paid-source ROI gate | APPLY SELECTIVELY NOW | Gate 3 applied it: the free IEM archive of NWS forecasts was chosen and paid weather data was not considered. The general ingestion platform is not built. |
 
@@ -36,6 +36,12 @@ Related owner records that are not ideas:
   its own branch and file claim. It does not touch Gate 3 files.
 
 ## Review log
+
+- **2026-09-23: Gate 4 → 5 → 6 and the risk foundation (overnight directive, PRs #21–#24).**
+  - #6 and #3 moved to foundation-implemented (shadow and backend only).
+  - #5 and #9 stay outside scope. The directive says no sports tonight.
+  - #7 unchanged: no paid sources.
+  - #10 unchanged: headless collector only; no subdomain or dashboard.
 
 - **2026-09-22, Gate 2 → Gate 3 / Gate 3 PR.**
   - Classifications as above. None change Gate 3 scope.
