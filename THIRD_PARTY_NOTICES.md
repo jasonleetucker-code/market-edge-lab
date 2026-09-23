@@ -84,3 +84,19 @@ so the idea's origin stays traceable.
   and never assumed to be the cent grid; the grid is enforced in depth walks, not in the
   frozen opportunity engine.
 - **Audit:** `docs/GITHUB_REUSE_AUDIT.md`.
+
+### TPN-R004 — ordered pre-submit control chain for the execution ticket
+
+- **Where:** `src/edge_lab/execution_ticket.py` (`pre_submit_checks`, `Control`,
+  `TICKET_TRANSITIONS`, `ORDER_TRANSITIONS`); `tests/test_execution_ticket_controls.py`.
+- **Upstream studied:** `betcode-org/flumine` at `54854495b45accae614b23d10859047d582c3ecf`
+  (trading and client controls, order validation, exposure counting pending orders).
+- **License:** MIT. Nothing was copied.
+- **What differs from upstream:**
+  - a stale book is rejected, not warned;
+  - there is no `force` bypass;
+  - money is Decimal;
+  - exposure limits come from `risk.RiskPolicy`, and a missing risk report fails closed;
+  - transitions are guarded by explicit tables with terminal states final;
+  - the chain always ends in `EXECUTION_NOT_AUTHORIZED`, so no ticket can be submitted.
+- **Audit:** `docs/GITHUB_REUSE_AUDIT.md` §7.3, §7.8; `docs/audits/2026-09-23-github-reuse/D_sports.md`.

@@ -685,6 +685,16 @@ formatting. No license, so nothing is copied.
 
 ## 9. Adoption plan
 
+> **Follow-up status (2026-09-23, production activation directive).**
+> - **Done:**
+>   - the Polymarket US `DepthLadder` builder and per-market price grids (PR #42, ADR 0023);
+>   - the binary payoff guard (PR #42);
+>   - the flumine-derived execution-ticket control chain (PR #43, TPN-R004);
+>   - the ntfy sink, disabled and unwired, behind a one-file POST exception (PR #44, ADR 0022);
+>   - Windows portability (PR #45).
+> - **Still NEXT:** the best-price-for-size comparator. It now has two venues on one depth
+>   primitive, and must pass `Market.price_grid` to `walk_ladder`.
+
 **Classification of the top 20:**
 - **APPLY_NOW** (done in this PR):
   - PredictionMarketBench, flumine and nautilus (test ideas);
@@ -727,7 +737,7 @@ FEE INTERFACE (fee_schedules.py; per venue, UNSUPPORTED until evidenced)        
         │
 EVENT / SETTLEMENT IDENTITY + RULES EQUIVALENCE (deterministic; LLM may only propose) [PARTLY BUILT]
         │
-BEST-PRICE-FOR-SIZE COMPARATOR (#30)   [NEXT: needs Polymarket US ladders]
+BEST-PRICE-FOR-SIZE COMPARATOR (#30)   [NEXT: both venues now have ladders (#42)]
 UNIQUE-MARKET DISCOVERY (#30)          [discovery.py BUILT #39]
         │
 OPPORTUNITY ENGINE → SHADOW LEDGER → RISK / STARTER POLICY → OUTCOME BOARD       [BUILT]
@@ -759,10 +769,10 @@ Shared primitives now unlock several ideas at once:
 | Idea | NOW | NEXT | LATER | BLOCKED |
 |---|---|---|---|---|
 | #36 reuse audit | this PR (audit, depth ladder, provenance guard, F14) | issue #36 updated with the adoption plan | re-audit before any execution or streaming work | — |
-| #30 multi-venue | depth ladder (this PR); Polymarket US, Novig daily data and discovery (built, #39) | Polymarket US `DepthLadder` builder; Kalshi `price_ranges` tick grid; best-price-for-size comparator on two venues | ProphetX / IBKR feasibility | Novig live API (owner credentials) |
+| #30 multi-venue | depth ladder (this PR); Polymarket US, Novig daily data and discovery (built, #39) | ~~Polymarket US `DepthLadder` builder; Kalshi `price_ranges` tick grid~~ (done, #42); best-price-for-size comparator on two venues | ProphetX / IBKR feasibility | Novig live API (owner credentials) |
 | #29 Odds API | fixtures adapter built (#39). It already meets every point the sports review raised: Decimal conversion that rejects −100 < x < +100, `apiKey` redaction, all three quota headers, de-vig never executable | — | consensus (median across fresh books) | live pulls (owner key + activation plan) |
-| #33 notifications | contract, outbox and disabled SMS sink (built, #38) | ntfy sink behind the contract, after the invariant change | Apprise if ≥3 channels | first real send (owner approval); SMS (paid provider) |
-| #32 starter policy / tickets | `STARTER_MAX_7D_V1` and ticket contract (built, #38) | flumine control checklist in the ticket contract | Hummingbot lifecycle states | any execution (no authority) |
+| #33 notifications | contract, outbox and disabled SMS sink (built, #38) | ~~ntfy sink behind the contract, after the invariant change~~ (done, disabled, #44) | Apprise if ≥3 channels | first real send (owner approval); SMS (paid provider) |
+| #32 starter policy / tickets | `STARTER_MAX_7D_V1` and ticket contract (built, #38) | ~~flumine control checklist in the ticket contract~~ (done, #43) | Hummingbot lifecycle states | any execution (no authority) |
 | #9 / #5 sports | — | — | sportsbook consensus research | sports models (preregistration) |
 | #27 Action PRO | — | — | schema design (§7.10) | purchase, login (owner) |
 | #6 / #3 | — | risk and board read depth-aware costs | — | real-money policy |

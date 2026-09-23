@@ -11,6 +11,13 @@ Scope: the 2026-09-23 daily-shadow directive (ADR 0016). It covers:
 - Deploy only a reviewed, merged `main` SHA.
 - Never install or restart between **17:40 and 18:35 America/New_York**, or while any
   `edgelab-*` unit is running (`systemctl list-units 'edgelab-*' --state=running`).
+  **Exception:** `edgelab-dashboard.service` (ADR 0024) runs continuously and is exempt from
+  this check. It is read-only (`ProtectSystem=strict`, no `ReadWritePaths`, SQLite `mode=ro`)
+  and holds no locks beyond per-request reads. `install.sh` replaces
+  `/opt/market-edge-lab/app` underneath it, so run `systemctl restart edgelab-dashboard` after
+  any install so that it serves the new code.
+- Every install, by any session, runs §2 (backup before install) and §4.1 (fail-closed
+  test) on the code actually installed.
 - Nothing here places orders or uses credentials.
 
 ## 0. Check first (no sudo)
@@ -76,7 +83,10 @@ enabled state. New units are installed but not enabled.
    sudo systemctl start edgelab-shadow.service
    cat /var/lib/market-edge-lab-status/shadow_daily.json
    ```
-   - Before the first live day, expect `NO_CAPTURE` or `NOT_CLOSED` (exit 0).
+   - Before the first live day, expect `NO_CAPTURE` or `NOT_CLOSED` (exit 0). A closed day
+     whose only capture record is a fail-closed test (step 4.1 run on an earlier day) reports
+     `INVALID_CAPTURE`, exit 3. That is true (the day has no valid evidence); it alerts once,
+     and repeats are deduplicated.
    - After the first live day: `PENDING_SETTLEMENT` (a signal day), `HEALTHY_NO_SIGNAL`,
      or `INVALID_CAPTURE` (exit 3, which alerts).
 3. Run the settlement refresh:

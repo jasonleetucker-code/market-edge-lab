@@ -173,15 +173,63 @@ be written here when they are made.
 
   **Status (end of 2026-09-23 session):**
   - Repository work merged in PRs #34, #35, #37, #38 and #39.
-  - Production verification and deployment NOT DONE (no SSH route from the cloud session).
-    They are owner-run, with the command sheet in `HANDOFF.md`.
-  - F09 OPEN.
+  - Production verification and deployment were not done from that cloud session (no SSH
+    route). They were done later the same day by the owner's local session under the
+    production activation directive below.
   - Gate unchanged at 7.
 
   Fee claims distinguish `claim_basis` NONE, CONSERVATIVE_BOUND and EXACT (ADR 0017).
   KXHIGHNY decisions from 2026-09-23T13:39:48Z carry CONSERVATIVE_BOUND for a direct
   member. A claim subtracts 0.0101 USD per contract before it counts. The
   no-scheduled-change check must be re-done by 2026-10-23.
+
+- **2026-09-23 (afternoon ET), SSH grant and production activation directive.** Recorded
+  verbatim in `docs/owner/2026-09-23-production-activation-directive.md`.
+  - **SSH grant.** The owner's local Claude Code session may use the existing access to
+    chaseupside:
+    - `dynasty` by default;
+    - root only for the exact privileged steps of a reviewed runbook.
+    - It must not change SSH configuration or keys, disable root SSH, alter sudo rules,
+      harden the host, apt-upgrade, reboot or touch unrelated Brisket code. Those are
+      separate future security tasks.
+  - **Authorized:**
+    - verify production;
+    - deploy reviewed merged `main` with `docs/deploy/DAILY_SHADOW_ACTIVATION.md` only;
+    - enable `edgelab-shadow.timer` and `edgelab-settlement.timer`;
+    - run the fail-closed dry runs;
+    - verify backups and restores and Chase Upside health;
+    - export the first manual F09 checkpoint and store and verify it off-host;
+    - bounded non-live-money follow-ups: Polymarket US depth, the payoff guard and tick
+      grid, an ntfy sink with no real send, execution-ticket checks, Windows portability;
+    - review and squash-merge this mission's PRs.
+  - **Not authorized:**
+    - real orders, trading credentials, deposits or withdrawals, funded or automatic
+      trading;
+    - paid APIs or paid SMS;
+    - DNS or public dashboard exposure;
+    - unrelated Brisket changes;
+    - new SSH keys, apt upgrades, reboots;
+    - any real ntfy send without separate owner approval;
+    - any new scheduled anchoring job.
+  - **Status:** production evidence is in `docs/deploy/PRODUCTION_ACTIVATION_2026-09-23.md`,
+    the F09 evidence is in `docs/engineering/GATE7_FINDINGS.md`, and the current state is in
+    `HANDOFF.md`. PRs #42 (ADR 0023), #43, #44 (ADR 0022) and #45 merged, each independently
+    reviewed with CI green on the exact head.
+
+- **2026-09-23 (~14:10 ET), private phone access to the dashboard over Tailscale.** Recorded
+  verbatim in `docs/owner/2026-09-23-tailscale-private-dashboard-directive.md`; PR #46,
+  ADR 0024.
+  - **Authorized, narrowly:**
+    - the official Tailscale client on chaseupside, with `--netfilter-mode=off` and
+      `--accept-dns=false`;
+    - joining the owner's tailnet;
+    - the read-only dashboard on 127.0.0.1:8765 (`edgelab-dashboard.service`), published to
+      the tailnet only with Tailscale Serve;
+    - a Host-header allowance for the exact Serve name.
+  - **Not authorized:** Tailscale Funnel or Tailscale SSH, firewall, nginx, DNS or SSH
+    changes, public exposure, credentials, orders.
+  - `edgelab-dashboard.service` runs continuously. It is exempt from the activation sheet's
+    "no running `edgelab-*` unit" install check and is restarted after each install.
 
 ## Standing merge rule: docs-only and test-only PRs
 
@@ -257,9 +305,18 @@ A PR that fails any of these needs the usual authority: a directive grant or the
     approved activation plan.
 
   None of these add a timer.
-- **Local read-only dashboard** bound to 127.0.0.1, with no public exposure. Merged in PR #28
-  (`edge-lab dashboard`, `docs/DASHBOARD.md`). It is local only: hosting, DNS/TLS, tunnels
-  and firewall changes remain unauthorized.
+- **Read-only dashboard** bound to 127.0.0.1 (PR #28, `docs/DASHBOARD.md`). On chaseupside it
+  is reachable only from the owner's tailnet through Tailscale Serve (PR #46, ADR 0024).
+  Public exposure, Tailscale Funnel, DNS/TLS for chaseupside.com, and firewall changes
+  remain unauthorized.
+- **Production-activation follow-ups (2026-09-23):**
+  - Polymarket US depth ladders; the binary payoff guard and per-market price grids
+    (ADR 0023).
+  - The execution-ticket pre-submit control chain (data only; `EXECUTION_NOT_AUTHORIZED`
+    always fails).
+  - The ntfy sink (ADR 0022). It is disabled unless configured, is not wired into any run
+    or timer, and **sends nothing without separate owner approval**.
+  - Windows portability.
 
 ## Explicitly not authorized
 
