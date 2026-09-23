@@ -190,6 +190,9 @@ class DepthFill:
     ladder offers up to `quantity` (None for an invalid book).
     """
 
+    venue: str
+    market_id: str
+    side: str
     status: DepthStatus
     quantity: Decimal
     available: Decimal | None
@@ -202,7 +205,11 @@ class DepthFill:
 
 @dataclass(frozen=True)
 class DepthCost:
-    """A fillable ladder walk priced under one fee schedule, each take as its own taker fill."""
+    """A fillable ladder walk priced under one fee schedule, each take as its own taker fill.
+
+    This is a cost, not a claim: a net result built on it still follows the schedule's
+    point-in-time verification (`verification_at`), including `claim_adjusted_net` for a
+    CONSERVATIVE_BOUND claim (ADR 0017)."""
 
     fill: DepthFill
     fee_quotes: tuple[FeeQuote, ...]
@@ -569,7 +576,8 @@ def walk_ladder(ladder: DepthLadder, quantity: Decimal | int) -> DepthFill:
         raise ValueError("quantity must be a positive, finite number of contracts")
 
     def unfilled(status: DepthStatus, available: Decimal | None, detail: str) -> DepthFill:
-        return DepthFill(status, qty, available, (), None, None, None, detail)
+        return DepthFill(ladder.venue, ladder.market_id, ladder.side, status, qty, available, (), None, None, None,
+                         detail)
 
     problem = _ladder_problem(ladder)
     if problem:
@@ -588,7 +596,7 @@ def walk_ladder(ladder: DepthLadder, quantity: Decimal | int) -> DepthFill:
                             f"truncated capture offers {available} < {qty}; deeper levels were not captured")
         return unfilled(DepthStatus.INSUFFICIENT_DEPTH, available, f"complete capture offers {available} < {qty}")
     gross = sum((t.price * t.size for t in takes), Decimal(0))
-    return DepthFill(DepthStatus.FILLABLE, qty, qty, tuple(takes), gross,
+    return DepthFill(ladder.venue, ladder.market_id, ladder.side, DepthStatus.FILLABLE, qty, qty, tuple(takes), gross,
                      (gross / qty).quantize(_AVERAGE_GRID, rounding=ROUND_CEILING), takes[-1].price,
                      f"{len(takes)} level(s)")
 
@@ -596,16 +604,22 @@ def walk_ladder(ladder: DepthLadder, quantity: Decimal | int) -> DepthFill:
 def price_depth_fill(fill: DepthFill, fee_schedule: FeeSchedule) -> tuple[DepthCost | None, str]:
     """Fees for a fillable walk, each take priced as its own taker fill.
 
-    Returns (None, why) when no cost can be stated: the walk is not fillable, or a take is
-    a fractional number of contracts (no fee rule for fractional fills is modelled). This
+    Returns (None, why) when no cost can be stated: the walk is not fillable, the schedule
+    belongs to another venue, a take is a fractional number of contracts (no fee rule for
+    fractional fills is modelled), or the schedule refuses a take. It never raises. This
     makes no new fee claim: claimability stays with `verification_at` (ADR 0017), whose
     rounding allowance already covers an order that executes as several fills.
     """
     if fill.status is not DepthStatus.FILLABLE:
         return None, f"walk is {fill.status.value}: {fill.detail}"
+    if fee_schedule.venue != fill.venue:
+        return None, f"fee schedule {fee_schedule.schedule_id} prices {fee_schedule.venue}, not {fill.venue}"
     if any(t.size != t.size.to_integral_value() for t in fill.takes):
         return None, "a take is a fractional number of contracts; no fee rule for it is modelled"
-    quotes = tuple(fee_schedule.taker_buy(int(t.size), t.price) for t in fill.takes)
+    try:
+        quotes = tuple(fee_schedule.taker_buy(int(t.size), t.price) for t in fill.takes)
+    except ValueError as exc:
+        return None, f"fee schedule {fee_schedule.schedule_id} refused a take: {exc}"
     total = sum((q.total_cost for q in quotes), Decimal(0))
     return DepthCost(
         fill=fill,

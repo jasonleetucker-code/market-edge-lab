@@ -454,27 +454,28 @@ def official_outcome(market: dict[str, Any]) -> tuple[str | None, str]:
 
 
 def event_settlement_problems(index: dict[str, dict[str, Any]]) -> dict[str, str]:
-    """Events whose captured settlement evidence is incoherent, with the reason (GATE7-F14).
+    """Events whose captured settlement evidence contradicts itself, with the reason (GATE7-F14).
 
-    Gate 2 settles an event only when exactly one bracket resolves YES and every bracket
-    carries the same expiration value (`settlement_audit`). Each market can be internally
-    consistent while the event as a whole is not; such an event settles nothing until
-    coherent evidence arrives."""
+    Each market can be internally consistent while its event is not. An event is
+    contradictory when more than one bracket resolves YES, or when brackets state different
+    expiration values (Gate 2, `settlement_audit`). Incomplete evidence is not a
+    contradiction: a bracket with no result or value yet is unknown, and a missing YES
+    bracket only means it has not been captured or settled. With one stated value, every
+    captured bracket resolves on that value, so per-market settlement stays correct."""
     by_event: dict[str, list[dict[str, Any]]] = {}
     for found in index.values():
-        by_event.setdefault(str(found["market"].get("event_ticker") or ""), []).append(found["market"])
+        event = found["market"].get("event_ticker")
+        if isinstance(event, str) and event:
+            by_event.setdefault(event, []).append(found["market"])
     problems: dict[str, str] = {}
     for event, markets in by_event.items():
         yes = sum(1 for m in markets if official_outcome(m)[0] == "YES")
-        # A bracket with no value yet is unknown, not a disagreement; only stated values conflict.
         values = {str(v.normalize()) for m in markets
                   if (v := settlement.parse_value(m.get("expiration_value"))) is not None}
-        if not event:
-            problems[event] = "settlement record has no event_ticker"
-        elif yes != 1:
+        if yes > 1:
             problems[event] = f"event {event}: {yes} YES brackets in the captured settlement evidence (expected exactly 1)"
         elif len(values) > 1:
-            problems[event] = f"event {event}: brackets disagree on expiration_value {sorted(values)}"
+            problems[event] = f"event {event}: brackets state different expiration values {sorted(values)}"
     return problems
 
 
@@ -502,10 +503,14 @@ def settle_open_positions(store: SnapshotStore, ledger: ShadowLedger, *, account
             if found is None:
                 continue
             latest, _ = official_outcome(found["market"])
-            if len(found["variants"]) > 1 or (latest is not None and latest != position.outcome):
-                report["conflicts"].append({"account_id": acct, "position_id": position.position_id,
-                                            "recorded_outcome": position.outcome, "latest_evidence_outcome": latest,
-                                            "variants": sorted(map(list, found["variants"]))})
+            event_problem = incoherent.get(str(found["market"].get("event_ticker") or ""))
+            if len(found["variants"]) > 1 or (latest is not None and latest != position.outcome) or event_problem:
+                entry = {"account_id": acct, "position_id": position.position_id,
+                         "recorded_outcome": position.outcome, "latest_evidence_outcome": latest,
+                         "variants": sorted(map(list, found["variants"]))}
+                if event_problem:
+                    entry["reason"] = event_problem
+                report["conflicts"].append(entry)
         for position in state.open_positions():
             native = position.market_id.split(":", 1)[1]
             found = index.get(native)
@@ -521,7 +526,12 @@ def settle_open_positions(store: SnapshotStore, ledger: ShadowLedger, *, account
                                             "variants": sorted(map(list, found["variants"]))})
                 continue
             market = found["market"]
-            event_problem = incoherent.get(str(market.get("event_ticker") or ""))
+            if not market.get("event_ticker"):
+                report["pending"].append({"account_id": acct, "position_id": position.position_id,
+                                          "reason": "settlement record has no event_ticker; event coherence "
+                                                    "cannot be checked"})
+                continue
+            event_problem = incoherent.get(str(market["event_ticker"]))
             if event_problem:
                 report["pending"].append({"account_id": acct, "position_id": position.position_id,
                                           "reason": event_problem})

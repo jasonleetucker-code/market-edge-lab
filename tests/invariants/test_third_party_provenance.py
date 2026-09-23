@@ -16,12 +16,34 @@ CODE_DIRS = (ROOT / "src", ROOT / "tests", ROOT / "scripts")
 
 ENTRY = re.compile(r"^### (TPN-[A-Z]?\d{3})\b", re.M)
 REFERENCE = re.compile(r"\bTPN-[A-Z]?\d{3}\b")
-# "adapted from <a source>", not "copied from the fill": an article or pronoun is not a source.
-MARKER = re.compile(r"\b(copied|vendored|ported|adapted)\s+from\s+(?!(the|a|an|this|that|these|those|it|its|each|"
-                    r"every|our|one|another)\b)", re.I)
+MARKER = re.compile(r"\b(copied|vendored|ported|adapted|borrowed)\s+from\b", re.I)
+# "copied from the fill" is internal; "adapted from the nautilus repo" is not. A marker needs a
+# citation when the next word is not an article/pronoun, or when the nearby text names an
+# outside source.
+INTERNAL_START = re.compile(r"\s+(the|a|an|this|that|these|those|it|its|each|every|our|one|another)\b", re.I)
+OUTSIDE = re.compile(r"github|gitlab|\brepo|repositor|project|library|package|upstream|open[- ]source|\bsdk\b|"
+                     r"\bpypi\b|\bnpm\b|https?://", re.I)
 GITHUB = re.compile(r"github\.com/([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)")
 SHA = re.compile(r"\b[0-9a-f]{40}\b")
 SPDX = re.compile(r"^- \*\*License:\*\* \S", re.M)
+
+
+def _needs_citation(after_marker: str) -> bool:
+    return not INTERNAL_START.match(after_marker) or bool(OUTSIDE.search(after_marker))
+
+
+def test_marker_rules_on_examples():
+    def needs(phrase: str) -> bool:
+        match = MARKER.search(phrase)
+        return bool(match) and _needs_citation(phrase[match.end():])
+
+    assert needs("Adapted from the nautilus_trader repo")
+    assert needs("ported from ccxt's kalshi.ts")
+    assert needs("Vendored from https://example.org/lib")
+    assert needs("copied from the upstream project")
+    assert needs("Adapted from Brisket's online-backup pattern")  # cited as first party elsewhere
+    assert not needs("fee fields copied from the fill")
+    assert not needs("status is derived from what was fetched")
 
 
 def _notices() -> str:
@@ -75,6 +97,8 @@ def test_copy_markers_cite_a_notice_or_a_first_party_source():
         text = path.read_text(encoding="utf-8")
         for match in MARKER.finditer(text):
             window = text[match.start(): match.start() + 200].lower()
+            if not _needs_citation(text[match.end(): match.end() + 120]):
+                continue
             cited = [r for r in REFERENCE.findall(text[match.start(): match.start() + 200]) if r in entries]
             if not cited and not any(name in window for name in first_party):
                 line = text.count("\n", 0, match.start()) + 1
@@ -92,7 +116,9 @@ def test_every_notice_reference_exists():
 def test_third_party_github_urls_in_runtime_code_are_recorded():
     notices, first_party = _notices().lower(), _first_party()
     problems = []
-    for path in (ROOT / "src").rglob("*.py"):
+    files = [p for d in (ROOT / "src", ROOT / "scripts") for pattern in ("*.py", "*.sh") for p in d.rglob(pattern)]
+    assert files
+    for path in files:
         for owner, repo in GITHUB.findall(path.read_text(encoding="utf-8")):
             slug = f"{owner}/{repo}".lower().removesuffix(".git")
             if owner.lower() not in first_party and slug not in first_party and slug not in notices:

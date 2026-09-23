@@ -206,10 +206,14 @@ def ladders_from_orderbook(
 ) -> dict[str, DepthLadder]:
     """YES and NO ask ladders from one captured order-book payload.
 
-    The top of each ladder is exactly what `quotes_from_orderbook` reports. `depth_limit`
-    is the `depth` the book was requested with (`forward.BOOK_DEPTH`), or None if the
-    request was not depth-limited. A side whose opposite bids reached that limit is marked
-    truncated. Returns {} when there is no book; malformed or crossed books carry `anomaly`.
+    When a ladder is valid, its top level is exactly what `quotes_from_orderbook` reports.
+    Validation is stricter than the top-of-book path: one invalid level anywhere (for
+    example a bid at 0 or off the price grid) makes the whole ladder INVALID_BOOK in
+    `walk_ladder`, failing closed. `depth_limit` is the `depth` the book was requested
+    with; callers pass the value recorded in the snapshot's request URL
+    (`forward.BOOK_DEPTH` today), or None if the request was not depth-limited. A side
+    whose opposite bids reached that limit is marked truncated. Returns {} when there is no
+    book; malformed or crossed books carry `anomaly`.
     """
     book = payload.get("orderbook_fp") if isinstance(payload, Mapping) else None
     if not isinstance(book, Mapping):

@@ -24,7 +24,7 @@ from edge_lab.opportunity import ExecutableQuote
 
 from test_forward import D, MARKETS
 
-from gate7.gate7_support import CLOSED, OPS, store_settled_markets
+from gate7.gate7_support import CLOSED, OPS, settled_copy, store_settled_markets
 
 UTC = timezone.utc
 T0 = datetime(2026, 9, 22, 22, 0, tzinfo=UTC)
@@ -64,8 +64,9 @@ def test_every_fill_is_a_taker_fill_at_the_entry_ask():
     assert not hasattr(FEES, "maker_buy")  # taker schedule only; maker fees are unmodelled
 
 
-def test_no_partial_fill_and_no_depth_beyond_the_displayed_best_level():
-    """PredictionMarketBench fills partially and walks every level; the frozen policy is all or nothing."""
+def test_no_partial_fill_when_the_best_level_is_short():
+    """PredictionMarketBench fills partially and walks every level. The frozen policy sees only
+    the best level (`ExecutableQuote` carries nothing deeper) and is all or nothing."""
     for entry_size, confirm_size in (("2", "10"), ("10", "2"), ("0", "10")):
         result = fill(3, q("0.45", entry_size), q("0.45", confirm_size, at=T0 + timedelta(minutes=12)))
         assert result.status == NO_FILL and result.quantity == 0 and result.price is None
@@ -83,7 +84,8 @@ def test_shadow_run_records_at_most_one_fill_per_market_side_and_day(full_day, l
     taken twice by recording several fills against one market side on one day."""
     shadow.run_day(full_day, ledger, D, model=model, now=CLOSED)
     shadow.run_day(full_day, ledger, D, model=model, now=CLOSED)  # re-run must not add fills
-    keys = [(f["market_id"], f["side"]) for f in (e for e in _payloads(ledger, "fill")) if f["status"] == FILLED]
+    keys = [(f["market_id"], f["side"]) for f in _payloads(ledger, "fill") if f["status"] == FILLED]
+    assert keys, "the fixture day must fill something, or this test proves nothing"
     assert len(keys) == len(set(keys))
 
 
@@ -143,6 +145,7 @@ def test_an_event_with_several_yes_brackets_does_not_settle(full_day, ledger, mo
     assert [s for s in report["settled"] if s["account_id"] == OPS] == []
     pending = {p["position_id"]: p["reason"] for p in report["pending"] if p["account_id"] == OPS}
     assert pending and all("YES brackets" in why for why in pending.values())
+    assert {c["position_id"] for c in report["conflicts"] if c["account_id"] == OPS} == set(pending)
 
 
 def _self_no(market: dict) -> dict:
@@ -153,43 +156,21 @@ def _self_no(market: dict) -> dict:
     raise AssertionError(f"no NO value for {market.get('ticker')}")
 
 
-def test_an_event_with_no_yes_bracket_does_not_settle(full_day, ledger, model):
-    """Every captured market settles NO on its own expiration value, so the event has no
-    winning bracket at all. That is contradictory evidence, not a clean set of losses."""
+def test_brackets_that_each_lose_on_their_own_value_do_not_settle(full_day, ledger, model):
+    """Every captured market settles NO, each on a different expiration value: the brackets
+    contradict each other, so this is not a clean set of losses."""
     shadow.run_day(full_day, ledger, D, model=model, now=CLOSED)
     store_settled_markets(full_day, [_self_no(m) for m in MARKETS["markets"]], run_id="no-yes",
                           fetched_at="2026-09-24T14:00:00+00:00")
     report = shadow.settle_open_positions(full_day, ledger)
     assert [s for s in report["settled"] if s["account_id"] == OPS] == []
     pending = {p["position_id"]: p["reason"] for p in report["pending"] if p["account_id"] == OPS}
-    assert pending and all("YES brackets" in why for why in pending.values())
-
-
-def test_coherent_event_settles_even_with_an_unsettled_sibling(full_day, ledger, model):
-    """A bracket whose latest record has no value yet is unknown, not a contradiction: a
-    coherent event (one YES, one stated value) still settles exactly as before F14."""
-    from gate7.gate7_support import settled_copy
-    shadow.run_day(full_day, ledger, D, model=model, now=CLOSED)
-    settled = settled_copy(MARKETS["markets"], 67)
-    loser = next(i for i, m in enumerate(settled) if m["result"] == "no")
-    settled[loser] = dict(MARKETS["markets"][loser], expiration_value=None, result="")
-    store_settled_markets(full_day, settled, run_id="partial", fetched_at="2026-09-24T14:00:00+00:00")
-    report = shadow.settle_open_positions(full_day, ledger)
-    assert report["conflicts"] == []
-    unsettled_ticker = MARKETS["markets"][loser]["ticker"]
-    booked = {s["position_id"] for s in report["settled"] if s["account_id"] == OPS}
-    held = {p["position_id"] for p in report["pending"] if p["account_id"] == OPS}
-    for position in ledger.state(OPS).positions:
-        if position.market_id.endswith(unsettled_ticker):
-            assert position.position_id in held
-        else:
-            assert position.position_id in booked
+    assert pending and all("different expiration values" in why for why in pending.values())
 
 
 def test_brackets_stating_different_values_do_not_settle(full_day, ledger, model):
     """Exactly one YES bracket, but another bracket states a different expiration value."""
     shadow.run_day(full_day, ledger, D, model=model, now=CLOSED)
-    from gate7.gate7_support import settled_copy
     settled = settled_copy(MARKETS["markets"], 67)
     loser = next(i for i, m in enumerate(settled) if m["result"] == "no"
                  and settlement.resolve(m, 90).outcome is settlement.Outcome.NO)
@@ -197,4 +178,76 @@ def test_brackets_stating_different_values_do_not_settle(full_day, ledger, model
     store_settled_markets(full_day, settled, run_id="split", fetched_at="2026-09-24T14:00:00+00:00")
     report = shadow.settle_open_positions(full_day, ledger)
     assert [s for s in report["settled"] if s["account_id"] == OPS] == []
-    assert all("disagree on expiration_value" in p["reason"] for p in report["pending"] if p["account_id"] == OPS)
+    pending = [p["reason"] for p in report["pending"] if p["account_id"] == OPS]
+    assert pending and all("different expiration values" in why for why in pending)
+
+
+# --------------------------------------------------------------------------- incomplete is not contradictory
+
+
+def _positions(ledger):
+    return {p.market_id.split(":", 1)[1]: p.position_id for p in ledger.state(OPS).positions}
+
+
+def test_unsettled_brackets_are_pending_not_a_conflict(full_day, ledger, model):
+    """The daily refresh often captures an event before Kalshi publishes results. Unsettled
+    records mean the evidence is incomplete, not contradictory: no alert, just pending."""
+    shadow.run_day(full_day, ledger, D, model=model, now=CLOSED)
+    unsettled = [dict(m, expiration_value=None, result="") for m in MARKETS["markets"]]
+    store_settled_markets(full_day, unsettled, run_id="early", fetched_at="2026-09-24T14:00:00+00:00")
+    report = shadow.settle_open_positions(full_day, ledger)
+    assert report["settled"] == [] and report["conflicts"] == []
+    assert {p["position_id"] for p in report["pending"] if p["account_id"] == OPS} == set(_positions(ledger).values())
+
+
+def test_losing_brackets_settle_while_the_winning_bracket_is_not_yet_settled(full_day, ledger, model):
+    """One stated value, the YES bracket not settled yet: every captured bracket resolves on
+    that value, so the losers settle exactly as they did before F14 and nothing is flagged."""
+    shadow.run_day(full_day, ledger, D, model=model, now=CLOSED)
+    settled = settled_copy(MARKETS["markets"], 67)
+    winner = next(i for i, m in enumerate(settled) if m["result"] == "yes")
+    winner_ticker = settled[winner]["ticker"]
+    settled[winner] = dict(MARKETS["markets"][winner], expiration_value=None, result="")
+    store_settled_markets(full_day, settled, run_id="partial", fetched_at="2026-09-24T14:00:00+00:00")
+    report = shadow.settle_open_positions(full_day, ledger)
+    assert report["conflicts"] == []
+    positions = _positions(ledger)
+    assert winner_ticker in positions, "the fixture day must hold a position on the winning bracket"
+    booked = {s["position_id"]: s["outcome"] for s in report["settled"] if s["account_id"] == OPS}
+    held = {p["position_id"] for p in report["pending"] if p["account_id"] == OPS}
+    assert positions[winner_ticker] in held
+    others = {t: pid for t, pid in positions.items() if t != winner_ticker}
+    assert others and all(booked.get(pid) == "NO" for pid in others.values())
+
+
+def test_an_unsettled_bracket_holding_a_position_stays_pending(full_day, ledger, model):
+    shadow.run_day(full_day, ledger, D, model=model, now=CLOSED)
+    positions = _positions(ledger)
+    settled = settled_copy(MARKETS["markets"], 67)
+    loser = next(i for i, m in enumerate(settled) if m["result"] == "no" and m["ticker"] in positions)
+    loser_ticker = settled[loser]["ticker"]
+    settled[loser] = dict(MARKETS["markets"][loser], expiration_value=None, result="")
+    store_settled_markets(full_day, settled, run_id="partial", fetched_at="2026-09-24T14:00:00+00:00")
+    report = shadow.settle_open_positions(full_day, ledger)
+    assert report["conflicts"] == []
+    booked = {s["position_id"] for s in report["settled"] if s["account_id"] == OPS}
+    held = {p["position_id"] for p in report["pending"] if p["account_id"] == OPS}
+    assert positions[loser_ticker] in held
+    assert {pid for t, pid in positions.items() if t != loser_ticker} <= booked
+
+
+def test_a_later_contradiction_is_reported_for_already_settled_positions(full_day, ledger, model):
+    """Settled on coherent evidence, then a later capture adds a second YES bracket: the booked
+    positions are reported as conflicts (never silently rewritten)."""
+    shadow.run_day(full_day, ledger, D, model=model, now=CLOSED)
+    store_settled_markets(full_day, settled_copy(MARKETS["markets"], 67), run_id="s1",
+                          fetched_at="2026-09-24T14:00:00+00:00")
+    first = shadow.settle_open_positions(full_day, ledger)
+    settled_ids = {s["position_id"] for s in first["settled"] if s["account_id"] == OPS}
+    assert settled_ids and first["conflicts"] == []
+    store_settled_markets(full_day, [_self_yes(m) for m in MARKETS["markets"]], run_id="s2",
+                          fetched_at="2026-09-24T15:00:00+00:00")
+    report = shadow.settle_open_positions(full_day, ledger)
+    flagged = {c["position_id"] for c in report["conflicts"] if c["account_id"] == OPS}
+    assert settled_ids <= flagged
+    assert any("YES brackets" in (c.get("reason") or "") for c in report["conflicts"])

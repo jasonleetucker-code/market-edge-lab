@@ -201,8 +201,12 @@ def test_walk_properties_on_random_books():
 # --------------------------------------------------------------------------- fees
 
 
+def kalshi_ladder(*levels):
+    return replace(ladder(*levels), venue="kalshi", market_id="kalshi:M")
+
+
 def test_one_level_fee_equals_the_engine_fee_schedule():
-    fill = walk_ladder(ladder(("0.48", "10")), 3)
+    fill = walk_ladder(kalshi_ladder(("0.48", "10")), 3)
     cost, why = price_depth_fill(fill, KALSHI_QUADRATIC_TAKER_V1)
     direct = KALSHI_QUADRATIC_TAKER_V1.taker_buy(3, D("0.48"))
     assert why == "priced"
@@ -211,7 +215,7 @@ def test_one_level_fee_equals_the_engine_fee_schedule():
 
 
 def test_each_level_is_priced_as_its_own_taker_fill():
-    fill = walk_ladder(ladder(("0.48", "2"), ("0.50", "1"), ("0.53", "10")), 5)
+    fill = walk_ladder(kalshi_ladder(("0.48", "2"), ("0.50", "1"), ("0.53", "10")), 5)
     cost, _ = price_depth_fill(fill, KALSHI_QUADRATIC_TAKER_V1)
     expected = [KALSHI_QUADRATIC_TAKER_V1.taker_buy(q, D(p)) for p, q in (("0.48", 2), ("0.50", 1), ("0.53", 2))]
     assert cost.fee_quotes == tuple(expected)
@@ -221,16 +225,38 @@ def test_each_level_is_priced_as_its_own_taker_fill():
 
 
 def test_no_cost_for_unfillable_or_fractional_walks():
-    thin = walk_ladder(ladder(("0.48", "1")), 2)
+    thin = walk_ladder(kalshi_ladder(("0.48", "1")), 2)
     assert price_depth_fill(thin, KALSHI_QUADRATIC_TAKER_V1) == (None, f"walk is INSUFFICIENT_DEPTH: {thin.detail}")
-    fractional = walk_ladder(ladder(("0.48", "0.5"), ("0.49", "5")), 2)
+    fractional = walk_ladder(kalshi_ladder(("0.48", "0.5"), ("0.49", "5")), 2)
     cost, why = price_depth_fill(fractional, KALSHI_QUADRATIC_TAKER_V1)
     assert cost is None and "fractional" in why
 
 
 def test_fees_follow_the_schedule_passed_in():
-    fill = walk_ladder(ladder(("0.48", "10")), 10)
+    fill = walk_ladder(kalshi_ladder(("0.48", "10")), 10)
     doubled = replace(KALSHI_QUADRATIC_TAKER_V1, schedule_id="test-doubled", multiplier=D(2))
     base, _ = price_depth_fill(fill, KALSHI_QUADRATIC_TAKER_V1)
     more, _ = price_depth_fill(fill, doubled)
     assert more.fee > base.fee and more.fee_quotes[0].schedule_id == "test-doubled"
+
+
+def test_a_schedule_for_another_venue_never_prices_the_walk():
+    fill = walk_ladder(ladder(("0.48", "10")), 2)  # ladder venue "test"
+    cost, why = price_depth_fill(fill, KALSHI_QUADRATIC_TAKER_V1)
+    assert cost is None and "prices kalshi, not test" in why
+
+
+def test_a_schedule_that_refuses_a_take_returns_a_reason_not_an_exception():
+    class Refusing:
+        schedule_id, venue = "refusing", "test"
+
+        def taker_buy(self, contracts, price):
+            raise ValueError("series not covered")
+
+    cost, why = price_depth_fill(walk_ladder(ladder(("0.48", "10")), 2), Refusing())
+    assert cost is None and "series not covered" in why
+
+
+def test_the_walk_carries_the_ladder_identity():
+    fill = walk_ladder(ladder(("0.48", "10"), side="NO"), 2)
+    assert (fill.venue, fill.market_id, fill.side) == ("test", "test:M", "NO")
