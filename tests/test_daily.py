@@ -269,3 +269,15 @@ def _settled_run(store, value, result_for, run_id):
     _save(store, run_id=run_id, kind="settled_markets", entity_id="KXHIGHNY", url="u", payload=payload,
           fetch=fetch, spec=SETTLEMENT_SOURCE)
     store.finish_run(run_id, status="succeeded")
+
+
+def test_a_day_that_can_never_fill_does_not_hold_settlement_back(store, tmp_path, monkeypatch, model):
+    from test_forward import Clock, FakeApi, _run as capture
+    # An earlier day whose only capture is the forecast (no markets, no opportunities).
+    early = Clock(datetime(2026, 9, 21, 21, 45, tzinfo=UTC))
+    capture(store, "pfm", early, FakeApi(early), monkeypatch)
+    _full_day(store, monkeypatch)
+    _settled(store, 67, _result(67))
+    receipt, _ = _run(store, tmp_path, model, now=datetime(2026, 9, 24, 15, tzinfo=UTC))
+    assert receipt["settlement"]["settled"] == 6
+    assert receipt["settlement"]["evidence_cutoff_utc"] == "2026-09-24T15:00:00+00:00"

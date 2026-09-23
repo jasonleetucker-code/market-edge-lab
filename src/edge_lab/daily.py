@@ -109,18 +109,28 @@ def missing_capture_days(days: list[date], last_closed: date) -> list[date]:
     return out
 
 
-def settlement_cutoff(store: SnapshotStore, ledger: ShadowLedger, now: datetime) -> datetime:
+def settlement_cutoff(store: SnapshotStore, ledger: ShadowLedger, now: datetime, *, model=None) -> datetime:
     """The latest evidence-receipt time settlements may use now.
 
-    While any closed capture day is unprocessed or incomplete in either account, settling on
-    evidence received after that day's decision would record cash movements its fills must
-    precede, and the ledger (knowledge-time order) would then refuse those fills forever.
-    So settlement is capped at the earliest such day's decision time until it is done."""
+    While a closed capture day that can still produce fills is unprocessed or incomplete in
+    either account, settling on evidence received after that day's decision would record
+    cash movements its fills must precede, and the ledger (knowledge-time order) would then
+    refuse those fills forever. So settlement is capped at the earliest such day's decision
+    time until it is done. A day with no qualifying opportunity (for example a capture that
+    stored no markets) can never fill, so it never holds settlement back."""
+    from . import exp001_stageb
+
     days = closed_capture_days(store, now)
     done = processed_days(ledger, shadow.RESEARCH_ACCOUNT_ID) & processed_days(ledger, shadow.ACCOUNT_ID)
     broken = incomplete_days(ledger, shadow.RESEARCH_ACCOUNT_ID) | incomplete_days(ledger, shadow.ACCOUNT_ID)
-    waiting = [d for d in days if d not in done or d in broken]
-    return forward.windows(min(waiting))["decision"] if waiting else now
+    for day in days:
+        if day in broken:
+            return forward.windows(day)["decision"]
+        if day not in done:
+            evaluation = exp001_stageb.evaluate_day(store, day, model=model)
+            if any(o.qualification == "QUALIFY" for o in evaluation.opportunities):
+                return forward.windows(day)["decision"]
+    return now
 
 
 def _previous_receipt(status_dir: Path | None) -> dict[str, Any] | None:
@@ -327,7 +337,7 @@ def _run_locked(db: Path, ledger_path: Path, now: datetime, receipt: dict[str, A
         except Exception as exc:  # noqa: BLE001 - a failed refresh must not lose the bookkeeping
             receipt["settlement"]["refresh"] = {"status": "failed", "errors": [f"{type(exc).__name__}: {exc}"]}
         store = SnapshotStore.open_readonly(db)  # fresh read-only view including the new evidence
-    cutoff = settlement_cutoff(store, ledger, now)
+    cutoff = settlement_cutoff(store, ledger, now, model=model)
     if cutoff < now:
         receipt["problems"].append(f"settlement held at evidence received by {_iso(cutoff)} until the earliest "
                                    "unfinished capture day is processed")
