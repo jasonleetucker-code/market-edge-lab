@@ -1,0 +1,71 @@
+{
+  "bootstrap": {
+    "alpha": 0.05,
+    "block": 7,
+    "function": "edge_lab.stats.block_bootstrap_mean_ci",
+    "resamples": 10000,
+    "seed": 20260922
+  },
+  "dataset_sha256": "1794b23cd519a4c4a952700dc97530df0f0452f070962c0cb7500fd1afcef51a",
+  "difference_v2_minus_v1": {
+    "ci_lower": -0.025574066705235373,
+    "ci_upper": 0.020747451507099942,
+    "mean": -0.001984708364578254,
+    "n_days": 731
+  },
+  "experiment_id": "EXP-001",
+  "fit_counts": {
+    "V1": {
+      "ALL": 2191
+    },
+    "V2": {
+      "DJF": 541,
+      "JJA": 552,
+      "MAM": 552,
+      "SON": 546
+    }
+  },
+  "fit_window": {
+    "first": "2017-01-01",
+    "last": "2022-12-31",
+    "n_days": 2191,
+    "splits": [
+      "train"
+    ]
+  },
+  "phase": "validation",
+  "provenance": {
+    "code_commit": "e3405cf68161be10c19ea3e8edd9a84d93ca6e00",
+    "command": "python scripts/run_exp001_gate4.py --phase validation",
+    "python": "3.12.10",
+    "run_at_utc": "2026-09-22T23:31:08+00:00"
+  },
+  "r0_support": [
+    3,
+    108
+  ],
+  "r1_params": {
+    "mu": 0.4381560931081698,
+    "sigma": 3.213345783300672
+  },
+  "rule": "per validation day in date order d = lnP_V2 - lnP_V1 (both fitted on usable train days); choose V2 only if mean(d) > 0 and the 95% block-bootstrap lower bound > 0 (strict); otherwise V1 (ties -> V1)",
+  "scored_window": {
+    "first": "2023-01-01",
+    "last": "2024-12-31",
+    "n_days": 731,
+    "splits": [
+      "validation"
+    ]
+  },
+  "selected_variant": "V1",
+  "train_in_sample_mean_log_score": {
+    "V1": -2.507356383714898,
+    "V2": -2.465678100040164
+  },
+  "validation_mean_log_score": {
+    "R0": -3.6970545183258214,
+    "R1": -2.446227348788311,
+    "V1": -2.4218294975361303,
+    "V2": -2.4238142059007086
+  }
+}

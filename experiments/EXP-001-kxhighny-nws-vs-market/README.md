@@ -1,9 +1,14 @@
 # EXP-001: KXHIGHNY NWS forecast vs market
 
-**Status: PREREGISTERED (frozen 2026-09-22, `preregistration.json`).** Gate 2 (settlement)
-passed; Gate 3 built the point-in-time dataset and the full specification (`gate3/`). No
-model has been fitted, no validation or test error has been computed, and nothing here
-claims an edge. Next: Gate 4 implements the frozen baseline and evaluates it once.
+**Status: RUNNING. Stage A PASSED (Gate 4, 2026-09-22); Stage B is pending.** The
+preregistration was frozen on 2026-09-22 (`preregistration.json`).
+- Gate 2 validated settlement. Gate 3 built the point-in-time dataset and the full
+  specification (`gate3/`).
+- Gate 4 fitted the frozen baseline. The validation rule selected V1, and the test split
+  was opened once for Stage A (`gate4/REPORT.md`).
+- Stage A checks probabilities only. Nothing here claims a trading edge.
+- Stage B (prospective shadow trading) needs the forward order-book evidence now being
+  collected (ADR 0012).
 
 ## Log
 
@@ -50,6 +55,36 @@ claims an edge. Next: Gate 4 implements the frozen baseline and evaluates it onc
     handles both (v3 also refuses suffixed products); this was found before any error
     statistic was computed.
 
+- **2026-09-22 (gate 4).** Implemented the frozen baseline (`src/edge_lab/exp001_baseline.py`,
+  `scripts/run_exp001_gate4.py`) and ran it once. The work is four commits on
+  `gate4/exp001-baseline`: code and amendments, validation, the single test run, and
+  reproducibility tests.
+  - Six dated pre-validation `[[amendments]]` (commit `e3405cf`) resolved ambiguities before
+    any validation or test score existed. None changes a model, window or threshold.
+  - Validation selection (`gate4/validation_selection.json`, commit `e1705d2`, train and
+    validation rows only): d = lnP_V2 - lnP_V1 has mean -0.0020, 95% block-bootstrap CI
+    [-0.0256, +0.0207], so the frozen rule selects **V1 (pooled)**.
+  - Stage A: V1, R0 and R1 were refitted on 2,922 train + validation days and scored once on
+    629 test days (split opened once, run at `e1705d2`, `gate4/test_split_opened.json`).
+    - Condition 1: model - R0 per-day log score +1.253, CI [+1.147, +1.362]. Met.
+    - Condition 2: randomized-PIT central coverage 0.806 (507/629), inside [0.75, 0.85]. Met.
+    - Tails: 75 days with u < 0.10 and 47 with u > 0.90.
+  - Reported only (not criteria):
+    - model - R1: +0.020, CI [-0.001, +0.039]. The interval includes 0: V1 is not
+      distinguishable from the Gaussian reference R1 at 95%;
+    - mean Brier: model 0.892, R0 0.968, R1 0.897;
+    - mean log loss: model 2.451, R0 3.705, R1 2.471.
+  - Caveats, recorded and not investigated (investigating them would mean analysing the
+    test split beyond the preregistration):
+    - Climatology (R0) is a low bar.
+    - The PIT tails are asymmetric: 75 days (11.9%) fell below 0.10 and 47 (7.5%) above
+      0.90. Coverage is still inside the preregistered range.
+    - The R1 Brier score uses floored probabilities over f±60, which need not sum to 1.
+  - **Stage A PASS.** Per amendment 5 the status is now `RUNNING`: Stage B is pending.
+    The owner authorized scheduled read-only forward collection on 2026-09-22 (ADR 0012).
+    Stage B evaluation needs the valid days that collection produces. This is probability
+    validation only. It is not evidence of a trading edge. Full report: `gate4/REPORT.md`.
+
 ## Open questions
 
 1. ~~What does GLOBALTEMPERATURE.pdf specify?~~ Answered in `docs/SETTLEMENT.md`.
@@ -61,7 +96,8 @@ claims an edge. Next: Gate 4 implements the frozen baseline and evaluates it onc
    (`edge-lab experiments freeze`, CI `check-frozen`); use it when preregistering.
 5. ~~Gate 3 design question: decision time vs. forecast availability.~~ Answered in ADR 0010
    and `gate3/DESIGN.md` §1.
-6. Stage B needs order books collected at 18:00 ET daily. That is scheduled collection,
-   which is an owner decision (ADR 0008).
+6. ~~Stage B needs order books collected at 18:00 ET daily.~~ Authorized by the owner on
+   2026-09-22: read-only scheduled collection on the Chase Upside VPS (ADR 0012,
+   `edge-lab forward`).
 7. Re-verify the fee coefficient against Kalshi's fee-schedule PDF before any Stage B
    result.

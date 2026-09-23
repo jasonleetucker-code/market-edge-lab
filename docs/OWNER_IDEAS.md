@@ -42,6 +42,11 @@ Related owner records that are not ideas:
   - #7's free-first principle drove the forecast-source choice (IEM PFMOKX).
   - The Kalshi fee-schedule PDF sits behind a bot checkpoint and is not bypassed, which
     is consistent with #7's "no circumvention".
+- **2026-09-22, Gate 4 exit criteria met (PR #18); Gate 5 awaits the owner.**
+  - #10 is partly authorized: the headless read-only collector only (ADR 0012).
+  - No other classification changes.
+  - #3 and #6 stay NOT READY until a shadow ledger with real forward data exists.
+  - #5 and #9 stay outside scope: no sports work.
 - **2026-09-22, Gate 3 → Gate 4 (Gate 3 PR, effective on merge).**
   - No classification changes: #3, #6, #9 and #10 stay NOT READY, #5 READY FOR RESEARCH,
     #7 APPLY SELECTIVELY.

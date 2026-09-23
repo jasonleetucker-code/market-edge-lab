@@ -10,8 +10,8 @@ be written here when they are made.
 | 1 | Data collection | **Complete.** Collectors, provenance, source health, freshness and immutable evidence (PR #2); NWS CLI and settlement-evidence collectors, pagination and pacing (PR #8). Scheduled read-only forward collection **authorized 2026-09-22** (see below; ADR 0012). |
 | 2 | Settlement validation | **PASSED 2026-09-22 (PR #8, merged 22d217b).** 799 daily events audited (including a fresh 2024 validation with the procedure frozen first), 0 mis-predictions under the final procedure, 0 unexplained mismatches; see `experiments/EXP-001-kxhighny-nws-vs-market/gate2/REPORT.md` and `docs/SETTLEMENT.md`. |
 | 3 | Historical dataset | **PASSED 2026-09-22 (PR #14, merged 2f5d640; Windows portability fixes PR #15, 7c93f78).** Point-in-time dataset EXP-001-pit-v2 (3,551 days, 3,551 usable, SHA-256 `1794b23c…`), train-only descriptive analysis, EXP-001 PREREGISTERED and frozen; see `experiments/EXP-001-kxhighny-nws-vs-market/gate3/`. |
-| 4 | Baseline model | **ACTIVE** (since the PR #14 merge, 2026-09-22). Implement the frozen baseline model and evaluate it on the predeclared train/validation/test protocol. |
-| 5–10 | Market-vs-model → … → scaling | Not authorized. |
+| 4 | Baseline model | **EXIT CRITERIA MET 2026-09-22 (PR #18).** The frozen baseline was implemented; validation selected V1; the test split was opened once; **Stage A PASS** (model − R0 +1.253, 95% CI [+1.147, +1.362]; PIT coverage 0.806 ∈ [0.75, 0.85]). EXP-001 is `RUNNING` (Stage B pending). A Stage A pass is not evidence of an edge; see `experiments/EXP-001-kxhighny-nws-vs-market/gate4/REPORT.md`. Gate 4 stays the current gate until the owner approves moving to Gate 5. |
+| 5–10 | Market-vs-model → … → scaling | Not authorized. Moving to Gate 5 needs explicit owner approval. |
 
 ## Owner authorization record
 
@@ -135,5 +135,7 @@ trusting a number written here.) Any proposed scheduled collector must, before a
   preregistration.
 - **Gate 4 → 5 (proposed; the owner may revise):** the frozen baseline is implemented with tests, validation selection is
   recorded, Stage A on test is run once and reported (pass or fail) in EXP-001's log, and
-  the owner decides whether and how Stage B collection proceeds. *(The collection decision
-  was made on 2026-09-22: read-only scheduled collection on the Chase Upside VPS.)*
+  the owner decides whether and how Stage B collection proceeds. *(All met on 2026-09-22:
+  PR #18 implemented and tested the baseline, recorded the V1 selection, ran Stage A once
+  (PASS) and logged it; the owner authorized read-only scheduled collection on the Chase
+  Upside VPS. Activating Gate 5 still needs the owner's explicit approval.)*

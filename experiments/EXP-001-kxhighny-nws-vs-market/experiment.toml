@@ -1,6 +1,6 @@
 id = "EXP-001"
 title = "KXHIGHNY: NWS-forecast-implied probability vs executable Kalshi prices"
-status = "PREREGISTERED"
+status = "RUNNING"
 owner = "jasonleetucker-code"
 created = "2026-09-22"
 
@@ -95,3 +95,43 @@ max_book_age = "5 minutes"
 [artifacts]
 spec = "experiments/EXP-001-kxhighny-nws-vs-market/experiment.toml"
 log = "experiments/EXP-001-kxhighny-nws-vs-market/README.md"
+gate4_report = "experiments/EXP-001-kxhighny-nws-vs-market/gate4/REPORT.md"
+gate4_validation_selection = "experiments/EXP-001-kxhighny-nws-vs-market/gate4/validation_selection.json"
+gate4_stage_a_result = "experiments/EXP-001-kxhighny-nws-vs-market/gate4/stage_a_result.json"
+
+# Gate 4 amendments. Recorded and committed before any validation or test score was
+# computed. None changes a model, variant, fit window, threshold, feature or distribution.
+
+[[amendments]]
+date = "2026-09-22"
+field = "model"
+change = "Gate 4 pre-validation (1/6): R1's mu and sigma are the fit-window mean and population sd of the raw, unclamped errors k = y - f."
+reason = "The frozen text says only 'from fit-window errors'; the +-20 clamp is defined for the empirical pmf. R1 is reported only and cannot affect the Stage A verdict. Decided before any validation or test score existed."
+
+[[amendments]]
+date = "2026-09-22"
+field = "success_criteria"
+change = "Gate 4 pre-validation (2/6): PIT inputs from the clamped pmf: F(y-1) = math.fsum of the pmf over k < k_c in ascending k, P(y) = pmf[k_c], with k_c = clamp(y - f, -20, 20) for every outcome (outcomes with |k| > 20 use the clamped k, as the frozen text states)."
+reason = "Pins the summation so the randomized PIT is one deterministic computation. No model, window or threshold changes."
+
+[[amendments]]
+date = "2026-09-22"
+field = "success_criteria"
+change = "Gate 4 pre-validation (3/6): Stage A condition 2 coverage bounds are inclusive at both ends (0.75 <= coverage <= 0.85). Condition 1 uses strict inequalities (mean > 0 and lower bound > 0), as does the V1/V2 selection rule (ties and lower bound <= 0 select V1)."
+reason = "'within [0.75, 0.85]' is a closed interval and '> 0' is strict; stated explicitly so no borderline outcome is open to interpretation after the fact."
+
+[[amendments]]
+date = "2026-09-22"
+change = "Gate 4 pre-validation (4/6): owner-requested reporting additions, reported only and never pass/fail criteria: per-day multi-category Brier score 1 - 2 P(scored outcome) + sum_y P(y)^2 over the model's full support (R0: its support; R1: integers f +- 60, floored probabilities), mean log loss (= - mean log score), and the model - R1 per-day log-score difference with its 95% block-bootstrap interval."
+reason = "Owner request for more complete reporting. These quantities do not enter the V1/V2 selection or the Stage A decision."
+
+[[amendments]]
+date = "2026-09-22"
+change = "Gate 4 pre-validation (5/6): experiment status after Stage A. FAIL -> status CONCLUDED_FAIL with a [result] table (code_commit, dataset_version, report, summary). PASS -> status RUNNING (Stage B pending), with a dated Log entry."
+reason = "A Stage A failure ends EXP-001 for this model; a pass leaves Stage B open. The registry lifecycle is fixed before the result is known."
+
+[[amendments]]
+date = "2026-09-22"
+field = "execution"
+change = "Gate 4 pre-validation (6/6): Stage B operational definitions. (a) The latency re-check window is measured per bracket from that bracket's decision-snapshot receipt time: [+10 min, +15 min]. (b) If several complete in-window decision captures exist, the latest complete one counts. (c) 'Open bracket' = a market of the target event whose status is active/open in the decision-time market list. (d) The live forecast input is NWS PFMOKX from api.weather.gov (/products/types/PFM/locations/OKX) under the same WMO-header, cutoff, age and suffix rules as the historical dataset. (e) Forward collection runs regardless of the Stage A outcome as research evidence, but Stage B evaluation for EXP-001 remains conditional on a Stage A PASS."
+reason = "Decided before any Stage B data exists, to remove ambiguity in the frozen execution and valid-day text. The fill model, latency, book age, signal threshold, looks and intervals are unchanged. Forward collection itself still needs owner approval for scheduling (ADR 0008)."
