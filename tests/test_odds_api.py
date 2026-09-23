@@ -28,6 +28,15 @@ UTC = timezone.utc
 NOW = datetime(2026, 9, 23, 15, 0, tzinfo=UTC)
 
 
+@pytest.fixture(autouse=True)
+def no_default_network(monkeypatch):
+    """The adapter's own no-redirect opener must never reach the network in tests either."""
+    def refuse(request, timeout):
+        raise AssertionError(f"test attempted a real network call: {request.full_url}")
+
+    monkeypatch.setattr(oa, "_no_redirect_opener", refuse)
+
+
 class HeaderResponse(FakeResponse):
     def __init__(self, body: bytes, *, url: str, headers: dict[str, str], status: int = 200):
         super().__init__(body, status=status, url=url)
@@ -196,7 +205,11 @@ def test_exhaustion_by_ceiling_and_by_provider_remaining(tmp_path):
                                      {"x-requests-remaining": "ten", "x-requests-used": "1"},
                                      {"x-requests-remaining": "-1", "x-requests-used": "1"},
                                      {"x-requests-remaining": "1.5", "x-requests-used": "1"},
-                                     {"x-requests-remaining": "NaN", "x-requests-used": "1"}])
+                                     {"x-requests-remaining": "NaN", "x-requests-used": "1"},
+                                     {"x-requests-remaining": "5.0", "x-requests-used": "1"},
+                                     {"x-requests-remaining": "1e2", "x-requests-used": "1"},
+                                     {"x-requests-remaining": "+5", "x-requests-used": "1"},
+                                     {"x-requests-remaining": "５", "x-requests-used": "1"}])
 def test_malformed_headers_are_quota_unknown(tmp_path, headers):
     assert oa.parse_quota_headers(headers) is None
     assert ledger(tmp_path).reconcile(headers) is oa.QuotaState.QUOTA_UNKNOWN
@@ -210,8 +223,34 @@ def test_malformed_headers_on_a_paid_call_keep_the_reservation(tmp_path):
     assert snap["reservations"][res.reservation_id]["state"] == "AMBIGUOUS" and snap["outstanding"] == 2
     with pytest.raises(oa.QuotaRefused):
         led.reserve(1)  # unknown until reconciled again
+    assert led.reconcile({"x-requests-used": "1"}) is oa.QuotaState.QUOTA_UNKNOWN
+    assert led.snapshot()["outstanding"] == 2  # never dropped without a trustworthy provider reading
     led.reconcile(quota(398, 102))
-    assert led.snapshot()["outstanding"] == 2  # never silently dropped
+    snap = led.snapshot()
+    assert snap["outstanding"] == 0  # retired, with an event, once the provider counter covers it
+    assert any(e["event"] == "reservation_retired" and e["reservation_id"] == res.reservation_id
+               for e in snap["events"])
+
+
+def test_reconciliation_retires_ambiguous_and_orphaned_reservations_only(tmp_path):
+    clock = Clock(NOW)
+    led = ledger(tmp_path, clock=clock)
+    led.reconcile(quota(400, 100))
+    orphan = led.reserve(3)  # never settled: its process "crashed"
+    ambiguous = led.reserve(2)
+    led.mark_ambiguous(ambiguous, "network error")
+    clock.at = NOW + oa.ORPHAN_AFTER + timedelta(minutes=1)
+    assert led.reconcile(quota(395, 105)) is oa.QuotaState.READY
+    snap = led.snapshot()
+    assert snap["reservations"] == {} and snap["outstanding"] == 0
+    retired = {e["reservation_id"]: e["previous_state"] for e in snap["events"] if e["event"] == "reservation_retired"}
+    assert retired == {ambiguous.reservation_id: "AMBIGUOUS", orphan.reservation_id: "RESERVED"}
+    # The provider's own counter, not the retired reservations, now carries their cost.
+    assert snap["last_headers"]["used"] == 105
+    in_flight = led.reserve(4)  # a recent RESERVED call may still be running: kept
+    clock.at += timedelta(seconds=30)
+    led.reconcile(quota(395, 105))
+    assert set(led.snapshot()["reservations"]) == {in_flight.reservation_id}
 
 
 def test_new_utc_month_needs_reconciliation_and_never_guesses_a_reset(tmp_path):
@@ -297,12 +336,11 @@ def test_reconcile_uses_the_quota_free_sports_endpoint(tmp_path):
 
 def test_successful_pull_books_the_charge_and_persists_nothing_secret(tmp_path):
     led = reconciled(tmp_path)
-    redirected = "https://api.the-odds-api.com/v4/sports/americanfootball_nfl/odds/?apiKey=" + FAKE + "&x=1"
-    opener = Opener((ODDS, quota(398, 102, 2), redirected))
+    opener = Opener((ODDS, quota(398, 102, 2)))
     out = oa.fetch_odds("americanfootball_nfl", ["h2h", "spreads"], regions=["us"], odds_format="american",
                         ledger=led, opener=opener, environ=ENV)
     assert out.state is oa.QuotaState.READY and out.quota_after is oa.QuotaState.READY
-    assert out.fetch.final_url.endswith("apiKey=REDACTED&x=1")
+    assert "apiKey=REDACTED" in out.fetch.final_url and "apiKey=REDACTED" in out.fetch.requested_url
     snap = led.snapshot()
     assert snap["used_local"] == 2 and snap["outstanding"] == 0
 
@@ -316,6 +354,29 @@ def test_successful_pull_books_the_charge_and_persists_nothing_secret(tmp_path):
     assert FAKE in opener.calls[0]  # it was sent, as the documented query parameter only
 
 
+@pytest.mark.parametrize("final", [
+    "https://evil.example/" + FAKE + "/odds",  # the key moved into the path
+    "https://api.the-odds-api.com/v4/sports/americanfootball_nfl/odds/?token2=" + FAKE,  # another parameter
+    "https://api.the-odds-api.com/v4/sports/americanfootball_nfl/odds/?apiKey=" + FAKE + "&x=1",
+])
+def test_redirects_are_refused_and_redacted(tmp_path, final):
+    led = reconciled(tmp_path)
+    with pytest.raises(oa.OddsApiError) as err:
+        oa.fetch_odds("americanfootball_nfl", ["h2h"], regions=["us"], ledger=led,
+                      opener=Opener((ODDS, quota(399, 101, 1), final)), environ=ENV)
+    assert "redirect refused" in str(err.value) and FAKE not in str(err.value)
+    assert err.value.__context__ is None and err.value.__cause__ is None
+    assert led.snapshot()["reservations"]  # the call may have been charged: kept as AMBIGUOUS
+    for path in tmp_path.rglob("*"):
+        assert FAKE.encode() not in path.read_bytes(), path
+    assert oa._redact(final, FAKE).count("REDACTED") >= 1 and FAKE not in oa._redact(final, FAKE)
+
+
+def test_the_default_opener_never_follows_redirects():
+    handler = oa._RefuseRedirects()
+    assert handler.redirect_request(None, None, 302, "Found", {}, "https://elsewhere.example/") is None
+
+
 @pytest.mark.parametrize("failure", [HTTPError("https://api.the-odds-api.com/v4/sports/x/odds/?apiKey=" + FAKE, 401,
                                                "Unauthorized", {}, None),
                                      URLError("connection reset while fetching apiKey=" + FAKE),
@@ -327,7 +388,8 @@ def test_failures_are_redacted_unchained_and_keep_the_reservation(tmp_path, fail
                       environ=ENV)
     exc = err.value
     assert FAKE not in str(exc) and FAKE not in repr(exc)
-    assert exc.__cause__ is None and exc.__suppress_context__ is True
+    assert exc.__cause__ is None and exc.__context__ is None
+    assert FAKE not in repr(exc.__context__)
     snap = led.snapshot()
     assert snap["outstanding"] == 1 and snap["state"] == "QUOTA_UNKNOWN"
     assert FAKE not in (tmp_path / "quota.json").read_text()
@@ -413,6 +475,10 @@ def test_invalid_prices_are_kept_as_evidence_but_never_become_markets():
     assert oa.offer_freshness(snap.offers[1], now=NOW).value == "fresh"
     assert oa.offer_freshness(snap.offers[1], now=NOW + timedelta(hours=1)).value == "stale"
     assert oa.parse_odds({"not": "a list"}, odds_format="decimal").problems
+    bad_line = [{"id": "e2", "bookmakers": [{"key": "fanduel", "markets": [{"key": "spreads", "outcomes": [
+        {"name": "A", "price": 1.9, "point": "abc"}, {"name": "B", "price": 1.9, "point": "NaN"}]}]}]}]
+    devig = oa.devig_by_market(oa.parse_odds(bad_line, odds_format="decimal"))
+    assert devig == {("the_odds_api:e2", "fanduel", "spreads:invalid-line"): None}
 
 
 def test_coverage_distinguishes_absent_paid_only_and_unimplemented():

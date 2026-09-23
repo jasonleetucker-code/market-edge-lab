@@ -191,9 +191,11 @@ fixture tests, but no collector job, no timer and no health profile. Evidence is
 
 Provenance rules specific to these adapters:
 
-- **Catalog coverage.** A listing read is COMPLETE only when every page succeeded and the
-  last page was short. A PARTIAL or FAILED read is never evidence that a market does not
-  exist (`discovery.CatalogCoverage`).
+- **Catalog coverage.** A listing read is COMPLETE only when every page succeeded, the last
+  page came back empty, and no filter was applied. A short page is not proof of the end,
+  because a server may cap the page size. A filtered scan is PARTIAL and names its filter.
+  A PARTIAL or FAILED read is never evidence that a market does not exist
+  (`discovery.CatalogCoverage`).
 - **Units.** Units are recorded as the source states them. Polymarket US prices are USD per
   YES contract, and its quantities are contracts that may be fractional. Novig trade prices
   are `cost/qty`, but its market OHLC is in cents. The Odds API keeps raw American or decimal

@@ -36,12 +36,13 @@ import re
 import threading
 import uuid
 from dataclasses import asdict, dataclass, replace
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 from enum import Enum
 from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping, Sequence
 from urllib.parse import quote, urlencode
+from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 from . import http
 from .forward import LockBusy, exclusive_lock
@@ -66,6 +67,10 @@ PAID_ONLY_BOOKMAKERS = frozenset({"williamhill_us", "fanatics"})
 SUPPORTED_MARKETS = frozenset({"h2h", "spreads", "totals"})
 
 _SLUG = re.compile(r"^[a-z0-9_]{1,64}$")
+_COUNT = re.compile(r"^[0-9]+$")
+# A RESERVED reservation older than this cannot still be in flight (one GET, 20 s timeout,
+# no retries): the process that made it crashed. It is retired at the next header reading.
+ORPHAN_AFTER = timedelta(minutes=10)
 
 
 class QuotaState(str, Enum):
@@ -196,13 +201,9 @@ def parse_quota_headers(headers: Iterable[tuple[str, str]] | Mapping[str, str] |
         text = found.get(name)
         if text is None:
             return None
-        try:
-            value = Decimal(text)
-        except InvalidOperation:
-            raise ValueError(name) from None
-        if not value.is_finite() or value < 0 or value != value.to_integral_value():
+        if not _COUNT.match(text):  # plain non-negative integers only
             raise ValueError(name)
-        return int(value)
+        return int(text)
 
     try:
         remaining, used, last = number("x-requests-remaining"), number("x-requests-used"), number("x-requests-last")
@@ -340,6 +341,25 @@ class QuotaLedger:
         data["last_headers"] = {"remaining": parsed.remaining, "used": parsed.used, "last": parsed.last,
                                 "observed_at_utc": now.isoformat()}
         data["quota_known"] = True
+        self._retire_settled_by_provider(data, now)
+
+    def _retire_settled_by_provider(self, data: dict[str, Any], now: datetime) -> None:
+        """Retire reservations that the provider's own counter now accounts for.
+
+        An AMBIGUOUS reservation's call finished (it failed) before this header reading, so
+        whatever it cost is inside the provider's `used`, which the ceiling already counts.
+        A RESERVED one older than ORPHAN_AFTER was orphaned by a crash. A recent RESERVED one
+        may still be in flight and is kept."""
+        for rid, entry in list(data["reservations"].items()):
+            created = datetime.fromisoformat(entry["created_at_utc"])
+            if created > now:
+                continue
+            orphaned = entry["state"] == "RESERVED" and now - created > ORPHAN_AFTER
+            if entry["state"] == "AMBIGUOUS" or orphaned:
+                del data["reservations"][rid]
+                self._event(data, now, "reservation_retired", reservation_id=rid, cost=int(entry["cost"]),
+                            previous_state=entry["state"], reason=("orphaned (no settle within "
+                            f"{ORPHAN_AFTER})" if orphaned else "provider counter observed after the call"))
 
     def reserve(self, cost: int) -> Reservation:
         """Reserve `cost` credits or raise QuotaRefused. Nothing is sent without a reservation."""
@@ -423,20 +443,44 @@ class OddsFetch:
     quota_after: QuotaState | None = None
 
 
-def _redacted_result(result: http.FetchResult) -> http.FetchResult:
-    return replace(result, requested_url=redact_url(result.requested_url), final_url=redact_url(result.final_url))
+def _redact(url: str, key: str) -> str:
+    return redact_text(redact_url(url), (key,))
+
+
+def _redacted_result(result: http.FetchResult, key: str) -> http.FetchResult:
+    return replace(result, requested_url=_redact(result.requested_url, key),
+                   final_url=_redact(result.final_url, key))
+
+
+class _RefuseRedirects(HTTPRedirectHandler):
+    """A redirect could carry the key to another URL: this source never follows one."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: D401 - urllib hook
+        return None  # urllib then raises HTTPError with the 3xx status
+
+
+def _no_redirect_opener(request: Request, timeout: float) -> Any:
+    return build_opener(_RefuseRedirects()).open(request, timeout=timeout)
 
 
 def _get(url: str, key: str, *, opener: http.Opener | None, pacer: http.Pacer | None) -> http.FetchResult:
-    """One GET with no retries (a retry could spend credits twice). Errors are redacted."""
+    """One GET, no retries (a retry could spend credits twice), no redirects. Errors are
+    redacted and raised with no cause and no context."""
+    failure: tuple[str, int | None] | None = None
+    result = None
     try:
-        result = http.fetch(url, headers={"User-Agent": USER_AGENT}, retries=0, opener=opener, pacer=pacer,
-                            sleep=lambda s: None)
+        result = http.fetch(url, headers={"User-Agent": USER_AGENT}, retries=0,
+                            opener=opener or _no_redirect_opener, pacer=pacer, sleep=lambda s: None)
     except http.HttpFetchError as exc:
-        raise OddsApiError(redact_text(str(exc), (key,)), status=exc.status) from None
+        failure = (redact_text(str(exc), (key,)), exc.status)
     except Exception as exc:  # anything else: still never leak the key or the chain
-        raise OddsApiError(redact_text(f"{type(exc).__name__}: {exc}", (key,))) from None
-    return _redacted_result(result)
+        failure = (redact_text(f"{type(exc).__name__}: {exc}", (key,)), None)
+    if failure is not None:  # raised outside the except block: no __context__ either
+        raise OddsApiError(failure[0], status=failure[1])
+    if result.final_url != url:
+        raise OddsApiError(f"redirect refused: {_redact(url, key)} answered from {_redact(result.final_url, key)}",
+                           status=result.http_status)
+    return _redacted_result(result, key)
 
 
 def reconcile_quota(ledger: QuotaLedger, *, opener: http.Opener | None = None,
@@ -492,8 +536,8 @@ def _decode(result: http.FetchResult, key: str) -> Any:
     try:
         return json.loads(result.body)
     except (json.JSONDecodeError, UnicodeDecodeError):
-        raise OddsApiError(redact_text(f"invalid JSON from {result.requested_url}", (key,)),
-                           status=result.http_status) from None
+        pass
+    raise OddsApiError(redact_text(f"invalid JSON from {result.requested_url}", (key,)), status=result.http_status)
 
 
 def save_snapshot(store: Any, *, run_id: str, sport: str, outcome: OddsFetch) -> int:
@@ -693,10 +737,20 @@ def devig_by_market(snapshot: OddsSnapshot) -> dict[tuple[str, str, str], DevigE
     for offer in snapshot.offers:
         if offer.market_key not in SUPPORTED_MARKETS:
             continue
-        line = "" if offer.point is None else str(abs(Decimal(offer.point)))
+        line = "" if offer.point is None else _abs_line(offer.point)
         groups.setdefault((offer.event_id, offer.bookmaker, f"{offer.market_key}{':' + line if line else ''}"),
                           []).append(offer)
-    return {k: devig_probabilities([o.decimal_odds for o in v]) for k, v in sorted(groups.items())}
+    return {k: None if k[2].endswith(":invalid-line") else devig_probabilities([o.decimal_odds for o in v])
+            for k, v in sorted(groups.items())}
+
+
+def _abs_line(point: str) -> str:
+    """The absolute line of a spread/total, or "invalid-line" (never de-vigged)."""
+    try:
+        value = Decimal(point)
+    except InvalidOperation:
+        return "invalid-line"
+    return str(abs(value)) if value.is_finite() else "invalid-line"
 
 
 def coverage(snapshot: OddsSnapshot, *, requested_bookmakers: Sequence[str] = (),

@@ -198,10 +198,10 @@ THE_ODDS_API = VenueSpec(
     venue_id="the_odds_api", kind=VenueKind.AGGREGATOR, route_id="the_odds_api:v4",
     liquidity_pool_id="none (republishes sportsbook prices)",
     capabilities=_caps(
-        catalog_read=CapabilityState(ConnectivityStage.TESTED, True, "edge_lab.odds_api on documented v4 fixtures; a live read needs the "
-                                     "owner's free key (NEEDS_ACCESS) and an approved activation plan"),
-        quote_read=CapabilityState(ConnectivityStage.TESTED, True, "offered odds per bookmaker parsed from documented fixtures; never "
-                                   "executable and not fillable here; live read NEEDS_ACCESS (owner key)"),
+        catalog_read=CapabilityState(_N, True, "edge_lab.odds_api fixture-tested on documented v4 examples; a live "
+                                     "read needs the owner's free key and an approved activation plan"),
+        quote_read=CapabilityState(_N, True, "offered odds per bookmaker, fixture-tested; never executable and not "
+                                   "fillable here; a live read needs the owner's key"),
         depth_read=CapabilityState(_U, None, "no depth or size is published"),
         history_read=CapabilityState(_U, None, "historical odds are not in the free tier"),
         settlement_read=CapabilityState(_N, True, "scores endpoint (free-tier key)"),

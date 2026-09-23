@@ -13,9 +13,9 @@ Rules:
 - **No model, no probability.** A market without a validated model estimate is
   MODEL_UNSUPPORTED and its record carries `probability=None`. Nothing is fabricated.
 - **A title match is not rule equivalence.** MATCHED_EQUIVALENT needs equal
-  `Event.settlement_identity` on both sides and captured, resolved rules on both
-  (`rules_resolved`). Anything else a caller offers as a candidate is at most
-  RELATED_NOT_EQUIVALENT.
+  `Event.settlement_identity`, captured and resolved rules on both sides (`rules_resolved`,
+  `rules_sha256`), and the same contract: payoff kind, amount, YES condition and outcome.
+  Anything else a caller offers as a candidate is at most RELATED_NOT_EQUIVALENT.
 - **Uniqueness is only claimed within verified coverage.** UNIQUE_WITHIN_VERIFIED_COVERAGE
   needs every searched venue's catalog coverage to be COMPLETE and no candidate at all. The
   record names the venues and the as-of time. A failed or partial catalog is never
@@ -162,11 +162,24 @@ class DiscoveryRecord:
         return out
 
 
+def _norm(text: str | None) -> str:
+    return " ".join((text or "").split()).casefold()
+
+
 def is_equivalent(a_event: Event | None, a: Market, b_event: Event, b: Market) -> bool:
-    """Equal settlement identity and resolved rules on both sides; never a title comparison."""
+    """Same settlement identity **and** the same contract; never a title comparison.
+
+    Both sides need resolved, captured rules (`rules_resolved`, a `rules_sha256`), and the
+    same payoff (kind, amount, normalized YES condition) and outcome. Equal event identity
+    alone is not enough: sibling brackets of one event settle on the same source but pay
+    on different outcomes."""
     return (a_event is not None and a.rules_resolved and b.rules_resolved
+            and a.rules_sha256 is not None and b.rules_sha256 is not None
             and a_event.settlement_identity == b_event.settlement_identity
-            and a.event_id == a_event.event_id and b.event_id == b_event.event_id)
+            and a.event_id == a_event.event_id and b.event_id == b_event.event_id
+            and a.payoff.kind == b.payoff.kind and a.payoff.amount == b.payoff.amount
+            and _norm(a.payoff.yes_condition) == _norm(b.payoff.yes_condition)
+            and _norm(a.outcome) == _norm(b.outcome))
 
 
 def _series_scope(market: Market) -> str | None:

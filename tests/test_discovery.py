@@ -90,6 +90,36 @@ def test_matched_equivalent_needs_equal_settlement_identity_and_resolved_rules_o
     assert rec.equivalents == ()  # without its own event, equivalence cannot be shown
 
 
+def test_sibling_brackets_of_one_event_are_related_not_equivalent():
+    lower = Market("kalshi", "kalshi:KXHIGHNY-26SEP24-B70.5", "KXHIGHNY-26SEP24-B70.5", KALSHI_EVENT.event_id,
+                   "70-71", Payoff("binary", Decimal(1), "value in [70, 71]"), "cd" * 32, MarketStatus.OPEN,
+                   True, "rules detail")
+    top = Market("kalshi", "kalshi:KXHIGHNY-26SEP24-T80", "KXHIGHNY-26SEP24-T80", KALSHI_EVENT.event_id,
+                 "81 or above", Payoff("binary", Decimal(1), "value > 80"), "ef" * 32, MarketStatus.OPEN, True,
+                 "rules detail")
+    rec = d.classify(lower, event=KALSHI_EVENT, estimate=None, coverage=[], candidates=[Candidate(KALSHI_EVENT, top)],
+                     now=NOW)
+    assert rec.equivalents == () and rec.related == ("kalshi:KXHIGHNY-26SEP24-T80",)
+    assert S.MATCHED_EQUIVALENT.value not in rec.statuses and S.RELATED_NOT_EQUIVALENT.value in rec.statuses
+
+
+@pytest.mark.parametrize("change", [
+    dict(payoff=Payoff("binary", Decimal(1), "value in [76, 77]")),
+    dict(payoff=Payoff("binary", Decimal("100"), "value in [75, 76]")),
+    dict(payoff=Payoff("sportsbook_fixed_odds_per_unit_stake", Decimal(1), "value in [75, 76]")),
+    dict(outcome="76-77"),
+    dict(rules_sha256=None),
+])
+def test_equivalence_needs_the_same_contract_and_captured_rules(change):
+    from dataclasses import replace
+    twin_event = event("venue_b:nyc", KALSHI_EVENT.settlement_identity)
+    twin = replace(market("venue_b", "nyc-75", twin_event.event_id), **change)
+    assert d.is_equivalent(KALSHI_EVENT, KALSHI, twin_event, twin) is False
+    spaced = replace(market("venue_b", "nyc-75", twin_event.event_id),
+                     payoff=Payoff("binary", Decimal("1.00"), "Value  in [75, 76]"))
+    assert d.is_equivalent(KALSHI_EVENT, KALSHI, twin_event, spaced) is True  # normalized, same contract
+
+
 def test_unique_only_within_complete_coverage_and_names_venues_and_time():
     rec = d.classify(KALSHI, event=KALSHI_EVENT, estimate=None,
                      coverage=[cov("kalshi"), cov("polymarket_us", as_of="2026-09-23T13:00:00Z")],

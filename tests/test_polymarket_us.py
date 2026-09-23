@@ -120,9 +120,15 @@ def test_missing_book_and_bbo_never_become_quotes():
     assert (bbo.best_bid, bbo.best_ask, bbo.executable) == (Decimal("0.54"), Decimal("0.56"), False)
     assert bbo.ask_shares_total_rounded is None  # no size at the best price
     empty_side = pm.quotes_from_book("will-team-a-win", {"marketData": {"marketSlug": "will-team-a-win",
+                                                                        "state": "MARKET_STATE_OPEN",
                                                                         "bids": [], "offers": []}},
                                      received_at_utc=None, evidence_id=None)
     assert empty_side["YES"].best_ask is None and empty_side["YES"].displayed_size == 0
+    assert empty_side["YES"].anomaly is None
+    no_state = pm.quotes_from_book("will-team-a-win", {"marketData": {"marketSlug": "will-team-a-win",
+                                                                      "bids": [], "offers": []}},
+                                   received_at_utc=None, evidence_id=None)
+    assert "missing" in no_state["YES"].anomaly  # a book with no state fails closed
 
 
 def test_settlement_value():
@@ -152,13 +158,28 @@ def _page(n: int, start: int = 0) -> dict:
                         for i in range(n)]}
 
 
-def test_catalog_complete_only_after_a_short_final_page():
-    opener = ScriptedOpener(_page(2), _page(2, 2), _page(1, 4))
+def test_catalog_complete_only_after_an_empty_page():
+    opener = ScriptedOpener(_page(2), _page(2, 2), _page(1, 4), _page(0))
     pages = []
     rows, cov = pm.read_catalog(limit=2, opener=opener, pacer=Pacer(), on_page=lambda p, r: pages.append(p))
     assert [r["slug"] for r in rows] == ["m-0", "m-1", "m-2", "m-3", "m-4"]
-    assert cov.state is CoverageState.COMPLETE and cov.pages_ok == 3 and len(pages) == 3
+    assert cov.state is CoverageState.COMPLETE and cov.pages_ok == 4 and len(pages) == 4
     assert opener.calls[1] == "GET https://gateway.polymarket.us/v1/markets?limit=2&offset=2"
+    assert cov.endpoint == "https://gateway.polymarket.us/v1/markets"
+
+
+def test_a_short_first_page_is_not_proof_of_the_end():
+    # The server may cap the page size below `limit`: 50 rows for limit=100 proves nothing.
+    rows, cov = pm.read_catalog(limit=100, max_pages=1, opener=ScriptedOpener(_page(50)), pacer=Pacer())
+    assert cov.state is CoverageState.PARTIAL and len(rows) == 50
+
+
+def test_a_filtered_scan_is_never_a_full_catalog_complete():
+    opener = ScriptedOpener(_page(2), _page(0))
+    rows, cov = pm.read_catalog(limit=2, extra=[("categories", "sports")], opener=opener, pacer=Pacer())
+    assert cov.state is CoverageState.PARTIAL and "FILTERED" in cov.detail
+    assert cov.endpoint == "https://gateway.polymarket.us/v1/markets?categories=sports"
+    assert opener.calls[0].endswith("limit=2&offset=0&categories=sports")
 
 
 def test_a_failed_page_is_partial_and_never_evidence_of_absence():
@@ -174,11 +195,12 @@ def test_a_failed_page_is_partial_and_never_evidence_of_absence():
 
 
 def test_coverage_from_stored_pages():
-    assert pm.coverage_from_pages([100, 100, 7], limit=100, as_of_utc=None).state is CoverageState.COMPLETE
-    assert pm.coverage_from_pages([100, None], limit=100, as_of_utc=None).state is CoverageState.PARTIAL
-    assert pm.coverage_from_pages([None], limit=100, as_of_utc=None).state is CoverageState.FAILED
-    assert pm.coverage_from_pages([100, 100], limit=100, as_of_utc=None).state is CoverageState.PARTIAL
-    assert pm.coverage_from_pages([], limit=100, as_of_utc=None).state is CoverageState.FAILED
+    assert pm.coverage_from_pages([100, 100, 7, 0], as_of_utc=None).state is CoverageState.COMPLETE
+    assert pm.coverage_from_pages([100, 100, 7], as_of_utc=None).state is CoverageState.PARTIAL
+    assert pm.coverage_from_pages([100, None], as_of_utc=None).state is CoverageState.PARTIAL
+    assert pm.coverage_from_pages([None], as_of_utc=None).state is CoverageState.FAILED
+    assert pm.coverage_from_pages([], as_of_utc=None).state is CoverageState.FAILED
+    assert pm.coverage_from_pages([3, 0], as_of_utc=None, extra=[("active", "true")]).state is CoverageState.PARTIAL
 
 
 def test_only_the_public_gateway_is_used_and_it_is_not_polymarket_international():

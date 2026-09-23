@@ -64,11 +64,22 @@ and a change to the invariant tests. It is never a flag flip.
     Price history is PLANNED. Fees are UNSUPPORTED.
   - `novig` public daily data. `history_read` is TESTED, with one manual read recorded. The
     live API stays NEEDS_ACCESS (OAuth).
-  - `the_odds_api`. `catalog_read` and `quote_read` are TESTED on documented fixtures. A live
-    read is NEEDS_ACCESS until the owner installs the key and approves activation. Offered
-    odds are never quotes.
+  - `the_odds_api`. `catalog_read` and `quote_read` stay NEEDS_ACCESS; TESTED would read as
+    access obtained. The evidence text says they are fixture-tested and that a live read
+    needs the owner's key and an approved activation. Offered odds are never quotes, and
+    redirects are refused for this source.
   - `discovery.classify` is the one shared discovery step, and `discovery.CatalogCoverage`
-    is the shared coverage record.
+    is the shared coverage record. MATCHED_EQUIVALENT needs:
+    - the same settlement identity;
+    - resolved and hashed rules on both sides;
+    - the same contract: payoff kind, amount, YES condition and outcome.
+
+    Sibling brackets of one event are only related.
+- **Follow-up (coordinator-owned, not changed here):** `opportunity.evaluate` does not check
+  `Payoff.kind`. A non-binary market (for example `sportsbook_fixed_odds_per_unit_stake` from
+  `odds_api`) could be priced as a $1 binary contract if anyone attached a quote to it.
+  Today nothing builds such a quote, and fees are UNSUPPORTED for every venue except Kalshi.
+  The engine should still reject any payoff kind other than `binary` explicitly.
 - **Reconsider when** a second credentialed source is proposed, or when any source with a
   credential is to become ACTIVE. Either needs its own owner approval and a change to these
   tests in the same PR.

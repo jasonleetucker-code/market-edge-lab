@@ -1,8 +1,10 @@
 # Security and Credentials
 
-**Today:** the repository has no credentials, no authenticated clients, and no order-capable
-code. `tests/invariants/` enforces this. The only credential the code can use is The Odds
-API's free, read-only data-feed key, and it is not installed (see below).
+**Today:** the repository holds no credentials and has no order-capable code, no trading
+client and no account client. `tests/invariants/` enforces this. There is one keyed
+**read-only data-feed** client: `edge_lab.odds_api` can send The Odds API free-tier key as a
+query parameter to read odds. That key is not installed (see below). It is not a trading
+credential, and the registry cannot hold one.
 
 ## Rules
 

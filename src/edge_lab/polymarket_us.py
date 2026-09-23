@@ -34,9 +34,10 @@ What the docs establish, and how it is mapped (see experiments/multi_venue/):
   UNSUPPORTED, so every opportunity rejects FEE_UNSUPPORTED. The coefficient is recorded as
   raw metadata only.
 - **Catalog completeness.** `GET /v1/markets` pages by `limit`/`offset` and returns no total
-  and no cursor. A scan is COMPLETE only when every page succeeded and the last page was
-  shorter than the limit. A failed or partial scan is never evidence that a market does not
-  exist.
+  and no cursor, and the docs publish no maximum page size. So a short page is not proof
+  of the end: a scan is COMPLETE only when every page succeeded and the last page came
+  back empty, with no filters. A filtered, failed or partial scan is never evidence that
+  a market does not exist.
 """
 
 from __future__ import annotations
@@ -285,8 +286,8 @@ def quotes_from_book(slug: str, payload: Mapping[str, Any] | None, *, received_a
     if bid is not None and ask is not None and bid >= ask:
         anomaly = f"crossed book: bid {bid} >= offer {ask}"
     state = data.get("state")
-    if anomaly is None and state not in (None, "MARKET_STATE_OPEN"):
-        anomaly = f"book state {state} is not open"
+    if anomaly is None and state != "MARKET_STATE_OPEN":
+        anomaly = f"book state {state or 'missing'} is not open"  # a missing state fails closed
     return {
         "YES": ExecutableQuote(VENUE, mid, "YES", best_bid=bid, best_ask=ask,
                                displayed_size=ask_qty if ask is not None else Decimal(0),
@@ -358,14 +359,17 @@ def read_catalog(*, limit: int = 100, max_pages: int = MAX_PAGES, extra: Sequenc
                  ) -> tuple[list[Mapping[str, Any]], CatalogCoverage]:
     """Every market page of GET /v1/markets, in offset order, with an honest coverage record.
 
-    Stops at the first failed or malformed page (PARTIAL, or FAILED if no page was read).
-    Hitting `max_pages` before a short page is PARTIAL. `on_page` receives each raw page, for
-    immutable storage. Not wired to any schedule."""
+    The docs publish no maximum page size, and the server may return fewer rows than asked
+    for, so a short page proves nothing. The scan is COMPLETE only after a page returns
+    zero rows. A failed or malformed page stops it (PARTIAL, or FAILED if no page was read),
+    and so does the `max_pages` cap (PARTIAL). A scan with `extra` filters covers only that
+    filter: it is recorded in the endpoint and is never a full-catalog COMPLETE (PARTIAL).
+    `on_page` receives each raw page, for immutable storage. Not wired to any schedule."""
     pacer = pacer or http.Pacer(MIN_INTERVAL_S)
     markets: list[Mapping[str, Any]] = []
     pages = 0
     last_time = None
-    endpoint = f"{BASE_URL}/v1/markets"
+    endpoint = f"{BASE_URL}/v1/markets" + (f"?{urlencode(list(extra))}" if extra else "")
     for page in range(max_pages):
         url = markets_url(limit=limit, offset=page * limit, extra=extra)
         try:
@@ -385,26 +389,34 @@ def read_catalog(*, limit: int = 100, max_pages: int = MAX_PAGES, extra: Sequenc
         pages += 1
         last_time = result.received_at_utc
         markets.extend(rows)
-        if len(rows) < limit:
-            return markets, CatalogCoverage(
-                VENUE, endpoint, CoverageState.COMPLETE, pages, len(markets), last_time,
-                "every page read; the last page was short. Offset paging has no snapshot isolation, so "
-                "markets listed or delisted during the scan can be missed or repeated")
+        if not rows:
+            return markets, _terminal_coverage(endpoint, pages, len(markets), last_time, filtered=bool(extra))
     return markets, CatalogCoverage(VENUE, endpoint, CoverageState.PARTIAL, pages, len(markets), last_time,
-                                    f"stopped at the {max_pages}-page cap before the end of the listing")
+                                    f"stopped at the {max_pages}-page cap before an empty page")
 
 
-def coverage_from_pages(page_sizes: Sequence[int | None], *, limit: int, as_of_utc: str | None,
-                        endpoint: str = f"{BASE_URL}/v1/markets") -> CatalogCoverage:
-    """Coverage for stored pages (None = a failed or malformed page), in offset order."""
+def _terminal_coverage(endpoint: str, pages: int, items: int, as_of: str | None, *, filtered: bool) -> CatalogCoverage:
+    if filtered:
+        return CatalogCoverage(VENUE, endpoint, CoverageState.PARTIAL, pages, items, as_of,
+                               "every page of a FILTERED listing read (to an empty page); covers that filter only, "
+                               "never the full catalog")
+    return CatalogCoverage(VENUE, endpoint, CoverageState.COMPLETE, pages, items, as_of,
+                           "every page read, ending with an empty page. Offset paging has no snapshot isolation, so "
+                           "markets listed or delisted during the scan can be missed or repeated")
+
+
+def coverage_from_pages(page_sizes: Sequence[int | None], *, as_of_utc: str | None,
+                        extra: Sequence[tuple[str, str]] = ()) -> CatalogCoverage:
+    """Coverage for stored pages (None = a failed or malformed page), in offset order.
+    COMPLETE needs a final page with zero rows and no filters."""
+    endpoint = f"{BASE_URL}/v1/markets" + (f"?{urlencode(list(extra))}" if extra else "")
     items = 0
     for i, size in enumerate(page_sizes):
         if size is None:
             state = CoverageState.PARTIAL if i else CoverageState.FAILED
             return CatalogCoverage(VENUE, endpoint, state, i, items, as_of_utc, f"page {i} failed")
         items += size
-        if size < limit:
-            return CatalogCoverage(VENUE, endpoint, CoverageState.COMPLETE, i + 1, items, as_of_utc,
-                                   "every page read; the last page was short")
+        if size == 0:
+            return _terminal_coverage(endpoint, i + 1, items, as_of_utc, filtered=bool(extra))
     return CatalogCoverage(VENUE, endpoint, CoverageState.PARTIAL if page_sizes else CoverageState.FAILED,
-                           len(page_sizes), items, as_of_utc, "no short final page: the listing may continue")
+                           len(page_sizes), items, as_of_utc, "no empty final page: the listing may continue")
