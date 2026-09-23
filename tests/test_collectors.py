@@ -167,7 +167,8 @@ def test_settlement_evidence_stores_rules_markets_and_contract_bytes(tmp_path, m
 
     counts = kalshi.collect_settlement_evidence(store, run_id="r", anomalies=anomalies)
 
-    assert counts == {"series": 1, "settled_pages": 2, "historical_pages": 1, "markets": 3, "documents": 2}
+    assert counts == {"series": 1, "settled_pages": 2, "historical_pages": 1, "markets": 3, "documents": 2,
+                      "documents_failed": 0}
     assert anomalies == []
     assert store.document_bytes(store.document_versions("https://assets.example.test/terms.pdf")[0]["sha256"]).startswith(b"%PDF")
     # A changed contract document is kept as a new version and flagged.
@@ -204,3 +205,53 @@ def test_cli_collector_stores_each_issuance_once(tmp_path, monkeypatch):
     assert len(calls) == 3  # list, product, list: the stored product is not re-fetched
     (row,) = store.snapshots_of_kind(source="nws_cli", kind="cli_product")
     assert nws_cli.parse_cli(__import__("json").loads(row["payload_json"])["productText"]).max_temp_f == 72
+
+
+def test_blocked_contract_pdf_does_not_cost_the_settled_markets(tmp_path, monkeypatch):
+    from edge_lab.http import HttpFetchError
+
+    series = {"series": {"ticker": "KXHIGHNY", "contract_url": "https://assets.example.test/filing.pdf",
+                         "contract_terms_url": "https://assets.example.test/terms.pdf"}}
+
+    def fake_json(url, **kwargs):
+        payload = {"markets": [{"ticker": "A", "result": "yes"}], "cursor": ""} if "/markets?" in url else series
+        return payload, FetchResult(url, url, 200, "application/json", b"{}", "2026-09-23T17:00:00+00:00", 1, 1)
+
+    def blocked(url, **kwargs):
+        raise HttpFetchError("HTTP 429 (bot checkpoint)", status=429, attempts=3)
+
+    monkeypatch.setattr(kalshi, "fetch_json_result", fake_json)
+    monkeypatch.setattr(kalshi, "fetch", blocked)
+    store = SnapshotStore(tmp_path / "edge.sqlite3")
+    store.start_run("r")
+    anomalies: list[str] = []
+    counts = kalshi.collect_settlement_evidence(store, run_id="r", anomalies=anomalies, include_historical=False)
+    assert counts["markets"] == 1 and counts["documents"] == 0 and counts["documents_failed"] == 2
+    assert len(anomalies) == 2 and all("not retrieved" in a and "429" in a for a in anomalies)
+    assert store.snapshots_of_kind(source="kalshi_settlement", kind="settled_markets")
+
+
+def test_event_settlement_refresh_is_targeted_and_bounded(tmp_path, monkeypatch):
+    urls: list[str] = []
+
+    def fake_json(url, **kwargs):
+        urls.append(url)
+        return ({"markets": [{"ticker": "KXHIGHNY-26SEP24-B67.5", "result": "yes"},
+                             {"ticker": "KXHIGHNY-26SEP24-T70", "result": ""}], "cursor": ""},
+                FetchResult(url, url, 200, "application/json", b"{}", "2026-09-25T15:00:00+00:00", 1, 1))
+
+    monkeypatch.setattr(kalshi, "fetch_json_result", fake_json)
+    store = SnapshotStore(tmp_path / "edge.sqlite3")
+    store.start_run("r")
+    anomalies: list[str] = []
+    counts = kalshi.refresh_event_settlements(store, run_id="r", event_tickers=["KXHIGHNY-26SEP24"] * 2 + ["E2", "E3"],
+                                              max_events=2, anomalies=anomalies)
+    assert counts == {"events_requested": 2, "events_fetched": 2, "markets": 4, "settled_markets": 2}
+    assert len(urls) == 2 and all("event_ticker=" in u and "status=" not in u and "historical" not in u for u in urls)
+    assert any("deferred" in a for a in anomalies)
+    ticks = iter([0.0, 0.0, 999.0, 999.0])
+    anomalies = []
+    counts = kalshi.refresh_event_settlements(store, run_id="r", event_tickers=["A", "B"], deadline_s=10,
+                                              anomalies=anomalies, clock=lambda: next(ticks))
+    assert counts["events_fetched"] == 1 and any("deadline" in a for a in anomalies)
+    assert kalshi.event_ticker_of("KXHIGHNY-26SEP24-B67.5") == "KXHIGHNY-26SEP24"

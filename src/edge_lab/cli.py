@@ -97,11 +97,24 @@ def build_parser() -> argparse.ArgumentParser:
     sh_settle.add_argument("--ledger", default="data/shadow_ledger.sqlite3")
     sh_account = shadow_sub.add_parser("account", help="Replay the shadow account from its ledger.")
     sh_account.add_argument("--ledger", default="data/shadow_ledger.sqlite3")
+    sh_account.add_argument("--account", default=None, help="account id (default: the operational account)")
+    sh_daily = shadow_sub.add_parser(
+        "daily", help="Daily orchestration: evaluate closed capture days, simulate fills, settle, report."
+    )
+    sh_daily.add_argument("--db", default="data/edge_lab.sqlite3")
+    sh_daily.add_argument("--ledger", default="data/shadow_ledger.sqlite3")
+    sh_daily.add_argument("--status-dir", help="write the receipt (shadow_daily.json) here")
+    sh_daily.add_argument("--refresh-settlements", action="store_true",
+                          help="first fetch official settlement evidence for pending events (bounded GETs)")
+    sh_daily.add_argument("--max-events", type=int, default=10)
+    sh_daily.add_argument("--deadline-s", type=float, default=120.0)
+    sh_daily.add_argument("--lock-timeout", type=float, default=60.0)
     sh_risk = shadow_sub.add_parser(
         "risk", help="Risk/capital report, withdrawal contract and Outcome Board for the shadow account."
     )
     sh_risk.add_argument("--ledger", default="data/shadow_ledger.sqlite3")
     sh_risk.add_argument("--as-of", help="ISO-8601 instant with zone (default: now)")
+    sh_risk.add_argument("--account", default=None, help="account id (default: the operational account)")
 
     settle = subparsers.add_parser("settlement", help="Gate 2 settlement evidence and audit.")
     settle_sub = settle.add_subparsers(dest="settlement_command", required=True)
@@ -481,12 +494,31 @@ def _shadow(args: argparse.Namespace) -> int:
     from . import exp001_shadow
     from .shadow_ledger import ShadowLedger
 
+    from . import forward
+    from .shadow_ledger import LedgerError
+    from .storage import ReadOnlyStoreError
+
     ledger_path = Path(args.ledger)
+    if args.shadow_command == "daily":
+        from . import daily
+
+        receipt, code = daily.run(Path(args.db), ledger_path,
+                                  status_dir=Path(args.status_dir) if args.status_dir else None,
+                                  refresh_settlements=args.refresh_settlements, max_events=args.max_events,
+                                  deadline_s=args.deadline_s, lock_timeout_s=args.lock_timeout,
+                                  code_version=os.getenv("EDGE_LAB_CODE_VERSION"))
+        print(json.dumps(receipt, indent=2, sort_keys=True, ensure_ascii=False))
+        return code
     if args.shadow_command in ("account", "risk"):
         if not ledger_path.is_file():
             print(f"no ledger at {ledger_path}", file=sys.stderr)
             return 2
-        state = ShadowLedger(ledger_path).state(exp001_shadow.ACCOUNT_ID)
+        account_id = args.account or exp001_shadow.ACCOUNT_ID
+        ledger = ShadowLedger.open_readonly(ledger_path)
+        if account_id not in ledger.accounts():
+            print(f"no account {account_id!r} in {ledger_path}", file=sys.stderr)
+            return 2
+        state = ledger.state(account_id)
         if args.shadow_command == "account":
             result = state.to_dict()
         else:
@@ -512,16 +544,30 @@ def _shadow(args: argparse.Namespace) -> int:
         if not db.is_file():
             print(f"no database at {db}", file=sys.stderr)
             return 2
-        store, ledger = SnapshotStore(db), ShadowLedger(ledger_path)
-        if args.shadow_command == "settle":
-            result = exp001_shadow.settle_open_positions(store, ledger)
-        else:
+        try:
+            store = SnapshotStore.open_readonly(db)  # analysis never creates or migrates evidence
+        except ReadOnlyStoreError as exc:
+            print(str(exc), file=sys.stderr)
+            return 2
+        if args.shadow_command == "run":
             try:
                 target = date.fromisoformat(args.date)
             except ValueError:
                 print(f"--date must be YYYY-MM-DD, got {args.date!r}", file=sys.stderr)
                 return 2
-            result = exp001_shadow.run_day(store, ledger, target)
+        try:
+            with forward.exclusive_lock(ledger_path.with_name(ledger_path.name + ".lock"), timeout_s=60):
+                ledger = ShadowLedger(ledger_path)
+                if args.shadow_command == "settle":
+                    result = exp001_shadow.settle_open_positions(store, ledger)
+                else:
+                    result = exp001_shadow.run_day(store, ledger, target)
+        except forward.LockBusy as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
+        except LedgerError as exc:
+            print(f"{type(exc).__name__}: {exc}", file=sys.stderr)
+            return 1
     print(json.dumps(result, indent=2, sort_keys=True, ensure_ascii=False))
     return 0
 

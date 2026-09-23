@@ -4,7 +4,9 @@ from decimal import Decimal
 from typing import Any
 from urllib.parse import urlencode
 
-from .http import Pacer, fetch, fetch_json_result
+import time
+
+from .http import HttpFetchError, Pacer, fetch, fetch_json_result
 from .sources import get_source
 from .storage import SnapshotStore
 
@@ -231,7 +233,8 @@ def collect_settlement_evidence(
       changed PDF becomes a new version instead of overwriting the old one.
     """
     anomalies = anomalies if anomalies is not None else []
-    counts = {"series": 0, "settled_pages": 0, "historical_pages": 0, "markets": 0, "documents": 0}
+    counts = {"series": 0, "settled_pages": 0, "historical_pages": 0, "markets": 0, "documents": 0,
+              "documents_failed": 0}
 
     series_url = _url(f"/series/{series_ticker}")
     series_payload, series_fetch = _get(series_url)
@@ -245,7 +248,14 @@ def collect_settlement_evidence(
         if not isinstance(url, str) or not url.startswith("https://"):
             anomalies.append(f"series {series_ticker} has no usable {field}")
             continue
-        document = fetch(url, headers={"Accept": "application/pdf, */*"}, pacer=PACER)
+        try:
+            document = fetch(url, headers={"Accept": "application/pdf, */*"}, pacer=PACER)
+        except HttpFetchError as exc:
+            # A blocked or failing contract PDF must not cost the settled-market evidence:
+            # record partial coverage and keep collecting.
+            counts["documents_failed"] += 1
+            anomalies.append(f"contract document {field} not retrieved ({url}): {exc}")
+            continue
         _, _, is_new = store.save_document(
             run_id=run_id, source_id=SETTLEMENT_SOURCE.source_id, doc_type=doc_type, fetch=document,
             series_ticker=series_ticker,
@@ -274,4 +284,46 @@ def collect_settlement_evidence(
 
     if not settled:
         anomalies.append(f"no settled markets returned for {series_ticker}")
+    return counts
+
+
+def event_ticker_of(market_ticker: str) -> str:
+    """KXHIGHNY-26SEP24-B67.5 -> KXHIGHNY-26SEP24."""
+    return market_ticker.rsplit("-", 1)[0]
+
+
+def refresh_event_settlements(
+    store: SnapshotStore,
+    *,
+    run_id: str,
+    event_tickers: list[str],
+    max_events: int = 10,
+    deadline_s: float = 120.0,
+    anomalies: list[str] | None = None,
+    clock=time.monotonic,
+) -> dict[str, int]:
+    """Targeted settlement refresh: `/markets?event_ticker=E` for each pending event only.
+
+    Bounded: at most `max_events` events and 2 pages each, the shared Kalshi pacer, the
+    fetch layer's bounded retries, and a run deadline checked before every event. Every
+    page is stored as an immutable `event_settlement_markets` snapshot; an unsettled market
+    simply has no result yet and leaves its positions pending. No full-history download."""
+    anomalies = anomalies if anomalies is not None else []
+    counts = {"events_requested": 0, "events_fetched": 0, "markets": 0, "settled_markets": 0}
+    tickers = sorted(set(event_tickers))
+    if len(tickers) > max_events:
+        anomalies.append(f"{len(tickers) - max_events} pending events deferred to the next run (max {max_events})")
+        tickers = tickers[:max_events]
+    started = clock()
+    for ticker in tickers:
+        if clock() - started > deadline_s:
+            anomalies.append(f"deadline {deadline_s:.0f}s reached; remaining events deferred")
+            break
+        counts["events_requested"] += 1
+        markets, _ = paginate_markets(store, run_id=run_id, path="/markets", kind="event_settlement_markets",
+                                      entity_id=ticker, max_pages=2, spec=SETTLEMENT_SOURCE, event_ticker=ticker,
+                                      limit=PAGE_LIMIT)
+        counts["events_fetched"] += 1
+        counts["markets"] += len(markets)
+        counts["settled_markets"] += sum(1 for m in markets if isinstance(m, dict) and m.get("result") in ("yes", "no"))
     return counts

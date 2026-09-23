@@ -1,0 +1,14 @@
+[Unit]
+Description=Market Edge Lab: settlement-evidence refresh (late morning and afternoon, ET)
+
+[Timer]
+# Kalshi usually settles KXHIGHNY D the morning after D. Two bounded refreshes a day;
+# both are far from the 17:40-18:35 America/New_York capture windows.
+OnCalendar=*-*-* 11:15:00 America/New_York
+OnCalendar=*-*-* 16:15:00 America/New_York
+AccuracySec=1s
+Persistent=false
+Unit=edgelab-settlement.service
+
+[Install]
+WantedBy=timers.target

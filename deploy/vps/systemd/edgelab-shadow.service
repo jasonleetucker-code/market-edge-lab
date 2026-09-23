@@ -1,5 +1,5 @@
 [Unit]
-Description=Market Edge Lab: EXP-001 10-15 min re-check capture (read-only)
+Description=Market Edge Lab: daily EXP-001 shadow bookkeeping from stored evidence (no network, no orders)
 Documentation=file:///opt/market-edge-lab/app/deploy/vps/README.md
 After=network-online.target
 Wants=network-online.target
@@ -12,12 +12,12 @@ User=edgelab
 Group=edgelab
 EnvironmentFile=/etc/market-edge-lab/env
 WorkingDirectory=/var/lib/market-edge-lab
-ExecStart=/opt/market-edge-lab/venv/bin/python -m edge_lab.cli forward capture --phase recheck --db /var/lib/market-edge-lab/db/edge_lab.sqlite3
-# Oneshot: the whole run is the start job. On timeout systemd sends SIGTERM, which the
-# collector turns into a recorded failed run.
-TimeoutStartSec=17min
+# Evaluates closed capture days read-only, records simulated decisions/fills, settles from
+# stored evidence, writes shadow_daily.json. Exit 3 = INVALID capture day (alerts).
+ExecStart=/opt/market-edge-lab/venv/bin/python -m edge_lab.cli shadow daily --db /var/lib/market-edge-lab/db/edge_lab.sqlite3 --ledger /var/lib/market-edge-lab/ledger/shadow_ledger.sqlite3 --status-dir /var/lib/market-edge-lab-status
+TimeoutStartSec=10min
 UMask=0077
-# Resource caps: the collector must never starve Chase Upside (ADR 0012).
+# Resource caps per run; edgelab.slice caps all edgelab units together (ADR 0012, 0016).
 MemoryHigh=192M
 MemoryMax=256M
 CPUQuota=25%
@@ -36,5 +36,6 @@ ProtectControlGroups=yes
 RestrictSUIDSGID=yes
 RestrictNamespaces=yes
 LockPersonality=yes
-RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictAddressFamilies=AF_UNIX
+IPAddressDeny=any
 ReadWritePaths=/var/lib/market-edge-lab /var/lib/market-edge-lab-status
