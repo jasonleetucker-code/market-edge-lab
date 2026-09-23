@@ -17,8 +17,9 @@ Rules:
   the opener refuses any URL other than the one validated when the sink was built.
 - **Nothing identifying leaves the host.** Only the event type, the severity and a fixed
   headline chosen by event type are sent. The caller's summary, values, venue, market and
-  event refs, deep link and action mode are never sent. The sequence id is a SHA-256 of
-  the dedupe key, so it is stable for dedupe but reveals nothing.
+  event refs, deep link and action mode are never sent. The sequence id is a BLAKE2b hash
+  of the dedupe key keyed with the topic, so it is stable per topic for dedupe but cannot
+  be brute-forced from a guessable key (a date, an account label) without the topic.
 - **Honest status.** A 2xx answer means the ntfy server accepted the message. It does not
   mean a phone showed it, so the sink returns SUBMITTED, never DELIVERED.
 - **Expiry.** An event already expired at send time, or whose expiry does not parse, is
@@ -30,12 +31,15 @@ Rules:
   through an injectable `sleep`, and retries only when a sequence id makes a duplicate
   harmless. 429 is never retried (RATE_LIMITED). Certificate errors, redirects and other
   4xx are not retried (FAILED). After three consecutive failed events the sink stops
-  sending for a cooldown (a simple circuit breaker).
+  sending for a cooldown (a simple circuit breaker). The 15-second budget is best-effort:
+  the urllib timeout applies to each socket operation, not the whole request, and DNS
+  resolution has no timeout at all.
 - **Never raises.** Every failure becomes a status, with a redacted `last_error`. A
   notification failure never changes risk, trading or ledger state.
 - **Secrets.** The topic is effectively a password on a public server, and the optional
-  access token is a credential. Neither appears in a repr, an error or a stored field that
-  is shown: errors pass through `redaction.redact_text` with both removed.
+  access token is a credential. Neither appears in a repr or an error: errors pass through
+  `redaction.redact_text` with both removed. The token and the redaction list live only in
+  closures, not in attributes, and the sink and its target refuse to be pickled or copied.
 """
 
 from __future__ import annotations
@@ -110,8 +114,9 @@ def _allowed_hosts() -> tuple[str, ...]:
 
 def _validate(url: object) -> tuple[str, str]:
     """(normalized URL, host) for an allowlisted https `<host>/<topic>`, else NtfyConfigError."""
-    if not isinstance(url, str) or not url.isascii() or any(c in url for c in "\\ \t\r\n"):
-        raise NtfyConfigError("ntfy topic URL must be plain ASCII with no whitespace")
+    if not isinstance(url, str) or not url.isascii() or any(c in url for c in "\\ ?#") \
+            or any(ord(c) < 0x20 or ord(c) == 0x7F for c in url):
+        raise NtfyConfigError("ntfy topic URL must be plain ASCII with no whitespace, control characters, ? or #")
     try:
         parts = urlsplit(url)
         port = parts.port
@@ -153,20 +158,35 @@ class Target:
         """Safe to log: scheme and host only. The topic is the secret part."""
         return urlunsplit(("https", self.host, "/" + REDACTED, "", ""))
 
+    def __reduce_ex__(self, protocol: object) -> Any:  # pickle, copy and deepcopy all go through here
+        raise TypeError("an ntfy Target holds a secret topic and cannot be pickled or copied")
+
+    __reduce__ = __getstate__ = lambda self: self.__reduce_ex__(None)  # noqa: E731
+
 
 def parse_topic_url(url: str) -> Target:
     """Validate a topic URL (see `_validate`). Errors never echo the URL."""
     return Target(url)
 
 
-def sequence_id(dedupe_key: str) -> str | None:
-    """SHA-256 hex of `dedupe_key`: stable, valid for ntfy, and reveals nothing. None if empty."""
+def sequence_key(topic_url: str) -> bytes:
+    """The secret that keys sequence ids: the validated topic, at most 64 bytes (BLAKE2b's limit)."""
+    return urlsplit(_validate(topic_url)[0]).path[1:].encode("ascii")[:64]
+
+
+def sequence_id(dedupe_key: str, key: bytes) -> str | None:
+    """BLAKE2b-256 hex of `dedupe_key`, keyed with the topic. Stable per topic, valid for ntfy.
+
+    A plain hash of a guessable key (for example an account label plus a date) can be
+    brute-forced by anyone who sees it; without the topic, this one cannot. None if empty."""
     if not dedupe_key:
         return None
-    return hashlib.sha256(dedupe_key.encode("utf-8")).hexdigest()
+    if not 16 <= len(key) <= 64:
+        raise NtfyConfigError("sequence key must be the 16-64 byte topic")
+    return hashlib.blake2b(dedupe_key.encode("utf-8"), key=key, digest_size=32).hexdigest()
 
 
-def payload(event: NotificationEvent) -> tuple[dict[str, str], bytes]:
+def payload(event: NotificationEvent, key: bytes) -> tuple[dict[str, str], bytes]:
     """Headers and body for one event: type, severity and a fixed headline, nothing else."""
     headers = {
         "X-Title": f"Market Edge {event.severity.value}: {event.type.value}",
@@ -174,7 +194,7 @@ def payload(event: NotificationEvent) -> tuple[dict[str, str], bytes]:
         "X-Tags": f"{event.severity.value.lower()},{event.type.value.lower()}",
         "Content-Type": "text/plain; charset=utf-8",
     }
-    seq = sequence_id(event.dedupe_key)
+    seq = sequence_id(event.dedupe_key, key)
     if seq is not None:
         headers["X-Sequence-ID"] = seq
     return headers, f"{HEADLINES[event.type]}. {FOOTER}".encode("utf-8")
@@ -192,16 +212,29 @@ def _default_opener(request: Request, timeout: float) -> Any:
     return build_opener(ProxyHandler({}), _NoRedirect).open(request, timeout=timeout)
 
 
-def _guarded(opener: Opener | None, expected_url: str) -> Opener:
-    """An opener that refuses any URL except the one validated when the sink was built."""
+def _guarded(opener: Opener | None, expected_url: str, token: str | None) -> Opener:
+    """An opener that refuses any request except a POST to the URL validated when the sink was
+    built. It alone holds the token, and adds it only to that request."""
 
     def open_checked(request: Request, timeout: float) -> Any:
         if request.full_url != expected_url or request.get_method() != "POST":
             raise NtfyConfigError("refused: request is not for the validated ntfy topic")
         _validate(request.full_url)
+        if token:
+            request.add_header("Authorization", f"Bearer {token}")
         return (opener or _default_opener)(request, timeout)
 
     return open_checked
+
+
+def _redactor(secrets: tuple[str, ...]) -> Callable[[str], str]:
+    """Redacts the given secrets and secret patterns, holding the secrets only in a closure."""
+    ordered = tuple(sorted({s for s in secrets if s}, key=len, reverse=True))
+
+    def redact(text: str) -> str:
+        return redact_text(text, ordered)[:200]
+
+    return redact
 
 
 def _cert_error(exc: BaseException) -> bool:
@@ -212,7 +245,8 @@ def _cert_error(exc: BaseException) -> bool:
 class NtfySink:
     """Publishes one fixed headline per event to one allowlisted ntfy topic. See the module rules."""
 
-    __slots__ = ("_target", "_secrets", "_token", "_opener", "_sleep", "_clock", "_monotonic", "max_attempts",
+    # The token and the redaction secrets are held only by the `_opener` and `_redact` closures.
+    __slots__ = ("_target", "_has_token", "_redact", "_opener", "_sleep", "_clock", "_monotonic", "max_attempts",
                  "backoff", "timeout", "deadline", "last_error", "last_attempts", "last_http_status",
                  "_consecutive_failures", "_open_until")
     sink_id = "ntfy"
@@ -222,14 +256,13 @@ class NtfySink:
                  monotonic: Callable[[], float] = time.monotonic, max_attempts: int = MAX_ATTEMPTS,
                  backoff: float = BACKOFF_SECONDS, timeout: float = TIMEOUT_SECONDS,
                  deadline: float = DEADLINE_SECONDS) -> None:
-        self._secrets = tuple(s for s in (topic_url, token) if isinstance(s, str) and s)
         target = parse_topic_url(topic_url)
-        self._secrets += (target.url, urlsplit(target.url).path[1:])
         if token is not None and not _TOKEN.fullmatch(token):
             raise NtfyConfigError(f"{ENV_TOKEN} must match [A-Za-z0-9_-]{{1,128}}")
         self._target = target
-        self._token = token
-        self._opener = _guarded(opener, target.url)
+        self._has_token = bool(token)
+        self._redact = _redactor((topic_url, token or "", target.url, urlsplit(target.url).path[1:]))
+        self._opener = _guarded(opener, target.url, token)
         self._sleep = sleep
         self._clock = clock or (lambda: datetime.now(timezone.utc))
         self._monotonic = monotonic
@@ -248,12 +281,14 @@ class NtfySink:
         return self._target
 
     def __repr__(self) -> str:
-        return f"NtfySink(host={self._target.host}, token={'set' if self._token else 'none'})"
+        return f"NtfySink(host={self._target.host}, token={'set' if self._has_token else 'none'})"
 
     __str__ = __repr__
 
-    def _redact(self, text: str) -> str:
-        return redact_text(text, self._secrets)[:200]
+    def __reduce_ex__(self, protocol: object) -> Any:  # pickle, copy and deepcopy all go through here
+        raise TypeError("an NtfySink holds a secret topic and token and cannot be pickled or copied")
+
+    __reduce__ = __getstate__ = lambda self: self.__reduce_ex__(None)  # noqa: E731
 
     def _expired(self, event: NotificationEvent) -> bool:
         if event.expires_at_utc is None:
@@ -286,9 +321,7 @@ class NtfySink:
         if self._open_until is not None and self._monotonic() < self._open_until:
             self.last_error = "circuit open after repeated failures; not sent"
             return DeliveryStatus.FAILED
-        headers, body = payload(event)
-        if self._token:
-            headers["Authorization"] = f"Bearer {self._token}"
+        headers, body = payload(event, sequence_key(self._target.url))
         attempts = self.max_attempts if "X-Sequence-ID" in headers else 1  # a duplicate then replaces
         started = self._monotonic()
         status = DeliveryStatus.FAILED
@@ -348,8 +381,8 @@ def sink_from_env(environ: Mapping[str, str] | None = None, **kwargs: Any) -> Nt
     value is an owner step; agents never create, see or commit them. A set but invalid value
     raises NtfyConfigError, whose message contains neither value."""
     env = os.environ if environ is None else environ
-    topic_url = (env.get(ENV_TOPIC_URL) or "").strip()
+    topic_url = (env.get(ENV_TOPIC_URL) or "").strip(" ")  # only spaces: a control character fails validation
     if not topic_url:
         return None
-    token = (env.get(ENV_TOKEN) or "").strip() or None
+    token = (env.get(ENV_TOKEN) or "").strip(" ") or None
     return NtfySink(topic_url, token=token, **kwargs)

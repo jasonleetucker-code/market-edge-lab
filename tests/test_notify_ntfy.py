@@ -126,7 +126,9 @@ def test_factory_reads_the_process_environment_when_no_mapping_is_given(monkeypa
 
 @pytest.mark.parametrize("bad", [f"http://ntfy.sh/{TOPIC}", f"https://ntfy.sh/{TOPIC}/x", f"https://evil.example/{TOPIC}",
                                  f"https://u:p@ntfy.sh/{TOPIC}", f"https://ntfy.sh/{TOPIC}?auth=x",
-                                 f"https://169.254.169.254/{TOPIC}", "https://ntfy.sh/short"])
+                                 f"https://169.254.169.254/{TOPIC}", "https://ntfy.sh/short", f"\x00https://ntfy.sh/{TOPIC}",
+                                 f"\x1fhttps://ntfy.sh/{TOPIC}", f"https://ntfy.sh/{TOPIC}\x7f",
+                                 f"https://ntfy.sh/{TOPIC}?", f"https://ntfy.sh/{TOPIC}#", f"https://ntfy.sh/{TOPIC}\t"])
 def test_invalid_configuration_is_refused_without_echoing_the_url(bad):
     with pytest.raises(ntfy.NtfyConfigError) as err:
         ntfy.sink_from_env({ntfy.ENV_TOPIC_URL: bad})
@@ -222,6 +224,32 @@ def test_repr_and_str_never_show_the_topic_or_token():
         vars(s)  # __slots__: no __dict__ to dump
 
 
+def test_no_attribute_holds_the_token_or_the_redaction_list():
+    s, _ = make(token=TOKEN)
+    for name in ntfy.NtfySink.__slots__:
+        value = getattr(s, name)
+        assert value != TOKEN and TOKEN not in repr(value), name
+        assert not isinstance(value, tuple), name  # no stored secrets list
+    assert not hasattr(s, "_token") and not hasattr(s, "_secrets")
+
+
+@pytest.mark.parametrize("copier", ["pickle", "copy", "deepcopy"])
+def test_the_sink_and_its_target_refuse_to_be_pickled_or_copied(copier):
+    import copy
+    import pickle
+
+    s, _ = make(token=TOKEN)
+    do = {"pickle": lambda o: pickle.dumps(o, protocol=pickle.HIGHEST_PROTOCOL), "copy": copy.copy,
+          "deepcopy": copy.deepcopy}[copier]
+    for obj in (s, s.target):
+        with pytest.raises(TypeError):
+            do(obj)
+    with pytest.raises(TypeError):
+        pickle.dumps(s, protocol=0)
+    with pytest.raises(TypeError):
+        s.__getstate__()
+
+
 # ------------------------------------------------------------------ mapping and payload
 
 def test_headers_map_title_priority_tags_and_hashed_sequence_id():
@@ -234,7 +262,8 @@ def test_headers_map_title_priority_tags_and_hashed_sequence_id():
     assert h["x-title"] == "Market Edge WARNING: SOURCE_FAILURE"
     assert h["x-priority"] == "4"
     assert h["x-tags"] == "warning,source_failure"
-    assert h["x-sequence-id"] == hashlib.sha256(b"daily:FAILED:2026-09-25").hexdigest()
+    assert h["x-sequence-id"] == hashlib.blake2b(b"daily:FAILED:2026-09-25", key=TOPIC.encode(),
+                                                 digest_size=32).hexdigest()
     assert set(h) == {"x-title", "x-priority", "x-tags", "x-sequence-id", "content-type"}
     assert request.data == b"A run or data source failed. Open Market Edge for details."
 
@@ -334,13 +363,37 @@ def test_an_event_that_expires_during_retries_stops_being_sent():
     assert len(opener.requests) == 1
 
 
-def test_sequence_id_is_a_full_hash_that_reveals_nothing():
-    for key in ("daily:FAILED:2026-09-25", "veto:research:2026-09-25", "settlement-conflict:" + "x" * 500, "ok_key"):
-        seq = ntfy.sequence_id(key)
-        assert ntfy.SEQUENCE_ID.fullmatch(seq) and seq == hashlib.sha256(key.encode()).hexdigest()
-        assert "research" not in seq and "2026" not in seq and "ok_key" not in seq
-    assert ntfy.sequence_id("a:b") != ntfy.sequence_id("a/b")
-    assert ntfy.sequence_id("") is None
+KEY = TOPIC.encode()
+OTHER_KEY = b"another-topic-0123456789"
+
+
+def test_sequence_id_is_keyed_by_the_topic_and_not_a_plain_hash():
+    for key in ("daily:FAILED:2026-09-25", "veto:acct1:2026-09-23", "settlement-conflict:" + "x" * 500, "ok_key"):
+        seq = ntfy.sequence_id(key, KEY)
+        assert ntfy.SEQUENCE_ID.fullmatch(seq) and seq == ntfy.sequence_id(key, KEY)  # stable per topic
+        assert seq == hashlib.blake2b(key.encode(), key=KEY, digest_size=32).hexdigest()
+        assert seq != hashlib.sha256(key.encode()).hexdigest()  # a guessable key cannot be brute-forced
+        assert seq != hashlib.blake2b(key.encode(), digest_size=32).hexdigest()
+        assert seq != ntfy.sequence_id(key, OTHER_KEY)  # differs across topics
+        assert "acct1" not in seq and "2026" not in seq and "ok_key" not in seq
+    assert ntfy.sequence_id("a:b", KEY) != ntfy.sequence_id("a/b", KEY)
+    assert ntfy.sequence_id("", KEY) is None
+
+
+def test_the_sequence_key_is_the_validated_topic_capped_at_64_bytes():
+    assert ntfy.sequence_key(URL) == KEY
+    long_topic = "t" * 64
+    assert ntfy.sequence_key(f"https://ntfy.sh/{long_topic}") == long_topic.encode()
+    with pytest.raises(ntfy.NtfyConfigError):
+        ntfy.sequence_id("k", b"short")
+
+
+def test_sinks_on_different_topics_send_different_sequence_ids_for_one_key():
+    a, b = Opener(), Opener()
+    make(a)[0].deliver(ev())
+    ntfy.NtfySink("https://ntfy.sh/another-topic-0123456789", opener=b, sleep=lambda s: None,
+                  clock=lambda: NOW).deliver(ev())
+    assert headers(a.requests[0])["x-sequence-id"] != headers(b.requests[0])["x-sequence-id"]
 
 
 def test_an_empty_dedupe_key_sends_no_sequence_id_and_is_never_retried():
@@ -513,6 +566,6 @@ def test_notification_failure_changes_no_caller_state():
     s.deliver(e)
     assert e.to_dict() == before
     assert set(ntfy.NtfySink.__slots__) == {
-        "_target", "_secrets", "_token", "_opener", "_sleep", "_clock", "_monotonic", "max_attempts", "backoff",
+        "_target", "_has_token", "_redact", "_opener", "_sleep", "_clock", "_monotonic", "max_attempts", "backoff",
         "timeout", "deadline", "last_error", "last_attempts", "last_http_status", "_consecutive_failures",
         "_open_until"}

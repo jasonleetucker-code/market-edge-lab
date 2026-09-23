@@ -64,7 +64,15 @@ timer or deploy file each need a separate owner approval recorded in the repo.
   - `X-Priority`: INFO 2, WARNING 4, CRITICAL 5;
   - `X-Tags`: `<severity>,<type>`;
   - body: a fixed headline per event type (`HEADLINES`) plus "Open Market Edge for details.";
-  - `X-Sequence-ID`: the full SHA-256 hex (64 characters) of the dedupe key.
+  - `X-Sequence-ID`: BLAKE2b-256 hex (64 characters) of the dedupe key, keyed with the
+    topic (at most 64 bytes, BLAKE2b's key limit).
+
+  A plain SHA-256 was used at first, but review showed it can be brute-forced: dedupe keys
+  such as `veto:<account>:<date>` are guessable, and the reviewer recovered one from the
+  hash. The keyed hash is stable per topic, so dedupe still works, and it differs across
+  topics. Without the topic, which is already the secret, it cannot be reversed. The
+  signing invariant forbids the word for the standard keyed-hash construction, so BLAKE2b's
+  built-in key mode is used instead.
 
   Values, refs, the deep link and the action mode are never sent. There is no `X-Click` or
   `X-Actions`. A test runs realistic receipt events through the sink and checks that no
@@ -78,7 +86,9 @@ timer or deploy file each need a separate owner approval recorded in the repo.
   each retry.
 - **Bounded cost.**
   - At most 3 attempts inside a 15-second budget per event, with backoff and per-attempt
-    timeouts included. Neither bound can be raised by a constructor argument.
+    timeouts included. Neither bound can be raised by a constructor argument. The budget
+    is best-effort: the urllib timeout applies to each socket operation, not the whole
+    request, and DNS resolution has no timeout.
   - Backoff is 1 s then 2 s, through an injectable `sleep` and monotonic clock.
   - Only transport errors and 500/502/503/504 are retried, and only when a sequence id
     exists.
@@ -97,11 +107,20 @@ timer or deploy file each need a separate owner approval recorded in the repo.
   - The sink holds no reference to risk, ledger or trading state.
 - **Secrets.** The topic URL, topic and token are removed from every error by
   `redaction.redact_text`. `Target`'s repr omits the URL. The sink's repr and str show only
-  the host and whether a token is set. `__slots__` leaves no `__dict__` to dump. Config
-  errors never echo the URL or token.
+  the host and whether a token is set. `__slots__` leaves no `__dict__` to dump.
+  - The token is held only by the guarded opener's closure, which adds the header.
+  - The redaction list is held only by the redactor's closure. No attribute holds either.
+  - The sink and its `Target` refuse pickling, `copy` and `deepcopy` (TypeError).
+  - Config errors never echo the URL or token. The factory trims only spaces, so a control
+    character in the environment value fails validation instead of being silently removed.
+  - Validation also refuses C0/DEL control characters anywhere, and a bare trailing `?` or
+    `#`.
 - **Invariant change** (`tests/invariants/test_no_execution_paths.py`):
-  - `NOTIFICATION_DELIVERY_EXCEPTION` names exactly `edge_lab/notify_ntfy.py` and exempts it
-    from exactly three rules: non-GET method, request body, auth header.
+  - `NOTIFICATION_DELIVERY_EXCEPTION` names exactly `edge_lab/notify_ntfy.py` and relaxes
+    exactly three rules, each only as far as needed:
+    - non-GET method: POST only, so PUT, PATCH and DELETE still fail;
+    - request body: lifted;
+    - auth header: `Authorization` only, so venue headers still fail.
   - The order-endpoint, client-write-call and request-signing rules have no exception
     anywhere, that file included.
   - Tests prove that:
@@ -110,7 +129,8 @@ timer or deploy file each need a separate owner approval recorded in the repo.
     - order patterns still fail inside the exempt file;
     - the file contains no venue name, trading path or URL literal, and imports only
       stdlib and three `edge_lab` modules;
-    - the host allowlist is exactly `("ntfy.sh",)` plus an empty self-hosted tuple;
+    - the host allowlist is exactly `("ntfy.sh",)` plus an empty self-hosted tuple, and no
+      other `src/` file assigns `DEFAULT_HOSTS`, `SELF_HOSTED_HOSTS` or a sink's `_opener`;
     - venue, data-source, IP-literal and userinfo/port-trick URLs are refused, including
       when a `Target` is built directly;
     - the token variable is read only in that file, through an injectable mapping;

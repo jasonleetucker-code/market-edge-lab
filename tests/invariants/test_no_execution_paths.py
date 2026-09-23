@@ -4,8 +4,8 @@ If a future, owner-approved gate needs execution code, it goes in a separate
 component with its own review, and this test changes in the same PR as that decision.
 
 One narrow exception exists (ADR 0022): the ntfy notification sink may POST a text body,
-with an optional Bearer token, to the one topic URL the owner configures. It is exempt
-from exactly three rules, in exactly one file. The order, client-write and signing rules
+with an optional Bearer token, to one topic on an allowlisted ntfy host. Three rules are
+relaxed, in exactly one file, and only to POST and the Authorization header. The order, client-write and signing rules
 still apply to it, and the tests below prove the exception cannot spread.
 """
 
@@ -26,10 +26,16 @@ FORBIDDEN = {
 }
 
 
-# The single notification delivery file allowed to publish (ADR 0022), and the only rules
-# it is exempt from. Path-exact: a copy, a rename or a subpackage file gets no exception.
+# The single notification delivery file allowed to publish (ADR 0022), the only rules it is
+# relaxed for, and what still applies to it under each (None: the rule is lifted). It may use
+# POST only (never PUT, PATCH or DELETE) and the Authorization header only (never a venue
+# header). Path-exact: a copy, a rename or a subpackage file gets no exception.
 NOTIFICATION_DELIVERY_EXCEPTION = {
-    "edge_lab/notify_ntfy.py": frozenset({"non-GET HTTP method", "request body (implies POST)", "auth header"}),
+    "edge_lab/notify_ntfy.py": {
+        "non-GET HTTP method": re.compile(r"""method\s*=\s*["'](PUT|PATCH|DELETE)["']""", re.I),
+        "request body (implies POST)": None,
+        "auth header": re.compile(r"""["'](KALSHI-ACCESS-KEY|KALSHI-ACCESS-SIGNATURE)["']""", re.I),
+    },
 }
 # These rules have no exception anywhere, the notification file included.
 NEVER_EXEMPT = frozenset({"order endpoint", "client write call", "request signing"})
@@ -45,9 +51,10 @@ def _rel(path: Path) -> str:
 
 def _violations(label: str, rel: str, text: str) -> list[str]:
     """Lines of `text` (the file at `rel`, relative to src/) that break rule `label`."""
-    if label in NOTIFICATION_DELIVERY_EXCEPTION.get(rel, frozenset()):
+    relaxed = NOTIFICATION_DELIVERY_EXCEPTION.get(rel, {})
+    pattern = relaxed[label] if label in relaxed else FORBIDDEN[label]
+    if pattern is None:
         return []
-    pattern = FORBIDDEN[label]
     return [f"{rel}:{lineno}: {line.strip()}" for lineno, line in enumerate(text.splitlines(), 1)
             if pattern.search(line)]
 
@@ -75,7 +82,7 @@ _POST_LINES = {
 def test_the_post_exception_covers_exactly_one_file_and_three_rules():
     assert set(NOTIFICATION_DELIVERY_EXCEPTION) == {NTFY_REL}
     assert (SRC / NTFY_REL).is_file()
-    exempt = NOTIFICATION_DELIVERY_EXCEPTION[NTFY_REL]
+    exempt = set(NOTIFICATION_DELIVERY_EXCEPTION[NTFY_REL])
     assert exempt == set(_POST_LINES) and exempt <= set(FORBIDDEN)
     assert not exempt & NEVER_EXEMPT and NEVER_EXEMPT == set(FORBIDDEN) - exempt
     text = (SRC / NTFY_REL).read_text()
@@ -108,8 +115,33 @@ def test_order_execution_patterns_stay_forbidden_in_the_notification_file(line):
     assert any(_violations(label, NTFY_REL, text) for label in NEVER_EXEMPT), line
 
 
+@pytest.mark.parametrize("label,line", [
+    ("non-GET HTTP method", 'Request(url, method="PUT")'), ("non-GET HTTP method", "Request(url, method='patch')"),
+    ("non-GET HTTP method", 'Request(url, method="DELETE")'), ("auth header", 'h["KALSHI-ACCESS-KEY"] = k'),
+    ("auth header", "h['KALSHI-ACCESS-SIGNATURE'] = s"),
+])
+def test_the_notification_file_may_post_but_never_put_patch_delete_or_send_venue_headers(label, line):
+    text = (SRC / NTFY_REL).read_text()
+    assert not _violations(label, NTFY_REL, text)
+    assert _violations(label, NTFY_REL, text + "\n" + line + "\n"), line
+
+
+# Only the notification module may set its host allowlist or replace a sink's opener.
+_ALLOWLIST_TAMPERING = re.compile(r"\b(SELF_HOSTED_HOSTS|DEFAULT_HOSTS)\b\s*(\+|\||-)?=(?!=)|\._opener\s*=(?!=)"
+                                  r"|setattr\([^)]*[\"'](SELF_HOSTED_HOSTS|DEFAULT_HOSTS|_opener)[\"']")
+
+
+def test_no_other_source_file_changes_the_ntfy_allowlist_or_opener():
+    hits = [f"{_rel(p)}:{n}: {line.strip()}" for p in _source_files() if _rel(p) != NTFY_REL
+            for n, line in enumerate(p.read_text().splitlines(), 1) if _ALLOWLIST_TAMPERING.search(line)]
+    assert not hits, hits
+    for probe in ("notify_ntfy.SELF_HOSTED_HOSTS = ('evil.example',)", "ntfy.DEFAULT_HOSTS += ('x',)",
+                  "sink._opener = my_opener", 'setattr(notify_ntfy, "SELF_HOSTED_HOSTS", ("x",))'):
+        assert _ALLOWLIST_TAMPERING.search(probe), probe
+
+
 # Venue, data-source and trading words that must never appear in the notification file. Its
-# refused-host list is derived at run time from the registries, so it needs none of them.
+# hosts come from a fixed allowlist of ntfy hosts, so it needs none of them.
 _VENUE_TEXT = re.compile(r"kalshi|polymarket|novig|odds[-_ ]?api|the-odds|pinnacle|betfair|draftkings|fanduel"
                          r"|/orders|\borders?\b|create_order|place_order|trade-api|portfolio|balance|withdraw"
                          r"|deposit|https?://", re.I)
@@ -119,7 +151,7 @@ def test_the_notification_file_names_no_venue_host_order_path_or_url():
     text = (SRC / NTFY_REL).read_text()
     hits = [f"{lineno}: {line.strip()}" for lineno, line in enumerate(text.splitlines(), 1)
             if _VENUE_TEXT.search(line)]
-    assert not hits, "the notification file must take its only host from configuration:\n" + "\n".join(hits)
+    assert not hits, "the notification file may name only allowlisted ntfy hosts, never a venue:\n" + "\n".join(hits)
 
 
 def test_the_notification_file_imports_nothing_that_can_trade():
