@@ -12,8 +12,9 @@ be written here when they are made.
 | 3 | Historical dataset | **PASSED 2026-09-22 (PR #14, merged 2f5d640; Windows portability fixes PR #15, 7c93f78).** Point-in-time dataset EXP-001-pit-v2 (3,551 days, 3,551 usable, SHA-256 `1794b23c…`), train-only descriptive analysis, EXP-001 PREREGISTERED and frozen; see `experiments/EXP-001-kxhighny-nws-vs-market/gate3/`. |
 | 4 | Baseline model | **EXIT CRITERIA MET 2026-09-22 (PR #18).** The frozen baseline was implemented; validation selected V1; the test split was opened once; **Stage A PASS** (model − R0 +1.253, 95% CI [+1.147, +1.362]; PIT coverage 0.806 ∈ [0.75, 0.85]). EXP-001 is `RUNNING` (Stage B pending). A Stage A pass is not evidence of an edge; see `experiments/EXP-001-kxhighny-nws-vs-market/gate4/REPORT.md`. Closed: the owner approved Gate 5 on 2026-09-22. |
 | 5 | Market-vs-model | **PASSED 2026-09-23 (PR #22).** The domain-neutral opportunity engine (ADR 0013): contracts for event, market, executable quote, model estimate and opportunity; executable Kalshi prices (never mid or last); versioned fees (`kalshi-quadratic-taker-v1`, `UNVERIFIED_CURRENT_SCHEDULE`, so no result is claimable); fail-closed freshness; explicit liquidity; machine-readable rejection reasons. EXP-001 probabilities and forward books plug in (`edge-lab forward opportunities`). An independent review found one blocker (settlement equivalence), which was fixed and re-reviewed with no blocker. CI is green on the exact head. |
-| 6 | Simulated / shadow trading | **PASSED 2026-09-23 (PR #23).** Append-only, hash-chained shadow ledger with all account state derived by replay (ADR 0014). The fill policy is deterministic (`latency-confirmed-v1`, the frozen EXP-001 execution model). The sizing foundation has hard caps and fractional Kelly. `edge-lab shadow run|settle|account`. No real-order path. The independent review found no blocker; 4 should-fix items were fixed and re-reviewed. CI is green on the exact head. The P0 risk/capital foundation (issue #6) and the Outcome Board backend (issue #3) were then built under the same directive (PR #24, ADR 0015): shadow only, with no withdrawal recommendation. Gate 6 stays current until the owner approves Gate 7. |
-| 7–10 | Adversarial validation → … → scaling | Not authorized. |
+| 6 | Simulated / shadow trading | **PASSED 2026-09-23 (PR #23).** Append-only, hash-chained shadow ledger with all account state derived by replay (ADR 0014). The fill policy is deterministic (`latency-confirmed-v1`, the frozen EXP-001 execution model). The sizing foundation has hard caps and fractional Kelly. `edge-lab shadow run|settle|account`. No real-order path. The independent review found no blocker; 4 should-fix items were fixed and re-reviewed. CI is green on the exact head. The P0 risk/capital foundation (issue #6) and the Outcome Board backend (issue #3) were then built under the same directive (PR #24, ADR 0015): shadow only, with no withdrawal recommendation. Gate 7 engineering was authorized on 2026-09-23. |
+| 7 | Adversarial validation | **Engineering authorized 2026-09-23** (daily-shadow directive): adversarial software tests on disposable stores, risk/ledger/timing/execution fault handling. Gate 7 *research* evidence needs real Stage B days; the EXP-001 180/365-valid-day looks are unaffected. Not passed. |
+| 8–10 | Paper/shadow → tiny real money → scaling | Not authorized. |
 
 ## Owner authorization record
 
@@ -90,6 +91,34 @@ be written here when they are made.
     - sports, sportsbook, crypto, equities, generic web/news scraping, dashboard styling,
       DNS/TLS/subdomains, and automatic withdrawals.
 
+- **2026-09-23, daily shadow operation directive.** Recorded verbatim in
+  `docs/owner/2026-09-23-daily-shadow-directive.md`. The owner authorizes:
+  1. bounded daily official settlement-evidence collection on the existing VPS;
+  2. scheduled opportunity evaluation, simulated bookkeeping and shadow settlement using
+     stored evidence;
+  3. Gate 7 adversarial engineering work and tests;
+  4. a local, read-only, mobile-friendly dashboard over existing research and shadow data;
+  5. review, testing and squash-merging of this mission's bounded PRs.
+
+  Each PR must be reconciled with `main`, pass the targeted tests, the full suite and the
+  frozen-artifact checks, and get an independent review for accounting, runtime, security
+  or deployment changes. Blockers must be resolved and CI green on the final revision.
+
+  Merge and deployment are separate states: deployment runs reviewed merged code only,
+  under the existing edgelab isolation, and never during 17:40–18:35 America/New_York.
+
+  **Not authorized:**
+  - real orders or authenticated trading APIs;
+  - deposits, withdrawals or funded accounts;
+  - paid services or new credentials;
+  - sports, crypto or equity expansion;
+  - public dashboard exposure, DNS/TLS, tunnels or firewall changes;
+  - unrelated Brisket changes;
+  - SSH-key changes, OS upgrades or reboots;
+  - Gate 8 or any real-money work.
+
+  The laptop bridge stays a manual emergency fallback only.
+
 ## Standing merge rule: docs-only and test-only PRs
 
 Owner rule of 2026-09-22 (verbatim source: `docs/owner/2026-09-22-overnight-build-directive.md`).
@@ -142,6 +171,17 @@ A PR that fails any of these needs the usual authority: a directive grant or the
   Collection is evidence gathering. Stage B *evaluation* for EXP-001 still needs a Stage A
   PASS, and it simulates only: it never sends orders.
 
+- **Daily shadow operation (2026-09-23 directive):**
+  - scheduled settlement-evidence refresh with bounded GETs;
+  - the `shadow daily` orchestration: evaluation from stored evidence, simulated
+    decisions, fills and settlement, summaries and receipt;
+  - backups of the evidence DB and the shadow ledger.
+
+  All of it runs on the VPS under edgelab isolation, after the re-check window.
+- **Gate 7 engineering:** adversarial tests and fixes against disposable stores. Never run
+  against production.
+- **Local read-only dashboard** bound to 127.0.0.1, with no public exposure.
+
 ## Explicitly not authorized
 
 - Any order placement, order simulation against live endpoints, or authenticated trading client.
@@ -152,7 +192,8 @@ A PR that fails any of these needs the usual authority: a directive grant or the
   experiment after seeing test performance.
 - Any real-money step (gates 8–10), any live-order path, and any Stage B *evaluation*
   for a model that did not pass Stage A.
-- Scheduled or unattended jobs **outside** the 2026-09-22 read-only VPS authorization,
+- Scheduled or unattended jobs **outside** the 2026-09-22 read-only VPS authorization and
+  the 2026-09-23 daily-shadow authorization,
   including GitHub Actions cron, any paid host, and any authenticated source, without new
   owner approval.
 - Browser automation against any source whose terms have not been reviewed and recorded.

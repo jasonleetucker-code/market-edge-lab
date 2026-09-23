@@ -6,6 +6,21 @@ This is the live state of the repository. Each session overwrites it; it is not 
 _Last updated: 2026-09-23 (early UTC), by the risk-foundation PR (#24), which ends the
 overnight build directive (`docs/owner/2026-09-22-overnight-build-directive.md`)._
 
+## Mission checkpoint: 2026-09-23 daily-shadow directive (in progress)
+
+Directive: `docs/owner/2026-09-23-daily-shadow-directive.md`. Plan: PR-A (this record) →
+PR-B (daily pipeline: read-only evidence, pre-fill risk enforcement, point-in-time cash,
+bounded settlement refresh, orchestrator, dual backups, VPS units) → PR-C (Gate 7
+adversarial suite) → PR-D (local dashboard) → PR-E (fee evidence attempt).
+
+- **Access limitation (2026-09-23 06:24 ET):** the working session runs in a cloud
+  container with no SSH client, no key, and TCP/22 to the VPS unreachable. Production
+  state (revision, timers, status JSON, backups, Chase Upside health) was **not read**
+  and nothing was deployed. The next live window, 2026-09-23 17:45–18:15 ET (D =
+  2026-09-24), has not happened yet. The laptop bridge stays manual emergency fallback
+  only; this session cannot reach the laptop either.
+- The block below is the state as of PR #24 until this mission's PRs replace it.
+
 ```
 STATUS: DONE for the overnight directive's authorized sequence.
   - Gate 5 PASSED (#22). Gate 6 PASSED (#23). Risk/capital and Outcome Board foundations
