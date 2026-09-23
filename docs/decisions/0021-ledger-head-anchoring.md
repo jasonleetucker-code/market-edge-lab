@@ -31,6 +31,14 @@ entries appended after the newest checkpoint, and no option prevents tampering. 
 only makes it evident. A5 is covered when the checkpoint survives the disk loss and
 proves which backup is complete.
 
+**Where verification runs matters under A2.** Root on the VPS controls the code, the Python
+interpreter and the output of anything run there. A `shadow anchor verify` run *on the VPS*
+can be made to print VERIFIED whatever the ledger holds. So under A2, options (c), (d), (e)
+and (f) hold only if verification runs **off-host**: from the owner's own checkout at a
+known, reviewed SHA, against a copy of the ledger or of a backup bundle fetched from the VPS,
+compared with the independently kept checkpoint. An on-host verify is enough for A1 and A3
+(where root and the deployed code are still trusted), but not for A2.
+
 **Alternatives.**
 - (a) **Checkpoint file beside the ledger**, in `/var/lib/market-edge-lab`, under
   `edgelab` write authority.
@@ -49,27 +57,28 @@ proves which backup is complete.
 - (c) **Owner-held off-host copy.** The owner runs `edge-lab shadow anchor export` over the
   existing SSH access and keeps the output off the VPS, on the laptop or in the password
   manager.
-  - Covers: **A1**, **A2** for history checkpointed before the compromise, **A3** and **A5**.
+  - Covers: **A1**, **A2** for history checkpointed before the compromise (only with
+    off-host verification, see above), **A3** and **A5**.
   - Does not cover: an attacker who also controls the owner's laptop or vault.
   - It is manual: coverage is only as recent as the last copy the owner kept.
 - (d) **Git-backed checkpoint.** The owner commits the checkpoint JSON to a private
   repository, or posts it on a private issue. A signed commit is optional.
-  - Covers: **A1**, **A2** (history before compromise), **A3** and **A5**. GitHub's
-    push timestamps and history are outside the VPS.
+  - Covers: **A1**, **A2** (history before compromise, only with off-host verification),
+    **A3** and **A5**. GitHub's push timestamps and history are outside the VPS.
   - Does not cover: **A4**. The account holder can rewrite a private repository's history
     or edit an issue, and without signed commits nothing proves who wrote a checkpoint.
   - Manual too. Publishing it publicly would need approval ("public publishing").
 - (e) **Third-party timestamp** (RFC 3161 TSA or OpenTimestamps) over the checkpoint digest.
-  - Covers: **A1–A5** for *existence at a time*. A timestamped digest cannot be backdated
-    by anyone the owner controls.
+  - Covers: **A1–A5** for *existence at a time* (A2 only with off-host verification). A
+    timestamped digest cannot be backdated by anyone the owner controls.
   - Needs an outbound POST to a new service. The collector's HTTP client is GET-only by
     invariant (`tests/invariants/test_no_execution_paths.py`), and a new external service
     needs **separate approval**. Some TSAs are paid.
   - It proves when a digest existed, not where the checkpoint is kept. It still needs (c)
     or (d) to hold the checkpoint itself.
 - (f) **Email to the owner** (checkpoint JSON in the body).
-  - Covers: **A1**, **A2** (history before compromise), **A3** and **A5**, while the
-    mailbox is intact.
+  - Covers: **A1**, **A2** (history before compromise, only with off-host verification),
+    **A3** and **A5**, while the mailbox is intact.
   - Does not cover: compromise of the mailbox. Sending mail from the VPS needs an outbound
     mail path and a scheduled job, which needs **separate approval**. A manual email by the
     owner is simply (c) with another store.
@@ -81,7 +90,8 @@ proves which backup is complete.
   - A checkpoint (`edge-lab-ledger-checkpoint/1`) holds, per account, the entry count, head
     seq, head entry hash and head effective time. It also carries the ledger file's name
     (not its path), the ledger schema version and `checkpoint_sha256` over its canonical
-    JSON. That digest catches a damaged or hand-edited file. It is not a keyed signature.
+    JSON. That digest catches accidental damage or a careless edit (anyone can recompute
+    the digest). It is not a keyed signature.
   - Export refuses an empty ledger or one that fails verification: anchoring a broken
     ledger would bless it.
   - Verify returns, worst first: `INVALID_CHECKPOINT` (own schema, shape or digest) >
@@ -95,9 +105,14 @@ proves which backup is complete.
     unreadable ledger.
 - **Recommend (c) + (d) as the owner's manual procedure.** Run `anchor export` over SSH as
   `edgelab`, in the same session as a verified backup. Keep one copy off-host (c) and commit
-  one to a private repository (d). Later, verify the live ledger or any backup against the
-  newest kept checkpoint. The two stores cover each other's gaps: (d) fails under A4 and (c)
-  fails if the laptop is lost.
+  one to a private repository (d). Later, verify against the newest kept checkpoint:
+  - routinely on the VPS (enough for A1 and A3);
+  - and, to cover A2, **off-host**: copy the ledger or a backup bundle's database to the
+    owner's machine and run `anchor verify` there from the owner's own checkout at a known,
+    reviewed SHA.
+
+  The two stores cover each other's gaps: (d) fails under A4 and (c) fails if the laptop is
+  lost.
 - **(b), (e) and (f) as automation only with separate owner approval.** Each needs a
   scheduled job, an outbound POST or mail, or a new service. **(a) is rejected** as an
   independent anchor.

@@ -72,8 +72,12 @@ evidence:
    beside the ledger (option (a)) does not count.
 4. A later `shadow anchor verify` of the production ledger, against that independent copy,
    returned VERIFIED or EXTENDED, and the output is recorded.
+5. At least one such verification ran **off-host**: from the owner's own checkout at a
+   known, reviewed SHA, against a copy of the production ledger or of a backup bundle's
+   database fetched from the VPS. Root on the VPS (ADR 0021, A2) controls whatever runs
+   there, so an on-host VERIFIED does not cover A2.
 
-Items 1 to 4 show that a truncation would now be *detectable* for the anchored history. They
+Items 1 to 5 show that a truncation would now be *detectable* for the anchored history. They
 do not detect tampering with entries appended after the newest stored checkpoint. That residual
 gap is accepted in ADR 0021. Keeping it small means exporting a checkpoint regularly, which is
 manual unless the owner separately approves a scheduled anchor.

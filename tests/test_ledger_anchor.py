@@ -342,3 +342,64 @@ def test_cli_export_refusals_exit_2(tmp_path, capsys):
     ShadowLedger(tmp_path / "empty.sqlite3")
     code, out, err = run(capsys, "export", "--ledger", str(tmp_path / "empty.sqlite3"))
     assert code == 2 and out == "" and "nothing to anchor" in err
+
+
+# --------------------------------------------------------------------------- crafted rows and renumbering
+
+
+def append_crafted_head(path, account: str, payload_json: str) -> None:
+    """Append a correctly chained row whose payload is not a JSON object (an attacker or a bug)."""
+    with closing(raw(path)) as conn:
+        head = conn.execute("SELECT * FROM ledger_entries WHERE account_id = ? ORDER BY seq DESC LIMIT 1",
+                            (account,)).fetchone()
+        payload_sha = _sha(payload_json)
+        entry_hash = _entry_hash(head["entry_hash"], account, "decision", "crafted", T0.isoformat(), payload_sha)
+        conn.execute("INSERT INTO ledger_entries (account_id, kind, entry_key, effective_at_utc, payload_json, "
+                     "payload_sha256, prev_hash, entry_hash, appended_at_utc) VALUES (?, 'decision', 'crafted', ?, ?, "
+                     "?, ?, ?, ?)", (account, T0.isoformat(), payload_json, payload_sha, head["entry_hash"],
+                                     entry_hash, T0.isoformat()))
+
+
+@pytest.mark.parametrize("payload_json", ["[]", "null", "[1, 2]", '"text"', "7"])
+def test_crafted_non_object_payload_is_chain_invalid_not_a_crash(anchored, tmp_path, capsys, payload_json):
+    path, cp = anchored
+    append_crafted_head(path, "A", payload_json)
+    v = verdict(path, cp)
+    assert v.status == "CHAIN_INVALID" and status_of(v, "A") == "CHAIN_INVALID"
+    with pytest.raises(LedgerError, match="refusing to anchor"):
+        export_checkpoint(ShadowLedger.open_readonly(path), now=NOW)
+    cp_file = tmp_path / "cp.json"
+    cp_file.write_text(json.dumps(cp), encoding="utf-8")
+    code, out, _ = run(capsys, "verify", "--ledger", str(path), "--checkpoint", str(cp_file))
+    assert code == 2 and json.loads(out)["status"] == "CHAIN_INVALID"
+    code, out, err = run(capsys, "export", "--ledger", str(path))
+    assert code == 2 and out == "" and "refusing to anchor" in err
+
+
+def test_seq_renumbering_alone_is_verified_with_a_note(anchored):
+    """seq is outside the hash; a rebuild may renumber it. Content identical means VERIFIED."""
+    path, cp = anchored
+    tamper(path, ("UPDATE ledger_entries SET seq = seq + 1000 WHERE account_id = ?", ("B",)))
+    v = verdict(path, cp)
+    assert v.status == "VERIFIED" and status_of(v, "B") == "VERIFIED"
+    detail = next(a.detail for a in v.accounts if a.account_id == "B")
+    assert "seq is now" in detail and "content is identical" in detail
+
+
+def test_consistently_renamed_account_is_missing_plus_new(anchored):
+    """Renaming an account (every row re-hashed under the new id) removes the anchored account."""
+    path, cp = anchored
+    with closing(raw(path)) as conn:
+        rows = conn.execute("SELECT * FROM ledger_entries WHERE account_id = 'B' ORDER BY seq").fetchall()
+    statements, prev = [], "0" * 64
+    for row in rows:
+        new_hash = _entry_hash(prev, "B2", row["kind"], row["entry_key"], row["effective_at_utc"], row["payload_sha256"])
+        statements.append(("UPDATE ledger_entries SET account_id = 'B2', prev_hash = ?, entry_hash = ? WHERE seq = ?",
+                           (prev, new_hash, row["seq"])))
+        prev = new_hash
+    tamper(path, *statements)
+    lg = ShadowLedger.open_readonly(path)
+    lg.verify_chain("B2")  # a consistent forgery replays
+    v = verify_checkpoint(lg, cp)
+    assert v.status == "ACCOUNT_MISSING" and status_of(v, "B") == "ACCOUNT_MISSING"
+    assert v.new_accounts == ("B2",) and status_of(v, "A") == "VERIFIED"

@@ -9,14 +9,24 @@
 #
 # Usage: bash verify_production.sh          (as dynasty; or via sudo to read private sections)
 #
+# Read-only input overrides, for tests and for checking copied files off-host:
+#   EDGE_LAB_VERIFY_STATUS_DIR       read latest.json / shadow_daily.json / last_failure.json here
+#   EDGE_LAB_VERIFY_BACKUP_JOURNAL   read `journalctl -u edgelab-backup.service -o json` lines
+#                                    from this file instead of the journal
+# Each override is announced in the output, so an overridden report is never mistaken for
+# a production one.
+#
 # One state does not imply the next: an enabled timer is not a capture, a capture is not a
-# valid day, and a clean journal is not a verified backup. Procedure:
-# docs/deploy/DAILY_SHADOW_ACTIVATION.md.
+# valid day, a backup is not a verified restore. The directive's post-deployment states
+# (DEPLOYED_SHA, COLLECTOR_HEALTH, SHADOW_TIMER, SETTLEMENT_TIMER, BACKUP_EVIDENCE_DB,
+# BACKUP_SHADOW_LEDGER, RESTORE_EVIDENCE_DB, RESTORE_SHADOW_LEDGER, CHASE_UPSIDE_HEALTH) are
+# each reported on their own line. Procedure: docs/deploy/DAILY_SHADOW_ACTIVATION.md.
 set -u
 
 APP=/opt/market-edge-lab/app
 DATA=/var/lib/market-edge-lab
-STATUS=/var/lib/market-edge-lab-status
+STATUS=${EDGE_LAB_VERIFY_STATUS_DIR:-/var/lib/market-edge-lab-status}
+BACKUP_JOURNAL=${EDGE_LAB_VERIFY_BACKUP_JOURNAL:-}
 NAMES=(pfm decision recheck status backup shadow settlement)
 NR=NOT_READABLE_WITHOUT_PRIVILEGE
 SUMMARY=()
@@ -25,9 +35,206 @@ state() { # NAME VALUE
   printf 'STATE %s: %s\n' "$1" "$2"
   SUMMARY+=("$1: $2")
 }
+states_from() { # lines of NAME-tab-VALUE printed by an embedded parser
+  while IFS=$'\t' read -r name value; do
+    [ -n "$name" ] && state "$name" "$value"
+  done <<< "$1"
+}
 detail() { sed 's/^/    /'; }
 have() { command -v "$1" >/dev/null 2>&1; }
 
+# --------------------------------------------------------------------------- embedded parsers
+# Run as `python3 -I -B` (isolated: no user site, no environment, no bytecode written).
+# They only read the file or stdin they are given and print NAME-tab-VALUE lines.
+
+IFS= read -r -d '' PY_LATEST <<'PY' || :
+import json, sys
+from datetime import datetime, timezone
+
+def emit(name, value):
+    print(f"{name}\t{value}")
+
+try:
+    with open(sys.argv[1], encoding="utf-8") as stream:
+        d = json.load(stream)
+    problem = None if isinstance(d, dict) else f"NOT_A_JSON_OBJECT ({type(d).__name__})"
+except Exception as exc:
+    d, problem = None, f"UNPARSEABLE ({type(exc).__name__})"
+if problem:
+    emit("LATEST_JSON", problem)
+    emit("LATEST_JSON_AGE", "UNKNOWN")
+    emit("COLLECTOR_HEALTH", f"UNKNOWN (latest.json {problem})")
+    emit("VALID_DAY_OBSERVED", f"UNKNOWN (latest.json {problem})")
+    raise SystemExit(0)
+keys = ("generated_at_utc", "last_closed_target_date", "last_closed_status", "last_closed_reasons",
+        "valid_days", "first_valid_day", "days_with_captures", "invalid_days")
+emit("LATEST_JSON", json.dumps({k: d.get(k) for k in keys}, sort_keys=True))
+generated = d.get("generated_at_utc")
+try:
+    at = datetime.fromisoformat(str(generated).replace("Z", "+00:00"))
+    if at.tzinfo is None:
+        raise ValueError("naive")
+    hours = (datetime.now(timezone.utc) - at).total_seconds() / 3600
+    age = f"{hours:.1f}h (generated_at_utc {generated})"
+except ValueError:
+    age = "UNKNOWN (no parseable generated_at_utc)"
+emit("LATEST_JSON_AGE", age)
+status = d.get("last_closed_status")
+if isinstance(status, str) and status:
+    reasons = json.dumps(d.get("last_closed_reasons"))
+    emit("COLLECTOR_HEALTH", f"{status} (last closed day {d.get('last_closed_target_date')}; reasons {reasons}; "
+                             f"latest.json age {age})")
+else:
+    emit("COLLECTOR_HEALTH", "UNKNOWN (latest.json has no last_closed_status)")
+valid = d.get("valid_days")
+if isinstance(valid, bool) or not isinstance(valid, int) or valid < 0:
+    emit("VALID_DAY_OBSERVED", f"UNKNOWN (latest.json valid_days is not a non-negative integer: {valid!r})")
+elif valid == 0:
+    emit("VALID_DAY_OBSERVED", "NO (latest.json valid_days = 0)")
+else:
+    emit("VALID_DAY_OBSERVED", f"YES (latest.json valid_days = {valid})")
+PY
+
+IFS= read -r -d '' PY_SHADOW <<'PY' || :
+import json, sys
+
+try:
+    with open(sys.argv[1], encoding="utf-8") as stream:
+        d = json.load(stream)
+    problem = None if isinstance(d, dict) else f"NOT_A_JSON_OBJECT ({type(d).__name__})"
+except Exception as exc:
+    d, problem = None, f"UNPARSEABLE ({type(exc).__name__})"
+if problem:
+    print(f"SHADOW_DAILY\t{problem}")
+    raise SystemExit(0)
+
+def obj(value):
+    return value if isinstance(value, dict) else {}
+
+def seq(value):
+    return value if isinstance(value, list) else []
+
+fee, settlement = obj(d.get("fee")), obj(d.get("settlement"))
+out = {k: d.get(k) for k in ("state", "exit_code", "generated_at_utc", "latest_day", "valid_days")}
+out["fee"] = {k: fee[k] for k in ("schedule_id", "status", "claim_basis", "claimable") if k in fee}
+out["settlement"] = {"settled": settlement.get("settled"), "pending": len(seq(settlement.get("pending"))),
+                     "conflicts": len(seq(settlement.get("conflicts"))),
+                     "refresh": obj(settlement.get("refresh")).get("status")}
+out["days"] = [{"target_date": day.get("target_date"), "result": day.get("result"),
+                "capture_status": day.get("capture_status"), "accounts": day.get("accounts")}
+               for day in seq(d.get("days")) if isinstance(day, dict)]
+print(f"SHADOW_DAILY\t{json.dumps(out, sort_keys=True)}")
+PY
+
+# Backup reports: edgelab-backup.service runs `edge_lab.backup create` for the evidence DB,
+# then for the shadow ledger, and each prints one JSON report (indented, so one journal line
+# per JSON line). The parser groups journal lines by unit invocation, reassembles the JSON
+# objects and classifies each by store_kind / kind / bundle path. A FAILED report names no
+# store, so it is attributed by its order within the invocation, and says so.
+# BACKUP_* comes from the created bundle; RESTORE_* only from verify_backup's result (the
+# temporary restore reproduced schema and row counts), never from BACKUP_*.
+IFS= read -r -d '' PY_BACKUP <<'PY' || :
+import json, sys
+from datetime import datetime, timezone
+
+def emit(name, value):
+    print(f"{name}\t{value}")
+
+runs, order = {}, []
+for line in sys.stdin:
+    try:
+        entry = json.loads(line)
+    except ValueError:
+        continue
+    if not isinstance(entry, dict) or not isinstance(entry.get("MESSAGE"), str):
+        continue
+    run = entry.get("_SYSTEMD_INVOCATION_ID") or entry.get("INVOCATION_ID") or "unknown"
+    if run not in runs:
+        runs[run] = {"t": entry.get("__REALTIME_TIMESTAMP"), "lines": []}
+        order.append(run)
+    runs[run]["lines"].append(entry["MESSAGE"])
+
+decoder = json.JSONDecoder()
+
+def reports(text):
+    found, i = [], 0
+    while True:
+        i = text.find("{", i)
+        if i == -1:
+            return found
+        try:
+            value, end = decoder.raw_decode(text, i)
+        except ValueError:
+            i += 1
+            continue
+        if isinstance(value, dict) and isinstance(value.get("status"), str):
+            found.append(value)
+        i = end
+
+def when(stamp):
+    try:
+        return datetime.fromtimestamp(int(stamp) / 1e6, timezone.utc).isoformat(timespec="seconds")
+    except (TypeError, ValueError):
+        return "UNKNOWN_TIME"
+
+def store_of(report, position):
+    for key in ("store_kind", "kind"):
+        if report.get(key) in ("evidence", "ledger"):
+            return report[key], ""
+    bundle = report.get("bundle")
+    if isinstance(bundle, str):
+        return ("ledger" if "/ledger/" in bundle.replace("\\", "/") else "evidence"), ""
+    if position in (0, 1):
+        return ("evidence", "ledger")[position], " (store attributed by its order in the unit: evidence, then ledger)"
+    return None, ""
+
+def stamp_key(run):
+    try:
+        return int(runs[run]["t"])
+    except (TypeError, ValueError):
+        return 0
+
+latest, total = {}, 0
+for run in sorted(order, key=stamp_key):
+    for position, report in enumerate(reports("\n".join(runs[run]["lines"]))):
+        total += 1
+        store, note = store_of(report, position)
+        if store is not None:
+            latest[store] = (report, when(runs[run]["t"]), note)
+emit("BACKUP_REPORTS_8D", f"{total} report(s) in {len(order)} run(s)")
+for store, backup_name, restore_name in (("evidence", "BACKUP_EVIDENCE_DB", "RESTORE_EVIDENCE_DB"),
+                                         ("ledger", "BACKUP_SHADOW_LEDGER", "RESTORE_SHADOW_LEDGER")):
+    if store not in latest:
+        emit(backup_name, "NONE_IN_WINDOW (no report for this store in the last 8 days)")
+        emit(restore_name, "NONE_IN_WINDOW (no report for this store in the last 8 days)")
+        continue
+    report, at, note = latest[store]
+    status = report["status"]
+    if isinstance(report.get("bundle"), str):
+        backup = f"CREATED at {at}: {report['bundle']}{note}"
+    elif status == "SKIPPED_NO_SOURCE":
+        backup = f"SKIPPED_NO_SOURCE at {at} (the store did not exist yet)"
+    elif status == "FAILED":
+        backup = f"FAILED at {at}: {report.get('error')}{note}"
+    else:
+        backup = f"UNKNOWN at {at}: status {status} without a bundle{note}"
+    restored = "row_counts" in report and "schema_sha256" in report
+    if status == "VERIFIED_BACKUP_AND_RESTORE" and restored:
+        counts = json.dumps(report["row_counts"], sort_keys=True)
+        restore = f"VERIFIED at {at} (temporary restore reproduced schema and row counts {counts})"
+    elif status.startswith("BACKED_UP_LEDGER_") and restored:
+        restore = f"NOT_VERIFIED at {at}: {status} (the restore copy matched; the ledger itself fails its checks)"
+    elif status == "SKIPPED_NO_SOURCE":
+        restore = f"NOT_RUN at {at} (SKIPPED_NO_SOURCE)"
+    elif status == "FAILED":
+        restore = f"FAILED_OR_NOT_RUN at {at}: {report.get('error')}{note}"
+    else:
+        restore = f"UNKNOWN at {at}: status {status}"
+    emit(backup_name, backup)
+    emit(restore_name, restore)
+PY
+
+# --------------------------------------------------------------------------- access checks
 # The system journal is readable only by root or the adm/systemd-journal groups. Without it,
 # journalctl silently shows nothing for system units, which must never read as "no entries".
 # So the journal counts as readable only when a PID 1 (systemd) message is actually visible.
@@ -47,6 +254,8 @@ fi
 NOSD="UNKNOWN (systemd not reachable from this shell)"
 
 echo "== Market Edge Lab production state, host $(hostname), $(date -u +%Y-%m-%dT%H:%M:%SZ), user $(id -un), journal readable: ${JOURNAL}, systemd: ${SYSTEMD}"
+[ -n "${EDGE_LAB_VERIFY_STATUS_DIR:-}" ] && echo "OVERRIDE status files read from ${STATUS} (not the production status directory)"
+[ -n "$BACKUP_JOURNAL" ] && echo "OVERRIDE backup reports read from ${BACKUP_JOURNAL} (not the production journal)"
 
 # --------------------------------------------------------------------------- time
 ny_time=$(TZ=America/New_York date '+%Y-%m-%d %H:%M:%S %Z')
@@ -85,8 +294,7 @@ if [ "$SYSTEMD" = yes ]; then
 
   echo "== last result of each service"
   for n in "${NAMES[@]}"; do
-    line=$(systemctl show "edgelab-$n.service" -p LoadState -p ActiveState -p Result -p ExecMainStatus \
-           -p ActiveEnterTimestamp --no-pager 2>/dev/null | tr '\n' ' ')
+    line=$(systemctl show "edgelab-$n.service" -p LoadState -p ActiveState -p Result -p ExecMainStatus -p ActiveEnterTimestamp --no-pager 2>/dev/null | tr '\n' ' ')
     printf '    edgelab-%-11s %s\n' "$n" "${line:-UNKNOWN}"
   done
   failed=$(systemctl list-units 'edgelab-*' --state=failed --no-legend --plain --no-pager 2>/dev/null | awk '{print $1}' | tr '\n' ' ')
@@ -96,47 +304,31 @@ else
   state UNIT_RESULTS "$NOSD"
 fi
 
+timer_state() { # NAME unit: the timer's own state and its service's last result, nothing inferred
+  if [ "$SYSTEMD" != yes ]; then
+    state "$1" "$NOSD"
+    return
+  fi
+  en=$(systemctl is-enabled "$2.timer" 2>/dev/null); ac=$(systemctl is-active "$2.timer" 2>/dev/null)
+  info=$(systemctl show "$2.timer" -p LastTriggerUSec -p NextElapseUSecRealtime --no-pager 2>/dev/null | tr '\n' ' ')
+  res=$(systemctl show "$2.service" -p Result -p ExecMainStatus --no-pager 2>/dev/null | tr '\n' ' ')
+  state "$1" "enabled=${en:-not-found} active=${ac:-unknown} ${info}last-run: ${res:-UNKNOWN}"
+}
+timer_state SHADOW_TIMER edgelab-shadow
+timer_state SETTLEMENT_TIMER edgelab-settlement
+
 # --------------------------------------------------------------------------- status files
 if [ -r "$STATUS/latest.json" ]; then
-  latest=$(python3 - "$STATUS/latest.json" <<'PY' 2>&1
-import json, sys
-try:
-    d = json.load(open(sys.argv[1], encoding="utf-8"))
-except Exception as exc:
-    print(f"UNPARSEABLE ({type(exc).__name__})")
-    raise SystemExit(0)
-keys = ("generated_at_utc", "last_closed_target_date", "last_closed_status", "last_closed_reasons",
-        "valid_days", "first_valid_day", "days_with_captures", "invalid_days")
-print(json.dumps({k: d.get(k) for k in keys}, sort_keys=True))
-PY
-)
-  state LATEST_JSON "$latest"
+  states_from "$(python3 -I -B -c "$PY_LATEST" "$STATUS/latest.json" 2>&1)"
 else
   state LATEST_JSON "NOT_FOUND ($STATUS/latest.json)"
+  state LATEST_JSON_AGE "UNKNOWN"
+  state COLLECTOR_HEALTH "UNKNOWN (latest.json not readable)"
+  state VALID_DAY_OBSERVED "UNKNOWN (latest.json not readable)"
 fi
 
 if [ -r "$STATUS/shadow_daily.json" ]; then
-  shadow=$(python3 - "$STATUS/shadow_daily.json" <<'PY' 2>&1
-import json, sys
-try:
-    d = json.load(open(sys.argv[1], encoding="utf-8"))
-except Exception as exc:
-    print(f"UNPARSEABLE ({type(exc).__name__})")
-    raise SystemExit(0)
-fee = d.get("fee") or {}
-settlement = d.get("settlement") or {}
-out = {k: d.get(k) for k in ("state", "exit_code", "generated_at_utc", "latest_day", "valid_days")}
-out["fee"] = {k: fee[k] for k in ("schedule_id", "status", "claim_basis", "claimable") if k in fee}
-out["settlement"] = {"settled": settlement.get("settled"), "pending": len(settlement.get("pending") or []),
-                     "conflicts": len(settlement.get("conflicts") or []),
-                     "refresh": (settlement.get("refresh") or {}).get("status")}
-out["days"] = [{"target_date": day.get("target_date"), "result": day.get("result"),
-                "capture_status": day.get("capture_status"), "accounts": day.get("accounts")}
-               for day in (d.get("days") or [])]
-print(json.dumps(out, sort_keys=True))
-PY
-)
-  state SHADOW_DAILY "$shadow"
+  states_from "$(python3 -I -B -c "$PY_SHADOW" "$STATUS/shadow_daily.json" 2>&1)"
 else
   state SHADOW_DAILY "NOT_FOUND ($STATUS/shadow_daily.json: expected before the first shadow run)"
 fi
@@ -191,18 +383,6 @@ observed PFM_CAPTURE_OBSERVED pfm
 observed DECISION_CAPTURE_OBSERVED decision
 observed RECHECK_CAPTURE_OBSERVED recheck
 
-if [ -r "$STATUS/latest.json" ]; then
-  valid=$(python3 -c 'import json,sys; v=json.load(open(sys.argv[1])).get("valid_days"); print("UNKNOWN" if v is None else v)' \
-          "$STATUS/latest.json" 2>/dev/null)
-  case "$valid" in
-    ''|UNKNOWN) state VALID_DAY_OBSERVED "UNKNOWN (latest.json has no valid_days)" ;;
-    0) state VALID_DAY_OBSERVED "NO (latest.json valid_days = 0)" ;;
-    *) state VALID_DAY_OBSERVED "YES (latest.json valid_days = ${valid})" ;;
-  esac
-else
-  state VALID_DAY_OBSERVED "UNKNOWN (latest.json not readable)"
-fi
-
 # --------------------------------------------------------------------------- stores and backups
 if [ ! -e "$DATA" ]; then
   state DB_SIZES "NOT_FOUND ($DATA does not exist)"
@@ -215,24 +395,30 @@ else
 fi
 
 if [ ! -e "$DATA" ]; then
-  files="NOT_FOUND ($DATA does not exist)"
+  state BACKUPS "files: NOT_FOUND ($DATA does not exist)"
 elif [ -r "$DATA/backups" ] && [ -x "$DATA/backups" ]; then
   echo "== newest backups"
   ls -lt "$DATA/backups" 2>&1 | head -6 | detail
   ls -lt "$DATA/backups/ledger" 2>&1 | head -6 | detail
-  files="listed above"
+  state BACKUPS "files: listed above"
 else
-  files="$NR (backup directories)"
+  state BACKUPS "files: $NR (backup directories)"
 fi
-if [ "$JOURNAL" = yes ]; then
-  reports=$(journalctl -u edgelab-backup.service --since -8d --no-pager -q -o short-iso 2>/dev/null \
-            | grep -E '"status": "(VERIFIED_BACKUP_AND_RESTORE|SKIPPED_NO_SOURCE|BACKED_UP[A-Z_]*|FAILED[A-Z_]*)"' | tail -4)
-  echo "== last backup reports (8 days)"
-  printf '%s\n' "${reports:-none}" | detail
-  verified=$(printf '%s' "$reports" | grep -c VERIFIED_BACKUP_AND_RESTORE)
-  state BACKUPS "files: ${files}; ${verified} VERIFIED_BACKUP_AND_RESTORE among the last 4 backup reports"
+
+if [ -n "$BACKUP_JOURNAL" ]; then
+  if [ -r "$BACKUP_JOURNAL" ]; then
+    states_from "$(python3 -I -B -c "$PY_BACKUP" < "$BACKUP_JOURNAL" 2>&1)"
+  else
+    for s in BACKUP_REPORTS_8D BACKUP_EVIDENCE_DB BACKUP_SHADOW_LEDGER RESTORE_EVIDENCE_DB RESTORE_SHADOW_LEDGER; do
+      state "$s" "UNKNOWN (override file ${BACKUP_JOURNAL} not readable)"
+    done
+  fi
+elif [ "$JOURNAL" = yes ]; then
+  states_from "$(journalctl -u edgelab-backup.service --since -8d --no-pager -q -o json 2>/dev/null | python3 -I -B -c "$PY_BACKUP" 2>&1)"
 else
-  state BACKUPS "files: ${files}; reports: ${JNOTE}"
+  for s in BACKUP_REPORTS_8D BACKUP_EVIDENCE_DB BACKUP_SHADOW_LEDGER RESTORE_EVIDENCE_DB RESTORE_SHADOW_LEDGER; do
+    state "$s" "$JNOTE"
+  done
 fi
 
 # --------------------------------------------------------------------------- journal and resources
@@ -252,24 +438,36 @@ state MEMORY "MemAvailable=${avail:-?}MB; edgelab.slice ${slice:-UNKNOWN}"
 
 state DISK "$(df -h /var/lib 2>/dev/null | awk 'NR==2 {print $4 " free of " $2 " (" $5 " used) on " $6}')"
 
+# --------------------------------------------------------------------------- Chase Upside
+brisket_active=0
 if [ "$SYSTEMD" = yes ]; then
   brisket=""
   for u in nginx dynasty dynasty-frontend docker; do
     s=$(systemctl is-active "$u" 2>/dev/null); brisket="$brisket $u=${s:-unknown}"
+    [ "$s" = active ] && brisket_active=$((brisket_active + 1))
   done
   state BRISKET_UNITS "${brisket# }"
 else
   state BRISKET_UNITS "$NOSD"
 fi
 
+code=""
 if have curl; then
-  # A plain GET: no method override, no request body, no output file.
-  resp=$(curl -sS -m 5 -w '\n%{http_code}' https://chaseupside.com/api/health 2>&1)
+  # A plain GET over https only: no method override, no request body, no output file, no curlrc.
+  resp=$(curl -q --proto =https -sS -m 5 -w '\n%{http_code}' https://chaseupside.com/api/health 2>&1)
   code=$(printf '%s\n' "$resp" | tail -1)
   body=$(printf '%s\n' "$resp" | sed '$d' | tr '\n' ' ' | head -c 200)
   state API_HEALTH "HTTP ${code} ${body}"
 else
-  state API_HEALTH "UNKNOWN (curl not installed)"
+  state API_HEALTH "UNKNOWN (no curl command found)"
+fi
+
+if [ "$SYSTEMD" != yes ] || [ -z "$code" ]; then
+  state CHASE_UPSIDE_HEALTH "UNKNOWN (units: $([ "$SYSTEMD" = yes ] && echo "${brisket_active}/4 active" || echo unknown); /api/health: HTTP ${code:-not checked})"
+elif [ "$brisket_active" -eq 4 ] && [ "$code" = 200 ]; then
+  state CHASE_UPSIDE_HEALTH "HEALTHY (4/4 units active; /api/health HTTP 200)"
+else
+  state CHASE_UPSIDE_HEALTH "UNHEALTHY (${brisket_active}/4 units active; /api/health HTTP ${code})"
 fi
 
 # --------------------------------------------------------------------------- summary

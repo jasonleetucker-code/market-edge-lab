@@ -14,8 +14,8 @@ This module produces and checks such a record:
 
 A checkpoint is independent evidence **only** when it is stored outside the ledger writer's
 authority (ADR 0021 compares the options by attacker). `checkpoint_sha256` is a plain digest
-that catches a damaged or hand-edited file; it is not a keyed signature, and anyone can
-recompute it. Nothing here writes to the ledger: both functions accept a ledger opened with
+that catches accidental damage or a careless edit (anyone can recompute the digest); it is
+not a keyed signature. Nothing here writes to the ledger: both functions accept a ledger opened with
 `ShadowLedger.open_readonly`.
 """
 
@@ -40,7 +40,6 @@ STATUS_ORDER = ("VERIFIED", "EXTENDED", "TRUNCATED", "ACCOUNT_MISSING", "REWRITT
 PASSING = frozenset({"VERIFIED", "EXTENDED"})
 
 _HEX64 = re.compile(r"[0-9a-f]{64}")
-_CHAIN_ERRORS = (LedgerError, ValueError, KeyError, TypeError, ArithmeticError)
 
 LIMITATION = ("A checkpoint is independent evidence only if it was stored where the ledger's writer "
               "cannot change it (ADR 0021). Verifying against a copy kept beside the ledger proves nothing.")
@@ -71,10 +70,11 @@ def _snapshot(ledger: ShadowLedger) -> dict[str, list[dict[str, Any]]]:
 
 def _chain_problem(rows: list[dict[str, Any]]) -> str | None:
     """The replay half of `ShadowLedger.verify_chain` (every hash, every invariant), applied to
-    the snapshot rows. Returns the problem, or None."""
+    the snapshot rows. Returns the problem, or None. Any exception counts: a crafted row (for
+    example a payload that is a JSON list or null) must become CHAIN_INVALID, never a crash."""
     try:
         replay(rows)
-    except _CHAIN_ERRORS as exc:
+    except Exception as exc:  # noqa: BLE001 - any failure to replay a (crafted) row means the chain fails
         return f"{type(exc).__name__}: {exc}"
     return None
 
