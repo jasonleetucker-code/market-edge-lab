@@ -7,8 +7,14 @@ maximum cost; the fee claim basis; the starter-policy verdict; and the risk cons
 Nothing here can submit anything. `ExecutionTicket.execution_enabled` is always False,
 and constructing one with True raises. The API action modes are refused while the venue's
 `order_write` capability is not authorized, which is every venue
-(`edge_lab.venues`). Approval, re-validation and submission are later, separately
-authorized work.
+(`edge_lab.venues`). Approval and submission are later, separately authorized work.
+
+`pre_submit_checks` is the re-validation a future boundary would run just before sending.
+It is an ordered control chain (the idea is from flumine's trading controls, reimplemented
+here; no code copied): every failing control is listed in evaluation order and the first
+one is the primary reason. Its last control, EXECUTION_NOT_AUTHORIZED, always fails, so no
+ticket can ever come out of it clean. There is no force or bypass argument. `ticket_id` is
+content-derived and is the idempotency key a future client order id must be derived from.
 """
 
 from __future__ import annotations
@@ -19,10 +25,12 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from decimal import Decimal
 from enum import Enum
+from types import MappingProxyType
 from typing import Any, Mapping
 
 from .freshness import parse_utc
-from .opportunity import Opportunity
+from .fee_schedules import valid_price
+from .opportunity import ExecutableQuote, Market, MarketStatus, Opportunity
 from .starter_policy import StarterVerdict
 from .venues import Capability, VenueSpec
 
@@ -44,6 +52,14 @@ class TicketStatus(str, Enum):
     DRAFT = "DRAFT"  # complete and current; still nothing is submitted
     EXPIRED = "EXPIRED"  # the quote is too old or past the ticket's expiry
     REJECTED = "REJECTED"  # a precondition fails; `reasons` says which
+
+
+# Allowed ticket transitions. Terminal states map to nothing. No ticket state means "may be sent".
+TICKET_TRANSITIONS: Mapping[TicketStatus, frozenset[TicketStatus]] = MappingProxyType({
+    TicketStatus.DRAFT: frozenset({TicketStatus.EXPIRED, TicketStatus.REJECTED}),
+    TicketStatus.EXPIRED: frozenset(),
+    TicketStatus.REJECTED: frozenset(),
+})
 
 
 @dataclass(frozen=True)
@@ -74,6 +90,7 @@ class ExecutionTicket:
     risk_constraints: Mapping[str, str]
     action_mode: ActionMode
     execution_enabled: bool = False
+    event_id: str | None = None  # the exposure-per-event grouping key
 
     def __post_init__(self) -> None:
         if self.execution_enabled:
@@ -139,5 +156,179 @@ def draft_ticket(opportunity: Opportunity, *, venue: VenueSpec, route_id: str | 
         fee_claimable=opportunity.claimable, model_id=opportunity.model_id, model_version=opportunity.model_version,
         probability=opportunity.model_probability, conservative_probability=opportunity.conservative_probability,
         quote_received_at_utc=opportunity.quote_received_at_utc, starter_policy=verdict.to_dict(),
-        risk_constraints=dict(risk_constraints or {}), action_mode=action_mode,
+        risk_constraints=dict(risk_constraints or {}), action_mode=action_mode, event_id=opportunity.event_id,
     )
+
+
+# ---------------------------------------------------------------- pre-submit control chain
+
+
+class Control(str, Enum):
+    """Pre-submit controls. Declaration order is evaluation order."""
+
+    TICKET_NOT_DRAFT = "TICKET_NOT_DRAFT"
+    TICKET_EXPIRED = "TICKET_EXPIRED"
+    QTY_INVALID = "QTY_INVALID"
+    PRICE_INVALID = "PRICE_INVALID"
+    PRICE_OFF_TICK = "PRICE_OFF_TICK"
+    MARKET_UNKNOWN = "MARKET_UNKNOWN"
+    MARKET_NOT_OPEN = "MARKET_NOT_OPEN"
+    BOOK_MISSING = "BOOK_MISSING"
+    BOOK_STALE = "BOOK_STALE"  # rejected, never merely warned
+    QUOTE_CHANGED = "QUOTE_CHANGED"  # price moved, or less size than the ticket, since pricing
+    ORDER_STATE_UNHEALTHY = "ORDER_STATE_UNHEALTHY"  # no current view of our own orders: no new risk
+    DUPLICATE_TICKET = "DUPLICATE_TICKET"
+    DUPLICATE_OPEN_ORDER = "DUPLICATE_OPEN_ORDER"  # an order on this market and side is still open
+    EXPOSURE_UNKNOWN = "EXPOSURE_UNKNOWN"
+    EXPOSURE_PER_ORDER = "EXPOSURE_PER_ORDER"
+    EXPOSURE_PER_CONTRACT = "EXPOSURE_PER_CONTRACT"
+    EXPOSURE_PER_EVENT = "EXPOSURE_PER_EVENT"
+    EXPOSURE_GLOBAL = "EXPOSURE_GLOBAL"
+    TRADE_COUNT_LIMIT = "TRADE_COUNT_LIMIT"
+    COOLDOWN_ACTIVE = "COOLDOWN_ACTIVE"
+    EXECUTION_NOT_AUTHORIZED = "EXECUTION_NOT_AUTHORIZED"  # always fails while execution is disabled
+
+
+class OrderState(str, Enum):
+    PENDING = "PENDING"  # intent recorded, no venue answer yet
+    OUTCOME_UNKNOWN = "OUTCOME_UNKNOWN"  # sent, answer lost: reconcile before any retry
+    RESTING = "RESTING"  # on the book, possibly partly filled
+    FILLED = "FILLED"
+    CANCELLED = "CANCELLED"  # may have partly filled first
+    REJECTED = "REJECTED"  # never accepted
+
+
+OPEN_ORDER_STATES = frozenset({OrderState.PENDING, OrderState.OUTCOME_UNKNOWN, OrderState.RESTING})
+ORDER_TRANSITIONS: Mapping[OrderState, frozenset[OrderState]] = MappingProxyType({
+    OrderState.PENDING: frozenset({OrderState.OUTCOME_UNKNOWN, OrderState.RESTING, OrderState.FILLED,
+                                   OrderState.REJECTED}),
+    OrderState.OUTCOME_UNKNOWN: frozenset({OrderState.RESTING, OrderState.FILLED, OrderState.CANCELLED,
+                                           OrderState.REJECTED}),
+    OrderState.RESTING: frozenset({OrderState.FILLED, OrderState.CANCELLED}),
+    OrderState.FILLED: frozenset(), OrderState.CANCELLED: frozenset(), OrderState.REJECTED: frozenset(),
+})
+
+
+def transition(current: TicketStatus | OrderState, new: TicketStatus | OrderState) -> TicketStatus | OrderState:
+    """Return `new` if its table allows the move; an illegal or post-terminal move raises."""
+    table = TICKET_TRANSITIONS if isinstance(current, TicketStatus) else ORDER_TRANSITIONS
+    if type(new) is not type(current) or new not in table[current]:
+        raise ValueError(f"illegal transition {current.value} -> {new.value}")
+    return new
+
+
+@dataclass(frozen=True)
+class OrderRecord:
+    """One of our own orders, as a future order-state feed would report it (none exists yet).
+
+    `worst_case_loss` covers the pending, resting and filled parts together; None is unknown,
+    never zero. Records of settled positions are not passed in."""
+
+    ticket_id: str
+    market_id: str
+    event_id: str
+    side: str
+    state: OrderState
+    worst_case_loss: Decimal | None
+    created_at_utc: str
+
+
+@dataclass(frozen=True)
+class TicketLimits:
+    max_order_loss: Decimal
+    max_contract_loss: Decimal  # one market and side
+    max_event_loss: Decimal
+    max_global_loss: Decimal
+    max_orders_per_window: int  # every order created in the window counts, failed ones too
+    order_window: timedelta
+    market_cooldown: timedelta  # minimum gap between orders on one market
+
+
+@dataclass(frozen=True)
+class Violation:
+    control: Control
+    detail: str
+
+
+def pre_submit_checks(ticket: ExecutionTicket, *, now: datetime, market: Market | None,
+                      quote: ExecutableQuote | None, max_book_age: timedelta, order_state_as_of_utc: str | None,
+                      max_order_state_age: timedelta, orders: tuple[OrderRecord, ...], limits: TicketLimits,
+                      price_grid: Decimal | None = None) -> tuple[Violation, ...]:
+    """Every failing control, in `Control` order; the first is the primary reason. Never empty.
+
+    `price_grid` is an optional venue tick (e.g. Decimal("0.01")) on top of `valid_price`.
+    TODO: take it from the market's own grid once one exists on `Market`."""
+    at = parse_utc(now)
+    if at is None:
+        raise ValueError("now must be timezone-aware")
+    out: list[Violation] = []
+
+    def fail(control: Control, detail: str) -> None:
+        out.append(Violation(control, detail))
+
+    def age_bad(stamp: str | None, max_age: timedelta) -> bool:
+        seen = parse_utc(stamp)
+        return seen is None or seen > at or at - seen > max_age
+
+    if ticket.status is not TicketStatus.DRAFT:
+        fail(Control.TICKET_NOT_DRAFT, f"{ticket.status.value}: {'; '.join(ticket.reasons)}")
+    expires = parse_utc(ticket.expires_at_utc)
+    if expires is None or at >= expires:
+        fail(Control.TICKET_EXPIRED, f"expires {ticket.expires_at_utc}")
+    q = ticket.quantity
+    if type(q) is not int or q <= 0:
+        fail(Control.QTY_INVALID, f"quantity {q!r} is not a positive whole number of contracts")
+    price = ticket.limit_price
+    if not valid_price(price):  # Decimal, finite, inside (0, 1), on the 1/100-cent grid
+        fail(Control.PRICE_INVALID, f"limit {price!r}")
+    elif price_grid is not None and price % price_grid != 0:
+        fail(Control.PRICE_OFF_TICK, f"limit {price} is not on the {price_grid} grid")
+    if market is None or market.market_id != ticket.market_id:
+        fail(Control.MARKET_UNKNOWN, ticket.market_id)
+    elif market.status is not MarketStatus.OPEN:
+        fail(Control.MARKET_NOT_OPEN, market.status.value)
+    if (quote is None or quote.market_id != ticket.market_id or quote.side != ticket.side
+            or quote.best_ask is None or quote.anomaly):
+        fail(Control.BOOK_MISSING, "no usable book for this market and side")
+    else:
+        if age_bad(quote.received_at_utc, max_book_age):
+            fail(Control.BOOK_STALE, f"received {quote.received_at_utc}")
+        if quote.best_ask != price or quote.displayed_size is None or quote.displayed_size < q:
+            fail(Control.QUOTE_CHANGED, f"ask {quote.best_ask} x {quote.displayed_size}; ticket {price} x {q}")
+    if age_bad(order_state_as_of_utc, max_order_state_age):
+        fail(Control.ORDER_STATE_UNHEALTHY, f"order state as of {order_state_as_of_utc}")
+    if any(o.ticket_id == ticket.ticket_id for o in orders):
+        fail(Control.DUPLICATE_TICKET, ticket.ticket_id)
+    if any(o.state in OPEN_ORDER_STATES and o.market_id == ticket.market_id and o.side == ticket.side
+           for o in orders):
+        fail(Control.DUPLICATE_OPEN_ORDER, f"{ticket.market_id} {ticket.side}")
+
+    counted = [o for o in orders if o.state is not OrderState.REJECTED]
+    if ticket.max_loss is None or ticket.event_id is None or any(o.worst_case_loss is None for o in counted):
+        fail(Control.EXPOSURE_UNKNOWN, "a worst-case loss or the event is unknown")
+    else:
+        new = ticket.max_loss
+
+        def total(keep) -> Decimal:
+            return new + sum((o.worst_case_loss for o in counted if keep(o)), Decimal(0))
+
+        for control, limit, amount in (
+                (Control.EXPOSURE_PER_ORDER, limits.max_order_loss, new),
+                (Control.EXPOSURE_PER_CONTRACT, limits.max_contract_loss,
+                 total(lambda o: o.market_id == ticket.market_id and o.side == ticket.side)),
+                (Control.EXPOSURE_PER_EVENT, limits.max_event_loss, total(lambda o: o.event_id == ticket.event_id)),
+                (Control.EXPOSURE_GLOBAL, limits.max_global_loss, total(lambda o: True))):
+            if amount > limit:
+                fail(control, f"{amount} > {limit}")
+
+    created = [(parse_utc(o.created_at_utc), o) for o in orders]
+    if any(c is None for c, _ in created):
+        fail(Control.TRADE_COUNT_LIMIT, "an order has no creation time")
+    else:
+        recent = sum(1 for c, _ in created if c > at - limits.order_window)  # future-dated ones count
+        if recent >= limits.max_orders_per_window:
+            fail(Control.TRADE_COUNT_LIMIT, f"{recent} orders in {limits.order_window}")
+        if any(o.market_id == ticket.market_id and at - c < limits.market_cooldown for c, o in created):
+            fail(Control.COOLDOWN_ACTIVE, f"{ticket.market_id} within {limits.market_cooldown}")
+    fail(Control.EXECUTION_NOT_AUTHORIZED, "execution is disabled for every venue (docs/EXECUTION_PLAN.md)")
+    return tuple(out)
