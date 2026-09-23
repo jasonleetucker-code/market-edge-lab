@@ -777,14 +777,17 @@ def build_rows(observed: Iterable[Any], account_id: str, decisions: Iterable[Map
     rows: dict[str, MarketRow] = {}
     for m in observed:
         items = by_market.get(m.market_id, [])
+        dom = domain_of(m.event_id, m.domain)
+        # A captured day older than its domain's newest decided day (a missed capture) is historical too.
+        stale_day = bool(m.target_date) and m.target_date < domain_now.get(dom, m.target_date)
         rows[m.market_id] = MarketRow(
-            venue=m.venue, market_id=m.market_id, native_id=m.native_id, domain=domain_of(m.event_id, m.domain),
+            venue=m.venue, market_id=m.market_id, native_id=m.native_id, domain=dom,
             league=None, title=m.title, outcome=m.outcome, target_date=m.target_date, status=m.status,
             close_time_utc=m.close_time_utc, rules_primary=m.rules_primary, payoff_kind=m.payoff_kind,
             event_id=m.event_id, quotes=observed_quotes(m, capture_status),
             assessments=_by_time(a for a in items if a.target_date == m.target_date),
             history=_by_time(a for a in items if a.target_date != m.target_date),
-            observed=True, has_position=m.market_id in open_ids, now=now)
+            observed=True, has_position=m.market_id in open_ids, historical=stale_day, now=now)
     for mid, assessments in by_market.items():
         if mid in rows:
             continue

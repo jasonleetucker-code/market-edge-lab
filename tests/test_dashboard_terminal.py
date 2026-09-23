@@ -528,3 +528,13 @@ def test_overdue_only_for_open_positions():
     row = dataclasses.replace(synthetic_rows()[0], now=datetime(2026, 10, 5, tzinfo=timezone.utc))
     assert "overdue" not in c.release_value(row)[1]
     assert "overdue" in c.release_value(dataclasses.replace(row, has_position=True))[1]
+
+
+def test_a_missed_capture_leaves_the_older_captured_day_historical():
+    # Books for Sep 24 were never stored, so the board still shows Sep 23; the Sep 24 run recorded decisions.
+    rows = {r.native_id: r for r in pr.build_rows(
+        [_observed("kalshi:OLD", "2026-09-23")], "acct",
+        [_decision("kalshi:OLD", "2026-09-23"), _decision("kalshi:NEW", "2026-09-24", qualify=False)], {},
+        current_target="2026-09-23")}
+    assert rows["OLD"].historical and rows["OLD"].state == "historical"
+    assert not rows["NEW"].historical

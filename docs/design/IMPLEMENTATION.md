@@ -91,7 +91,11 @@ appended sections in `docs/EXECUTION_PLAN.md`, `docs/OWNER_IDEAS.md`, `THIRD_PAR
 6. [x] Portfolio, Outcomes and Risk.
 7. [x] Research & Data, Alerts and More.
 8. [x] Semantic parity, security, accessibility and browser-layout testing (see PR evidence).
-9. [ ] Independent design/data/security review; findings corrected.
+9. [x] Independent design/data/security review; findings corrected. Round 1: 1 blocker (decisions for
+   earlier target days shown as currently qualified), 6 should-fix, nits. Round 2 (da4dba2): all fixed, 2
+   new should-fix from the fixes. Round 3 (e90669f): those fixed and verified, no blocker; one
+   should-fix remained (a missed capture could leave the older captured day current), fixed with a
+   regression test in the final commit.
 10. [ ] Reviewed merge, private dashboard deployment, final browser verification.
 
 ## Conflicts identified (safer behaviour kept)
