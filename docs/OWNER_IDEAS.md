@@ -19,8 +19,8 @@ Roadmap vocabulary: **NOW** (on the current critical path and authorized) · **N
 (ready once a named prerequisite lands) · **LATER** (wanted; not on the 2026-10-22 path) ·
 **BLOCKED** (waiting on an owner decision, access or evidence, which is named).
 
-Newly classified ideas use the roadmap vocabulary in the Readiness column. Older rows keep
-the readiness vocabulary until their next review: **NOT READY** (prerequisites absent) · **READY FOR RESEARCH** ·
+Newly classified ideas use the roadmap vocabulary in the Readiness column. Older rows
+keep the readiness vocabulary until their next review: **NOT READY** (prerequisites absent) · **READY FOR RESEARCH** ·
 **APPLY SELECTIVELY** (use the principle where current work already needs it) ·
 **READY FOR IMPLEMENTATION** (prerequisites exist and there is an authorization path) ·
 **SUPERSEDED / NOT PLANNED**.

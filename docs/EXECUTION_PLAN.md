@@ -241,8 +241,9 @@ A PR that fails any of these needs the usual authority: a directive grant or the
     contract (the ticket is a data contract only, and execution stays disabled);
   - the notification contract with local sinks only;
   - ledger checkpoint export and verify on demand;
-  - the read-only Polymarket US and Novig public-data adapters. A live pull from these
-    public endpoints is manual, bounded and read-only, where the terms permit;
+  - the read-only Polymarket US and Novig public-data adapters. Live access is limited to
+    one bounded Polymarket US smoke test and manual reads of Novig's published daily
+    files, where the terms permit;
   - The Odds API adapter, on fixtures only. A live pull waits for the owner's key and an
     approved activation plan.
 
