@@ -49,6 +49,20 @@ all fixed in the same PR (`tests/test_daily.py`, `tests/test_collectors.py`,
 | GATE7-F12 | B/D settlement time | SHOULD-FIX (becomes BLOCKER once F01 lands, unless `settlement_ts` is always captured) | When `settlement_ts` is missing, the settlement is stamped at `expiration_time`, which is the *latest possible* expiry (2026-09-30 for the 26SEP23 fixture). That time is later than the evidence capture (2026-09-24). `risk.require_point_in_time` then refuses every `as_of` before it, so the risk report fails for up to a week. A pre-fill `risk.assess` for the following days would do the same. | A settle run on 09-24 stamps 09-30. `edge-lab shadow risk --as-of 2026-09-24T15:00Z` and next-day pre-fill checks raise `ValueError`. | `test_gate7_ledger.py::test_settlement_is_never_stamped_after_its_evidence_was_captured` | FIXED (PR #26): settlement time clamped to the evidence receipt; reported time kept |
 | GATE7-F13 | D reporting / fees | SHOULD-FIX | Fill and settlement payloads carry `fee_schedule_id` (fills only) but not `fee_status` or `claimable`. Only decisions record that the P&L is not claimable while the schedule is UNVERIFIED_CURRENT_SCHEDULE. | A report built from fills or settlements alone cannot tell that the net P&L is unclaimable. | `test_gate7_reporting.py::test_fill_and_settlement_payloads_carry_fee_status` | FIXED (PR #26): fills and settlements carry `fee_schedule_id`, `fee_status`, `claimable` |
 
+Reporting findings from the independent review of the local dashboard (PR #28, area D). All
+are fixed and tested in `tests/test_dashboard.py`:
+
+- **Host header (DNS rebinding).** Any Host was accepted. Now a non-local Host gets 400.
+- **Incomplete receipt.** Settlement conflicts, the evidence cutoff, the latest day, missing
+  capture days, valid-day counts and risk vetoes were not rendered. Now all are shown, and a
+  test renders a receipt produced by `edge_lab.daily`.
+- **Colours.** SETTLEMENT_CONFLICT, MISSING_CAPTURE and RESEARCH_INVALID_CASH were neutral.
+  They are now errors.
+- **Zero capacity.** It was shown as "BREACH — no breaches". It is now HALTED and listed as
+  a blocker.
+- **RESEARCH_INVALID_CASH** (a deviation from the frozen rule) is now a blocker.
+- **Malformed receipt lists** now render as MALFORMED, not "none".
+
 Observations that are not defects, recorded so nobody rediscovers them:
 
 - **Portfolio cap versus loss headroom.** Under `EXP-001-shadow-risk-v1`, remaining capacity

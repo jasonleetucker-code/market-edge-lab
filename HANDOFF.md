@@ -3,134 +3,130 @@
 This is the live state of the repository. Each session overwrites it; it is not a history
 (git log is the history). Format: `AI_INSTRUCTIONS.md` → Handoff format.
 
-_Last updated: 2026-09-23 (early UTC), by the risk-foundation PR (#24), which ends the
-overnight build directive (`docs/owner/2026-09-22-overnight-build-directive.md`)._
-
-## Mission checkpoint: 2026-09-23 daily-shadow directive (in progress)
-
-Directive: `docs/owner/2026-09-23-daily-shadow-directive.md`. Plan: PR-A (this record) →
-PR-B (daily pipeline: read-only evidence, pre-fill risk enforcement, point-in-time cash,
-bounded settlement refresh, orchestrator, dual backups, VPS units) → PR-C (Gate 7
-adversarial suite) → PR-D (local dashboard) → PR-E (fee evidence attempt).
-
-- **Access limitation (2026-09-23 06:24 ET):** the working session runs in a cloud
-  container with no SSH client, no key, and TCP/22 to the VPS unreachable. Production
-  state (revision, timers, status JSON, backups, Chase Upside health) was **not read**
-  and nothing was deployed. The next live window, 2026-09-23 17:45–18:15 ET (D =
-  2026-09-24), has not happened yet. The laptop bridge stays manual emergency fallback
-  only; this session cannot reach the laptop either.
-- The block below is the state as of PR #24 until this mission's PRs replace it.
+_Last updated: 2026-09-23 (UTC), by the final-state PR of the 2026-09-23 daily-shadow
+directive (`docs/owner/2026-09-23-daily-shadow-directive.md`)._
 
 ```
-STATUS: DONE for the overnight directive's authorized sequence.
-  - Gate 5 PASSED (#22). Gate 6 PASSED (#23). Risk/capital and Outcome Board foundations
-    merged (#24).
-  - The forward collector is DEPLOYED and PRODUCTION_VERIFIED for the fail-closed path and
-    for backup/restore.
-  - No live Stage B window has run yet. Valid Stage B days: 0. No shadow trade exists.
-ACCEPTANCE: the owner's overnight build directive, recorded verbatim.
-  - Laptop bridge cleanup.
-  - Production checks.
-  - Gate 5 and Gate 6 acceptance lists (docs/EXECUTION_PLAN.md).
-  - Risk/capital, withdrawal and Outcome Board backend foundations.
-  - Merge conditions for each PR.
+STATUS: PARTIAL.
+  - Repository work for P2–P5 is DONE and MERGED.
+  - P1 (production verification) and deployment were NOT DONE: this session has no access
+    to the VPS.
+ACCEPTANCE: the 2026-09-23 daily-shadow directive, recorded verbatim.
+  - P1: verify production, reporting each state separately.
+  - P2: bounded daily orchestration.
+  - P3: fee evidence without a retry loop.
+  - P4: Gate 7 adversarial engineering.
+  - P5: local read-only dashboard.
+  - Every PR: independent review, green CI on the exact head, squash-merge.
 EVIDENCE:
-  - Laptop bridge (2026-09-23 about 02:18 UTC):
-    - The one attended-bridge task was stopped before any capture. data/bridge.sqlite3
-      was never created.
-    - No Windows Scheduled Task, Claude scheduled task or cron job exists.
-    - The bridge is now MANUAL EMERGENCY FALLBACK ONLY
-      (docs/deploy/EMERGENCY_LAPTOP_BRIDGE.md).
-  - Production (read on the host at 2026-09-23 02:20 UTC):
-    - Revision main 9326a7a (the collector code is unchanged since).
-    - Five timers enabled. Next fires (America/New_York): pfm 2026-09-23 17:45, decision
-      17:55:05, recheck 18:05, status 18:30; backup daily 04:40 UTC.
-    - The units run as edgelab: MemoryMax 256M, CPUQuota 25%, TasksMax 32,
-      ProtectSystem=strict.
-    - Host: 6.7 of 7.9 GB free.
-    - Chase Upside: nginx, dynasty, dynasty-frontend and docker active; /api/health ok.
-  - Backup and recovery drill:
-    - edgelab-backup.service succeeded, and the bundle was VERIFIED_BACKUP_AND_RESTORE
-      (schema v4, 16 triggers).
-    - Independent restore into a disposable directory: integrity ok; UPDATE/DELETE blocked.
-    - Disabling and re-enabling the status and backup timers kept the DB sha unchanged.
-    - Brisket PIDs were identical before and after.
-  - Merged PRs, each with an independent read-only review and CI green on its exact head:
-    - #21 directive record and standing merge rule (3ef0369).
-    - #22 Gate 5 opportunity engine (467a1a4). Review: 1 blocker (settlement equivalence),
-      fixed and re-reviewed with no blocker.
-    - #23 Gate 6 shadow ledger (f854161). Review: no blocker; 4 should-fix items fixed and
-      re-reviewed.
-    - #24 risk/capital and Outcome Board foundations (squash of this PR).
-  - Tests: python -m pytest -o addopts="" on the final branch gave 482 passed, 1 skipped
-    (Windows, Python 3.12). CI: 3.11 and 3.12 green.
-  - Fee schedule (checked 2026-09-23 02:20 UTC):
-    - The API reports KXHIGHNY quadratic, multiplier 1, and no pending fee changes.
-    - The Fee Rounding docs confirm the rounding.
-    - The 0.07 coefficient could not be read from a primary source (the PDF answers
-      HTTP 429). Status: UNVERIFIED_CURRENT_SCHEDULE, so every opportunity and decision
-      has claimable=false.
+  - Merged (squash), each with CI green on its exact head:
+    - #25 directive record and authorization (b3050db).
+    - #26 daily pipeline + Gate 7 suite (923ed9e). Independent review: 1 blocker and 7
+      should-fix items, all fixed; the re-review found 3 more items, also fixed.
+    - #28 local read-only dashboard (0f5ac9d). Independent review: no blocker and 7
+      should-fix items, all fixed (Host-header check against DNS rebinding, full receipt
+      rendering, state colours, HALTED at zero capacity, RESEARCH_INVALID_CASH blocker,
+      receipt produced by the real pipeline in tests, demo research account). A focused
+      re-review of those fixes followed: no blocker and no should-fix items; its nits were fixed and tested (Host port strictness, MALFORMED receipt lists, SIGTERM restore).
+  - Tested main: 0f5ac9d. Tests: python -m pytest -o addopts="" gave 783 passed
+    (Python 3.11 local); CI 3.11 and 3.12 green. Windows 3.12 was not available in this
+    session.
+  - Deployed revision: NONE from this session. Production is still main 9326a7a as of
+    2026-09-23 02:20 UTC, the last read on the host, taken before this directive.
+  - Access limitation (2026-09-23 06:24 ET):
+    - This session runs in a cloud container with no SSH client and no key; TCP/22 to the
+      VPS is unreachable.
+    - Not read: production revision, timers, status JSON, backups, Chase Upside health.
+    - The laptop is not reachable either. The laptop bridge stays MANUAL EMERGENCY
+      FALLBACK ONLY: it was not touched and no scheduler was created.
 UNRESOLVED:
-  - First live window: 2026-09-23 17:45–18:15 ET (D = 2026-09-24). Not yet verified.
-  - Fee coefficient 0.07 is unverified. Owner step: download
-    https://kalshi.com/docs/kalshi-fee-schedule.pdf in a browser and commit it as evidence.
-  - Settlement evidence is not captured on the VPS. `settlement collect` has no timer, so
-    shadow positions will stay open (safely) until one is approved and installed or the
-    evidence is collected by hand.
-  - The Outcome Board's cluster worst case is an upper bound. Scenario enumeration is
-    deferred.
-  - Risk limits are code constants for a notional shadow account, not an owner-approved
-    real-money policy.
-  - Alerts go only to journald and the status file (EDGE_LAB_ALERT_URL is not set). The
-    NWS User-Agent has no contact address.
-  - PFMOKX thinning since mid-2025 (disclosed). Test-period protection is procedural.
+  - P1 production states, each UNVERIFIED from this session:
+    - installed / timers enabled: shadow and settlement units NOT INSTALLED (awaiting the
+      owner's SSH step);
+    - fail-closed dry run on the host: not run;
+    - real decision/recheck captured: unknown (first live window 2026-09-23 17:45–18:15 ET,
+      D = 2026-09-24);
+    - complete forecast evidence: unknown;
+    - valid-day classification: unknown; valid real Stage B days known to this session: 0;
+    - eventual settlement lifecycle: not observed.
+  - Shadow decisions, fills and settlements on real evidence: none recorded (the pipeline
+    has not run on production data). All of it is exercised on fixtures only.
+  - Backup/restore for evidence AND ledger: implemented and tested on disposable fixture
+    stores (tests/test_backup_ledger.py: VERIFIED_BACKUP_AND_RESTORE, chain-invalid and
+    tampered-trigger cases). Not run in production.
+  - Fee coefficient 0.07: UNVERIFIED_CURRENT_SCHEDULE; claimable=false everywhere. One
+    polite attempt per URL on 2026-09-23 (PDF and fee pages answered HTTP 429; see
+    experiments/EXP-001-kxhighny-nws-vs-market/fee_verification/ATTEMPTS_2026-09-23.md).
+    No retry loop exists.
+  - GATE7-F09 (open): without an external anchor of the ledger head hash, truncating the
+    newest entries leaves a valid, shorter chain. Needs an owner decision on an anchor.
+  - Known limits, documented:
+    - settlement_index re-reads all settlement snapshots each run (fine at current scale);
+    - Outcome Board worst case is an upper bound;
+    - risk limits are notional-shadow constants, not an owner-approved real-money policy;
+    - alerts go to journald and the status file only;
+    - the NWS User-Agent has no contact address;
+    - PFMOKX thinning since mid-2025.
   - Carried from Gate 2: TWC cannot be checked directly; the NHIGH rule rests on one
     observation.
   - Chase Upside host (not this repo): dynasty's NOPASSWD allowlist is root-equivalent.
-BLOCKERS: NONE for code. Verifying the fee schedule needs one owner browser download.
-NEXT ACTION: After 2026-09-23 18:30 ET, read /var/lib/market-edge-lab-status/latest.json on
-  chaseupside and confirm D = 2026-09-24 is VALID. Then run
-  `edge-lab forward opportunities --date 2026-09-24` and `edge-lab shadow run --date
-  2026-09-24` against a copy of the production DB to exercise Gates 5–6 on real evidence.
+BLOCKERS: owner-only; none for code.
+  1. Deploy and activate on the VPS (SSH): follow docs/deploy/DAILY_SHADOW_ACTIVATION.md.
+     It covers: pull main, run install.sh, a fail-closed dry run, enabling
+     edgelab-shadow.timer and edgelab-settlement.timer, and a tested rollback.
+  2. Fee evidence: download https://kalshi.com/docs/kalshi-fee-schedule.pdf in a browser
+     and commit it under experiments/EXP-001-kxhighny-nws-vs-market/fee_verification/.
+  3. Decide on a ledger head-hash anchor (GATE7-F09) if one is wanted.
+NEXT ACTION: The owner runs the activation sheet on chaseupside after 18:35 ET. The next
+  session then reads /var/lib/market-edge-lab-status/latest.json and shadow_daily.json and
+  reports each P1 state separately.
 ```
+
+## Gate 7 status (engineering vs research)
+
+- **Engineering:** the adversarial suite is merged (`tests/gate7/`,
+  `docs/engineering/GATE7_FINDINGS.md`). F01–F08 and F10–F13 are FIXED; F09 is an open,
+  documented limitation. The dashboard review added reporting fixes on top.
+- **Production evidence:** none from this session (no access).
+- **Research evidence:** none. Gate 7 research needs real Stage B days; the EXP-001
+  180/365-valid-day looks are unchanged.
+- **Gate 7 is NOT PASSED.** No Gate 8 work was done.
+
+## Dashboard (local, read-only)
+
+```
+edge-lab dashboard --db <evidence.sqlite3> --ledger <shadow_ledger.sqlite3> --status-dir <status dir>
+edge-lab dashboard --demo        # synthetic data in a fresh temp dir
+```
+
+- Opens at http://127.0.0.1:8765.
+- Views: Overview, Opportunities, Positions & performance, Outcome Board, Risk & capital,
+  Experiments & sources.
+- Runbook: `docs/DASHBOARD.md` (use backup copies; never expose it).
 
 ## 30-day directive status (issue #11, target 2026-10-22)
 
 - **Remaining calendar days:** 29.
-- **Completed P0:**
-  - collector live;
-  - Gate 4 Stage A;
-  - Gate 5 opportunity engine;
-  - Gate 6 shadow ledger, fills and sizing;
-  - risk/capital foundation with the withdrawal contract;
-  - Outcome Board backend.
-- **Remaining P0:**
-  1. Accumulate valid Stage B days (the first is tonight).
-  2. Run the shadow pipeline on real evidence every day. It is manual today; running it
-     on the VPS needs owner approval of a new timer.
-  3. Settlement-evidence capture (a daily `settlement collect` timer on the VPS; owner
-     approval needed).
-  4. Fee verification (owner PDF).
-  5. Dashboard and hosting (not authorized).
-- **Critical path:**
-  1. Valid forward days.
-  2. Daily shadow runs.
-  3. Settlements.
-  4. Stage B looks at the 180th and 365th valid day. The first is far past 2026-10-22,
-     so by the deadline Stage B can show pipeline completeness and early descriptive
-     results, not a verdict.
-- **Blockers:** fee verification needs the owner's browser download. Scheduling shadow
-  runs and settlement capture on the VPS needs owner approval, because it changes the
-  deployment.
+- **Newly completed P0:**
+  - daily shadow orchestration code, with its units staged;
+  - settlement-evidence refresh;
+  - dual backups;
+  - pre-fill risk enforcement;
+  - the two-account research/operational split;
+  - the local dashboard.
+- **Roadmap impact:** everything on the critical path now waits on one owner SSH session.
+  - Each day before activation is a day without automated shadow bookkeeping.
+  - Capture itself still runs, so evidence is not lost, and the pipeline catches up the
+    closed days on its first run.
+  - Stage B cannot reach its first look (180 valid days) before 2026-10-22. By the
+    deadline it can show pipeline completeness and early descriptive results, not a
+    verdict.
 
 ## Open questions for the owner
 
-1. **Fee schedule evidence.** Please download the Kalshi fee-schedule PDF in a browser (it
-   blocks automated fetches) so the 0.07 coefficient can be verified.
-2. **VPS timers for Stage B bookkeeping.** May I add two read-only timers on chaseupside?
-   One is a daily `settlement collect --no-historical`. The other is a daily `forward
-   opportunities` + `shadow run` + `shadow settle`, writing to a separate shadow ledger
-   file. This is a deployment change, so it waits for approval.
+1. **Activation.** Please run `docs/deploy/DAILY_SHADOW_ACTIVATION.md` on chaseupside
+   (outside 17:40–18:35 ET).
+2. **Fee schedule evidence.** Browser download of the fee-schedule PDF.
 3. **Alert channel.** Optionally, a private ntfy topic URL for failure pushes.
-4. **Gate 7.** Gate 6 is complete. Gate 7 (adversarial validation) needs your explicit
-   approval, and it only becomes meaningful once real shadow days exist.
+4. **Ledger anchor (F09).** Should the ledger head hash be anchored externally (for
+   example, committed daily)? That would be a scheduled job, so it needs approval.
