@@ -1,3 +1,4 @@
 # Files executed or parsed on Linux hosts must keep LF endings on every checkout.
 *.sh text eol=lf
 deploy/** text eol=lf
+*.pdf binary

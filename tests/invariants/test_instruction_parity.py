@@ -63,3 +63,51 @@ def test_owner_idea_intake_is_routed_and_indexed():
     index = (ROOT / "docs/OWNER_IDEAS.md").read_text()
     assert "issue #4" in index and "Review log" in index
     assert "An issue is not authorization" in index or "never authorizes" in index
+
+
+def _owner_ideas_section() -> str:
+    text = CANONICAL.read_text()
+    start = text.index("## Owner ideas")
+    end = text.find("\n## ", start + 1)
+    return text[start:end if end != -1 else None]
+
+
+def test_owner_idea_intake_triggers_replanning():
+    section = _owner_ideas_section()
+    for word in ("NOW", "NEXT", "LATER", "BLOCKED"):
+        assert word in section, f"owner-idea rule lacks the {word} classification"
+    for dimension in ("priority", "dependencies", "overlap", "shared infrastructure", "parallel", "roadmap"):
+        assert dimension in section, f"owner-idea re-planning lacks the {dimension!r} analysis"
+    assert "already-needed shared primitive" in section, "owner-idea rule lacks the shared-primitive question"
+    assert "Re-prioritizing never authorizes" in section, "re-planning must not read as authorization"
+
+
+def test_shared_primitives_have_exactly_one_canonical_owner():
+    text = (ROOT / "docs/OWNER_IDEAS.md").read_text()
+    start = text.index("## Shared primitives")
+    table = text[start:text.index("\n## ", start + 1)]
+    rows = [line for line in table.splitlines() if line.startswith("|") and not line.startswith("|---")][1:]
+    assert len(rows) >= 10, "the shared primitives table is incomplete"
+    required = ("identity", "venue", "quote", "fee", "model", "source", "ledger", "risk", "notification",
+                "execution-ticket", "eligibility", "equivalence")
+    first_cells = " ".join(row.strip("|").split("|")[0].lower() for row in rows)
+    missing = [name for name in required if name not in first_cells]
+    assert not missing, f"shared primitives missing from the table: {missing}"
+    names = []
+    for row in rows:
+        cells = [c.strip() for c in row.strip("|").split("|")]
+        assert len(cells) == 4 and all(cells), f"primitive row needs 4 non-empty cells: {row}"
+        names.append(cells[0].lower())
+        owners = re.findall(r"`([^`]+)`", cells[1])
+        assert len(owners) == 1, f"a primitive needs exactly one canonical owner: {row}"
+        if cells[2].startswith("PLANNED"):
+            assert not (ROOT / owners[0]).exists(), f"{owners[0]} exists: update its row from PLANNED"
+        else:
+            assert (ROOT / owners[0]).exists(), f"built primitive owner is missing: {owners[0]}"
+    assert len(names) == len(set(names)), "a primitive is listed twice"
+
+
+def test_owner_idea_index_covers_open_directive_issues():
+    index = (ROOT / "docs/OWNER_IDEAS.md").read_text()
+    for issue in ("#3", "#5", "#6", "#7", "#9", "#10", "#27", "#29", "#30", "#32", "#33"):
+        assert f"| {issue} |" in index, f"owner idea {issue} is not indexed"

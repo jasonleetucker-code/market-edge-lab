@@ -119,6 +119,61 @@ be written here when they are made.
 
   The laptop bridge stays a manual emergency fallback only.
 
+- **2026-09-23, integration and production directive.** Recorded verbatim, with the
+  owner's four clarifying answers, in
+  `docs/owner/2026-09-23-integration-production-directive.md`. The owner authorizes:
+  1. verifying the production collector on chaseupside through the owner's existing SSH
+     access (no key requested, copied or added);
+  2. deploying the reviewed, merged daily-shadow and settlement code with
+     `docs/deploy/DAILY_SHADOW_ACTIVATION.md`, and enabling `edgelab-shadow.timer` and
+     `edgelab-settlement.timer`;
+  3. preserving the owner-supplied Kalshi fee-schedule PDF as evidence, and correcting the
+     fee verification state where it supports that, without rewriting frozen EXP-001
+     assumptions;
+  4. the seven-day starter policy `STARTER_MAX_7D_V1` as an operational eligibility policy.
+     It is enforced prospectively in the operational shadow account only; the research
+     account is never touched;
+  5. updating the canonical owner-idea process (re-planning at each new idea);
+  6. a provider-neutral notification layer, with no paid SMS provider;
+  7. GATE7-F09 design, tests and non-scheduled checkpoint support code. F09 stays OPEN;
+  8. after the P0 work, bounded read-only foundations for:
+     - Polymarket US public market data;
+     - The Odds API free tier: the adapter foundation only (fixtures, a quota model,
+       redaction and the owner's setup step). The free key is a **read-only data-feed
+       credential**:
+       - only the owner installs it, in server or local environment configuration;
+       - agents never create, request, see or commit it;
+       - no key exists yet.
+
+       A live pull needs the key installed **and** an owner-approved activation and quota
+       plan (issue #29);
+     - Novig public daily data;
+     - a venue capability registry with execution authorization false by default;
+  9. squash-merging this directive's PRs when their acceptance conditions are met.
+
+  **Not authorized:**
+  - any order or order submission to any venue, trading credentials, one-click or
+    automatic trading;
+  - deposits, withdrawals or funding;
+  - paid APIs or paid SMS, and Action PRO or Outlier purchases;
+  - DNS or public dashboard exposure;
+  - unrelated Brisket changes;
+  - SSH-key changes, apt upgrades or reboots;
+  - new scheduled jobs, including a scheduled ledger anchor or scheduled Odds API pulls;
+  - configuring any SMS provider (Twilio, Telnyx, SNS or similar), paid or free tier;
+  - Polymarket International, VPN or geolocation circumvention, or any authenticated
+    Polymarket US endpoint. Polymarket US uses documented public US interfaces only, with
+    one bounded smoke test where the terms and availability permit;
+  - network calls in CI;
+  - presenting Novig end-of-day files, or de-vigged sportsbook probabilities, as executable
+    prices;
+  - sports models or sports strategy. This directive supersedes the earlier sports and
+    sportsbook exclusion only for the read-only data foundations listed above (§12);
+  - any gate advance. The current gate stays at 7.
+
+  When the fee-evidence PR merges (ADR 0017), fee claims will distinguish `claim_basis`
+  NONE, CONSERVATIVE_BOUND and EXACT.
+
 ## Standing merge rule: docs-only and test-only PRs
 
 Owner rule of 2026-09-22 (verbatim source: `docs/owner/2026-09-22-overnight-build-directive.md`).
@@ -180,6 +235,19 @@ A PR that fails any of these needs the usual authority: a directive grant or the
   All of it runs on the VPS under edgelab isolation, after the re-check window.
 - **Gate 7 engineering:** adversarial tests and fixes against disposable stores. Never run
   against production.
+- **Integration directive work (2026-09-23):**
+  - fee evidence and the multi-component fee verification;
+  - `STARTER_MAX_7D_V1`, the venue capability registry and the execution-ticket
+    contract (the ticket is a data contract only, and execution stays disabled);
+  - the notification contract with local sinks only;
+  - ledger checkpoint export and verify on demand;
+  - the read-only Polymarket US and Novig public-data adapters. Live access is limited to
+    one bounded Polymarket US smoke test and manual reads of Novig's published daily
+    files, where the terms permit;
+  - The Odds API adapter, on fixtures only. A live pull waits for the owner's key and an
+    approved activation plan.
+
+  None of these add a timer.
 - **Local read-only dashboard** bound to 127.0.0.1, with no public exposure. Merged in PR #28
   (`edge-lab dashboard`, `docs/DASHBOARD.md`). It is local only: hosting, DNS/TLS, tunnels
   and firewall changes remain unauthorized.
@@ -187,7 +255,9 @@ A PR that fails any of these needs the usual authority: a directive grant or the
 ## Explicitly not authorized
 
 - Any order placement, order simulation against live endpoints, or authenticated trading client.
-- Credential creation or storage, or funded accounts.
+- Credential creation or storage, or funded accounts. One exception, directive §10 and
+  issue #29: the owner may install The Odds API free read-only key in server or local
+  environment configuration. Agents never create, request, see or commit it.
 - Paid data or AI services, and any signup that creates an ongoing cost.
 - Strategy optimization or parameter searches; any model variant, threshold or window not
   in the frozen EXP-001 spec; evaluating the test split more than once, or changing the
