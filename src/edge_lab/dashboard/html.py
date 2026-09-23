@@ -102,9 +102,11 @@ def state_tag(value: Any) -> str:
     good = {"OK", "FRESH", "VALID", "HEALTHY_NO_SIGNAL", "HEALTHY_TRADED", "SETTLED", "FILLED", "QUALIFY", "PASS",
             "ok", "RUNNING", "CONCLUDED_PASS", "VERIFIED"}
     bad = {"ERROR", "STALE", "INVALID", "INVALID_CAPTURE", "FAILED", "failed", "REJECT", "NO_FILL", "LOCK_BUSY",
-           "CONCLUDED_FAIL", "BREACH", "NOT_RECOMMENDED", "UNVERIFIED_CURRENT_SCHEDULE", "overdue", "FAIL"}
+           "CONCLUDED_FAIL", "BREACH", "NOT_RECOMMENDED", "UNVERIFIED_CURRENT_SCHEDULE", "overdue", "FAIL",
+           "SETTLEMENT_CONFLICT", "MISSING_CAPTURE", "RESEARCH_INVALID_CASH", "HALTED"}
     kind = "ok" if text in good else "err" if text in bad else "warn" if text in {
-        "PENDING_SETTLEMENT", "NOT_CLOSED", "partial", "UNKNOWN", "OPEN", "PARTIALLY_SETTLED"} else "nd"
+        "PENDING_SETTLEMENT", "NOT_CLOSED", "partial", "UNKNOWN", "OPEN", "PARTIALLY_SETTLED", "NO_CAPTURE",
+        "RISK_VETO", "not_run"} else "nd"
     return tag(text, kind)
 
 

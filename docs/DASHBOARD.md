@@ -21,6 +21,7 @@ never writes to any store, and never recommends a withdrawal.
 | A WSGI application (`edge_lab.dashboard.app.make_app(config)`) | WSGI is the standard interface. If hosting is ever authorized, a real server (gunicorn, uWSGI, a reverse proxy) can run the same callable. We do not build our own production server. `wsgiref` is only the local development server. |
 | Server-rendered HTML, inline CSS, no JavaScript | No build step, no client code to audit. A strict CSP (`default-src 'none'; style-src 'unsafe-inline'`) forbids scripts, images, frames and forms. |
 | Bound to `127.0.0.1` | It is local-only. Public exposure, tunnels, DNS/TLS and firewall changes are not authorized. A non-loopback `--host` is refused unless `--allow-non-loopback` is passed, and that prints a warning. |
+| Host header must be local | A request whose `Host` is not `localhost`, a 127.0.0.0/8 address or `::1` (or the explicitly approved `--host`) gets 400. This stops a web page from reading the dashboard by pointing its own domain at 127.0.0.1 (DNS rebinding). |
 | No authentication | Nothing is exposed, so there is no one to authenticate. We do not build a custom auth system. If exposure is ever authorized, authentication belongs in the front server (see "Limitations"). |
 
 ## Data sources (all read-only, all optional)
@@ -82,7 +83,10 @@ open port, and do not expose it.
    `scp vps:/var/lib/market-edge-lab-status/latest.json ./data/status/`, and the same for
    `shadow_daily.json` once the pipeline writes it.
 2. For ledger or evidence views, copy a **backup** (not the live file) produced by the
-   existing backup path, into a local directory. Point `--db` / `--ledger` at the copies.
+   existing backup path, into a local directory. A backup is a **bundle directory**
+   (`edge-backup-*/`) holding `database.sqlite3` and a manifest, and there is one per
+   kind (evidence, ledger). Point `--db` and `--ledger` at each bundle's
+   `database.sqlite3` file, not at the directory.
 3. Run the dashboard locally on `127.0.0.1`.
 
 Never: bind `0.0.0.0` on the VPS, open a firewall port, use an SSH `-R`/`-L` tunnel or any
@@ -93,9 +97,9 @@ tunnel service, or publish a database. The private stores stay private
 
 | Route | What it shows |
 |---|---|
-| `/` Overview | Collector status file (freshness and age) and the status re-derived from the evidence DB; the pipeline receipt state; per account the **notional starting bankroll**, **cost-basis shadow equity (not liquidation value)**, settled cash, committed capital, open worst-case risk, realized P&L, new-risk-allowed; blockers such as the UNVERIFIED fee schedule, stale inputs, pending or overdue settlements, and risk breaches. |
+| `/` Overview | Collector status file (freshness and age) and the status re-derived from the evidence DB; the pipeline receipt state, latest day, valid/closed capture days, missing capture days, settlement conflicts and evidence cutoff; per account the **notional starting bankroll**, **cost-basis shadow equity (not liquidation value)**, settled cash, committed capital, open worst-case risk, realized P&L, new-risk-allowed; blockers such as the UNVERIFIED fee schedule, stale inputs, pending or overdue settlements, settlement conflicts, missed or invalid capture days, risk breaches or zero-capacity halts, and RESEARCH_INVALID_CASH (a frozen-rule deviation). |
 | `/opportunities` | Every recorded decision from the ledger payloads: model and conservative probability, executable price, fee, all-in cost, net edge, size and binding constraint, qualification with primary and all rejection reasons, fill outcome, freshness, fee status, claimable. |
-| `/positions` | The accounting basis note, NO_FILL reason counts, every simulated fill (FILLED and NO_FILL with reason), open positions with settlement state (awaiting, overdue, or no time = locked), settled positions with payout and net P&L, and pending settlements from the receipt. |
+| `/positions` | The accounting basis note, NO_FILL reason counts, every simulated fill (FILLED and NO_FILL with reason), open positions with settlement state (awaiting, overdue, or no time = locked), settled positions with payout and net P&L, and pending settlements and settlement evidence conflicts from the receipt. |
 | `/outcome-board` | Outcome groups ranked by account impact, with exposure, max loss and max gain labelled **upper bound, not a predicted scenario**, horizon, status, the bound method, and linked positions. |
 | `/risk` | Policy caps, the risk report (reserve floor, remaining capacity, drawdown, trailing loss windows, breaches, new_risk_allowed), capital release by horizon (best-case payout never counted as cash), exposure by event and cluster, sizing-policy parameters, binding sizing constraints, and the withdrawal contract: **NOT RECOMMENDED**. |
 | `/experiments` | Registry status and manifest validation, the EXP-001 Stage A recorded result, gate report file names, source health, fee schedules with verification status and claimable, and the full receipt (days, settlement refresh). |
@@ -122,13 +126,16 @@ account**. If it has not been opened, it shows NOT STARTED.
 
 - Local development server (`wsgiref`, single-threaded). It is fine for one person on
   loopback. It is not a production server.
-- IPv4 bind only (`127.0.0.1`). An IPv6 `--host ::1` passes the loopback check, but `wsgiref`'s
-  default server does not bind it.
+- `--host ::1` binds an IPv6 socket. If the port is taken or the address is unavailable, the
+  command prints one line and exits 2 instead of a traceback. SIGTERM stops the server like
+  Ctrl+C, so the demo's temporary directory is removed either way.
 - No authentication or TLS, by design (not exposed). If hosting is ever authorized, put the WSGI
   app behind an authenticated reverse proxy with TLS, as a separately reviewed change.
 - The research account's risk figures appear only if code registers a risk policy for it
   (`exp001_shadow.RESEARCH_RISK_POLICY`). Otherwise the dashboard says the figures are not
-  computed.
+  computed. Its sizing is the frozen EXP-001 rule, which is shown as text.
+- New-risk status is `OK`, `BREACH` (a limit is breached) or `HALTED` (no limit breached, but
+  zero remaining risk capacity). BREACH and HALTED are both listed as blockers.
 - Equity is cost basis. There is no liquidation mark, because no executable liquidation quotes
   are stored.
 - The receipt schema (`edge-lab-shadow-daily-receipt/1`) is read defensively. Unknown fields are

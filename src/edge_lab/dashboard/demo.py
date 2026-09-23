@@ -57,11 +57,13 @@ def _fill(dec: dict, filled: bool, price: str, fee: str, cost: str, expected: da
     }
 
 
-def _account(ledger: ShadowLedger, account: str, now: datetime) -> None:
-    ledger.open_account(account, starting_bankroll=exp001_shadow.STARTING_BANKROLL, strategy=f"DEMO {account}",
-                        opened_at_utc=_iso(now - timedelta(days=5)),
-                        sizing_policy_id=exp001_shadow.SIZING_POLICY.policy_id,
+def _account(ledger: ShadowLedger, account: exp001_shadow.ShadowAccount, now: datetime) -> None:
+    ledger.open_account(account.account_id, starting_bankroll=account.starting_bankroll,
+                        strategy=f"DEMO {account.strategy}", opened_at_utc=_iso(now - timedelta(days=5)),
+                        sizing_policy_id=account.sizing_policy_id,
                         fill_policy_id=LATENCY_CONFIRMED_V1.policy_id, fee_schedule_id="kalshi-quadratic-taker-v1")
+    binding = "fixed_contracts" if account.sizing is not None else "frozen_rule"
+    account = account.account_id
     day1, day2 = now - timedelta(days=3), now - timedelta(hours=20)
     won = _decision(account, 1, day1, "kalshi:DEMO-B67.5", "YES", True, "QUALIFY", "0.41", "0.34", "0.0158",
                     "0.36", "0.05")
@@ -73,6 +75,8 @@ def _account(ledger: ShadowLedger, account: str, now: datetime) -> None:
                       "0.26", "0.04")
     overdue = _decision(account, 5, day2, "kalshi:DEMO-B73.5", "NO", True, "QUALIFY", "0.88", "0.80", "0.0112",
                         "0.82", "0.06")
+    for dec in (won, unfilled, open_, overdue):
+        dec["sizing"]["binding_constraint"] = binding
     for dec in (won, rejected, unfilled, open_, overdue):
         ledger.record_decision(account, dec)
     ledger.record_fill(account, _fill(won, True, "0.34", "0.0158", "0.36", day1 + timedelta(days=2)))
@@ -93,7 +97,7 @@ def build_demo(now: datetime | None = None, *, experiments_root: Path | None = N
     now = now or datetime.now(timezone.utc)
     root = Path(tempfile.mkdtemp(prefix=DEMO_PREFIX))
     ledger = ShadowLedger(root / "demo_shadow_ledger.sqlite3")
-    for account in (d.OPERATIONAL_ACCOUNT_ID, d.RESEARCH_ACCOUNT_ID):
+    for account in (exp001_shadow.OPERATIONAL, exp001_shadow.RESEARCH):
         _account(ledger, account, now)
     store = SnapshotStore(root / "demo_evidence.sqlite3")
     store.start_run("demo-run")
@@ -109,19 +113,25 @@ def build_demo(now: datetime | None = None, *, experiments_root: Path | None = N
         .date().isoformat(), "last_closed_status": "VALID", "last_closed_reasons": [], "valid_days": 2,
         "first_valid_day": (now - timedelta(days=3)).date().isoformat(), "days_with_captures": 3,
         "invalid_days": [(now - timedelta(days=2)).date().isoformat()]}), encoding="utf-8")
-    (status / d.RECEIPT_FILE).write_text(json.dumps({
+    last_day = (now - timedelta(hours=20)).date().isoformat()
+    per_account = {"decisions": 2, "qualified": 2, "fills": 2, "no_fills": 0, "risk_vetoes": 0}
+    fee = exp001_shadow.fee_fields()
+    (status / d.RECEIPT_FILE).write_text(json.dumps({  # same shape as edge_lab.daily writes
         "schema": d.RECEIPT_SCHEMA, "generated_at_utc": _iso(now - timedelta(minutes=30)), "code_version": "demo",
         "state": "PENDING_SETTLEMENT", "exit_code": 0,
-        "days": [{"target_date": (now - timedelta(hours=20)).date().isoformat(), "capture_status": "VALID",
-                  "decision_time_utc": _iso(now - timedelta(hours=20)), "result": "TRADED",
-                  "accounts": {d.OPERATIONAL_ACCOUNT_ID: {"decisions": 2, "fills": 2, "no_fills": {}}},
-                  "problems": []}],
-        "settlement": {"refresh": {"status": "ok", "events_requested": 1, "markets_stored": 6, "errors": []},
-                       "settled": 0, "pending": [{"account_id": d.OPERATIONAL_ACCOUNT_ID,
-                                                  "position_id": "fill-demo-opp-b-shadow-5",
-                                                  "reason": "no settlement evidence yet"}]},
-        "fee": {"schedule_id": "kalshi-quadratic-taker-v1", "status": "UNVERIFIED_CURRENT_SCHEDULE",
-                "claimable": False},
-        "problems": []}), encoding="utf-8")
+        "days": [{"target_date": last_day, "decision_time_utc": _iso(now - timedelta(hours=20)),
+                  "accounts": {d.RESEARCH_ACCOUNT_ID: per_account, d.OPERATIONAL_ACCOUNT_ID: per_account},
+                  "problems": [], "capture_status": "VALID", "result": "HEALTHY_TRADED"}],
+        "settlement": {"refresh": {"status": "ok", "run_id": "demo-run", "events_requested": 1,
+                                   "markets_stored": 6, "settled_markets": 0, "errors": []},
+                       "settled": 0, "evidence_cutoff_utc": _iso(now - timedelta(minutes=30)),
+                       "pending": [{"account_id": acct, "position_id": f"fill-demo-opp-{acct[-8:]}-5",
+                                    "reason": "no settlement evidence yet"}
+                                   for acct in (d.RESEARCH_ACCOUNT_ID, d.OPERATIONAL_ACCOUNT_ID)],
+                       "conflicts": []},
+        "fee": {"schedule_id": fee["fee_schedule_id"], "status": fee["fee_status"], "claimable": fee["claimable"]},
+        "accounts": {}, "problems": [], "missing_capture_days": [], "valid_days": 2, "closed_capture_days": 3,
+        "latest_day": {"target_date": last_day, "result": "HEALTHY_TRADED", "capture_status": "VALID"}}),
+        encoding="utf-8")
     config = d.Config(db=store.path, ledger=ledger.path, status_dir=status, experiments_root=experiments_root, demo=True)
     return config, root

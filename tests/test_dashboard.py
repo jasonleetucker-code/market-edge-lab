@@ -15,13 +15,15 @@ from pathlib import Path
 
 import pytest
 
-from edge_lab import exp001_shadow as shadow, exp001_stageb as stageb
+from edge_lab import daily, exp001_shadow as shadow, exp001_stageb as stageb
+from edge_lab.dashboard.app import host_allowed
 from edge_lab.dashboard import Config, make_app, views
 from edge_lab.dashboard import data as dd
 from edge_lab.dashboard import server
 from edge_lab.dashboard.demo import DEMO_PREFIX, build_demo
 from edge_lab.shadow_ledger import ShadowLedger
 from edge_lab.storage import SnapshotStore
+from test_daily import _settled_run
 from test_exp001_shadow import CLOSED, _result, _settled
 from test_forward import D, _full_day
 
@@ -32,13 +34,16 @@ BANNER = "SHADOW — NO REAL MONEY"
 REPO = Path(__file__).resolve().parents[1]
 
 
-def call(app, path="/", method="GET", query=""):
+def call(app, path="/", method="GET", query="", host="127.0.0.1:8765"):
     captured = {}
 
     def start_response(status, headers):
         captured["status"], captured["headers"] = status, dict(headers)
 
-    body = b"".join(app({"REQUEST_METHOD": method, "PATH_INFO": path, "QUERY_STRING": query}, start_response))
+    environ = {"REQUEST_METHOD": method, "PATH_INFO": path, "QUERY_STRING": query}
+    if host is not None:
+        environ["HTTP_HOST"] = host
+    body = b"".join(app(environ, start_response))
     return captured["status"], captured["headers"], body.decode("utf-8")
 
 
@@ -436,3 +441,207 @@ def test_cli_delegates_to_the_dashboard(monkeypatch):
     monkeypatch.setattr(dash, "main", lambda argv: seen.setdefault("argv", argv) and 0)
     assert cli.main(["dashboard", "--host", "0.0.0.0"]) == 0
     assert seen["argv"] == ["--host", "0.0.0.0"]
+
+
+# --------------------------------------------------------------------------- review fixes (PR #28)
+
+
+@pytest.mark.parametrize("host", ["127.0.0.1:8765", "127.0.0.1", "localhost:8765", "LOCALHOST", "[::1]:8765",
+                                  "[::1]", "127.0.0.2:8765", "localhost.", None])
+def test_local_host_headers_are_served(host):
+    assert host_allowed(host)
+    assert call(make_app(config()), "/", host=host)[0] == "200 OK"
+
+
+@pytest.mark.parametrize("host", ["evil.example.com", "evil.example.com:8765", "127.0.0.1.evil.example.com",
+                                  "localhost.evil.example.com:8765", "192.168.1.10:8765", "", "[::1"])
+def test_foreign_host_headers_are_refused_dns_rebinding(host, populated):
+    cfg, _, _ = populated
+    app = make_app(cfg)
+    for route in ROUTES + ["/healthz"]:
+        status, headers, body = call(app, route, host=host)
+        assert status.startswith("400"), (host, route)
+        assert "EXP-001" not in body and "kalshi:" not in body and headers["Cache-Control"] == "no-store"
+
+
+def test_approved_bind_host_is_accepted_only_when_configured():
+    assert call(make_app(config()), "/", host="10.0.0.5:8765")[0].startswith("400")
+    assert call(make_app(config(allowed_hosts=("10.0.0.5",))), "/", host="10.0.0.5:8765")[0] == "200 OK"
+
+
+def test_main_passes_the_approved_host_to_the_app(monkeypatch):
+    seen = {}
+
+    class FakeServer:
+        server_port = 8765
+
+        def serve_forever(self):
+            raise KeyboardInterrupt
+
+        def server_close(self):
+            pass
+
+    def fake_make_server(host, port, app, **kw):
+        seen["app"], seen["server_class"] = app, kw["server_class"]
+        return FakeServer()
+    monkeypatch.setattr(server, "make_server", fake_make_server)
+    assert server.main(["--host", "10.0.0.5", "--allow-non-loopback"]) == 0
+    assert call(seen["app"], "/healthz", host="10.0.0.5:8765")[0] == "200 OK"
+    assert call(seen["app"], "/healthz", host="evil.example.com")[0].startswith("400")
+    assert seen["server_class"] is not server.server_class_for("::1")
+
+
+def test_ipv6_loopback_uses_an_ipv6_socket_and_bind_errors_are_one_line(monkeypatch, capsys):
+    seen = {}
+
+    def fake_make_server(host, port, app, **kw):
+        seen.update(host=host, server_class=kw["server_class"])
+        raise OSError(98, "Address already in use")
+    monkeypatch.setattr(server, "make_server", fake_make_server)
+    assert server.main(["--host", "[::1]"]) == 2
+    assert seen["host"] == "::1" and seen["server_class"].address_family == server.socket.AF_INET6
+    err = capsys.readouterr().err
+    assert "cannot bind" in err and "Traceback" not in err
+
+
+def test_sigterm_removes_the_demo_directory_and_restores_the_handler(monkeypatch):
+    import signal
+    before = signal.getsignal(signal.SIGTERM)
+    seen = {}
+
+    class FakeServer:
+        server_port = 8765
+
+        def serve_forever(self):
+            signal.raise_signal(signal.SIGTERM)
+
+        def server_close(self):
+            pass
+
+    real_config_from_args = server.config_from_args
+
+    def spy(args):
+        cfg, root = real_config_from_args(args)
+        seen["root"] = root
+        return cfg, root
+    monkeypatch.setattr(server, "config_from_args", spy)
+    monkeypatch.setattr(server, "make_server", lambda *a, **k: FakeServer())
+    assert server.main(["--demo"]) == 0
+    assert seen["root"] is not None and not seen["root"].exists()
+    assert signal.getsignal(signal.SIGTERM) == before
+
+
+@pytest.fixture
+def real_receipt(tmp_path, monkeypatch, model):
+    """A receipt written by the real daily pipeline over contradicting settlement evidence."""
+    store = SnapshotStore(tmp_path / "evidence" / "edge_lab.sqlite3")
+    ledger_path = tmp_path / "ledger" / "shadow_ledger.sqlite3"
+    status_dir = tmp_path / "status"
+    _full_day(store, monkeypatch)
+    _settled_run(store, 67, _result(67), "first", received="2026-09-23T12:00:00+00:00")
+    daily.run(store.path, ledger_path, status_dir=status_dir, model=model,
+              now=datetime(2026, 9, 23, 20, tzinfo=UTC))
+    _settled_run(store, 70, _result(70), "later", received="2026-09-23T13:00:00+00:00")
+    now = datetime(2026, 9, 24, 16, tzinfo=UTC)  # D+1's window closed with no capture: a missed day
+    receipt, code = daily.run(store.path, ledger_path, status_dir=status_dir, model=model, now=now)
+    assert (receipt["state"], code) == ("INVALID_CAPTURE", 3) and receipt["settlement"]["conflicts"]
+    cfg = config(db=store.path, ledger=ledger_path, status_dir=status_dir, clock=lambda: now + timedelta(minutes=5))
+    return cfg, receipt
+
+
+def test_real_pipeline_receipt_is_fully_rendered(real_receipt):
+    cfg, receipt = real_receipt
+    app = make_app(cfg)
+    overview = call(app, "/")[2]
+    conflict = receipt["settlement"]["conflicts"][0]
+    assert 'class="tag err">INVALID_CAPTURE' in overview
+    assert 'class="tag err">MISSING_CAPTURE' in overview and "2026-09-24" in overview
+    assert "SETTLEMENT_CONFLICT" in overview and conflict["position_id"] in overview
+    assert "closed day(s) with no capture" in overview and "latest day 2026-09-24 is INVALID_CAPTURE" in overview
+    assert receipt["settlement"]["evidence_cutoff_utc"] in overview
+    assert f"{receipt['valid_days']} / {receipt['closed_capture_days']}" in overview
+    positions = call(app, "/positions")[2]
+    assert "Settlement evidence conflicts reported by the latest receipt" in positions
+    assert conflict["position_id"] in positions and "none recorded" not in positions.split("conflicts reported")[1][:400]
+    experiments = call(app, "/experiments")[2]
+    assert "risk vetoes" in experiments and "qualified" in experiments and conflict["position_id"] in experiments
+    for route in ROUTES:
+        assert call(app, route)[0] == "200 OK"
+
+
+def test_demo_receipt_has_every_field_the_real_pipeline_writes(real_receipt):
+    _, real = real_receipt
+    cfg, root = build_demo()
+    try:
+        demo = json.loads((cfg.status_dir / dd.RECEIPT_FILE).read_text(encoding="utf-8"))
+    finally:
+        shutil.rmtree(root)
+    assert set(real) - {"repeat_of_previous_alert"} <= set(demo)
+    assert set(real["settlement"]) <= set(demo["settlement"])
+    assert set(real["days"][0]) <= set(demo["days"][0])
+    real_acct = next(iter(real["days"][0]["accounts"].values()))
+    assert set(real_acct) <= set(next(iter(demo["days"][0]["accounts"].values())))
+    assert set(real["latest_day"]) <= set(demo["latest_day"])
+
+
+@pytest.mark.parametrize("state,kind", [
+    ("SETTLEMENT_CONFLICT", "err"), ("MISSING_CAPTURE", "err"), ("RESEARCH_INVALID_CASH", "err"),
+    ("HALTED", "err"), ("NO_CAPTURE", "warn"), ("RISK_VETO", "warn"), ("INVALID_CAPTURE", "err"),
+    ("HEALTHY_NO_SIGNAL", "ok"), ("something-new", "nd")])
+def test_serious_states_are_not_neutral(state, kind):
+    from edge_lab.dashboard.html import state_tag
+    assert f'class="tag {kind}"' in state_tag(state)
+
+
+def test_zero_capacity_is_halted_not_breach_and_is_a_blocker(populated, monkeypatch):
+    import dataclasses
+    real_assess = dd.risk.assess
+
+    def exhausted(state, policy, as_of):
+        rep = real_assess(state, policy, as_of)
+        assert not rep.breaches
+        return dataclasses.replace(rep, new_risk_allowed=False, remaining_risk_capacity=Decimal("0"))
+    monkeypatch.setattr(dd.risk, "assess", exhausted)
+    cfg, _, _ = populated
+    app = make_app(cfg)
+    overview = call(app, "/")[2]
+    assert 'class="tag err">HALTED' in overview and "remaining risk capacity is zero" in overview
+    assert "BREACH" not in overview
+    assert f"{shadow.ACCOUNT_ID}: remaining risk capacity is zero; new risk halted" in overview
+    assert 'class="tag err">HALTED' in call(app, "/risk")[2]
+
+
+def test_research_invalid_cash_is_a_blocker(tmp_path):
+    from edge_lab.dashboard.demo import _decision, _fill
+    ledger = ShadowLedger(tmp_path / "ledger.sqlite3")
+    shadow.ensure_account(ledger, shadow.RESEARCH)
+    at = NOW - timedelta(days=1)
+    dec = _decision(shadow.RESEARCH_ACCOUNT_ID, 1, at, "kalshi:X-B67.5", "YES", True, "QUALIFY", "0.41", "0.34",
+                    "0.0158", "0.36", "0.05")
+    ledger.record_decision(shadow.RESEARCH_ACCOUNT_ID, dec)
+    ledger.record_fill(shadow.RESEARCH_ACCOUNT_ID, _fill(dec, False, "0", "0", "0", at + timedelta(days=1),
+                                                          reason="RESEARCH_INVALID_CASH"))
+    app = make_app(config(ledger=ledger.path))
+    overview = call(app, "/")[2]
+    assert "1 RESEARCH_INVALID_CASH no-fill(s)" in overview and "deviated from the frozen EXP-001 rule" in overview
+    assert 'class="tag err">RESEARCH_INVALID_CASH' in call(app, "/positions")[2]
+
+
+def test_demo_research_account_matches_the_real_research_account():
+    cfg, root = build_demo()
+    try:
+        ledger = ShadowLedger.open_readonly(cfg.ledger)
+        research = ledger.state(shadow.RESEARCH_ACCOUNT_ID)
+        operational = ledger.state(shadow.ACCOUNT_ID)
+        assert research.starting_bankroll == shadow.RESEARCH_BANKROLL
+        assert operational.starting_bankroll == shadow.STARTING_BANKROLL
+        risk_page = call(make_app(cfg), "/risk")[2]
+        assert shadow.RESEARCH_SIZING_ID in risk_page and "Frozen EXP-001 rule" in risk_page
+    finally:
+        shutil.rmtree(root)
+
+
+def test_withdrawal_amounts_are_labelled_not_available(populated):
+    cfg, _, _ = populated
+    body = call(make_app(cfg), "/risk")[2]
+    assert "simulated arithmetic only; NOT available, NOT recommended" in body

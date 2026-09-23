@@ -8,9 +8,13 @@ authorized exposing this dashboard (docs/DASHBOARD.md).
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import ipaddress
 import shutil
+import signal
+import socket
 import sys
+import threading
 from pathlib import Path
 from typing import Sequence
 from wsgiref.simple_server import WSGIRequestHandler, WSGIServer, make_server
@@ -71,6 +75,19 @@ def build_parser() -> argparse.ArgumentParser:
     return p
 
 
+class _IPv6Server(WSGIServer):
+    address_family = socket.AF_INET6
+
+
+def server_class_for(host: str) -> type[WSGIServer]:
+    """An IPv6 literal (::1) needs an AF_INET6 socket; everything else binds IPv4."""
+    return _IPv6Server if ":" in host else WSGIServer
+
+
+def _sigterm_to_interrupt(signum, frame) -> None:  # noqa: ARG001 - signal handler signature
+    raise KeyboardInterrupt
+
+
 class _QuietHandler(WSGIRequestHandler):
     def log_message(self, format: str, *args) -> None:  # noqa: A002 - stdlib signature
         sys.stderr.write("dashboard: %s %s\n" % (self.command, self.path.split("?", 1)[0]))
@@ -97,12 +114,25 @@ def main(argv: Sequence[str] | None = None) -> int:
     if warning:
         print(f"dashboard: {warning}", file=sys.stderr)
     config, demo_root = config_from_args(args)
+    if warning:  # an explicitly approved non-loopback bind: accept its own name in Host
+        config = dataclasses.replace(config, allowed_hosts=(args.host,))
     if demo_root is not None:
         print(f"dashboard: SYNTHETIC DEMO DATA in a temporary directory ({demo_root.name}); "
               "configured --db/--ledger/--status-dir are ignored", file=sys.stderr)
-    server = make_server(args.host, args.port, make_app(config), server_class=WSGIServer,
-                         handler_class=_QuietHandler)
-    host = f"[{args.host}]" if ":" in args.host else args.host
+    bind_host = args.host.strip().strip("[]")
+    try:
+        server = make_server(bind_host, args.port, make_app(config), server_class=server_class_for(bind_host),
+                             handler_class=_QuietHandler)
+    except OSError as exc:
+        print(f"dashboard: cannot bind {args.host}:{args.port}: {exc.strerror or exc}", file=sys.stderr)
+        if demo_root is not None:
+            shutil.rmtree(demo_root, ignore_errors=True)
+        return 2
+    previous_sigterm = None
+    if threading.current_thread() is threading.main_thread():
+        # SIGTERM stops the server like Ctrl+C, so the demo's temp directory is removed too.
+        previous_sigterm = signal.signal(signal.SIGTERM, _sigterm_to_interrupt)
+    host = f"[{bind_host}]" if ":" in bind_host else bind_host
     print(f"dashboard: serving read-only on http://{host}:{server.server_port}/ (Ctrl+C to stop)", file=sys.stderr)
     try:
         server.serve_forever()
@@ -110,6 +140,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         pass
     finally:
         server.server_close()
+        if previous_sigterm is not None:
+            signal.signal(signal.SIGTERM, previous_sigterm)
         if demo_root is not None:
             shutil.rmtree(demo_root, ignore_errors=True)  # only the demo's own temp directory
     return 0

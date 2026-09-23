@@ -67,6 +67,7 @@ class Config:
     status_dir: Path | None = None
     experiments_root: Path | None = None
     demo: bool = False
+    allowed_hosts: tuple[str, ...] = ()  # extra Host names accepted besides loopback (the bound host)
     clock: Callable[[], datetime] = field(default=lambda: datetime.now(timezone.utc))
 
     def paths(self) -> list[Path]:

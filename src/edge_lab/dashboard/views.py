@@ -127,9 +127,17 @@ def receipt_panel(ctx: d.Context, *, detail: bool = False) -> str:
     settlement = _get(r, "settlement")
     refresh = _get(settlement, "refresh")
     fee = _get(r, "fee")
+    latest = _get(r, "latest_day")
+    conflicts = _list(_get(settlement, "conflicts"))
     pairs = [
-        ("state", state_tag(r.get("state"))),
+        ("state", state_tag(r.get("state"))
+         + (" " + tag("REPEAT OF PREVIOUS ALERT", "nd") if r.get("repeat_of_previous_alert") else "")),
         ("exit code", esc(r.get("exit_code"))),
+        ("latest day", (f"{esc(_get(latest, 'target_date'))} {state_tag(_get(latest, 'capture_status'))} "
+                        f"{state_tag(_get(latest, 'result'))}") if isinstance(latest, dict) else esc(None)),
+        ("valid / closed capture days", f"{esc(r.get('valid_days'))} / {esc(r.get('closed_capture_days'))}"),
+        ("missing capture days", ul(_list(r.get("missing_capture_days"))) if r.get("missing_capture_days")
+         else esc("none") if "missing_capture_days" in r else esc(None)),
         ("freshness", _fresh_line(r.get("generated_at_utc"), ctx.now)),
         ("code version", esc(r.get("code_version"))),
         ("schema", esc(schema) + ("" if schema in (None, d.RECEIPT_SCHEMA) else " " + tag("UNEXPECTED SCHEMA", "warn"))),
@@ -137,6 +145,9 @@ def receipt_panel(ctx: d.Context, *, detail: bool = False) -> str:
         ("settled this run", esc(_get(settlement, "settled"))),
         ("pending settlements", esc(len(_list(_get(settlement, "pending")))) if isinstance(settlement, dict)
          and "pending" in settlement else esc(None)),
+        ("settlement conflicts", (tag(f"{len(conflicts)} SETTLEMENT_CONFLICT", "err") if conflicts else esc("none"))
+         if isinstance(settlement, dict) and "conflicts" in settlement else esc(None)),
+        ("settlement evidence cutoff", esc(_get(settlement, "evidence_cutoff_utc"))),
         ("settlement refresh", state_tag(_get(refresh, "status")) if refresh is not None else esc(None)),
         ("fee schedule", esc(_get(fee, "schedule_id")) + " " + (state_tag(_get(fee, "status")) if fee else "")),
         ("fee claimable", esc(_get(fee, "claimable"))),
@@ -148,19 +159,41 @@ def receipt_panel(ctx: d.Context, *, detail: bool = False) -> str:
         for day in _list(r.get("days")):
             accounts = _get(day, "accounts")
             acct = "; ".join(
-                f"{a}: {_get(v, 'decisions')} decisions, {_get(v, 'fills')} fills, no-fills {_get(v, 'no_fills')}"
+                f"{a}: {_get(v, 'decisions')} decisions, {_get(v, 'qualified')} qualified, {_get(v, 'fills')} fills, "
+                f"{_get(v, 'no_fills')} no-fills, {_get(v, 'risk_vetoes')} risk vetoes"
                 for a, v in accounts.items()) if isinstance(accounts, dict) else None
             rows.append([esc(_get(day, "target_date")), state_tag(_get(day, "capture_status")),
                          esc(_get(day, "decision_time_utc")), esc(_get(day, "result")), esc(acct),
                          esc("; ".join(map(str, _list(_get(day, "problems")))) or None)])
         body += "<h3>Days</h3>" + table(["target date", "capture", "decision time", "result", "accounts",
                                          "problems"], rows, wrap=(4, 5))
+        body += "<h3>Settlement evidence conflicts</h3>" + conflicts_table(conflicts)
         if isinstance(refresh, dict):
             body += "<h3>Settlement evidence refresh</h3>" + kv([
                 ("status", state_tag(refresh.get("status"))), ("events requested", esc(refresh.get("events_requested"))),
                 ("markets stored", esc(refresh.get("markets_stored"))), ("errors", ul(_list(refresh.get("errors")))),
             ])
     return panel(title, body, "" if fresh == "FRESH" else "stale")
+
+
+def conflicts_table(conflicts: list) -> str:
+    return table(["account", "position", "recorded outcome", "latest evidence outcome", "evidence variants"],
+                 [[esc(_get(c, "account_id")), esc(_get(c, "position_id")), esc(_get(c, "recorded_outcome")),
+                   esc(_get(c, "latest_evidence_outcome")), esc(_get(c, "variants"))] for c in conflicts], wrap=(4,))
+
+
+def risk_state(rep: Any) -> str:
+    """OK, BREACH (a limit is breached) or HALTED (no limit breached, but no risk capacity left)."""
+    if rep.breaches:
+        return "BREACH"
+    return "OK" if rep.new_risk_allowed else "HALTED"
+
+
+def _risk_line(rep: Any) -> str:
+    state = risk_state(rep)
+    detail = (", ".join(rep.breaches) if state == "BREACH" else
+              "no limit breached, but remaining risk capacity is zero" if state == "HALTED" else "no breaches")
+    return state_tag(state) + " " + esc(detail)
 
 
 def _account_summary(view: d.AccountView) -> str:
@@ -182,8 +215,7 @@ def _account_summary(view: d.AccountView) -> str:
     ]
     if view.risk is not None and view.risk.status == d.OK:
         rep = view.risk.value
-        pairs.append(("new risk allowed", state_tag("OK" if rep.new_risk_allowed else "BREACH")
-                      + " " + esc(", ".join(rep.breaches) or "no breaches")))
+        pairs.append(("new risk allowed", _risk_line(rep)))
         pairs.append(("remaining risk capacity", money(rep.remaining_risk_capacity)))
     else:
         pairs.append(("risk", esc(view.risk.message if view.risk else None)))
@@ -208,9 +240,22 @@ def blockers(ctx: d.Context) -> list[str]:
         state = ctx.receipt.value.get("state")
         if state not in ("HEALTHY_NO_SIGNAL", "HEALTHY_TRADED"):
             out.append(f"pipeline receipt state is {state}")
-        pending = _list(_get(_get(ctx.receipt.value, "settlement"), "pending"))
+        settlement = _get(ctx.receipt.value, "settlement")
+        pending = _list(_get(settlement, "pending"))
         if pending:
             out.append(f"{len(pending)} settlement(s) pending in the latest receipt")
+        conflicts = _list(_get(settlement, "conflicts"))
+        if conflicts:
+            out.append(f"{len(conflicts)} settlement evidence conflict(s): "
+                       + ", ".join(f"{_get(c, 'account_id')}/{_get(c, 'position_id')}" for c in conflicts[:10])
+                       + " (see Positions)")
+        missing = _list(ctx.receipt.value.get("missing_capture_days"))
+        if missing:
+            out.append(f"{len(missing)} closed day(s) with no capture (lost Stage B days): "
+                       + ", ".join(map(str, missing[:10])))
+        latest = _get(ctx.receipt.value, "latest_day")
+        if isinstance(latest, dict) and latest.get("result") == "INVALID_CAPTURE":
+            out.append(f"latest day {latest.get('target_date')} is INVALID_CAPTURE ({latest.get('capture_status')})")
     if ctx.ledger.status != d.OK:
         out.append(f"shadow ledger: {ctx.ledger.status.replace('_', ' ')} — {ctx.ledger.message}")
     for view in ctx.accounts:
@@ -225,6 +270,12 @@ def blockers(ctx: d.Context) -> list[str]:
                        "(pending official evidence)")
         if view.risk is not None and view.risk.status == d.OK and view.risk.value.breaches:
             out.append(f"{view.account_id}: risk breaches {', '.join(view.risk.value.breaches)}; new risk halted")
+        elif view.risk is not None and view.risk.status == d.OK and not view.risk.value.new_risk_allowed:
+            out.append(f"{view.account_id}: remaining risk capacity is zero; new risk halted (no limit breached)")
+        invalid_cash = view.state.no_fill_reasons.get("RESEARCH_INVALID_CASH")
+        if invalid_cash:
+            out.append(f"{view.account_id}: {invalid_cash} RESEARCH_INVALID_CASH no-fill(s): the research record "
+                       "deviated from the frozen EXP-001 rule (experiment validity problem)")
         if view.risk is not None and view.risk.status == d.ERROR:
             out.append(f"{view.account_id}: risk report ERROR — {view.risk.message}")
     return out
@@ -302,7 +353,7 @@ def positions(ctx: d.Context) -> str:
             ("fills / no-fills / settlements", f"{esc(s.fills)} / {esc(s.no_fills)} / {esc(s.settlements)}"),
         ])
         body += "<h3>NO_FILL reasons</h3>" + table(
-            ["reason", "count"], [[esc(k), esc(v)] for k, v in sorted(s.no_fill_reasons.items())])
+            ["reason", "count"], [[state_tag(k), esc(v)] for k, v in sorted(s.no_fill_reasons.items())])
         fills = sorted(view.fills.values(), key=lambda f: (str(f.get("filled_at_utc")), str(f.get("fill_id"))),
                        reverse=True)
         body += "<h3>Simulated fills (FILLED and NO_FILL)</h3>" + table(
@@ -338,6 +389,11 @@ def positions(ctx: d.Context) -> str:
             ["account", "position", "reason"],
             [[esc(_get(p, "account_id")), esc(_get(p, "position_id")), esc(_get(p, "reason"))] for p in pending],
             wrap=(2,))))
+        conflicts = _list(_get(_get(ctx.receipt.value, "settlement"), "conflicts"))
+        out.append(panel("Settlement evidence conflicts reported by the latest receipt", conflicts_table(conflicts)
+                         + '<p class="note">A conflict means official evidence snapshots disagree; the position is '
+                           'not settled (or its settlement is questioned) until the owner reviews the evidence.</p>',
+                         "stale" if conflicts else ""))
     else:
         out.append(_loaded_panel("Pending settlements reported by the latest receipt", ctx.receipt))
     return "".join(out)
@@ -425,7 +481,7 @@ def risk_view(ctx: d.Context) -> str:
                 ("trailing 24 h realized loss", money(r.daily_loss)),
                 ("trailing 7 d realized loss", money(r.weekly_loss)),
                 ("breaches", ul(r.breaches)),
-                ("new risk allowed", state_tag("OK" if r.new_risk_allowed else "BREACH")),
+                ("new risk allowed", _risk_line(r)),
                 ("notes", ul(r.notes)),
             ])
             body += "<h3>Capital release by horizon</h3>" + table(
@@ -441,6 +497,10 @@ def risk_view(ctx: d.Context) -> str:
         body += f"<h3>Sizing policy ({esc(sizing_id)})</h3>"
         if sizing_id == exp001_shadow.SIZING_POLICY.policy_id:
             body += table(["parameter", "value"], _sizing_policy_rows(exp001_shadow.SIZING_POLICY))
+        elif sizing_id == exp001_shadow.RESEARCH_SIZING_ID:
+            body += ('<p class="note">' + esc("Frozen EXP-001 rule: exactly 1 contract per signalled bracket, "
+                                              "latency-confirmed-v1 fills, no operational caps and no risk vetoes. "
+                                              "Never re-tuned.") + "</p>")
         else:
             body += '<p class="na">sizing policy parameters are not registered in this dashboard</p>'
         counts: dict[str, int] = {}
@@ -464,8 +524,10 @@ def _withdrawal(view: d.AccountView) -> str:
         ("recommendation status", state_tag(w.recommendation_status)),
         ("recommended owner draw", esc(w.recommended_owner_draw) if w.recommended_owner_draw is not None
          else "none (no recommendation exists)"),
-        ("technically withdrawable (simulated)", money(w.technically_withdrawable)),
-        ("policy-safe bound (simulated)", money(w.policy_safe_withdrawable)),
+        ("technically withdrawable (simulated arithmetic only; NOT available, NOT recommended)",
+         money(w.technically_withdrawable)),
+        ("policy-safe bound (simulated arithmetic only; NOT available, NOT recommended)",
+         money(w.policy_safe_withdrawable)),
         ("why not recommended", ul(w.reasons)),
     ])
 

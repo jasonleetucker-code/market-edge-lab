@@ -1,11 +1,14 @@
 """The WSGI application: fixed routes, GET/HEAD only, restrictive headers.
 
 There is no endpoint that takes SQL, a file path, a command or any other parameter. Query
-strings are ignored.
+strings are ignored. A request whose Host header is not a loopback name (or a host the
+operator bound explicitly) is refused, so a web page cannot read the dashboard through DNS
+rebinding.
 """
 
 from __future__ import annotations
 
+import ipaddress
 import sys
 from datetime import datetime, timezone
 from typing import Any, Callable, Iterable
@@ -27,8 +30,29 @@ TEXT = "text/plain; charset=utf-8"
 ALLOWED = ("GET", "HEAD")
 
 
+def host_allowed(header: Any, extra: Iterable[str] = ()) -> bool:
+    """True for a Host header naming loopback (localhost, 127.0.0.0/8, ::1) or one of `extra`.
+
+    A missing header is allowed: browsers always send one, so its absence is not a
+    rebinding attack (curl and HTTP/1.0 tools may omit it)."""
+    if header is None:
+        return True
+    text = str(header).strip().lower()
+    if text.startswith("["):  # [::1]:8765
+        name = text[1:text.find("]")] if "]" in text else text
+    else:
+        name = text.rsplit(":", 1)[0] if text.count(":") == 1 else text
+    name = name.rstrip(".")
+    if name == "localhost" or name in {h.strip().lower().strip("[]") for h in extra}:
+        return True
+    try:
+        return ipaddress.ip_address(name).is_loopback
+    except ValueError:
+        return False
+
+
 def _status_line(code: int) -> str:
-    return {200: "200 OK", 404: "404 Not Found", 405: "405 Method Not Allowed",
+    return {200: "200 OK", 400: "400 Bad Request", 404: "404 Not Found", 405: "405 Method Not Allowed",
             500: "500 Internal Server Error"}[code]
 
 
@@ -46,7 +70,9 @@ def make_app(config: d.Config) -> Callable[[dict[str, Any], Callable], Iterable[
         if len(path) > 1:
             path = path.rstrip("/") or "/"
         extra: list[tuple[str, str]] = []
-        if method not in ALLOWED:
+        if not host_allowed(environ.get("HTTP_HOST"), config.allowed_hosts):
+            code, ctype, text = 400, TEXT, "refused: Host header is not a local address\n"
+        elif method not in ALLOWED:
             code, ctype = 405, HTML
             extra.append(("Allow", ", ".join(ALLOWED)))
             text = render("Method not allowed", path, "<p>This dashboard is read-only: only GET and HEAD are "
