@@ -84,6 +84,9 @@ def server_class_for(host: str) -> type[WSGIServer]:
     return _IPv6Server if ":" in host else WSGIServer
 
 
+_UNSET = object()
+
+
 def _sigterm_to_interrupt(signum, frame) -> None:  # noqa: ARG001 - signal handler signature
     raise KeyboardInterrupt
 
@@ -128,20 +131,22 @@ def main(argv: Sequence[str] | None = None) -> int:
         if demo_root is not None:
             shutil.rmtree(demo_root, ignore_errors=True)
         return 2
-    previous_sigterm = None
-    if threading.current_thread() is threading.main_thread():
-        # SIGTERM stops the server like Ctrl+C, so the demo's temp directory is removed too.
-        previous_sigterm = signal.signal(signal.SIGTERM, _sigterm_to_interrupt)
-    host = f"[{bind_host}]" if ":" in bind_host else bind_host
-    print(f"dashboard: serving read-only on http://{host}:{server.server_port}/ (Ctrl+C to stop)", file=sys.stderr)
+    previous_sigterm: object = _UNSET
     try:
+        if threading.current_thread() is threading.main_thread():
+            # SIGTERM stops the server like Ctrl+C, so the demo's temp directory is removed too.
+            previous_sigterm = signal.signal(signal.SIGTERM, _sigterm_to_interrupt)
+        host = f"[{bind_host}]" if ":" in bind_host else bind_host
+        print(f"dashboard: serving read-only on http://{host}:{server.server_port}/ (Ctrl+C to stop)",
+              file=sys.stderr)
         server.serve_forever()
     except KeyboardInterrupt:
         pass
     finally:
         server.server_close()
-        if previous_sigterm is not None:
-            signal.signal(signal.SIGTERM, previous_sigterm)
+        if previous_sigterm is not _UNSET:
+            # None means a handler installed from C: fall back to the default action.
+            signal.signal(signal.SIGTERM, signal.SIG_DFL if previous_sigterm is None else previous_sigterm)
         if demo_root is not None:
             shutil.rmtree(demo_root, ignore_errors=True)  # only the demo's own temp directory
     return 0

@@ -454,7 +454,8 @@ def test_local_host_headers_are_served(host):
 
 
 @pytest.mark.parametrize("host", ["evil.example.com", "evil.example.com:8765", "127.0.0.1.evil.example.com",
-                                  "localhost.evil.example.com:8765", "192.168.1.10:8765", "", "[::1"])
+                                  "localhost.evil.example.com:8765", "192.168.1.10:8765", "", "[::1",
+                                  "[::1]evil.example.com", "localhost:evil", ":8765", "localhost:99999999"])
 def test_foreign_host_headers_are_refused_dns_rebinding(host, populated):
     cfg, _, _ = populated
     app = make_app(cfg)
@@ -645,3 +646,45 @@ def test_withdrawal_amounts_are_labelled_not_available(populated):
     cfg, _, _ = populated
     body = call(make_app(cfg), "/risk")[2]
     assert "simulated arithmetic only; NOT available, NOT recommended" in body
+
+
+def test_malformed_receipt_lists_are_malformed_not_none(tmp_path):
+    status_dir = tmp_path / "status"
+    write_status(status_dir, receipt={"state": "INVALID_CAPTURE", "missing_capture_days": "2026-09-01",
+                                      "settlement": {"conflicts": {"a": 1}, "pending": "x"}})
+    body = call(make_app(config(status_dir=status_dir)), "/")[2]
+    assert body.count("MALFORMED (expected a list)") == 2
+    for key in ("pending", "conflicts", "missing_capture_days"):
+        assert f"pipeline receipt field {key} is MALFORMED" in body
+
+
+def test_no_fill_counts_by_reason_are_readable(tmp_path):
+    status_dir = tmp_path / "status"
+    write_status(status_dir, receipt={"state": "HEALTHY_NO_SIGNAL", "days": [{"target_date": "2026-09-24",
+        "accounts": {shadow.ACCOUNT_ID: {"decisions": 3, "qualified": 2, "fills": 1,
+                                         "no_fills": {"RISK_VETO": 1}, "risk_vetoes": 1}}}]})
+    body = call(make_app(config(status_dir=status_dir)), "/experiments")[2]
+    assert "1 (RISK_VETO 1) no-fills" in body and "{" not in body.split("RISK_VETO 1")[0][-20:]
+
+
+def test_c_level_previous_sigterm_handler_falls_back_to_default(monkeypatch):
+    import signal
+    calls = []
+    real = signal.signal
+
+    def fake_signal(sig, handler):
+        calls.append(handler)
+        return None if len(calls) == 1 else real(sig, signal.getsignal(sig))  # "installed from C"
+    monkeypatch.setattr(server.signal, "signal", fake_signal)
+
+    class FakeServer:
+        server_port = 8765
+
+        def serve_forever(self):
+            raise KeyboardInterrupt
+
+        def server_close(self):
+            pass
+    monkeypatch.setattr(server, "make_server", lambda *a, **k: FakeServer())
+    assert server.main([]) == 0
+    assert calls == [server._sigterm_to_interrupt, signal.SIG_DFL]

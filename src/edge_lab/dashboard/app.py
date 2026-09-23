@@ -9,6 +9,7 @@ rebinding.
 from __future__ import annotations
 
 import ipaddress
+import re
 import sys
 from datetime import datetime, timezone
 from typing import Any, Callable, Iterable
@@ -39,10 +40,18 @@ def host_allowed(header: Any, extra: Iterable[str] = ()) -> bool:
         return True
     text = str(header).strip().lower()
     if text.startswith("["):  # [::1]:8765
-        name = text[1:text.find("]")] if "]" in text else text
+        name, sep, rest = text[1:].partition("]")
+        if not sep or (rest and not re.fullmatch(r":\d{1,5}", rest)):
+            return False
+    elif text.count(":") == 1:  # host:port
+        name, port = text.split(":")
+        if not re.fullmatch(r"\d{1,5}", port):
+            return False
     else:
-        name = text.rsplit(":", 1)[0] if text.count(":") == 1 else text
+        name = text
     name = name.rstrip(".")
+    if not name:
+        return False
     if name == "localhost" or name in {h.strip().lower().strip("[]") for h in extra}:
         return True
     try:

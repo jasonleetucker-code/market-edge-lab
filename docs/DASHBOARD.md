@@ -21,7 +21,7 @@ never writes to any store, and never recommends a withdrawal.
 | A WSGI application (`edge_lab.dashboard.app.make_app(config)`) | WSGI is the standard interface. If hosting is ever authorized, a real server (gunicorn, uWSGI, a reverse proxy) can run the same callable. We do not build our own production server. `wsgiref` is only the local development server. |
 | Server-rendered HTML, inline CSS, no JavaScript | No build step, no client code to audit. A strict CSP (`default-src 'none'; style-src 'unsafe-inline'`) forbids scripts, images, frames and forms. |
 | Bound to `127.0.0.1` | It is local-only. Public exposure, tunnels, DNS/TLS and firewall changes are not authorized. A non-loopback `--host` is refused unless `--allow-non-loopback` is passed, and that prints a warning. |
-| Host header must be local | A request whose `Host` is not `localhost`, a 127.0.0.0/8 address or `::1` (or the explicitly approved `--host`) gets 400. This stops a web page from reading the dashboard by pointing its own domain at 127.0.0.1 (DNS rebinding). |
+| Host header must be local | A request whose `Host` is not `localhost`, a 127.0.0.0/8 address or `::1` (or the explicitly approved `--host`, matched literally: with `--host 0.0.0.0` only `Host: 0.0.0.0` is accepted, not a LAN address) gets 400. Malformed values (a non-numeric port, text after `]`) are refused. This stops a web page from reading the dashboard by pointing its own domain at 127.0.0.1 (DNS rebinding). |
 | No authentication | Nothing is exposed, so there is no one to authenticate. We do not build a custom auth system. If exposure is ever authorized, authentication belongs in the front server (see "Limitations"). |
 
 ## Data sources (all read-only, all optional)

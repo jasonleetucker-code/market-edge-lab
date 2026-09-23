@@ -114,7 +114,7 @@ def build_demo(now: datetime | None = None, *, experiments_root: Path | None = N
         "first_valid_day": (now - timedelta(days=3)).date().isoformat(), "days_with_captures": 3,
         "invalid_days": [(now - timedelta(days=2)).date().isoformat()]}), encoding="utf-8")
     last_day = (now - timedelta(hours=20)).date().isoformat()
-    per_account = {"decisions": 2, "qualified": 2, "fills": 2, "no_fills": 0, "risk_vetoes": 0}
+    per_account = {"decisions": 2, "qualified": 2, "fills": 2, "no_fills": {}, "risk_vetoes": 0}
     fee = exp001_shadow.fee_fields()
     (status / d.RECEIPT_FILE).write_text(json.dumps({  # same shape as edge_lab.daily writes
         "schema": d.RECEIPT_SCHEMA, "generated_at_utc": _iso(now - timedelta(minutes=30)), "code_version": "demo",

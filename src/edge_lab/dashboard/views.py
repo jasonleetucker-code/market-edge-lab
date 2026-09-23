@@ -42,6 +42,28 @@ def _list(value: Any) -> list:
     return value if isinstance(value, list) else []
 
 
+def _malformed(container: Any, key: str) -> bool:
+    """True when `key` is present with a value that is not a list: shown as MALFORMED, never as none."""
+    return isinstance(container, dict) and container.get(key) is not None and not isinstance(container[key], list)
+
+
+def _list_field(container: Any, key: str) -> str:
+    """A receipt list field: its items, "none" when empty, unknown when absent, MALFORMED otherwise."""
+    if _malformed(container, key):
+        return tag("MALFORMED (expected a list)", "err") + " " + esc(container[key])
+    if not isinstance(container, dict) or key not in container:
+        return esc(None)
+    return ul(container[key]) if container[key] else esc("none")
+
+
+def _no_fills(value: Any) -> str:
+    """The pipeline writes no-fill counts by reason ({"RISK_VETO": 1}); older shapes are an int."""
+    if isinstance(value, dict):
+        total = sum(v for v in value.values() if isinstance(v, int))
+        return f"{total} ({', '.join(f'{k} {v}' for k, v in sorted(value.items(), key=str))})" if value else "0"
+    return str(value)
+
+
 def _account_heading(view: d.AccountView) -> str:
     role = view.role.label if view.role else "UNCLASSIFIED ACCOUNT"
     return f"{view.account_id} — {role}"
@@ -136,8 +158,7 @@ def receipt_panel(ctx: d.Context, *, detail: bool = False) -> str:
         ("latest day", (f"{esc(_get(latest, 'target_date'))} {state_tag(_get(latest, 'capture_status'))} "
                         f"{state_tag(_get(latest, 'result'))}") if isinstance(latest, dict) else esc(None)),
         ("valid / closed capture days", f"{esc(r.get('valid_days'))} / {esc(r.get('closed_capture_days'))}"),
-        ("missing capture days", ul(_list(r.get("missing_capture_days"))) if r.get("missing_capture_days")
-         else esc("none") if "missing_capture_days" in r else esc(None)),
+        ("missing capture days", _list_field(r, "missing_capture_days")),
         ("freshness", _fresh_line(r.get("generated_at_utc"), ctx.now)),
         ("code version", esc(r.get("code_version"))),
         ("schema", esc(schema) + ("" if schema in (None, d.RECEIPT_SCHEMA) else " " + tag("UNEXPECTED SCHEMA", "warn"))),
@@ -145,7 +166,8 @@ def receipt_panel(ctx: d.Context, *, detail: bool = False) -> str:
         ("settled this run", esc(_get(settlement, "settled"))),
         ("pending settlements", esc(len(_list(_get(settlement, "pending")))) if isinstance(settlement, dict)
          and "pending" in settlement else esc(None)),
-        ("settlement conflicts", (tag(f"{len(conflicts)} SETTLEMENT_CONFLICT", "err") if conflicts else esc("none"))
+        ("settlement conflicts", _list_field(settlement, "conflicts") if _malformed(settlement, "conflicts") else
+         (tag(f"{len(conflicts)} SETTLEMENT_CONFLICT", "err") if conflicts else esc("none"))
          if isinstance(settlement, dict) and "conflicts" in settlement else esc(None)),
         ("settlement evidence cutoff", esc(_get(settlement, "evidence_cutoff_utc"))),
         ("settlement refresh", state_tag(_get(refresh, "status")) if refresh is not None else esc(None)),
@@ -160,7 +182,7 @@ def receipt_panel(ctx: d.Context, *, detail: bool = False) -> str:
             accounts = _get(day, "accounts")
             acct = "; ".join(
                 f"{a}: {_get(v, 'decisions')} decisions, {_get(v, 'qualified')} qualified, {_get(v, 'fills')} fills, "
-                f"{_get(v, 'no_fills')} no-fills, {_get(v, 'risk_vetoes')} risk vetoes"
+                f"{_no_fills(_get(v, 'no_fills'))} no-fills, {_get(v, 'risk_vetoes')} risk vetoes"
                 for a, v in accounts.items()) if isinstance(accounts, dict) else None
             rows.append([esc(_get(day, "target_date")), state_tag(_get(day, "capture_status")),
                          esc(_get(day, "decision_time_utc")), esc(_get(day, "result")), esc(acct),
@@ -253,6 +275,10 @@ def blockers(ctx: d.Context) -> list[str]:
         if missing:
             out.append(f"{len(missing)} closed day(s) with no capture (lost Stage B days): "
                        + ", ".join(map(str, missing[:10])))
+        for owner, key in ((settlement, "pending"), (settlement, "conflicts"),
+                           (ctx.receipt.value, "missing_capture_days")):
+            if _malformed(owner, key):
+                out.append(f"pipeline receipt field {key} is MALFORMED (not a list); its contents are unknown")
         latest = _get(ctx.receipt.value, "latest_day")
         if isinstance(latest, dict) and latest.get("result") == "INVALID_CAPTURE":
             out.append(f"latest day {latest.get('target_date')} is INVALID_CAPTURE ({latest.get('capture_status')})")
