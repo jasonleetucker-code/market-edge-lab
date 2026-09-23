@@ -116,6 +116,11 @@ def build_parser() -> argparse.ArgumentParser:
     sh_risk.add_argument("--as-of", help="ISO-8601 instant with zone (default: now)")
     sh_risk.add_argument("--account", default=None, help="account id (default: the operational account)")
 
+    subparsers.add_parser(
+        "dashboard", help="Local read-only dashboard (127.0.0.1 by default; see docs/DASHBOARD.md).",
+        add_help=False,
+    )
+
     settle = subparsers.add_parser("settlement", help="Gate 2 settlement evidence and audit.")
     settle_sub = settle.add_subparsers(dest="settlement_command", required=True)
     s_collect = settle_sub.add_parser(
@@ -701,6 +706,11 @@ def _experiments(args: argparse.Namespace) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
+    argv = sys.argv[1:] if argv is None else list(argv)
+    if argv[:1] == ["dashboard"]:  # the dashboard owns its own argument parser
+        from .dashboard import main as dashboard_main
+
+        return dashboard_main(argv[1:])
     args = build_parser().parse_args(argv)
 
     if args.command == "collect":

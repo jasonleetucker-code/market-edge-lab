@@ -189,7 +189,8 @@ def test_populated_views_show_canonical_figures(populated):
     assert f"${state.starting_bankroll}" in overview
     assert "HEALTHY_TRADED" in overview and "UNVERIFIED_CURRENT_SCHEDULE" in overview
     assert "OPERATIONAL" in overview and "RESEARCH (FROZEN EXP-001 RULE)" in overview
-    assert f"account {dd.RESEARCH_ACCOUNT_ID} has not been opened" in overview
+    research = ledger.state(dd.RESEARCH_ACCOUNT_ID)  # opened by run_day alongside the operational account
+    assert f"${research.starting_bankroll}" in overview and research.fills == state.fills
     assert "NOT RECOMMENDED" in overview
 
     opps = call(app, "/opportunities")[2]
@@ -425,3 +426,13 @@ def test_no_demo_money_in_real_render(populated):
     assert "DEMO-" not in body
     assert re.search(r"kalshi:KXHIGHNY-26SEP23-", body)
     assert Decimal(ledger.state(shadow.ACCOUNT_ID).starting_bankroll) == shadow.STARTING_BANKROLL
+
+
+def test_cli_delegates_to_the_dashboard(monkeypatch):
+    import edge_lab.dashboard as dash
+    from edge_lab import cli
+
+    seen = {}
+    monkeypatch.setattr(dash, "main", lambda argv: seen.setdefault("argv", argv) and 0)
+    assert cli.main(["dashboard", "--host", "0.0.0.0"]) == 0
+    assert seen["argv"] == ["--host", "0.0.0.0"]
