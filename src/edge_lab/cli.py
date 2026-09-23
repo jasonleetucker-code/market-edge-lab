@@ -75,6 +75,14 @@ def build_parser() -> argparse.ArgumentParser:
     f_status.add_argument("--db", default="data/edge_lab.sqlite3")
     f_status.add_argument("--date", help="YYYY-MM-DD target date D (default: last closed day)")
     f_status.add_argument("--status-file", help="Also write the non-sensitive summary JSON here.")
+    f_opps = fwd_sub.add_parser(
+        "opportunities",
+        help="Gate 5: every (bracket, side) opportunity for target date D from stored evidence "
+             "(qualified and rejected, with reasons). Read-only; never trades.",
+    )
+    f_opps.add_argument("--db", default="data/edge_lab.sqlite3")
+    f_opps.add_argument("--date", required=True, help="YYYY-MM-DD target date D")
+    f_opps.add_argument("--out", help="Also write the JSON report here.")
 
     settle = subparsers.add_parser("settlement", help="Gate 2 settlement evidence and audit.")
     settle_sub = settle.add_subparsers(dest="settlement_command", required=True)
@@ -422,6 +430,31 @@ def _forward_status(args: argparse.Namespace) -> int:
     return 0 if ok else 1
 
 
+def _forward_opportunities(args: argparse.Namespace) -> int:
+    """Exit 0 when the report was produced (whatever it says), 2 on bad input."""
+    from datetime import date
+
+    from . import exp001_stageb
+
+    db = Path(args.db)
+    if not db.is_file():
+        print(f"no database at {db}", file=sys.stderr)
+        return 2
+    try:
+        target = date.fromisoformat(args.date)
+    except ValueError:
+        print(f"--date must be YYYY-MM-DD, got {args.date!r}", file=sys.stderr)
+        return 2
+    report = exp001_stageb.evaluate_day(SnapshotStore(db), target).to_dict()
+    text = json.dumps(report, indent=2, sort_keys=True, ensure_ascii=False) + "\n"
+    if args.out:
+        out = Path(args.out)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(text, encoding="utf-8", newline="\n")
+    sys.stdout.write(text)
+    return 0
+
+
 def _settlement_collect(args: argparse.Namespace) -> int:
     from datetime import date
 
@@ -552,6 +585,8 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "forward":
         if args.forward_command == "capture":
             return _forward_capture(args)
+        if args.forward_command == "opportunities":
+            return _forward_opportunities(args)
         return _forward_status(args)
     if args.command == "settlement":
         if args.settlement_command == "collect":
