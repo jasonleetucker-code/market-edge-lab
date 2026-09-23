@@ -203,9 +203,10 @@ def receipt_panel(ctx: d.Context, *, detail: bool = False) -> str:
 
 
 def conflicts_table(conflicts: list) -> str:
-    return table(["account", "position", "recorded outcome", "latest evidence outcome", "evidence variants"],
+    return table(["account", "position", "recorded outcome", "latest evidence outcome", "evidence variants", "reason"],
                  [[esc(_get(c, "account_id")), esc(_get(c, "position_id")), esc(_get(c, "recorded_outcome")),
-                   esc(_get(c, "latest_evidence_outcome")), esc(_get(c, "variants"))] for c in conflicts], wrap=(4,))
+                   esc(_get(c, "latest_evidence_outcome")), esc(_get(c, "variants")), esc(_get(c, "reason"))]
+                  for c in conflicts], wrap=(4, 5))
 
 
 def risk_state(rep: Any) -> str:

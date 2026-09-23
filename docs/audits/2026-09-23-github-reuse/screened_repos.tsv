@@ -1,0 +1,1210 @@
+repository	stars	license	pushed_at	archived	language	query_families
+mvanhorn/last30days-skill	62700	mit	2026-09-23	false	Python	F03_polymarket
+sansan0/TrendRadar	62505	gpl-3.0	2026-09-13	false	Python	F14_notify
+binwiederhier/ntfy	34387	apache-2.0	2026-09-15	false	Go	F14_notify
+polakowo/vectorbt	9161	other	2026-09-17	false	Python	F10_backtest
+TraderAlice/OpenAlice	7139	agpl-3.0	2026-09-23	false	TypeScript	F16_agents
+noodlewerk/NWPusher	6300	bsd-2-clause	2021-03-30	false	Objective-C	F14_notify
+KnuffApp/Knuff	5217	mit	2022-09-04	false	Objective-C	F14_notify
+dschep/ntfy	4982	gpl-3.0	2025-10-27	false	Python	F14_notify
+Jon-Becker/prediction-market-analysis	3856	mit	2026-09-21	false	Python	F02_kalshi,F03_polymarket
+Polymarket/agents	3803	mit	2024-11-05	true	Python	F03_polymarket
+sideshow/apns2	3189	mit	2025-07-22	false	Go	F14_notify
+Polymarket/polymarket-cli	2882	none	2026-05-26	false	Rust	F03_polymarket
+alsk1992/CloddsBot	2830	mit	2026-09-18	false	TypeScript	F02_kalshi,F03_polymarket,F16_agents
+warproxxx/poly_data	2343	gpl-3.0	2026-09-08	false	Python	F03_polymarket
+borgmatic-collective/borgmatic	2328	gpl-3.0	2026-09-22	false	Python	F14_notify
+rpush/rpush	2203	mit	2025-07-01	false	Ruby	F14_notify
+chrisworsey55/atlas-gic	2192	other	2026-09-22	false	Python	F16_agents
+pmxt-dev/pmxt	2164	mit	2026-07-18	false	TypeScript	F02_kalshi,F03_polymarket
+notnoop/java-apns	1788	bsd-3-clause	2022-07-15	false	Java	F14_notify
+clemcer/LoggiFly	1776	mit	2026-09-07	false	Python	F14_notify
+orangecoding/fredy	1528	apache-2.0	2026-09-23	false	JavaScript	F14_notify
+warproxxx/poly-maker	1506	mit	2026-07-09	false	Python	F03_polymarket,F07_orderbook
+mnemox-ai/tradememory-protocol	1420	mit	2026-09-14	false	Python	F16_agents
+Novals83/5min-btc-polymarket	1317	none	2026-04-11	false	Python	F03_polymarket
+FrondEnt/PolymarketBTC15mAssistant	1265	none	2026-01-29	false	JavaScript	F03_polymarket
+Polymarket/py-clob-client	1232	mit	2026-05-25	true	Python	F03_polymarket
+djacobs/PyAPNs	1221	mit	2025-06-06	false	Python	F14_notify
+ErTasselli/OpenTerminal	1220	mit	2026-09-21	false	TypeScript	F15_dashboards
+evan-kolberg/prediction-market-backtesting	1202	other	2026-05-16	false	Python	F01_prediction_markets,F03_polymarket
+rs/pushd	1155	mit	2020-07-15	false	CoffeeScript	F14_notify
+binwiederhier/ntfy-android	1131	apache-2.0	2026-07-21	false	Kotlin	F14_notify
+mother-of-all-self-hosting/mash-playbook	1110	agpl-3.0	2026-09-23	false	Python	F14_notify
+kuestcom/prediction-market	1096	other	2026-09-21	false	TypeScript	F02_kalshi,F03_polymarket
+santoshlite/EigenLedger	1084	apache-2.0	2025-09-14	false	Python	F10_backtest
+expo/expo-server-sdk-node	1036	mit	2026-09-13	false	TypeScript	F14_notify
+ent0n29/polybot	1023	mit	2026-02-20	false	Java	F03_polymarket
+sterlingcrispin/nothing-ever-happens	986	cc0-1.0	2026-04-13	false	Python	F03_polymarket
+MrFadiAi/Polymarket-bot	910	mit	2026-09-13	false	TypeScript	F03_polymarket
+notifo-io/notifo	882	mit	2026-09-20	false	C#	F14_notify
+kylebrowning/APNSwift	844	apache-2.0	2026-08-14	false	Swift	F14_notify
+SII-WANGZJ/Polymarket_data	837	mit	2026-01-01	false	Python	F03_polymarket
+komako-workshop/digital-oracle	836	mit	2026-07-26	false	Python	F02_kalshi,F03_polymarket
+LeslieLeung/heimdallr	813	gpl-3.0	2026-09-19	false	Python	F14_notify
+sstklen/trump-code	801	mit	2026-09-22	false	Python	F03_polymarket
+suislanchez/polymarket-kalshi-weather-bot	761	none	2026-03-02	false	Python	F01_prediction_markets,F02_kalshi,F03_polymarket
+aarora4/Awesome-Prediction-Market-Tools	756	none	2026-09-03	false		F02_kalshi,F03_polymarket
+guanguans/notify	691	mit	2026-09-23	false	PHP	F14_notify
+195440/nof1.ai	687	agpl-3.0	2026-05-15	false	TypeScript	F16_agents
+Polymarket/rs-clob-client	685	mit	2026-05-11	true	Rust	F03_polymarket
+TheDuffman85/crowdsec-web-ui	682	agpl-3.0	2026-09-12	false	TypeScript	F14_notify
+caiovicentino/polymarket-mcp-server	676	mit	2026-09-20	false	Python	F03_polymarket
+yorkeccak/Polyseer	666	none	2026-09-14	false	TypeScript	F03_polymarket
+nahrek/polyledger	623	mit	2026-09-22	false	Python	F03_polymarket
+ryanfrigo/kalshi-ai-trading-bot	595	mit	2026-07-06	false	Python	F02_kalshi
+Ameobea/tickgrinder	593	mit	2019-12-09	true	Rust	F10_backtest
+aulekator/Polymarket-BTC-15-Minute-Trading-Bot	587	none	2026-02-28	false	Python	F03_polymarket
+amyreese/znc-push	569	mit	2024-09-04	false	C++	F14_notify
+Gajesh2007/ai-trading-agent	551	none	2025-10-27	false	Python	F16_agents
+Der-Henning/tgtg	545	gpl-3.0	2026-08-12	false	Python	F14_notify
+jpoz/APNS	538	mit	2017-07-20	true	Ruby	F14_notify
+fbertram/TuringTrader	537	agpl-3.0	2026-05-19	false	C#	F10_backtest
+pretrehr/Sports-betting	534	mit	2023-12-21	false	Python	F06_exchanges
+lihanyu81/polymarket_lp_tool	530	none	2026-05-06	false	Python	F03_polymarket
+radioman/polymarket-arbitrage-trading-bot	523	other	2026-06-19	false	C++	F03_polymarket,F13_news_llm
+Polymarket/clob-client	514	mit	2026-05-25	true	TypeScript	F03_polymarket
+betcode-org/betfair	513	mit	2026-09-04	false	Python	F06_exchanges
+dev-polymarket/clob-client-v2	512	mit	2026-09-18	false		F03_polymarket
+neurallayer/roboquant	463	apache-2.0	2026-09-18	false	Kotlin	F10_backtest
+danilobatson/ai-trading-agent-gemini	460	none	2026-01-05	false	TypeScript	F16_agents
+HarrierOnChain/Prediction-Markets-Trading-Bot-Toolkits	456	mit	2026-09-07	false	Rust	F01_prediction_markets,F02_kalshi,F13_news_llm
+taetaehoho/poly-kalshi-arb	447	none	2025-12-21	false	Rust	F02_kalshi
+okx/agent-trade-kit	438	mit	2026-09-23	false	TypeScript	F16_agents
+cgross/angular-notify	427	mit	2019-07-08	false	HTML	F14_notify
+edamov/pushok	410	mit	2026-05-13	false	PHP	F14_notify
+rodlaf/KalshiMarketMaker	401	mit	2026-04-14	false	Python	F02_kalshi
+OctagonAI/kalshi-trading-bot-cli	390	mit	2026-09-22	false	TypeScript	F02_kalshi
+Pr0Ger/PyAPNs2	357	mit	2024-04-19	false	Python	F14_notify
+lukstei/trading-backtest	351	mit	2021-07-20	false	Java	F10_backtest
+productdevbook/nitroping-push	338	mit	2026-04-22	false	Vue	F14_notify
+NicosKaralis/pushmeup	325	mit	2018-11-15	false	Ruby	F14_notify
+Polymarket/poly-market-maker	325	mit	2024-07-05	false	Python	F03_polymarket
+binwiederhier/ntfy-ios	319	mit	2026-06-27	false	Swift	F14_notify
+livetennisapi/polymarket-tennis	317	mit	2026-09-12	false	Python	F02_kalshi
+ryantcullen/stock-bot	313	agpl-3.0	2026-02-25	false	Python	F10_backtest
+T1mn/MarketPulse	312	mit	2026-02-12	false	TypeScript	F14_notify
+pzmarzly/ancs4linux	296	other	2026-08-29	false	Python	F14_notify
+personal-coding/Live-Sports-Arbitrage-Bet-Finder	294	none	2023-11-25	false	Python	F05_sports
+lo2cin4/lo2cin4bt	290	other	2026-08-01	false	Python	F10_backtest
+pennersr/shove	285	mit	2026-08-20	false	Go	F14_notify
+ImMike/polymarket-arbitrage	283	none	2025-12-09	false	Python	F02_kalshi,F13_news_llm
+fmzquant/backtest_python	279	none	2026-06-26	false	Python	F10_backtest
+Comcast/cmb	274	apache-2.0	2018-11-27	true	Java	F14_notify
+YichengYang-Ethan/oracle3	256	apache-2.0	2026-05-08	false	Python	F01_prediction_markets,F02_kalshi
+CarlosIbCu/polymarket-kalshi-btc-arbitrage-bot	252	mit	2026-05-09	false	Python	F02_kalshi
+shanyao0/DownLoadManager	252	none	2016-07-11	false	Java	F14_notify
+Adamant-im/adamant-notificationService	247	gpl-3.0	2026-08-07	false	C#	F14_notify
+nikitadoudikov/claude-pulse	247	mit	2026-07-19	false	JavaScript	F14_notify
+betcode-org/flumine	246	mit	2026-09-07	false	Python	F02_kalshi,F06_exchanges
+fidetolabs/qanat	244	mit	2026-09-21	false	Python	F10_backtest
+RamosLi/dbay-apns-for-java	240	apache-2.0	2020-08-31	false	Java	F14_notify
+machina-sports/sports-skills	234	mit	2026-09-23	false	Python	F02_kalshi
+Magic-Push/MagicPush	234	none	2024-08-07	false	Vue	F14_notify
+wsgsc/NtfyChat	234	none	2026-09-10	false	Kotlin	F14_notify
+alexkay/muspy	217	agpl-3.0	2014-08-28	false	Python	F14_notify
+betfair/API-NG-sample-code	217	none	2025-02-25	false	Java	F06_exchanges
+Yaolinwang/AITD	215	other	2026-04-29	false	Python	F16_agents
+Aetherinox/ntfy-desktop	211	mit	2026-09-19	false	JavaScript	F14_notify
+CaoMeiYouRen/push-all-in-one	210	mit	2026-09-21	false	TypeScript	F14_notify
+kaktusesquire6rmu/ai-polymarket-agent	210	none	2026-04-20	false		F13_news_llm
+wfnuser/OpenNof1	210	none	2026-01-15	false	Python	F16_agents
+zeyneloz/onesignal-node	209	mit	2023-06-30	false	TypeScript	F14_notify
+nickexyz/ntfy-shellscripts	206	bsd-3-clause	2026-04-05	false	Shell	F14_notify
+guzus/dr-manhattan	203	none	2026-07-18	false	Jupyter Notebook	F02_kalshi
+nlethetech/nepse-quant-terminal	202	none	2026-06-11	false	Python	F15_dashboards
+teaey/apns4j	200	apache-2.0	2022-06-10	false	Java	F14_notify
+txthinkin/polymarket-kalshi-arbitrage-bot	200	none	2026-08-25	false	TypeScript	F02_kalshi
+hummingbot/condor	189	mit	2026-09-22	false	Python	F16_agents
+Polymarket/agent-skills	189	none	2026-02-19	false		F13_news_llm
+properscoring/properscoring	188	apache-2.0	2023-03-09	true	Python	F11_calibration
+Benjam1nCup/Polymarket-trading-bot-python-V2	187	none	2026-09-14	false		F13_news_llm
+pineforge-4pass/pineforge-engine	187	apache-2.0	2026-09-23	false	C++	F10_backtest
+tsif/pu.sh	186	mit	2020-11-25	false	Shell	F14_notify
+timehop/apns	185	mit	2023-04-03	false	Go	F14_notify
+braedonsaunders/homerun	183	agpl-3.0	2026-08-21	false	Python	F01_prediction_markets,F02_kalshi
+realfishsam/prediction-market-arbitrage-bot	180	mit	2026-01-16	false	JavaScript	F01_prediction_markets,F02_kalshi
+hkirat/ai-trading-agent	176	none	2025-11-02	false	TypeScript	F16_agents
+KristianP26/ble-scale-sync	176	gpl-3.0	2026-09-14	false	TypeScript	F14_notify
+zbarge/stocklook	174	mit	2018-06-22	false	Python	F07_orderbook
+TheDuffman85/linux-update-dashboard	172	agpl-3.0	2026-09-06	false	TypeScript	F14_notify
+zerotech-studio/zack	151	none	2025-11-01	false	Zig	F10_backtest
+jaipreet15/tradingview-mcp	150	mit	2026-09-14	false	TypeScript	F10_backtest
+guanguans/laravel-exception-notify	149	mit	2026-09-21	false	PHP	F14_notify
+llSourcell/Poly-Trader	148	none	2025-04-27	false	Python	F13_news_llm
+AruneshDev/Automated-Trading-System-Kalshi-Weather-Model	146	none	2025-04-08	false	Jupyter Notebook	F02_kalshi
+KangOxford/AlphaTrade	145	none	2026-03-16	false	Jupyter Notebook	F07_orderbook
+Alinebm17/trade-backtesting-engine	142	mit	2026-09-14	false	TypeScript	F10_backtest
+meloner3/poly-kalshi-sports-bot	142	none	2026-01-18	false	Rust	F02_kalshi
+JesusRS1/stock-trade-finance-api	139	other	2026-09-14	false	TypeScript	F16_agents
+magisk317/xinyi-relay	136	gpl-3.0	2026-09-23	false	Kotlin	F14_notify
+9600dev/mmr	132	other	2026-09-14	false	Python	F10_backtest
+arshka/pykalshi	125	mit	2026-07-29	false	Python	F02_kalshi
+dos-2/oddshub	125	apache-2.0	2025-09-16	false	Go	F05_sports
+reunios2024/cortex-sentinel-trading-nexus	123	none	2026-09-23	false	HTML	F02_kalshi
+dickreuter/betfair-horse-racing	120	none	2020-12-10	false	CSS	F06_exchanges
+ghy196830-del/agent-watch-approve	120	mit	2026-06-16	false	Python	F14_notify
+taylorwilsdon/quantconnect-mcp	120	mit	2025-08-24	false	Python	F10_backtest
+dexorynlabs/polymarket-trading-bot-python	118	none	2026-09-10	false	Python	F13_news_llm
+Noisyxl/brier	117	mit	2026-09-20	false	HTML	F11_calibration
+Drakkar-Software/OctoBot-Prediction-Market	115	gpl-3.0	2026-03-30	false	Python	F02_kalshi
+gotoConversion/goto_conversion	115	mit	2026-09-06	false	Python	F06_exchanges
+Magica-Chen/GaussWorldTrader	113	mit	2026-09-07	false	Python	F10_backtest
+algotrading-lab/coinbase-market-making-bot	112	none	2026-06-17	false	TypeScript	F07_orderbook
+JakeNesler/OpenProphet	111	other	2026-07-24	false	JavaScript	F16_agents
+ranfdev/Notify	110	gpl-3.0	2026-02-06	false	Rust	F14_notify
+howdymary/autopredict	109	mit	2026-07-15	false	Python	F01_prediction_markets
+the-odds-api/samples-python	106	none	2026-03-26	false	Python	F05_sports
+thesoulcrancerdev/poly-trading-strategies	104	none	2026-09-22	false		F13_news_llm
+frazane/scoringrules	102	apache-2.0	2026-07-25	false	Python	F11_calibration
+alexbakker/alertmanager-ntfy	101	gpl-3.0	2026-03-23	false	Go	F14_notify
+AlgoTrader/betfair	100	none	2020-10-14	false	JavaScript	F06_exchanges
+hackingthemarkets/ai-trading-agent	100	none	2025-02-17	false	Python	F16_agents
+jmcarp/betfair.py	100	mit	2021-08-12	false	Python	F06_exchanges
+Aji-Q/levelfield	99	mit	2026-08-31	false	TypeScript	F01_prediction_markets
+Kalshi/kalshi-starter-code-python	99	none	2025-03-07	false	Python	F02_kalshi
+melphi/algobox	99	apache-2.0	2018-07-10	false	JavaScript	F10_backtest
+Yeachan-Heo/Certis	98	none	2022-10-13	false	Python	F10_backtest
+ashercn97/predmarket	95	none	2025-10-09	false	Python	F02_kalshi
+leozqin/precis	93	mit	2024-12-15	false	Python	F14_notify
+kittyandrew/grafana-to-ntfy	92	agpl-3.0	2026-09-17	false	Nix	F14_notify
+lauramyol13/crypto-signal-agent	90	mit	2026-06-17	false	TypeScript	F16_agents
+leionion/ClawForge	90	apache-2.0	2026-05-04	false	Python	F02_kalshi,F16_agents
+mjunaidca/polymarket-skills	90	none	2026-02-26	false	Python	F01_prediction_markets
+bobkingdom/TrendRadar	89	gpl-3.0	2026-09-23	false	HTML	F14_notify
+ivanmihov/homeassistant-ntfy.sh	89	gpl-3.0	2024-05-17	false	Python	F14_notify
+HintikkaKimmo/surebet	87	mit	2026-02-06	false	Python	F05_sports
+jensnesten/rust_bt	87	mit	2026-01-05	false	Rust	F10_backtest
+jonocarroll/ntfy	87	other	2025-12-13	false	JavaScript	F14_notify
+n9xdev/poly-alpha-lab	86	none	2026-09-02	false	CSS	F13_news_llm
+SH-Stark/trading-dashboard	86	none	2022-03-16	false	JavaScript	F15_dashboards
+betfair/stream-api-sample-code	84	none	2026-06-30	false	C#	F06_exchanges
+tradinglabpremium/sports-prediction-market-scanner	84	other	2026-09-14	false	TypeScript	F15_dashboards
+calumrussell/rotala	77	mit	2025-03-10	false	Rust	F10_backtest
+0xNetuser/Polymarket-golang	76	none	2026-05-20	false	Go	F03_polymarket
+Erik-Erik116/Polymarket-Arbitrage-Trading-Bot	75	none	2026-08-29	false		F13_news_llm
+flukelaster/ai-trading-agent	75	none	2026-05-03	false	Python	F16_agents
+Polymarket/clob-client-v2	75	mit	2026-09-23	false	TypeScript	F03_polymarket
+nMaroulis/sibyl	74	apache-2.0	2026-01-07	false	Python	F15_dashboards
+quantfreedom/QuantFreedom	71	apache-2.0	2026-07-07	false	Jupyter Notebook	F10_backtest
+chainstacklabs/web3-ai-trading-agent	70	apache-2.0	2025-08-21	false	Python	F16_agents
+moondevonyt/Limitless-Prediction-Market-Bots	70	none	2026-04-28	false		F01_prediction_markets,F04_other_venues
+alex-jb/orallexa-ai-trading-agent	67	mit	2026-07-12	false	Python	F16_agents
+dashee87/betScrapeR	67	other	2016-12-09	false	R	F05_sports
+rockscripts/Sport-Betting-APP-Betfair-Market	67	other	2023-04-02	false	HTML	F06_exchanges
+betfair-datascientists/betfair-datascientists.github.io	65	mit	2026-09-21	false	Jupyter Notebook	F06_exchanges
+0xalberto/polymarket-arbitrage-bot	62	none	2025-12-24	false		F13_news_llm
+DaviddTech/ai-trading-agent	61	mit	2026-09-11	false		F16_agents
+KangOxford/jax-lob	60	none	2023-10-22	false	Jupyter Notebook	F07_orderbook
+petercerno/trader-backtest	59	mit	2023-02-19	false	C++	F10_backtest
+ztomsy/ztom	59	mit	2023-02-21	false	Python	F08_execution
+phillc73/abettor	56	other	2025-03-11	false	R	F06_exchanges
+Polymarket/go-order-utils	56	none	2025-09-25	false	Go	F03_polymarket
+AlgoTrader/betfair-sports-api	55	mit	2016-07-06	false	JavaScript	F06_exchanges
+flancast90/sportsbookreview-scraper	53	mit	2024-07-12	false	Python	F05_sports
+fiale-plus/tradingview-mcp-server	52	mit	2026-08-21	false	TypeScript	F16_agents
+Raahi-Bhushan/ui-trading-system	52	mit	2026-08-07	false	Python	F15_dashboards
+faryhuo/backtrader	51	mit	2026-04-07	false	Python	F10_backtest
+gelatotrade/Hyperliquid-Outcome-Market-Making-Bot-	51	none	2026-05-04	false	Rust	F07_orderbook
+lalouannabel0072/kalshi-trading-bot	51	mit	2026-09-17	false	Python	F01_prediction_markets
+danieledangeli/betfair-php	47	none	2019-01-31	false	PHP	F06_exchanges
+tarb/betfair_data	47	mit	2022-05-05	false	Rust	F06_exchanges
+alphabench/raptorbt	46	mit	2026-09-10	false	Rust	F10_backtest
+dexoryn-china/polymarket-arbitrage-bot	46	none	2026-06-05	false	Python	F13_news_llm
+JeremyWhittaker/Polymarket_arbitrage	46	none	2026-09-23	false	Python	F13_news_llm
+manifoldmarkets/market-maker	45	mit	2024-07-04	false	TypeScript	F07_orderbook
+Nyarum/betting	45	mit	2022-11-25	true	Go	F06_exchanges
+Omnis-Labs/hunch-it-archive	44	agpl-3.0	2026-06-11	true	TypeScript	F16_agents
+open-draft/event-contract	44	none	2023-03-09	false	TypeScript	F01_prediction_markets
+joelpob/betfairng	41	mit	2022-01-28	false	C#	F06_exchanges
+vvonha/crypto-trading-tools	41	none	2026-02-02	false	Python	F13_news_llm
+Degenapetrader/EVClaw	40	mit	2026-06-23	false	Python	F16_agents
+mirzayasirabdullahbaig07/AI-Trading-Agents	40	none	2026-04-12	false	Python	F16_agents
+aitrados/langchain-trading-agents	39	mit	2025-11-11	false	Python	F16_agents
+else24/kalshi-market-bot	39	mit	2026-08-01	false	Python	F01_prediction_markets
+JudyaiLab/hackathon-trading-agent	39	none	2026-04-12	false	Python	F16_agents
+mberk/betfairviz	39	mit	2026-02-12	false	Python	F06_exchanges
+PeterBorah/ethereum-powerball	39	mit	2014-12-10	false	Python	F04_other_venues
+20wiz/crypto-trading-dashboard	38	none	2024-11-25	false	Python	F15_dashboards
+bartonguestier1725-collab/backtest-engine	38	gpl-3.0	2026-04-27	false	Python	F10_backtest
+betfair-datascientists/API	38	none	2021-05-10	false	HTML	F06_exchanges
+P-x-J/polymarket-arbitrage-bot	38	mit	2025-08-23	false	Python	F13_news_llm
+betfair-down-under/AwesomeBetfair	37	mit	2021-07-06	false		F06_exchanges
+mberk/betfairutil	37	mit	2025-05-07	false	Python	F06_exchanges
+Myttyyytytyyttt/Polyagent	37	mit	2025-02-10	false	Python	F13_news_llm
+smartcat-labs/superset-trading-dashboard	37	none	2018-02-27	false	Python	F15_dashboards
+terrytrl100/polymarket-automated-mm	37	none	2025-12-07	false	Python	F07_orderbook
+wegamekinglc/AlgoTrading	37	none	2017-04-13	false	Jupyter Notebook	F10_backtest
+manifoldbt/manifoldbt	36	other	2026-09-21	false	Python	F10_backtest
+StefanBelo/BetfairAiTrading	36	mit	2026-09-02	false	F#	F06_exchanges
+bitbankinc/sample-market-making-bot	35	none	2017-04-24	false	JavaScript	F07_orderbook
+expresspotato/autoStock	35	none	2016-02-29	false	OCaml	F10_backtest
+ghgr/BetFair_Arbitrer	35	mit	2015-10-06	false	Python	F06_exchanges
+warren618/AlphaForge	35	mit	2026-04-02	false	Python	F10_backtest
+Koukyosyumei/h5i-db	34	apache-2.0	2026-08-14	false	Rust	F10_backtest
+Paparusi/Clawtrade	34	mit	2026-03-14	false	Go	F16_agents
+pawsengineer/polymarket-rs	34	none	2025-12-31	false	Rust	F03_polymarket
+skharchikov/polymarket-bot	34	none	2026-09-20	false	Rust	F01_prediction_markets
+christianshub/sports-arbitrage	33	none	2020-05-20	false	Python	F05_sports
+AndyDu0921/wc26-predict	32	mit	2026-07-22	false	Python	F10_backtest
+michaelxu688/ai-trading-signals-engine	32	none	2026-09-09	false		F15_dashboards
+amankhoza/betfair-machine-learning	31	none	2017-05-02	false	Python	F06_exchanges
+dinesh/RTA	31	none	2013-12-04	false	JavaScript	F10_backtest
+eugeneleychenko/moondev-ai-trading-agents	31	none	2025-12-16	false	Python	F16_agents
+marketcalls/trading-dashboard	31	mit	2024-06-23	false	JavaScript	F15_dashboards
+odds-api/odds-api	29	apache-2.0	2026-09-23	false	TypeScript	F05_sports
+pattty847/Sentinel-Lite	29	none	2026-05-12	false	Python	F15_dashboards
+Polymarket/polymarket-us-python	29	mit	2026-09-23	false	Python	F03_polymarket
+the-odds-api/samples-nodejs	29	none	2026-07-22	false	JavaScript	F05_sports
+zhouyan8603/Betting-Arbitrage	29	none	2017-01-11	false	Python	F06_exchanges
+marketlenstrade/marketlens-python	28	mit	2026-09-17	false	Python	F10_backtest
+Miles-Deutscher/Backtesting-Engine	28	mit	2026-07-23	false	TypeScript	F10_backtest
+mbordash/DRADIS	27	agpl-3.0	2026-09-23	false	Rust	F01_prediction_markets
+Oddpool/PredictionMarketBench	27	none	2026-01-26	false	Python	F01_prediction_markets
+RAYDENFLY/quantumterminal	27	mit	2026-03-16	false	TypeScript	F15_dashboards
+TimGebhardt/Disruptor.NET	27	none	2011-12-21	false	C#	F06_exchanges
+trade-nexus/tradesharp-core	27	apache-2.0	2019-05-14	false	C#	F10_backtest
+BavoDC/CalibrationCurves	26	none	2026-03-31	false	R	F11_calibration
+betfair-down-under/autoHubTutorials	26	none	2023-03-27	false	Jupyter Notebook	F06_exchanges
+chrisgillam/polymarket_gambot	26	mit	2025-04-20	false	Jupyter Notebook	F09_risk_ledger
+joelpob/jbetfairng	26	mit	2019-01-19	false	Java	F06_exchanges
+kpetridis24/lobsim	26	apache-2.0	2026-02-03	false	C++	F07_orderbook
+rajmaurya0904/bhav	26	mit	2026-07-19	false	Python	F10_backtest
+trade-nexus/tradesharp-ui	26	apache-2.0	2019-05-14	false	C#	F10_backtest
+dexoryn-china/polymarket-copy-trading-bot	25	isc	2026-06-05	false	Python	F13_news_llm
+quedexnet/java-market-maker	25	apache-2.0	2018-04-17	false	Java	F07_orderbook
+Sports-Betting-Sportsbook/sports-betting	25	apache-2.0	2025-12-02	false	TypeScript	F06_exchanges
+thadhutch/sports-quant	25	mit	2026-03-19	false	Python	F10_backtest
+thespread/api	25	none	2018-11-05	false		F05_sports
+danielneil/Shark	24	gpl-3.0	2023-07-02	false	C	F10_backtest
+emmanuelwestra/Polymarket-Trading-Bot	24	none	2026-02-27	false	TypeScript	F15_dashboards
+fmzquant/backtest_javascript	24	none	2026-06-26	false		F10_backtest
+jimk2024/nof1.ai-AI-trading-agent	24	mit	2025-11-23	false	JavaScript	F16_agents
+neurallayer/roboquant.py	24	apache-2.0	2026-09-23	false	Python	F10_backtest
+SergioIommi/Quant-Trading-Dashboards	24	none	2023-11-01	false	Jupyter Notebook	F15_dashboards
+web3xiaogong/Forecasting-market-hedging-arbitrage	24	none	2026-04-04	false		F01_prediction_markets
+HydroProtocol/amm-bots	23	apache-2.0	2019-05-24	false	Go	F07_orderbook
+robbiehaynes/arbitrage-finder	23	bsd-3-clause	2024-05-12	false	Python	F05_sports
+titothetrader/fullstack-trading-dashboard	23	none	2023-06-02	false	Python	F15_dashboards
+ideas4u/Trading-Platform	22	lgpl-3.0	2014-01-25	false		F08_execution,F10_backtest
+omarkhursheed/finance-ml	22	none	2018-01-23	false	Python	F10_backtest
+adsstudio24/crypto_trading_dashboard	21	mit	2025-02-02	false	JavaScript	F15_dashboards
+BlockRunAI/polymarket-agent	21	mit	2026-09-21	false	Python	F01_prediction_markets,F13_news_llm
+gnosis/pm-trading-ui	21	mit	2019-06-21	false	JavaScript	F01_prediction_markets
+mccaffers/backtesting-engine	21	mit	2025-11-30	false	C#	F10_backtest
+Abel-ai-lab/predict-anything	20	none	2026-09-09	false	Python	F16_agents
+BrainDAO/mcp-polymarket	20	mit	2026-08-10	false	TypeScript	F16_agents
+goldspanlabs/optopsy-mcp	20	none	2026-04-07	false	Rust	F10_backtest
+JamesBrofos/Odin-Securities	20	mit	2017-11-25	false	Python	F10_backtest
+johntelforduk/betfair-data-analysis	20	mit	2023-02-10	false	Jupyter Notebook	F06_exchanges
+MelnikLabs/quant	20	mit	2024-11-25	true	Jupyter Notebook	F10_backtest
+noterminusgit/statarb	20	apache-2.0	2026-02-10	false	Python	F10_backtest
+paperduck/algo	20	none	2019-07-24	false	Python	F10_backtest
+roman-smith/oddsapi_ev	20	mit	2022-09-09	false	Python	F05_sports
+zhangzuomin/Blockchain-Smart-Trade-Credit-Platform	19	none	2025-09-24	false		F15_dashboards
+arbbets/Prediction-Market-Arbitrage	18	none	2025-07-06	false		F01_prediction_markets
+auroradan/PrizePicks-Prop-Finder	18	none	2024-09-06	false	Python	F05_sports
+brodyautomates/sports-betting-intelligence	18	other	2026-04-15	false	Python	F05_sports
+Ezee-Kits/AI-SportyBet-Bot-Phone	18	mit	2025-11-29	false	Python	F05_sports
+haris-sujethan/live-sportsbook-arbitrage	18	none	2026-05-28	false	Python	F05_sports
+NicholasTanWeiHong/commodity-trading-dashboards-in-shiny	18	mit	2019-07-04	false	R	F15_dashboards
+rozzac90/betdaq	18	mit	2023-11-08	false	Python	F06_exchanges
+Skopaq-AI/skopaqtrader	18	apache-2.0	2026-08-21	false	Python	F10_backtest
+TradingBotX/market-making-bot	18	none	2024-03-13	false	JavaScript	F07_orderbook
+KattyFury/Binance-Agent	17	none	2026-09-04	false	TypeScript	F16_agents
+KylerCondran/TradingViewDashboard	17	none	2024-10-26	false	HTML	F15_dashboards
+tigusigalpa/zoomex-go	17	mit	2026-09-15	false	Go	F09_risk_ledger
+tigusigalpa/zoomex-php	17	mit	2026-09-19	false	PHP	F09_risk_ledger
+arcofs/polymarket-sportsbook-arbitrage-agent	16	none	2025-10-12	false	Python	F05_sports
+carterlasalle/SportsArbFinder	16	mit	2024-10-29	false	Python	F05_sports
+demwick/polymarket-agent-mcp	16	mit	2026-09-17	false	TypeScript	F13_news_llm
+Dylanwu2025/polymarket-sports-arbitrage	16	none	2026-01-13	false	Python	F05_sports
+jbram22/ev_sports_betting	16	none	2024-01-21	false	Python	F05_sports
+Johnserf-Seed/SportteryAPI	16	mit	2026-07-24	false	TypeScript	F05_sports
+miladhist/polymarket-market-maker	16	mit	2025-11-09	false	Python	F07_orderbook
+yflaz/stock-lab-framework	16	mit	2026-07-02	false	Python	F15_dashboards
+cooperbrandon1/oddsjam-api	15	mit	2023-03-17	false	Python	F05_sports
+itsKayWat/TradeSight-Dashboard	15	none	2024-12-28	false	HTML	F15_dashboards
+kmizzi/karb	15	none	2026-01-13	false	Python	F13_news_llm
+linq-team/kalshi-agent	15	mit	2026-06-18	false	TypeScript	F01_prediction_markets
+mertozbas/hashtrade	15	apache-2.0	2026-09-04	false	Python	F15_dashboards
+Polymarket/polymarket-us-typescript	15	mit	2026-09-22	false	TypeScript	F03_polymarket
+ratsam3474/sports-arbitrage-system	15	none	2025-07-04	false	Python	F05_sports
+spyderweb47/Vibe-Trade	15	none	2026-04-22	false	TypeScript	F16_agents
+WFord26/BetTrack	15	mit	2026-09-17	false	TypeScript	F05_sports
+yuthavithi/binance-makret-maker-bot	15	mit	2025-08-29	false	Python	F07_orderbook
+chizy7/PinnacleMM	14	mit	2026-08-20	false	C++	F07_orderbook
+cnemri/world-cup-2026-predictor	14	mit	2026-07-10	false	Python	F10_backtest
+jliakosgr/LiveOddsApiAndGoalAlerts	14	none	2026-07-16	false		F05_sports
+m-schillinger/enscale	14	none	2026-08-05	false	Jupyter Notebook	F11_calibration
+needmoney90/merkato	14	gpl-3.0	2018-07-20	false	Python	F07_orderbook
+joinQuantish/skills	13	mit	2026-03-29	false		F01_prediction_markets
+kindofzero/forecasting-plus-mt5	13	none	2026-07-01	false	Python	F15_dashboards
+marcoblume/odds.converter	13	none	2018-07-09	false	R	F05_sports
+monster0318/fullstack-trading-dashboard	13	none	2025-06-01	false	Python	F15_dashboards
+NAME0x0/Pantheon-Trades	13	mit	2026-05-25	false	Python	F01_prediction_markets,F03_polymarket
+pixelwhiz/tasty-schwab-trader-BE	13	none	2025-10-21	false	Python	F10_backtest
+theo-wq/Polymarket-market-making-bot	13	mit	2025-01-22	false	Python	F07_orderbook
+BlueMoon0x69/Polymarket-Dashboard	12	none	2026-07-19	false	HTML	F15_dashboards
+defi-ape/polymarket-kalshi-arbitrage-bot	12	none	2026-05-29	false	TypeScript	F01_prediction_markets,F03_polymarket
+JoeCars/Nerman.js	12	mit	2024-10-25	false	TypeScript	F01_prediction_markets
+jrey999/mlb-positive-ev	12	none	2023-10-11	false	Python	F05_sports
+mikedeshazer/StellarXMarketMaker	12	none	2018-10-22	false	JavaScript	F07_orderbook
+Shikha-code36/ArbiSim-A-Real-Time-Arbitrage-Detection-System	12	mit	2025-10-07	false	C++	F15_dashboards
+Shrotriya-lalit/Crypto-Trading-Bot	12	mit	2022-05-08	false	Python	F15_dashboards
+TonyMa1/walk-forward-backtester	12	mit	2025-03-24	false	Python	F10_backtest
+y-matsuwitter/eventeth-contracts	12	mit	2017-11-14	true	JavaScript	F01_prediction_markets
+yu2001-s/war-room	12	none	2026-06-03	false	Python	F15_dashboards
+billpmurphy/sports	11	none	2015-03-29	false	Python	F05_sports
+danielkorzekwa/oddschecker-api	11	none	2015-10-20	false	Java	F05_sports
+golden-mane-labs/Sports-Betting-Demo	11	mit	2026-02-03	false	Python	F05_sports
+hale0124/CoinCheck-Sniper	11	none	2017-10-30	false	Python	F07_orderbook
+huachu-pets/polymarket-trading-tool	11	none	2026-04-10	false	TypeScript	F03_polymarket
+IntelIP/Neural	11	mit	2026-09-11	false	Python	F01_prediction_markets
+JashanDhiman/Trading-Dashboard	11	none	2026-05-22	false	TypeScript	F15_dashboards
+jvanderhoof/Sports-Arbitrage-Parser	11	none	2015-02-24	false	Ruby	F05_sports
+sarartur/oddsapi	11	mit	2023-07-20	false	Python	F05_sports
+Th3-H4xx0r/IntelliStock	11	mit	2026-09-23	false	Python	F10_backtest
+84376834111/gpt-account-market-scanner	10	mit	2026-07-27	false	Python	F15_dashboards
+AlexLindberg9/SportsBettingScraper	10	none	2022-07-11	false	Python	F05_sports
+b1rdmania/polymarket-ai-trading	10	none	2026-02-03	false	Python	F15_dashboards
+DarriEy/Auramaur	10	mit	2026-09-19	false	Python	F01_prediction_markets
+inmyth/akka-integrated-mmm	10	none	2018-11-02	false	Scala	F07_orderbook
+johntam/OpenTOMS	10	gpl-3.0	2012-10-26	false	PHP	F08_execution
+kindofzero/maitreya	10	none	2026-07-01	false	Python	F15_dashboards
+kinexbtdev/polymarket-arbitrage-bot-60s-twap	10	none	2026-08-19	false		F13_news_llm
+odds-api-io/odds-api-python	10	mit	2026-09-18	false	Python	F05_sports
+pachepot/HL-market-making	10	none	2026-01-31	false	Python	F07_orderbook
+sportsdataverse/oddsapiR	10	other	2026-09-10	false	R	F05_sports
+the-odds-api/samples-php	10	none	2025-07-25	false	PHP	F05_sports
+thmp/bitmm	10	mit	2016-11-27	false	Python	F07_orderbook
+zer0cache/hyperliquid-market-maker-bot	10	none	2026-04-16	false	Go	F07_orderbook
+amirunpri2018/Stock-forecasts-dashboard	9	none	2021-10-21	false		F15_dashboards
+andydardgallard/FarukonAlgoTradingPlatform	9	mit	2026-09-10	false	Rust	F10_backtest
+anglil/kalshi-ai-trading-bot	9	mit	2026-09-23	false	Python	F01_prediction_markets
+ankit7540/RamanSpecCalibration	9	gpl-3.0	2022-01-17	false	Jupyter Notebook	F11_calibration
+DGabri/binance_marketMaking	9	none	2022-10-20	false	Python	F07_orderbook
+Docat0209/qlib-tw-trader	9	mit	2026-03-15	false	Python	F10_backtest
+HorseDev77/polymarket_5minute_15minute-arbitrage-bot	9	none	2026-02-18	false	TypeScript	F13_news_llm
+IanChongG/btc-Event-Contracts	9	none	2026-05-13	false	Python	F01_prediction_markets
+jsteng19/kalshi-research	9	mit	2026-08-13	false	Jupyter Notebook	F01_prediction_markets
+ProjectNovigrad/ProjectNovigrad	9	wtfpl	2020-05-15	false	C++	F04_other_venues
+realfishsam/prediction-markets-arbitrage-scan	9	none	2026-05-25	false	Python	F01_prediction_markets
+umn-adc/ATLAS	9	none	2026-09-22	false	Python	F10_backtest
+Weirwindle/sailwind-market-watcher	9	mit	2025-10-13	false	Python	F15_dashboards
+aquilax/novigeroi2	8	none	2011-09-07	false	PHP	F04_other_venues
+BlockRunAI/alpha-mcp	8	none	2026-01-26	false	JavaScript	F16_agents
+Chidubemkingsley/PredictSOMNIA	8	apache-2.0	2026-09-05	false	TypeScript	F01_prediction_markets
+chung-thai-nguyen/efiquant	8	mit	2022-09-25	false	TypeScript	F10_backtest
+davdunc/mcp_etrade	8	none	2025-09-08	false	Python	F16_agents
+derekpankaew/IDEX-Market-Making-Bot	8	other	2022-12-08	false	JavaScript	F07_orderbook
+felipe-de-godoy/bet_arbitrage_automation	8	none	2024-04-19	false	Python	F05_sports
+hemangjoshi37a/hjAlgos	8	mit	2024-11-08	false	HTML	F10_backtest
+hicmtrex/Crypto-Trading-Dashboard	8	none	2024-02-29	false	JavaScript	F15_dashboards
+inmyth/mmm-java	8	none	2018-02-16	false	Java	F07_orderbook
+jpmit/pybetdaq	8	none	2015-02-19	false	XML	F06_exchanges
+jvanderhoof/Sports-Arbitrage-Website	8	none	2010-08-29	false	Ruby	F05_sports
+lropero/trady	8	none	2023-03-23	false	JavaScript	F15_dashboards
+MyriadProtocol/myriad-cli	8	mit	2026-05-07	false	TypeScript	F04_other_venues
+realfishsam/Risk-Free-Prediction-Market-Trading-Bot	8	mit	2026-01-25	false	Python	F01_prediction_markets
+RichardFeynmanEnthusiast/kalshi-polymarket-arbitrage-bot	8	gpl-3.0	2025-12-12	false	Python	F13_news_llm
+rkeshs/aglypto	8	none	2025-04-11	false	JavaScript	F15_dashboards
+scibrokes/dixon-coles1996	8	none	2022-06-11	false	HTML	F05_sports
+sreerevanth/TRADEX	8	none	2026-08-13	false	Python	F15_dashboards
+thepycoach/the-sports-arbitrage-project	8	none	2021-03-22	false		F05_sports
+tradestreamhq/tradestream	8	mit	2026-06-17	false	Python	F10_backtest
+trevortrinh/exchange	8	none	2026-02-12	false	Rust	F07_orderbook
+zorazeroyzz/xianyu-market-scanner	8	none	2026-03-17	false	Python	F15_dashboards
+3yit/Limit-Order-Book-Simulator	7	none	2025-10-27	false	C++	F07_orderbook
+alekdev0/sport-book-odds-api-react	7	mit	2022-03-18	false	JavaScript	F05_sports
+bitbankinc/sample-xrp-market-making-bot	7	none	2017-07-10	false	JavaScript	F07_orderbook
+bparvin12/sports-betting-odds	7	none	2024-03-11	false	TypeScript	F05_sports
+euriska/opentrader	7	apache-2.0	2026-07-19	false	Python	F10_backtest
+indover/polymarket-dashboard	7	none	2026-06-10	false	Go	F15_dashboards
+kapelame/kalshi-crypto-bot	7	none	2026-02-28	false	Python	F01_prediction_markets
+krish567366/AlphaForge	7	mit	2025-09-19	false	Rust	F10_backtest
+lattesir/uxapi	7	mit	2021-08-10	false	Python	F08_execution
+LvcidPsyche/polymarket-arbitrage-bot	7	none	2026-04-12	false	Python	F13_news_llm
+MihirM9/polymarket-weather-bot	7	none	2026-09-14	false	Python	F03_polymarket
+monolithicpower/MagAlpha-Calibration-Curve-Toolbox	7	mit	2017-11-30	false	C	F11_calibration
+Nationalisationgeneticfingerprint243/AskEliraTrader	7	mit	2026-09-23	false	Python	F01_prediction_markets
+nhtyy/polymarket-rust	7	other	2025-11-27	false	Rust	F03_polymarket
+tfrmma/prediction-market-maker	7	mit	2026-09-12	false	Python	F03_polymarket
+treverson/opentrade-1	7	apache-2.0	2018-08-13	false	C++	F10_backtest
+Aaquib111/java-algo-trading	6	none	2024-02-04	false	Java	F10_backtest
+abailey81/Crypto-Statistical-Arbitrage	6	mit	2026-03-15	false	Jupyter Notebook	F10_backtest
+Abhi2627/AlgoTrading-India	6	mit	2026-06-12	false	TypeScript	F10_backtest
+aqsmith02/paper-betting-tracker	6	none	2026-09-23	false	Python	F05_sports
+bentroutman/prediction-market-arbitrage	6	none	2025-11-16	false	Jupyter Notebook	F01_prediction_markets
+bl888m/assay	6	mit	2026-09-21	false	Python	F01_prediction_markets
+carsonchou/tw-stock-radar	6	mit	2026-07-05	false	Python	F15_dashboards
+d-edison/theoddsapi	6	other	2021-08-14	false	R	F05_sports
+DarmorGamz/Tickermind	6	mit	2026-03-10	false	TypeScript	F15_dashboards
+dbfarias/dbf-poly-agent	6	mit	2026-07-25	false	Python	F01_prediction_markets
+eneskemalergin/loqculate	6	mit	2026-09-13	false	Python	F11_calibration
+Farxida/prediction-market-ml	6	mit	2026-04-28	false	Python	F01_prediction_markets
+ioi-studio/IOI-LottoLab	6	mit	2026-07-19	false	Python	F10_backtest
+kevinramlal/Q-Book	6	none	2020-04-17	false	Python	F07_orderbook
+lalalune/polymarket-agent	6	none	2026-01-27	false	TypeScript	F13_news_llm
+lay-z/betfair_bot	6	none	2016-06-26	false	Python	F06_exchanges
+m0wer/polyarb	6	none	2025-11-28	false	Python	F13_news_llm
+Maarten14C/rintcal	6	none	2026-09-07	false	R	F11_calibration
+MohamadSafi/market-making-bot	6	mit	2024-10-14	false	Python	F07_orderbook
+pizzatipz/sportybet-instantvirtual	6	mit	2026-04-01	false	Python	F05_sports
+s1dny/arbitrage	6	none	2026-03-25	false	Rust	F05_sports
+Samstix636/ps3838-bot	6	none	2024-04-24	false	Python	F05_sports
+sbefort/json-odds-api	6	none	2016-08-19	false	JavaScript	F05_sports
+sebhtml/novigrad	6	none	2024-07-19	false	Rust	F04_other_venues
+staccDOTsol/SportsArbitrageBot	6	none	2020-12-04	false	Python	F05_sports
+strmprivacy/cli	6	apache-2.0	2023-08-04	false	Go	F01_prediction_markets
+turtlehq-tech/turtlestack-lite	6	other	2025-07-19	false	JavaScript	F16_agents
+w7wnwpfj26-art/Polymarket-Oracle	6	mit	2026-02-28	false	TypeScript	F01_prediction_markets
+zorojan/Real-Time-Market-Scanner-Analytics-Engine	6	none	2025-12-12	false	TypeScript	F15_dashboards
+0xNathanW/clob-rs	5	mit	2025-02-10	false	Rust	F03_polymarket
+bbezias/betdaqlightweight	5	gpl-3.0	2018-12-02	false	Python	F06_exchanges
+bingcheng45/polymarketrust	5	none	2026-03-06	false	Rust	F13_news_llm
+blocknetdx/dxmakerbot	5	mit	2021-09-06	false	Python	F07_orderbook
+BowTiedBettor/BetfairBot	5	none	2024-02-21	false	Python	F06_exchanges
+buddies2705/polymarket-dashboard	5	none	2025-11-21	false	TypeScript	F15_dashboards
+buildkit-ai/betting-odds-tracker	5	mit	2026-02-21	false	Python	F05_sports
+calvinwang9/Sports-betting-odds	5	none	2020-03-24	false	Python	F05_sports
+Claudoi/GammaEdge	5	none	2026-07-26	false	Python	F10_backtest
+cosmasken/TheOddsApiClient	5	none	2026-06-16	false	Java	F05_sports
+DanathanKechik/genesis-exodus-scanner	5	none	2026-06-26	false		F15_dashboards
+danielkorzekwa/betdaq-api	5	none	2015-10-10	false	Java	F06_exchanges
+deworben/betfairValueBetting	5	none	2020-03-24	false	Python	F05_sports
+djienne/StandX_Rust_Market_Maker_Bot	5	none	2026-09-05	false	Rust	F07_orderbook
+dmitryk4/prediction-market-arbitrage	5	none	2025-12-17	false	Python	F01_prediction_markets
+firedigger/polymarket-userscripts	5	unlicense	2025-01-10	false	JavaScript	F03_polymarket
+gk47bball/Finance-AutoResearch	5	none	2026-03-24	false	Python	F10_backtest
+lmalvara/Hermes	5	none	2019-10-06	false	Python	F15_dashboards
+mospira/ml-open30	5	none	2026-06-25	false	Python	F10_backtest
+oyi77/1ai-trade-dex	5	mit	2026-09-14	false	Python	F01_prediction_markets
+QuiteAFellow/UnusualVolumeDetectorSimplified	5	none	2020-07-30	false	Python	F15_dashboards
+ratrimaa/btc-5m-polymarket-bot	5	none	2026-06-24	false	Python	F01_prediction_markets,F03_polymarket
+rdekovich/edgelord	5	apache-2.0	2026-02-25	false	Rust	F01_prediction_markets
+sam-minns/AxiomEdge-PRO	5	gpl-3.0	2025-08-02	false	Python	F10_backtest
+Sanju311/plusEV-odds-finder	5	none	2025-07-10	false	Python	F05_sports
+SidharthK2/polymarket-agent	5	none	2025-08-26	false	TypeScript	F13_news_llm
+soldev3639/market-making-bot	5	none	2022-11-07	false	JavaScript	F07_orderbook
+SportsGameOdds/sports-odds-api-python	5	apache-2.0	2026-09-21	false	Python	F05_sports
+stat-ml/uncertainty_from_proper_scoring_rules	5	none	2025-02-11	false	Jupyter Notebook	F11_calibration
+tony-42069/precedence	5	none	2026-04-19	false	TypeScript	F01_prediction_markets
+zengruizhao/clinical-analysis	5	none	2020-05-06	false	MATLAB	F11_calibration
+ZeroPointIntel/polymarket-arbitrage-trading-bot	5	none	2026-06-01	false	Python	F13_news_llm
+apostleoffinance/prediction-market-maker	4	none	2025-11-25	false	Python	F01_prediction_markets
+arnabgho/rlcd-lite	4	apache-2.0	2026-09-18	false	Python	F11_calibration
+Aroesler1/Alpha-Factor-Mining-Framework	4	none	2026-09-10	false	Python	F10_backtest
+Ashwin-Iyer1/PolymarketArbitrage	4	none	2024-12-05	false	Python	F13_news_llm
+Bit-Nation/Token-Sale-Event-TSE	4	mit	2017-09-22	false	JavaScript	F01_prediction_markets
+deepn27/polymarket-arbitrage-scanner	4	none	2026-01-17	false	Python	F13_news_llm
+demyashev/php.market-scanner	4	none	2021-03-22	false	PHP	F15_dashboards
+dorkalifa/predict-bot	4	mit	2026-03-13	false	Python	F01_prediction_markets
+dungnotnull/export-trade-forecast-advisor-agent-skill	4	none	2026-08-11	false	Python	F01_prediction_markets
+Exidekat/math178project	4	none	2025-05-22	false	Jupyter Notebook	F05_sports
+Gmpho/strike-tips-autonomous-	4	agpl-3.0	2026-09-23	false	Python	F05_sports
+goldenwo/sports-betting-scraper	4	none	2021-01-13	false	Python	F05_sports
+ianalloway/ai-advantage	4	mit	2026-09-20	false	TypeScript	F09_risk_ledger
+INESCTEC/budget-constrained-collaborative-forecasting-market	4	other	2025-02-10	false	Python	F01_prediction_markets
+jacobwconklin/sportsBettingWebApp	4	none	2022-05-04	false	JavaScript	F05_sports
+jaimindarji88/royal-flush-backend	4	none	2023-01-04	false	TypeScript	F05_sports
+JerryWu0430/PolyBans	4	none	2026-03-01	false	TypeScript	F13_news_llm
+jonas-scholz123/nostale-market-scanner	4	none	2020-05-08	false	Python	F15_dashboards
+JREREEE/btc-5m-market-trading-bot	4	none	2026-06-08	false	TypeScript	F13_news_llm
+karidasd/football-predictions	4	none	2026-09-23	false	JavaScript	F05_sports
+kirbyhaze/clob-rs	4	apache-2.0	2025-12-05	false	Rust	F03_polymarket
+kmjjjj/polymarket-arbitrage-bot-btc-sol-15m	4	none	2026-09-23	false	Rust	F13_news_llm
+Kober-L/Trading-signals-scanner	4	none	2021-10-21	false	Python	F15_dashboards
+kristennreed/trading-dashboard	4	none	2026-07-13	false	Python	F15_dashboards
+Lauriy/bet-odds-analyzer	4	none	2017-10-27	true	HTML	F05_sports
+lindsayjohnsonrp1MKXFqk4V0m/clob-client	4	none	2025-10-27	false		F03_polymarket
+marcoeg/mcp-odds-api	4	apache-2.0	2025-05-01	false	Python	F05_sports
+MiziClare/r-and-trading-strategies	4	none	2026-01-28	false	R	F07_orderbook
+MyriadMarkets/MyriadMarkets	4	none	2025-10-28	false	Python	F04_other_venues
+Oceanjackson1/Prediction-Market-Arbitrage-Compendium	4	none	2026-02-16	false		F01_prediction_markets
+pipaitrader/sports-oracle	4	mit	2026-01-30	false	Shell	F01_prediction_markets
+piyush7749/cryptoscanner	4	none	2017-09-15	false	JavaScript	F15_dashboards
+poly402/poly402	4	mit	2025-10-29	false	Python	F01_prediction_markets
+promaaa/polymarket-arbitrage-bot	4	none	2026-01-09	false	Makefile	F13_news_llm
+ranjan-mishra-dev/kisan_mitra_ai	4	none	2026-05-28	false	JavaScript	F01_prediction_markets
+rhecustein/polymarket-agent	4	mit	2026-03-02	false	Rust	F13_news_llm
+rosskoval/calm_fin_news	4	none	2025-11-01	false	Python	F01_prediction_markets
+rucmeteor1025/chanlun-skills	4	mit	2026-08-12	false	Python	F10_backtest
+sgdva/polyoddwatcher	4	mit	2026-01-27	false	Python	F15_dashboards
+sumit-ai-ml/kronos-market-eval	4	mit	2026-08-14	false	Python	F10_backtest
+TemiKayode/football_pro	4	none	2026-04-25	false	Python	F05_sports
+therealaleph/polymarket-arbitrage-bot	4	none	2025-12-24	false		F13_news_llm
+tubakhxn/Liquidity-Heatmap-Limit-Order-Book-Simulator	4	mit	2026-03-23	false	Python	F07_orderbook
+VAIXLNS/VAIXLNS	4	none	2026-09-02	false	Python	F01_prediction_markets
+virtexvirtuoso/polyclawd	4	mit	2026-09-23	false	Python	F01_prediction_markets
+vishal-k-crypto/polymarket-hft	4	other	2026-06-09	false	Rust	F03_polymarket
+Vlad020107/19.12.2024-NovigationAPI-	4	none	2026-02-18	false	Kotlin	F04_other_venues
+willbebettertoday/Btc_trading_bot	4	mit	2026-09-21	false	Python	F10_backtest
+x4nnon/betfair-machine-learning	4	none	2023-05-13	false	Jupyter Notebook	F06_exchanges
+Zigarov/betting-odds-visual-analytics	4	none	2024-03-05	false	JavaScript	F05_sports
+1pperalta/ScrapOddsAPI	3	none	2026-04-16	false	Python	F05_sports
+Admuad/polymarket-agent	3	mit	2026-02-24	false	Rust	F13_news_llm
+Aftabgazali/quebec-load-forecasting	3	mit	2025-12-29	false	Python	F10_backtest
+Anagatam/Canopy	3	other	2026-02-21	false	Python	F10_backtest
+artvandelay/polymarket-agents	3	mit	2026-02-12	false	Python	F13_news_llm
+benjiec/calibrate	3	mit	2016-06-09	false	Python	F11_calibration
+braedenpoole/ScannerWebsiteRepo	3	none	2026-05-14	false	HTML	F15_dashboards
+chuvanan/calibcurve	3	other	2020-06-18	false	R	F11_calibration
+conda-forge/betfairlightweight-feedstock	3	bsd-3-clause	2026-09-04	false		F06_exchanges
+cryptomcp/allinone-crypto-trading-mcp-server	3	mit	2025-10-09	false	Python	F16_agents
+Cyprians-Mwanza/StockTrendPredictor	3	mit	2024-10-15	false	Jupyter Notebook	F01_prediction_markets
+Damonpnl/Arbitrage-Event-Engine	3	none	2026-03-21	false	Rust	F01_prediction_markets
+dickreuter/betfair-bot-frontend	3	none	2024-02-09	false	TypeScript	F06_exchanges
+dulvinsipsara/ArbiDex	3	none	2026-02-19	false	Python	F01_prediction_markets
+dustindog101/polymarket-trader	3	none	2026-07-07	false	TypeScript	F03_polymarket
+Ezee-Kits/SPORTYBET-AUTO-TRADING-BOT	3	mit	2026-07-25	false	Python	F05_sports
+Ezee-Kits/SPORTYBET-TRADING-Bot	3	mit	2025-11-29	false	Python	F05_sports
+faferiab/tft_market_portfolio	3	none	2023-06-15	false	Jupyter Notebook	F01_prediction_markets
+FanIvanTang/python_day11_blackjack	3	none	2022-06-09	false	Python	F05_sports
+FiachraBarry99/sportsbetting_arbitrage_calculator	3	mit	2021-01-20	false	Jupyter Notebook	F05_sports
+FrancoisPorcher/calibration_curve	3	none	2023-01-28	false	Jupyter Notebook	F11_calibration
+gautierpetit/meta-labeling-alpha-filter	3	bsd-3-clause	2026-04-17	false	Python	F10_backtest
+gram0616/lob-lab	3	none	2026-04-29	false	Python	F07_orderbook
+jamesjxliao/yass	3	apache-2.0	2026-08-27	false	Python	F10_backtest
+JamesK-AI/prediction-market-arbitrage	3	none	2026-01-03	false	Python	F01_prediction_markets
+johannestreutlein/scoring-rules-performative	3	none	2023-05-27	false	Mathematica	F11_calibration
+lindsaypino/matrix-matched_calcurves	3	apache-2.0	2026-09-22	false	Python	F11_calibration
+lzienkewicz/poly-kalshi-arb-bot	3	none	2026-05-27	false	Python	F13_news_llm
+matbbDTU/probforecasteval	3	none	2023-07-11	false	R	F11_calibration
+mjul23/polymarket-dashboard	3	none	2025-11-06	false		F15_dashboards
+mrturo/PredicTick	3	none	2025-09-30	false	Python	F01_prediction_markets
+MuadhAli/Novigo-freshers-notes	3	none	2026-04-29	false	Jupyter Notebook	F04_other_venues
+NearHuscarl/the-odds-api	3	mit	2023-01-03	false	TypeScript	F05_sports
+nijaru/go-clob-client	3	mit	2026-09-15	false	Go	F03_polymarket
+no-serve-people/SmartApe-Go	3	mit	2025-12-30	false	Go	F01_prediction_markets
+OrienSpec/AI-Powered-Quantitative-Stock-Analysis-Platform_	3	none	2026-07-30	false		F10_backtest
+profintegra/polymarket-arbitrage	3	none	2025-12-28	false		F13_news_llm
+racoope70/exploratory-daytrading	3	none	2026-09-05	false	Jupyter Notebook	F10_backtest
+robindevelops/btc-forex-gold-silver-price-predictor	3	none	2026-09-21	false	Jupyter Notebook	F01_prediction_markets
+sailedship/krypto-market-sentinel	3	unlicense	2026-03-25	false	Python	F01_prediction_markets
+shreesha345/Binance-Trading-Bot	3	other	2025-08-18	false	Python	F08_execution
+SkewMarket/skewmarket	3	none	2026-01-30	false	JavaScript	F15_dashboards
+sueun-dev/prediction-market-arbitrage	3	mit	2026-06-06	false	Go	F01_prediction_markets
+tamzid2001/polymarketfuturesbot	3	none	2026-09-23	false	Python	F03_polymarket
+technet365/TastyScanner-MCP-Server	3	mit	2026-09-21	false	TypeScript	F15_dashboards
+vaticTrading/polymarket-clob-v2-migrations	3	none	2026-04-20	false	TypeScript	F03_polymarket
+YichengYang-Ethan/ESG-Driven-Stock-Value-Prediction	3	mit	2026-03-01	false	Jupyter Notebook	F10_backtest
+zakariae-boui/football-prediction-ml	3	mit	2026-07-13	false	Jupyter Notebook	F05_sports
+zoller-swufe/forecast_market_anomalies_cn	3	apache-2.0	2025-01-16	false	R	F01_prediction_markets
+zw008/quant-trader	3	none	2026-03-16	false	Python	F16_agents
+1satwinder/trading-dashboard	2	none	2026-09-22	false	TypeScript	F08_execution
+a67793581/Ethereum-Trading-MCP-Server	2	none	2025-11-26	false	Rust	F16_agents
+abailey81/Tamer_Technical_Agent	2	mit	2026-03-15	false	Python	F10_backtest
+Adeleye-Emmanuel/Volatility-Forecasting-Using-Regime-Aware-LSTM-and-GARCH-Model	2	none	2025-11-28	false	Jupyter Notebook	F01_prediction_markets
+adriancorrendo/modified-ALCC	2	mit	2022-03-24	false		F11_calibration
+ai-automation-tools/Edge-Radar	2	none	2026-09-22	false	Python	F03_polymarket
+AinaRazafinjato/value-bets-scraper	2	mit	2025-05-12	false	Python	F05_sports
+AkhilNam/ev-arb-tool	2	none	2026-07-22	false	JavaScript	F05_sports
+alpha-mw/myQuant	2	mit	2026-09-23	false	Python	F10_backtest
+amarachiugwu/events_contracts	2	none	2022-10-19	false	Solidity	F01_prediction_markets
+aniket-work/My-Building-Of-Trading-Order-Management-System-Using-AI-Agents	2	apache-2.0	2025-02-09	false	Python	F08_execution
+AntonyKoshy/prophet-arbitrage-bot	2	none	2025-10-29	false	Go	F01_prediction_markets
+api-evangelist/novig	2	none	2026-09-23	false		F04_other_venues
+api-evangelist/sportsbook-api	2	none	2026-09-23	false		F05_sports
+Aryan2624/StockVision-AI	2	mit	2026-09-09	false	Python	F10_backtest
+asrhardi/polymarket-agent	2	none	2026-03-25	false	Go	F13_news_llm
+austinhuu/multi-agent-portfolio-research	2	none	2026-07-23	false	Python	F10_backtest
+avneesh0612/polymarket-agent	2	none	2026-03-13	false	TypeScript	F13_news_llm
+Ben41231/polymarket-agent	2	none	2026-07-21	false	Python	F13_news_llm
+betcode-org/betdaq-retail	2	mit	2026-03-12	false	Python	F06_exchanges
+bhavi-321/LOBSim	2	none	2026-07-06	false	Python	F07_orderbook
+blacksyncai/arbitrage-bot	2	none	2026-04-08	false	Python	F01_prediction_markets
+Blaeriz/lob_sim	2	none	2026-05-10	false	C	F07_orderbook
+bowen31337/polymarket-agent-skills	2	none	2026-02-06	false	Python	F13_news_llm
+cati3000/Sports-prediction-platform	2	none	2026-07-12	false	Python	F05_sports
+chadvik88/lob-simulator	2	none	2026-04-22	false	Python	F07_orderbook
+channasmcs/woolworths-forecasting	2	none	2026-06-07	false	Jupyter Notebook	F10_backtest
+chneller/polymarket-bot	2	none	2026-05-07	false	Python	F03_polymarket
+chrono35/RenDate	2	none	2025-07-01	false	R	F11_calibration
+cissa0791-dot/polyarb_lab	2	none	2026-05-10	false	Python	F03_polymarket
+cmarvinzurich/RL-LOB	2	none	2025-09-30	false	Python	F07_orderbook
+CZA1006/Poly-Maker-RS	2	none	2026-03-18	false	Rust	F03_polymarket
+czehd8qclm6y/clob-client	2	mit	2025-10-13	false	TypeScript	F03_polymarket
+davelamtrader/Strategy-Backtest-Orderbook-Imbalance-Pattern-based-Cryptocurrencies-Screening-Trading-Strategy	2	none	2025-08-24	false	Python	F07_orderbook
+davidalmeida90/endowment-agent-investment	2	other	2026-07-31	false	Python	F10_backtest
+Decaho7059/Novigrad_app	2	mit	2025-11-25	false	Java	F04_other_venues
+Duanyy1994/Radiomics-for-ALNM-Prediction	2	none	2022-06-20	false	Jupyter Notebook	F11_calibration
+eccentricvision/EccVisToolbox	2	gpl-3.0	2026-05-07	false	MATLAB	F11_calibration
+eterces/PancakeSwap-CandleGenie-ProphetX-Predictions-Game-Trading-Bot	2	none	2023-02-08	false	Python	F04_other_venues
+Faraone-Dev/Flowlab	2	apache-2.0	2026-05-06	false	Rust	F07_orderbook
+FlexiWay/prediction-market-arbitrage	2	mit	2026-01-01	false		F01_prediction_markets
+Florian-KOVACEVIC/Pro-Screener	2	mit	2026-09-21	false	Python	F15_dashboards
+Gamedaytrader/novig-american-odds	2	mit	2026-08-27	false	JavaScript	F04_other_venues
+Gaserd/MinimalBK	2	none	2022-07-05	false	JavaScript	F05_sports
+govindgoel2001/polyedge-claude-sports-arbitrage	2	mit	2026-08-12	false	Python	F05_sports
+GuillaumeLam/PaCalC	2	none	2023-04-18	false	Python	F11_calibration
+hallengray/football-edge	2	none	2026-05-11	false	Python	F05_sports
+henry9028/Open-Source-Intelligence-Market-2020-by-Component-Vertical-Leading-Manufacturers-Challenges-and-T	2	none	2022-01-24	false		F01_prediction_markets
+hurxan/rb-bot	2	none	2023-08-05	false	Python	F05_sports
+ianalloway/sports-betting-ml	2	mit	2026-09-20	false	Python	F05_sports
+ihsan215/aeon-market-scanner-rs	2	apache-2.0	2026-04-11	false	Rust	F15_dashboards
+ismail-amouma/Arbitrage_Opportunities_Finder	2	none	2023-07-20	false	Python	F05_sports
+jadensutton/sports-betting-odds-generator-ufc	2	none	2022-12-30	false	Python	F05_sports
+jakeflynn39/griffy-sharps	2	none	2023-10-02	false	Python	F05_sports
+james-wilder/betdaq	2	none	2018-04-17	false	Go	F06_exchanges
+JaredFisher2904DavidHarrington/clob-client	2	mit	2025-10-15	false	TypeScript	F03_polymarket
+jdcarbeck/betdaq-app	2	none	2023-07-21	false	Python	F06_exchanges
+jekpso9le/clob-client	2	mit	2025-10-13	false	TypeScript	F03_polymarket
+joshyattridge/Sports_Arbitrage	2	none	2025-09-25	false	Python	F05_sports
+karma659/kalshi-btc-trading-engine	2	none	2026-09-21	false	JavaScript	F01_prediction_markets
+kruthik93/Utilizing-ARIMA-to-forecast-Ubers-market-demand	2	none	2018-03-15	false	Jupyter Notebook	F01_prediction_markets
+LeandroPG19/apuestas-bot	2	mit	2026-05-11	false	Python	F05_sports
+leofratu/poly-alpha	2	none	2026-09-14	false	Python	F01_prediction_markets
+leonardoglez7/football-edge-predictor	2	none	2026-04-26	false	Python	F05_sports
+Littlemans90/SignalScan	2	none	2025-10-03	false	Python	F15_dashboards
+liuxing5/openclaw-quant-system	2	mit	2026-09-23	false	Python	F10_backtest
+machange12/bei-smart	2	none	2026-09-23	false	Jupyter Notebook	F01_prediction_markets
+madebyaris/bantuaku	2	other	2025-12-06	false	TypeScript	F01_prediction_markets
+marcosuma/mok-algo-trader	2	none	2026-04-11	false	Python	F10_backtest
+memonkey01/pypro_polymarket_agent	2	none	2026-08-23	false	Python	F13_news_llm
+micaellimaj/Caramelo-das-Bets-Pipeline-de-Inteligencia-Esportiva	2	mit	2026-04-30	false		F05_sports
+migach92/my_scaner_nhl-nba	2	none	2026-04-24	false	Python	F05_sports
+monroedean/polymarket-trader	2	gpl-3.0	2025-09-11	false	Python	F05_sports
+Morning-Star213/Live-Sports-Arbitrage-Bet-Finder	2	none	2025-06-19	false	Python	F05_sports
+murp8/polymarket-mm	2	none	2026-04-23	false	Python	F03_polymarket
+MyriadMarkets/MyriadMarkets-subgraph	2	lgpl-3.0	2025-10-28	false	TypeScript	F04_other_venues
+mzkrasner/prediction-agent	2	none	2025-07-22	false	TypeScript	F13_news_llm
+odds-api-io/odds-api-node	2	mit	2026-09-18	false	TypeScript	F05_sports
+okajimad/benten-core	2	mit	2019-09-18	false	JavaScript	F01_prediction_markets
+Pafika97/Novig-hedgehog-augur-bot	2	none	2025-11-07	false	Python	F04_other_venues
+PandasCoder/lilmarket	2	none	2026-06-04	false		F15_dashboards
+pavelloca/polymarket-user-ingest	2	mit	2026-06-16	false	Python	F03_polymarket
+phillypilane/precise_ephemeris	2	none	2017-04-04	false	Python	F09_risk_ledger
+pic-romain/aggregation-transformation	2	mit	2026-01-29	false	R	F11_calibration
+PWEI07/polymarket-order-signer	2	none	2026-05-17	false	Python	F03_polymarket
+pwnholic/polkas	2	none	2026-02-12	false	Rust	F01_prediction_markets
+rajdua22/sports_arbitrage	2	none	2020-06-08	false	Jupyter Notebook	F05_sports
+RandyHaddad/prediction-markets-arbitrage	2	none	2026-04-14	false	TypeScript	F01_prediction_markets
+Reymes/football-match-prediction	2	mit	2026-07-11	false	Python	F10_backtest
+rjpeacock/kelly-cli	2	none	2025-11-18	false	Python	F09_risk_ledger
+ryan-yuuu/polymarket-agents	2	apache-2.0	2026-04-14	false	Python	F13_news_llm
+SalimBennouna/rl-market-makers-glosten-milgrom	2	none	2025-12-13	false	Python	F07_orderbook
+SallowJacob/Pharmaceutical-Aseptic-Fill-Finish-CMO-Market-Size-Share-Trend-Volume-Key-Players-Production-	2	none	2022-03-03	false		F01_prediction_markets
+sam5051/COVID-19-Pandemic-Impact-on-Clinical-Laboratory-Services-MARKET-SIZE-ANALYTICAL-OVERVIEW-GROWTH-FA	2	none	2020-09-07	false		F01_prediction_markets
+sandeepportfolio/arbiter-dashboard	2	none	2026-08-04	false	Python	F01_prediction_markets
+sbrunomello/trader-assistant	2	none	2026-03-03	false	Python	F10_backtest
+Scorpio1987/odds-api-client	2	mit	2026-01-09	false	Python	F05_sports
+sharathStack/Statistical-Arbitrage-Pairs-Trading-Engine	2	none	2026-04-06	false	Python	F10_backtest
+shayd3/arbitrage-bot	2	none	2026-03-29	false	Python	F15_dashboards
+Siddarthb07/GeoQuant	2	mit	2026-09-19	false	Python	F10_backtest
+sonne-finance/sonne-token	2	none	2024-11-22	false	TypeScript	F01_prediction_markets
+steodose/odds-converter	2	none	2023-11-28	false	Python	F05_sports
+Steve-IX/Prediction-Market-Agentic-Trading-	2	none	2026-05-16	false	TypeScript	F01_prediction_markets
+TejesIngole/Apple-Stock-Price-Forecasting-Market-Trend-Analysis	2	none	2026-02-04	false	Jupyter Notebook	F01_prediction_markets
+toasterman234/qlib-us-trader	2	mit	2026-06-11	false	Python	F10_backtest
+TobiasBurman/Odds-Comparison-Tool	2	none	2026-03-08	false	JavaScript	F05_sports
+tradingexpert/ordersim	2	mit	2026-08-30	false	Python	F07_orderbook
+Trups39/Crypto-News-Sentiment-Analysis	2	none	2024-01-02	false	Jupyter Notebook	F01_prediction_markets
+Tushar416t/Future-Market-Analysis-	2	none	2025-02-24	false		F01_prediction_markets
+vndly/betfair	2	mit	2015-08-17	false	Java	F06_exchanges
+whiteyhat/quantik-frontend	2	none	2026-09-23	false	TypeScript	F13_news_llm
+x777-dev/funding-arbitrage-scanner-ts	2	mit	2024-08-31	false		F15_dashboards
+xDetroUK/SportsArbitrageDetector	2	none	2025-04-02	false	Python	F05_sports
+xunboo/polymarket-net-clob-client	2	mit	2026-01-04	false	C#	F03_polymarket
+xuxingjiankr-cpu/perception-xalpha-lite	2	mit	2026-09-21	false	Python	F10_backtest
+Youcef3939/ai-volatility-prophet	2	none	2025-09-09	false		F01_prediction_markets
+0xhardhat/betterweather-beta-contract	1	none	2024-12-27	false	Solidity	F12_weather
+101magikarp101/MarketScanner	1	none	2026-05-09	false	Java	F15_dashboards
+1MarBur1/InfNovigator	1	none	2020-08-30	false	JavaScript	F04_other_venues
+404pandas/novigradunderground	1	none	2026-04-06	false	JavaScript	F04_other_venues
+abhishekkr/mfl	1	other	2020-08-28	false	Python	F01_prediction_markets
+achrafrachek/Service-Novigrade	1	none	2022-01-11	false	Java	F04_other_venues
+adu0928/Polymarket-dashboard-v2	1	none	2025-12-18	false	HTML	F15_dashboards
+afan2g/prediction-markets-arbitrage	1	none	2025-05-22	false	Python	F01_prediction_markets
+akashp3128/sports-arbitrage	1	mit	2026-03-02	false	JavaScript	F05_sports
+alexanderkell/online-forecasting-market-comparison-paper-Elsevier	1	none	2020-10-31	false	PostScript	F01_prediction_markets
+alexgravx/real-estate-analysis	1	gpl-3.0	2023-06-23	false	Python	F01_prediction_markets
+alfinohatta/Myriad-Markets	1	none	2026-03-22	false	TypeScript	F04_other_venues
+alzei2269/polymarket-agent	1	none	2026-09-23	false		F13_news_llm
+amirath-souhouin/Novigrad	1	none	2021-02-17	false	Java	F04_other_venues
+Amit-sandhu/Limit-Order-Book-Simulator	1	none	2026-07-31	false	Java	F07_orderbook
+andr3w321/march-madness-betting	1	none	2015-04-06	false	Ruby	F09_risk_ledger
+aphroti/RCFreader	1	none	2024-11-06	false	Python	F11_calibration
+Aqua65535/Absorption_and_Calibration_Curves	1	mit	2026-04-30	false	Python	F11_calibration
+aquilax/novigeroi-go	1	none	2013-01-13	false	Go	F04_other_venues
+arjunsood2025/quant-research-platform-project	1	none	2026-07-28	false	Python	F07_orderbook
+ArkaKhorchidian/Limit-Order-Book-Simulator	1	none	2026-03-14	false	C++	F07_orderbook
+arpan6103/Pulsar	1	none	2026-06-13	false	C++	F07_orderbook
+arsenmakovei/sportsbook-scraper	1	none	2023-11-07	false	Python	F05_sports
+aryanarora236/lob-execution-sim	1	none	2026-06-09	false	Python	F07_orderbook
+Augustforge/weather-prediction-market-bot	1	none	2026-07-22	false	Python	F12_weather
+Axiom-Projects/polymarket-dashboard	1	none	2026-09-05	false	HTML	F15_dashboards
+bamboosalt09-bam/election-forecast	1	apache-2.0	2026-09-19	false	Python	F10_backtest
+BavoDC/PaperGeneralizedCalibrationCurves	1	agpl-3.0	2023-09-18	false	R	F11_calibration
+bckfv49/polymarket-dashboard	1	mit	2026-09-12	false	Python	F15_dashboards
+beckettrj/sportsbook-scraper2	1	mit	2025-06-27	false	Python	F05_sports
+BhavyaSatija54/Reactive-Limit-Order-Book-Simulator	1	mit	2026-08-03	false	Python	F07_orderbook
+BlessingDotDev/calibration-curve-tool	1	none	2026-05-05	false	JavaScript	F11_calibration
+bolymous-prog/polymarket-agents	1	mit	2026-03-26	false	Python	F13_news_llm
+carret1268/qNTA-Cal_Curves	1	other	2025-07-13	false	JavaScript	F11_calibration
+carribus/odds-rs	1	none	2020-02-12	false	Rust	F05_sports
+castletrade/trade-oms-java-core	1	mit	2026-04-21	false	Java	F08_execution
+caxky/Service-Novigrad	1	none	2020-12-07	false	Java	F04_other_venues
+cbangera2/robinhood-mcp-cli	1	mit	2026-08-30	false	Python	F16_agents
+Chanakya1305/ai-sports-arbitrage	1	none	2026-03-31	false	Python	F05_sports
+chartist1/betfair-oddson1	1	bsd-3-clause	2020-07-03	false	C++	F06_exchanges
+cjtwhittaker/Ruby_arb	1	none	2015-07-22	false	Ruby	F05_sports
+CodeByBenjamin/market-microstructure-simulator	1	mit	2026-05-11	false	C++	F07_orderbook
+conseilbasal/polymarket-dashboard	1	none	2025-11-07	false	Python	F15_dashboards
+cswaney/jsbook	1	none	2020-02-29	false	HTML	F07_orderbook
+cyuwaters/realtime-finance-pipeline	1	none	2025-09-01	false	Python	F01_prediction_markets
+damyankasapov-wq/MarketScanner	1	none	2026-07-02	false	Python	F15_dashboards
+DarinTheShovel/Market-prediction-arbitrage-bot	1	none	2025-12-09	false	Python	F13_news_llm
+DavidJMartinProjects/springboot-rest-microservice	1	none	2021-10-31	false	Java	F01_prediction_markets
+dchang0611/tennis-spread-model	1	none	2026-09-23	false	Python	F04_other_venues
+dddtjhhb/cpp-order-book	1	none	2026-09-23	false	C++	F07_orderbook
+deuavt/order-book-simulator	1	mit	2026-02-23	false	Python	F07_orderbook
+dhruvxbug/FifaPredictionAI	1	none	2026-06-12	false	Python	F09_risk_ledger
+djienne/StandX_Market_Making_Grid_Dry_Run	1	none	2026-08-16	false	Rust	F07_orderbook
+dk-webt/prediction-terminal	1	none	2026-04-29	false	Python	F01_prediction_markets
+dotincorp/dot-event-protocol	1	none	2026-09-17	false	TypeScript	F01_prediction_markets
+dQw4w9WgXcQ/prediction-market-arbitrage	1	none	2025-08-08	false	Python	F01_prediction_markets
+ElijahRTaylor/SportsBettingOdds	1	none	2024-12-27	false	Jupyter Notebook	F05_sports
+EpiAware/ScoringRules.jl	1	gpl-2.0	2026-09-16	false	Julia	F11_calibration
+ErandM50/kelly-criterion-simulation	1	none	2022-10-04	false	Jupyter Notebook	F09_risk_ledger
+estesadvisory/poly-us-desk	1	mit	2026-09-10	false	Python	F03_polymarket
+fatemeh231/kelly-betting-calculator	1	none	2026-06-11	false	Jupyter Notebook	F09_risk_ledger
+fernandomanuellopesrodrigues/BetfairBotSDK	1	none	2016-04-27	false	F#	F06_exchanges
+Foxmik0007/Novigrad	1	none	2020-12-22	false	Java	F04_other_venues
+frahank/prediction-market-arbitrage	1	mit	2026-09-05	false	Python	F01_prediction_markets
+ftsiboe/rexcelbridge	1	gpl-3.0	2025-10-12	false	R	F04_other_venues
+fukuyama/forecast_market	1	none	2012-05-25	false	Java	F01_prediction_markets
+FWangZil/polymarket-usd-wrap	1	none	2026-05-03	false	TypeScript	F03_polymarket
+Gamble-Projects/SportsArbitrageBots	1	none	2018-10-25	false		F05_sports
+Gamble-Projects/SportsArbitrageCalculator	1	none	2020-10-12	false		F05_sports
+gehrigrankin/sportsbook-scraper	1	none	2023-11-23	false	JavaScript	F05_sports
+gitidhar/sports_arbitrage	1	none	2026-03-03	false	Python	F05_sports
+hadeel04/prediction-market-arbitrage-bot	1	mit	2026-04-30	false	JavaScript	F01_prediction_markets
+hainesm6/standard-linearity	1	other	2023-01-16	false	Jupyter Notebook	F11_calibration
+HansHemsey/FootLumen_discord	1	none	2026-06-23	false	Python	F10_backtest
+HarrierOnChain/Kalshi	1	mit	2026-06-24	false	Rust	F01_prediction_markets
+heyvivox/polymarket-agent	1	none	2026-07-02	false	Python	F13_news_llm
+hmac213/event-contract-trading	1	none	2025-11-16	false	Python	F01_prediction_markets
+howardt12345/service-novigrad	1	none	2020-12-27	false	Java	F04_other_venues
+howrisky/howrisky-mcp-server	1	other	2025-11-07	false	JavaScript	F09_risk_ledger
+iamnitishsah/LOB-Engine	1	mit	2026-09-19	false	C++	F07_orderbook
+igorzelaya-io/mercado-x-library-entity	1	none	2026-09-11	false	HTML	F01_prediction_markets
+IlyasFardaouix/finclaw	1	mit	2026-03-17	false		F16_agents
+IronicDeGawd/ec-dreamdex-hackathon-template	1	mit	2026-08-28	false	JavaScript	F01_prediction_markets
+ishan12206/Limit-Order-Book-Microstructure-Simulation	1	none	2025-12-17	false	Python	F07_orderbook
+jacyap/FilmProtocol	1	none	2021-03-22	false	MATLAB	F11_calibration
+James-Begin/Sports-Arbitrage	1	none	2022-08-31	false	Python	F05_sports
+jaracah/polymarket-us-go	1	mit	2026-08-02	false	Go	F03_polymarket
+jho1019/kalshi-polymarket-arbitrage	1	none	2026-06-17	false	Python	F13_news_llm
+johnstill/calibration	1	none	2018-06-11	false	Jupyter Notebook	F11_calibration
+jonesconnor/prediction-market-arbitrage	1	none	2025-10-26	false	Python	F01_prediction_markets
+jorubhi/React-Springboot-Zuul-Eureka-Mongo	1	none	2018-08-30	false	JavaScript	F08_execution
+Josedapker/polymarket-dashboard	1	none	2024-09-10	false	TypeScript	F15_dashboards
+JulienHeiduk/tennis-prediction	1	none	2026-06-25	false	Python	F09_risk_ledger
+jwt2706/Novigrad	1	mit	2023-12-16	false	Kotlin	F04_other_venues
+Kaonels/polymarket-dashboard	1	none	2026-06-20	false	HTML	F15_dashboards
+KarthikKumarN/event-contracts-v1	1	mit	2024-12-19	false	TypeScript	F01_prediction_markets
+kingostrich/polymarket-safety-lab	1	mit	2026-08-04	false	Python	F01_prediction_markets
+Kirill52300/polymarket_dashboard_hourly_example	1	none	2025-07-24	false	Python	F15_dashboards
+KiyomiMondal/Apollo_Calibration_Curve_And_GUI_Development	1	none	2026-08-26	false	Jupyter Notebook	F11_calibration
+KlishevDA/Market-Microstructure-and-Latency-Effects-in-L2-Market-Making	1	none	2026-01-31	false	Python	F07_orderbook
+komimessan/LIBS-Calibration	1	apache-2.0	2019-04-19	false	HTML	F11_calibration
+koushikswarna/polymarket-agent	1	none	2026-02-17	false	Python	F13_news_llm
+krittaphat6/polymarket-weather-bot	1	none	2026-03-20	false	TypeScript	F12_weather
+KshitigSeth/Limit-Order-Book-Simulator	1	none	2025-07-02	false	C++	F07_orderbook
+lachlanspangler/OrderBookSim	1	none	2026-08-25	false	Python	F07_orderbook
+larrytzhang/novig	1	none	2026-04-07	false	TypeScript	F04_other_venues
+leeroyanesu/tradingview-mcp-server	1	mit	2026-03-28	false	Python	F16_agents
+LgrappaG/PolymarketAgent	1	other	2026-04-13	false	Python	F13_news_llm
+lild811/Hedger	1	none	2026-01-10	false	TypeScript	F05_sports
+linlic2005/polymarket-agent	1	none	2026-04-19	false	Python	F13_news_llm
+lufegaga/kalshi-polymarket-arbitrage-trading-bot-python	1	none	2026-09-22	false		F13_news_llm
+lukapetrovicwork/kalshi-polymarket-arbitrage	1	none	2026-06-25	false	JavaScript	F13_news_llm
+lukebhan/oddsCalculator	1	none	2021-12-19	false	Python	F05_sports
+matteoiacopini/acps	1	none	2020-11-11	false	MATLAB	F11_calibration
+MatthewJohnMorris/BetfairBot	1	none	2017-05-23	false	Python	F06_exchanges
+Maxisy/betfair_bot	1	none	2026-04-03	false	Python	F06_exchanges
+mbordash/polymarket-us	1	mit	2026-09-10	false	Rust	F03_polymarket
+mhmdaskari/llm-confidence-scoring	1	other	2026-06-13	false	Python	F11_calibration
+ml-jku/regression-uncertainty	1	mit	2025-09-30	false	Jupyter Notebook	F11_calibration
+mofazzelhmorshed/Automation-Prediction-Market-Arbitrage-	1	mit	2026-09-13	false	HTML	F01_prediction_markets
+mohammadvaezimoghadam/calibration_curve	1	none	2023-04-01	false	Dart	F11_calibration
+molofsky/forecasting-kalshi	1	none	2025-11-01	false	Python	F01_prediction_markets
+moontropica/characterevent	1	mit	2022-10-28	false		F01_prediction_markets
+NanaBag/NovigoSolutionsExcelWebAutomationUseCase	1	none	2024-11-19	false		F04_other_venues
+neocodesoftware/fm-333333-most-used-english-words	1	none	2017-08-21	false		F04_other_venues
+nhtt1026/People-s-Coffee-Sales-Forecasting-Marketing-Dashboard	1	none	2025-12-15	false		F01_prediction_markets
+NITIN9181/Pharmaceutical-Sales-Forecasting-Market-Intelligence	1	mit	2025-11-15	false	Jupyter Notebook	F01_prediction_markets
+njvijay-mck/polymarket-us-demo	1	none	2026-02-22	false	Python	F03_polymarket
+novig1/novig1	1	none	2026-05-08	false	C	F04_other_venues
+noviga/noviga.ru	1	none	2026-04-14	false	JavaScript	F04_other_venues
+npyrz/probis	1	mit	2026-08-28	false	JavaScript	F03_polymarket
+oceanagent/ocean-agent	1	other	2026-09-22	false	Python	F16_agents
+outpostmyles/overlay	1	none	2026-08-05	false	Python	F05_sports
+OWurst/SportsbetArbitrageFinder	1	mit	2024-08-31	false	Jupyter Notebook	F05_sports
+pablowilliams/polymarket-kalshi-weather-bot	1	none	2026-03-30	false	Python	F12_weather
+Palak0905/polyweather-agent	1	none	2026-06-28	false	Python	F12_weather
+Paleobas/calibration_curves	1	none	2025-05-12	false	Python	F11_calibration
+pantazis/prediction-market-arbitrage	1	none	2026-03-23	false	Python	F01_prediction_markets
+PaulieB14/limitless-subgraphs	1	none	2026-09-04	false	TypeScript	F04_other_venues
+pBouillon/Novigrad	1	bsd-2-clause	2018-04-19	true	Python	F04_other_venues
+pchmura4/NTC_TableGen	1	gpl-3.0	2021-02-14	false	C++	F11_calibration
+pdmuinck/sbtech-sports-book	1	mit	2020-08-05	false	JavaScript	F05_sports
+phenomenon0/polymarket-agents	1	none	2026-02-10	false	Go	F13_news_llm
+pinguarmy/polymarket-agent	1	mit	2026-06-06	true	Python	F13_news_llm
+pplmaverick/miden-weather-market	1	mit	2026-09-15	false	TypeScript	F12_weather
+prashantunhale/LimitOrderBookSimulator	1	none	2018-06-03	false	Java	F07_orderbook
+presidentperk/OddsHedging	1	none	2025-02-14	false	Python	F05_sports
+pstsantos/trading-order-management-system	1	none	2026-06-09	false	Java	F08_execution
+Reddimus/polymarket-cpp	1	mit	2026-06-07	false	C++	F03_polymarket
+RyanKn1ght/CalibrationCurve	1	mit	2021-11-19	false		F11_calibration
+segafult/pyDropletUtility	1	mit	2018-04-09	false	Python	F11_calibration
+selinaxian/Polymarket-Agent	1	none	2026-04-04	false	Python	F13_news_llm
+shswtinc/rust-matching-engine	1	mit	2026-09-17	false	Rust	F07_orderbook
+sjdweb/lignite	1	none	2013-08-06	false	C#	F06_exchanges
+smoothjazzchazz/PREDICTION-MARKET-BACKTESTING-PLATFORM	1	none	2026-01-23	false	Python	F01_prediction_markets
+spencerfletcher/market-maker	1	mit	2026-09-16	false	Python	F03_polymarket
+spunzon/polymarket-agent	1	apache-2.0	2026-08-11	false	TypeScript	F13_news_llm
+SreyaMynampati/LimitOrderBook-Engine-HFT	1	none	2026-03-21	false	Python	F07_orderbook
+srgangaram-swe/Signalattice	1	mit	2026-09-06	false	Python	F10_backtest
+steveyangpi/binance-research-pro	1	none	2026-09-07	false	TypeScript	F16_agents
+suhasghorp/nasdaq-itch-orderbook	1	none	2025-05-05	false	Rust	F07_orderbook
+swayam-the-great/Smart_Krishi_Advisor	1	none	2026-02-16	false	TypeScript	F12_weather
+TarasKuzmych/sports-arbitrage	1	none	2024-09-13	false	Python	F05_sports
+TechnoDoomed1/Betfair-Sportsbook-Scraper	1	none	2019-06-20	false	Python	F05_sports
+tejassinghbhati/naqd	1	mit	2026-09-09	false	TypeScript	F01_prediction_markets
+thedatadoktor/prediict	1	none	2026-09-23	false	Python	F05_sports
+theiceeman/eventwise-contracts	1	none	2023-12-12	false	Solidity	F01_prediction_markets
+thejfry/arbitrage_sports	1	none	2020-03-28	false	Jupyter Notebook	F05_sports
+Tranks27/betfairBot	1	none	2023-09-14	false	Jupyter Notebook	F06_exchanges
+true-brace05/gpu-orderbook-simulator	1	mit	2026-07-29	false	C++	F07_orderbook
+UnityEQ/Polymarket-US-Mean-reversion-fade-strategy-test	1	none	2026-03-03	false	Python	F03_polymarket
+vaibhavanand31/trading_mcp_server	1	mit	2025-11-02	false	TypeScript	F16_agents
+VaishnaviK23/Trading-MCP-Server	1	mit	2025-06-26	false	Python	F16_agents
+visioneth/polymarket-agent	1	none	2026-03-08	false		F13_news_llm
+Vkutti/artificial-stock-exchange	1	none	2026-09-02	false	Python	F07_orderbook
+vshkuratov4/Cuda-accelerated-tennis-prediction-engine	1	other	2026-08-03	false	Python	F09_risk_ledger
+wasana007/event-contracts	1	none	2026-05-11	false	Java	F01_prediction_markets
+wauul/study-room	1	none	2026-09-18	false	TypeScript	F11_calibration
+wuihee/sports-arbitrage	1	mit	2024-06-09	false	JavaScript	F05_sports
+xiangnancode/LimitOrderBookSimulator	1	none	2017-04-07	false	Matlab	F07_orderbook
+XieBosco/Sportsbook-Arbitrage-Finder	1	none	2026-09-16	false	JavaScript	F05_sports
+xxxhhbb/AlphaForge	1	mit	2026-09-23	false	Python	F10_backtest
+zhangmatt/bayesian-news-fair-value	1	none	2026-07-13	false	Python	F01_prediction_markets
+zirui-Chen-maker/quant-research-lab	1	none	2026-09-08	false	Python	F10_backtest
+zuhaib2525/institutional-market-microstructure-research	1	none	2026-06-05	false	Python	F07_orderbook
+aaron-mcgrath-adp/betfair-thor	0	none	2020-07-06	false		F06_exchanges
+abiesaga90/polymarket-dashboard	0	none	2026-01-27	false		F15_dashboards
+AdithyaSalian23/mini-trading-order-management-monitoring	0	none	2026-09-18	false	Python	F08_execution
+adriantang23/SportsbookScraper	0	none	2024-07-12	false	Python	F05_sports
+aexsalomao/quale	0	none	2026-04-20	false	Python	F10_backtest
+agraolmez/equity-selection-thesis	0	other	2026-09-07	false	Python	F10_backtest
+AgrimaBhatnagar/hft-alpha-research	0	none	2026-09-17	false	C++	F07_orderbook
+AJSKirk/election_forecasting	0	mit	2020-02-24	false	Python	F11_calibration
+aKAIVALYA/projects-MCP	0	none	2025-07-15	false	TypeScript	F16_agents
+AkashElangovan/Kelly-Criterion-Betting-Calculator	0	none	2025-04-21	false	JavaScript	F09_risk_ledger
+akshatvasisht/cardinalcast	0	mit	2026-04-16	true	Python	F12_weather
+alankc06/AAPI	0	none	2018-06-13	false	Java	F06_exchanges
+alankc06/BETDAQAAPI	0	none	2018-06-06	false		F06_exchanges
+alecurtu/clv-calculator	0	none	2025-09-05	false	TypeScript	F05_sports
+alexriverwork-spec/AI-Trading-Platform	0	none	2026-07-21	false		F16_agents
+amaster97/adam-circuit-agent	0	none	2026-01-08	false	Python	F09_risk_ledger
+Anagha-2000/trade-order-management-system	0	none	2026-06-07	false	Java	F08_execution
+ananthgoyal/sportsbook-scraper	0	none	2024-11-10	false		F05_sports
+Angleito/stockbot	0	agpl-3.0	2026-09-22	false	Python	F10_backtest
+anjavera/polymarket-us-mcp	0	mit	2026-09-20	false	Python	F03_polymarket
+AnoopIbrampur/nsefactor	0	mit	2026-09-22	false	Python	F10_backtest
+anthonymorelli/prop-screen	0	none	2026-05-29	false	Python	F04_other_venues
+appstackx/hydra-trading-ui	0	apache-2.0	2026-07-30	false	TypeScript	F08_execution
+Artic853/kdbtrade	0	none	2026-08-15	false	Python	F07_orderbook
+Artrciik25o2s/ProphetX	0	none	2025-07-05	false	JavaScript	F04_other_venues
+asiamato/proper-scoring-rules-engine	0	mit	2026-03-31	false	Python	F11_calibration
+asiimwewislye/qeslab	0	none	2026-05-14	false	Python	F16_agents
+Astreus-5/Atreus-trading-agent	0	none	2026-09-06	false	TypeScript	F16_agents
+Auriora/TimeLocker	0	other	2026-08-13	false	Python	F10_backtest
+AyushRatan1/Mcp-polymarket	0	mit	2025-04-25	false	Python	F16_agents
+AyushRatan1/MCP-Polymarket-APP	0	none	2025-04-25	false	Python	F16_agents
+AyushRatan1/Onfinance-MCP-Polymarket	0	mit	2025-04-25	false	Python	F16_agents
+Basiliskenzahn/Quant	0	mit	2026-08-24	false	Python	F07_orderbook
+beckettrj/sportsbookreview-scraper2	0	none	2025-06-24	false		F05_sports
+bellatrix-ds/uniswap-v3-position-accounting	0	none	2026-07-31	false	Makefile	F09_risk_ledger
+bengoshorn/march-madness-betting-model	0	none	2026-03-17	false	Python	F09_risk_ledger
+bertybaums/prophets-and-losses	0	none	2026-02-26	false	JavaScript	F11_calibration
+betprophet1/python-parlay-api-integration-guide	0	none	2026-05-12	false	Python	F04_other_venues
+BFlinkDesign/ncaa-basketball-system	0	none	2026-09-22	false	Python	F09_risk_ledger
+BitKilou/Polymarket_Dashboard	0	none	2026-02-25	false	HTML	F15_dashboards
+blackjackmath-research/card-counting-simulator	0	mit	2026-09-22	false	TypeScript	F09_risk_ledger
+BrainDAO/mcp-kalshi	0	none	2026-06-16	false	TypeScript	F16_agents
+BrainDAO/mcp-limitless	0	mit	2026-06-23	false	TypeScript	F04_other_venues
+Brianhernandez-dev/SportsModel	0	none	2026-09-23	false	Python	F05_sports
+brviscase-blip/betfair-bot	0	none	2026-07-09	false	TypeScript	F06_exchanges
+burdena0/weather-lab-polymarket-us	0	none	2026-09-17	false	Python	F03_polymarket
+Bwizrd/Trading-MCP	0	none	2026-01-23	false	HTML	F16_agents
+Canjn777/weather-dashboard	0	mit	2026-07-21	false	Python	F12_weather
+Captainzero69/HellaWeather	0	none	2026-02-13	false		F12_weather
+chandr3w/Kalshi_Trader	0	none	2026-04-06	false	Python	F12_weather
+charlescol/itch-mbo-feed-replay	0	none	2026-06-22	false	C++	F07_orderbook
+charlottek26/SkyOracle	0	none	2026-08-15	false	TypeScript	F12_weather
+Chkeibs/Kalshi-Polymarket-Arbitrage-Simulation	0	none	2026-09-16	false	Python	F13_news_llm
+chrisx262/closingline	0	none	2026-09-21	false	Python	F05_sports
+ClaudenI8/weather-trading-agent	0	none	2026-03-30	false		F12_weather
+clinsbb1/candlecall	0	none	2026-04-10	false	PHP	F04_other_venues
+ClolyAgent/mcp-polymarket	0	mit	2026-05-18	false	TypeScript	F16_agents
+Codybk/polymarket-us-paper-agent	0	none	2026-08-28	false	Python	F03_polymarket
+coenensam/tennis-match-predictor	0	other	2026-07-01	false	Jupyter Notebook	F05_sports
+cran/scoring	0	none	2018-02-12	false	R	F11_calibration
+crippersland/Myriad-signal-bot	0	none	2026-04-08	false	Python	F04_other_venues
+crollila/polymarket-vegas-edge	0	mit	2026-08-13	false	Python	F05_sports
+ctkrug/bankroll	0	mit	2026-08-01	false	JavaScript	F09_risk_ledger
+cullejam/weather_kalshi	0	none	2026-03-25	false	Python	F12_weather
+CuriousNPC/PolymarketDashboard	0	none	2024-09-17	false	Python	F15_dashboards
+CustomBooch/quant-research-platform	0	mit	2026-08-22	false		F10_backtest
+D-BX/KPRbitrage	0	none	2026-02-23	false	Python	F13_news_llm
+DanielBerd/kellybrated	0	0bsd	2026-08-11	false	HTML	F09_risk_ledger
+danielcox7/bet-bot	0	none	2026-09-22	false	JavaScript	F06_exchanges
+david-agentic/ml-trading	0	none	2026-08-27	false	HTML	F08_execution
+davidhilscher/Project-gambl	0	none	2025-12-19	false	Python	F09_risk_ledger
+davidrobbo/Betfair-bot	0	none	2016-06-10	false	Visual Basic	F06_exchanges
+dbotx/dbot-mcp-servers	0	mit	2025-07-24	false	JavaScript	F16_agents
+dcxtrfx/Betfair-bot-	0	none	2026-03-16	false		F06_exchanges
+devtry8/closing-line-value-and-why-professionals-pay-atten-4945	0	none	2026-04-09	false		F05_sports
+devtry8/how-closing-line-value-separates-signal-from-noise-4476	0	none	2026-04-09	false		F05_sports
+devtry8/the-case-for-closing-line-value-in-modern-sports-a-1459	0	none	2026-04-09	false	HTML	F05_sports
+devtry8/the-case-for-closing-line-value-in-modern-sports-a-6347	0	none	2026-04-09	false	HTML	F05_sports
+devtry8/the-overlooked-role-of-closing-line-value-in-sport-3652	0	none	2026-04-09	false	HTML	F05_sports
+devtry8/the-overlooked-role-of-closing-line-value-in-sport-7435	0	none	2026-04-09	false		F05_sports
+devtry8/why-closing-line-value-matters-more-than-most-fans-0755	0	none	2026-04-04	false	HTML	F05_sports
+devtry8/why-closing-line-value-matters-more-than-most-fans-9844	0	none	2026-04-09	false		F05_sports
+devtry8/why-smart-analysts-focus-on-closing-line-value-3545	0	none	2026-04-09	false	HTML	F05_sports
+devtry8/why-smart-analysts-focus-on-closing-line-value-3775	0	none	2026-04-09	false	HTML	F05_sports
+devtry8/why-smart-analysts-focus-on-closing-line-value-8583	0	none	2026-04-09	false	HTML	F05_sports
+dobbobalina2/Weather_app	0	none	2026-02-28	false	TypeScript	F04_other_venues
+Dobozib/Point-in-Time-Data-Pipeline	0	none	2026-09-07	false		F10_backtest
+dong-quan-tran/Bookforge	0	mit	2026-09-08	false	C++	F07_orderbook
+dpkmhn/trading-order-management-system	0	none	2026-04-19	false	Java	F08_execution
+dragonhuntr/go-polymarket-us-ws	0	none	2026-01-19	false	Go	F03_polymarket
+EagleCreek/ProphetX	0	none	2018-04-25	false	JavaScript	F04_other_venues
+edlee9514/myriad-5m-bot	0	none	2026-03-16	false	Python	F04_other_venues
+edoardopasero-tech/polymarket-user-toolkit	0	none	2026-04-20	false	Python	F03_polymarket
+edunavata/clv-poc	0	none	2026-08-11	false	Python	F05_sports
+ee2625/kalshi-polymarket-arb	0	none	2026-05-07	false	Python	F13_news_llm
+ejnj03/kalshi-polymarket-arbitrage	0	none	2026-08-04	false	Python	F13_news_llm
+elftvxq/Orderbook-WebSocket	0	none	2022-06-30	false	JavaScript	F07_orderbook
+eliasgehring/polyedge	0	none	2026-08-06	false	Python	F01_prediction_markets
+ethandede/pmwb	0	none	2026-04-16	false	Python	F12_weather
+Evan-k-global/perfect-weather_prediction_market	0	apache-2.0	2026-05-11	false	TypeScript	F12_weather
+evo-ai/prediction-market-backtesting	0	other	2026-07-05	false	Python	F01_prediction_markets
+faculadcani/prediction-backtest	0	mit	2026-04-12	false	Python	F01_prediction_markets
+faith176/Service-Novigrad	0	none	2021-03-07	false	Java	F04_other_venues
+falloutphil/BetfairBot	0	none	2016-11-09	false	C	F06_exchanges
+Faxulous/supersecretbetcodehistoryformcp	0	none	2025-08-26	false	Python	F06_exchanges
+fclarke1/betfair_bot	0	none	2024-09-05	false	Jupyter Notebook	F06_exchanges
+ferrerallan/betfair-bot	0	none	2026-09-04	false	Python	F06_exchanges
+Franzferdinan51/polymarket-MCP	0	none	2026-04-29	false	JavaScript	F03_polymarket
+galpha-ai/open-pm-backtest	0	mit	2026-04-20	false	Python	F01_prediction_markets
+Gayatri45/TradingOrderManagementSystem	0	none	2026-02-25	false	JavaScript	F08_execution
+gbozee/UExInterface	0	mit	2021-09-22	false	Python	F08_execution
+giovanni-ghegin/Polymarket-Dashboard	0	none	2026-04-24	false	Python	F15_dashboards
+GregoryBartolo/polymarket-weather-bot	0	none	2026-05-07	false	Python	F12_weather
+Habeel-Shamsudeen/sportsbook-scraper	0	none	2025-12-11	false	Python	F05_sports
+haisapan/ethereum-trading-mcp-server	0	none	2025-10-29	false	Rust	F16_agents
+HandyAndyShortStack/rgbdiagram	0	none	2016-05-03	false	JavaScript	F09_risk_ledger
+HarrierOnChain/Myriad-Markets	0	mit	2026-06-24	false	Rust	F04_other_venues
+HarshwardhanBhaskar/attoflow-hft	0	mit	2026-09-22	false	Rust	F07_orderbook
+HenryZhao88/kalshi-polymarket-arbitrage	0	none	2026-06-22	false	Python	F13_news_llm
+hihihhi/qrae-rd	0	none	2026-07-30	false	Python	F10_backtest
+HobanSearch/Whether	0	none	2026-02-02	false	TypeScript	F12_weather
+Hooker41/Exchange-Trading-Order-Management-Tool	0	mit	2018-05-14	false	CSS	F08_execution
+Huang-chenglong/Ashare-Alpha-Discovery	0	mit	2026-07-25	false	Python	F10_backtest
+HWatson2007/perp-regime-classifier	0	none	2026-07-27	false	Python	F10_backtest
+igorpw4/kalshi-polymarket-arbitrage	0	none	2026-08-08	false	Python	F13_news_llm
+ijurk/tnp-crps	0	none	2026-09-15	false	Jupyter Notebook	F11_calibration
+illgitthat/fastprophetx	0	mit	2026-09-13	false	Python	F04_other_venues
+irishelpful1995/kalshi-polymarket-arbitrage	0	none	2026-02-21	false	Python	F13_news_llm
+iTerminate/mailrise	0	none	2026-04-18	false		F14_notify
+itsmeber2-cell/arbscan	0	none	2026-04-04	false	JavaScript	F13_news_llm
+jacobdeviscoding/Limitless-Prediction-Market-Bots	0	none	2026-07-27	false		F04_other_venues
+JacobDHolden/Sportsbook-Line-Evaluation-Program	0	none	2024-02-18	false		F05_sports
+JacobiusMakes/betting-model-starter	0	mit	2026-09-05	false	Jupyter Notebook	F05_sports
+JacobiusMakes/parlayapi-notebooks	0	mit	2026-09-15	false	Python	F05_sports
+james-see/polymarket-scalping-bot	0	none	2026-08-31	false	Python	F03_polymarket
+james-wilder/betdaq-bot	0	none	2018-05-03	false	Go	F06_exchanges
+JamesHankinsDev/noVig	0	none	2026-04-06	false	CSS	F04_other_venues
+jamesnjk/trading-mcp-server	0	none	2026-08-16	false	Python	F16_agents
+jamesreall117/Weather-Prediction-Market	0	none	2025-02-20	false		F12_weather
+JaronKBragg7337/polymarket-us-agent	0	other	2026-09-10	false	Python	F03_polymarket
+jasonwidjajadev/cpp-market-data-engine	0	mit	2026-09-08	false	C++	F07_orderbook
+jc214-fullstack/pm-cre-workflow	0	none	2026-03-30	false	Python	F01_prediction_markets
+jcm-sci/ScoringRules.jl	0	mit	2026-04-08	false	Just	F11_calibration
+JetMendoza30/kalshi-polymarket-arbitrage	0	none	2026-04-10	false	Python	F13_news_llm
+jho1019/kalshi-polymarket-us-arb	0	none	2026-07-21	false	TypeScript	F03_polymarket
+JHSchlegel/distfit-scoring	0	mit	2026-07-28	false		F11_calibration
+jmoore87jr/sportsbook-scrapers	0	none	2020-10-13	false	Python	F05_sports
+joaopaulljp-ui/Betfair-bot	0	none	2026-04-20	false		F06_exchanges
+joinQuantish/quantish-server	0	other	2026-01-01	false	TypeScript	F16_agents
+jond580/sports-market-reversion-lab	0	other	2026-08-26	false	Python	F01_prediction_markets
+JosiahLeas/CoinbaseOrderbookWebsocket	0	none	2024-02-21	false	TypeScript	F07_orderbook
+jpierce-dev/polymarket-dashboard	0	none	2026-05-11	false	TypeScript	F15_dashboards
+jsteng19/polymarket-us-take-home	0	none	2026-08-06	false	Jupyter Notebook	F03_polymarket
+jstkyle/Sportsbook_Scraper	0	none	2023-06-05	false	Python	F05_sports
+JuanJayaJ/Scoriverse	0	mit	2025-10-01	false	R	F11_calibration
+Juanvulcano/mcp-polymarket-test	0	none	2025-12-14	false		F16_agents
+JussCubs/kalshi-mcp	0	none	2026-02-09	false	Python	F16_agents
+justinloo12/beat-the-books-public	0	none	2026-07-21	false	Python	F05_sports
+justrhoto/polymarket-us-docs	0	other	2026-09-23	false	TypeScript	F03_polymarket
+K3val17/orrery	0	mit	2026-07-06	false	Python	F10_backtest
+Kaloyan-Stankov/Orderbook-Websocket	0	none	2021-03-22	false	Java	F07_orderbook
+kennychavz/novig	0	none	2026-03-09	false	TypeScript	F04_other_venues
+kent0309/polymarket-dashboard	0	none	2026-01-08	false	Python	F15_dashboards
+Kevinbeltran123/ML-sports-predictor	0	none	2026-03-22	false	Python	F09_risk_ledger
+KhiProspere41/ThePulse	0	mit	2026-08-24	false	Python	F05_sports
+kianlee-dev/order-management-api	0	none	2026-05-13	false	Python	F08_execution
+koggydk/betdaq-api-client	0	none	2026-03-18	false	Python	F06_exchanges
+kphilpot/Kalshi_Tele_Bot	0	none	2026-04-14	false	Python	F12_weather
+KrystynaGrzesiak/Iscores	0	none	2026-08-12	false	R	F11_calibration
+kukurmusa/betfairBot	0	none	2026-06-29	false	Python	F06_exchanges
+Kznrifky/prophetxgbforecasting	0	none	2026-03-10	false	Python	F04_other_venues
+lan956/weather-arbitrage-bot	0	none	2026-04-07	false	Python	F12_weather
+lek-orer/kalshi-polymarket-arbitrage-trading-bot-python	0	none	2025-12-10	false		F13_news_llm
+limitless-labs-group/limitless-acp	0	none	2026-08-27	false	TypeScript	F04_other_venues
+locupleto/mcp-polymarket	0	none	2026-08-08	false	Python	F16_agents
+luongs3/superteam-worldcup-bookie	0	none	2026-07-03	false	JavaScript	F05_sports
+magnus90project/Betfair	0	none	2024-05-25	false	C#	F06_exchanges
+magnus90project/BetfairBotSolution	0	none	2024-06-01	false	C#	F06_exchanges
+maraprikkripa/databricks-lakebase-app-day-3	0	none	2026-08-13	false	Python	F16_agents
+Marki4175/polymarket-user-activity-checker	0	none	2026-03-15	false	Python	F03_polymarket
+martinffx/point-in-time	0	none	2017-06-23	false	Python	F10_backtest
+matheusccouto/botfair	0	mit	2024-10-13	false	Python	F06_exchanges
+matthewbroyer/Kelly-Betting-Spreadsheet	0	mit	2024-08-08	false		F09_risk_ledger
+matthewginz/polymarket-us-bot	0	mit	2026-09-21	false		F03_polymarket
+matthewlu2/Sportsbook-Scraper-Calculator	0	none	2026-02-04	false	Python	F05_sports
+matthewmiglio/oddsjam-sportsbook-scraper	0	none	2025-12-20	false	HTML	F05_sports
+maxbiostat/proper_scoring_rules	0	mit	2020-10-14	false	TeX	F11_calibration
+MaxterPC/bybit-mcp	0	none	2026-02-26	false	Python	F16_agents
+mayankd101/flashbook	0	none	2026-08-03	false	C++	F07_orderbook
+mdunlap15/prophetx-data-explorer	0	none	2025-09-04	false	TypeScript	F04_other_venues
+mercerclayton/portfolio-management-system	0	mit	2025-09-17	false	C++	F09_risk_ledger
+mhaklee/PulseTrader	0	none	2026-04-30	false	Python	F07_orderbook
+Michaelclark2013/polymarket-dashboard	0	none	2026-05-30	false	HTML	F15_dashboards
+michealimuse777/polymarket-dashboard	0	none	2026-03-19	false	CSS	F15_dashboards
+miguels-b/atp-betting-model	0	none	2026-04-07	false	Python	F09_risk_ledger
+MK27MK/proper-scoring-rules-sp500	0	none	2026-04-29	false	R	F11_calibration
+Mohammad79-nkv/orderbook-websocket	0	none	2022-06-25	false	TypeScript	F07_orderbook
+Mohsentinal/lob-replay-engine	0	mit	2026-04-29	false	C++	F07_orderbook
+mtzdavies/BetfairBot	0	none	2018-10-30	false	C#	F06_exchanges
+muggles708/Betscaplerjs	0	none	2014-06-11	false		F06_exchanges
+muxuebingcheng/capstan	0	none	2025-08-13	false		F08_execution
+n-hassan01/live-orderbook-websocket	0	none	2024-09-26	false	TypeScript	F07_orderbook
+naraxnarax/exchange_connectors	0	mit	2026-08-19	false	Rust	F08_execution
+nathan1324/BetSizer	0	none	2026-04-01	false	HTML	F09_risk_ledger
+navadiashrey/concurrent-market-data-replay-engine	0	mit	2026-08-25	false	C++	F07_orderbook
+NelyPinhati/teste-qa-novigoit	0	none	2025-05-02	false		F04_other_venues
+neokarri946-creator/esports-predict	0	none	2026-05-10	false	Python	F09_risk_ledger
+nerocoffee/polymarket-dashboard	0	none	2026-03-24	false	TypeScript	F15_dashboards
+oddsifylabs/clv-tracker	0	none	2026-07-14	false	Python	F05_sports
+Omjha-100/Trade-Order-Management-System	0	none	2026-06-28	false	C#	F08_execution
+onedoorallsolutions/cs-oms	0	none	2022-01-21	false	Java	F08_execution
+orangeZSCB/trader-mcp	0	none	2026-06-26	false	TypeScript	F16_agents
+ospex-org/ospex-benchmark	0	mit	2026-09-18	false	TypeScript	F05_sports
+ozakboy/Ozakboy.TradeKit.Abstractions	0	mit	2026-09-16	false	C#	F09_risk_ledger
+p1cxi/212-mcp	0	mit	2026-06-19	false	Python	F09_risk_ledger
+panicAtTheCompile/dead-heat-analysis	0	none	2026-05-06	false	Jupyter Notebook	F09_risk_ledger
+parthakker/nfl-analytics	0	mit	2026-09-22	false	Python	F16_agents
+patels1999/ordersystem	0	none	2021-12-14	false	Java	F08_execution
+pbhargav7/FITOMS	0	none	2025-08-20	false		F08_execution
+pengczeczec-hub/pengbot	0	none	2026-06-29	false	HTML	F15_dashboards
+PettBro/PolymarketDashboard	0	none	2026-01-27	false	Python	F15_dashboards
+petushokmaxorka-ai/polymarket-dashboard	0	none	2026-04-20	true	HTML	F15_dashboards
+pipeworx-io/mcp-kalshi	0	mit	2026-09-17	false	TypeScript	F16_agents
+pipeworx-io/mcp-polymarket	0	mit	2026-09-18	false	TypeScript	F16_agents
+piyayayaya/Weather-Prediction-Market-Trading-Simulator	0	mit	2026-09-17	false	Python	F12_weather
+polybbot-hm/SportsbookScraperAPI	0	none	2026-04-20	false	Python	F05_sports
+poojasind98/latency-aware-order-book-replay-engine	0	none	2025-06-13	false		F07_orderbook
+popeye23/market-scanning-toolkit-	0	none	2026-09-10	false	Jupyter Notebook	F05_sports
+popiliadam/football-edge	0	none	2026-09-23	false	Python	F05_sports
+powoso/weather-backtest	0	none	2026-02-27	false	Python	F12_weather
+pplmaverick/tempo-weather-market	0	mit	2026-09-04	false	TypeScript	F12_weather
+PRAHE/financial-distress-early-warning	0	none	2026-08-19	false	Python	F10_backtest
+pranavpillaiNUS/l2-mm-system	0	mit	2026-09-12	false	Python	F07_orderbook
+Problemsolver0070/Blackjack-card-scanner-and-counter	0	none	2026-05-14	false	Python	F09_risk_ledger
+problemxl/vane	0	none	2026-05-27	false	Python	F12_weather
+ProphetXA/ProphetXA	0	none	2021-09-22	false		F04_other_venues
+prophetxfake/prophetxfake	0	none	2024-08-25	false		F04_other_venues
+prophetxo/prophetxo.github.io	0	none	2026-04-19	false	CSS	F04_other_venues
+psenthkum134/MLB-Moneyline-Markets	0	none	2026-07-29	false	Python	F05_sports
+pxjoh/prophetx-content-calendar	0	none	2026-08-12	false	TypeScript	F04_other_venues
+py-numeraire/numeraire-dataset	0	bsd-3-clause	2026-07-19	false	Python	F10_backtest
+qdibs-web3/polymarket-dashboard	0	none	2026-02-28	false	TypeScript	F15_dashboards
+QuantLet/Proper-Scoring-Rules	0	none	2026-01-26	false	Jupyter Notebook	F11_calibration
+QuentinAndre/sportsbook-scraper	0	none	2026-03-04	false	JavaScript	F05_sports
+rangertaha/coinbase-mcp	0	mit	2026-07-15	false	Go	F16_agents
+rangertaha/kalshi-mcp	0	mit	2026-06-30	false	Go	F16_agents
+ratatatatat/kellyCriterion	0	none	2017-02-10	false	Python	F09_risk_ledger
+RBA123/kalshi-markets-analysis	0	none	2026-09-20	false	Jupyter Notebook	F02_kalshi
+rdpunder/LSPS	0	mit	2025-09-30	false	Python	F11_calibration
+realgeedamante/weather-bot	0	none	2026-09-22	false		F12_weather
+ridahaidar992-creator/java-trading-order-system	0	none	2026-03-15	false	Java	F08_execution
+riteshh107-tatascientist/Smart-Agriculture-AI	0	none	2026-05-01	false	Python	F12_weather
+RomanPlaud/tailored-psr	0	none	2026-05-18	false	Python	F11_calibration
+Rossod4/quantlab	0	none	2026-09-12	false	Python	F10_backtest
+saarthakg/lob-sim-cpp	0	none	2026-09-02	false	C++	F07_orderbook
+Sadow-Vortex/Order_Management	0	none	2025-06-20	false	Java	F08_execution
+saiharshavarma/OrderBookReplay	0	none	2025-10-06	false	C++	F07_orderbook
+sallen12/ConditionalScoreDecomp	0	none	2023-11-08	false	R	F11_calibration
+Sam-exe/Kelly-Calculator-for-SureBet.com	0	none	2025-08-26	false	JavaScript	F09_risk_ledger
+samarthjoshi964-ux/trading-order-management-system	0	none	2026-08-12	false	Python	F08_execution
+samslunch/betdaq-bot	0	none	2025-11-28	false	Python	F06_exchanges
+sanskarbhavar28-del/Agro-bridge	0	none	2026-08-05	false		F08_execution
+sarahclawnor/polymarket-dashboard	0	none	2026-03-25	false	TypeScript	F15_dashboards
+sati2013/kelly-sizer	0	mit	2026-08-22	false	Python	F09_risk_ledger
+SatyaA27/kalshi-tennis-paper-trading	0	none	2026-08-13	false	Python	F07_orderbook
+scottdmorris/edgefinder	0	none	2026-08-21	false	Python	F05_sports
+sebyYepes/Sportsbook_Scraper	0	none	2026-03-27	false	Jupyter Notebook	F05_sports
+shanmukhasantoshreddy10-coder/PolymarketDashboard	0	none	2026-03-01	false	Python	F15_dashboards
+sherlie/inverse-score	0	none	2019-05-16	false	Jupyter Notebook	F11_calibration
+ShubhamNakhod/Kelly-Criterion-Betting-Simulator	0	none	2025-08-21	false	Python	F09_risk_ledger
+sm5190/sportsbook-scraper	0	none	2026-01-27	false	Python	F05_sports
+soodoku/data-repos	0	none	2026-09-14	false		F10_backtest
+SpacerexSoul/obscura	0	mit	2026-05-05	false	Python	F07_orderbook
+Sreenivas-Sadhu-Prabhakara/sd-trade-order-management	0	none	2026-09-23	false	Java	F08_execution
+SSDALab/COCHomeless	0	none	2026-09-02	false	R	F10_backtest
+Stefangur/polymarket-dashboard	0	none	2026-03-28	false	TypeScript	F15_dashboards
+stefantapescu/polymarket-dashboard	0	none	2026-02-21	false	Python	F15_dashboards
+straffonmath-pixel/polymarket-dashboard	0	none	2026-09-12	false	HTML	F15_dashboards
+submartingle/orderbook-sim-q	0	none	2026-08-04	false	q	F07_orderbook
+sui414/polymarket-user-base	0	none	2026-08-26	true	HTML	F03_polymarket
+Sully-Ok/weather-prediction-market-model	0	none	2026-08-12	false	Python	F12_weather
+surajitsamanta7/TradeFlow-OMS	0	none	2026-06-09	false		F08_execution
+Swicko87/betfairbot	0	none	2026-08-15	false	Python	F06_exchanges
+teeclaw/polyweater	0	none	2026-03-29	false	Python	F12_weather
+trevmon28/CollegeBaseballAnalytics	0	none	2026-09-23	false	Python	F09_risk_ledger
+tumicat/PIT-Fundamental-Data-SDK	0	none	2023-04-24	false	Jupyter Notebook	F10_backtest
+Turnipnator/Betfair_Bot	0	none	2026-09-14	false	Python	F06_exchanges
+TylerPardun/pluvio_analytics	0	none	2026-04-07	false	Python	F12_weather
+UmutCanDundar/TradingEngine	0	none	2026-08-25	false	C++	F08_execution
+unehis/probabilistic-forecasting-llm-training	0	none	2026-08-17	false	Python	F11_calibration
+unsanction/mcp-polymarket	0	none	2026-02-09	false	TypeScript	F16_agents
+Usmankhan866/BetfairBot	0	none	2025-11-26	false	Python	F06_exchanges
+vayesy/betdaq	0	apache-2.0	2023-08-22	false	Python	F06_exchanges
+Vellinium/vellinium-sdk	0	mit	2025-12-29	false	TypeScript	F09_risk_ledger
+Verifiedlabs/limitless-bot	0	none	2026-04-29	false	TypeScript	F04_other_venues
+vikt20/unified-exchanges-api-node	0	none	2026-08-11	false	TypeScript	F08_execution
+vimasamo/mcp-polymarket-agent	0	none	2026-05-12	false	TypeScript	F16_agents
+Viprasol-Tech/orderbook-websocket	0	mit	2026-08-01	false	Python	F07_orderbook
+vishal-tiwari9/multi-venue-trading-engine	0	none	2026-07-28	false	Rust	F08_execution
+vossie/BetfairBotML	0	none	2025-10-16	false	Python	F06_exchanges
+vraj2131/ProphetX	0	none	2025-09-17	false	Jupyter Notebook	F04_other_venues
+vt9311692-bot/INNOVAHACKS	0	none	2026-07-25	false	HTML	F16_agents
+vulfff/polyWeather	0	none	2026-07-06	false	Python	F12_weather
+wanony/Krusty-Krab	0	none	2024-03-04	false	Rust	F08_execution
+waterypoo456/NEW-Weather-kalshi-	0	none	2026-01-11	false		F12_weather
+winstongarth/point-in-time-datawarehouse	0	none	2026-07-21	false	Python	F10_backtest
+xas-L/options-desk-analytics	0	mit	2026-08-03	false	Jupyter Notebook	F07_orderbook
+xkk9866/PLCG_C3	0	mit	2026-09-13	false	Python	F11_calibration
+yaukwan/eth_trading_mcp	0	none	2025-11-26	false	Rust	F16_agents
+ydjemai93/weather-bot	0	none	2026-03-16	false	Python	F12_weather
+yerlannof/possession-value	0	none	2026-08-06	false	Python	F11_calibration
+yqj2k/sportsbook-scraper	0	none	2024-04-10	false	Python	F05_sports
+Yunjihun-n/mcp-binance-futures	0	none	2026-03-30	false	Python	F16_agents
+YuxiangJiangCT/fastapi-trade-service	0	none	2026-03-29	false	Python	F08_execution
+zagordemores/betfair_bot	0	none	2026-04-13	false	Python	F06_exchanges

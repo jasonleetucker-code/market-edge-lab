@@ -278,7 +278,8 @@ def _alert_key(receipt: dict[str, Any]) -> Any:
     if receipt.get("state") == "INVALID_CAPTURE":
         return (receipt.get("latest_day") or {}).get("target_date")
     conflicts = (receipt.get("settlement") or {}).get("conflicts") or []
-    return sorted((c.get("account_id"), c.get("position_id"), json.dumps(c.get("variants"), sort_keys=True))
+    return sorted((c.get("account_id"), c.get("position_id"), json.dumps(c.get("variants"), sort_keys=True),
+                   c.get("reason") or "")
                   for c in conflicts)
 
 
