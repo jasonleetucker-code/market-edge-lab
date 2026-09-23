@@ -7,7 +7,7 @@ _Last updated: 2026-09-22 late ET (2026-09-23 about 02:30 UTC), by the PR that r
 overnight build directive (`docs/owner/2026-09-22-overnight-build-directive.md`)._
 
 ```
-STATUS: PARTIAL. The overnight directive is recorded and Gate 5 is ACTIVE. The forward
+STATUS: PARTIAL. The overnight directive is recorded. Gate 5 PASSED (PR #22) and Gate 6 is ACTIVE. The forward
   collector is DEPLOYED on chaseupside and PRODUCTION_VERIFIED for the fail-closed path,
   backup and restore. No live window has run yet. Valid Stage B days: 0.
 ACCEPTANCE: the owner's overnight build directive, recorded verbatim. Its first items are
@@ -45,6 +45,14 @@ EVIDENCE:
     - Brisket units (nginx, dynasty, dynasty-frontend, docker) kept the same PIDs and
       start times before and after. The capture timers (pfm, decision, recheck) were
       not touched.
+  - Gate 5 (PR #22): opportunity engine (ADR 0013).
+    - Reusable contracts, plus Kalshi and EXP-001 adapters.
+    - `edge-lab forward opportunities --date D` lists every (bracket, side) opportunity
+      with ordered reasons. Only VALID Stage B days can qualify (EVIDENCE_INCOMPLETE
+      otherwise). Settlement equivalence (event, date, CLINYC) fails closed.
+    - 60+ new tests.
+    - The independent review found 1 blocker (a market for another day could qualify). It
+      was fixed and re-reviewed with no blocker.
   - Fee schedule, re-checked 2026-09-23 02:20 UTC:
     - The public API reports KXHIGHNY fee_type "quadratic", fee_multiplier 1,
       last_updated 2026-09-17; /series/fee_changes is empty.
@@ -69,8 +77,8 @@ UNRESOLVED:
     root-equivalent.
   - Cosmetic: the alert instance name doubles the suffix (edgelab-alert@<unit>.service.service).
 BLOCKERS: NONE
-NEXT ACTION: Build the Gate 5 opportunity engine, then, if Gate 5 passes, Gate 6. After
-  2026-09-23 18:30 ET, confirm that D = 2026-09-24 is VALID on the VPS.
+NEXT ACTION: Gate 6 shadow ledger PR. After 2026-09-23 18:30 ET, confirm that
+  D = 2026-09-24 is VALID on the VPS.
 ```
 
 ## 30-day directive status (issue #11, target 2026-10-22)
