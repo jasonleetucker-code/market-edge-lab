@@ -101,12 +101,16 @@ def test_only_production_needs_attention_and_origins_never_mix(mixed):
     assert "never counted as attention" in plain(body)
 
 
-def test_an_unconfirmed_verification_record_is_a_production_incident(mixed):
+def test_an_unconfirmed_or_expired_verification_is_its_own_state_never_an_incident(mixed):
+    """Root's confirmations are cleaned up after 7 days; the record then stays unproven, not an incident.
+    Production failures live only in last_failure.json, so this record can never hide one."""
     _, body = call(make_app(mixed), "/alerts")
-    attention = plain(section(body, "al-attention"))
-    assert "Production incident: unit failed: edgelab-shadow.service" in attention
-    assert "claims origin DEPLOYMENT_VERIFICATION, but no root confirmation" in attention
+    attention, checks = plain(section(body, "al-attention")), plain(section(body, "al-checks"))
+    title = "Verification record: edgelab-shadow.service (root confirmation not found or expired)"
+    assert title in checks and "edgelab-shadow.service" not in attention
     assert "Verification check:" not in plain(body)
+    ctx = d.Context(mixed)
+    assert not any(a.group == "attention" and "edgelab-shadow" in a.title for a in cm.alerts(ctx))
 
 
 def test_a_root_confirmed_verification_is_a_check_not_an_incident(tmp_path, monkeypatch):
@@ -119,7 +123,9 @@ def test_a_root_confirmed_verification_is_a_check_not_an_incident(tmp_path, monk
     assert "Production incident" not in plain(section(body, "al-attention"))
     assert not any("edgelab-shadow" in a.title for a in cm.alerts(d.Context(cfg)) if a.group == "attention")
     _, home = call(app, "/")
-    assert "Verification check: edgelab-shadow.service" in home and "Production incident" not in home
+    assert "Production incident" not in plain(section(home, "act-h"))
+    assert "Verification check: edgelab-shadow.service" not in plain(section(home, "act-h"))  # Alerts only
+    assert "shown as Verification check" in plain(home)  # System & evidence
 
 
 def test_the_bell_counts_production_attention_only(mixed):
@@ -128,7 +134,8 @@ def test_the_bell_counts_production_attention_only(mixed):
     attention = [a for a in items if a.group == "attention"]
     assert cm.attention_count(ctx) == len(attention)
     assert all(a.origin in ("PRODUCTION", None) for a in attention)
-    assert {a.origin for a in items if a.group == "checks"} == {"TEST", "MANUAL_DIAGNOSTIC", "REPLAY", "DEMO"}
+    assert {a.origin for a in items if a.group == "checks"} == {"TEST", "MANUAL_DIAGNOSTIC", "REPLAY", "DEMO",
+                                                                  "DEPLOYMENT_VERIFICATION"}
 
 
 def test_delivery_wording_follows_the_origin_policy(mixed):
@@ -254,4 +261,37 @@ def test_data_sources_tab_shows_the_odds_card(tmp_path):
 
 def test_file_names_match_the_verification_owner():
     assert (d.FAILURE_FILE, d.VERIFICATION_FILE) == (verification.FAILURE_NAME, verification.VERIFICATION_NAME)
+
+
+def test_last_failure_is_always_production_whatever_it_claims(tmp_path, monkeypatch):
+    monkeypatch.setattr(verification, "verification_confirmed", lambda record, **k: True)
+    cfg = _status_dir(tmp_path, failure=_record("edgelab-decision.service", "DEPLOYMENT_VERIFICATION"))
+    (alert,) = [a for a in cm.alerts(d.Context(cfg)) if "edgelab-decision" in (a.subject or "")]
+    assert alert.group == "attention" and alert.title.startswith("Production incident")
+    assert "last_failure.json holds production failures only" in alert.reason
+
+
+def test_terminal_activity_shows_production_only(mixed):
+    _, home = call(make_app(mixed), "/")
+    activity = plain(section(home, "act-h"))
+    assert "PROD critical" in activity and "Production incident: unit failed: edgelab-decision.service" in activity
+    for needle in ("TEST critical", "MANUAL check", "REPLAY row", "DEMO row", "Verification record"):
+        assert needle not in activity, needle
+
+
+def test_untrusted_text_is_escaped_everywhere(tmp_path):
+    evil = "<script>alert(1)</script>"
+    event = _event(evil, n.Origin.TEST)
+    cfg = _status_dir(tmp_path, failure=_record(unit=evil), events=[event, _event(evil, n.Origin.PRODUCTION)])
+    for path in ("/alerts", "/"):
+        _, body = call(make_app(cfg), path)
+        assert evil not in body and "&lt;script&gt;" in body, path
+    card = c.odds_status_card(_odds("SETUP_NEEDED", detail=evil, problems=[evil]))
+    assert evil not in card and "&lt;script&gt;" in card
+
+
+@pytest.mark.parametrize("state", ["CONNECTED", "OK", "", None, "active"])
+def test_an_unexpected_odds_state_is_unknown_never_passed_through(state):
+    text = plain(c.odds_status_card({**_odds("ACTIVE", verified=True), "state": state}))
+    assert text.startswith("The Odds API — UNKNOWN") and "CONNECTED" not in text.split("state (as reported)")[0]
 

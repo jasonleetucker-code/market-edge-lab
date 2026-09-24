@@ -361,21 +361,30 @@ def failure_alert(f: d.FailureRecord) -> Alert:
     if f.error is not None:
         return Alert("attention", "err", f"Unit-failure record unreadable ({f.source})", None, None, f.error, None,
                      "Recorded locally", "ERROR")
-    if f.verification:
-        return Alert("checks", "nd", f"Verification check: {unit} refused as expected", f.record.get("unit"),
-                     f.record.get("failed_at_utc"), f"Deployment verification confirmed by root ({f.source}). "
-                     "Not an incident; never pushed.", None, "Stored locally; never pushed (verification)",
-                     "DEPLOYMENT_VERIFICATION", f.record, "DEPLOYMENT_VERIFICATION")
+    if f.source == d.VERIFICATION_FILE:
+        # alert.sh writes production failures only to last_failure.json, so a record here cannot hide one.
+        # Root's confirmation files are cleaned up after 7 days: an unconfirmed record is a check whose
+        # proof is missing or expired, shown as such, never as a production incident.
+        if f.verification:
+            return Alert("checks", "nd", f"Verification check: {unit} refused as expected", f.record.get("unit"),
+                         f.record.get("failed_at_utc"), f"Deployment verification confirmed by root ({f.source}). "
+                         "Not an incident; never pushed.", None, "Stored locally; never pushed (verification)",
+                         "DEPLOYMENT_VERIFICATION", f.record, "DEPLOYMENT_VERIFICATION")
+        return Alert("checks", "warn", f"Verification record: {unit} (root confirmation not found or expired)",
+                     f.record.get("unit"), f.record.get("failed_at_utc"),
+                     f"Recorded in {f.source}. No root confirmation of this check exists now (it may have expired "
+                     "after 7 days), so it is not proven to be the runbook check. Production failures are recorded "
+                     "separately in last_failure.json.", None, "Stored locally; never pushed (verification)",
+                     "VERIFICATION_UNCONFIRMED", f.record, f.origin)
     claimed = f.record.get("origin")
     why = f"Recorded in {f.source} by the failure hook."
     if claimed not in (None, "PRODUCTION"):
-        why += (f" It claims origin {claimed}, but no root confirmation of a verification exists, so it is "
-                "treated as a production failure.")
+        why += f" It claims origin {claimed}, but last_failure.json holds production failures only."
     return Alert("attention", "err", f"Production incident: unit failed: {unit}", f.record.get("unit"),
                  f.record.get("failed_at_utc"), why, None, "Recorded locally", "FAILED", f.record, "PRODUCTION")
 
 
-def _delivery(origin: Any) -> str:
+def delivery_text(origin: Any) -> str:
     """How a notification of this origin is delivered (notifications' origin policy); the outbox row
     is the only record here."""
     from ... import notifications as n
@@ -421,7 +430,7 @@ def alerts(ctx: d.Context) -> list[Alert]:
                                row.get("market_id") or row.get("venue_id"), row.get("created_at_utc"),
                                f"{pr.state_word(row.get('type')).label if row.get('type') else 'Event'}"
                                + (" · expired" if expired else ""), _safe_local_href(row.get("deep_link")),
-                               _delivery(origin_value), row.get("type"), row, origin_value))
+                               delivery_text(origin_value), row.get("type"), row, origin_value))
     return items
 
 

@@ -410,10 +410,11 @@ class Context:
 
 @dataclass(frozen=True)
 class FailureRecord:
-    """One unit-failure record and how to present it. `verification` is True only for a record
-    that says DEPLOYMENT_VERIFICATION *and* that root confirmed as the runbook's fail-closed check
-    (`verification.verification_confirmed`): anything else, whatever it claims, is a production
-    failure. `origin` is the record's origin value (None: an unrecognised value)."""
+    """One unit-failure record and how to present it. last_failure.json holds production failures
+    only (alert.sh). `verification` is True only for a last_verification.json record that says
+    DEPLOYMENT_VERIFICATION *and* that root confirmed (`verification.verification_confirmed`); an
+    unconfirmed one is shown as an unproven or expired check, never as an incident. `origin` is the
+    record's origin value (None: an unrecognised value)."""
 
     source: str  # FAILURE_FILE | VERIFICATION_FILE
     record: dict[str, Any]
@@ -426,7 +427,8 @@ def classify_failure(source: str, record: dict[str, Any]) -> FailureRecord:
     from .. import notifications, verification
 
     origin = notifications.origin_of(record)
-    confirmed = origin is notifications.Origin.DEPLOYMENT_VERIFICATION and verification.verification_confirmed(record)
+    confirmed = (source == VERIFICATION_FILE and origin is notifications.Origin.DEPLOYMENT_VERIFICATION
+                 and verification.verification_confirmed(record))
     return FailureRecord(source, record, None if origin is None else origin.value, bool(confirmed))
 
 

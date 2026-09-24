@@ -7,6 +7,7 @@ explicit unavailable marker with accessible text, never as zero.
 
 from __future__ import annotations
 
+import json
 from typing import Any, Iterable, Mapping, Sequence
 from urllib.parse import urlencode
 
@@ -827,7 +828,7 @@ def odds_status_card(status: Mapping[str, Any]) -> str:
         ("sport", code(_g(status, "sport"))), ("policy version", esc(_g(status, "policy_version"))),
         ("markets observed", ul(_g(status, "markets_observed") or ())),
         ("bookmakers observed", ul(_g(status, "bookmakers_observed") or ())),
-        ("targets", esc(cm_json(_g(status, "targets")))), ("cost block", esc(cm_json(_g(status, "cost_block")))),
+        ("targets", esc(_json_text(_g(status, "targets")))), ("cost block", esc(_json_text(_g(status, "cost_block")))),
         ("quota detail", esc(_g(quota, "detail"))), ("pilot state file", code(_g(status, "pilot_state_file"))),
         ("problems", ul(problems)), ("as of (UTC)", esc(_g(status, "as_of_utc"))),
     ]))
@@ -835,7 +836,5 @@ def odds_status_card(status: Mapping[str, Any]) -> str:
             + "</ul>" + (f'<div class="pad">{notes}</div>' if notes else ""))
 
 
-def cm_json(value: Any) -> str | None:
-    import json
+def _json_text(value: Any) -> str | None:
     return None if value is None else json.dumps(value, sort_keys=True, default=str)
-

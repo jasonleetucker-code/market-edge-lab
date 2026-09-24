@@ -279,4 +279,3 @@ def synthetic_failure_record(unit: str, origin: str | None = None) -> dict:
     if origin is not None:
         record["origin"] = origin
     return record
-

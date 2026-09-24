@@ -17,7 +17,7 @@ def _row(a: cm.Alert) -> str:
     origin = f"{c.badge(pr.origin_code(a.origin))} " if a.raw is not None else ""
     extra = (f'<p class="meta">{origin}{esc(a.delivery)}' + (f" · {esc(a.subject)}" if a.subject else "") + "</p>")
     if a.raw is not None:
-        extra += c.disclosure("Notification record", c.kv([(k, esc(v if not isinstance(v, (dict, list)) else cm.jdump(v)))
+        extra += c.disclosure("Recorded fields", c.kv([(k, esc(v if not isinstance(v, (dict, list)) else cm.jdump(v)))
                                                            for k, v in sorted(a.raw.items())]))
     title = a.title if a.group != "expired" else f"Expired · {a.title}"
     return c.activity_row(a.kind if a.group != "expired" else "nd", title, a.reason, a.when_utc,

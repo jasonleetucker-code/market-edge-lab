@@ -360,6 +360,7 @@ STATES: dict[str, StateWord] = {
     "ORIGIN_DEMO": StateWord("Demo", ND_K),
     "ORIGIN_UNKNOWN": StateWord("Origin unrecognised", WARN_K),
     "HELD_BY_ORIGIN": StateWord("Stored, not pushed (origin)", ND_K),
+    "VERIFICATION_UNCONFIRMED": StateWord("Verification not confirmed", WARN_K),
     # The Odds API pilot (odds_pilot.dashboard_status, most blocking first). Never "connected"
     # before a stored live read that held offers.
     "COST_BLOCKED": StateWord("Cost blocked", ERR_K),
@@ -1045,7 +1046,11 @@ def origin_code(origin: Any) -> str:
 def odds_state(status: Mapping[str, Any] | None) -> str:
     """The Odds API card state. ACTIVE is shown only with a verified live read; a status that
     claims ACTIVE without one is shown as UNVERIFIED, never as connected."""
+    from ..odds_pilot import DASHBOARD_STATES
+
     state = str(_get(status, "state") or "UNKNOWN")
+    if state not in DASHBOARD_STATES:
+        return "UNKNOWN"  # never shown as reported: an unexpected word (e.g. "CONNECTED") is unknown
     if state == "ACTIVE" and _get(status, "live_read_verified") is not True:
         return "UNVERIFIED"
     return state

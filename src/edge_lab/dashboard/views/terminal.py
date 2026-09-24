@@ -121,7 +121,11 @@ def matters(ctx: d.Context, p: pr.Params) -> str:
 def activity(ctx: d.Context) -> str:
     events: list[tuple[str, str, str, str | None, str | None]] = []
     if ctx.notifications.status == d.OK:
+        from ... import notifications as nt
         for n in ctx.notifications.value:
+            origin = nt.origin_of(n)
+            if origin is not None and origin is not nt.Origin.PRODUCTION:
+                continue  # tests, checks, diagnostics, replays and demos stay on Alerts, never mixed in here
             kind = {"CRITICAL": "err", "WARNING": "warn", "INFO": "info"}.get(str(n.get("severity")), "nd")
             events.append((kind, str(n.get("summary") or n.get("type") or "Notification"), pr.state_word(n.get("type")).label,
                            n.get("created_at_utc"), "/alerts"))
@@ -138,7 +142,8 @@ def activity(ctx: d.Context) -> str:
                        s.get("generated_at_utc"), None))
     for f in ctx.failure_records:
         a = cm.failure_alert(f)
-        events.append((a.kind, a.title, f.source, a.when_utc, "/alerts"))
+        if a.group == "attention":  # production incidents only; verification records stay on Alerts
+            events.append((a.kind, a.title, f.source, a.when_utc, "/alerts"))
     events.sort(key=lambda e: str(e[3] or ""), reverse=True)
     if not events:
         body = c.empty_state("No activity recorded yet", "Collector reports, pipeline runs and notifications appear "
@@ -206,7 +211,7 @@ def system(ctx: d.Context) -> str:
         if f.error is not None:
             parts.append(c.error_state(f"{heading} ({f.source})", f.error))
             continue
-        shown = "Verification check (root-confirmed)" if f.verification else "Production incident"
+        shown = cm.failure_alert(f).title.split(":", 1)[0]
         parts.append(f'<h3 class="eyebrow">{esc(heading)} ({esc(f.source)})</h3>' + c.kv([
             ("shown as", esc(shown)), ("origin recorded", c.code(f.record.get("origin") or "none (production)")),
             ("unit", esc(f.record.get("unit"))), ("failed at", esc(f.record.get("failed_at_utc"))),

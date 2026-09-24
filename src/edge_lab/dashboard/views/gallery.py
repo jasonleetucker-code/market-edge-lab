@@ -109,11 +109,14 @@ def view(ctx: d.Context, p: pr.Params) -> cm.Page:
             "edgelab-shadow.service", "DEPLOYMENT_VERIFICATION"), "DEPLOYMENT_VERIFICATION", True)),
         cm.failure_alert(d.FailureRecord(d.VERIFICATION_FILE, fixtures.synthetic_failure_record(
             "edgelab-shadow.service", "DEPLOYMENT_VERIFICATION"), "DEPLOYMENT_VERIFICATION", False)),
+        cm.failure_alert(d.FailureRecord(d.FAILURE_FILE, fixtures.synthetic_failure_record(
+            "edgelab-decision.service", "DEPLOYMENT_VERIFICATION"), "DEPLOYMENT_VERIFICATION", True)),
     ] + [cm.Alert("checks", "nd", f"SYNTHETIC: {o.replace('_', ' ').lower()} event", None, fixtures.T1, "Source failure",
-                  None, cm._delivery(o), "SOURCE_FAILURE", {"origin": o}, o)
+                  None, cm.delivery_text(o), "SOURCE_FAILURE", {"origin": o}, o)
          for o in ("TEST", "MANUAL_DIAGNOSTIC", "REPLAY", "DEMO")]
     parts.append(c.section("Alert origins", '<ul class="rows">' + "".join(alerts._row(a) for a in origin_rows)
-                           + "</ul>", meta="production incident · confirmed verification · unconfirmed claim · "
+                           + "</ul>", meta="production incident · confirmed verification · unconfirmed or expired verification · a claim in "
+                                           "last_failure.json (production) · "
                                            "test · manual diagnostic · replay · demo", sid="g-origins", flush=True))
     parts.append(c.disclosure("EvidenceDisclosure", c.kv([("code", c.code("INVALID_CAPTURE")),
                                                           ("exact value", esc("0.05120000"))]), boxed=True))
