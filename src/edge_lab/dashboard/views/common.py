@@ -329,7 +329,7 @@ def receipt_time(ctx: d.Context) -> str | None:
 
 @dataclass(frozen=True)
 class Alert:
-    group: str  # attention | standing | recent | expired
+    group: str  # attention | standing | recent | checks | expired
     kind: str
     title: str
     subject: str | None
@@ -339,6 +339,7 @@ class Alert:
     delivery: str
     code: str | None
     raw: dict | None = None
+    origin: str | None = "PRODUCTION"  # notifications.Origin value; None = unrecognised (treated as production)
 
 
 def _safe_local_href(link: Any) -> str | None:
@@ -353,36 +354,83 @@ def _safe_local_href(link: Any) -> str | None:
     return path if path in PAGES else None
 
 
+def failure_alert(f: d.FailureRecord) -> Alert:
+    """A unit-failure record as an alert. Only a root-confirmed deployment verification is a check;
+    every other record (whatever origin it claims) is a production incident that needs attention."""
+    unit = f.record.get("unit") or "unknown unit"
+    if f.error is not None:
+        return Alert("attention", "err", f"Unit-failure record unreadable ({f.source})", None, None, f.error, None,
+                     "Recorded locally", "ERROR")
+    if f.source == d.VERIFICATION_FILE:
+        # alert.sh writes production failures only to last_failure.json, so a record here cannot hide one.
+        # Root's confirmation files are cleaned up after 7 days: an unconfirmed record is a check whose
+        # proof is missing or expired, shown as such, never as a production incident.
+        if f.verification:
+            return Alert("checks", "nd", f"Verification check: {unit} refused as expected", f.record.get("unit"),
+                         f.record.get("failed_at_utc"), f"Deployment verification confirmed by root ({f.source}). "
+                         "Not an incident; never pushed.", None, "Stored locally; never pushed (verification)",
+                         "DEPLOYMENT_VERIFICATION", f.record, "DEPLOYMENT_VERIFICATION")
+        return Alert("checks", "warn", f"Verification record: {unit} (root confirmation not found or expired)",
+                     f.record.get("unit"), f.record.get("failed_at_utc"),
+                     f"Recorded in {f.source}. No root confirmation of this check exists now (it may have expired "
+                     "after 7 days), so it is not proven to be the runbook check. Production failures are recorded "
+                     "separately in last_failure.json.", None, "Stored locally; never pushed (verification)",
+                     "VERIFICATION_UNCONFIRMED", f.record, "DEPLOYMENT_VERIFICATION")  # its file's origin, badge never mixed
+    claimed = f.record.get("origin")
+    why = f"Recorded in {f.source} by the failure hook."
+    if claimed not in (None, "PRODUCTION"):
+        why += f" It claims origin {claimed}, but last_failure.json holds production failures only."
+    return Alert("attention", "err", f"Production incident: unit failed: {unit}", f.record.get("unit"),
+                 f.record.get("failed_at_utc"), why, None, "Recorded locally", "FAILED", f.record, "PRODUCTION")
+
+
+def delivery_text(origin: Any) -> str:
+    """How a notification of this origin is delivered (notifications' origin policy); the outbox row
+    is the only record here."""
+    from ... import notifications as n
+
+    if origin is None:
+        return "Recorded locally (outbox); origin unrecognised, so treated as production"
+    o = n.Origin(origin)
+    if o in n.DEFAULT_PUSH_ORIGINS:
+        return "Recorded locally (outbox); phone delivery not recorded"
+    if o in n.REQUESTABLE_PUSH_ORIGINS:
+        return "Recorded locally (outbox); pushed only when explicitly requested; phone delivery not recorded"
+    return "Stored locally; never pushed (held by origin)"
+
+
 def alerts(ctx: d.Context) -> list[Alert]:
-    """Every attention item available locally: outbox notifications, the last unit failure and the
-    system blockers. Nothing is sent; a row in a file is not proof a phone received anything."""
+    """Every attention item available locally: outbox notifications, the unit-failure records and the
+    system blockers. Nothing is sent; a row in a file is not proof a phone received anything.
+
+    Origins never mix: only production (or an unrecognised origin, failing closed) can need
+    attention; tests, verification checks, diagnostics, replays and demos are their own group."""
+    from ... import notifications as n
+
     items: list[Alert] = []
     for text in blockers_cached(ctx):
         title, kind = blocker_title(text)
         group = "standing" if kind == "info" else "attention"
         items.append(Alert(group, kind, title, None, None, text, None, "Shown here only (not a notification)", None))
-    failure = ctx.last_failure
-    if failure.status == d.OK:
-        f = failure.value
-        items.append(Alert("attention", "err", f"Unit failed: {f.get('unit') or 'unknown unit'}", f.get("unit"),
-                           f.get("failed_at_utc"), "Recorded in last_failure.json by the failure hook.", None,
-                           "Recorded locally", "FAILED"))
-    elif failure.status == d.ERROR:
-        items.append(Alert("attention", "err", "Unit-failure record unreadable", None, None, failure.message, None,
-                           "Recorded locally", "ERROR"))
+    items.extend(failure_alert(f) for f in ctx.failure_records)
     if ctx.notifications.status == d.OK:
-        for n in ctx.notifications.value:
-            expires = parse_utc(n.get("expires_at_utc"))
+        for row in ctx.notifications.value:
+            origin = n.origin_of(row)
+            origin_value = None if origin is None else origin.value
+            expires = parse_utc(row.get("expires_at_utc"))
             expired = expires is not None and expires < ctx.now
-            sev = str(n.get("severity") or "")
+            sev = str(row.get("severity") or "")
             kind = {"CRITICAL": "err", "WARNING": "warn", "INFO": "info"}.get(sev, "nd")
-            group = "expired" if expired and sev != "CRITICAL" else ("attention" if sev in ("CRITICAL", "WARNING")
-                                                                     else "recent")
-            items.append(Alert(group, kind, str(n.get("summary") or n.get("type") or "Notification"),
-                               n.get("market_id") or n.get("venue_id"), n.get("created_at_utc"),
-                               f"{pr.state_word(n.get('type')).label if n.get('type') else 'Event'}"
-                               + (" · expired" if expired else ""), _safe_local_href(n.get("deep_link")),
-                               "Recorded locally (outbox); phone delivery not recorded", n.get("type"), n))
+            if origin is not None and origin is not n.Origin.PRODUCTION:
+                group, kind = "checks", "nd"
+            else:
+                group = "expired" if expired and sev != "CRITICAL" else ("attention" if sev in ("CRITICAL", "WARNING")
+                                                                         else "recent")
+            items.append(Alert(group, kind, str(row.get("summary") or row.get("type") or "Notification"),
+                               row.get("market_id") or row.get("venue_id"), row.get("created_at_utc"),
+                               f"{pr.state_word(row.get('type')).label if row.get('type') else 'Event'}"
+                               + (" · expired" if expired else ""), _safe_local_href(row.get("deep_link")),
+                               delivery_text(origin_value), row.get("type"), row, origin_value))
     return items
 
 

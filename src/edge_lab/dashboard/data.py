@@ -33,7 +33,9 @@ COLLECTOR_STATUS_FILE = "latest.json"
 RECEIPT_FILE = "shadow_daily.json"
 NOTIFICATIONS_FILE = "notifications.jsonl"
 NOTIFICATIONS_SHOWN = 50
-FAILURE_FILE = "last_failure.json"
+FAILURE_FILE = "last_failure.json"  # production unit failures only (alert.sh; verification.FAILURE_NAME)
+VERIFICATION_FILE = "last_verification.json"  # install-time checks (runbook §4.1; verification.VERIFICATION_NAME)
+ODDS_LEDGER_FILE = "odds_quota_ledger.json"  # the Odds API quota ledger, beside the evidence database
 RECEIPT_SCHEMA = "edge-lab-shadow-daily-receipt/1"
 
 OPERATIONAL_ACCOUNT_ID = exp001_shadow.ACCOUNT_ID
@@ -68,12 +70,14 @@ class Config:
     ledger: Path | None = None
     status_dir: Path | None = None
     experiments_root: Path | None = None
+    odds_ledger: Path | None = None  # The Odds API quota ledger; default: ODDS_LEDGER_FILE beside `db`
     demo: bool = False
     allowed_hosts: tuple[str, ...] = ()  # extra Host names accepted besides loopback (the bound host)
     clock: Callable[[], datetime] = field(default=lambda: datetime.now(timezone.utc))
 
     def paths(self) -> list[Path]:
-        return [p for p in (self.db, self.ledger, self.status_dir, self.experiments_root) if p is not None]
+        return [p for p in (self.db, self.ledger, self.status_dir, self.experiments_root, self.odds_ledger)
+                if p is not None]
 
 
 @dataclass
@@ -209,6 +213,37 @@ class Context:
     @cached_property
     def last_failure(self) -> Loaded:
         return self._status_file(FAILURE_FILE)
+
+    @cached_property
+    def last_verification(self) -> Loaded:
+        return self._status_file(VERIFICATION_FILE)
+
+    @cached_property
+    def failure_records(self) -> list["FailureRecord"]:
+        """Both unit-failure records, each classified by origin (see `classify_failure`)."""
+        out = []
+        for name, loaded in ((FAILURE_FILE, self.last_failure), (VERIFICATION_FILE, self.last_verification)):
+            if loaded.status == OK:
+                out.append(classify_failure(name, loaded.value))
+            elif loaded.status == ERROR:
+                out.append(FailureRecord(name, {}, None, False, loaded.message))
+        return out
+
+    @cached_property
+    def odds_status(self) -> Loaded:
+        """`odds_pilot.dashboard_status` for The Odds API pilot (read-only, no key, no network)."""
+        from .. import odds_pilot
+
+        if self.config.db is None:
+            return Loaded(NO_DATA, message="no evidence database configured (--db), so the Odds API pilot's "
+                                           "evidence cannot be read")
+        ledger = self.config.odds_ledger or self.config.db.with_name(ODDS_LEDGER_FILE)
+        # The runner keeps its non-secret state beside the ledger (odds_pilot.PilotState).
+        state = ledger.with_name(ledger.name + ".pilot.json")
+        try:
+            return Loaded(OK, odds_pilot.dashboard_status(self.config.db, ledger, state, now=self.now))
+        except Exception as exc:  # noqa: BLE001 - shown as an error state, never raised
+            return Loaded(ERROR, message=short_error(exc, self.config))
 
     @cached_property
     def notifications(self) -> Loaded:
@@ -371,6 +406,30 @@ class Context:
         except Exception as exc:  # noqa: BLE001
             return Loaded(ERROR, message=short_error(exc, self.config))
         return Loaded(OK, out)
+
+
+@dataclass(frozen=True)
+class FailureRecord:
+    """One unit-failure record and how to present it. last_failure.json holds production failures
+    only (alert.sh). `verification` is True only for a last_verification.json record that says
+    DEPLOYMENT_VERIFICATION *and* that root confirmed (`verification.verification_confirmed`); an
+    unconfirmed one is shown as an unproven or expired check, never as an incident. `origin` is the
+    record's origin value (None: an unrecognised value)."""
+
+    source: str  # FAILURE_FILE | VERIFICATION_FILE
+    record: dict[str, Any]
+    origin: str | None
+    verification: bool
+    error: str | None = None  # the record could not be read
+
+
+def classify_failure(source: str, record: dict[str, Any]) -> FailureRecord:
+    from .. import notifications, verification
+
+    origin = notifications.origin_of(record)
+    confirmed = (source == VERIFICATION_FILE and origin is notifications.Origin.DEPLOYMENT_VERIFICATION
+                 and verification.verification_confirmed(record))
+    return FailureRecord(source, record, None if origin is None else origin.value, bool(confirmed))
 
 
 def fee_state(now: datetime) -> fee_schedules.FeeVerificationState:

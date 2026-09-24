@@ -226,11 +226,19 @@ rule; withdrawal **Not enabled**; policy details disclosure.
 **Research & Data `/experiments`** — tabs Research | Data sources. Research: title, ID,
 research stage, historical result, forward valid days, next preregistered look, progress
 labelled "Observations toward the next scheduled evaluation", limitations, details. Data
-sources: venues (Tested ≠ connected), collected sources with freshness, fee verification,
-venue registry and full receipt in disclosures.
+sources: The Odds API pilot card (`odds_pilot.dashboard_status`: "The Odds API — SETUP NEEDED" and
+so on; active only with a stored live read that held offers, never "connected"; offered odds are
+research only, never executable), venues (Tested ≠ connected), collected sources with freshness,
+fee verification, venue registry and full receipt in disclosures.
 
-**Alerts `/alerts`** — Needs attention, Standing conditions, Recent notifications, Expired;
-delivery state stated honestly (recorded locally; phone delivery not recorded). **More
+**Alerts `/alerts`** — Needs attention, Standing conditions, Recent notifications, Tests,
+verification checks and diagnostics, Expired; delivery state stated honestly (recorded locally;
+phone delivery not recorded; stored and never pushed where the origin policy holds it). Origins
+never mix: only production (or an unrecognised origin, failing closed) can need attention or
+count on the bell; each notification and failure record carries its origin badge.
+`last_failure.json` is always a production incident. A `last_verification.json` record is a
+verification check when root confirmed it, and "Verification record (root confirmation not found
+or expired)" otherwise, never an incident. Terminal Activity lists production events only. **More
 `/more`** — links to Risk, Research & Data, Alerts, System & evidence.
 
 **Gallery `/gallery`** — demo mode only; every component with synthetic fixtures.
@@ -340,4 +348,14 @@ directive), and the screenshots that justify it.
   table, disclosure and state components; new state words for the sizing-v2 verdicts. No token,
   CSS, layout or navigation change. Risk & capital is unchanged. Screenshots: 360x800 and
   1440x900 (`tests/browser/capture.py`), reviewed locally by the author and described in PR #69
+  (not attached).
+- **2026-09-24 — Alerts by origin; The Odds API card.** Approved by the 2026-09-24 next-build-chunk
+  directive, Deliverables 5 and 6 (UI parts). §8 Alerts gains the "Tests, verification checks and
+  diagnostics" group and origin badges (notifications.Origin); `last_verification.json` joins
+  `last_failure.json` (production only) and is a check, confirmed or not; Terminal Activity shows
+  production events only. The demo's synthetic notifications carry origin DEMO, so they appear in
+  that group (the gallery shows every origin, production included). §8 Research & Data sources gains the
+  Odds API card. New state words for origins and the Odds pilot states; new component
+  `odds_status_card`. No token, CSS, layout or navigation change. Screenshots: 360x800 and
+  1440x900 (`tests/browser/capture.py`), reviewed locally by the author and described in the PR
   (not attached).

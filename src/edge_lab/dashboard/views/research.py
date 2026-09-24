@@ -101,6 +101,21 @@ def _requirement(stage: str, cap: str, authorized: bool) -> str:
             "PARTIAL": "Partly verified", "STALE": "Re-verify"}.get(stage, "Unknown")
 
 
+def odds_body(result: d.Loaded) -> str:
+    """Every state of the Odds API card; OK carries `odds_pilot.dashboard_status`."""
+    if result.status == d.OK:
+        return c.odds_status_card(result.value)
+    if result.status == d.ERROR:
+        return c.error_state("The Odds API — status unavailable", f"ERROR — {result.message}. This is not a "
+                                                                  "healthy or empty feed.")
+    return c.unavailable("The Odds API — status unavailable", result.message[:1].upper() + result.message[1:] + ".")
+
+
+def odds_section(ctx: d.Context) -> str:
+    return c.section("The Odds API (NFL pilot)", odds_body(ctx.odds_status),
+                     meta="Offered odds · research only · not executable", sid="odds-h", flush=True)
+
+
 def sources_tab(ctx: d.Context) -> str:
     out = []
     rows = []
@@ -125,6 +140,7 @@ def sources_tab(ctx: d.Context) -> str:
                          + '<div class="pad"><p class="note">Tested is not connected. A single smoke read is '
                            "not a scheduled feed. Daily files are not real-time books. Public market reads do not "
                            "imply account or order access.</p></div>", sid="ven-h", flush=True))
+    out.append(odds_section(ctx))
     health = ctx.source_health
     missing = cm.loaded_state("Collected sources", health)
     if missing:

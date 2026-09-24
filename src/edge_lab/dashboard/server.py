@@ -84,6 +84,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--ledger", type=Path, help="shadow ledger SQLite file (opened read-only)")
     p.add_argument("--status-dir", type=Path, help="directory holding latest.json / shadow_daily.json")
     p.add_argument("--experiments-root", type=Path, help="experiments/ directory (default: this checkout's)")
+    p.add_argument("--odds-ledger", type=Path,
+                   help="The Odds API quota ledger, read without locking (default: odds_quota_ledger.json beside --db)")
     p.add_argument("--host", default=DEFAULT_HOST, help="bind address (default 127.0.0.1)")
     p.add_argument("--port", type=int, default=DEFAULT_PORT, help="port (default 8765)")
     p.add_argument("--allow-non-loopback", action="store_true",
@@ -125,7 +127,7 @@ def config_from_args(args: argparse.Namespace) -> tuple[d.Config, Path | None]:
         config, root = build_demo(experiments_root=experiments_root)
         return config, root
     return d.Config(db=args.db, ledger=args.ledger, status_dir=args.status_dir,
-                    experiments_root=experiments_root), None
+                    experiments_root=experiments_root, odds_ledger=args.odds_ledger), None
 
 
 def main(argv: Sequence[str] | None = None) -> int:

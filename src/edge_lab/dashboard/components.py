@@ -7,6 +7,7 @@ explicit unavailable marker with accessible text, never as zero.
 
 from __future__ import annotations
 
+import json
 from typing import Any, Iterable, Mapping, Sequence
 from urllib.parse import urlencode
 
@@ -785,3 +786,55 @@ def research_sizing(panel: Mapping[str, Any], *, note: str = "") -> str:
         ("panel version", esc(_g(panel, "panel_version"))), ("market", code(_g(panel, "market_id"))),
         ("replay clock (UTC)", esc(_g(panel, "as_of_utc")))])))
     return "".join(parts)
+
+
+# --------------------------------------------------------------------------- The Odds API pilot (odds_pilot)
+
+
+def odds_status_card(status: Mapping[str, Any]) -> str:
+    """OddsSourceStatus: `odds_pilot.dashboard_status` as one row. The title always names the state
+    ("The Odds API — SETUP NEEDED"); it reads active only with a stored live read that held offers.
+    Offered odds are research data, never executable prices. Nothing here connects or sends."""
+    state = pr.odds_state(status)
+    word = pr.state_word(state)
+    title = f"The Odds API — {word.label.upper()}"
+    latest = _g(status, "latest_successful_capture")
+    quota = _g(status, "quota") or {}
+    discovery = _g(status, "discovery")
+    nxt = _g(status, "next_capture")
+    used = pr.quantity(_g(quota, "used_local"))
+    ceiling = pr.quantity(_g(quota, "ceiling"))
+    body = facts([
+        ("Live read verified", badge("VERIFIED", label="Yes · offers stored") if _g(status, "live_read_verified") is True
+         else badge("NOT_EVALUATED", label="No live read yet")),
+        ("Latest successful capture", txt(pr.datetime_et(_g(latest, "received_at_utc")), reason="none stored")
+         + (f'<span class="cell-sub">{esc(_g(latest, "offers"))} offers · {esc(_g(latest, "freshness"))}</span>'
+            if latest else "")),
+        ("Quota (this month)", num(f"{used} of {ceiling}" if used is not None and ceiling is not None else None,
+                                   reason="quota unknown")
+         + f'<span class="cell-sub">{esc(pr.state_word(_g(quota, "state")).label)}</span>'),
+        ("Provider remaining", num(pr.quantity(_g(quota, "provider_remaining")), reason="not reported yet")),
+        ("Discovery", txt(pr.datetime_et(_g(discovery, "last_success_utc")), reason="no successful discovery")
+         + (f'<span class="cell-sub">{"fresh" if _g(discovery, "fresh") else "not fresh"}</span>' if discovery else "")),
+        ("Next capture", txt(pr.datetime_et(_g(nxt, "due_utc")), reason="none scheduled")
+         + (f'<span class="cell-sub">{esc(_g(nxt, "offset"))} · {esc(_g(nxt, "event_id"))}</span>' if nxt else "")),
+        ("Timer", txt("Not observable here")),
+        ("Executable", badge("NOT_RECOMMENDED", label="Never · research only")),
+    ], wide=True, text_cols=(0, 1, 4, 5, 6, 7))
+    notes = f'<p class="note">{esc(_g(status, "detail") or "")}</p>' if _g(status, "detail") else ""
+    problems = _g(status, "problems") or []
+    detail = disclosure("Odds pilot details", kv([
+        ("label", esc(_g(status, "label"))), ("state (as reported)", code(_g(status, "state"))),
+        ("sport", code(_g(status, "sport"))), ("policy version", esc(_g(status, "policy_version"))),
+        ("markets observed", ul(_g(status, "markets_observed") or ())),
+        ("bookmakers observed", ul(_g(status, "bookmakers_observed") or ())),
+        ("targets", esc(_json_text(_g(status, "targets")))), ("cost block", esc(_json_text(_g(status, "cost_block")))),
+        ("quota detail", esc(_g(quota, "detail"))), ("pilot state file", code(_g(status, "pilot_state_file"))),
+        ("problems", ul(problems)), ("as of (UTC)", esc(_g(status, "as_of_utc"))),
+    ]))
+    return ('<ul class="rows">' + row(esc(title), sub=_g(status, "label") or "", aside=badge(state), body=body + detail)
+            + "</ul>" + (f'<div class="pad">{notes}</div>' if notes else ""))
+
+
+def _json_text(value: Any) -> str | None:
+    return None if value is None else json.dumps(value, sort_keys=True, default=str)
