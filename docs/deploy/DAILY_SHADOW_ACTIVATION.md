@@ -374,11 +374,80 @@ A close observation is labelled `CLOSE` only with its stored proof. It displays 
 of trading close)", because the public book has no sequence number. Anything else is "latest pre-close
 observation" (ADR 0030, close semantics). An idle `plan` or `capture` (nothing due) writes nothing.
 
+## 5e. Polymarket US NFL research pilot activation (ADR 0032; owner risk decision 2026-09-24)
+
+**Authority.**
+- The owner directive of 2026-09-24 (evening), section 17 items 2 and 3.
+- The owner's **risk decision** of 2026-09-24: "its my risk decision. just do it". It is
+  recorded in `experiments/multi_venue/polymarket_us_sports_terms_2026-09-24.md`, "Owner
+  decision". The Terms themselves do **not** clear unattended collection; this is not a
+  Polymarket grant.
+- An owner-attested permission text is UNVERIFIED and is not the basis. Its conditions are
+  honoured anyway: at most 100 requests a minute, Polymarket US attribution, no redistribution.
+
+`edgelab-pm-sports.timer` and `edgelab-pm-sports-discover.timer` are installed by install.sh
+but stay disabled until these steps pass. Run them outside 17:40-18:50 ET, and not while a
+settlement job runs (about 11:15 and 16:15 ET).
+
+1. **Preconditions** (all required):
+   - the deployed code is the merged PR, with exact-head CI green and the independent review
+     recorded;
+   - the evidence store is **v7** (`verify_production.sh` or `edge_lab.storage` reports it);
+   - `polymarket_sports.OWNER_ACCESS_DECISION` in the deployed code is
+     `OWNER_RISK_DECISION_2026-09-24`;
+   - The Odds API pilot is active: relationships need its stored NFL schedule, less than 24 h old;
+   - verified backups of both stores exist from today.
+2. **One manual discovery**, bounded: at most 6 pages, 12 requests, a 1 s pacer and 3 minutes.
+   ```bash
+   sudo systemd-run --wait --pipe --quiet -p User=edgelab -p Group=edgelab -p Slice=edgelab.slice -p EnvironmentFile=/etc/market-edge-lab/env /opt/market-edge-lab/venv/bin/python -m edge_lab.cli pm-sports discover --db /var/lib/market-edge-lab/db/edge_lab.sqlite3
+   ```
+   Expect `"state": "FILTER_COMPLETE"`, `pages` of 2 or more, `markets` > 0 and
+   `plan.relationships`. A `PARTIAL` or `FAILED` result stops here. Record the scan id.
+3. **Verify it from stored rows, not from the command output or a timer state.** Read-only:
+   ```bash
+   sudo runuser -u edgelab -- /opt/market-edge-lab/venv/bin/python -m edge_lab.cli pm-sports status --db /var/lib/market-edge-lab/db/edge_lab.sqlite3
+   ```
+   Check each of these:
+   - `catalog.state` is FILTER_COMPLETE, and `catalog.usable_scan_id` is the scan from step 2;
+   - `targets_by_offset` lists PLANNED targets;
+   - `related.events` shows RELATED_NOT_EQUIVALENT entries, labelled
+     "RELATED MARKET — NOT ECONOMICALLY EQUIVALENT", with `source` "Polymarket US (...)".
+4. **Enable the two timers:**
+   ```bash
+   sudo systemctl enable --now edgelab-pm-sports.timer edgelab-pm-sports-discover.timer
+   systemctl is-enabled edgelab-pm-sports.timer edgelab-pm-sports-discover.timer
+   systemctl list-timers edgelab-pm-sports.timer edgelab-pm-sports-discover.timer
+   ```
+5. **Verify one capture from stored rows** after the first due target's tick (`status` →
+   `next_due`). Run `pm-sports status --market <slug>` (same line as in step 3):
+   - the target shows a CAPTURED attempt with `snapshot_id`, `received_at_utc`, `yes_bid` or
+     `yes_ask`, and `freshness`;
+   - or the attempt says why not (NOT_EXECUTABLE, FAILED retrying, MISSED with its reason).
+
+   Timer state alone proves nothing.
+6. **Budget.**
+   - Discovery: at most 12 requests every 6 h.
+   - Captures: at most 50 requests and 20 books per 15-minute tick, and never more than 100
+     requests a minute.
+   - A real NFL week is about 48 book reads.
+   - Storage is about 1.5 MB a day, and at most about 14.5 MB a day with a 300-game listing
+     (ADR 0032).
+7. **Shutoff** (either one):
+   - `sudo systemctl disable --now edgelab-pm-sports.timer edgelab-pm-sports-discover.timer`. Targets and evidence stay.
+   - Or set `polymarket_sports.OWNER_ACCESS_DECISION = None` and deploy. Every run then refuses
+     before the network (`BLOCKED_TERMS_REVIEW`, exit 0).
+
+   Use one of these at once if Polymarket US objects, revokes, rate-limits or blocks the host.
+   Never work around a block.
+
+This is read-only research collection. It authorizes no Polymarket account, no order, no
+credential and no redistribution.
+
 ## 6. Verify over the next days: each state separately
 
 | State | Evidence |
 |---|---|
-| Installed, timers enabled | `list-timers` shows 9 core/observation timers; 10 when the separately activated Odds timer is enabled |
+| Installed, timers enabled | `list-timers` shows the core/observation timers, plus each separately activated timer once its own step ran: the Odds timer (§5b) and the two Polymarket US pilot timers (§5e) |
 | Fail-closed dry run | step 4.1 journal |
 | Real decision/recheck captured | `latest.json` has `last_closed_target_date` = D with VALID or an explicit INVALID reason |
 | Complete forecast evidence | no `pfm` reason in `last_closed_reasons` |
@@ -410,20 +479,24 @@ read is UNKNOWN.
 
 ## Rollback
 
-**The evidence schema is forward-only.** The ADR 0029 install made the evidence store v5, and
-the ADR 0030 install makes it **v6**. The shadow ledger stays v1.
+**The evidence schema is forward-only.** The ADR 0029 install made the evidence store v5, the
+ADR 0030 install made it v6, and the ADR 0032 install makes it **v7**. The shadow ledger stays v1.
 - **Why it matters.** install.sh step 7 migrates the live evidence DB. Older code refuses a newer
   store ("Database schema v6 is newer than this code"), which would stop the collectors,
   VERIFIED backups and the dashboard.
-- **Why a stamp is enough.** v5 only **added** the odds capture tables, and v6 only the price
-  observation tables. Older code ignores both. Rolling back therefore means stamping the store
+- **Why a stamp is enough.** v5 only **added** the odds capture tables, v6 only the price
+  observation tables, and v7 only the Polymarket US NFL pilot tables. Older code ignores both. Rolling back therefore means stamping the store
   down first, with the new code still installed, and then putting code and units back together.
-- **Rolling back one step, to the v5 code (just before ADR 0030).**
-  - Step 3 is `mark-v5-for-rollback` only.
+- **Rolling back one step, to the v6 code (just before ADR 0032).**
+  - Step 3 is `mark-v6-for-rollback` only.
+  - Remove the four ADR 0032 pilot unit files (`edgelab-pm-sports*`) after restoring the v6
+    code; v6 does not know them. Keep every other unit.
+- **Rolling back to the v5 code (just before ADR 0030).**
+  - Step 3 is `mark-v6-for-rollback`, then `mark-v5-for-rollback`.
   - Remove the four ADR 0030 observation unit files after restoring the v5 code; v5 does not know them.
   - Keep the Odds API units; v5 includes ADR 0029. Re-enable whichever pre-ADR0030 timers were enabled.
-- **Rolling back to the v4 code (before ADR 0029).** Run both stamps in order, remove the
-  ADR 0030 observation units **and** the ADR 0029 odds units.
+- **Rolling back to the v4 code (before ADR 0029).** Run all three stamps in order, remove the
+  ADR 0032 pilot units, the ADR 0030 observation units **and** the ADR 0029 odds units.
 - The old `backup.py` from before ADR 0016 also rejects the new backup unit's flags.
 
 Nothing is deleted. Run the steps as root, in order, outside 17:40-18:50 ET and not during a
@@ -433,8 +506,8 @@ settlement run (about 11:15 and 16:15 ET):
    timers: `disable` does not reliably expand a glob for unit files, and step 5 deletes unit files, so
    every timer must really be disabled first.
    ```bash
-   sudo systemctl disable --now edgelab-pfm.timer edgelab-decision.timer edgelab-recheck.timer edgelab-status.timer edgelab-backup.timer edgelab-shadow.timer edgelab-settlement.timer edgelab-observe.timer edgelab-observe-close.timer edgelab-freshness.timer edgelab-odds.timer
-   systemctl is-enabled edgelab-pfm.timer edgelab-decision.timer edgelab-recheck.timer edgelab-status.timer edgelab-backup.timer edgelab-shadow.timer edgelab-settlement.timer edgelab-observe.timer edgelab-observe-close.timer edgelab-freshness.timer edgelab-odds.timer   # expect disabled (or not-found) for every one
+   sudo systemctl disable --now edgelab-pfm.timer edgelab-decision.timer edgelab-recheck.timer edgelab-status.timer edgelab-backup.timer edgelab-shadow.timer edgelab-settlement.timer edgelab-observe.timer edgelab-observe-close.timer edgelab-freshness.timer edgelab-odds.timer edgelab-pm-sports.timer edgelab-pm-sports-discover.timer
+   systemctl is-enabled edgelab-pfm.timer edgelab-decision.timer edgelab-recheck.timer edgelab-status.timer edgelab-backup.timer edgelab-shadow.timer edgelab-settlement.timer edgelab-observe.timer edgelab-observe-close.timer edgelab-freshness.timer edgelab-odds.timer edgelab-pm-sports.timer edgelab-pm-sports-discover.timer   # expect disabled (or not-found) for every one
    systemctl list-units 'edgelab-*' --state=running --no-legend   # expect no capture job
    ```
 2. **Make a verified backup (still the new code):**
@@ -444,20 +517,29 @@ settlement run (about 11:15 and 16:15 ET):
    Expect `VERIFIED_BACKUP_AND_RESTORE` for both stores. Stop here if either is missing.
 3. **Stamp the evidence store down (still the new code):**
    ```bash
-   sudo runuser -u edgelab -- /opt/market-edge-lab/venv/bin/python -m edge_lab.storage mark-v5-for-rollback --db /var/lib/market-edge-lab/db/edge_lab.sqlite3   # v6 -> v5
+   sudo runuser -u edgelab -- /opt/market-edge-lab/venv/bin/python -m edge_lab.storage mark-v6-for-rollback --db /var/lib/market-edge-lab/db/edge_lab.sqlite3   # v7 -> v6: every rollback target before ADR 0032
+   sudo runuser -u edgelab -- /opt/market-edge-lab/venv/bin/python -m edge_lab.storage mark-v5-for-rollback --db /var/lib/market-edge-lab/db/edge_lab.sqlite3   # v6 -> v5: only when going back before ADR 0030
    sudo runuser -u edgelab -- /opt/market-edge-lab/venv/bin/python -m edge_lab.storage mark-v4-for-rollback --db /var/lib/market-edge-lab/db/edge_lab.sqlite3   # v5 -> v4: only when going back before ADR 0029
    ```
-   Expect `{"from": 6, "to": 5, ...}`, then `{"from": 5, "to": 4, ...}`. Each refuses (exit 1,
+   Expect `{"from": 7, "to": 6, ...}`, then `{"from": 6, "to": 5, ...}`, then `{"from": 5, "to": 4, ...}`. Each refuses (exit 1,
    nothing changed) anything that is not a complete, intact store of its version.
 4. **Restore the previous code:**
    ```bash
    sudo mv /opt/market-edge-lab/app /opt/market-edge-lab/app.bad
    sudo mv /opt/market-edge-lab/app.prev /opt/market-edge-lab/app
    ```
-5. **Restore the previous units and remove units newer than the target code.** For a v5
-   rollback, remove only the ADR 0030 observation units:
+5. **Restore the previous units, then remove units newer than the target code.** Always first
+   reinstall the restored code's own units:
    ```bash
    sudo install -o root -g root -m 0644 /opt/market-edge-lab/app/deploy/vps/systemd/edgelab-* /opt/market-edge-lab/app/deploy/vps/systemd/edgelab.slice /etc/systemd/system/
+   ```
+   For every rollback target before ADR 0032 (v6 or older), remove the pilot units:
+   ```bash
+   sudo rm -f /etc/systemd/system/edgelab-pm-sports.service /etc/systemd/system/edgelab-pm-sports.timer /etc/systemd/system/edgelab-pm-sports-discover.service /etc/systemd/system/edgelab-pm-sports-discover.timer
+   sudo systemctl daemon-reload
+   ```
+   A v6 rollback stops there. For a v5 rollback, also remove the ADR 0030 observation units:
+   ```bash
    sudo rm -f /etc/systemd/system/edgelab-observe.service /etc/systemd/system/edgelab-observe.timer \
      /etc/systemd/system/edgelab-observe-close.service /etc/systemd/system/edgelab-observe-close.timer
    sudo systemctl daemon-reload
@@ -497,4 +579,4 @@ settlement run (about 11:15 and 16:15 ET):
 Re-installing the newer code later stamps it again: the migration is idempotent, and every row
 written meanwhile is kept. The shadow
 ledger's schema did not change (v1), so the rolled-back code reads it. To stop all collection
-and keep the data: `sudo systemctl disable --now edgelab-pfm.timer edgelab-decision.timer edgelab-recheck.timer edgelab-status.timer edgelab-backup.timer edgelab-shadow.timer edgelab-settlement.timer edgelab-observe.timer edgelab-observe-close.timer edgelab-freshness.timer edgelab-odds.timer` (named, not a glob).
+and keep the data: `sudo systemctl disable --now edgelab-pfm.timer edgelab-decision.timer edgelab-recheck.timer edgelab-status.timer edgelab-backup.timer edgelab-shadow.timer edgelab-settlement.timer edgelab-observe.timer edgelab-observe-close.timer edgelab-freshness.timer edgelab-odds.timer edgelab-pm-sports.timer edgelab-pm-sports-discover.timer` (named, not a glob).

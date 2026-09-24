@@ -44,12 +44,16 @@ STATUS=/var/lib/market-edge-lab-status
 ETC=/etc/market-edge-lab
 ENV_FILE=$ETC/env
 SECRETS_FILE=$ETC/secrets.env
-UNITS=(edgelab-pfm edgelab-decision edgelab-recheck edgelab-status edgelab-backup edgelab-shadow edgelab-settlement edgelab-observe edgelab-observe-close edgelab-freshness edgelab-odds)
-# Installed and verified with the rest, but activated separately (ADR 0029): the Odds API timer
-# is enabled only after the owner installs the key and `odds plan` / `odds smoke` pass.
-SEPARATELY_ACTIVATED=edgelab-odds
+UNITS=(edgelab-pfm edgelab-decision edgelab-recheck edgelab-status edgelab-backup edgelab-shadow edgelab-settlement edgelab-observe edgelab-observe-close edgelab-freshness edgelab-odds edgelab-pm-sports edgelab-pm-sports-discover)
+# Installed and verified with the rest, but activated separately, each by its own runbook step:
+# the Odds API timer (ADR 0029) after the owner installs the key and `odds plan` / `odds smoke`
+# pass (section 5b); the Polymarket US NFL pilot timers (ADR 0032) under the owner's recorded
+# risk decision (section 5e). The installer never enables any of them.
+SEPARATELY_ACTIVATED=(edgelab-odds edgelab-pm-sports edgelab-pm-sports-discover)
 CORE_TIMERS=()
-for u in "${UNITS[@]}"; do [ "$u" = "$SEPARATELY_ACTIVATED" ] || CORE_TIMERS+=("$u"); done
+for u in "${UNITS[@]}"; do
+  case " ${SEPARATELY_ACTIVATED[*]} " in *" $u "*) ;; *) CORE_TIMERS+=("$u") ;; esac
+done
 # The unprivileged account that must NOT read private data (the Chase Upside app user).
 OTHER_USER=${EDGELAB_OTHER_USER:-dynasty}
 
@@ -172,8 +176,9 @@ Next (owner):
   2. Activate the schedule:
        sudo systemctl enable --now ${CORE_TIMERS[*]/%/.timer}
        systemctl list-timers 'edgelab-*'
-     $SEPARATELY_ACTIVATED.timer is installed but stays disabled until the Odds API activation
-     in docs/deploy/DAILY_SHADOW_ACTIVATION.md section 5b (key, odds plan, one odds smoke).
+     ${SEPARATELY_ACTIVATED[*]/%/.timer} are installed but stay disabled until their own
+     activation in docs/deploy/DAILY_SHADOW_ACTIVATION.md: section 5b for edgelab-odds (key,
+     odds plan, one odds smoke); section 5e for the Polymarket US NFL pilot (owner risk decision).
   Stop everything at any time (named timers; disable does not reliably expand a glob):
-       sudo systemctl disable --now ${CORE_TIMERS[*]/%/.timer} $SEPARATELY_ACTIVATED.timer
+       sudo systemctl disable --now ${CORE_TIMERS[*]/%/.timer} ${SEPARATELY_ACTIVATED[*]/%/.timer}
 EOF

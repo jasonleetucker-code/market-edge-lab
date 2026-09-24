@@ -546,6 +546,67 @@ def _terminal_coverage(endpoint: str, pages: int, items: int, as_of: str | None,
                            "markets listed or delisted during the scan can be missed or repeated")
 
 
+def events_url(*, limit: int, offset: int, extra: Sequence[tuple[str, str]] = ()) -> str:
+    """GET /v1/events with `limit`/`offset` paging and optional documented filters."""
+    if not 0 < limit <= 1000 or offset < 0:
+        raise ValueError("limit must be in (0, 1000] and offset >= 0")
+    return f"{BASE_URL}/v1/events?{urlencode([('limit', str(limit)), ('offset', str(offset)), *extra])}"
+
+
+Getter = Callable[[str], "tuple[dict[str, Any], http.FetchResult]"]
+
+
+def read_events_listing(*, extra: Sequence[tuple[str, str]], limit: int = 50, max_pages: int = MAX_PAGES,
+                        get: Getter | None = None,
+                        on_page: Callable[[dict[str, Any], http.FetchResult, str], None] | None = None,
+                        ) -> tuple[list[Mapping[str, Any]], CatalogCoverage]:
+    """Every page of a GET /v1/events listing, in offset order, under the same completeness
+    contract as `read_catalog` (additive, ADR 0032).
+
+    The listing is paged by `limit`/`offset` with no total and no cursor, so only an empty page
+    ends it. `extra` filters make it a FILTERED listing: even when every page was read to an
+    empty page, its coverage is PARTIAL ("covers that filter only") and never a full-catalog
+    COMPLETE. A failed or malformed page, or any request refusal raised by `get` (a request
+    budget, a run deadline), stops the scan: PARTIAL after at least one page, else FAILED. So a
+    market missing from such a scan is never evidence that it does not exist.
+    `get(url)` returns (payload, FetchResult); the default is a paced public GET.
+    `on_page(payload, result, url)` receives each raw page, for immutable storage.
+    A building block, not a collector: it is not wired to any schedule and checks no access gate.
+    The NFL pilot calls it only through `polymarket_sports.run_discover` (ADR 0032)."""
+    if get is None:
+        pacer = http.Pacer(MIN_INTERVAL_S)
+
+        def get(url: str) -> tuple[dict[str, Any], http.FetchResult]:
+            return http.fetch_json_result(url, headers={"User-Agent": USER_AGENT}, pacer=pacer)
+
+    events: list[Mapping[str, Any]] = []
+    pages = 0
+    last_time = None
+    endpoint = f"{BASE_URL}/v1/events" + (f"?{urlencode(list(extra))}" if extra else "")
+    for page in range(max_pages):
+        url = events_url(limit=limit, offset=page * limit, extra=extra)
+        try:
+            payload, result = get(url)
+        except RuntimeError as exc:  # HttpFetchError, a request budget or a run deadline
+            state = CoverageState.PARTIAL if pages else CoverageState.FAILED
+            return events, CatalogCoverage(VENUE, endpoint, state, pages, len(events), last_time,
+                                           f"page at offset {page * limit} failed: {type(exc).__name__}: {exc}")
+        rows = parse_events_page(payload)
+        if rows is None:
+            state = CoverageState.PARTIAL if pages else CoverageState.FAILED
+            return events, CatalogCoverage(VENUE, endpoint, state, pages, len(events), result.received_at_utc,
+                                           f"page at offset {page * limit} is malformed")
+        if on_page is not None:
+            on_page(payload, result, url)
+        pages += 1
+        last_time = result.received_at_utc
+        events.extend(rows)
+        if not rows:
+            return events, _terminal_coverage(endpoint, pages, len(events), last_time, filtered=bool(extra))
+    return events, CatalogCoverage(VENUE, endpoint, CoverageState.PARTIAL, pages, len(events), last_time,
+                                   f"stopped at the {max_pages}-page cap before an empty page")
+
+
 def coverage_from_pages(page_sizes: Sequence[int | None], *, as_of_utc: str | None,
                         extra: Sequence[tuple[str, str]] = ()) -> CatalogCoverage:
     """Coverage for stored pages (None = a failed or malformed page), in offset order.

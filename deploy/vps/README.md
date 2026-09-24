@@ -24,6 +24,8 @@ is Europe/Berlin.
 | `edgelab-freshness` | every 5 min (:01, :06, ...) | Freshness Fabric v1 supervisor (ADR 0031): network-free, read-only over the evidence DB, ledgers and status files; writes `freshness.json` only; observes every schedule as EXTERNAL_SCHEDULE and controls none; no OnFailure alert by design |
 | `edgelab-observe-close` | 04:57:45 UTC | dedicated KXHIGHNY close-window capture tick; waits to the proof window and confirms post-close (ADR 0030) |
 | `edgelab-odds` | every 15 min (ticks in 17:40-18:35 deferred in code) | The Odds API NFL pilot: free discovery, and at most one paid odds call when a planned T-24h / T-6h / T-60m slot is due (ADR 0029). Installed, **not enabled** by install.sh; enabled only by `docs/deploy/DAILY_SHADOW_ACTIVATION.md` section 5b |
+| `edgelab-pm-sports-discover` | 02:40, 08:40, 14:40, 20:40 | Polymarket US NFL research pilot discovery (ADR 0032): one filtered, bounded public listing scan (at most 12 requests, 1 s pacer, 100 a minute at most). Installed, **not enabled** by install.sh; enabled only by runbook section 5e under the owner's recorded risk decision |
+| `edgelab-pm-sports` | :10, :25, :40, :55 each hour | Polymarket US NFL research book captures at T-24h / T-6h / T-60m for markets related (never equivalent) to an Odds API event (ADR 0032): local planning, GETs only when a target is due (at most 20 books and 50 requests a run). Installed, **not enabled** by install.sh; runbook section 5e |
 
 All edgelab units run inside `edgelab.slice` (MemoryMax 384M, CPUQuota 25% combined), as
 well as their per-run caps. Activation, verification and rollback for the daily shadow
@@ -133,30 +135,36 @@ sudo journalctl -u 'edgelab-*' --since today
 To stop all collection (the data is kept):
 
 ```bash
-sudo systemctl disable --now edgelab-pfm.timer edgelab-decision.timer edgelab-recheck.timer edgelab-status.timer edgelab-backup.timer edgelab-shadow.timer edgelab-settlement.timer edgelab-observe.timer edgelab-observe-close.timer edgelab-freshness.timer edgelab-odds.timer
-systemctl is-enabled edgelab-pfm.timer edgelab-decision.timer edgelab-recheck.timer edgelab-status.timer edgelab-backup.timer edgelab-shadow.timer edgelab-settlement.timer edgelab-observe.timer edgelab-observe-close.timer edgelab-freshness.timer edgelab-odds.timer   # expect disabled for every one
+sudo systemctl disable --now edgelab-pfm.timer edgelab-decision.timer edgelab-recheck.timer edgelab-status.timer edgelab-backup.timer edgelab-shadow.timer edgelab-settlement.timer edgelab-observe.timer edgelab-observe-close.timer edgelab-freshness.timer edgelab-odds.timer edgelab-pm-sports.timer edgelab-pm-sports-discover.timer
+systemctl is-enabled edgelab-pfm.timer edgelab-decision.timer edgelab-recheck.timer edgelab-status.timer edgelab-backup.timer edgelab-shadow.timer edgelab-settlement.timer edgelab-observe.timer edgelab-observe-close.timer edgelab-freshness.timer edgelab-odds.timer edgelab-pm-sports.timer edgelab-pm-sports-discover.timer   # expect disabled for every one
 ```
 
 Name the timers: `disable` does not reliably expand a glob for unit files.
 
 To roll back the code: **the evidence schema is forward-only: v5 from the ADR 0029 install, v6
-from the ADR 0030 install**, and previous code refuses a newer store. Code, units and the schema
+from the ADR 0030 install, v7 from the ADR 0032 install**, and previous code refuses a newer store. Code, units and the schema
 stamp go back together, in this order. The details and expected outputs are under "Rollback" in
 `docs/deploy/DAILY_SHADOW_ACTIVATION.md`.
+- **Back to the code just before ADR 0032 (v6).**
+  - Stamp with `mark-v6-for-rollback` only.
+  - Remove the `edgelab-pm-sports*` service/timer files; v6 predates them.
+  - Keep every other unit and re-enable the timers that were enabled before.
 - **Back to the code just before ADR 0030 (v5).**
-  - Stamp with `mark-v5-for-rollback` only.
+  - Stamp with `mark-v6-for-rollback`, then `mark-v5-for-rollback`.
   - Remove `edgelab-observe*` service/timer files; v5 predates them.
   - Keep the Odds API units and re-enable the timers that were enabled before.
-- **Back before ADR 0029 (v4).** Run both stamps and every step below.
+- **Back before ADR 0029 (v4).** Run all three stamps and every step below.
 
 ```bash
-sudo systemctl disable --now edgelab-pfm.timer edgelab-decision.timer edgelab-recheck.timer edgelab-status.timer edgelab-backup.timer edgelab-shadow.timer edgelab-settlement.timer edgelab-observe.timer edgelab-observe-close.timer edgelab-freshness.timer edgelab-odds.timer   # 1. stop every timer, odds included
-systemctl is-enabled edgelab-pfm.timer edgelab-decision.timer edgelab-recheck.timer edgelab-status.timer edgelab-backup.timer edgelab-shadow.timer edgelab-settlement.timer edgelab-observe.timer edgelab-observe-close.timer edgelab-freshness.timer edgelab-odds.timer   # 1b. expect disabled for every one before any unit file is removed
+sudo systemctl disable --now edgelab-pfm.timer edgelab-decision.timer edgelab-recheck.timer edgelab-status.timer edgelab-backup.timer edgelab-shadow.timer edgelab-settlement.timer edgelab-observe.timer edgelab-observe-close.timer edgelab-freshness.timer edgelab-odds.timer edgelab-pm-sports.timer edgelab-pm-sports-discover.timer   # 1. stop every timer, odds included
+systemctl is-enabled edgelab-pfm.timer edgelab-decision.timer edgelab-recheck.timer edgelab-status.timer edgelab-backup.timer edgelab-shadow.timer edgelab-settlement.timer edgelab-observe.timer edgelab-observe-close.timer edgelab-freshness.timer edgelab-odds.timer edgelab-pm-sports.timer edgelab-pm-sports-discover.timer   # 1b. expect disabled for every one before any unit file is removed
 sudo systemctl start edgelab-backup.service                           # 2. VERIFIED backup (journalctl -u edgelab-backup)
-sudo runuser -u edgelab -- /opt/market-edge-lab/venv/bin/python -m edge_lab.storage mark-v5-for-rollback --db /var/lib/market-edge-lab/db/edge_lab.sqlite3   # 3a. stamp v6 -> v5
+sudo runuser -u edgelab -- /opt/market-edge-lab/venv/bin/python -m edge_lab.storage mark-v6-for-rollback --db /var/lib/market-edge-lab/db/edge_lab.sqlite3   # 3. stamp v7 -> v6 (every rollback target before ADR 0032)
+sudo runuser -u edgelab -- /opt/market-edge-lab/venv/bin/python -m edge_lab.storage mark-v5-for-rollback --db /var/lib/market-edge-lab/db/edge_lab.sqlite3   # 3a. stamp v6 -> v5 (only before ADR 0030)
 sudo runuser -u edgelab -- /opt/market-edge-lab/venv/bin/python -m edge_lab.storage mark-v4-for-rollback --db /var/lib/market-edge-lab/db/edge_lab.sqlite3   # 3b. stamp v5 -> v4 (only before ADR 0029)
 sudo mv /opt/market-edge-lab/app /opt/market-edge-lab/app.bad && sudo mv /opt/market-edge-lab/app.prev /opt/market-edge-lab/app   # 4. code
 sudo install -o root -g root -m 0644 /opt/market-edge-lab/app/deploy/vps/systemd/edgelab-* /opt/market-edge-lab/app/deploy/vps/systemd/edgelab.slice /etc/systemd/system/   # 5. units
+sudo rm -f /etc/systemd/system/edgelab-pm-sports.service /etc/systemd/system/edgelab-pm-sports.timer /etc/systemd/system/edgelab-pm-sports-discover.service /etc/systemd/system/edgelab-pm-sports-discover.timer   # every target before ADR 0032
 sudo rm -f /etc/systemd/system/edgelab-observe.service /etc/systemd/system/edgelab-observe.timer /etc/systemd/system/edgelab-observe-close.service /etc/systemd/system/edgelab-observe-close.timer   # v5 and v4
 sudo rm -f /etc/systemd/system/edgelab-freshness.service /etc/systemd/system/edgelab-freshness.timer   # any target before ADR 0031
 sudo systemctl daemon-reload

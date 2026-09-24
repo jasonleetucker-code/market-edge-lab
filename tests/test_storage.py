@@ -223,7 +223,9 @@ def test_v5_store_migrates_to_v6_additively(tmp_path):
     db = tmp_path / "v5.sqlite3"
     _v5_store(db)
     store = SnapshotStore(db)
-    assert store.schema_version() == 6 and [r["run_id"] for r in store.recent_snapshots()] == ["old"]
+    # v5 migrates additively to the current version (v6 and every later step, ADR 0030/0032).
+    assert store.schema_version() == storage.SCHEMA_VERSION >= 6
+    assert [r["run_id"] for r in store.recent_snapshots()] == ["old"]
     with sqlite3.connect(db) as conn:
         names = {r[0] for r in conn.execute("SELECT name FROM sqlite_master")}
     assert storage.V6_OBJECTS <= names and storage.V5_OBJECTS <= names
@@ -243,4 +245,4 @@ def test_a_failed_v6_migration_leaves_a_clean_v5_store(tmp_path, monkeypatch):
         names = {r[0] for r in conn.execute("SELECT name FROM sqlite_master")}
     assert not (storage.V6_OBJECTS & names)  # all or nothing
     monkeypatch.undo()
-    assert SnapshotStore(db).schema_version() == 6  # the next open migrates cleanly
+    assert SnapshotStore(db).schema_version() == storage.SCHEMA_VERSION  # the next open migrates cleanly

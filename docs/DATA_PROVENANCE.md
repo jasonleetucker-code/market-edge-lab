@@ -179,9 +179,9 @@ Chase Upside VPS (`deploy/vps/`).
 
 ## 6b. Planned multi-venue sources (read-only adapters; 2026-09-23 directive)
 
-Four sources are registered as `PLANNED`, with `collected_by=()`. Each has adapter code and
+Six sources are registered as `PLANNED`, with `collected_by=()`. Each has adapter code and
 fixture tests, but no enabled collector timer and no health profile (the Odds API pilot's
-`edgelab-odds.timer` is installed and disabled until the owner's key exists; ADR 0029). Evidence is in
+`edgelab-odds.timer` is installed and disabled until the owner's key exists, ADR 0029; the two Polymarket US pilot timers are installed and enabled only by runbook §5e, ADR 0032). Evidence is in
 `experiments/multi_venue/`.
 
 | Source id | Adapter | Access | What it is not |
@@ -189,6 +189,8 @@ fixture tests, but no enabled collector timer and no health profile (the Odds AP
 | `polymarket_us_public` | `edge_lab.polymarket_us` | the public gateway `gateway.polymarket.us`, keyless, 20 req/s per IP. One bounded smoke GET was recorded | Not Polymarket International; no authenticated host. BBO is never a quote; fees are UNSUPPORTED |
 | `the_odds_api` | `edge_lab.odds_api` | The Odds API v4, free tier, a `READ_ONLY_DATA_FEED` key in `EDGE_LAB_ODDS_API_KEY` (not installed). Fixtures only | Offered odds and de-vigged probabilities are never executable prices |
 | `the_odds_api_discovery` | `edge_lab.odds_pilot` | the same key and host as `the_odds_api`; the quota-free events endpoint, paced at most every 6 h | Health rows for discovery only; a successful discovery never marks the odds feed healthy |
+| `polymarket_us_nfl_discovery` | `edge_lab.polymarket_sports` (ADR 0032) | health id for the NFL pilot's filtered `/v1/events` scans; pages are stored under `polymarket_us_public`, kind `nfl_events` | A filtered listing: never a full-catalog COMPLETE; absence is not evidence |
+| `polymarket_us_nfl_book` | `edge_lab.polymarket_sports` (ADR 0032) | health id for the pilot's research book captures; books are stored under `polymarket_us_public`, kind `book` | A research book, never an executable price claim; never ranked against a sportsbook |
 | `novig_public_data` | `edge_lab.novig_data` | data.novig.com daily CSVs, no authentication. One manual read of the index and one day | End-of-day research data, never an executable quote. The live API is NEEDS_ACCESS |
 
 Provenance rules specific to these adapters:
@@ -204,9 +206,36 @@ Provenance rules specific to these adapters:
   odds.
 - **Credentials.** A credentialed source stores only redacted URLs. For example, `url` and
   `final_url` in `snapshots` read `apiKey=REDACTED` (`docs/SECURITY.md`).
-- **Terms.** Recorded in each `license_notes`. The Polymarket US website Terms of Service
-  could not be read without a browser and are not reviewed. Until they are, data is for
-  research storage only and is not redistributed.
+- **Terms.** Recorded in each `license_notes`.
+  - The Polymarket US Terms were reviewed on 2026-09-24
+    (`experiments/multi_venue/polymarket_us_sports_terms_2026-09-24.md`). They do **not** clear
+    unattended collection.
+  - The NFL pilot runs on the owner's recorded risk decision, not on a Polymarket grant.
+  - The data is for research storage only, is attributed to Polymarket US, and is not
+    redistributed.
+  - At most 100 requests a minute are made.
+
+### 6b-1. Polymarket US NFL pilot tables (evidence schema v7, ADR 0032)
+
+The raw payloads stay in `snapshots` (immutable, hashed; §2), under `source_id`
+`polymarket_us_public` and legacy source `polymarket_us`:
+- kind `nfl_events`, entity `nfl`: each discovery page;
+- kind `book`, entity = the market slug: each research book.
+
+The three additive tables are derived and reproducible from those snapshots plus the versioned
+code. All three are immutable, enforced by triggers.
+
+| Table | One row per | What it records |
+|---|---|---|
+| `pm_sports_scans` | discovery run | coverage state (never COMPLETE for this filtered listing), `filter_complete`, page snapshot ids, requests, and the derived NFL moneyline catalog (parser and policy version) |
+| `pm_sports_targets` | intended capture (market × offset × intended time) | relationship to the Odds API event (always RELATED_NOT_EQUIVALENT, with reasons, checks and flags), intended and effective time, due window, planned rules hash |
+| `pm_sports_observations` | attempt (append-only) | CAPTURED / NOT_EXECUTABLE / FAILED / MISSED / SUPERSEDED / SKIPPED_CAP, the reason, receipt and source (`transactTime`) times, deviation from the intended time, YES top of book and levels (CAPTURED only), and the snapshot id |
+
+- **Receipts.** Only a successful acquisition counts: a scan read to its empty page, or a
+  CAPTURED book. Every other outcome is an attempt.
+- **Final states.** A final state is never followed by another attempt, and a miss is never
+  replaced by a late fetch.
+- **Rollback.** `python -m edge_lab.storage mark-v6-for-rollback`.
 
 ## 6c. Longitudinal learning history (issue #50; audit 2026-09-24)
 

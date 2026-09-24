@@ -930,6 +930,12 @@ def main(argv: list[str] | None = None) -> int:
         from .sizing_counterfactual import main as counterfactual_main
 
         return counterfactual_main(argv[2:])
+    # --- pm-sports: Polymarket US NFL research pilot (ADR 0032). Self-contained block.
+    if argv[:1] == ["pm-sports"]:  # the pilot owns its parser (edge_lab.polymarket_sports.main)
+        from .polymarket_sports import main as pm_sports_main
+
+        return pm_sports_main(argv[1:])
+    # --- end pm-sports
     # --- consensus / readiness (ADR 0033): read-only, network-free; each module owns its parser.
     if argv[:2] == ["odds", "consensus"]:
         from .odds_consensus import main as consensus_main
