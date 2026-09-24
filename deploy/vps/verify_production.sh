@@ -27,7 +27,7 @@ APP=/opt/market-edge-lab/app
 DATA=/var/lib/market-edge-lab
 STATUS=${EDGE_LAB_VERIFY_STATUS_DIR:-/var/lib/market-edge-lab-status}
 BACKUP_JOURNAL=${EDGE_LAB_VERIFY_BACKUP_JOURNAL:-}
-NAMES=(pfm decision recheck status backup shadow settlement observe observe-close)
+NAMES=(pfm decision recheck status backup shadow settlement observe observe-close freshness)
 NR=NOT_READABLE_WITHOUT_PRIVILEGE
 SUMMARY=()
 
@@ -93,6 +93,41 @@ elif valid == 0:
     emit("VALID_DAY_OBSERVED", "NO (latest.json valid_days = 0)")
 else:
     emit("VALID_DAY_OBSERVED", f"YES (latest.json valid_days = {valid})")
+PY
+
+IFS= read -r -d '' PY_FRESHNESS <<'PY' || :
+import json, sys
+from datetime import datetime, timezone
+
+try:
+    with open(sys.argv[1], encoding="utf-8") as stream:
+        d = json.load(stream)
+    if not isinstance(d, dict):
+        raise ValueError(f"not a JSON object ({type(d).__name__})")
+except Exception as exc:
+    print(f"FRESHNESS_STATUS\tUNPARSEABLE ({type(exc).__name__})")
+    raise SystemExit(0)
+schema = d.get("schema")
+state = (d.get("supervisor") or {}).get("state") if isinstance(d.get("supervisor"), dict) else None
+summary = d.get("summary") if isinstance(d.get("summary"), dict) else {}
+try:
+    generated = datetime.fromisoformat(str(d.get("generated_at_utc")).replace("Z", "+00:00"))
+    age_min = (datetime.now(timezone.utc) - generated).total_seconds() / 60
+    age = f"{age_min:.1f} min"
+    fresh = "CURRENT" if 0 <= age_min <= 15 else "STALE (older than 15 min, or future-dated; the supervisor may not be running)"
+except Exception:
+    age, fresh = "UNKNOWN", "UNKNOWN (no parseable generated_at_utc)"
+limit = 95 if state == "DEFERRED_PROTECTED_WINDOW" else 15
+try:
+    evaluated = datetime.fromisoformat(str(d.get("sources_evaluated_at_utc")).replace("Z", "+00:00"))
+    ev_min = (datetime.now(timezone.utc) - evaluated).total_seconds() / 60
+    evaluation = (f"EVALUATION_CURRENT ({ev_min:.1f} min)" if 0 <= ev_min <= limit
+                  else f"EVALUATION_STALE ({ev_min:.1f} min; limit {limit} min)")
+except Exception:
+    evaluation = "NO_EVALUATION (sources_evaluated_at_utc missing: every source is UNKNOWN)"
+print(f"FRESHNESS_STATUS\t{fresh}; age {age}; {evaluation}; schema {schema}; supervisor {state}; "
+      f"sources {summary.get('sources')}; by_freshness {json.dumps(summary.get('by_freshness'), sort_keys=True)}; "
+      f"disagreements {summary.get('disagreements')}")
 PY
 
 IFS= read -r -d '' PY_SHADOW <<'PY' || :
@@ -335,6 +370,12 @@ else
   state LATEST_JSON_AGE "UNKNOWN"
   state COLLECTOR_HEALTH "UNKNOWN (latest.json not readable)"
   state VALID_DAY_OBSERVED "UNKNOWN (latest.json not readable)"
+fi
+
+if [ -r "$STATUS/freshness.json" ]; then
+  states_from "$(python3 -I -B -c "$PY_FRESHNESS" "$STATUS/freshness.json" 2>&1)"
+else
+  state FRESHNESS_STATUS "NOT_FOUND ($STATUS/freshness.json: expected once edgelab-freshness.timer has run)"
 fi
 
 if [ -r "$STATUS/shadow_daily.json" ]; then

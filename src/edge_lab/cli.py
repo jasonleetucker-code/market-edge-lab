@@ -950,6 +950,12 @@ def main(argv: list[str] | None = None) -> int:
         from .sizing_eval import main as sizing_main
 
         return sizing_main(argv[1:])
+    # --- freshness: Freshness Fabric v1 supervisor (ADR 0031). Self-contained block; it owns its parser.
+    if argv[:1] == ["freshness"]:
+        from .freshness_fabric import main as freshness_main
+
+        return freshness_main(argv[1:])
+    # --- end freshness
     args = build_parser().parse_args(argv)
 
     if args.command == "collect":
