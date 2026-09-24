@@ -616,19 +616,16 @@ class VenueComparison:
     book_phase: str = COMPARISON_PHASE
 
 
-UNKNOWN_DEPTH = 0  # passed as the depth limit when the request depth is unknown: every side counts as truncated
-
-
-def _depth_limit(url: str | None) -> int:
-    """The `depth` the book was requested with, from the stored request URL. When the URL does not
-    say, the depth is unknown and every side is treated as possibly truncated (fail closed), so a
-    ladder that runs out reads DEPTH_UNKNOWN, never "the complete book offers less"."""
+def _depth_limit(url: str | None) -> int | None:
+    """The `depth` the book was requested with, from the stored request URL; None when the URL does
+    not say. The caller treats an unknown depth as possibly truncated (fail closed), so a ladder
+    that runs out reads DEPTH_UNKNOWN, never "the complete book offers less"."""
     from urllib.parse import parse_qsl, urlsplit
 
     for key, value in parse_qsl(urlsplit(url or "").query):
         if key == "depth" and value.isascii() and value.isdecimal():
             return int(value)
-    return UNKNOWN_DEPTH
+    return None
 
 
 def venue_comparison(ctx: Context, market_id: str, side: str, quantity: Any, as_of_utc: str | None,
@@ -639,7 +636,7 @@ def venue_comparison(ctx: Context, market_id: str, side: str, quantity: Any, as_
     `exp001_stageb.evaluate_day` builds them: the decision capture's market listing
     (`kalshi_quotes.market_from_kalshi`, with the same `settlement_equivalence` downgrade of
     `rules_resolved`), its captured book for `side` (`kalshi_quotes.ladders_from_orderbook`, depth
-    limit from the stored request URL, unknown = truncated), the fee schedule for the market's own
+    limit from the stored request URL; an unknown depth counts as truncated), the fee schedule for the market's own
     series (`fee_schedules.schedule_for`) and the engine's book-age limit. When the decision
     recorded its quote evidence ids (`evidence_ids`), the book must be one of them. The routes are
     every captured route for this market; today only its own venue is captured, so no other venue
@@ -694,8 +691,12 @@ def venue_comparison(ctx: Context, market_id: str, side: str, quantity: Any, as_
             contract = replace(contract, rules_resolved=False, rules_detail=f"settlement equivalence: {why_not}")
         ladder = None
         if book is not None:
+            limit = _depth_limit(book.url)
             ladder = ladders_from_orderbook(contract.native_id, book.payload, received_at_utc=book.received_at_utc,
-                                            evidence_id=book.evidence_id, depth_limit=_depth_limit(book.url)).get(side)
+                                            evidence_id=book.evidence_id, depth_limit=limit).get(side)
+            if ladder is not None and limit is None:
+                # Unknown request depth: the book may have been cut off, so it is never "complete".
+                ladder = replace(ladder, truncated=True)
         route = best_price.Route(event, contract, ladder,
                                  fee_schedules.schedule_for(contract.venue, _series_scope(contract), as_of=at))
         result = best_price.compare(best_price.PositionRequest(event, contract, side, qty), [route], as_of=at,

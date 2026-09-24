@@ -316,17 +316,18 @@ def assessment_section(row: pr.MarketRow, side: str) -> str:
                      + c.disclosure("Exact recorded values", exact) + earlier, sid="as-h")
 
 
-def comparison_body(result: d.VenueComparison) -> str:
-    """Every state of the across-venues slot. Only OK carries comparator figures."""
+def comparison_body(result: d.VenueComparison, now=None) -> str:
+    """Every state of the across-venues slot. Only OK carries comparator figures; `now` only adds
+    each book's age today beside the comparator's decision-time freshness."""
     if result.status == d.OK:
-        return c.venue_comparison(result.comparison)
+        return c.venue_comparison(result.comparison, now=now)
     if result.status == "NOT_EVALUATED":
         return c.empty_state("Not evaluated yet", f"No comparison: {result.message}. The requested size is always the "
                                                   "evaluated size; it is never entered here.")
     if result.status == d.ERROR:
         return c.error_state("Comparison unavailable", f"ERROR — {result.message}. This is not an empty comparison.")
     why = result.message[:1].upper() + result.message[1:]
-    return c.unavailable("No captured book to compare", f"{why}. Nothing is ranked without captured evidence.")
+    return c.unavailable("Nothing captured to compare", f"{why}. Nothing is ranked without captured evidence.")
 
 
 def venues_section(ctx: d.Context, row: pr.MarketRow, side: str) -> str:
@@ -347,7 +348,7 @@ def venues_section(ctx: d.Context, row: pr.MarketRow, side: str) -> str:
     else:
         result = d.venue_comparison(ctx, row.market_id, side, a.size, a.decided_at_utc,
                                      evidence_ids=a.raw.get("quote_evidence_ids"))
-        body = comparison_body(result)
+        body = comparison_body(result, ctx.now)
         size = pr.quantity(result.quantity)
         meta = (f"{side} · {size} contract{'' if size == '1' else 's'} (evaluated size) · as of "
                 f"{pr.datetime_et(result.as_of_utc) or 'unknown time'}") if size else None

@@ -236,6 +236,7 @@ delivery state stated honestly (recorded locally; phone delivery not recorded). 
 | No model | No model for this market |
 | No comparable venue | No equivalent venue price verified |
 | Stale quote | Stale quote — not actionable |
+| Comparator route, judged at its decision time | Fresh at decision time (plus the book's age now) / Stale at decision time — not ranked |
 | Stage A pass | Historical validation passed (never "Profitable") |
 | Zero capacity | New positions halted + binding reason |
 | Seven-day rule fails | Outside starter horizon |
@@ -313,6 +314,9 @@ directive), and the screenshots that justify it.
   per-route rows, related markets unranked, stale routes named) instead of a fixed "No
   equivalent venue price verified" state. New component `venue_comparison` built from the
   existing facts, row, badge, state-text and disclosure components; new state words for route
-  exclusions and rules equivalence in `presentation.STATES`. No token, CSS, layout or
-  navigation change. Markets rows get no comparison indicator: §8 fixes the board columns.
+  exclusions and rules equivalence in `presentation.STATES`. §9 gains the comparator's
+  decision-time freshness row: the comparator judges a book at the recorded decision time, so it
+  says "at decision time" and never plain "fresh" beside the Quote section's current-time
+  verdict; a single captured route reuses "No equivalent venue price verified". No token, CSS,
+  layout or navigation change. Markets rows get no comparison indicator: §8 fixes the board columns.
   Screenshots: see the PR.

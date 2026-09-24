@@ -80,9 +80,9 @@ def test_figures_are_the_comparators_own(cmps):
     quote, gross = cmp.claim("BEST_OBSERVED_QUOTE"), cmp.claim("BEST_GROSS_COST_FOR_SIZE")
     verified = cmp.claim("BEST_VERIFIED_TOTAL_COST")
     assert (quote.value, gross.value, verified.value) == (Decimal("0.33"), Decimal("3.30"), Decimal("3.61"))
-    assert f"{pr.cents(quote.value)} per contract · Polymarket US · lowest of 2 fresh routes" in text
+    assert f"{pr.cents(quote.value)} per contract · Polymarket US · lowest of 2 routes fresh at decision time" in text
     assert f"{pr.money(gross.value)} for 10 contracts · Polymarket US" in text
-    assert f"{pr.money(verified.value)} for 10 contracts · Kalshi · lowest of 1 fresh route" in text
+    assert f"{pr.money(verified.value)} for 10 contracts · Kalshi · lowest of 1 route fresh at decision time" in text
     # The account-feasible claim is absent with the comparator's own reason, never a figure.
     feasible = cmp.claim("BEST_ACCOUNT_FEASIBLE_ROUTE")
     assert not feasible.supported and feasible.reason == "NO_ACCOUNT_CONNECTED"
@@ -119,11 +119,11 @@ def test_related_markets_are_labelled_and_unranked(cmps):
 
 def test_stale_routes_are_named_and_never_ranked(cmps):
     multi = plain(c.venue_comparison(cmps["multi"]))
-    assert "Not ranked because the book is stale or of unknown age: novig:DEMO-HIGH-67-68." in multi
-    assert "Routes not ranked by any claim" in multi and "Stale quote — not ranked" in multi
+    assert "Not ranked because the book was stale or of unknown age at decision time: novig:DEMO-HIGH-67-68." in multi
+    assert "Routes excluded from every claim" in multi and "Stale at decision time — not ranked" in multi
     stale = plain(c.venue_comparison(cmps["stale"]))
-    assert stale.count("Stale quote — not ranked Not claimed") == 4  # every claim, for the same reason
-    assert "Routes ranked by at least one claim" not in stale
+    assert stale.count("Stale at decision time — not ranked Not claimed") == 4  # every claim, for the same reason
+    assert "Routes eligible for at least one claim" not in stale
     assert "kalshi:DEMO-HIGH-B67.5, polymarket_us:demo-high-67-68" in stale
 
 
@@ -137,7 +137,7 @@ def test_unsupported_payoff_is_refused_not_reinterpreted(cmps):
 
 def test_single_captured_route_says_nothing_is_ranked_across_venues(cmps):
     text = plain(c.venue_comparison(cmps["single"]))
-    assert "Only Kalshi is captured for this market." in text
+    assert "No equivalent venue price verified: only Kalshi is captured for this market" in text
     assert "for 1 contract ·" in text and "for 1 contracts" not in text
     assert "Fees unverified Not claimed" in text
 
@@ -155,7 +155,7 @@ def test_bounds_that_overlap_prove_no_order():
     claim = cmp.claim("BEST_VERIFIED_TOTAL_COST")
     two = dataclasses.replace(claim, candidates=(claim.market_id, "polymarket_us:demo-high-67-68"), proven_below=())
     shown = dataclasses.replace(cmp, claims=tuple(two if c_.kind == claim.kind else c_ for c_ in cmp.claims))
-    assert "No proven order against: polymarket_us:demo-high-67-68 (bounds overlap or totals tie)" in plain(
+    assert "No proven order against: polymarket_us:demo-high-67-68 (cost bounds overlap)" in plain(
         c.venue_comparison(shown))
 
 
@@ -183,7 +183,7 @@ def test_claim_value_text_formats_without_computing():
 
 @pytest.mark.parametrize("status,title,kind", [
     ("NOT_EVALUATED", "Not evaluated yet", "nd"),
-    (d.NO_DATA, "No captured book to compare", "nd"),
+    (d.NO_DATA, "Nothing captured to compare", "nd"),
     (d.ERROR, "Comparison unavailable", "err"),
 ])
 def test_every_non_ok_state_has_its_own_treatment(status, title, kind):
@@ -233,8 +233,8 @@ def test_adapter_runs_the_comparator_on_the_decision_capture(demo):
 
 @pytest.mark.parametrize("url,depth", [
     ("https://api.elections.kalshi.com/trade-api/v2/markets/X/orderbook?depth=100", 100),
-    ("demo://book/DEMO-B67.5", d.UNKNOWN_DEPTH), (None, d.UNKNOWN_DEPTH), ("https://x/y?depth=abc", d.UNKNOWN_DEPTH),
-    ("https://x/y?depth=²", d.UNKNOWN_DEPTH),
+    ("demo://book/DEMO-B67.5", None), (None, None), ("https://x/y?depth=abc", None),
+    ("https://x/y?depth=²", None),
 ])
 def test_depth_limit_comes_from_the_stored_request_url(url, depth):
     assert d._depth_limit(url) == depth
@@ -245,7 +245,7 @@ def test_unknown_request_depth_fails_closed_to_depth_unknown(demo):
     ctx = d.Context(demo)
     market = next(m for m in ctx.observed.value.markets if m.market_id == "kalshi:DEMO-B71.5")
     book = market.books["decision"]
-    assert d._depth_limit(book.url) == d.UNKNOWN_DEPTH  # the demo's URLs carry no depth
+    assert d._depth_limit(book.url) == None  # the demo's URLs carry no depth
     as_of = (datetime.fromisoformat(book.received_at_utc) + timedelta(seconds=30)).isoformat()
     (route,) = d.venue_comparison(ctx, market.market_id, "YES", 100000, as_of).comparison.routes
     assert route.liquidity == "DEPTH_UNKNOWN" and "INSUFFICIENT_DEPTH" not in route.exclusions
@@ -287,7 +287,7 @@ def test_a_stale_routes_total_is_not_claimed(cmps):
     kalshi = next(r for r in cmps["stale"].routes if r.venue == "kalshi")
     assert kalshi.claim_total_cost is not None and "NOT_FRESH" in kalshi.exclusions
     text = plain(c.comparison_route(kalshi))
-    assert "Verified total — Not claimed (stale book)" in text and pr.money(kalshi.claim_total_cost) not in text
+    assert "Verified total — Not claimed (stale at decision time)" in text and pr.money(kalshi.claim_total_cost) not in text
 
 
 def test_an_earlier_target_day_is_never_compared(demo):
@@ -318,7 +318,29 @@ def test_gallery_shows_every_comparison_state(demo):
     status, body = call(make_app(demo), "/gallery")
     text = plain(body)
     assert status == "200 OK"
-    for needle in ("RELATED MARKET — NOT ECONOMICALLY EQUIVALENT", "Only Kalshi is captured for this market.",
-                   "Comparison refused: payoff not supported", "Not ranked because the book is stale",
-                   "Not evaluated yet", "No captured book to compare", "Comparison unavailable"):
+    for needle in ("RELATED MARKET — NOT ECONOMICALLY EQUIVALENT", "No equivalent venue price verified: only Kalshi is captured for this market",
+                   "Comparison refused: payoff not supported", "Not ranked because the book was stale",
+                   "Not evaluated yet", "Nothing captured to compare", "Comparison unavailable"):
         assert needle in text, needle
+
+
+def test_decision_time_freshness_is_never_shown_as_current(cmps):
+    """The comparator judges books at the decision time; the page says so and adds the age today."""
+    from datetime import datetime, timezone
+    now = datetime(2026, 9, 24, 12, 0, tzinfo=timezone.utc)
+    text = plain(c.venue_comparison(cmps["multi"], now=now))
+    assert "Evaluated at the decision time" in text and "Fresh at decision time" in text
+    assert "Fresh book" not in text and "fresh routes" not in text
+    assert "book captured Sep 23, 5:59 PM EDT (" in text and " ago)" in text
+
+
+def test_ties_are_named_and_a_missing_total_names_its_own_cause(cmps):
+    cmp = cmps["multi"]
+    quote = cmp.claim("BEST_OBSERVED_QUOTE")
+    tied = dataclasses.replace(quote, candidates=(*quote.candidates, "polymarket_us:tie"), proven_below=quote.proven_below)
+    shown = dataclasses.replace(cmp, claims=tuple(tied if c_.kind == quote.kind else c_ for c_ in cmp.claims))
+    assert "Tied with: polymarket_us:tie" in plain(c.venue_comparison(shown))
+    kalshi = next(r for r in cmp.routes if r.venue == "kalshi")
+    thin = dataclasses.replace(kalshi, claim_total_cost=None, exclusions=("INSUFFICIENT_DEPTH", "NO_ACCOUNT_CONNECTED"))
+    assert "Not verified · Insufficient depth" in plain(c.comparison_route(thin))
+

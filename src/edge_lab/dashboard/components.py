@@ -488,32 +488,52 @@ def _plural(n: int, word: str) -> str:
     return f"{n} {word}{'' if n == 1 else 's'}"
 
 
+# A route's first exclusion among these explains a missing verified total (gate order).
+_TOTAL_GATES = ("PAYOFF_UNSUPPORTED", "MARKET_NOT_OPEN", "BOOK_MISSING", "INVALID_BOOK", "NO_OFFER",
+                "INSUFFICIENT_DEPTH", "DEPTH_UNKNOWN", "FEE_UNSUPPORTED", "FEE_NOT_PRICED", "FEE_UNVERIFIED")
+
+
+def _unranked_note(kind: str, claim: Any, routes: Mapping[str, Any]) -> str:
+    """Candidates the winner is not proven below: equal figures are ties; totals may only overlap."""
+    open_ = [m for m in claim.candidates if m != claim.market_id and m not in claim.proven_below]
+    if not open_:
+        return ""
+    if kind in pr.TOTAL_CLAIMS:
+        # Equal exact debits are a tie (as best_price.summarize); equal bounds prove nothing.
+        best = routes.get(claim.market_id)
+        tied = [m for m in open_ if best is not None and routes.get(m) is not None
+                and best.fee_status == routes[m].fee_status == "VERIFIED" and routes[m].total_cost == best.total_cost]
+    else:  # observed quotes and gross costs are exact: a candidate not proven above the winner equals it
+        tied = open_
+    other = [m for m in open_ if m not in tied]
+    out = ""
+    if tied:
+        out += f'<span class="cell-sub">Tied with: {esc(", ".join(tied))}</span>'
+    if other:
+        out += f'<span class="cell-sub">No proven order against: {esc(", ".join(other))} (cost bounds overlap)</span>'
+    return out
+
+
 def comparison_claims(cmp: Any) -> str:
     """The comparator's four claims side by side, each with its own figure or its reason for
     absence. There is never a single "best" verdict: the four answer different questions."""
     routes = {r.market_id: r for r in cmp.routes}
+    size = pr.quantity(cmp.quantity)
     pairs = []
     for kind in pr.CLAIM_ORDER:
         claim = cmp.claim(kind)
         label, _ = pr.CLAIM_LABELS[kind]
         if claim.supported:
-            route = routes.get(claim.market_id)
-            size = pr.quantity(cmp.quantity)
-            unit = ("per contract" if kind == "BEST_OBSERVED_QUOTE"
-                    else f"for {size} contract{'' if size == '1' else 's'}")
+            unit = "per contract" if kind == "BEST_OBSERVED_QUOTE" else f"for {size} contract{'' if size == '1' else 's'}"
             n = len(claim.candidates)
-            value = (num(pr.claim_value_text(claim, route)) + f'<span class="cell-sub">{esc(unit)} · '
-                     f'{esc(pr.venue_label(claim.venue))} · lowest of {esc(_plural(n, "fresh route"))}</span>')
-            if kind in pr.TOTAL_CLAIMS:
-                # A bound below another bound proves no order (best_price.proven_cheaper).
-                open_ = [m for m in claim.candidates if m != claim.market_id and m not in claim.proven_below]
-                if open_:
-                    value += (f'<span class="cell-sub">No proven order against: {esc(", ".join(open_))} '
-                              "(bounds overlap or totals tie)</span>")
+            value = (num(pr.claim_value_text(claim, routes.get(claim.market_id)))
+                     + f'<span class="cell-sub">{esc(unit)} · {esc(pr.venue_label(claim.venue))} · lowest of '
+                       f'{esc(_plural(n, "route"))} fresh at decision time</span>'
+                     + _unranked_note(kind, claim, routes))
         else:
             value = badge(claim.reason) + '<span class="cell-sub">Not claimed</span>'
         if claim.stale_candidates:
-            value += (f'<span class="cell-sub">Not ranked (stale or unknown-age book): '
+            value += (f'<span class="cell-sub">Not ranked (stale or unknown-age book at decision time): '
                       f'{esc(", ".join(claim.stale_candidates))}</span>')
         pairs.append((label, value))
     return facts(pairs, text_cols=range(4))
@@ -530,11 +550,13 @@ def _fee_cell(r: Any) -> str:
 
 def _total_cell(r: Any) -> str:
     if r.claim_total_cost is None:
-        return na("no verified total: the fee evidence does not support a claim") + \
-            '<span class="cell-sub">Not verified</span>'
+        # The route's own first blocking exclusion explains it (depth, offer, book or fee evidence).
+        why = next((e for e in r.exclusions if e in _TOTAL_GATES), None)
+        word = pr.state_word(why).label if why else "not verified"
+        return na(f"no verified total: {word.lower()}") + f'<span class="cell-sub">Not verified · {esc(word)}</span>'
     if "NOT_FRESH" in r.exclusions:  # as the comparator's summary: a stale book's total is not claimed
-        return na("total not claimed: the book is stale or of unknown age") + \
-            '<span class="cell-sub">Not claimed (stale book)</span>'
+        return na("total not claimed: the book was stale or of unknown age at decision time") + \
+            '<span class="cell-sub">Not claimed (stale at decision time)</span>'
     if r.fee_status != "VERIFIED":
         sub = "At most (conservative bound)"
     elif r.claim_total_cost == r.total_cost:
@@ -548,8 +570,9 @@ def _depth_cell(r: Any) -> str:
     if r.liquidity is None:
         return na("not assessed: the payoff is not supported") + '<span class="cell-sub">Not assessed</span>'
     offered = pr.quantity(r.available)
-    sub = (f"{offered} of {pr.quantity(r.quantity)} offered" if offered is not None else "Nothing captured") + \
-        f" · {_plural(r.levels_taken, 'level')}"
+    sub = f"{offered} of {pr.quantity(r.quantity)} offered" if offered is not None else "Nothing captured"
+    if r.levels_taken:
+        sub += f" · {_plural(r.levels_taken, 'level')} taken"
     return badge(r.liquidity) + f'<span class="cell-sub">{esc(sub)}</span>'
 
 
@@ -559,9 +582,10 @@ def _release_cell(r: Any) -> str:
     return txt(when, reason="tradable-cash release unknown") + f'<span class="cell-sub">{esc(sub)}</span>'
 
 
-def comparison_route(r: Any) -> str:
+def comparison_route(r: Any, now: Any = None) -> str:
     """One venue route: its own quote, gross cost, fees, verified total, depth, cash release and
-    rules status. Figures are the comparator's; a missing one stays unavailable, never zero."""
+    rules status. Figures are the comparator's; a missing one stays unavailable, never zero.
+    Freshness is the comparator's, at its as-of time; `now` adds the book's age today beside it."""
     code_, label = pr.route_freshness(r.freshness)
     status = (badge("ALL_GATES_PASSED") if not r.exclusions
               else "".join(badge(e) for e in r.exclusions[:3])
@@ -590,16 +614,22 @@ def comparison_route(r: Any) -> str:
         ("starter reasons", ul(r.capital_release_reasons)), ("exclusions (gate order)", ul(r.details)),
         ("execution authorized", esc("no")),
     ]))
+    when = pr.datetime_et(r.book_received_at_utc)
+    age = pr.age_text(r.book_received_at_utc, now) if now is not None and when else None
+    captured = (f"book captured {when}" + (f" ({age})" if age else "")) if when else "book capture time unknown"
     title = f"{esc(pr.venue_label(r.venue))} {code(r.market_id)}"
-    return row(title, sub=f"{pr.state_word(r.equivalence).label} · {label}",
+    return row(title, sub=f"{pr.state_word(r.equivalence).label} · {captured}",
                aside=state_text(code_, label=label), body=body + detail)
 
 
-def venue_comparison(cmp: Any) -> str:
+def venue_comparison(cmp: Any, *, now: Any = None) -> str:
     """VenueComparison: the canonical `best_price.Comparison` for one market, side and evaluated
     size. Four separate claims, one row per equivalent route, related markets listed unranked,
-    stale routes named as not ranked. Read-only; the comparator never authorizes execution."""
-    parts = []
+    stale routes named as not ranked. Freshness is judged at the comparison's as-of time (the
+    recorded decision), never now. Read-only; the comparator never authorizes execution."""
+    as_of = pr.datetime_et(cmp.as_of_utc) or cmp.as_of_utc
+    parts = [f'<p class="note">Evaluated at the decision time, {esc(as_of)}: "fresh" means fresh then, not '
+             "now. The Quote section above judges the latest capture against the current time.</p>"]
     # The comparator refuses a request whose own payoff it cannot price: every claim then carries it.
     if all(not c_.supported and c_.reason == "PAYOFF_UNSUPPORTED" for c_ in cmp.claims):
         parts.append(blocked_state("Comparison refused: payoff not supported",
@@ -608,27 +638,25 @@ def venue_comparison(cmp: Any) -> str:
     parts.append(comparison_claims(cmp))
     stale = sorted({m for c_ in cmp.claims for m in c_.stale_candidates})
     if stale:
-        parts.append(f'<p class="note">{icon("triangle-alert", "ic-sm k-warn")} Not ranked because the book is stale '
-                     f'or of unknown age: {esc(", ".join(stale))}.</p>')
+        parts.append(f'<p class="note">{icon("triangle-alert", "ic-sm k-warn")} Not ranked because the book was stale '
+                     f'or of unknown age at decision time: {esc(", ".join(stale))}.</p>')
     if not cmp.routes:
         parts.append('<p class="note">No route for this market was captured, so nothing is compared.</p>')
     elif len(cmp.routes) == 1 and not cmp.related:
         only = pr.venue_label(cmp.routes[0].venue)
-        parts.append(f'<p class="note">Only {esc(only)} is captured for this market. No other venue\'s book is '
-                     "stored, so nothing is ranked across venues; the claims cover this one route.</p>")
+        parts.append(f'<p class="note">No equivalent venue price verified: only {esc(only)} is captured for this '
+                     "market, so nothing is compared across venues. The claims describe this one route.</p>")
     # Eligible comparisons first, excluded or unproven ones separately (a grouping, not a ranking).
-    ranked = {m for c_ in cmp.claims for m in c_.candidates}
-    groups = (("Routes ranked by at least one claim", [r for r in cmp.routes if r.market_id in ranked]),
-              ("Routes not ranked by any claim", [r for r in cmp.routes if r.market_id not in ranked]))
+    eligible = {m for c_ in cmp.claims for m in c_.candidates}
+    groups = (("Routes eligible for at least one claim", [r for r in cmp.routes if r.market_id in eligible]),
+              ("Routes excluded from every claim", [r for r in cmp.routes if r.market_id not in eligible]))
     for heading, routes in groups:
         if routes:
             parts.append(f'<h3 class="eyebrow">{esc(heading)}</h3><ul class="rows">'
-                         + "".join(comparison_route(r) for r in routes) + "</ul>")
+                         + "".join(comparison_route(r, now) for r in routes) + "</ul>")
     if cmp.related:
-        items = "".join(f'<li class="row"><div class="row-main"><p class="row-title">{code(m)}</p>'
-                        f'<p class="row-sub">Listed only; never priced against this market</p></div>'
-                        f'<div class="row-aside">{state_text("RELATED_NOT_EQUIVALENT")}</div></li>'
-                        for m in cmp.related)
+        items = "".join(row(code(m), sub="Listed only; never priced against this market",
+                            aside=state_text("RELATED_NOT_EQUIVALENT")) for m in cmp.related)
         parts.append(f'<h3 class="eyebrow">Related markets · unranked</h3><ul class="rows">{items}</ul>')
     parts.append(disclosure("What each claim means", kv(
         [(pr.CLAIM_LABELS[k][0], esc(pr.CLAIM_LABELS[k][1] + " " + cmp.claim(k).detail)) for k in pr.CLAIM_ORDER])))

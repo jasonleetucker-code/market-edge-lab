@@ -337,7 +337,7 @@ STATES: dict[str, StateWord] = {
     "NO_OFFER": StateWord("Nothing offered", WARN_K),
     "MARKET_NOT_OPEN": StateWord("Market not open", ND_K),
     "FEE_NOT_PRICED": StateWord("Fee not priced", WARN_K),
-    "NOT_FRESH": StateWord("Stale quote — not ranked", WARN_K),
+    "NOT_FRESH": StateWord("Stale at decision time — not ranked", WARN_K),
     "NO_ACCOUNT_CONNECTED": StateWord("No account connected", WARN_K),
     "CAPITAL_RELEASE_INELIGIBLE": StateWord("Outside starter horizon", WARN_K),
     "NO_EQUIVALENT_ROUTE": StateWord("No equivalent route", ND_K),
@@ -983,10 +983,13 @@ FEE_STATUS_NOTES = {
     "UNVERIFIED": "Unverified estimate — not claim-grade",
     "UNSUPPORTED": "Unavailable: no fee model",
 }
-ROUTE_FRESHNESS = {"fresh": ("FRESH", "Fresh book"), "stale": ("NOT_FRESH", "Stale quote — not ranked"),
+# The comparator judges a book's freshness at its own `as_of` (the recorded decision time), never
+# now: the labels say so, and the page shows the book's age relative to now beside them.
+ROUTE_FRESHNESS = {"fresh": ("FRESH", "Fresh at decision time"),
+                   "stale": ("NOT_FRESH", "Stale at decision time — not ranked"),
                    "unknown": ("UNKNOWN", "Book age unknown — not ranked")}
 
 
 def route_freshness(value: Any) -> tuple[str, str]:
-    """(state code, label) for a route's book freshness; anything not fresh is never ranked."""
+    """(state code, label) for a route's book freshness at the comparison's as-of time."""
     return ROUTE_FRESHNESS.get(str(value).lower(), ("UNKNOWN", "Book age unknown — not ranked"))
