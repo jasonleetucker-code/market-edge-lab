@@ -160,10 +160,11 @@ cat <<EOF
 
 INSTALL OK: $SHA
 Next (owner):
-  1. Fail-closed dry run (outside the window it must be rejected before any order-book request):
-       sudo systemctl start edgelab-decision.service; sudo journalctl -u edgelab-decision -n 20 --no-pager
-     Expect "status": "rejected_out_of_window" and a failed unit (that is correct). Then:
-       sudo systemctl reset-failed 'edgelab-*'
+  1. Fail-closed dry run (outside the window it must be rejected before any order-book request).
+     Use the check script: its failure is recorded as DEPLOYMENT_VERIFICATION, not pushed
+     (runbook section 4.1, ADR 0028):
+       sudo bash /opt/market-edge-lab/app/deploy/vps/verify_fail_closed.sh
+     Expect "FAIL_CLOSED_CHECK: PASS". Anything else stops here.
   2. Activate the schedule:
        sudo systemctl enable --now ${CORE_TIMERS[*]/%/.timer}
        systemctl list-timers 'edgelab-*'

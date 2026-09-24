@@ -421,6 +421,12 @@ RELAY_NAME = "ntfy_relay.jsonl"
 # replay days of history onto the phone. Older events stay in the outbox and the dashboard.
 RELAY_MAX_AGE = timedelta(hours=36)
 INVOCATION_ID = re.compile(r"[0-9a-f]{32}")  # a systemd InvocationID, as alert.sh records it
+UNIT_NAME = re.compile(r"edgelab-[A-Za-z0-9_@.-]{1,80}")
+# Written by alert.sh: PRODUCTION failures only, and root-confirmed fail-closed checks only.
+FAILURE_NAME = "last_failure.json"
+VERIFICATION_NAME = "last_verification.json"
+# Root-owned directory holding the fail-closed check's confirmations (verify_fail_closed.sh).
+VERIFY_DIR = "/var/lib/market-edge-lab-verify"
 
 
 def _summarize(results: list[dict[str, Any]]) -> dict[str, int]:
@@ -452,24 +458,58 @@ class _RecordingSink:
         return status
 
 
-def unit_failure_event(record: Mapping[str, Any]) -> NotificationEvent | None:
-    """The `last_failure.json` that `deploy/vps/alert.sh` writes, as a SOURCE_FAILURE event.
+def _trusted(path: str, uid: int) -> bool:
+    """Owned by `uid`, not a symlink, not writable by group or others (as alert.sh checks)."""
+    try:
+        st = os.lstat(path)
+    except OSError:
+        return False
+    return not os.path.islink(path) and st.st_uid == uid and not st.st_mode & 0o022
+
+
+def verification_confirmed(record: Mapping[str, Any], *, verify_dir: str | os.PathLike[str] = VERIFY_DIR,
+                           trusted_uid: int = 0) -> bool:
+    """Whether root confirmed this failure record's exact invocation as the runbook §4.1
+    fail-closed check (deploy/vps/verify_fail_closed.sh). The status directory is writable by
+    every edgelab process, so the record's own `origin` is never trusted alone: the root-owned
+    confirmation must exist with exactly the expected content."""
+    unit, invocation = record.get("unit"), record.get("invocation_id")
+    if not (isinstance(unit, str) and UNIT_NAME.fullmatch(unit) and isinstance(invocation, str)
+            and INVOCATION_ID.fullmatch(invocation)):
+        return False
+    directory = os.fspath(verify_dir)
+    confirmation = os.path.join(directory, f"confirmed-{invocation}")
+    if not (_trusted(directory, trusted_uid) and _trusted(confirmation, trusted_uid)):
+        return False
+    expected = f'{{"unit": "{unit}", "invocation_id": "{invocation}", "status": "rejected_out_of_window"}}\n'
+    try:
+        with open(confirmation, "rb") as fh:
+            return fh.read(1024) == expected.encode("ascii")
+    except OSError:
+        return False
+
+
+def unit_failure_event(record: Mapping[str, Any], *, verify_dir: str | os.PathLike[str] = VERIFY_DIR,
+                       trusted_uid: int = 0) -> NotificationEvent | None:
+    """A failure record that `deploy/vps/alert.sh` writes (`last_failure.json`, or
+    `last_verification.json`), as a SOURCE_FAILURE event.
 
     It covers runs killed before they could write the outbox (timeout, OOM, crash). The ntfy
     headline stays fixed. The unit name goes only into the dedupe key, never to the phone.
 
-    The origin is the one alert.sh recorded for that exact invocation: DEPLOYMENT_VERIFICATION
-    only when the root-run check confirmed it (runbook §4.1, ADR 0028 amendment). A record
-    without an origin, or with an unreadable one, is PRODUCTION: a garbled field never
+    The origin is DEPLOYMENT_VERIFICATION only when the record says so AND root's confirmation
+    of that exact invocation exists (`verification_confirmed`; runbook §4.1, ADR 0028
+    amendment). Anything else is PRODUCTION: no origin, an unreadable one, another origin, or
+    a verification claim without a trusted confirmation. A garbled or forged field never
     silences a real failure."""
     unit = str(record.get("unit") or "")
     failed_at = parse_utc(record.get("failed_at_utc"))
-    if not re.fullmatch(r"edgelab-[A-Za-z0-9_@.-]{1,80}", unit) or failed_at is None:
+    if not UNIT_NAME.fullmatch(unit) or failed_at is None:
         return None
-    try:
-        origin = Origin(record.get("origin") or Origin.PRODUCTION.value)
-    except (ValueError, TypeError):
-        origin = Origin.PRODUCTION
+    origin = Origin.PRODUCTION
+    if record.get("origin") == Origin.DEPLOYMENT_VERIFICATION.value and verification_confirmed(
+            record, verify_dir=verify_dir, trusted_uid=trusted_uid):
+        origin = Origin.DEPLOYMENT_VERIFICATION
     invocation = record.get("invocation_id")
     valid = isinstance(invocation, str) and INVOCATION_ID.fullmatch(invocation) is not None
     values = {"invocation_id": invocation} if valid else {}
@@ -483,14 +523,21 @@ def unit_failure_event(record: Mapping[str, Any]) -> NotificationEvent | None:
 def relay_outbox(outbox_path: str | os.PathLike[str], relay_path: str | os.PathLike[str], sink: Any, *, now: datetime,
                  max_age: timedelta = RELAY_MAX_AGE, limits: Limits = Limits(),
                  failure_path: str | os.PathLike[str] | None = None,
-                 push_origins: tuple[Origin, ...] = ()) -> dict[str, Any]:
+                 push_origins: tuple[Origin, ...] = (), verify_dir: str | os.PathLike[str] = VERIFY_DIR,
+                 trusted_uid: int = 0) -> dict[str, Any]:
     """Forward recent outbox events (and the last unit failure) to `sink` once each, under the
     normal `dispatch` rules.
 
+    With `failure_path` (last_failure.json), the relay also reads last_verification.json next
+    to it. A record from either file is DEPLOYMENT_VERIFICATION only with root's confirmation
+    of its invocation in `verify_dir` (`unit_failure_event`); otherwise it is PRODUCTION and
+    pushed.
+
     Only PRODUCTION events are pushed, unless the caller explicitly names MANUAL_DIAGNOSTIC (or
     TEST) in `push_origins`; the relay unit never does. Any other event is counted as
-    HELD_BY_ORIGIN and left where it is: the outbox and last_failure.json are never modified,
-    so the dashboard still shows it. A held event is not written to the relay history.
+    HELD_BY_ORIGIN and left where it is: the outbox and both failure records are never
+    modified, so the dashboard still shows them. A held event is not written to the relay
+    history.
 
     The relay history (`relay_path`) records each event as soon as the sink SUBMITTED it. It is
     the dedupe history for later relays, by `dedupe_key` (in `dispatch`) and by `event_id` (here).
@@ -506,13 +553,16 @@ def relay_outbox(outbox_path: str | os.PathLike[str], relay_path: str | os.PathL
         history = relay.history()
         sent_ids = {h.get("event_id") for h in history}
         candidates: list[NotificationEvent] = [e for e in map(event_from_dict, JsonlOutbox(outbox_path).history()) if e]
-        if failure_path is not None:
+        records = [] if failure_path is None else [
+            os.fspath(failure_path), os.path.join(os.path.dirname(os.fspath(failure_path)), VERIFICATION_NAME)]
+        for path in records:
             try:
-                with open(failure_path, encoding="utf-8") as fh:
+                with open(path, encoding="utf-8") as fh:
                     record = json.loads(fh.read())
             except (OSError, ValueError):
                 record = None
-            failure = unit_failure_event(record) if isinstance(record, Mapping) else None
+            failure = (unit_failure_event(record, verify_dir=verify_dir, trusted_uid=trusted_uid)
+                       if isinstance(record, Mapping) else None)
             if failure is not None:
                 candidates.append(failure)
         events: list[NotificationEvent] = []

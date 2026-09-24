@@ -66,10 +66,14 @@ unit fail, to prove the collector fails closed. That failure then reached the ow
     `edge-lab-notification/1` because the field is additive.
   - A line without the field reads as PRODUCTION. An unknown value makes `event_from_dict`
     return None, never a guess.
+  - **Garbled origins.** A garbled outbox line is dropped, neither guessed nor relayed. A
+    garbled unit-failure record is PRODUCTION and pushed. So is a failure record that claims
+    DEPLOYMENT_VERIFICATION without root's confirmation. A bad field can make an extra alert,
+    never a missing one.
   - The event id leaves the origin out, so the ids of events already relayed do not change.
 - **Who sets it.** Whoever creates the event. `daily._notify` passes PRODUCTION explicitly,
-  `send_test` passes TEST, and unit failures take the origin that `alert.sh` recorded (ADR 0028
-  amendment). It is never inferred from the clock, from a deployment being in progress, or
+  `send_test` passes TEST. A unit failure takes the origin that `alert.sh` recorded, and the
+  relay accepts DEPLOYMENT_VERIFICATION only with root's confirmation (ADR 0028 amendment). It is never inferred from the clock, from a deployment being in progress, or
   from free text.
 - **Delivery policy, enforced in `dispatch`.** A sink declares `external = False` only if it
   keeps events on this host (the outbox). A sink that declares nothing counts as external.
@@ -94,8 +98,9 @@ unit fail, to prove the collector fails closed. That failure then reached the ow
   dashboard demo (`dashboard/demo.py`) writes to a demo status directory that the relay never
   reads, so it cannot push. It should still pass `origin=Origin.DEMO` when its owner next
   touches it.
-- **Rollback.** Code from before this amendment ignores `origin` and would treat a stored
-  DEPLOYMENT_VERIFICATION record as a production failure. That is the fail-loud direction.
+- **Rollback.** Code from before this amendment ignores `origin`, so it would push any
+  non-PRODUCTION outbox line (the fail-loud direction). It never reads
+  `last_verification.json`.
 
 **Reconsider when:** a new producer needs a pushed origin other than PRODUCTION or TEST. Add it
 to `REQUESTABLE_PUSH_ORIGINS` in a reviewed change, never as configuration.
