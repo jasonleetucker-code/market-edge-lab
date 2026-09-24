@@ -313,6 +313,23 @@ be written here when they are made.
     - Before any install, check that no `edgelab-*` capture job is running.
     - Deploy only merged code, through `docs/deploy/DAILY_SHADOW_ACTIVATION.md`.
 
+- **2026-09-24 (morning), next build chunk directive.** Recorded in
+  `docs/owner/2026-09-24-next-build-chunk-directive.md`.
+  - **Authorized (research/shadow only):**
+    - the sizing-v2 counterfactual runner (derived replay store; never the canonical ledger);
+    - the read-only RESEARCH SIZING panel and the multi-venue comparator UI in Terminal v1;
+    - later/closing-price capture: schemas, CLI, capture logic, tests, runbook and **manual**
+      capture only;
+    - notification origin/provenance and delivery policy;
+    - Odds API work that needs no key;
+    - the #50 coverage audit and safe P0 storage fixes;
+    - settlement verification and a manual F09 checkpoint after the first real settlement;
+    - review, merge and deploy of that work through `docs/deploy/DAILY_SHADOW_ACTIVATION.md`.
+  - **Not authorized:** a new unattended timer for later/closing-price capture (the proposed
+    schedule is an owner decision); any change to operational shadow fills or the frozen EXP-001
+    rule; orders, money, credentials, paid services, public exposure, SSH changes, Brisket
+    changes.
+
 ## Standing merge rule: docs-only and test-only PRs
 
 Owner rule of 2026-09-22 (verbatim source: `docs/owner/2026-09-22-overnight-build-directive.md`).
