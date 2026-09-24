@@ -302,6 +302,11 @@ be written here when they are made.
     SSH key / sshd / sudo / root-login changes (root SSH hardening is a separate future
     security task), OS upgrades or reboots, broad macro/crypto implementation, retuning EXP-001
     or changing its sizing, criteria or history.
+  - **Status (2026-09-24, verified on production):** merged and deployed as `ced77b8`: PRs #57
+    (ntfy relay, ADR 0028), #58 (comparator, ADR 0027), #59 (Odds API pilot, ADR 0029; evidence
+    schema v5, forward-only with a tested manual rollback) and #60 (sizing v2 research, ADR 0026).
+    One ntfy test was SUBMITTED. `edgelab-odds.timer` is installed and disabled until the owner's
+    key exists. Operational fills are unchanged (`EXP-001-fixed-1-v1`); EXP-001 is untouched.
   - **Operations:**
     - No Market Edge install or restart from 17:40 to 18:50 America/New_York, nor while a
       settlement job runs (around 11:15 and 16:15 ET).

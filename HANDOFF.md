@@ -3,84 +3,75 @@
 This is the live state of the repository. Each session overwrites it; it is not a history
 (git log is the history). Format: `AI_INSTRUCTIONS.md` → Handoff format.
 
-_Last updated: 2026-09-23 ~19:00 America/New_York, by the final-state PR of the production
-activation directive (`docs/owner/2026-09-23-production-activation-directive.md`). This
-session ran on the owner's laptop, with SSH to chaseupside._
+_Last updated: 2026-09-24 ~06:45 America/New_York. Written by the docs PR for the
+2026-09-24 directive (`docs/owner/2026-09-24-brisket-health-and-next-phase-directive.md`).
+The session ran on the owner's laptop with SSH to chaseupside._
 
 ```
-STATUS: DONE for the directive's production and follow-up scope. Evidence as below; nothing
-  is claimed beyond it.
-ACCEPTANCE: the 2026-09-23 production activation + post-audit integration directive
-  (recorded verbatim with the SSH grant).
+STATUS: DONE for the directive's Market Edge build, merge and deploy scope. Two items wait on
+  the owner: the Odds API key and subscribing on the phone.
+ACCEPTANCE: the 2026-09-24 directive and the owner's four plan corrections (recorded verbatim),
+  PHASES 2-9.
 EVIDENCE:
-  - Production (details and every state, separately:
-    docs/deploy/PRODUCTION_ACTIVATION_2026-09-23.md):
-    - deployed with DAILY_SHADOW_ACTIVATION.md only:
-      247fe80 -> 6e2031c -> afa3ce9 (Tailscale session, #46) -> 7aac49c (ran the first
-      window) -> f646481 (Terminal v1 session, #49, 18:52 ET, after the window; §10 of the record);
-    - each install had a verified backup before it and a fail-closed decision test on the
-      installed code (rejected_out_of_window, 0 records);
-    - 7/7 timers enabled: pfm, decision, recheck, status, backup, shadow, settlement.
-      edgelab-dashboard.service (tailnet-only, ADR 0024) runs continuously and is exempt
-      from the install check;
-    - evidence and ledger backups and restores VERIFIED at every step; OOM (30 d) 0;
-      memory PSI 0.00; edgelab.slice peak 49 MiB of 384 MiB.
-    - CHASE_UPSIDE_HEALTH: HEALTHY through 14:59 ET; UNHEALTHY from at least 18:51 ET
-      (Brisket /api/health 503 "degraded", contract_ok=false: Brisket's own data contract,
-      not Market Edge; all Brisket units active; not touched).
-  - First real window (target 2026-09-24): pfm, decision (6 books) and recheck (6 books)
-    all complete inside their windows; status VALID, no reasons; valid_days = 1.
-  - First real shadow day, both accounts: 12 decisions, 2 qualified, 2 filled
-    (B66.5 NO @0.56, B70.5 YES @0.08, 1 contract each), 0 NO_FILL, 0 risk vetoes, starter
-    policy not yet in effect for that decision time; 4 positions pending settlement.
-  - F09: CLOSED for the anchored history (GATE7_FINDINGS). Two independent checkpoints
-    (487c744d at 2 entries; 89581b5a at 30 entries), each stored off-host (laptop) and in
-    Git (docs/engineering/ledger_checkpoints/). Production ledger VERIFIED on the VPS;
-    off-host verifies VERIFIED, and the first checkpoint EXTENDED.
-  - Code merged (squash), each independently reviewed, blockers and should-fix items fixed
-    and re-reviewed, CI 3.11 and 3.12 green on the exact head:
-    - #42 Polymarket US depth ladders, binary payoff guard, per-market price grids
-      (ADR 0023);
-    - #43 execution-ticket pre-submit control chain (data only; always
-      EXECUTION_NOT_AUTHORIZED);
-    - #44 ntfy push sink (ADR 0022): disabled, unwired, allowlist ntfy.sh only, one-file
-      POST exception;
-    - #45 Windows portability, including two real src leaks (SnapshotStore connections,
-      outbox fchmod);
-    - #48 docs (directive record, activation record, F09 evidence, roadmap). This PR
-      closes the claim.
-    - Parallel sessions merged #46 (tailnet-only dashboard) and #49 (Terminal v1 UI).
-  - Windows 3.12 full suite (nothing deselected): 1214 passed, 16 skipped, exit 0 after
-    #45 (before: 15 failures plus a process-killing SIGTERM test). Later heads were
-    re-verified per PR.
+  - Merged (squash). Each code PR had an independent review; blockers and should-fix items
+    were fixed and re-reviewed; CI 3.11/3.12 was green on the exact head; each was reconciled
+    with main.
+    - #51 #50 index
+    - #55 wall-clock test fix (another session's green test-only PR; merged to unblock CI)
+    - #56 directive authority
+    - #57 ntfy relay + owner secrets file (ADR 0028)
+    - #58 best-price comparator + Polymarket US fee evidence + split-cancel refusal (ADR 0027)
+    - #59 Odds API pilot (ADR 0029; evidence schema v5)
+    - #60 sizing v2 research challenger (ADR 0026)
+  - Production installs used DAILY_SHADOW_ACTIVATION.md: f646481 -> dd3ab4d -> bce5bc2 ->
+    ced77b8. Every install had a VERIFIED backup of both stores first and a fail-closed
+    decision check after (rejected_out_of_window). Other results:
+    - shadow dry run PENDING_SETTLEMENT on each new SHA;
+    - dashboard 200 (tailnet only);
+    - 7 core timers enabled; edgelab-odds.timer installed and disabled;
+    - no failed units; evidence schema v5 and VERIFIED after migration.
+  - ntfy: the topic was generated as root straight into /etc/market-edge-lab/secrets.env
+    (root:root 0600); nothing printed it. One TEST event SUBMITTED (attempts 1). Phone delivery
+    is NOT verified. The relay has since SUBMITTED the "A run or data source failed" headlines
+    caused by the install fail-closed checks. Those are real unit failures, run on purpose.
+  - Odds API: code deployed. `odds run` reports SETUP_NEEDED. No live read and no credits
+    spent.
+  - Sizing v2: research only. `sizing.py`, `fees.py`, `exp001_shadow.py` and the EXP-001
+    artifacts are byte-unchanged (hash-pinned test). Operational fills still use
+    EXP-001-fixed-1-v1.
+  - Brisket (separate repo, same host): /api/health fixed by riskittogetthebrisket#1405,
+    deployed 15b43f4. It shows 200, contract_ok/served_generation_ok/source_health_ok true,
+    and the post-deploy scrape had 1110 players.
 UNRESOLVED:
-  - Settlement lifecycle on real data: not yet observed (positions settle after Kalshi
-    publishes 2026-09-24's result; the settlement timer runs 11:15 and 16:15 ET).
-  - F09 residual (ADR 0021): entries after 2026-09-23T22:47:20Z are unanchored until the
-    next manual checkpoint.
-  - Starter policy: first enforced for decisions from 2026-09-24T00:00Z (tomorrow's
-    window); not yet observed in production.
-  - Polymarket US rules include "resolves 50-50" on cancellation: the adapter's Payoff
-    must model or refuse it before any Polymarket US market can qualify (they reject
-    today: rules unresolved, fees unsupported).
-  - The grid check has no production caller yet (ADR 0023); the #30 comparator and the
-    ticket must pass Market.price_grid.
-  - Brisket: /api/health 503 "degraded" (contract_ok=false) since ~18:47-18:51 ET, and
-    6 dynasty-* refresh units in a failed state (pre-existing). Not Market Edge; untouched;
-    needs the owner or a Brisket session.
-  - The same SSH key authenticates as root (owner-known; hardening is a separate task).
-  - Carried: fee account type owner-attested; EXACT not claimable; the no-scheduled-change
-    check must be re-done by 2026-10-23T13:39:48Z; TWC cannot be checked directly;
-    PFMOKX thinning; the NHIGH rule rests on one observation.
-BLOCKERS: NONE for the running system. Owner decisions pending (none blocks collection):
-  1. ntfy first real send (ADR 0022): approve and choose a private topic; the token is
-     optional.
-  2. The Odds API free key and activation plan (#29).
-  3. SMS provider (#33).
-  4. Novig developer credentials (#30).
-NEXT ACTION: let tonight's timers run. Tomorrow: read latest.json and shadow_daily.json,
-  confirm the first settlement after Kalshi publishes 2026-09-24, and export the next F09
-  checkpoint (manual) after a few real days.
+  - The first settlement on real data is not yet observed. The settlement timer runs 11:15 and
+    16:15 ET. After it, take a manual F09 checkpoint (owner cadence: roughly weekly plus notable
+    ledger events; no timer).
+  - F09 residual (ADR 0021): entries after 2026-09-23T22:47:20Z are unanchored until that
+    checkpoint.
+  - Starter policy: in force from 2026-09-24T00:00Z; first enforced decisions arrive in tonight's
+    window.
+  - Polymarket US: fees are an UNVERIFIED estimate that never supports a claim (settlement
+    fees, debit rounding, account type and scheduled changes are unverified); rules are
+    unresolved. So no cross-venue "cheaper" claim is possible yet. Re-check by
+    2026-10-24T01:39Z.
+  - Kalshi fee re-check due by 2026-10-23T13:39:48Z. Add SETTLEMENT_AND_TRANSFER_FEES to its
+    record then.
+  - Sizing v2 needs an evidence-based n_eff, the counterfactual runner and the read-only
+    RESEARCH SIZING panel (NEXT). The comparator UI and the odds-target panel are NEXT.
+  - Evidence schema v5 is forward-only. Rollback needs `edge_lab.storage mark-v4-for-rollback`
+    (runbook Rollback).
+  - Learning-history gaps are listed in docs/DATA_PROVENANCE.md §6c.
+  - Root SSH hardening is a separate future security task. The same key opens root.
+  - Other sessions' PRs #53 and #54 (Terminal follow-ups) are still open.
+BLOCKERS: NONE for the running system. Owner actions:
+  1. Install the free Odds API key: `sudoedit /etc/market-edge-lab/secrets.env`, add
+     `EDGE_LAB_ODDS_API_KEY=<key>`. Then an agent runs `odds plan`, one `odds smoke`, and
+     enables the timer (runbook §5b).
+  2. Subscribe on the phone: privately run `sudo grep NTFY /etc/market-edge-lab/secrets.env`
+     on the server, and subscribe in the ntfy app (server ntfy.sh, topic = the part after
+     https://ntfy.sh/).
+NEXT ACTION: after the 11:15 ET settlement run, confirm the first real settlement in
+  shadow_daily.json and take the manual F09 checkpoint.
 ```
 
 ## Daily operation (what runs by itself)
@@ -95,11 +86,13 @@ NEXT ACTION: let tonight's timers run. Tomorrow: read latest.json and shadow_dai
 | 11:15, 16:15 | edgelab-settlement | a bounded settlement refresh once positions are due, then bookkeeping |
 | 04:40 UTC | edgelab-backup | verified backups of the evidence DB and the shadow ledger |
 | always | edgelab-dashboard | read-only dashboard, tailnet-only (Tailscale Serve) |
+| after shadow/settlement/any failure alert | edgelab-notify | relays new outbox events and unit failures to ntfy (fixed headlines) |
+| every 15 min (once enabled) | edgelab-odds | game-relative NFL odds capture under the 450-credit budget; disabled until the key exists |
 
 Read the state without sudo: `cat /var/lib/market-edge-lab-status/latest.json` and
 `shadow_daily.json`, or `bash /opt/market-edge-lab/app/deploy/vps/verify_production.sh`
 (root sees journals and backups too). Deploy only with
-`docs/deploy/DAILY_SHADOW_ACTIVATION.md`, never during 17:40–18:35 ET. The laptop bridge
+`docs/deploy/DAILY_SHADOW_ACTIVATION.md`, never during 17:40–18:50 ET (2026-09-24 owner rule) or a settlement run. The laptop bridge
 remains MANUAL EMERGENCY FALLBACK ONLY.
 
 ## F09 checkpoint procedure (manual; no timer)
@@ -125,10 +118,10 @@ remains MANUAL EMERGENCY FALLBACK ONLY.
 
 ## 30-day plan (issue #11, target 2026-10-22)
 
-- **Remaining calendar days:** 29.
+- **Remaining calendar days:** 28.
 - The binding constraint is now the calendar (at most one valid day per day), not
-  deployment. The ordered roadmap is in `docs/OWNER_IDEAS.md` → Roadmap; the top NEXT item
-  is the #30 best-price-for-size comparator.
+  deployment. The ordered roadmap and the Domain Readiness matrix are in
+  `docs/OWNER_IDEAS.md` → Roadmap (re-run 2026-09-24).
 - By 2026-10-22 the system can show:
   - a deployed, verified pipeline;
   - up to about 29 days of point-in-time shadow bookkeeping, claimable only as a lower
@@ -138,13 +131,17 @@ remains MANUAL EMERGENCY FALLBACK ONLY.
 
   It cannot show an edge verdict.
 
-## Open questions for the owner
+## Owner decisions recorded 2026-09-24
 
-1. **ntfy:** send real pushes? It needs your approval and a private topic.
-2. **F09 cadence:** manual checkpoints weekly, or after notable days? A scheduled anchor needs
-   separate approval.
-3. **Root SSH:** the key that opens `dynasty` also opens root. Harden it later, as its own task?
-4. **Brisket:** `/api/health` is 503 "degraded" (`contract_ok` false) since about 18:47–18:51 ET, and 6 `dynasty-*` refresh units have failed. Neither is Market Edge; neither was touched.
+1. **ntfy:** approved and activated. The owner still needs to subscribe on the phone.
+2. **F09 cadence:** manual, roughly weekly, plus after notable ledger events. No timer.
+3. **Root SSH:** a separate future security task, outside Market Edge missions.
+4. **Brisket:** the `/api/health` fix is done (riskittogetthebrisket#1405, deployed `15b43f4`,
+   verified). The owner scoped this session to that fix only. The six failing `dynasty-*` refresh
+   units are diagnosed and handed off in riskittogetthebrisket#1409:
+   - #1407 is a ready fix for the import-path and EvidenceStatus failures;
+   - #1406 records the DLF root cause and needs an owner decision;
+   - playerctx is on a WIP branch.
 
 ## UI (Terminal v1)
 

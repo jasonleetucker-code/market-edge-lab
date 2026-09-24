@@ -36,14 +36,17 @@ column lists which issues each primitive serves.
 | Event / market identity | `src/edge_lab/opportunity.py` | BUILT (Event, Market, settlement_identity) | #5 #9 #30 #32 |
 | Venue and account capability registry | `src/edge_lab/venues.py` | BUILT (stages per capability, cash timing; execution never authorized; ADR 0019) | #30 #32 #29 #9 |
 | Quote / order-book normalization | `src/edge_lab/opportunity.py` | BUILT (ExecutableQuote and DepthLadder / `walk_ladder` / `price_depth_fill` for Kalshi and Polymarket US, PRs #40 and #42; per-market `PriceGrid`, ADR 0023; sportsbook odds and Novig daily files are never executable) | #30 #9 #29 |
-| Fee models and fee verification | `src/edge_lab/fee_schedules.py` | BUILT (Kalshi, with dated component-level verification records, ADR 0017; other venues unsupported). It reuses the hash-frozen EXP-001 cost model in `fees.py`, never forks it | #6 #30 #9 |
+| Fee models and fee verification | `src/edge_lab/fee_schedules.py` | BUILT (Kalshi, with dated component-level verification records, ADR 0017; Polymarket US taker schedule from official US docs with its own record, UNVERIFIED estimate that never supports a claim, ADR 0027; other venues unsupported). It reuses the hash-frozen EXP-001 cost model in `fees.py`, never forks it | #6 #30 #9 |
 | Model estimates | `src/edge_lab/opportunity.py` | BUILT (ModelEstimate; EXP-001 only) | #5 #9 #32 |
 | Source ingestion and provenance | `src/edge_lab/sources.py` | BUILT: the registry (with a read-only data-feed credential kind), fronting `storage.py`, `provenance.py` and the shared `redaction.py` | #7 #29 #30 #27 |
 | Rules / settlement equivalence | `src/edge_lab/opportunity.py` | BUILT (`Event.settlement_identity`, `Market.rules_resolved`); cross-venue classification in `discovery.py` (title match is never equivalence); no equivalence proven across venues yet | #30 #9 |
 | Shadow / live ledger boundary | `src/edge_lab/shadow_ledger.py` | BUILT (shadow only; no live ledger). Head checkpoints: `ledger_anchor.py`; the first independent checkpoint is stored off-host and in Git and verified (F09 closed for the anchored history, 2026-09-23) | #6 #3 #32 |
 | Risk engine | `src/edge_lab/risk.py` | BUILT (limits, capital release, withdrawal contract) | #6 #3 |
+| Stake sizing (research challenger) | `src/edge_lab/sizing_v2.py` (evaluation in sizing_eval.py) | BUILT 2026-09-24, research only (ADR 0026): robust log-growth optimizer over the payoff's admissible uncertainty set, reusing risk, starter policy, depth and fees. `sizing.py` remains the frozen operational path; v2 influences fills only after its own experiment passes | #6 #3 #32 |
+| Best-price-for-size comparator | `src/edge_lab/best_price.py` | BUILT 2026-09-24 (ADR 0027): one comparator over the shared depth, grid, fee, equivalence, freshness and venue primitives; honest claim ladder; cross-venue "cheaper" only on proven order | #30 #9 |
+| Sports odds capture scheduling | `src/edge_lab/odds_schedule.py` (runner odds_pilot.py; adapter odds_api.py) | BUILT 2026-09-24 (ADR 0029): game-relative T-24h/T-6h/T-60m targets, persisted with intended times, worst-case budget proof under 450 credits; activation waits on the owner's key | #29 #5 #9 #50 |
 | Capital-eligibility policies | `src/edge_lab/starter_policy.py` | BUILT (`STARTER_MAX_7D_V1`, ADR 0018); enforced prospectively in the operational shadow account | #32 #6 |
-| Notification system | `src/edge_lab/notifications.py` | BUILT (contract, local outbox, SMS sink disabled; ADR 0020). ntfy push sink `notify_ntfy.py` built, disabled and unwired (ADR 0022) | #33 #3 #32 |
+| Notification system | `src/edge_lab/notifications.py` | BUILT (contract, local outbox, SMS sink disabled; ADR 0020). ntfy push sink `notify_ntfy.py` ACTIVATED 2026-09-24 through the `edgelab-notify` relay unit (ADR 0022 amendment, ADR 0028); owner secrets live only in `/etc/market-edge-lab/secrets.env` (root:root 0600) | #33 #3 #32 |
 | Execution-ticket contract | `src/edge_lab/execution_ticket.py` | BUILT (data contract plus an ordered pre-submit control chain, PR #43; `EXECUTION_NOT_AUTHORIZED` always fails) | #32 #33 #30 |
 | Operator views | `src/edge_lab/dashboard/` | BUILT (read-only; on chaseupside reachable only on the owner's tailnet via Tailscale Serve, ADR 0024) | #3 #6 #10 |
 | Design system (Market Edge Terminal v1) | `docs/design/UI_CONTRACT.md` | BUILT (implemented in dashboard presentation.py, components.py, html.py and static/tokens.css; shell, tokens, fonts, components, honest states, gallery; ADR 0025, issue #47). Every user-visible feature reuses it per docs/design/FEATURE_INTEGRATION.md | #47 #3 #6 #9 #10 #29 #30 #32 #33 |
@@ -57,91 +60,114 @@ column lists which issues each primitive serves.
 | #3 | Outcome Board / What Matters Today dashboard | **BACKEND + LOCAL VIEW IMPLEMENTED** 2026-09-23 (PR #28); hosting NOT READY | `edge_lab.outcome_board` (ADR 0015) plus the `/outcome-board` view of the local read-only dashboard (127.0.0.1 only). Hosting, auth and live marks are unauthorized and not built. |
 | #5 | Sports prediction-market and sports-modeling expansion | **LATER** (discovery and data foundations NEXT via #29/#30; any sports model BLOCKED on a preregistered experiment) | Core framework is proving out on weather. Needs the shared identity, venue and equivalence layers; the 2026-09-23 directive authorizes data foundations only, not sports models. |
 | #9 | Sportsbook odds aggregation, consensus pricing, best-venue comparison | **NEXT** (The Odds API data foundation via #29); comparison LATER | Sub-idea of #5. Needs market equivalence and verified access terms. Offered odds are never executable prices. |
-| #6 | Dynamic bankroll, position sizing, withdrawal guidance | **P0 FOUNDATION IMPLEMENTED** 2026-09-23 (shadow only) | Shadow ledger (ADR 0014), `suggest_position_size`, and the risk/capital report with a withdrawal contract (ADR 0015). The withdrawal contract never recommends a draw. Since PR #26 the operational shadow account enforces the risk limits **before** each fill (NO_FILL RISK_VETO); the frozen research account is separate. A real-money policy, a verified edge and verified fees are all still missing. |
+| #6 | Dynamic bankroll, position sizing, withdrawal guidance | **P0 FOUNDATION IMPLEMENTED** 2026-09-23 (shadow only); **sizing v2 research challenger IMPLEMENTED** 2026-09-24 (ADR 0026; no effect on fills) | Shadow ledger (ADR 0014), `suggest_position_size`, and the risk/capital report with a withdrawal contract (ADR 0015). The withdrawal contract never recommends a draw. Since PR #26 the operational shadow account enforces the risk limits **before** each fill (NO_FILL RISK_VETO); the frozen research account is separate. A real-money policy, a verified edge and verified fees are all still missing. |
 | #10 | Host privately on existing Chase Upside infrastructure (separate service/subdomain, real access control) | **IMPLEMENTED, private** 2026-09-23: collector, daily shadow and settlement deployed and verified (`docs/deploy/PRODUCTION_ACTIVATION_2026-09-23.md`); the dashboard is tailnet-only via Tailscale Serve (PR #46, ADR 0024) | A separate service with its own user, slice and stores on the VPS. Access control is tailnet membership. A public subdomain, DNS/TLS and public exposure remain unauthorized and are not planned. |
 | #7 | Free-first multi-domain ingestion with paid-source ROI gate | APPLY SELECTIVELY NOW | Gate 3 applied it: the free IEM archive of NWS forecasts was chosen and paid weather data was not considered. The general ingestion platform is not built. |
 | #32 | Starter policy: 7-day capital-release limit, broad discovery, API-first execution preference | **Policy IMPLEMENTED** 2026-09-23 (PR #38, ADR 0018; enforced prospectively in the operational shadow account; no deployment known or verified from this session); discovery foundation IMPLEMENTED (PR #39); execution BLOCKED (no live authority) | Governing clock: venue-tradable cash within 168 h. The ticket contract carries the verdict with execution disabled. |
-| #33 | SMS-first alerting through one shared notification layer | **Contract IMPLEMENTED** 2026-09-23 (PR #38, ADR 0020; local outbox); **ntfy push sink BUILT, disabled** (PR #44, ADR 0022; the first real send needs owner approval); SMS delivery BLOCKED (provider needs owner approval) | Serves daily-run failures, settlement conflicts, invalid captures, risk vetoes, settlements and policy exceptions now; approval tickets later. |
-| #30 | Multi-venue coverage, best-price comparison, unique-market discovery | **Foundation IMPLEMENTED** (registry PR #38; Polymarket US adapter TESTED + one smoke read, Novig daily files TESTED, discovery, PR #39; depth ladders for both book venues and per-market price grids, PR #42); best-price-for-size comparator NEXT; Novig live API BLOCKED (credentials) | Best-price claims still need proven rules equivalence and per-venue fee evidence (Polymarket US fees are UNSUPPORTED today). |
-| #29 | The Odds API free tier (quota-capped sports odds pilot) | **Adapter IMPLEMENTED on fixtures** (PR #39: quota ledger, 450-credit ceiling, redaction, SETUP_NEEDED); live pulls BLOCKED (owner key + activation plan) | Sportsbook-consensus input for #5/#9. Offered odds and de-vigged values are never executable prices. |
+| #33 | SMS-first alerting through one shared notification layer | **Contract IMPLEMENTED** 2026-09-23 (PR #38, ADR 0020; local outbox); **ntfy ACTIVATED** 2026-09-24 (PR #57, ADR 0028; one test SUBMITTED; phone delivery unverified until the owner subscribes); SMS delivery BLOCKED (provider needs owner approval) | Serves daily-run failures, settlement conflicts, invalid captures, risk vetoes, settlements and policy exceptions now; approval tickets later. |
+| #30 | Multi-venue coverage, best-price comparison, unique-market discovery | **Foundation IMPLEMENTED**; **best-price-for-size comparator IMPLEMENTED** 2026-09-24 (PR #58, ADR 0027) with Polymarket US fee evidence (unverified estimate) and split-cancel refusal; comparator UI NEXT; Novig live API BLOCKED (credentials) | Cross-venue "cheaper" is impossible until rules equivalence and claim-grade fees are proven (Polymarket US rules stay unresolved). |
+| #29 | The Odds API free tier (quota-capped sports odds pilot) | **Pilot IMPLEMENTED** 2026-09-24 (PR #59, ADR 0029: game-relative capture, budget proof, `edgelab-odds.timer` installed not enabled); activation authorized (2026-09-24 directive) and BLOCKED only on the owner's free key | Sportsbook-consensus input for #5/#9. Offered odds and de-vigged values are never executable prices. |
 | #27 | Action PRO permission and comparative sports-data subscription value | **LATER / BLOCKED** (no purchase authorized) | Paid source; needs the #7 ROI gate and a sports experiment that would use it. |
 | #50 | Longitudinal learning dataset across every domain, including rejected opportunities | **NOW as a permanent data-design rule; NEXT for a generalized cross-domain learning/reporting layer** | Existing provenance, opportunity/rejection, experiment and shadow-ledger primitives already preserve much of the required history. Every new domain should preserve point-in-time observations, model/version context, decisions and rejections, later outcomes and failures before it is called research-ready. No automatic retraining or self-modifying decision policy is authorized. |
 
-## Roadmap (re-run 2026-09-23 evening, production activation directive)
+## Roadmap (re-run 2026-09-24, Brisket-health and next-phase directive)
 
 This ordering authorizes nothing; `docs/EXECUTION_PLAN.md` does. Re-prioritizing never
-authorizes implementation.
-
-One system, built in this order: evidence, then policy, then the shared venue layer, then
-venue-specific data, then models, then (later, separately authorized) execution.
+authorizes implementation. The owner's domain sequence (directive, "Domain expansion") is
+recorded below and in the Domain Readiness matrix. Gate 7 is unchanged and **not passed**.
 
 **NOW** (critical path; authorized)
-1. **Keep production collecting and verified** (#10, #11). DONE for activation: `7aac49c`
-   deployed, 7/7 timers, backups and restores verified, fail-closed verified (see `HANDOFF.md`
-   for the first real window). Ongoing: read each night's status and receipt. Oct 22: every
-   day lost here is a Stage B day lost.
-2. **Accumulate valid Stage B days and real shadow bookkeeping** (EXP-001). Runs by itself
-   (captures 17:45–18:05 ET, status 18:30, shadow 18:40, settlement 11:15/16:15). Oct 22:
-   about 29 possible days, so pipeline evidence and early descriptive results, never a
-   verdict (180 valid days is out of reach).
-3. **F09: refresh the independent checkpoint after real shadow entries exist.** The first
-   checkpoint anchors only the two account openings. Manual export, store (laptop + Git) and
-   off-host verify, weekly or after notable days. No scheduled anchor unless the owner
-   approves one.
-4. **Re-check Kalshi scheduled fee changes by 2026-10-23** (calendar-bound; otherwise
-   claimability silently lapses).
-5. **#50 learning-history completeness rule.** Apply the existing provenance/decision-history contract to every new domain from its first prospective observation. Preserve rejected/non-actioned evaluations and later outcomes; do not wait for a future model to discover that the necessary history was never stored. This is a data-design rule, not authorization for new collectors or automatic retraining.
+1. **Keep production collecting and verified** (#10, #11). Every day lost is a Stage B day lost.
+   Production runs the merged `main` SHA recorded in `HANDOFF.md`. Deploys stay outside
+   17:40–18:50 ET and away from the 11:15 / 16:15 ET settlement runs.
+2. **Accumulate valid Stage B days and real shadow bookkeeping** (EXP-001). The first valid day
+   is 2026-09-24, and its first settlement is due. One valid day is pipeline evidence only: no
+   retuning, no sizing change, no criteria change.
+3. **F09 manual checkpoints** (owner decision 2026-09-24). Roughly weekly, and additionally
+   after a notable ledger event:
+   - the first settlement;
+   - a settlement conflict;
+   - a significant ledger or risk-schema migration;
+   - before and after a recovery that affects ledger durability.
+
+   **No F09 timer.**
+4. **Re-check Kalshi scheduled fee changes by 2026-10-23.** At the same re-check, add the
+   `SETTLEMENT_AND_TRANSFER_FEES` component to the Kalshi record (ADR 0027). Also re-check
+   Polymarket US fees by 2026-10-24T01:39Z.
+5. **#50 learning-history completeness** applies from the first prospective observation of
+   every domain. See the audit in `docs/DATA_PROVENANCE.md`.
+6. **#29 Odds API pilot activation.** The code is merged (ADR 0029). The owner installs the
+   free key, then the agent runs `odds plan` (budget proof), one `odds smoke`, and enables
+   `edgelab-odds.timer`.
+7. **#33 ntfy.** Activated 2026-09-24. One test send was SUBMITTED. Phone delivery is not
+   verified until the owner subscribes.
 
 **NEXT** (ready once the named prerequisite lands)
-6. **#30 best-price-for-size comparator.** Engineering is unblocked: both book venues now
-   emit `DepthLadder`s on one primitive and carry `Market.price_grid`. A result becomes
-   meaningful (not just gross cost) only with rules-equivalence evidence and Polymarket US fee
-   evidence (fees are UNSUPPORTED today). Parallel lane: yes. Oct 22: gross-cost comparison
-   is feasible, and a claimable comparison depends on fee evidence.
-7. **#30 cross-venue weather comparison** (Kalshi KXHIGHNY vs any Polymarket US weather
-   market). Weather is the only domain with a model. Depends on 5 plus a Polymarket US weather
-   catalog read and rules equivalence. Also depends on modelling or refusing the "resolves
-   50-50" payoff seen in Polymarket US rules (PR #42 finding).
-8. **#29 live Odds API pilot.** Built on fixtures. Depends on the owner's free key and an
-   approved activation and quota plan.
-9. **#33 ntfy push activation.** Built and disabled. Depends on owner approval for the first
-   external send and on choosing a private topic. It would carry only fixed headlines.
-10. **#3 / #6 dashboard and board on real data.** Now reachable privately on the phone. It
-   fills as real shadow days arrive; no new build is needed first.
+8. **Sizing v2 counterfactual runner** (#6). It replays each real shadow decision through
+   `sizing_v2` read-only, as the `PROPOSED_PREREGISTRATION` needs. Then comes the read-only
+   RESEARCH SIZING panel in Terminal v1 (FEATURE_INTEGRATION; after #53/#54 settle).
+   Operational fills change only after a separately recorded sizing experiment passes.
+9. **Comparator UI** (#30). Fill the market detail "Across venues" slot from
+   `best_price.compare`, with its honest claim ladder.
+10. **Sports prospective data** (domain 2). Odds snapshots accrue under the game-relative
+    policy. Add Polymarket US sports catalog reads, which are related-only until rules are
+    resolved. The split-cancel and alternative-settlement payoffs stay refused until the
+    generic payoff engine supports them.
+11. **#30 cross-venue weather comparison** (Kalshi vs a Polymarket US weather market). It
+    waits on resolved Polymarket rules and fees that reach claim grade.
+12. **Dashboard panels for odds capture targets** (CAPTURED / MISSED / SKIPPED_BUDGET). ADR
+    0029 is backend-only today.
 
 **LATER** (wanted; not on the 2026-10-22 path)
-11. **#5 / #9 sports models and consensus comparison.** Each needs a preregistered
-    experiment. They reuse #29 data, discovery and the opportunity engine.
-12. **#27 Action PRO ingestion.** Schema ideas are in the audit (§7.10). It needs the
-    owner's recorded permission evidence, a credential decision (login) and a sports
-    experiment that would use it.
-13. **#32 execution modes** (human-approved API, then bounded automation). The ticket control
-    chain is built; execution needs a gate 8+ decision, a credentials policy and an execution
-    boundary (Hummingbot lessons, audit §7.8).
-14. **#33 SMS provider**, after ntfy proves the event model on a phone.
-15. **Broader venues** (ProphetX, IBKR/ForecastEx), after the comparator shows incremental
-    catalog value.
+13. Sports baseline / preregistered models (domain 3; #5, #9), each as its own preregistered
+    experiment.
+14. Economics/macro (4), crypto (5), energy/commodities (6), business/technology (7),
+    culture/entertainment (8), politics/government (9), long-tail discovery (10). The owner's
+    order. No broad implementation in this mission.
+15. #27 Action PRO; #32 execution modes (gate 8+); #33 SMS provider; broader venues.
+16. **Security task, separate:** root SSH hardening. It stays out of scope for Market Edge
+    missions (owner decision 2026-09-24; no key, sshd, sudo or root-login changes here).
+17. **Brisket follow-ups** (other repository; not Market Edge work): the six failing refresh
+    units are handed off in riskittogetthebrisket#1409 (PRs #1406 and #1407 are paused). Also
+    `public-league-warmup` should accept 503.
 
 **BLOCKED** (named blocker)
-- The Odds API live data: the owner's free key plus an activation plan.
-- ntfy real send: owner approval.
-- SMS: provider choice and approval (cost and registration).
-- Novig live API: owner-requested developer credentials.
-- EXACT fee claims: a verified account type and modelling of multi-fill rebates.
-- Action PRO: owner permission evidence, a credential decision, and no purchase is authorized.
+- Odds API live data: the owner's free key (one `sudoedit` step).
+- Phone delivery of pushes: the owner subscribes to the private topic.
+- SMS: provider choice and approval. Novig live API: developer credentials.
+- Polymarket US claim-grade totals: settlement/transfer fees, debit rounding, account type and
+  scheduled changes are all unverified.
 - Any execution: gates 8–10.
 
-**Why priorities moved (2026-09-23 evening).**
-- **Production deployment is no longer the binding constraint.** It was done from the owner's
-  laptop session. The binding constraint is now the calendar: valid Stage B days accrue at
-  most one per day.
-- **#10 moved from LATER to IMPLEMENTED (private).** The owner chose tailnet-only access (ADR
-  0024), which needs no DNS/TLS or public auth.
-- **Polymarket US depth and the payoff/grid guards moved from NEXT to done** (PR #42). That
-  moves the best-price comparator to the top of NEXT: it now waits on evidence (rules, fees),
-  not engineering.
-- **ntfy moved from NEXT (build) to NEXT (activation).** The build is done (PR #44); only the
-  owner decision remains.
+### Domain Readiness matrix (states, not scores)
+
+Deliberately no numerical score: no weights have been validated. States:
+- **E** evidence in hand;
+- **P** partial or plausible;
+- **U** unknown;
+- **N** known negative.
+
+| Domain (owner order) | Settlement clarity | Point-in-time public data | Quantifiable | Event frequency | Liquidity | Fees known | 7-day capital | Model independence | Data latency | Venue coverage | Historical evidence | Rule ambiguity | Readiness |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| 1 Weather (KXHIGHNY) | E (Gate 2) | E (NWS, IEM) | E | E daily | P | P (Kalshi bound) | E | E (NWS vs market) | E | P (Kalshi; Polymarket related) | E (Gate 3) | E low | **Running (EXP-001 Stage B)** |
+| 2 Sports (NFL first) | P (void/push/split rules) | P (odds snapshots from 2026-09-24) | E | E weekly | P | U (Polymarket US unverified) | P | P | P | P (Kalshi, Polymarket US, books) | N (no provider history on free tier) | P | **Data collection** |
+| 3 Sports models | as above | needs weeks of snapshots | E | E | P | U | P | U | P | P | N | P | **Needs a preregistered experiment** |
+| 4 Economics / macro | P | P (release calendars, vintages) | E | P monthly | P | P | P | U | E | P | P | P (revisions) | Not started |
+| 5 Crypto | P | E | E | E | P | P | E | U (efficient market) | E | P | P | P | Not started |
+| 6 Energy / commodities | P | P | E | P | U | U | P | U | P | U | U | P | Not started |
+| 7 Business / technology | U | U | P | P | U | U | U | U | U | U | U | U | Not started |
+| 8 Culture / entertainment | U | U | P | P | U | U | U | U | U | U | U | U | Not started |
+| 9 Politics / government | P | P | P | N rare | P | P | N (long horizons) | U | P | P | P | P | Not started |
+| 10 Long-tail discovery | U | U | U | U | U | U | U | U | U | U | U | U | Discovery only |
+
+**Why priorities moved (2026-09-24).**
+- **Build work is done.** The comparator, Polymarket US fee evidence, split-cancel refusal,
+  sizing v2 (research), the Odds API pilot code and ntfy activation all moved from NEXT/BLOCKED
+  to built.
+- **The two remaining blockers are owner actions:** the Odds API key and the ntfy phone
+  subscription.
+- **Sports becomes the second domain.** It has data collection only; no sports model or
+  betting is authorized.
 - The 2026-10-22 date is unchanged.
 
 **UI foundation (2026-09-23, owner directive, issue #47).** The Market Edge Terminal v1 design
@@ -161,6 +187,8 @@ Related owner records that are not ideas:
   its own branch and file claim. It does not touch Gate 3 files.
 
 ## Review log
+
+- **2026-09-24: Brisket-health and next-phase directive re-plan.** New primitives: sizing v2 (research), best-price comparator, odds capture scheduling. #6, #29, #30 and #33 were reclassified. The domain sequence and the Domain Readiness matrix (states only) were added. F09 stays manual, and root SSH is a separate security task. No new idea required a new primitive: every lane extended an existing owner.
 
 - **2026-09-23: issue #50 longitudinal learning-history intake.**
   - Classification: **NOW as a permanent data-design rule; NEXT for a generalized derived learning/reporting layer once multiple domains have prospective data**.
