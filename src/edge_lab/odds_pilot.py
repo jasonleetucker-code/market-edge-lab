@@ -112,20 +112,35 @@ class _LazyRun:
                                   error="see the odds tick report" if failed else None)
 
 
-def _health(store: SnapshotStore, run: _LazyRun, *, started_utc: str, started_mono: float, status: str,
-            records: int = 0, payload_bytes: int = 0, http_errors: int = 0, anomalies: Sequence[str] = (),
-            error: str | None = None, environ: Mapping[str, str] | None = None) -> None:
-    """One source_health row for one network call of this source (issue #50: failed and partial
-    collections stay analysable, not only in the overwritten runner state file). Errors are
-    redacted with the key before they are stored."""
+# source_health ids (DATA_PROVENANCE section 3: one row per source per run; records = snapshots
+# stored). Paid odds reads keep the registered source id, so "the_odds_api" health means odds
+# arrived (or failed to). The quota-free schedule discovery has its own id, so a successful
+# discovery is never shown as a healthy odds feed.
+HEALTH_ODDS = odds_api.SOURCE_ID
+HEALTH_DISCOVERY = f"{odds_api.SOURCE_ID}_discovery"
+
+
+def _health(store: SnapshotStore, run: _LazyRun, *, source_id: str, started_utc: str, started_mono: float,
+            status: str, records: int = 0, payload_bytes: int = 0, http_errors: int = 0,
+            anomalies: Sequence[str] = (), error: str | None = None,
+            environ: Mapping[str, str] | None = None) -> None:
+    """One source_health row for one network call (issue #50: failed and partial collections stay
+    analysable, not only in the overwritten runner state file). Written LAST, after the evidence
+    and the target transitions, and it never raises: a health row must not change what was
+    stored or the tick's outcome. Errors are redacted with the key before they are stored."""
     key = odds_api.load_key(environ)
     secret = (key,) if key else ()
-    store.record_source_health(
-        run_id=run.id(), source_id=odds_api.SOURCE_ID, started_at_utc=started_utc,
-        completed_at_utc=datetime.now(UTC).isoformat(), duration_ms=max(0, int((time.monotonic() - started_mono) * 1000)),
-        status=status, records=0 if status == "failed" else records, payload_bytes=payload_bytes,
-        http_errors=http_errors, anomalies=[odds_api.redact_text(a, secret) for a in list(anomalies)[:20]],
-        error=None if error is None else odds_api.redact_text(error, secret)[:500])
+    try:
+        store.record_source_health(
+            run_id=run.id(), source_id=source_id, started_at_utc=started_utc,
+            completed_at_utc=datetime.now(UTC).isoformat(),
+            duration_ms=max(0, int((time.monotonic() - started_mono) * 1000)),
+            status=status, records=0 if status == "failed" else records, payload_bytes=payload_bytes,
+            http_errors=http_errors, anomalies=[odds_api.redact_text(a, secret) for a in list(anomalies)[:20]],
+            error=None if error is None else odds_api.redact_text(error, secret)[:500])
+    except Exception as exc:  # noqa: BLE001 - never let a health row break a paid capture's record
+        print(odds_api.redact_text(f"odds: source_health row not written: {type(exc).__name__}: {exc}", secret),
+              file=sys.stderr)
 
 
 def _target(row: Mapping[str, Any]) -> CaptureTarget:
@@ -330,8 +345,9 @@ def _tick_body(store: SnapshotStore, run: _LazyRun, ledger_path: Path, settings:
                                                   "commence_from": iso_z(start), "commence_to": iso_z(end),
                                                   "policy_version": POLICY_VERSION})
             events, problems = odds_api.parse_events(out.payload, sport=settings.sport)
-            _health(store, run, started_utc=t0_utc, started_mono=t0, status="partial" if problems else "ok",
-                    records=len(events), payload_bytes=len(out.fetch.body) if out.fetch else 0,
+            _health(store, run, source_id=HEALTH_DISCOVERY, started_utc=t0_utc, started_mono=t0,
+                    status="partial" if problems else "ok", records=1,
+                    payload_bytes=len(out.fetch.body) if out.fetch else 0,
                     anomalies=[f"discovery: {p}" for p in problems], environ=environ)
             refreshed = (events, start, end)
             discovery = {"state": "REFRESHED", "snapshot_id": sid, "events": len(events),
@@ -342,8 +358,9 @@ def _tick_body(store: SnapshotStore, run: _LazyRun, ledger_path: Path, settings:
         except (odds_api.OddsApiError, ValueError) as exc:
             status = getattr(exc, "status", None)
             outcome = "KEY_REJECTED" if status in KEY_REJECTED_STATUSES else "FAILED"
-            _health(store, run, started_utc=t0_utc, started_mono=t0, status="failed", http_errors=1 if status else 0,
-                    error=f"discovery {outcome}: {type(exc).__name__}: {exc}", environ=environ)
+            _health(store, run, source_id=HEALTH_DISCOVERY, started_utc=t0_utc, started_mono=t0, status="failed",
+                    http_errors=1 if status else 0, error=f"discovery {outcome}: {type(exc).__name__}: {exc}",
+                    environ=environ)
             discovery = {"state": outcome, "error_status": status, "error_kind": type(exc).__name__,
                          "next_attempt_after_utc": iso_z(now + settings.discovery_interval)}
             pilot.set(last_discovery_attempt_utc=stamp, discovery_outcome=outcome, discovery_status=status)
@@ -559,8 +576,6 @@ def _capture(store: SnapshotStore, ledger: odds_api.QuotaLedger, run: _LazyRun, 
                                   odds_format=settings.odds_format, opener=opener, pacer=pacer, environ=environ,
                                   commence_from=slot.commence_from, commence_to=slot.commence_to)
     except odds_api.OddsApiError as exc:
-        _health(store, run, started_utc=t0_utc, started_mono=t0, status="failed", http_errors=1 if exc.status else 0,
-                error=f"capture {slot.slot_id}: {exc}", environ=environ)
         fired["paid_calls"] = 1  # it may have reached the provider; the reservation is kept
         reason = f"paid call failed (not retried): {exc}"
         if exc.fetch is not None:  # charged but undecodable: keep the exact bytes as evidence
@@ -570,6 +585,8 @@ def _capture(store: SnapshotStore, ledger: odds_api.QuotaLedger, run: _LazyRun, 
             reason += f"; raw response kept as document {doc_id} (sha256 {digest})"
         finish("FAILED", reason)
         fired["error_status"] = exc.status  # the redacted reason is in the target transitions
+        _health(store, run, source_id=HEALTH_ODDS, started_utc=t0_utc, started_mono=t0, status="failed",
+                http_errors=1 if exc.status else 0, error=f"capture {slot.slot_id}: {reason}", environ=environ)
         return "FAILED", fired, True
     if out.state is not odds_api.QuotaState.READY:
         finish(out.state.value, f"refused before sending: {out.detail}")
@@ -592,14 +609,11 @@ def _capture(store: SnapshotStore, ledger: odds_api.QuotaLedger, run: _LazyRun, 
         cov = odds_api.coverage(parsed, requested_markets=list(settings.markets))
     except Exception as exc:  # the call was paid for: record it, never retry it
         reason = odds_api.redact_text(f"fetched but not stored: {type(exc).__name__}: {exc}")
-        _health(store, run, started_utc=t0_utc, started_mono=t0, status="failed",
-                error=f"capture {slot.slot_id}: {reason}", environ=environ)
         finish("FAILED", reason)
         fired["error_kind"] = type(exc).__name__
+        _health(store, run, source_id=HEALTH_ODDS, started_utc=t0_utc, started_mono=t0, status="failed",
+                error=f"capture {slot.slot_id}: {reason}", environ=environ)
         return "FAILED", fired, True
-    _health(store, run, started_utc=t0_utc, started_mono=t0, status="partial" if parsed.problems else "ok",
-            records=len(parsed.offers), payload_bytes=len(out.fetch.body),
-            anomalies=[f"capture {slot.slot_id}: {p}" for p in parsed.problems], environ=environ)
     received_dt = _parse(received)
     for m in members:
         detail = _event_coverage(parsed, m.event_id, settings.markets)
@@ -614,6 +628,12 @@ def _capture(store: SnapshotStore, ledger: odds_api.QuotaLedger, run: _LazyRun, 
                  bookmakers=sorted({o.bookmaker for o in parsed.offers}),
                  coverage=[{"scope": c.scope, "key": c.key, "status": c.status.value} for c in cov],
                  events_in_response=len(parsed.events), parse_problems=len(parsed.problems))
+    anomalies = [f"capture {slot.slot_id}: {p}" for p in parsed.problems]
+    if not parsed.offers:
+        anomalies.append(f"capture {slot.slot_id}: the response held no offers")
+    _health(store, run, source_id=HEALTH_ODDS, started_utc=t0_utc, started_mono=t0,
+            status="partial" if anomalies else "ok", records=1, payload_bytes=len(out.fetch.body),
+            anomalies=anomalies, environ=environ)
     return "CAPTURED", fired, False
 
 
@@ -801,8 +821,8 @@ def smoke(db_path: str | Path, ledger_path: str | Path, settings: RunnerSettings
                                   odds_format=settings.odds_format, opener=opener, pacer=pacer, environ=environ,
                                   commence_from=start, commence_to=end)
     except odds_api.OddsApiError as exc:
-        _health(store, run, started_utc=t0_utc, started_mono=t0, status="failed", http_errors=1 if exc.status else 0,
-                error=f"smoke: {exc}", environ=environ)
+        _health(store, run, source_id=HEALTH_ODDS, started_utc=t0_utc, started_mono=t0, status="failed",
+                http_errors=1 if exc.status else 0, error=f"smoke: {exc}", environ=environ)
         run.finish(True)
         report.update(state="FAILED", error_status=exc.status, paid_calls=1,
                       detail="the call failed; its reservation is kept (the quota ledger holds the redacted reason)")
@@ -817,16 +837,17 @@ def smoke(db_path: str | Path, ledger_path: str | Path, settings: RunnerSettings
                                           "commence_from": iso_z(start), "commence_to": iso_z(end)})
     parsed = odds_api.parse_odds(out.payload, odds_format=settings.odds_format,
                                  received_at_utc=out.fetch.received_at_utc, evidence_id=str(sid))
-    _health(store, run, started_utc=t0_utc, started_mono=t0, status="partial" if parsed.problems else "ok",
-            records=len(parsed.offers), payload_bytes=len(out.fetch.body),
-            anomalies=[f"smoke: {p}" for p in parsed.problems], environ=environ)
-    run.finish(False)
     headers = odds_api.parse_quota_headers(out.fetch.response_headers)
     pilot.set(last_paid_call_utc=iso_z(now))
     if headers is not None and headers.last is not None and headers.last > settings.cost_per_call:
         pilot.set(cost_block={"at_utc": iso_z(now), "reason": "COST_ANOMALY", "charged": headers.last,
                               "estimate": settings.cost_per_call, "slot_id": "smoke"})
         report["cost_block"] = pilot.get("cost_block")
+    anomalies = [f"smoke: {p}" for p in parsed.problems] + ([] if parsed.offers else ["smoke: the response held no offers"])
+    _health(store, run, source_id=HEALTH_ODDS, started_utc=t0_utc, started_mono=t0,
+            status="partial" if anomalies else "ok", records=1, payload_bytes=len(out.fetch.body),
+            anomalies=anomalies, environ=environ)
+    run.finish(False)
     # Counts, books and markets only: no URL, no error text, nothing that could carry the key.
     report.update(state="CAPTURED", snapshot_id=sid, received_at_utc=out.fetch.received_at_utc,
                   credits_last=headers.last if headers else None,
@@ -844,8 +865,8 @@ def smoke(db_path: str | Path, ledger_path: str | Path, settings: RunnerSettings
 
 DASHBOARD_SCHEMA = "odds-pilot-status/1"
 RESEARCH_LABEL = "OFFERED ODDS - RESEARCH ONLY, NOT EXECUTABLE"
-DASHBOARD_STATES = ("ERROR", "COST_BLOCKED", "KEY_REJECTED", "SETUP_NEEDED", "QUOTA_EXHAUSTED", "QUOTA_UNKNOWN",
-                    "DISCOVERY_FAILED", "DISCOVERY_STALE", "ACTIVE")
+DASHBOARD_STATES = ("ERROR", "COST_BLOCKED", "KEY_REJECTED", "SETUP_NEEDED", "DEGRADED", "QUOTA_EXHAUSTED",
+                    "QUOTA_UNKNOWN", "DISCOVERY_FAILED", "DISCOVERY_STALE", "ACTIVE")
 
 
 def _read_state_file(path: Path) -> tuple[str, dict[str, Any]]:
@@ -865,8 +886,11 @@ def dashboard_status(db_path: str | Path, ledger_path: str | Path, state_path: s
     writing them, and makes no network call. It never needs the key.
 
     `state` is one of DASHBOARD_STATES. It is never ACTIVE before a successful live read, that
-    is, before a paid odds response (capture or smoke) was stored as evidence. A successful
-    quota-free discovery proves the key works, not that odds arrive, so it stays SETUP_NEEDED.
+    is, before a paid odds response (capture or smoke) holding at least one offer was stored as
+    evidence (an empty response proves nothing). A successful quota-free discovery proves the
+    key works, not that odds arrive, so it stays SETUP_NEEDED. It is DEGRADED, not ACTIVE, while
+    the latest paid capture attempt is newer than the latest success and failed. A missing or
+    unreadable store, ledger or stored record is ERROR.
     Whether the systemd timer is enabled is not observable here and is not claimed."""
     if not isinstance(now, datetime) or now.tzinfo is None:
         raise ValueError("now must be a timezone-aware datetime")
@@ -911,7 +935,7 @@ def dashboard_status(db_path: str | Path, ledger_path: str | Path, state_path: s
     out["cost_block"] = cost_block
     discovery_outcome = pilot.get("discovery_outcome")
 
-    # Evidence store, read-only.
+    # Evidence store, read-only. Anything unreadable in it is ERROR, never a guess.
     store = None
     store_error = None
     if db_path.is_file():
@@ -919,56 +943,98 @@ def dashboard_status(db_path: str | Path, ledger_path: str | Path, state_path: s
             store = SnapshotStore.open_readonly(db_path)
         except Exception as exc:  # noqa: BLE001
             store_error = f"evidence store unreadable: {type(exc).__name__}"
+    elif paid_history:
+        store_error = "evidence store missing although the quota ledger records paid calls"
+    verified = None  # (row, parsed, request): the newest stored odds read that held offers
     latest_odds = latest_events = None
+    empty_reads_since = 0
     rows: list[Any] = []
+    health: dict[str, Any] = {}
     if store is not None:
         try:
-            latest_odds = store.latest_snapshot(source=SOURCE, kind="odds", entity_id=settings.sport)
+            odds_rows = [r for r in store.snapshots_of_kind(source=SOURCE, kind="odds")
+                         if r["entity_id"] == settings.sport]
+            for row in reversed(odds_rows):
+                payload = json.loads(row["payload_json"])
+                request = payload.get("request") or {}
+                parsed = odds_api.parse_odds(payload.get("events"),
+                                             odds_format=request.get("odds_format", settings.odds_format))
+                if latest_odds is None:
+                    latest_odds = row
+                if parsed.offers:
+                    verified = (row, parsed, request)
+                    break
+                empty_reads_since += 1
             latest_events = store.latest_snapshot(source=SOURCE, kind="events", entity_id=settings.sport)
             rows = store.odds_targets(sport=settings.sport)
+            health = {r["source_id"]: dict(r) for r in store.latest_source_health()
+                      if r["source_id"] in (HEALTH_ODDS, HEALTH_DISCOVERY)}
         except Exception as exc:  # noqa: BLE001
             store_error = f"evidence store unreadable: {type(exc).__name__}"
 
-    if latest_odds is not None:
-        payload = json.loads(latest_odds["payload_json"])
-        request = payload.get("request") or {}
-        parsed = odds_api.parse_odds(payload.get("events"), odds_format=request.get("odds_format",
-                                                                                    settings.odds_format))
-        received = _parse(latest_odds["fetched_at_utc"])
+    if verified is not None:
+        row, parsed, request = verified
+        received = _parse(row["fetched_at_utc"])
         max_age = odds_api.get_source(odds_api.SOURCE_ID).max_age["odds"]
         out["live_read_verified"] = True
         out["latest_successful_capture"] = {
-            "snapshot_id": int(latest_odds["id"]), "received_at_utc": iso_z(received),
+            "snapshot_id": int(row["id"]), "received_at_utc": iso_z(received),
             "age_minutes": round((now - received).total_seconds() / 60, 1),
             "freshness": assess(iso_z(received), max_age=max_age, now=now).value,
             "purpose": request.get("purpose"), "events": len(parsed.events), "offers": len(parsed.offers),
-            "raw_sha256": latest_odds["raw_sha256"]}
+            "payload_sha256": row["payload_sha256"]}
         out["markets_observed"] = sorted({o.market_key for o in parsed.offers})
         out["bookmakers_observed"] = sorted({o.bookmaker for o in parsed.offers})
+    if empty_reads_since:
+        problems.append(f"{empty_reads_since} newer odds read(s) held no offers")
     discovery_fresh = False
     if latest_events is not None:
-        at = _discovered_at(latest_events)
-        discovery_fresh = now - at <= settings.discovery_max_age
-        events, dproblems, _ = _events_from_snapshot(latest_events, settings.sport)
-        out["discovery"] = {"last_success_utc": iso_z(at), "fresh": discovery_fresh, "events": len(events),
-                            "problems": len(dproblems), "outcome": discovery_outcome,
-                            "last_attempt_utc": pilot.get("last_discovery_attempt_utc")}
+        try:
+            at = _discovered_at(latest_events)
+            events, dproblems, _ = _events_from_snapshot(latest_events, settings.sport)
+        except Exception as exc:  # noqa: BLE001
+            store_error = store_error or f"stored discovery unreadable: {type(exc).__name__}"
+        else:
+            discovery_fresh = now - at <= settings.discovery_max_age
+            out["discovery"] = {"last_success_utc": iso_z(at), "fresh": discovery_fresh, "events": len(events),
+                                "problems": len(dproblems), "outcome": discovery_outcome,
+                                "last_attempt_utc": pilot.get("last_discovery_attempt_utc")}
     elif discovery_outcome is not None:
         out["discovery"] = {"last_success_utc": None, "fresh": False, "events": 0, "problems": 0,
                             "outcome": discovery_outcome, "last_attempt_utc": pilot.get("last_discovery_attempt_utc")}
-    if rows:
-        open_rows = [r for r in rows if r["state"] not in ODDS_TARGET_FINAL_STATES]
-        upcoming = [(effective_due(_target(r), cfg), r) for r in open_rows if deadline(_target(r), cfg) > now]
-        captured = [r["captured_at_utc"] for r in rows if r["state"] == "CAPTURED"]
-        out["targets"] = {"by_state": _counts(rows), "open": len(open_rows),
-                          "last_captured_utc": max(captured, default=None)}
-        if upcoming:
-            due, r = min(upcoming, key=lambda x: (x[0], x[1]["priority"], x[1]["event_id"]))
-            out["next_capture"] = {"due_utc": iso_z(due), "due_et": _et_text(due), "offset": r["offset_label"],
-                                   "event_id": r["event_id"], "commence_utc": r["commence_time_utc"],
-                                   "state": r["state"], "reason": r["reason"]}
 
-    # State, most blocking first. Never ACTIVE without a stored successful live read.
+    # Failing paid captures: a FAILED capture, or a failed odds health row, newer than the last
+    # CAPTURED target means the feed is degraded even if an older capture succeeded.
+    last_captured = max((r["state_at_utc"] for r in rows if r["state"] == "CAPTURED"), default=None)
+    last_failed = max((r["state_at_utc"] for r in rows if r["state"] == "FAILED"), default=None)
+    odds_health = health.get(HEALTH_ODDS)
+    degraded_reason = None
+    if last_failed is not None and (last_captured is None or _parse(last_failed) > _parse(last_captured)):
+        degraded_reason = f"the latest paid capture attempt failed ({iso_z(_parse(last_failed))}), after the last success"
+    elif odds_health is not None and odds_health["status"] == "failed":
+        degraded_reason = "the latest paid odds call failed (source health)"
+    if degraded_reason:
+        problems.append(degraded_reason)
+    if odds_health is not None and odds_health["status"] == "partial":
+        problems.append("the latest paid odds call was partial (see source health anomalies)")
+    if rows:
+        try:
+            open_rows = [r for r in rows if r["state"] not in ODDS_TARGET_FINAL_STATES]
+            upcoming = [(effective_due(_target(r), cfg), r) for r in open_rows if deadline(_target(r), cfg) > now]
+        except Exception as exc:  # noqa: BLE001
+            store_error = store_error or f"stored capture targets unreadable: {type(exc).__name__}"
+        else:
+            captured = [r["captured_at_utc"] for r in rows if r["state"] == "CAPTURED"]
+            out["targets"] = {"by_state": _counts(rows), "open": len(open_rows),
+                              "last_captured_utc": max(captured, default=None)}
+            if upcoming:
+                due, r = min(upcoming, key=lambda x: (x[0], x[1]["priority"], x[1]["event_id"]))
+                out["next_capture"] = {"due_utc": iso_z(due), "due_et": _et_text(due), "offset": r["offset_label"],
+                                       "event_id": r["event_id"], "commence_utc": r["commence_time_utc"],
+                                       "state": r["state"], "reason": r["reason"]}
+
+    # State, most blocking first. Never ACTIVE without a stored successful live read that held
+    # offers; never ACTIVE while the latest paid attempt is failing.
     if store_error or ledger_error:
         state, detail = "ERROR", store_error or ledger_error
     elif cost_block:
@@ -978,7 +1044,9 @@ def dashboard_status(db_path: str | Path, ledger_path: str | Path, state_path: s
                                          "the owner reinstalls it privately (sudoedit)")
     elif not out["live_read_verified"]:
         state = "SETUP_NEEDED"
-        if discovery_outcome == "OK" or latest_events is not None:
+        if latest_odds is not None:
+            detail = "odds reads were stored, but none held any offers yet; a read with offers is required"
+        elif discovery_outcome == "OK" or latest_events is not None:
             detail = ("the key reached the quota-free events endpoint, but no odds read has succeeded yet; "
                       "activation continues with `odds plan` and one `odds smoke` (runbook 5b)")
         else:
@@ -987,6 +1055,8 @@ def dashboard_status(db_path: str | Path, ledger_path: str | Path, state_path: s
             problems.append("the last discovery attempt failed")
     elif discovery_outcome == "SETUP_NEEDED":
         state, detail = "SETUP_NEEDED", "the key is no longer installed; nothing is sent until it is reinstalled"
+    elif degraded_reason:
+        state, detail = "DEGRADED", f"{degraded_reason}; failed calls are never retried"
     elif quota.get("state") == "QUOTA_EXHAUSTED":
         state, detail = "QUOTA_EXHAUSTED", str(quota.get("detail"))
     elif quota.get("state") == "QUOTA_UNKNOWN":

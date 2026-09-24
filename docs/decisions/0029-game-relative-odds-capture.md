@@ -271,8 +271,12 @@ Results, with the full free allowance at the start of each month:
 | Dec 2026 | 74 | 222 | 90 | 270 | 273 | 0 |
 
 October reproduces the table above: 74 calls, and a worst case of 225 against 222 expected.
+The October and December rows are asserted exactly in CI. The September and November rows come
+from the same `simulate()` run and are **illustrative**: they are not asserted in CI, because of
+the runtime.
 
-A second scenario starts on 1 Dec with 380 credits already counted by the provider. Over 1–20
+A second scenario, asserted in CI, starts on 1 Dec with 380 credits already counted by the
+provider. Over 1–20
 Dec the runner spent 51 credits (17 calls), below the 67 allowed (450 − 380 − 3). Every T-60m
 target was captured. T-6h and T-24h were SKIPPED_BUDGET and then MISSED, with that reason.
 
@@ -284,8 +288,13 @@ Changes in the same review:
    - A drop no larger than the calls in flight is now recorded as `stale_reading_ignored`.
    - Only a larger drop counts as a reset (`QuotaLedger._apply_headers`).
 2. **Failed collections are evidence.** Every discovery, capture and smoke call writes a
-   `source_health` row (`source_id = the_odds_api`), with the error redacted. A failed
-   discovery or a rejected key no longer lives only in `*.pilot.json`.
+   `source_health` row, with the error redacted. A failed discovery or a rejected key no longer
+   lives only in `*.pilot.json`.
+   - The row is written last and never raises, so it cannot change what was stored.
+   - Paid odds reads use `the_odds_api`, and an empty response is `partial`.
+   - The free discovery uses `the_odds_api_discovery`, so a discovery never makes the odds feed
+     look healthy.
+   - `records` counts the snapshots stored.
 3. **Planning cost.** A tick writes only targets it does not already know. Before this change,
    every 15-minute tick asked the store once per known target.
 4. **Identity and research values** (`odds_api`):
@@ -296,7 +305,10 @@ Changes in the same review:
      separate, labelled and never executable.
 5. **Dashboard contract** (`odds_pilot.dashboard_status`) for the Terminal. It is read-only: no
    lock, no write, no network and no key.
-   - States: ERROR, COST_BLOCKED, KEY_REJECTED, SETUP_NEEDED, QUOTA_EXHAUSTED, QUOTA_UNKNOWN,
-     DISCOVERY_FAILED, DISCOVERY_STALE and ACTIVE.
-   - It stays SETUP_NEEDED until a paid odds response has been stored. A successful free
-     discovery is not enough.
+   - States: ERROR, COST_BLOCKED, KEY_REJECTED, SETUP_NEEDED, DEGRADED, QUOTA_EXHAUSTED,
+     QUOTA_UNKNOWN, DISCOVERY_FAILED, DISCOVERY_STALE and ACTIVE.
+   - It stays SETUP_NEEDED until a paid odds response **holding at least one offer** has been
+     stored. A successful free discovery or an empty read is not enough.
+   - It is DEGRADED while the latest paid capture attempt failed after the last success.
+   - It is ERROR when the evidence store is missing although paid calls exist, or when any
+     stored record is unreadable.

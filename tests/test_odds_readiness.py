@@ -275,6 +275,44 @@ def test_a_failed_paid_call_is_sent_once_never_retried_and_keeps_its_reservation
     assert [r["state"] for r in snap["reservations"].values()] == ["AMBIGUOUS"]
 
 
+def test_out_of_order_readings_are_stale_not_a_reset(tmp_path):
+    """Deterministic version of the race: two calls in flight, the provider counted both before
+    answering the first, and the second's headers (older counter) arrive last."""
+    led = ledger(tmp_path)
+    led.reconcile(quota(500, 0))
+    a, b = led.reserve(3), led.reserve(3)
+    led.settle(a, quota(494, 6, 3))  # already includes b's charge
+    assert led.settle(b, quota(497, 3, 3)) is oa.QuotaState.READY  # older reading, delivered late
+    snap = led.snapshot()
+    assert snap["used_local"] == 6 and snap["last_headers"]["used"] == 6 and snap["outstanding"] == 0
+    assert any(e["event"] == "stale_reading_ignored" for e in snap["events"])
+    assert not any(e["event"] == "provider_reset_observed" for e in snap["events"])
+    with pytest.raises(oa.QuotaRefused):
+        led.reserve(445)  # 6 spent + 445 > 450: nothing was handed back
+    # A free reconcile carrying an older counter while a call is in flight is stale too.
+    c = led.reserve(3)
+    led.reconcile(quota(497, 3))
+    snap = led.snapshot()
+    assert snap["last_headers"]["used"] == 6 and snap["used_local"] == 6
+    led.settle(c, quota(491, 9, 3))
+    assert led.snapshot()["used_local"] == 9
+
+
+def test_a_genuine_reset_with_reservations_outstanding_is_still_a_reset(tmp_path):
+    clock = Clock(utc(2026, 10, 31, 23, 58))
+    led = ledger(tmp_path, clock=clock)
+    led.reconcile(quota(200, 300))
+    in_flight = led.reserve(3)
+    clock.at = utc(2026, 11, 1, 0, 1)
+    assert led.reconcile(quota(500, 0)) is oa.QuotaState.READY  # 300 -> 0 is far more than 3 in flight
+    snap = led.snapshot()
+    assert snap["used_local"] == 0 and snap["last_headers"]["used"] == 0
+    assert any(e["event"] == "provider_reset_observed" for e in snap["events"])
+    assert snap["outstanding"] == 3 and in_flight.reservation_id in snap["reservations"]  # still counted
+    led.settle(in_flight, quota(497, 3, 3))
+    assert led.snapshot()["used_local"] == 3
+
+
 def test_a_lost_response_counts_conservatively_across_a_restart(tmp_path):
     clock = Clock(utc(2026, 10, 3, 12))
     led = ledger(tmp_path, clock=clock)
@@ -562,10 +600,11 @@ def test_repeated_captures_are_kept_as_a_time_series_with_every_contract_field(p
     no_key_anywhere(tmp_path, first, second)
 
 
-def _health(db: Path) -> list[dict]:
+def _health(db: Path, source_id: str = op.HEALTH_ODDS) -> list[dict]:
     with sqlite3.connect(f"{db.resolve().as_uri()}?mode=ro", uri=True) as conn:
         conn.row_factory = sqlite3.Row
-        return [dict(r) for r in conn.execute("SELECT * FROM source_health WHERE source_id = 'the_odds_api' ORDER BY id")]
+        return [dict(r) for r in conn.execute("SELECT * FROM source_health WHERE source_id = ? ORDER BY id",
+                                              (source_id,))]
 
 
 def test_failed_and_successful_collections_are_recorded_as_source_health(paths, tmp_path):
@@ -574,17 +613,20 @@ def test_failed_and_successful_collections_are_recorded_as_source_health(paths, 
     tick(paths, provider, utc(2026, 10, 3, 4, 0))
     provider.events_error = None
     tick(paths, provider, utc(2026, 10, 3, 10, 0))
+    assert _health(paths[0]) == []  # a free discovery is never reported as odds-feed health
     provider.odds_error = HTTPError("u", 500, "Error", {}, None)
     tick(paths, provider, utc(2026, 10, 3, 17, 0))
     provider.odds_error = None
     tick(paths, provider, utc(2026, 10, 3, 20, 25))
-    rows = _health(paths[0])
-    # discovery failed; discovery ok (10:00); discovery ok (17:00, 6 h later); capture failed; capture ok
-    assert [r["status"] for r in rows] == ["failed", "ok", "ok", "failed", "ok"]
-    assert "discovery FAILED" in rows[0]["error"] and rows[0]["records"] == 0
-    assert rows[1]["records"] == rows[2]["records"] == len(WEEK)
-    assert "capture" in rows[3]["error"] and rows[3]["http_errors"] == 1
-    assert rows[4]["records"] > 0 and rows[4]["error"] is None
+    discovery = _health(paths[0], op.HEALTH_DISCOVERY)
+    # failed (04:00); ok (10:00); ok (17:00, 6 h later). records = snapshots stored.
+    assert [r["status"] for r in discovery] == ["failed", "ok", "ok"]
+    assert "discovery FAILED" in discovery[0]["error"] and discovery[0]["records"] == 0
+    assert discovery[1]["records"] == discovery[2]["records"] == 1
+    odds = _health(paths[0])
+    assert [r["status"] for r in odds] == ["failed", "ok"]
+    assert "capture" in odds[0]["error"] and odds[0]["http_errors"] == 1 and odds[0]["records"] == 0
+    assert odds[1]["records"] == 1 and odds[1]["error"] is None
     no_key_anywhere(tmp_path)
 
 
@@ -593,8 +635,58 @@ def test_a_rejected_key_is_recorded_once_per_attempt(paths, tmp_path):
     provider.events_error = HTTPError("u", 401, "Unauthorized", {}, None)
     tick(paths, provider, utc(2026, 10, 3, 4, 0))
     tick(paths, provider, utc(2026, 10, 3, 4, 15))  # paced: no second attempt, no second row
-    rows = _health(paths[0])
+    rows = _health(paths[0], op.HEALTH_DISCOVERY)
     assert len(rows) == 1 and rows[0]["status"] == "failed" and "KEY_REJECTED" in rows[0]["error"]
+    assert _health(paths[0]) == []
+
+
+def test_an_empty_odds_response_is_a_partial_health_row(paths):
+    provider = Provider(WEEK)
+    tick(paths, provider, utc(2026, 10, 3, 10, 0))
+    provider.events = []  # the games vanish from the odds endpoint (free, empty response)
+    tick(paths, provider, utc(2026, 10, 3, 17, 0))
+    (row,) = _health(paths[0])
+    assert row["status"] == "partial" and "no offers" in row["anomalies_json"] and row["records"] == 1
+
+
+def test_a_failing_health_write_never_changes_what_a_capture_recorded(paths, monkeypatch, capsys):
+    provider = Provider(WEEK)
+    tick(paths, provider, utc(2026, 10, 3, 10, 0))
+
+    def boom(self, **kw):
+        raise sqlite3.OperationalError(f"disk full apiKey={FAKE}")
+
+    monkeypatch.setattr(SnapshotStore, "record_source_health", boom)
+    code, report = tick(paths, provider, utc(2026, 10, 3, 17, 0))
+    assert code == 0 and report["state"] == "CAPTURED" and len(provider.paid()) == 1
+    rows = SnapshotStore(paths[0]).odds_targets(sport=SPORT)
+    assert sum(r["state"] == "CAPTURED" for r in rows) == 2
+    err = capsys.readouterr().err
+    assert "source_health row not written" in err and FAKE not in err
+
+
+def test_the_health_row_is_written_after_the_capture_transitions(paths, monkeypatch):
+    provider = Provider(WEEK)
+    tick(paths, provider, utc(2026, 10, 3, 10, 0))
+    seen = []
+    original = SnapshotStore.record_source_health
+
+    def spy(self, **kw):
+        if kw["source_id"] == op.HEALTH_ODDS:
+            seen.append({r["state"] for r in self.odds_targets(sport=SPORT)
+                         if r["event_id"] in ("e1", "e2") and r["offset_label"] == "T-24h"})
+        return original(self, **kw)
+
+    monkeypatch.setattr(SnapshotStore, "record_source_health", spy)
+    tick(paths, provider, utc(2026, 10, 3, 17, 0))
+    assert seen == [{"CAPTURED"}]  # the targets were already final when the health row was written
+    provider.odds_error = HTTPError("u", 500, "Error", {}, None)
+    seen.clear()
+    tick(paths, provider, utc(2026, 10, 3, 20, 25))
+    assert _health(paths[0])[-1]["status"] == "failed"
+    states = {r["state"] for r in SnapshotStore(paths[0]).odds_targets(sport=SPORT)
+              if r["event_id"] == "e3" and r["offset_label"] == "T-24h"}
+    assert states == {"FAILED"}
 
 
 # ================================================================== 5. a whole NFL month under 450
@@ -706,7 +798,7 @@ def test_a_month_with_most_of_the_allowance_already_used_keeps_closing_lines_fir
     start = utc(2026, 12, 1)
     out = simulate(paths, start, utc(2026, 12, 21), month="2026-12", used=380, remaining=120)
     # The provider already counted 380 this month: at most 450 - 380 - 3 = 67 credits (22 calls).
-    assert 0 < out["credits"] <= 450 - 380 - 3 and out["provider"].used <= 450
+    assert out["credits"] == 51 <= 450 - 380 - 3 and out["provider"].used <= 450  # 17 calls
     by = out["by_offset_state"]
     # Every closing-line (T-60m) target is captured; T-6h and T-24h give way (skipped, then missed).
     assert by.get(("T-60m", "CAPTURED"), 0) > 0 and not any(k[0] == "T-60m" and k[1] != "CAPTURED" for k in by)
@@ -763,7 +855,7 @@ def test_active_only_after_a_stored_live_read_and_never_writes(paths, tmp_path):
     assert _fingerprint(tmp_path) == before
     assert out["state"] == "ACTIVE" and out["live_read_verified"] is True
     cap = out["latest_successful_capture"]
-    assert cap["purpose"] == "capture" and cap["offers"] > 0 and cap["raw_sha256"]
+    assert cap["purpose"] == "capture" and cap["offers"] > 0 and cap["payload_sha256"]
     assert out["markets_observed"] == ["h2h", "spreads", "totals"]
     assert out["bookmakers_observed"] == ["draftkings", "fanduel"]
     assert out["quota"]["provider_used"] == 3 and out["quota"]["ceiling"] == 450
@@ -812,3 +904,57 @@ def test_quota_unknown_and_exhausted_are_reported_after_a_live_read(paths):
     assert status(paths, utc(2026, 10, 3, 17, 2))["state"] == "QUOTA_EXHAUSTED"
     led.reconcile({"X-Requests-Remaining": "x"})
     assert status(paths, utc(2026, 10, 3, 17, 3))["state"] == "QUOTA_UNKNOWN"
+
+
+def test_an_empty_odds_read_is_not_a_live_read(paths):
+    provider = Provider(WEEK)
+    tick(paths, provider, utc(2026, 10, 3, 10, 0))
+    provider.events = []  # the paid call returns [] (free): stored, but it proves nothing
+    tick(paths, provider, utc(2026, 10, 3, 17, 0))
+    assert SnapshotStore(paths[0]).latest_snapshot(source="the_odds_api", kind="odds", entity_id=SPORT)
+    out = status(paths, utc(2026, 10, 3, 17, 5))
+    assert out["state"] == "SETUP_NEEDED" and out["live_read_verified"] is False
+    assert "none held any offers" in out["detail"]
+
+
+def test_an_older_read_with_offers_still_verifies_but_newer_empty_reads_are_reported(paths):
+    provider = Provider(WEEK)
+    tick(paths, provider, utc(2026, 10, 3, 10, 0))
+    tick(paths, provider, utc(2026, 10, 3, 17, 0))  # offers
+    provider.events = [e for e in WEEK if e["id"] != "e3"]
+    tick(paths, provider, utc(2026, 10, 3, 20, 25))  # e3's window is now empty
+    out = status(paths, utc(2026, 10, 3, 20, 30))
+    assert out["live_read_verified"] is True and out["latest_successful_capture"]["offers"] > 0
+    assert any("held no offers" in p for p in out["problems"])
+
+
+def test_failing_captures_after_a_success_are_degraded_not_active(paths):
+    provider = Provider(WEEK)
+    tick(paths, provider, utc(2026, 10, 3, 10, 0))
+    tick(paths, provider, utc(2026, 10, 3, 17, 0))  # success
+    assert status(paths, utc(2026, 10, 3, 17, 5))["state"] == "ACTIVE"
+    provider.odds_error = HTTPError("u", 502, "Bad Gateway", {}, None)
+    tick(paths, provider, utc(2026, 10, 3, 20, 25))  # the next paid attempt fails
+    # The failed call also made the quota ambiguous; DEGRADED names the failing capture first.
+    out = status(paths, utc(2026, 10, 3, 20, 30))
+    assert out["state"] == "DEGRADED" and "failed" in out["detail"]
+    assert any("latest paid capture attempt failed" in p for p in out["problems"])
+    provider.odds_error = None
+    _, report = tick(paths, provider, utc(2026, 10, 4, 0, 20))  # SNF's T-24h: free reconcile, then success
+    assert report["state"] == "CAPTURED"
+    assert status(paths, utc(2026, 10, 4, 0, 25))["state"] == "ACTIVE"
+
+
+def test_missing_store_with_paid_history_or_unreadable_evidence_is_error(paths, tmp_path, monkeypatch):
+    provider = Provider(WEEK)
+    tick(paths, provider, utc(2026, 10, 3, 10, 0))
+    tick(paths, provider, utc(2026, 10, 3, 17, 0))
+    moved = tmp_path / "elsewhere.sqlite3"
+    out = op.dashboard_status(moved, paths[1], state_path(paths), now=utc(2026, 10, 3, 17, 5))
+    assert out["state"] == "ERROR" and "missing" in out["detail"] and not moved.exists()
+    # A stored odds payload that cannot be read is ERROR: not a crash and not a guess.
+    real = SnapshotStore.snapshots_of_kind
+    monkeypatch.setattr(SnapshotStore, "snapshots_of_kind",
+                        lambda self, **kw: [dict(r) | {"payload_json": "{not json"} for r in real(self, **kw)])
+    out = status(paths, utc(2026, 10, 3, 17, 5))
+    assert out["state"] == "ERROR" and "unreadable" in out["detail"]
