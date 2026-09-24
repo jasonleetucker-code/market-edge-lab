@@ -199,7 +199,7 @@ listed as **RELATED MARKET — NOT ECONOMICALLY EQUIVALENT**, unpriced and unran
 not evaluated (no decision, no size, or an earlier target day), no captured book, read error.
 
 *Research sizing* (after Across venues, main column) renders Lane A's read-only
-`sizing_counterfactual.panel_for_market` for the market's latest recorded decision, every side.
+`sizing_counterfactual` panel for the market's latest recorded decision, every side.
 It is labelled with the contract's **RESEARCH SIZING - SHADOW SIZING CHALLENGER** label and never
 "Recommended bet". It shows the challenger policy's (H) size, verdict, binding constraint,
 probabilities, expected net edge, entry price, fee, Kelly and pre-cap amounts, bankroll basis and
@@ -335,8 +335,8 @@ directive), and the screenshots that justify it.
   the author and described in PR #65 (not attached).
 - **2026-09-24 — Research sizing panel.** Approved by the 2026-09-24 next-build-chunk directive,
   Deliverable 2. §8 market detail gains a "Research sizing" section after "Across venues" that
-  renders Lane A's `sizing_counterfactual.panel_for_market` contract (read-only, cached by the
-  ledger's head hashes). New component `research_sizing` built from the existing facts, badge,
+  renders Lane A's `sizing_counterfactual` panel contract (read-only; one memoized replay per
+  request). New component `research_sizing` built from the existing facts, badge,
   table, disclosure and state components; new state words for the sizing-v2 verdicts. No token,
   CSS, layout or navigation change. Risk & capital is unchanged. Screenshots: 360x800 and
   1440x900 (`tests/browser/capture.py`), reviewed locally by the author and described in PR #69

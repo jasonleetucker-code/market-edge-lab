@@ -351,6 +351,7 @@ STATES: dict[str, StateWord] = {
     "RISK_LIMIT": StateWord("Limited by risk caps", WARN_K),
     "STALE_DATA": StateWord("Stale data", WARN_K),
     "CAPITAL_HORIZON": StateWord("Outside capital horizon", WARN_K),
+    "PENDING": StateWord("Pending: not yet known", ND_K),
 }
 
 

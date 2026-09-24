@@ -677,7 +677,7 @@ SIZING_NOTE = ("Research only: a counterfactual challenger policy replayed on re
 # carry placeholder zeros that were never computed, so they render as unavailable, never as 0.
 SIZING_REFUSED = frozenset({"UNSUPPORTED", "STALE_DATA"})
 # Whole-panel reasons that mean "nothing to size", not a refusal of a real decision.
-SIZING_NO_DATA = frozenset({"No recorded decision", "Ledger unavailable"})
+SIZING_NO_DATA = frozenset({"No recorded decision", "Ledger unavailable", "No sizing policy"})
 
 
 def _g(mapping: Any, key: str) -> Any:
@@ -708,7 +708,9 @@ def sizing_side(side: Mapping[str, Any]) -> str:
             f'{esc(_g(side, "decision_id") or "id not recorded")} · '
             f'{esc(pr.datetime_et(_g(side, "decision_time")) or "time not recorded")}</h3>')
     recorded = (f'<p class="meta">Recorded decision: {badge(_g(side, "recorded_qualification"))} '
-                f'{code(_g(side, "recorded_reason"))} · model {esc(_g(side, "model_version") or "not recorded")}</p>')
+                f'{code(_g(side, "recorded_reason"))} · model {esc(_g(side, "model_version") or "not recorded")}'
+                + (f' · recorded in {esc(", ".join(map(str, _g(side, "recorded_in_accounts"))))}'
+                   if _g(side, "recorded_in_accounts") else "") + "</p>")
     if not available:
         body = blocked_state(_g(side, "unavailable_reason") or "Not computed",
                              _g(side, "unavailable_detail") or "The sizing engine did not compute this side.")
@@ -747,7 +749,8 @@ def sizing_side(side: Mapping[str, Any]) -> str:
                ("capital horizon reasons", ul(_g(horizon, "reasons") or ())),
                ("counterfactual fill", badge_code(_g(p, "fill_status"))),
                ("fill reason", code(_g(p, "fill_reason"))),
-               ("policy", esc(pr.policy_label(p)))]))
+               ("policy", esc(pr.policy_label(p))),
+               ("merged decision ids", ul(_g(side, "merged_decision_ids") or ()))]))
     if _g(side, "top_of_book_limited"):
         body += (f'<p class="note">{icon("triangle-alert", "ic-sm k-warn")} Depth: only the recorded top of book is '
                  "used, so every liquidity cap is top-of-book-limited.</p>")

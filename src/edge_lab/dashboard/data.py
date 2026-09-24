@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import json
 import re
-import threading
 import tomllib
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta, timezone
@@ -595,73 +594,59 @@ def observed_board(store: SnapshotStore, *, mode: str = "live") -> ObservedBoard
 # --------------------------------------------------------------------------- research sizing (sizing_counterfactual)
 
 RESEARCH_SIZING_MODULE = "edge_lab.sizing_counterfactual"
-_SIZING_CACHE: dict[tuple, Loaded] = {}
-_SIZING_CACHE_MAX = 64
-_SIZING_LOCK = threading.Lock()
 
 
-def _ledger_heads(ctx: Context) -> tuple | None:
-    """Every ledger account's head hash (from the replay this request already did), or None."""
-    heads = []
-    for view in ctx.accounts:
-        if view.status == ERROR:
-            return None
-        heads.append((view.account_id, view.state.last_entry_hash if view.state is not None else None))
-    return tuple(heads)
-
-
-def research_sizing(ctx: Context, market_id: str) -> Loaded:
-    """Lane A's read-only research sizing panel (`sizing_counterfactual.panel_for_market`) for one
-    market: OK with the panel dict (which may itself be unavailable with a named reason), NO_DATA
-    when the contract is not installed or no ledger is configured, ERROR on a read failure or a
-    broken contract.
-
-    The panel replays the whole ledger, so results are cached by the ledger's head hashes and the
-    evidence database's read status (a new entry changes a head and misses the cache). A replay made
-    while the evidence database cannot be read is never cached and carries a caveat in `message`.
-    Nothing here sizes or edits a figure; free-text details are only scrubbed of paths."""
+def _sizing_module(ctx: Context) -> tuple[Any, Loaded | None]:
+    """The research sizing contract, or the state that replaces it (not installed / broken)."""
     import importlib
 
     try:
-        module = importlib.import_module(RESEARCH_SIZING_MODULE)
+        return importlib.import_module(RESEARCH_SIZING_MODULE), None
     except ModuleNotFoundError as exc:
         if exc.name != RESEARCH_SIZING_MODULE:  # installed, but one of its own imports is missing
-            return Loaded(ERROR, message=short_error(exc, ctx.config))
-        return Loaded(NO_DATA, message="the research sizing contract (sizing_counterfactual) is not installed in "
-                                       "this build")
+            return None, Loaded(ERROR, message=short_error(exc, ctx.config))
+        return None, Loaded(NO_DATA, message="the research sizing contract (sizing_counterfactual) is not installed "
+                                             "in this build")
     except Exception as exc:  # noqa: BLE001 - a module that fails to import is broken, not absent
-        return Loaded(ERROR, message=short_error(exc, ctx.config))
+        return None, Loaded(ERROR, message=short_error(exc, ctx.config))
+
+
+def research_sizing(ctx: Context, market_id: str) -> Loaded:
+    """Lane A's read-only research sizing panel for one market: OK with the panel dict (which may
+    itself be unavailable with a named reason), NO_DATA when the contract is not installed or no
+    ledger is configured, ERROR on a read failure or a broken contract.
+
+    One `build_panel_bundle` replay per request serves every market on the page; the contract
+    memoizes it across requests (ledger heads, evidence DB snapshot id, config, code), so the
+    dashboard keeps no cache of its own. A replay made without a readable evidence database
+    carries a caveat in `message`. Nothing here sizes or edits a figure; free-text details are
+    only scrubbed of paths."""
+    module, problem = _sizing_module(ctx)
+    if problem is not None:
+        return problem
     if ctx.ledger.status == ERROR:
         return Loaded(ERROR, message=ctx.ledger.message)
     if ctx.ledger.status != OK:
         return Loaded(NO_DATA, message=ctx.ledger.message or "no shadow ledger configured")
-    heads = _ledger_heads(ctx)
     store = ctx.store.value if ctx.store.status == OK else None
     caveat = ""
     if ctx.store.status != OK:
         why = "cannot be read" if ctx.store.status == ERROR else "is not available"
         caveat = (f"Replayed without the evidence database, which {why} ({ctx.store.message}): captured "
                   "settlements and confirmation quotes are missing from this replay.")
-    cacheable = heads is not None and ctx.store.status != ERROR
-    key = (str(_resolved(ctx.config.ledger)), str(_resolved(ctx.config.db)), ctx.store.status, heads, market_id)
-    if cacheable:
-        with _SIZING_LOCK:
-            hit = _SIZING_CACHE.get(key)
-        if hit is not None:
-            return hit
     try:
-        panel = module.panel_for_market(store, ctx.ledger.value, market_id)
+        if hasattr(module, "build_panel_bundle") and hasattr(module, "panel_for_market_from_bundle"):
+            bundle = ctx.__dict__.get("_sizing_bundle")
+            if bundle is None:
+                bundle = ctx.__dict__["_sizing_bundle"] = module.build_panel_bundle(store, ctx.ledger.value)
+            panel = module.panel_for_market_from_bundle(bundle, market_id)
+        else:
+            panel = module.panel_for_market(store, ctx.ledger.value, market_id)
     except Exception as exc:  # noqa: BLE001 - the contract never raises for missing data; anything else is shown
         return Loaded(ERROR, message=short_error(exc, ctx.config))
     if not isinstance(panel, dict):
         return Loaded(ERROR, message="the research sizing contract returned no panel")
-    result = Loaded(OK, _scrubbed(panel, ctx.config), message=caveat)
-    if cacheable:
-        with _SIZING_LOCK:
-            if len(_SIZING_CACHE) >= _SIZING_CACHE_MAX:
-                _SIZING_CACHE.pop(next(iter(_SIZING_CACHE)))
-            _SIZING_CACHE[key] = result
-    return result
+    return Loaded(OK, _scrubbed(panel, ctx.config), message=caveat)
 
 
 def scrub_paths(text: Any, config: Config | None = None) -> Any:
@@ -683,10 +668,6 @@ def _scrubbed(panel: dict[str, Any], config: Config) -> dict[str, Any]:
         out["sides"] = [dict(s, unavailable_detail=scrub_paths(s.get("unavailable_detail"), config))
                         if isinstance(s, dict) else s for s in sides]
     return out
-
-
-def _resolved(path: Path | None) -> Path | None:
-    return None if path is None else path.resolve()
 
 
 # --------------------------------------------------------------------------- across venues (best_price, ADR 0027)

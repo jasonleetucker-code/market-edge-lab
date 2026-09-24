@@ -158,7 +158,7 @@ def synthetic_comparisons() -> dict[str, bp.Comparison]:
 SIZING_LABEL = "RESEARCH SIZING - SHADOW SIZING CHALLENGER (counterfactual; not a bet recommendation)"
 SIZING_UNAVAILABLE = ("No model", "Fees unsupported", "Stale quote", "Rules unresolved",
                       "Insufficient uncertainty evidence", "Risk state unavailable", "Unsupported payoff")
-SIZING_NO_SIDES = ("No recorded decision", "Ledger unavailable")
+SIZING_NO_SIDES = ("No recorded decision", "Ledger unavailable", "No sizing policy")
 _POLICIES = (("A", "sizing-v2-flat-1"), ("B", "sizing-v2-fixed-pct"), ("C", "sizing-v2-kelly-full"),
              ("D", "sizing-v2-kelly-half"), ("E", "sizing-v2-kelly-quarter"), ("F", "sizing-v2-robust-kelly"),
              ("G", "sizing-v2-drawdown-kelly"), ("H", "sizing-v2-candidate"))
@@ -215,6 +215,8 @@ def _side(side: str, *, verdict: str = "SIZE", contracts: str = "3", amount: str
     return {"side": side, "decision_id": f"dec-DEMO-{side}", "decision_time": T0,
             "recorded_qualification": "QUALIFY" if reason is None else "REJECT",
             "recorded_reason": "QUALIFY" if reason is None else "MODEL_UNAVAILABLE", "model_version": "demo",
+            "recorded_in_accounts": ["EXP-001-shadow", "EXP-001-stage-b-research"],
+            "merged_decision_ids": [f"dec-DEMO-{side}", f"dec-DEMO-{side}-research"],
             "available": reason is None, "unavailable_reason": reason,
             "unavailable_detail": None if reason is None else f"SYNTHETIC engine detail for: {reason}",
             "top_of_book_limited": True, "primary": primary,

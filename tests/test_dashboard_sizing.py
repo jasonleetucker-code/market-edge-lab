@@ -57,16 +57,21 @@ def demo():
 
 @pytest.fixture
 def fake_contract(monkeypatch):
-    """Install a stand-in for `edge_lab.sizing_counterfactual` that counts calls."""
+    """Install a stand-in for `edge_lab.sizing_counterfactual` (the bundle API) that records calls:
+    `builds` per `build_panel_bundle`, `calls` per market read from a bundle."""
     module = types.ModuleType(d.RESEARCH_SIZING_MODULE)
-    module.calls = []
+    module.calls, module.builds = [], []
 
-    def panel_for_market(store, ledger, market_id, **kw):
+    def build_panel_bundle(store, ledger, **kw):
+        module.builds.append(store is not None)
+        return {"fake": True}
+
+    def panel_for_market_from_bundle(bundle, market_id):
         module.calls.append(market_id)
         return {**fixtures.synthetic_sizing_panels()["sized"], "market_id": market_id}
-    module.panel_for_market = panel_for_market
+    module.build_panel_bundle = build_panel_bundle
+    module.panel_for_market_from_bundle = panel_for_market_from_bundle
     monkeypatch.setitem(sys.modules, d.RESEARCH_SIZING_MODULE, module)
-    monkeypatch.setattr(d, "_SIZING_CACHE", {})
     return module
 
 
@@ -168,37 +173,31 @@ def test_no_ledger_is_no_data_and_a_broken_ledger_is_error(fake_contract, tmp_pa
     assert fake_contract.calls == []
 
 
-def test_panel_is_cached_by_ledger_head(fake_contract, demo):
-    first = d.research_sizing(d.Context(demo), "kalshi:DEMO-B71.5")
-    again = d.research_sizing(d.Context(demo), "kalshi:DEMO-B71.5")
-    other = d.research_sizing(d.Context(demo), "kalshi:DEMO-B73.5")
-    assert first.status == d.OK and again is first and other is not first
-    assert fake_contract.calls == ["kalshi:DEMO-B71.5", "kalshi:DEMO-B73.5"]
+def test_one_replay_serves_every_market_on_a_request(fake_contract, demo):
+    """The contract's bundle is built once per request and read per market; the contract memoizes it
+    across requests (ledger heads, evidence snapshot id, config, code), so the dashboard does not."""
+    ctx = d.Context(demo)
+    first = d.research_sizing(ctx, "kalshi:DEMO-B71.5")
+    other = d.research_sizing(ctx, "kalshi:DEMO-B73.5")
+    assert first.status == other.status == d.OK and first.value["market_id"] == "kalshi:DEMO-B71.5"
+    assert fake_contract.builds == [True] and fake_contract.calls == ["kalshi:DEMO-B71.5", "kalshi:DEMO-B73.5"]
+    d.research_sizing(d.Context(demo), "kalshi:DEMO-B71.5")
+    assert fake_contract.builds == [True, True]
 
 
-def test_a_new_ledger_entry_misses_the_cache(fake_contract, tmp_path):
-    from edge_lab.shadow_ledger import ShadowLedger
-    cfg, root = build_demo(experiments_root=REPO / "experiments")
-    try:
-        d.research_sizing(d.Context(cfg), "kalshi:DEMO-B71.5")
-        account = d.OPERATIONAL_ACCOUNT_ID
-        ledger = ShadowLedger(cfg.ledger)
-        dec = dict(d.Context(cfg).account(account).decisions[0])
-        dec.pop("_meta", None)
-        dec["decision_id"] = dec["decision_id"] + "-again"
-        dec["slot"] = dec["slot"] + "-again"
-        ledger.record_decision(account, dec)
-        d.research_sizing(d.Context(cfg), "kalshi:DEMO-B71.5")
-    finally:
-        shutil.rmtree(root)
-    assert fake_contract.calls == ["kalshi:DEMO-B71.5", "kalshi:DEMO-B71.5"]
+def test_the_older_single_call_contract_still_works(monkeypatch, demo):
+    module = types.ModuleType(d.RESEARCH_SIZING_MODULE)
+    module.panel_for_market = lambda store, ledger, market_id, **k: {
+        **fixtures.synthetic_sizing_panels()["zero"], "market_id": market_id}
+    monkeypatch.setitem(sys.modules, d.RESEARCH_SIZING_MODULE, module)
+    result = d.research_sizing(d.Context(demo), "kalshi:DEMO-B71.5")
+    assert result.status == d.OK and result.value["market_id"] == "kalshi:DEMO-B71.5"
 
 
 def test_contract_failures_are_errors_never_raised(monkeypatch, demo):
     module = types.ModuleType(d.RESEARCH_SIZING_MODULE)
     module.panel_for_market = lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom"))
     monkeypatch.setitem(sys.modules, d.RESEARCH_SIZING_MODULE, module)
-    monkeypatch.setattr(d, "_SIZING_CACHE", {})
     assert d.research_sizing(d.Context(demo), "kalshi:DEMO-B71.5").status == d.ERROR
     module.panel_for_market = lambda *a, **k: None
     assert d.research_sizing(d.Context(demo), "kalshi:DEMO-B71.5").status == d.ERROR
@@ -215,7 +214,6 @@ def test_detail_page_has_the_research_sizing_section(fake_contract, demo):
 
 def test_real_contract_renders_on_the_demo_store(demo, monkeypatch):
     pytest.importorskip(d.RESEARCH_SIZING_MODULE)
-    monkeypatch.setattr(d, "_SIZING_CACHE", {})
     result = d.research_sizing(d.Context(demo), "kalshi:DEMO-B71.5")
     assert result.status == d.OK and isinstance(result.value, dict)
     html = markets.sizing_body(result)
@@ -250,14 +248,14 @@ def test_a_broken_contract_import_is_an_error_not_absent(monkeypatch, demo):
     assert result.status == d.ERROR and "sizing_eval" in result.message
 
 
-def test_a_replay_without_the_evidence_database_is_flagged_and_never_cached(fake_contract, demo, tmp_path):
+def test_a_replay_without_the_evidence_database_is_flagged(fake_contract, demo, tmp_path):
     bad = tmp_path / "evidence.sqlite3"
     bad.write_bytes(b"not a sqlite database")
     cfg = dataclasses.replace(demo, db=bad)
     first = d.research_sizing(d.Context(cfg), "kalshi:DEMO-B71.5")
     again = d.research_sizing(d.Context(cfg), "kalshi:DEMO-B71.5")
     assert first.status == d.OK and "Replayed without the evidence database" in first.message
-    assert again is not first and fake_contract.calls == ["kalshi:DEMO-B71.5", "kalshi:DEMO-B71.5"]
+    assert fake_contract.builds == [False, False]  # replayed without a store, flagged each time
     assert "Replayed without the evidence database" in markets.sizing_body(first)
     assert str(tmp_path) not in first.message
     healthy = d.research_sizing(d.Context(demo), "kalshi:DEMO-B71.5")
@@ -267,19 +265,19 @@ def test_a_replay_without_the_evidence_database_is_flagged_and_never_cached(fake
 def test_free_text_details_are_scrubbed_of_paths(monkeypatch, demo):
     module = types.ModuleType(d.RESEARCH_SIZING_MODULE)
     secret = r"C:\Users\someone\private\ledger.sqlite3"
-    module.panel_for_market = lambda *a, **k: {**fixtures.synthetic_sizing_panels()["Ledger unavailable"],
-                                               "unavailable_detail": f"OSError: cannot open {secret}"}
+    module.build_panel_bundle = lambda *a, **k: {}
+    module.panel_for_market_from_bundle = lambda bundle, market_id: {
+        **fixtures.synthetic_sizing_panels()["Ledger unavailable"], "unavailable_detail": f"OSError: cannot open {secret}"}
     monkeypatch.setitem(sys.modules, d.RESEARCH_SIZING_MODULE, module)
-    monkeypatch.setattr(d, "_SIZING_CACHE", {})
     result = d.research_sizing(d.Context(demo), "kalshi:DEMO-B71.5")
     assert result.value["unavailable_detail"] == "OSError: cannot open ledger.sqlite3"
 
 
 def test_fixtures_have_the_real_contracts_shape(demo, monkeypatch):
     real = pytest.importorskip(d.RESEARCH_SIZING_MODULE)
-    monkeypatch.setattr(d, "_SIZING_CACHE", {})
     ctx = d.Context(demo)
-    panel = real.panel_for_market(ctx.store.value, ctx.ledger.value, "kalshi:DEMO-B71.5")
+    panel = real.panel_for_market_from_bundle(real.build_panel_bundle(ctx.store.value, ctx.ledger.value),
+                                              "kalshi:DEMO-B71.5")
     fixture = fixtures.synthetic_sizing_panels()["sized"]
     assert set(fixture) == set(panel)
     assert panel["sides"], "the demo store should yield at least one side"
