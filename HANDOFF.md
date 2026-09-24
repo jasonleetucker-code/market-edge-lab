@@ -3,14 +3,14 @@
 This is the live state of the repository. Each session overwrites it; it is not a history
 (git log is the history). Format: `AI_INSTRUCTIONS.md` → Handoff format.
 
-_Last updated: 2026-09-24 ~09:50 America/New_York by the laptop coordinator session. It ran
+_Last updated: 2026-09-24 ~11:30 America/New_York by the laptop coordinator session. It ran
 the next-build-chunk directive (`docs/owner/2026-09-24-next-build-chunk-directive.md`) and
 the owner's ntfy / Odds API activation request._
 
 ```
-STATUS: PARTIAL. All seven deliverables are built, merged and deployed (production 6497af3).
-  The Odds API is live. ntfy phone delivery awaits the owner. The first real settlement
-  (11:15 ET run) is not yet observed.
+STATUS: DONE for this session's scope. All seven deliverables are built, merged and deployed
+  (production faadaa1). The Odds API is live, and ntfy phone delivery awaits the owner. No
+  settlement was due today: the first real settlement is possible from the 2026-09-25 11:15 ET run.
 ACCEPTANCE: the next-build-chunk directive (seven deliverables, settlement checkpoint, safety
   sections) and the owner's activation request (Part A ntfy, Part B Odds API; secrets never
   printed, read back, logged or committed).
@@ -25,8 +25,12 @@ EVIDENCE:
     - #67 Odds API readiness and the #50 coverage audit (6, 7);
     - #71 Odds smoke string-path fix (a production crash before any request);
     - #70 alerts by notification origin and the Odds API status card (5, 6 UI), plus #53 and
-      #63 (other sessions' Terminal follow-ups, reconciled by Lane B).
-  - Production is 6497af3, installed 2026-09-24 ~14:00Z (after 2e3e172 at 13:37Z). Both installs
+      #63 (other sessions' Terminal follow-ups, reconciled by Lane B);
+    - #73 venue registry: The Odds API catalog/quote reads are LIVE_DATA_VERIFIED and scores
+      are PLANNED, so the Data sources row no longer says "not connected";
+    - #72 docs (activation record, roadmap, handoff).
+  - Production is faadaa1, installed 2026-09-24 14:27Z (after 2e3e172 at 13:37Z and 6497af3 at
+    ~14:00Z). All three installs
     used DAILY_SHADOW_ACTIVATION.md. The second waited for the host's load to drop below the
     preflight limit (a Brisket scrape). For each install:
     - preflight PASS, and backups of both stores VERIFIED before and after the install;
@@ -34,11 +38,21 @@ EVIDENCE:
       pushed);
     - shadow dry run PENDING_SETTLEMENT; dashboard active;
     - 8 timers; no failed edgelab units.
-  - The live dashboard (6497af3):
+  - The live dashboard (faadaa1):
     - /alerts groups "Verification check: edgelab-decision.service refused as expected" under
       "Tests, verification checks and diagnostics", not as an incident;
     - Data sources shows "The Odds API — ACTIVE · LIVE READ VERIFIED" with the research-only,
-      not-executable label.
+      not-executable label. The registry row above it reads "catalog, quote: live data
+      verified".
+  - Settlement, 11:15 ET run (15:15Z; exit 0):
+    - receipt PENDING_SETTLEMENT; "no settlement evidence yet";
+    - the ledger is unchanged at 30 entries (last appended 2026-09-23T22:40Z);
+    - `shadow anchor verify` against the committed 2026-09-23T224720Z checkpoint: VERIFIED. The
+      whole ledger is anchored, and the F09 residual is empty.
+  - Why no settlement: the fills opened at 2026-09-23T22:05Z, and SETTLEMENT_DUE_AFTER is
+    30 h, so they are due from 2026-09-25T03:50Z. The market settles on the NWS report for
+    2026-09-24. The ledger did not change, so no F09 checkpoint was taken (none was
+    triggered).
   - The manual settlement dry run (runbook §4.3) was skipped on purpose: the scheduled
     11:15 ET run is the first real settlement path.
   - ntfy (Part A):
@@ -62,12 +76,10 @@ EVIDENCE:
     predate STARTER_MAX_7D_V1 (in force from 2026-09-24T00:00Z), so this is the designed
     fail-closed result.
 UNRESOLVED:
-  - The first real settlement, due in the 11:15 ET run. Verify event, outcome, source, payout,
-    fees, P&L, cash release, equity for both accounts, no duplicates and the hash chain. If the
-    ledger changed, take the manual F09 checkpoint (procedure below).
-  - PR #73: the venue registry still says The Odds API is "not connected" (stage TESTED) above
-    the ACTIVE card. #73 moves only catalog_read/quote_read to LIVE_DATA_VERIFIED. It is in
-    review; deploy after the settlement window.
+  - The first real settlement: the 2026-09-25 11:15 ET run at the earliest (16:15 ET if Kalshi
+    has not settled by then). Then verify event, outcome, source, payout, fees, P&L, cash
+    release, equity for both accounts, no duplicates and the hash chain, and take the manual
+    F09 checkpoint (procedure below).
   - A later-price row in the Terminal (optional in Deliverable 4) is not built.
   - The first paid Odds slots (14:15 and 19:15 ET): confirm CAPTURED or MISSED with a reason,
     3 credits each.
@@ -81,8 +93,8 @@ UNRESOLVED:
 BLOCKERS: NONE for the running system. Owner-only:
   1. Confirm whether the TEST push reached the phone (only the owner can see it).
   2. Decide the later/closing price capture schedule (ADR 0030).
-NEXT ACTION: after the 11:15 ET settlement run, verify the first real settlement and take the
-  manual F09 checkpoint if the ledger changed.
+NEXT ACTION: check the first paid Odds slot (14:15 ET today). After the 2026-09-25 11:15 ET run,
+  verify the first real settlement and take the manual F09 checkpoint.
 ```
 
 ## Daily operation (what runs by itself)
