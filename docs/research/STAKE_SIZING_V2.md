@@ -344,4 +344,120 @@ risk.assess report + RiskPolicy  ->  PortfolioState (capacity, exposures, stops)
 
 ## 7. Simulation study (SIMULATION evidence)
 
-The results are filled in from `experiments/sizing_v2/results/` (§7.2 onwards).
+**SIMULATION evidence.** Full tables:
+`experiments/sizing_v2/results/SIMULATION_REPORT_seed20260924.md`, with every number in
+`simulation_seed20260924.json`. Reproduce with:
+
+```
+edge-lab sizing simulate --paths 200 --rounds 250 --workers 18
+```
+
+It is seeded and deterministic, and took about 22 minutes on 18 cores. Smaller `--paths`
+and `--rounds` give quick checks.
+
+### 7.1 World model, and a failed first draft (recorded)
+
+- **Setup.**
+  - Each round is one cluster of 4 mutually exclusive brackets.
+  - The market belief m ~ Dirichlet(2), and the truth q ~ Dirichlet(30 m). The market is
+    therefore calibrated: E[q | m] = m, and a test checks it.
+  - The model reports softmax(tau (log m + rho (log q - log m) + 0.15 z)). rho is the
+    information the model has beyond the market.
+  - Asks are the market probability rounded up to the cent plus 1 cent. There are 5 levels
+    of 20-200 contracts, priced with the exact Kalshi taker fee.
+- **Run size.** 200 paths × 250 rounds, starting at $1,000. Ruin means falling below $100
+  (the operational reserve ratio). Each cluster is capped at 25% of wealth.
+- **Common random numbers.** Every policy sees the same world. Scenarios that differ only
+  on the sizer's side share a world: overconfidence, execution shock and the shared cap.
+- **Failed draft 1** (not committed). The market's and the model's noise were drawn
+  independently around the truth, so the market was *miscalibrated*. The "no information"
+  model then still earned about +0.18 per dollar traded: an artifact edge. It was caught by
+  a test that failed and redesigned before any committed run. It is recorded here because
+  it is the kind of mistake that manufactures an edge.
+- **Run 1** (committed as `results/run1_superseded_*`, 171 variant runs). The same world
+  model as run 2, except that sizer-side scenarios drew separate worlds. It was superseded
+  so those comparisons use common random numbers, and H-nominal-half and G were added to
+  the sweeps. Its conclusions are the same.
+- **Variant runs.** Run 2 has **188** (18 distinct policy variants). Counting run 1, **359**
+  variant runs were evaluated.
+
+### 7.2 Results by metric
+
+Wealth is shown as a multiple of the starting bankroll. The figures are from run 2.
+
+| Question | Winner | Evidence |
+|---|---|---|
+| Highest compound growth when the edge is real and calibrated | **C full Kelly** | strong_edge: +0.0080/round, median 9.8×. modest_edge: +0.0060, median 6.0× |
+| Growth per unit of tail risk (edge real and calibrated) | **D 1/2 Kelly, G, H-nominal-half** | modest_edge: D +0.0048, p10 1.76×; G +0.0040, P(DD>50%) 0.02. C has p10 1.61× but CVaR5 0.25× and P(DD>50%) 0.49 |
+| Survival with no information (costs make it negative) | **robust policies F-half, G-robust, H, H-RCK** | Wealth unchanged (median 1.000), 0 drawdown. C: median 0.34×, 15% ruin. D: P(DD>50%) 0.59 |
+| Survival with an anti-informative model | **G-robust / H-RCK** (median -13%) | C, D, E, G (nominal) and H-nominal: 70-100% ruin. The nominal drawdown constraint does not protect against a wrong model |
+| Overconfident model (tau 1.5) | **H-RCK / G-robust**: P(DD>50%) 0.01, no ruin | C: 39% ruin; D: 13% ruin, p10 0.095×. Robust sets absorb part of the overconfidence |
+| Severe overconfidence (tau 2) | nothing is safe; **H-RCK** is least bad | H-RCK: ruin 0, p10 0.62×, P(DD>50%) 0.37. C: 78% ruin. D: 38% ruin |
+| Unseen execution cost +$0.02 to +$0.04 per contract | robust policies are nearly unaffected | +$0.04: C growth ≈ 0 with 14% ruin; D p10 0.49×; H-RCK p10 0.97× |
+| Correlation misspecified (duplicate listings believed independent) | the **shared cap** helps the aggressive policies | C p5: 0.10× misspecified vs 0.79× with a shared cap; ruin 7% vs 3%. Robust and fractional policies rarely reach the cap |
+| Joint vs sequential cluster sizing | about the same at 1/2 Kelly | H-nominal-half vs D: growth +0.0045 vs +0.0048, P(DD>50%) 0.07 vs 0.12 (modest_edge). Joint trades a little growth for a thinner tail |
+| Capital locked | robust 1/2-Kelly policies commit about 0.1-2% of wealth per round | C commits 8-20% |
+
+Main tradeoff: with a robust set at n_eff = 100, the robust policies give up almost all of
+the growth when the edge is real. In modest_edge, H-RCK grows at +0.00018 per round
+(median 1.05×) against 0.0048 for D. That is the price of surviving the three bad worlds
+(no information, anti-informative, overconfident), where the nominal Kelly family is ruined
+or badly hurt. **We do not yet know which world we are in**, so the evidence favours robust
+sizing until prospective calibration evidence exists. The robust set also tightens
+automatically as that evidence accumulates.
+
+### 7.3 Uncertainty method (pre-declared rule)
+
+- **The rule**, declared in code before the run: maximize the minimum, over modest_edge,
+  overconfident, exec_shock and no_information, of p10 terminal wealth for robust 1/2 Kelly.
+  Ties go to the higher mean growth.
+- **The result.** The rule selected **Dirichlet, n_eff = 30** (min p10 0.934).
+- **This is a flaw of the rule.** At n_eff 30 the policy barely trades (growth +0.00006),
+  so the rule rewards abstention.
+- **Family comparison per n_eff (min p10).** Mixed:
+  - n 30: Dirichlet 0.934 vs Wilson 0.851;
+  - n 100: Wilson 0.913 vs Dirichlet 0.887;
+  - n 300: Dirichlet 0.831 vs Wilson 0.672.
+- **Decision.** Keep the Dirichlet posterior as the default family
+  (`DEFAULT_UNCERTAINTY_METHOD`). It is the Bayesian model with explicit coverage, and the
+  simulation does not contradict it. **n_eff is not taken from the simulation**; it must
+  come from out-of-sample evidence (see the proposed preregistration).
+- **Future rule.** A selection rule must constrain growth as well as the tail, for example
+  "maximize min p10 subject to growth >= 25% of 1/4 Kelly's in the edge scenarios".
+
+### 7.4 What the simulation does not show
+
+- It shows nothing about whether EXP-001 has an edge.
+- The world model is ours. Real bracket markets may be miscalibrated in structured ways
+  (favorite-longshot), depth may be thinner, and fills are adversely selected.
+- One cluster per round. There is no capital-lock across days, because positions settle
+  within the round, so turnover equals capital committed.
+- Hard caps in the study are cash, depth and 25% per cluster. The operational $1
+  position cap would bind every policy at today's bankroll.
+
+## 8. Replay over EXP-001 history
+
+Skipped. `edge-lab sizing replay --exp001` reads the Gate 3 header:
+
+- no market price column exists;
+- `market_price_available` is false on all 3,551 rows;
+- Gate 4 holds aggregate scores only;
+- the test split was opened once and stays protected.
+
+`edge-lab sizing replay --input <records.json>` exists for future prospective Stage B
+decision records. Its output is labelled IN-SAMPLE, not fills, and not evidence of an edge.
+
+## 9. Chosen research candidate and next step
+
+- **Research candidate:** `SV2-H-cluster-robust-rck` v1. It combines:
+  - joint robust 1/2 Kelly over the cluster;
+  - the robust Busseti-Ryu-Boyd drawdown constraint (alpha 0.7, beta 0.1);
+  - hard caps through `risk.assess` and STARTER_MAX_7D_V1.
+
+  It and its single-candidate twin G-robust are the only variants with no ruin and
+  P(DD>50%) <= 0.01 in every main scenario. H-RCK has the better lower tail under
+  overconfidence (p10 0.896 vs 0.886; at tau 2, 0.62×). It is preferred because it sizes
+  the cluster jointly.
+- **Operational use:** only through the prospective experiment in
+  `experiments/sizing_v2/PROPOSED_PREREGISTRATION.md`, after EXP-001 Stage B evidence
+  exists.

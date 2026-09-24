@@ -273,9 +273,11 @@ def dirichlet_box(states: Sequence[str], nominal: Sequence[float], n_eff: float,
 
 
 DEFAULT_UNCERTAINTY_METHOD = "dirichlet-box-v1"
-"""The family chosen by the pre-declared simulation rule (docs/research/STAKE_SIZING_V2.md §7):
-at every n_eff the rule preferred the Dirichlet box to the Wilson box. `n_eff` itself is not
-chosen by simulation. It is the effective settled out-of-sample sample behind the model."""
+"""The family the pre-declared simulation rule selected (docs/research/STAKE_SIZING_V2.md §7.3).
+The comparison per n_eff was mixed (Wilson was ahead at n_eff 100), and the rule's winner at
+n_eff 30 barely trades, so the evidence for the family is weak. The Dirichlet posterior is
+kept because it is the statistically justified Bayesian model with explicit coverage. `n_eff`
+is never chosen by simulation: it is the effective settled out-of-sample sample behind the model."""
 
 
 def default_uncertainty(states: Sequence[str], nominal: Sequence[float], n_eff: float) -> BoxSimplexSet:

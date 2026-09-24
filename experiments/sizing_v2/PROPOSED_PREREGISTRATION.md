@@ -31,9 +31,10 @@ frozen operational rule `EXP-001-fixed-1-v1`, and stays inside the operational r
    - The robust drawdown constraint E[(W'/W)^-lambda] <= 1 with alpha 0.7 and beta 0.1,
      evaluated at the worst admissible vector.
    - Hard caps from `exp001_shadow.RISK_POLICY` via `risk.assess`, plus STARTER_MAX_7D_V1.
-   - Why this candidate: in the simulation study it was the only variant with no ruin and
-     P(drawdown > 50%) <= 0.01 in every main scenario, including overconfident and
-     anti-informative models (`docs/research/STAKE_SIZING_V2.md` §7).
+   - Why this candidate: in the simulation study it and its single-candidate twin were the
+     only variants with no ruin and P(drawdown > 50%) <= 0.01 in every main scenario,
+     including overconfident and anti-informative models (`docs/research/STAKE_SIZING_V2.md`
+     §7). The joint version was preferred for its lower tail under overconfidence.
 
 ## Inputs, fixed in advance
 
