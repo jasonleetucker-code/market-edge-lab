@@ -918,6 +918,12 @@ def main(argv: list[str] | None = None) -> int:
         from .sizing_counterfactual import main as counterfactual_main
 
         return counterfactual_main(argv[2:])
+    # --- pm-sports: Polymarket US NFL research pilot (ADR 0032). Self-contained block.
+    if argv[:1] == ["pm-sports"]:  # the pilot owns its parser (edge_lab.polymarket_sports.main)
+        from .polymarket_sports import main as pm_sports_main
+
+        return pm_sports_main(argv[1:])
+    # --- end pm-sports
     if argv[:1] == ["sizing"]:  # stake sizing v2 research tools own their parser (ADR 0026)
         from .sizing_eval import main as sizing_main
 

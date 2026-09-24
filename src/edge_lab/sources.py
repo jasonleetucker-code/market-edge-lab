@@ -256,6 +256,55 @@ REGISTRY: dict[str, SourceSpec] = {
             ),
         ),
         SourceSpec(
+            # Health-only identity for the Polymarket US NFL pilot's catalog discovery (ADR 0032).
+            # The page snapshots themselves are stored under polymarket_us_public (legacy name
+            # "polymarket_us", kind "nfl_events"); this id keeps discovery health apart from book health.
+            source_id="polymarket_us_nfl_discovery",
+            legacy_name="polymarket_us_nfl_discovery",
+            description=(
+                "Polymarket US public gateway, NFL game (moneyline) discovery for the research pilot "
+                "(edge_lab.polymarket_sports, ADR 0032): GET /v1/events filtered to tagSlug=nfl, closed=false, "
+                "sportsMarketTypes=football_team_full_game_winner, paged to an empty page at most every 6 h. "
+                "A filtered listing: its coverage is never a full-catalog COMPLETE. Still PLANNED: the timer "
+                "is not enabled."
+            ),
+            access_tier=AccessTier.OFFICIAL_API,
+            base_url="https://gateway.polymarket.us",
+            status=SourceStatus.PLANNED,
+            # Discovery runs every 6 h; older than that means a run was missed. Captures stop
+            # planning from a scan older than 24 h (polymarket_sports.DISCOVERY_MAX_AGE).
+            max_age={"nfl_events": timedelta(hours=6, minutes=30)},
+            license_notes=(
+                "Terms/access review 2026-09-24 (experiments/multi_venue/polymarket_us_sports_terms_2026-09-24.md): "
+                "the API docs offer the keyless public gateway for reading and displaying market data, 20 "
+                "requests/s per IP. The Polymarket App Terms (effective 2025-09-25; cover 'related websites, "
+                "portals, and APIs') permit bots/automation only 'through authorized APIs', license market data "
+                "for personal, non-commercial use in connection with the user's trading, and prohibit "
+                "redistribution, scraping and bulk downloads unless expressly licensed. No geographic rule beyond "
+                "illegal-location and sanctions clauses. Verdict: NOT CLEARED for unattended collection until the "
+                "owner decides (ideally with written permission); research storage only, never redistributed. "
+                "No account, no authenticated endpoint, no VPN or geolocation circumvention."
+            ),
+        ),
+        SourceSpec(
+            # Health-only identity for the pilot's target-based research book captures (ADR 0032).
+            # Book snapshots are stored under polymarket_us_public (kind "book").
+            source_id="polymarket_us_nfl_book",
+            legacy_name="polymarket_us_nfl_book",
+            description=(
+                "Polymarket US public gateway, research book captures (GET /v1/markets/{slug}/book) of NFL "
+                "moneyline markets related (never equivalent) to an Odds API event, at T-24h / T-6h / T-60m "
+                "(edge_lab.polymarket_sports, ADR 0032). Research evidence only, never an executable price "
+                "claim. Still PLANNED: the timer is not enabled."
+            ),
+            access_tier=AccessTier.OFFICIAL_API,
+            base_url="https://gateway.polymarket.us",
+            status=SourceStatus.PLANNED,
+            # Event-relative: freshness is judged per target against its due window, not a fixed age.
+            max_age={"book": timedelta(minutes=5)},
+            license_notes="Same source, terms review and verdict as polymarket_us_nfl_discovery.",
+        ),
+        SourceSpec(
             source_id="the_odds_api",
             legacy_name="the_odds_api",
             description=(

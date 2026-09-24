@@ -1,0 +1,18 @@
+# PROPOSED unit (ADR 0032). Rename to edgelab-pm-sports.timer only together with the coordinator's
+# install.sh change (add it to UNITS and to the separately activated set, so the installer never
+# enables it). Enable only after the owner access decision, exact-head CI green and an
+# independent review.
+[Unit]
+Description=Market Edge Lab: Polymarket US NFL research capture tick every 15 minutes (ADR 0032)
+
+[Timer]
+# :10, :25, :40 and :55 every hour, staggered off the odds (:00/:15) and observe (:05/:20) ticks.
+# The code makes no request unless a target is due, and refuses protected windows itself.
+OnCalendar=*-*-* *:10/15:00 America/New_York
+AccuracySec=15s
+# Missed ticks are not replayed late: the next tick records expired targets as MISSED.
+Persistent=false
+Unit=edgelab-pm-sports.service
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,40 @@
+[Unit]
+Description=Market Edge Lab: Polymarket US NFL research book captures at T-24h/T-6h/T-60m (read-only, ADR 0032)
+Documentation=file:///opt/market-edge-lab/app/docs/decisions/0032-polymarket-us-nfl-research-pilot.md
+After=network-online.target
+Wants=network-online.target
+OnFailure=edgelab-alert@%n.service
+
+[Service]
+Type=oneshot
+Slice=edgelab.slice
+User=edgelab
+Group=edgelab
+EnvironmentFile=/etc/market-edge-lab/env
+WorkingDirectory=/var/lib/market-edge-lab
+# No secrets. Planning is local and idempotent; GETs are sent only for due targets. The code
+# refuses every run (BLOCKED_TERMS_REVIEW, no network, exit 0) until an owner access decision is
+# recorded. Bounds per run: 20 books, 50 HTTP requests (retries included), a 1 s pacer, a
+# 3-minute run deadline; protected windows are refused before the lock.
+ExecStart=/opt/market-edge-lab/venv/bin/python -m edge_lab.cli pm-sports capture --db /var/lib/market-edge-lab/db/edge_lab.sqlite3
+TimeoutStartSec=5min
+UMask=0077
+MemoryHigh=192M
+MemoryMax=256M
+CPUQuota=15%
+TasksMax=16
+Nice=10
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+ReadWritePaths=/var/lib/market-edge-lab /var/lib/market-edge-lab-status

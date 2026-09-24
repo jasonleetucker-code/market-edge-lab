@@ -1,0 +1,558 @@
+"""Polymarket US NFL research pilot (ADR 0032): catalog, relationships, planning, captures, gate.
+
+Every test is network-free: real gateway bytes captured on 2026-09-24 (tests/fixtures/polymarket_us,
+recorded in experiments/multi_venue/polymarket_us_sports_terms_2026-09-24.md) are replayed through a
+scripted opener."""
+
+from __future__ import annotations
+
+import json
+import sqlite3
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+
+import pytest
+
+from conftest import ScriptedOpener, http_error
+from edge_lab import polymarket_sports as ps
+from edge_lab import polymarket_us as pm
+from edge_lab.discovery import CoverageState
+from edge_lab.forward import exclusive_lock
+from edge_lab.odds_schedule import ScheduledEvent
+from edge_lab.storage import SnapshotStore
+
+UTC = timezone.utc
+FIX = Path(__file__).parent / "fixtures" / "polymarket_us"
+EVENTS_P0 = FIX / "nfl_events_moneyline_p0_2026-09-24T205921Z.json"
+EVENTS_P1 = FIX / "nfl_events_moneyline_p1_2026-09-24T205942Z.json"
+BOOK_KC_MIA = FIX / "book_aec-nfl-kc-mia-2026-09-27_2026-09-24T205949Z.json"
+BOOK_404 = FIX / "book_404_2026-09-24T210000Z.json"
+NOW = datetime(2026, 9, 24, 21, 0, tzinfo=UTC)  # 17:00 ET, outside every protected window
+KC_MIA = "aec-nfl-kc-mia-2026-09-27"
+ALLOW = "test: access decision recorded"
+
+
+def _events() -> list[dict]:
+    return json.loads(EVENTS_P0.read_bytes())["events"]
+
+
+def _catalog() -> list[ps.NflMarket]:
+    markets, anomalies = ps.catalog_from_events(_events())
+    assert anomalies == []
+    return markets
+
+
+def _market(slug: str = KC_MIA) -> ps.NflMarket:
+    return next(m for m in _catalog() if m.market_slug == slug)
+
+
+def _odds_event(eid: str, home: str, away: str, commence: str) -> dict:
+    return {"id": eid, "sport_key": "americanfootball_nfl", "commence_time": commence, "home_team": home,
+            "away_team": away}
+
+
+ODDS_EVENTS = [
+    _odds_event("e_kc_mia", "Miami Dolphins", "Kansas City Chiefs", "2026-09-27T17:00:00Z"),
+    _odds_event("e_atl_gb", "Green Bay Packers", "Atlanta Falcons", "2026-09-25T00:15:00Z"),
+    _odds_event("e_lac_sea", "Seattle Seahawks", "Los Angeles Chargers", "2026-10-04T20:25:00Z"),
+]
+
+
+def _scheduled(raw: list[dict]) -> list[ScheduledEvent]:
+    from edge_lab import odds_api
+
+    return list(odds_api.parse_events(raw, sport="americanfootball_nfl")[0])
+
+
+def _store(tmp_path: Path, odds_events: list[dict] | None = ODDS_EVENTS, *, odds_at: datetime = NOW) -> Path:
+    db = tmp_path / "edge.sqlite3"
+    store = SnapshotStore(db)
+    if odds_events is not None:
+        store.start_run("odds-disc")
+        store.save_snapshot(run_id="odds-disc", source="the_odds_api", kind="events", entity_id="americanfootball_nfl",
+                            url="https://api.the-odds-api.com/v4/sports/americanfootball_nfl/events",
+                            payload={"events": odds_events, "request": {"tick_utc": odds_at.isoformat()}},
+                            fetched_at_utc=odds_at.isoformat())
+        store.finish_run("odds-disc", status="succeeded")
+    return db
+
+
+def _discovered(tmp_path: Path, **kw) -> Path:
+    db = _store(tmp_path, **kw)
+    opener = ScriptedOpener(EVENTS_P0.read_bytes(), EVENTS_P1.read_bytes())
+    code, report = ps.run_discover(db, clock=lambda: NOW, sleep=lambda s: None, opener=opener, access_decision=ALLOW)
+    assert code == 0 and report["state"] == "FILTER_COMPLETE", report
+    return db
+
+
+class Clock:
+    def __init__(self, at: datetime):
+        self.at = at
+
+    def __call__(self) -> datetime:
+        return self.at
+
+
+# --------------------------------------------------------------------------- catalog and rules
+
+
+def test_catalog_from_the_real_filtered_listing():
+    markets = _catalog()
+    assert len(markets) == 33
+    kc = _market()
+    assert kc.pm_event_slug == "nfl-kc-mia-2026-09-27" and kc.game_start_utc == "2026-09-27T17:00:00Z"
+    assert kc.teams == ("Kansas City Chiefs", "Miami Dolphins") and kc.long_team == "Kansas City Chiefs"
+    # Sports rules: tie at $0.50 and last-fair-market-price postponement -> never plain binary.
+    assert kc.payoff_kind == pm.PAYOFF_ALTERNATIVE_SETTLEMENT
+    assert kc.clauses["overtime"] == "INCLUDED" and kc.clauses["tie_settlement"] == "0.50"
+    assert kc.clauses["last_fair_market_price"] is True and kc.clauses["postponement_window"] in ("two days", "two weeks")
+
+
+def test_filter_violations_are_dropped_and_reported():
+    events = _events()[:2]
+    events[0] = {**events[0], "tags": []}
+    spread = {**events[1]["markets"][0], "slug": "asc-x", "sportsMarketType": "football_team_full_game_spread"}
+    events[1] = {**events[1], "markets": [events[1]["markets"][0], spread, events[1]["markets"][0]]}
+    markets, anomalies = ps.catalog_from_events(events)
+    assert [m.market_slug for m in markets] == [events[1]["markets"][0]["slug"]]
+    assert any("filter not honoured" in a and "nfl" in a for a in anomalies)
+    assert any("asc-x" in a for a in anomalies) and any("listed twice" in a for a in anomalies)
+
+
+def test_rules_clauses_are_matched_literally_and_unknown_stays_unknown():
+    assert ps.rules_clauses(None) == {"overtime": "UNSTATED", "tie_settlement": None, "postponement_window": None,
+                                      "last_fair_market_price": False, "outcome_source": None,
+                                      "participant_start_condition": False}
+    c = ps.rules_clauses("Regulation time only. Outcome sourced from NFL.")
+    assert c["overtime"] == "EXCLUDED" and c["outcome_source"] == "NFL"
+
+
+# --------------------------------------------------------------------------- relationships
+
+
+def test_same_teams_and_kickoff_is_related_never_equivalent():
+    rel = ps.relate(_market(), _scheduled(ODDS_EVENTS))
+    assert rel.status == ps.RELATED and rel.odds_event_id == "e_kc_mia" and rel.odds_market_key == "h2h"
+    assert rel.equivalent is False and "EQUIVALENT" not in ps.RELATIONSHIP_STATES
+    assert set(rel.flags) == {"RULES_UNRESOLVED", "PAYOFF_UNSUPPORTED"}
+    for dim in ("teams", "date", "start_time", "league"):
+        assert rel.checks[dim]["state"] == "MATCH", dim
+    for dim in ("regulation_vs_overtime", "ties", "postponement_cancellation_no_contest", "participant_start",
+                "settlement_provider"):
+        assert rel.checks[dim]["state"] == "UNVERIFIED", dim
+    assert rel.checks["payout_structure"]["state"] == "DIFFERS"
+    assert rel.checks["alternative_settlement"]["state"] == "DIFFERS"
+    assert rel.checks["home_away"]["state"] == "UNVERIFIED"
+
+
+@pytest.mark.parametrize("odds, status, why", [
+    ([], ps.UNMATCHED, "no Odds API NFL event"),
+    ([_odds_event("x", "Miami Dolphins", "Kansas City Chiefs", "2026-10-11T17:00:00Z")], ps.UNMATCHED, "36 h"),
+    ([_odds_event("x", "Miami Dolphins", "Buffalo Bills", "2026-09-27T17:00:00Z")], ps.AMBIGUOUS, "exactly one team"),
+    ([_odds_event("x", "Miami Dolphins", "Kansas City Chiefs", "2026-09-27T20:25:00Z")], ps.AMBIGUOUS, "differ by"),
+    ([_odds_event("x", "Miami Dolphins", "Kansas City Chiefs", "2026-09-27T17:00:00Z"),
+      _odds_event("y", "Kansas City Chiefs", "Miami Dolphins", "2026-09-28T17:00:00Z")], ps.AMBIGUOUS, "2 Odds API events"),
+])
+def test_unmatched_and_ambiguous_fail_closed(odds, status, why):
+    rel = ps.relate(_market(), _scheduled(odds))
+    assert rel.status == status and why in " ".join(rel.reasons)
+    assert rel.odds_event_id is None and rel.equivalent is False
+
+
+def test_missing_start_or_team_names_is_ambiguous():
+    m = _market()
+    no_start = ps.NflMarket.from_dict({**m.to_dict(), "game_start_utc": None})
+    assert ps.relate(no_start, _scheduled(ODDS_EVENTS)).status == ps.AMBIGUOUS
+    one_team = ps.NflMarket.from_dict({**m.to_dict(), "teams": ["Kansas City Chiefs"]})
+    assert ps.relate(one_team, _scheduled(ODDS_EVENTS)).status == ps.AMBIGUOUS
+
+
+# --------------------------------------------------------------------------- listing completeness
+
+
+def _page(n: int) -> dict:
+    return {"events": [{"id": str(i), "slug": f"e{i}"} for i in range(n)]}
+
+
+def test_filtered_listing_read_to_an_empty_page_is_still_only_partial():
+    opener = ScriptedOpener(_page(2), _page(0))
+    rows, cov = pm.read_events_listing(extra=ps.DISCOVERY_FILTER, limit=2, get=_getter(opener))
+    assert len(rows) == 2 and cov.state is CoverageState.PARTIAL and "FILTERED" in cov.detail and cov.pages_ok == 2
+    assert "tagSlug=nfl" in opener.calls[0] and opener.calls[1].split("?")[1].startswith("limit=2&offset=2")
+
+
+def _getter(opener):
+    from edge_lab import http
+
+    return lambda url: http.fetch_json_result(url, opener=opener, retries=0, sleep=lambda s: None)
+
+
+def test_listing_failure_partial_page_cap_and_malformed():
+    rows, cov = pm.read_events_listing(extra=(), limit=2, get=_getter(ScriptedOpener(_page(2), http_error(503))))
+    assert cov.state is CoverageState.PARTIAL and "failed" in cov.detail and len(rows) == 2
+    rows, cov = pm.read_events_listing(extra=(), limit=2, get=_getter(ScriptedOpener(http_error(500))))
+    assert cov.state is CoverageState.FAILED and rows == []
+    rows, cov = pm.read_events_listing(extra=(), limit=2, max_pages=1, get=_getter(ScriptedOpener(_page(2))))
+    assert cov.state is CoverageState.PARTIAL and "cap" in cov.detail
+    rows, cov = pm.read_events_listing(extra=(), limit=2, get=_getter(ScriptedOpener({"nope": 1})))
+    assert cov.state is CoverageState.FAILED and "malformed" in cov.detail
+    # Unfiltered and read to an empty page: the only COMPLETE.
+    rows, cov = pm.read_events_listing(extra=(), limit=2, get=_getter(ScriptedOpener(_page(1), _page(0))))
+    assert cov.state is CoverageState.COMPLETE
+
+
+# --------------------------------------------------------------------------- the access gate and refusals
+
+
+def test_the_terms_gate_blocks_every_networked_run_before_anything(tmp_path):
+    assert ps.OWNER_ACCESS_DECISION is None  # the 2026-09-24 review did not clear it
+    db = _store(tmp_path)
+    opener = ScriptedOpener()  # any call would fail: pop from an empty list
+    for run in (ps.run_discover, ps.run_capture):
+        code, report = run(db, clock=lambda: NOW, sleep=lambda s: None, opener=opener)
+        assert code == 0 and report["state"] == "BLOCKED_TERMS_REVIEW" and report["requests"] == 0
+    assert opener.calls == [] and SnapshotStore(db).pm_sports_scans() == []
+
+
+@pytest.mark.parametrize("et", ["11:12", "16:15", "17:40", "18:49"])
+def test_protected_windows_refuse_before_the_lock(tmp_path, et):
+    db = _store(tmp_path)
+    h, m = map(int, et.split(":"))
+    at = datetime(2026, 9, 24, h + 4, m, tzinfo=UTC)  # EDT
+    for run in (ps.run_discover, ps.run_capture):
+        code, report = run(db, clock=lambda: at, opener=ScriptedOpener(), access_decision=ALLOW)
+        assert code == 0 and report["state"] == "DEFERRED_PROTECTED_WINDOW"
+
+
+def test_lock_busy_and_missing_store_do_nothing(tmp_path):
+    db = _store(tmp_path)
+    with exclusive_lock(db.with_name(db.name + ".pm-sports.lock"), timeout_s=1):
+        code, report = ps.run_capture(db, clock=lambda: NOW, opener=ScriptedOpener(), access_decision=ALLOW)
+    assert code == 0 and report["state"] == "LOCK_BUSY"
+    code, report = ps.run_discover(tmp_path / "nope.sqlite3", clock=lambda: NOW, access_decision=ALLOW)
+    assert code == 0 and report["state"] == "NO_STORE" and not (tmp_path / "nope.sqlite3").exists()
+
+
+def test_the_pilot_lock_is_not_the_kalshi_collector_lock():
+    db = Path("x/edge.sqlite3")
+    assert ps._lock_path(db).name == "edge.sqlite3.pm-sports.lock"
+    from edge_lab import price_observations
+
+    assert ps._lock_path(db) != price_observations._lock_path(db)
+
+
+# --------------------------------------------------------------------------- discovery
+
+
+def test_discovery_stores_pages_scan_and_plans_related_targets(tmp_path):
+    db = _discovered(tmp_path)
+    store = SnapshotStore(db)
+    scan = store.pm_sports_scans()[0]
+    assert scan["coverage_state"] == "PARTIAL" and scan["filter_complete"] == 1  # filtered: never COMPLETE
+    assert scan["pages_ok"] == 2 and scan["markets"] == 33 and scan["requests"] == 2
+    assert len(json.loads(scan["page_snapshot_ids_json"])) == 2
+    targets = store.pm_sports_targets()
+    by_market = {}
+    for t in targets:
+        by_market.setdefault(t["market_slug"], []).append(t)
+    # Only markets related to a stored Odds API event get targets.
+    assert set(by_market) == {KC_MIA, "aec-nfl-atl-gb-2026-09-24", "aec-nfl-lac-sea-2026-10-04"}
+    kc = {t["offset_label"]: t for t in by_market[KC_MIA]}
+    assert kc["T-60m"]["target_utc"] == "2026-09-27T16:00:00+00:00"
+    assert kc["T-6h"]["target_utc"] == "2026-09-27T11:00:00+00:00"
+    assert kc["T-24h"]["target_utc"] == "2026-09-26T17:00:00+00:00"
+    assert all(t["relationship"] == ps.RELATED and t["odds_event_id"] == "e_kc_mia" for t in kc.values())
+    assert kc["T-60m"]["due_from_utc"] == "2026-09-27T15:53:00+00:00"
+    assert kc["T-60m"]["deadline_utc"] == "2026-09-27T16:30:00+00:00"
+    # ATL-GB kicks off at 00:15Z: T-24h and T-6h deadlines already passed at planning -> not planned.
+    assert [t["offset_label"] for t in by_market["aec-nfl-atl-gb-2026-09-24"]] == ["T-60m"]
+    # LAC-SEA T-24h (16:25 ET Saturday) falls in the 16:13-16:30 ET settlement window: moved to its end.
+    lac = {t["offset_label"]: t for t in by_market["aec-nfl-lac-sea-2026-10-04"]}
+    assert lac["T-24h"]["target_utc"] == "2026-10-03T20:25:00+00:00"
+    assert lac["T-24h"]["effective_utc"] == "2026-10-03T20:30:00+00:00"
+    assert json.loads(lac["T-24h"]["detail_json"])["shifted_out_of_protected_window"] == "settlement_run_1615"
+    health = {r["source_id"]: r for r in store.latest_source_health()}
+    assert health["polymarket_us_nfl_discovery"]["status"] == "ok"
+
+
+def test_discovery_cadence_and_idempotent_planning(tmp_path):
+    db = _discovered(tmp_path)
+    n = len(SnapshotStore(db).pm_sports_targets())
+    code, report = ps.run_discover(db, clock=lambda: NOW + timedelta(hours=3), opener=ScriptedOpener(),
+                                   access_decision=ALLOW)
+    assert code == 0 and report["state"] == "NOT_DUE"
+    later = NOW + timedelta(hours=6)
+    code, report = ps.run_discover(db, clock=lambda: later, sleep=lambda s: None,
+                                   opener=ScriptedOpener(EVENTS_P0.read_bytes(), EVENTS_P1.read_bytes()),
+                                   access_decision=ALLOW)
+    assert code == 0 and report["state"] == "FILTER_COMPLETE"
+    assert len(SnapshotStore(db).pm_sports_targets()) == n  # nothing planned twice
+
+
+def test_partial_catalog_is_recorded_and_plans_only_what_was_seen(tmp_path):
+    db = _store(tmp_path)
+    opener = ScriptedOpener(EVENTS_P0.read_bytes(), http_error(503), http_error(503))
+    code, report = ps.run_discover(db, clock=lambda: NOW, sleep=lambda s: None, opener=opener, access_decision=ALLOW)
+    assert code == 0 and report["state"] == "PARTIAL" and report["filter_complete"] is False
+    store = SnapshotStore(db)
+    scan = store.pm_sports_scans()[0]
+    assert scan["coverage_state"] == "PARTIAL" and scan["filter_complete"] == 0 and scan["requests"] == 3
+    assert ps.catalog_state(store, now=NOW)["state"] == "PARTIAL_CATALOG"
+    assert store.latest_source_health()[0]["status"] == "partial"
+    assert store.pm_sports_targets()  # the markets that were read are still usable
+
+
+def test_a_failed_first_discovery_alerts_once_then_waits(tmp_path):
+    db = _store(tmp_path)
+    code, report = ps.run_discover(db, clock=lambda: NOW, sleep=lambda s: None,
+                                   opener=ScriptedOpener(http_error(500), http_error(500)), access_decision=ALLOW)
+    assert code == 1 and report["state"] == "FAILED" and report["catalog_stale"] is True
+    store = SnapshotStore(db)
+    assert store.pm_sports_scans()[0]["coverage_state"] == "FAILED" and store.pm_sports_targets() == []
+    assert ps.catalog_state(store, now=NOW)["state"] == "FAILED"
+    later = NOW + timedelta(hours=6)
+    code, report = ps.run_discover(db, clock=lambda: later, sleep=lambda s: None,
+                                   opener=ScriptedOpener(http_error(500), http_error(500)), access_decision=ALLOW)
+    assert code == 0 and report["state"] == "FAILED"  # the same failure: no second alert
+
+
+def test_a_failure_that_makes_a_good_catalog_stale_alerts(tmp_path):
+    db = _discovered(tmp_path)
+    at = NOW + timedelta(hours=27)  # 20:00 ET, outside the protected windows
+    code, report = ps.run_discover(db, clock=lambda: at, sleep=lambda s: None,
+                                   opener=ScriptedOpener(http_error(500), http_error(500)), access_decision=ALLOW)
+    assert code == 1 and report["catalog_stale"] is True
+    at2 = NOW + timedelta(hours=7)
+    db2 = _discovered(tmp_path / "b")
+    code, report = ps.run_discover(db2, clock=lambda: at2, sleep=lambda s: None,
+                                   opener=ScriptedOpener(http_error(500), http_error(500)), access_decision=ALLOW)
+    assert code == 0 and report["catalog_stale"] is False  # still fresh enough: retried in 6 h, no alert
+
+
+def test_no_odds_schedule_means_no_targets(tmp_path):
+    db = _discovered(tmp_path, odds_events=None)
+    assert SnapshotStore(db).pm_sports_targets() == []
+    db2 = _discovered(tmp_path / "stale", odds_at=NOW - timedelta(hours=30))
+    assert SnapshotStore(db2).pm_sports_targets() == []
+
+
+def test_slot_cap_skips_visibly(tmp_path, monkeypatch):
+    monkeypatch.setattr(ps, "MAX_MARKETS_PER_SLOT", 1)
+    odds = [_odds_event(f"e{i}", h, a, c) for i, (h, a, c) in enumerate([
+        ("Miami Dolphins", "Kansas City Chiefs", "2026-09-27T17:00:00Z"),
+        ("Cleveland Browns", "Carolina Panthers", "2026-09-27T17:00:00Z")])]
+    db = _discovered(tmp_path, odds_events=odds)
+    store = SnapshotStore(db)
+    states = [(t["offset_label"], t["state"]) for t in store.pm_sports_targets()]
+    assert sorted(s for _, s in states if s) == ["SKIPPED_CAP"] * 3  # one of the two markets per slot
+    skipped = [t for t in store.pm_sports_targets() if t["state"] == "SKIPPED_CAP"]
+    assert all("SLOT_CAP" in t["state_reason"] for t in skipped)
+
+
+# --------------------------------------------------------------------------- captures
+
+
+def _due_clock_for_kc() -> datetime:
+    return datetime(2026, 9, 27, 15, 55, tzinfo=UTC)  # 11:55 ET: the KC-MIA T-60m target is due
+
+
+def _fresh_catalog_at(db: Path, at: datetime) -> None:
+    """Re-run discovery at `at` so the catalog is not stale (captures refuse a stale one)."""
+    code, report = ps.run_discover(db, clock=lambda: at, sleep=lambda s: None,
+                                   opener=ScriptedOpener(EVENTS_P0.read_bytes(), EVENTS_P1.read_bytes()),
+                                   access_decision=ALLOW, force=True)
+    assert report["state"] == "FILTER_COMPLETE"
+
+
+def test_capture_records_a_research_book_from_real_bytes(tmp_path):
+    db = _discovered(tmp_path, odds_at=_due_clock_for_kc() - timedelta(hours=1))
+    at = _due_clock_for_kc()
+    _fresh_catalog_at(db, at - timedelta(hours=2))
+    opener = ScriptedOpener(BOOK_KC_MIA.read_bytes())
+    code, report = ps.run_capture(db, clock=lambda: at, sleep=lambda s: None, opener=opener, access_decision=ALLOW)
+    assert code == 0 and report["state"] == "CAPTURED" and report["by_status"] == {"CAPTURED": 1}
+    assert opener.calls == [f"GET https://gateway.polymarket.us/v1/markets/{KC_MIA}/book"]
+    store = SnapshotStore(db)
+    t = next(t for t in store.pm_sports_targets() if t["market_slug"] == KC_MIA and t["offset_label"] == "T-60m")
+    row = store.pm_sports_observations(target_id=t["target_id"])[-1]
+    assert row["status"] == "CAPTURED" and row["yes_bid"] == "0.8500" and row["yes_ask"] == "0.8550"
+    assert row["yes_ask_size"] == "632877.8400" and row["yes_bid_size"] == "434910.6900"
+    assert row["book_state"] == "MARKET_STATE_OPEN" and row["source_timestamp_utc"].startswith("2026-09-24T20:59:13")
+    assert row["snapshot_id"] and json.loads(row["depth_json"])["truncated"] is True
+    with sqlite3.connect(db) as conn:
+        kind, source_id = conn.execute("SELECT kind, source_id FROM snapshots WHERE id = ?",
+                                       (row["snapshot_id"],)).fetchone()
+    assert kind == "book" and source_id == "polymarket_us_public"
+    # Idempotent: a second tick finds the target final and sends nothing.
+    code, report = ps.run_capture(db, clock=lambda: at + timedelta(minutes=15), opener=ScriptedOpener(),
+                                  access_decision=ALLOW)
+    assert code == 0 and report["attempted"] == 0
+
+
+def test_404_is_final_not_executable_and_503_retries_once(tmp_path):
+    db = _discovered(tmp_path, odds_at=_due_clock_for_kc() - timedelta(hours=1))
+    at = _due_clock_for_kc()
+    _fresh_catalog_at(db, at - timedelta(hours=2))
+    code, report = ps.run_capture(db, clock=lambda: at, sleep=lambda s: None,
+                                  opener=ScriptedOpener(http_error(404)), access_decision=ALLOW)
+    assert code == 0 and report["by_status"] == {"NOT_EXECUTABLE": 1}
+    store = SnapshotStore(db)
+    assert any("BOOK_NOT_FOUND" in (t["state_reason"] or "") for t in store.pm_sports_targets())
+
+
+def test_a_retryable_failure_exits_zero_and_is_retried_next_tick(tmp_path):
+    db = _discovered(tmp_path, odds_at=_due_clock_for_kc() - timedelta(hours=1))
+    at = _due_clock_for_kc()
+    _fresh_catalog_at(db, at - timedelta(hours=2))
+    code, report = ps.run_capture(db, clock=lambda: at, sleep=lambda s: None,
+                                  opener=ScriptedOpener(http_error(503), http_error(503)), access_decision=ALLOW)
+    assert code == 0 and report["state"] == "PARTIAL_RETRYING" and report["requests"] == 2  # one retry only
+    assert report["failed_retrying"] and not report["failed_final"]
+    code, report = ps.run_capture(db, clock=lambda: at + timedelta(minutes=15), sleep=lambda s: None,
+                                  opener=ScriptedOpener(BOOK_KC_MIA.read_bytes()), access_decision=ALLOW)
+    assert code == 0 and report["by_status"] == {"CAPTURED": 1}
+
+
+def test_a_failure_no_later_tick_can_retry_exits_one(tmp_path):
+    db = _discovered(tmp_path, odds_at=_due_clock_for_kc() - timedelta(hours=1))
+    at = datetime(2026, 9, 27, 16, 20, tzinfo=UTC)  # 10 min before the T-60m deadline
+    _fresh_catalog_at(db, at - timedelta(hours=2))
+    code, report = ps.run_capture(db, clock=lambda: at, sleep=lambda s: None,
+                                  opener=ScriptedOpener(http_error(503), http_error(503)), access_decision=ALLOW)
+    assert code == 1 and report["state"] == "PARTIAL" and report["failed_final"]
+
+
+def test_budget_exhaustion_defers_without_failing(tmp_path):
+    odds = [_odds_event(f"e{i}", h, a, "2026-09-27T17:00:00Z") for i, (h, a) in enumerate([
+        ("Miami Dolphins", "Kansas City Chiefs"), ("Cleveland Browns", "Carolina Panthers"),
+        ("New York Giants", "Tennessee Titans")])]
+    db = _discovered(tmp_path, odds_events=odds, odds_at=_due_clock_for_kc() - timedelta(hours=1))
+    at = _due_clock_for_kc()
+    _fresh_catalog_at(db, at - timedelta(hours=2))
+    book = BOOK_KC_MIA.read_bytes()
+    code, report = ps.run_capture(db, clock=lambda: at, sleep=lambda s: None, max_requests=2,
+                                  opener=ScriptedOpener(book, book), access_decision=ALLOW)
+    # Two books fit the 2-request budget; the third is deferred, not failed (the other markets' book
+    # payload names KC-MIA, so it is recorded as an anomaly, NOT_EXECUTABLE).
+    assert code == 0 and report["attempted"] == 2 and len(report["deferred"]) == 1 and report["requests"] == 2
+    assert "FAILED" not in report["by_status"]
+    with pytest.raises(ValueError):
+        ps.run_capture(db, clock=lambda: at, max_requests=51, access_decision=ALLOW)
+
+
+def test_book_for_another_market_is_not_executable(tmp_path):
+    odds = [_odds_event("e0", "Cleveland Browns", "Carolina Panthers", "2026-09-27T17:00:00Z")]
+    db = _discovered(tmp_path, odds_events=odds, odds_at=_due_clock_for_kc() - timedelta(hours=1))
+    at = _due_clock_for_kc()
+    _fresh_catalog_at(db, at - timedelta(hours=2))
+    code, report = ps.run_capture(db, clock=lambda: at, sleep=lambda s: None,
+                                  opener=ScriptedOpener(BOOK_KC_MIA.read_bytes()), access_decision=ALLOW)
+    assert report["by_status"] == {"NOT_EXECUTABLE": 1}
+    row = SnapshotStore(db).pm_sports_observations()[-1]
+    assert "BOOK_ANOMALY" in row["reason"] and row["yes_bid"] is None and row["snapshot_id"]
+
+
+def test_missed_targets_are_recorded_never_fetched_late(tmp_path):
+    db = _discovered(tmp_path, odds_at=_due_clock_for_kc() - timedelta(hours=1))
+    at = datetime(2026, 9, 27, 16, 40, tzinfo=UTC)  # past the T-60m deadline (16:30Z)
+    _fresh_catalog_at(db, at - timedelta(hours=2))
+    opener = ScriptedOpener()
+    code, report = ps.run_capture(db, clock=lambda: at, opener=opener, access_decision=ALLOW)
+    assert code == 0 and opener.calls == []
+    missed = {m["target_id"]: m["reason"] for m in report["missed"]}
+    kc = [tid for tid in missed if KC_MIA in tid]
+    assert kc and all("NOT_CAPTURED_BY_DEADLINE" in missed[t] for t in kc)
+    store = SnapshotStore(db)
+    with pytest.raises(sqlite3.IntegrityError):  # final is final: no late capture can follow
+        store.record_pm_sports_observation({**ps._row(ps._LazyRun(store, "x"), {"target_id": kc[0]}, "CAPTURED", at),
+                                            "snapshot_id": 1, "received_at_utc": at.isoformat()})
+
+
+def test_a_stale_catalog_pauses_captures_and_says_so_in_the_miss(tmp_path):
+    db = _discovered(tmp_path)  # catalog from NOW; the KC-MIA T-60m target is 2.8 days later
+    at = _due_clock_for_kc()
+    opener = ScriptedOpener()
+    code, report = ps.run_capture(db, clock=lambda: at, opener=opener, access_decision=ALLOW)
+    assert code == 0 and report["state"] == "CATALOG_STALE" and report["deferred"] and opener.calls == []
+    code, report = ps.run_capture(db, clock=lambda: at + timedelta(hours=1), opener=opener, access_decision=ALLOW)
+    assert any("captures paused" in m["reason"] for m in report["missed"])
+
+
+def test_a_moved_kickoff_supersedes_open_targets(tmp_path):
+    db = _discovered(tmp_path)
+    moved = _events()
+    for e in moved:
+        if e["slug"] == "nfl-kc-mia-2026-09-27":
+            e["markets"][0]["gameStartTime"] = "2026-09-27T20:25:00Z"
+    body = json.dumps({"events": moved}).encode()
+    later = NOW + timedelta(hours=6)
+    ps.run_discover(db, clock=lambda: later, sleep=lambda s: None, opener=ScriptedOpener(body, EVENTS_P1.read_bytes()),
+                    access_decision=ALLOW)
+    store = SnapshotStore(db)
+    kc = [t for t in store.pm_sports_targets() if t["market_slug"] == KC_MIA]
+    superseded = [t for t in kc if t["state"] == "SUPERSEDED"]
+    assert len(superseded) == 3 and all("GAME_START_CHANGED" in t["state_reason"] for t in superseded)
+    # The Odds API still says 17:00Z: the moved market is AMBIGUOUS now, so no new targets.
+    assert len(kc) == 3
+
+
+def test_targets_and_attempts_are_immutable(tmp_path):
+    db = _discovered(tmp_path)
+    with sqlite3.connect(db) as conn:
+        for sql in ("UPDATE pm_sports_targets SET target_utc = 'x'", "DELETE FROM pm_sports_targets",
+                    "UPDATE pm_sports_scans SET markets = 0", "DELETE FROM pm_sports_scans"):
+            with pytest.raises(sqlite3.IntegrityError):
+                conn.execute(sql)
+
+
+# --------------------------------------------------------------------------- read-only views
+
+
+def test_related_markets_view_for_the_terminal(tmp_path):
+    db = _discovered(tmp_path)
+    store = SnapshotStore.open_readonly(db)
+    view = ps.related_markets(store, now=NOW)
+    assert view["label"] == "RELATED MARKET — NOT ECONOMICALLY EQUIVALENT"
+    assert view["executable"] is False and view["ranked"] is False and view["absence_is_evidence"] is False
+    kc = view["events"]["e_kc_mia"]
+    assert kc["state"] == ps.RELATED and kc["markets"][0]["market_slug"] == KC_MIA
+    assert kc["markets"][0]["equivalent"] is False and "PAYOFF_UNSUPPORTED" in kc["markets"][0]["flags"]
+    assert kc["markets"][0]["latest_capture"] is None
+    assert view["catalog"]["state"] == "FILTER_COMPLETE"
+
+
+def test_terminal_view_states(tmp_path):
+    assert ps.terminal_view(tmp_path / "missing.sqlite3", now=NOW)["state"] == "NO_STORE"
+    db = _store(tmp_path)
+    v = ps.terminal_view(db, now=NOW)
+    assert v["state"] == "BLOCKED_TERMS_REVIEW" and v["schema"] == "pm-sports-status/1"
+    assert ps.terminal_view(db, now=NOW, access_decision=ALLOW)["state"] == "NO_SCAN"
+    db2 = _discovered(tmp_path / "b")
+    assert ps.terminal_view(db2, now=NOW, access_decision=ALLOW)["state"] == "FILTER_COMPLETE"
+    assert ps.terminal_view(db2, now=NOW + timedelta(days=2), access_decision=ALLOW)["state"] == "STALE"
+
+
+def test_freshness_records_for_the_fabric(tmp_path):
+    db = _discovered(tmp_path)
+    store = SnapshotStore.open_readonly(db)
+    disc, cap = ps.freshness_records(store, now=NOW)
+    assert disc["acquisition_mode"] == "POLL" and cap["acquisition_mode"] == "EVENT_RELATIVE"
+    assert disc["schedule_state"] == "PAUSED" and "BLOCKED_TERMS_REVIEW" in disc["why"]
+    disc, cap = ps.freshness_records(store, now=NOW, access_decision=ALLOW)
+    assert disc["schedule_state"] == "NOT_DUE" and disc["freshness"] == "fresh" and disc["health"] == "FILTER_COMPLETE"
+    assert cap["schedule_state"] == "NOT_DUE" and cap["next_due_utc"] and cap["last_success_utc"] is None
+    assert cap["freshness"] == "unknown" and cap["data_age_s"] is None  # missing is never zero
+    disc, _ = ps.freshness_records(store, now=NOW + timedelta(hours=7), access_decision=ALLOW)
+    assert disc["schedule_state"] == "DUE" and disc["freshness"] == "stale"
+
+
+def test_status_and_cli(tmp_path, capsys):
+    db = _discovered(tmp_path)
+    assert ps.main(["status", "--db", str(db), "--market", KC_MIA]) == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out["access"] == "BLOCKED_TERMS_REVIEW" and out["catalog"]["state"] in ("FILTER_COMPLETE", "STALE")
+    assert len(out["market_history"]) == 3
+    from edge_lab import cli
+
+    assert cli.main(["pm-sports", "capture", "--db", str(db)]) == 0  # the gate: no network, exit 0
+    assert json.loads(capsys.readouterr().out)["state"] == "BLOCKED_TERMS_REVIEW"
