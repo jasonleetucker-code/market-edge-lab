@@ -12,6 +12,7 @@ from __future__ import annotations
 from dataclasses import replace
 from datetime import timedelta
 from decimal import Decimal
+from typing import Any
 
 from .. import best_price as bp
 from ..fee_schedules import (
@@ -271,6 +272,79 @@ def synthetic_odds_statuses() -> dict[str, dict]:
         "COST_BLOCKED": status("COST_BLOCKED"),
         "ERROR": status("ERROR", detail="SYNTHETIC: quota ledger unreadable: JSONDecodeError"),
         "ACTIVE_UNVERIFIED": status("ACTIVE"),
+    }
+
+
+# SYNTHETIC `data.odds_capture_targets` results: every target state, and each table state.
+ODDS_TARGETS_NOW = "2026-09-24T21:00:00+00:00"
+
+
+def _target(n: int, state: str, offset: str, commence: str, intended: str, *, fresh: str, captured: str | None = None,
+            credits: int | None = None, books: tuple[str, ...] | None = None, offers: int | None = None,
+            note: str | None = None, shared: int | None = None, reason: str | None = None) -> Any:
+    from . import data as d
+
+    return d.OddsTarget(
+        target_id=f"SYNTHETIC:DEMO-NFL-{n}:{offset}:{intended}", sport="SYNTHETIC_nfl", event_id=f"DEMO-NFL-{n}",
+        offset_label=offset, priority={"T-60m": 1, "T-6h": 2, "T-24h": 3}.get(offset, 9),
+        home_team=f"SYNTHETIC Home {n}", away_team=f"SYNTHETIC Away {n}" if n != 7 else None,
+        commence_utc=commence, target_utc=intended, planned_at_utc="2026-09-23T13:00:00Z",
+        policy_version="SYNTHETIC", state=state, state_at_utc=captured or intended, reason=reason,
+        slot_id="SYNTHETIC-slot" if captured else None, snapshot_id=900 + n if captured else None,
+        captured_at_utc=captured, credits_last=credits, detail={"deviation_minutes": 0.7} if captured else {},
+        due_utc=intended, deadline_utc=intended.replace(":00:00Z", ":30:00Z"), freshness=fresh, books=books,
+        offers=offers, books_note=note, shared_targets=shared,
+        transitions=({"state": "PLANNED", "at_utc": "2026-09-23T13:00:00Z"},
+                     {"state": state, "at_utc": captured or intended, "reason": reason}))
+
+
+def synthetic_odds_targets() -> dict[str, Any]:
+    """name -> a `data.Loaded` of the capture-target view: populated (every canonical target state, a
+    shared call, a known zero, an unreadable capture and an unknown state), no captures yet, empty,
+    source unavailable and read error."""
+    from . import data as d
+
+    nine = ("SYNTHETIC-book-a", "SYNTHETIC-book-b", "SYNTHETIC-book-c", "SYNTHETIC-book-d", "SYNTHETIC-book-e",
+            "SYNTHETIC-book-f", "SYNTHETIC-book-g", "SYNTHETIC-book-h", "SYNTHETIC-book-i")
+    k1, k2 = "2026-09-25T00:15:00Z", "2026-09-27T17:00:00Z"
+    recent = (
+        _target(1, "PLANNED", "T-60m", k1, "2026-09-24T20:00:00Z", fresh=d.TARGET_OVERDUE),
+        _target(1, "CAPTURED", "T-6h", k1, "2026-09-24T18:00:00Z", fresh="STALE", captured="2026-09-24T18:00:41Z",
+                credits=3, books=nine, offers=54),
+        _target(2, "CAPTURED", "T-6h", k1, "2026-09-24T17:00:00Z", fresh="STALE", captured="2026-09-24T17:00:12Z",
+                credits=3, books=(), offers=0, note="this event is not in the stored response", shared=2),
+        _target(3, "CAPTURED", "T-6h", k1, "2026-09-24T16:00:00Z", fresh="STALE", captured="2026-09-24T16:00:12Z",
+                credits=3, note="snapshot 903 unreadable: JSONDecodeError: SYNTHETIC", shared=2),
+        _target(4, "MISSED", "T-24h", k1, "2026-09-24T00:00:00Z", fresh=d.TARGET_NO_CAPTURE,
+                reason="SYNTHETIC: expired while PLANNED"),
+    )
+    upcoming = (
+        _target(5, "FAILED", "T-24h", k2, "2026-09-26T17:00:00Z", fresh=d.TARGET_NO_CAPTURE,
+                reason="SYNTHETIC: paid call failed (not retried): HTTP 500"),
+        _target(6, "SKIPPED_BUDGET", "T-24h", k2, "2026-09-26T18:00:00Z", fresh=d.TARGET_PENDING,
+                reason="SYNTHETIC: monthly credit proof: no headroom for this slot"),
+        _target(7, "SUPERSEDED", "T-6h", k2, "2026-09-27T11:00:00Z", fresh=d.TARGET_NO_CAPTURE,
+                reason="SYNTHETIC: commence time changed"),
+        _target(8, "DEFERRED", "T-6h", k2, "2026-09-27T12:00:00Z", fresh=d.TARGET_PENDING,
+                reason="SYNTHETIC: inside the capture quiet window"),
+        _target(9, "SOMETHING_NEW", "T-60m", k2, "2026-09-27T16:00:00Z", fresh="UNKNOWN"),
+    )
+
+    def view(rows: tuple, recent: tuple, upcoming: tuple) -> d.Loaded:
+        by_state: dict[str, int] = {}
+        for t in rows:
+            by_state[t.state] = by_state.get(t.state, 0) + 1
+        return d.Loaded(d.OK, d.OddsTargets(rows=rows, recent=recent, upcoming=upcoming, by_state=by_state,
+                                            last_change_utc="2026-09-24T18:00:41Z", odds_max_age=timedelta(minutes=10)))
+    planned = tuple(replace(t, state="PLANNED", freshness=d.TARGET_PENDING, reason=None, captured_at_utc=None,
+                            credits_last=None, books=None, offers=None, books_note=None, snapshot_id=None,
+                            shared_targets=None) for t in upcoming)
+    return {
+        "populated": view(recent[::-1] + upcoming, recent, upcoming),
+        "no_captures": view(planned, (), planned),
+        "empty": view((), (), ()),
+        "unavailable": d.Loaded(d.NO_DATA, message="no evidence database configured (--db)"),
+        "error": d.Loaded(d.ERROR, message="OperationalError: database disk image is malformed"),
     }
 
 
