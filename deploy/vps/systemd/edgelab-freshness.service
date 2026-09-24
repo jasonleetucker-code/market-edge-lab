@@ -1,0 +1,44 @@
+[Unit]
+Description=Market Edge Lab: Freshness Fabric supervisor (read-only, network-free status artifact)
+Documentation=file:///opt/market-edge-lab/app/docs/decisions/0031-freshness-fabric-v1.md
+# No OnFailure= alert on purpose (ADR 0031): a 5-minute diagnostic that crashes would page up to
+# 288 times a day and overwrite last_failure.json, which belongs to the evidence collectors. A crash
+# shows as a failed unit (the production verifier) and as freshness.json going stale (Terminal).
+
+[Service]
+Type=oneshot
+Slice=edgelab.slice
+User=edgelab
+Group=edgelab
+# No EnvironmentFile: it needs no secret and no setting (the deployed commit comes from REVISION).
+WorkingDirectory=/var/lib/market-edge-lab-status
+# Reads the stores read-only (SQLite mode=ro), the status files and the backup manifests; writes
+# only /var/lib/market-edge-lab-status/freshness.json (atomic replace, bounded, current state only).
+# Exit 0 whatever the sources say: a STALE or MISSED source is data, not a failure.
+ExecStart=/opt/market-edge-lab/venv/bin/python -m edge_lab.cli freshness status --write --db /var/lib/market-edge-lab/db/edge_lab.sqlite3 --ledger /var/lib/market-edge-lab/ledger/shadow_ledger.sqlite3 --odds-ledger /var/lib/market-edge-lab/db/odds_quota_ledger.json --backups-dir /var/lib/market-edge-lab/backups --status-dir /var/lib/market-edge-lab-status
+TimeoutStartSec=60s
+# The artifact is non-sensitive and read by the dashboard: 0644.
+UMask=0022
+# Small caps, well inside edgelab.slice: one short local read every 5 minutes.
+MemoryHigh=96M
+MemoryMax=128M
+CPUQuota=10%
+TasksMax=8
+Nice=10
+# The same hardening as the collectors, but network-free: local sockets only, no IP at all.
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+RestrictAddressFamilies=AF_UNIX
+IPAddressDeny=any
+# The data directory stays read-only (ProtectSystem=strict); only the status directory is writable.
+ReadWritePaths=/var/lib/market-edge-lab-status
