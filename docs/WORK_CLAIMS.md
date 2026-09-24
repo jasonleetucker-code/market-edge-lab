@@ -6,3 +6,4 @@ The expiry is a UTC date no more than 7 days out. An expired row is not a live c
 
 | Claim | Agent | Branch | Paths | Expires |
 |---|---|---|---|---|
+| Terminal v1 follow-ups: tape read-error state, plain outcome labels | Claude (laptop) | ui/tape-unavailable-cluster-labels | src/edge_lab/dashboard/{app,components,presentation}.py, views/{outcomes,terminal,gallery}.py, docs/design/*, tests/test_dashboard_terminal.py, tests/browser/fixture_states.py | 2026-09-30 |
