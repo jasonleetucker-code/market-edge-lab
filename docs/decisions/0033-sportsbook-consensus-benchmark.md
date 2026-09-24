@@ -90,13 +90,41 @@ The snapshot also fails closed, with a problem and no events, when:
   clock problem, `freshness.assess`).
 - **Per proposition:** the worst of its books (`freshness.combine`), and separate earliest and latest
   bounds for the market and bookmaker `last_update`, each with known and unknown counts.
-- **Point-in-time reads:** they add `freshness_as_of`, the receipt time judged at `as_of`.
+- **Per event and per snapshot:** `freshness_at_receipt` is the worst of what is shown (its propositions;
+  its events). It is UNKNOWN when there is no proposition at all, never FRESH by default.
+- **Point-in-time reads** add two fields:
+  - `receipt_freshness_as_of`: the receipt time alone, judged at `as_of`;
+  - `freshness_as_of`: the worst of that and `freshness_at_receipt`.
+
+  `freshness_as_of` is the field a display reads. It is never FRESH while any contributing book is stale
+  or unknown, even when the snapshot itself was received a minute ago.
 
 ### Point in time
 
 A consensus as of T uses only snapshots **received at or before T**. A snapshot with an unknown
 receipt time is never "known by T". `consensus_for_snapshot(..., as_of=T)` on a later snapshot raises
 `PointInTimeError`. Ordering is by parsed receipt instant, never by text.
+
+**Unusable captures are surfaced, not skipped.** A snapshot fails closed (`failed_closed = True`, no
+events, its problems) on a payload hash mismatch or an unknown or conflicting odds format.
+- `consensus_for_event` returns the latest usable observation. Newer snapshots that mention the event
+  but failed closed, or whose response lacked the event (`EVENT_ABSENT`), are listed in
+  `newer_unusable`, so an older result is never passed off as the latest capture.
+- When only unusable observations exist, the newest one is returned with no events.
+- `consensus_series_for_event` keeps failed-closed snapshots in the series.
+
+### Cost bounds (the Terminal calls these per request)
+
+- Snapshots are located through a metadata-only index: id and receipt time, with an SQLite `instr`
+  pre-filter on the event id. Payloads are loaded **one at a time**.
+- `consensus_for_event` walks newest first and stops at the first snapshot that holds the event. It
+  parses only that snapshot and any newer unusable ones, and only the requested event is parsed out of
+  each. The cost does not grow with the number of stored snapshots.
+- The readiness report counts through SQL. It parses at most `CONSENSUS_SAMPLE` (8) of the newest odds
+  reads with offers, and says so in its reason.
+- The evidence store has no public metadata-only or aggregate read, and `storage.py` is outside this
+  lane. Both modules therefore use the read-only store's own connection (`mode=ro`, `query_only`) for
+  SELECTs only. A public `snapshot_index` read in `storage.py` would replace that.
 
 ### Versioning and hashes
 
@@ -112,8 +140,12 @@ The same inputs give byte-identical output.
 ### Labels and separation
 
 - Every consensus result carries `label = "RESEARCH BENCHMARK — NOT EXECUTABLE"` and `executable = False`.
-- `OfferedPrice` (quote as received) and `OutcomeConsensus` (probability) are different types with
-  disjoint fields. No price field holds a probability, and no probability field holds a price.
+- `OfferedPrice` and `OutcomeConsensus` are different types:
+  - `OfferedPrice` holds the quote as received and two transforms of it: the decimal odds and
+    `implied_probability_with_margin` (1 / decimal). The implied probability still contains the book's
+    margin and is never de-vigged or pooled;
+  - `OutcomeConsensus` holds the de-vigged cross-book probability and its dispersion. It has no price or
+    odds field.
 - The module has no fetch, quota, order, ledger or `ExecutableQuote` path (a test pins this).
 
 ### Readiness (`edge_lab.research_readiness`, the one owner)
@@ -126,8 +158,30 @@ decisions (rejected included), later price, consensus, and settlement/outcome li
 - Every state is computed from the evidence store and the shadow ledger (both opened read-only) and the
   experiment registry file.
 - A missing, unreadable or unspecified store makes its items UNKNOWN.
-- Zero evidence is NOT_YET, some is PARTIAL, and YES needs every counted item.
+- Zero evidence is NOT_YET, some is PARTIAL, and YES needs every counted item (the rules below). Mere
+  existence is never YES.
 - `research_ready` is YES only when every applicable prerequisite is YES.
+- **Accounts are never pooled.** The weather ledger items describe the **operational** shadow account
+  (`exp001_shadow.ACCOUNT_ID`). The research account's decision counts are reported beside them as
+  `research_*`. Fills and settlements are matched within one account only.
+
+**YES rules.** A "capture day" is any target date with a live EXP-001 capture attempt, in any phase and
+with any status.
+
+| Domain | Prerequisite | YES only when |
+|---|---|---|
+| weather | raw_evidence | every (capture day, phase) pair for pfm, decision and recheck has a complete live capture |
+| weather | market_quote_history | order-book snapshots exist **and** every capture day has both a complete decision and a complete re-check capture |
+| weather | model_estimate | every operational decision carries the model probability or records `MODEL_UNAVAILABLE` |
+| weather | decisions | the operational account has at least one decision, at least one of them rejected, **and** every day with a complete decision capture has a recorded decision (an unreadable store caps this at PARTIAL) |
+| weather | later_price | every decided Kalshi market (operational) has a CAPTURED observation in a later phase (+1 h, +6 h, pre-close, close, before settlement) |
+| weather | settlement_linkage | every decided event (operational) has a filled position settled in the same account |
+| sports | raw_evidence | every stored odds read holds offers **and** none of the sampled reads failed closed |
+| sports | market_quote_history | at least one CAPTURED Odds API target, no MISSED or FAILED target, **and** at least one Polymarket US snapshot |
+| sports | model_estimate, decisions | as for weather, over sports decisions (none exist: NOT_YET) |
+| sports | later_price | every event whose latest pre-close target (by instant) is final was CAPTURED there |
+| sports | consensus | every sampled odds read with offers yields at least one SUPPORTED proposition (sample: the newest 8) |
+| sports | settlement_linkage | never YES yet: no outcome linkage exists (P1-5) |
 - Weather's lifecycle is the registry's EXP-001 status. Sports' lifecycle is derived from its evidence
   (NO_EVIDENCE_YET or DATA_COLLECTION). The directive's example states are not hard-coded.
 - The gap ids (P0-1, P1-1, P1-5, P2-6) are those of `LEARNING_HISTORY_COVERAGE.md`.
@@ -171,14 +225,19 @@ A weighted consensus belongs in a preregistered experiment with its own version.
   captured later phase. The counts are shown so a reader can judge.
 - Recently decided markets and events that are not yet due keep items PARTIAL. It is conservative on
   purpose.
-- The benchmark parses every stored odds snapshot on demand. At pilot volumes (tens of snapshots a week)
-  this is cheap. At much higher volume it would need an index or a cache keyed by `input_sha256`.
+- Snapshots are parsed on demand, one at a time and only as far as a read needs.
+  - An event read costs one event of one snapshot, plus any newer unusable ones.
+  - A series read and the CLI's `--since` read parse every matching snapshot.
+  - The readiness consensus item is a sample of 8. Its reason names the sample.
+- The metadata index still reads a row per stored snapshot, and the `instr` pre-filter scans stored
+  JSON inside SQLite. Both are linear in C, with no payload in Python memory.
 
 ## Reconsider when
 
 - A three-way market (soccer, or NFL with ties as an outcome) becomes a research target: add explicit
   three-way math and a version bump.
 - A preregistered experiment needs weighting, a different de-vig, or alternate lines.
-- Snapshot volume makes on-demand parsing slow: add a derived cache keyed by `input_sha256`.
+- Snapshot volume makes on-demand parsing slow: add a derived cache keyed by `input_sha256`, and a
+  public metadata read in `storage.py`.
 - Polymarket US or scores capture changes what counts as market or outcome history for sports.
 - `LEARNING_HISTORY_COVERAGE.md` adds a prerequisite or a domain.

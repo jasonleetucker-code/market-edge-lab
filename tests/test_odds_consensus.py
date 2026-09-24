@@ -350,9 +350,13 @@ def test_point_in_time_reads_use_only_snapshots_received_by_as_of(store):
     assert oc.consensus_for_event(store, "g1", T0 - timedelta(seconds=1)) is None
     at_t0 = oc.consensus_for_event(store, "g1", T0)
     assert at_t0.snapshot_id == s1 and [e.event_id for e in at_t0.events] == ["g1"]
-    assert at_t0.as_of_utc == iso(T0) and at_t0.freshness_as_of is Freshness.FRESH
+    assert at_t0.as_of_utc == iso(T0) and at_t0.receipt_freshness_as_of is Freshness.FRESH
+    # every book lacks last_update: the displayed freshness is UNKNOWN, never FRESH (SF-1)
+    assert at_t0.freshness_at_receipt is Freshness.UNKNOWN and at_t0.freshness_as_of is Freshness.UNKNOWN
     later = oc.consensus_for_event(store, "the_odds_api:g1", T0 + timedelta(hours=9))
-    assert later.snapshot_id == s2 and later.freshness_as_of is Freshness.STALE
+    assert later.snapshot_id == s2 and later.receipt_freshness_as_of is Freshness.STALE
+    assert later.freshness_as_of is Freshness.UNKNOWN  # UNKNOWN ranks worse than STALE
+    assert later.newer_unusable == ()
     series = oc.consensus_series_for_event(store, "g1", as_of=T0 + timedelta(hours=9))
     assert [s.snapshot_id for s in series] == [s1, s2]
     with pytest.raises(oc.PointInTimeError):
@@ -362,6 +366,70 @@ def test_point_in_time_reads_use_only_snapshots_received_by_as_of(store):
     assert oc.consensus_for_snapshot(store, 999) is None
     assert [s.snapshot_id for s in oc.consensus_since(store, T0 + timedelta(hours=1))] == [s2, s2 + 1]
     assert [s.snapshot_id for s in oc.consensus_since(store, as_of=T0 + timedelta(hours=6))] == [s1, s2]
+
+
+def test_display_freshness_is_the_worst_of_receipt_age_and_every_book(store):
+    fresh = [book(k, [h2h(-110, -110, last_update=iso(T0 - timedelta(minutes=1)))]) for k in ("a", "b")]
+    unknown = [book(k, [h2h(-110, -110)]) for k in ("a", "b")]
+    mixed = fresh + [book("c", [h2h(-110, -110, last_update=iso(T0 - timedelta(hours=1)))])]
+    save(store, [event("fresh", fresh), event("unknown", unknown), event("mixed", mixed)], at=T0)
+    at = T0 + timedelta(minutes=2)
+    ok = oc.consensus_for_event(store, "fresh", at)
+    assert (ok.receipt_freshness_as_of, ok.freshness_at_receipt, ok.freshness_as_of) == (Freshness.FRESH,) * 3
+    assert ok.events[0].freshness_at_receipt is Freshness.FRESH
+    blind = oc.consensus_for_event(store, "unknown", at)
+    assert blind.receipt_freshness_as_of is Freshness.FRESH  # the receipt alone looks fine ...
+    assert blind.events[0].freshness_at_receipt is Freshness.UNKNOWN
+    assert blind.freshness_as_of is Freshness.UNKNOWN  # ... but what a display reads is UNKNOWN
+    assert oc.consensus_for_event(store, "mixed", at).freshness_as_of is Freshness.STALE
+    whole = oc.consensus_for_snapshot(store, 1, as_of=at)
+    assert whole.freshness_at_receipt is Freshness.UNKNOWN and whole.freshness_as_of is Freshness.UNKNOWN
+    old = oc.consensus_for_event(store, "fresh", T0 + timedelta(hours=2))
+    assert old.freshness_at_receipt is Freshness.FRESH and old.freshness_as_of is Freshness.STALE
+    # an event with no proposition at all is UNKNOWN, never FRESH
+    single = [book("a", [market("h2h", [("Home", 2.5), ("Away", 3.0), ("Draw", 3.2)],
+                                last_update=iso(T0))])]
+    save(store, [event("threeway", single)], at=T0)
+    assert oc.consensus_for_event(store, "threeway", at).freshness_as_of is Freshness.UNKNOWN
+
+
+def test_consensus_for_event_parses_only_what_it_needs(store, monkeypatch):
+    books = [book("a", [h2h(-110, -110)]), book("b", [h2h(-120, 100)])]
+    for i in range(30):
+        save(store, [event("g1", books), event(f"other{i}", books)], at=T0 + timedelta(minutes=i))
+    for i in range(10):
+        save(store, [event(f"noise{i}", books)], at=T0 + timedelta(hours=1, minutes=i))
+    parsed = []
+    real = oc.build_snapshot_consensus
+    monkeypatch.setattr(oc, "build_snapshot_consensus", lambda row, **kw: parsed.append(row["id"]) or real(row, **kw))
+    result = oc.consensus_for_event(store, "g1", T0 + timedelta(hours=3))
+    assert result.snapshot_id == 30 and parsed == [30]  # newest holding the event; nothing else parsed
+    parsed.clear()
+    assert oc.consensus_for_event(store, "g1", T0 + timedelta(minutes=9, seconds=30)).snapshot_id == 10
+    assert parsed == [10]
+    parsed.clear()
+    assert oc.consensus_for_event(store, "absent", T0 + timedelta(hours=3)) is None and parsed == []
+
+
+def test_a_newer_unusable_capture_is_surfaced_not_silently_skipped(store):
+    books = [book("a", [h2h(-110, -110)]), book("b", [h2h(-120, 100)])]
+    good = save(store, [event("g1", books)], at=T0)
+    target = [{"target_id": "t", "event_id": "g1", "offset": "T-60m", "target_utc": iso(T0)}]
+    absent = save(store, [event("g2", books)], at=T0 + timedelta(hours=1), targets=target)
+    broken = save(store, [event("g1", books)], at=T0 + timedelta(hours=2), request=False, url_fmt=False)
+    result = oc.consensus_for_event(store, "g1", T0 + timedelta(hours=3))
+    assert result.snapshot_id == good and not result.failed_closed
+    assert [u.snapshot_id for u in result.newer_unusable] == [broken, absent]
+    assert result.newer_unusable[0].problems[0].startswith("ODDS_FORMAT_UNKNOWN")
+    assert result.newer_unusable[1].problems[-1].startswith("EVENT_ABSENT")
+    assert "newer_unusable" in result.to_dict()
+    series = oc.consensus_series_for_event(store, "g1", as_of=T0 + timedelta(hours=3))
+    assert [(s.snapshot_id, s.failed_closed) for s in series] == [(good, False), (broken, True)]
+    only_bad = SnapshotStore(Path(store.path).with_name("bad.sqlite3"))
+    only_bad.start_run("run-1")
+    sid = save(only_bad, [event("g1", books)], request=False, url_fmt=False)
+    lone = oc.consensus_for_event(only_bad, "g1", T0 + timedelta(hours=1))
+    assert lone.snapshot_id == sid and lone.failed_closed and lone.events == () and lone.newer_unusable == ()
 
 
 def test_capture_targets_from_the_stored_request_are_attached_per_event(store):
@@ -462,6 +530,21 @@ def test_cli_prints_or_writes_a_read_only_artifact(store, tmp_path):
     assert code == 1 and json.loads(out)["state"] == "NOT_KNOWABLE_AT_AS_OF"
     assert run_cli(["odds", "consensus", "--db", str(tmp_path / "missing.sqlite3")])[0] == 1
     assert hashlib.sha256(Path(db).read_bytes()).hexdigest() == before  # the store was not written
+
+
+def test_an_event_read_matches_the_full_snapshot_and_ignores_the_callers_decimal_context(store):
+    books = [book("a", [h2h(-150, 130), spread(3.5)]), book("b", [h2h(-140, 120), spread(3.5, -105, -115)])]
+    sid = save(store, [event("g1", books), event("g2", books)])
+    full = oc.consensus_for_snapshot(store, sid)
+    one = oc.consensus_for_event(store, "g2", T0)
+    assert [oc._plain(p) for p in props(one)] == [oc._plain(p) for e in full.events if e.event_id == "g2"
+                                                  for p in e.propositions]
+    snap = oa.parse_odds([event("g1", books)], odds_format="american")
+    baseline = oa.consensus_by_market(snap)
+    with localcontext() as ctx:
+        ctx.prec = 6
+        assert oa.consensus_by_market(snap) == baseline
+        assert oc.consensus_for_snapshot(store, sid).output_sha256 == full.output_sha256
 
 
 def test_receipt_order_uses_instants_not_text(store):

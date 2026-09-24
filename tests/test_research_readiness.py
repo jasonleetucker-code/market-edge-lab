@@ -21,7 +21,8 @@ from edge_lab.storage import SnapshotStore
 UTC = timezone.utc
 T0 = datetime(2026, 9, 24, 21, 55, tzinfo=UTC)
 NOW = T0 + timedelta(days=2)
-ACC = "EXP-001-stage-b-research"
+ACC = "EXP-001-stage-b-shadow"  # the operational account the weather items describe
+RES = "EXP-001-stage-b-research"
 SPORT = "americanfootball_nfl"
 Y, P, N, U, NA = (rr.Readiness.YES, rr.Readiness.PARTIAL, rr.Readiness.NOT_YET, rr.Readiness.UNKNOWN,
                   rr.Readiness.NOT_APPLICABLE)
@@ -49,8 +50,10 @@ def store(tmp_path):
 @pytest.fixture
 def ledger(tmp_path):
     lg = ShadowLedger(tmp_path / "ledger.sqlite3")
-    lg.open_account(ACC, starting_bankroll=Decimal("100.00"), strategy="test", opened_at_utc=iso(T0 - timedelta(days=1)),
-                    sizing_policy_id="s", fill_policy_id="f", fee_schedule_id="kalshi-quadratic-taker-v1")
+    for account in (ACC, RES):
+        lg.open_account(account, starting_bankroll=Decimal("100.00"), strategy="test",
+                        opened_at_utc=iso(T0 - timedelta(days=1)), sizing_policy_id="s", fill_policy_id="f",
+                        fee_schedule_id="kalshi-quadratic-taker-v1")
     return lg
 
 
@@ -84,23 +87,27 @@ def snapshot(store, source: str, kind: str, payload: dict | None = None, *, url:
 
 
 def decide(lg, n: int, *, qualification: str = "REJECT", market: str | None = None, model: bool = True,
-           event: str = "weather:us-nyc-central-park:daily-max-temp-f:2026-09-24", account: str = ACC) -> None:
+           event: str = "weather:us-nyc-central-park:daily-max-temp-f:2026-09-24", account: str = ACC,
+           day: str = "2026-09-24") -> None:
     lg.record_decision(account, {
         "decision_id": f"d{n}", "opportunity_id": f"o{n}", "as_of_utc": iso(T0), "qualification": qualification,
         "reason": "QUALIFY" if qualification == "QUALIFY" else "NO_EDGE", "event_id": event,
         "market_id": market or f"kalshi:KXHIGHNY-26SEP24-B{n}", "side": "YES", "outcome_cluster": event,
+        "slot": f"{day}|kalshi:KXHIGHNY-26SEP24-B{n}|YES",
         "opportunity": {"model_probability": "0.42" if model else None}})
 
 
-def fill_and_settle(lg, n: int, *, event: str = "weather:us-nyc-central-park:daily-max-temp-f:2026-09-24") -> None:
+def fill_and_settle(lg, n: int, *, event: str = "weather:us-nyc-central-park:daily-max-temp-f:2026-09-24",
+                    account: str = ACC, settle: bool = True) -> None:
     cost = FEES.taker_buy(1, Decimal("0.40"))
     market = f"kalshi:KXHIGHNY-26SEP24-B{n}"
-    lg.record_fill(ACC, {"fill_id": f"f{n}", "decision_id": f"d{n}", "venue": "kalshi", "market_id": market,
+    lg.record_fill(account, {"fill_id": f"f{n}", "decision_id": f"d{n}", "venue": "kalshi", "market_id": market,
                          "event_id": event, "outcome_cluster": event, "side": "YES", "filled_at_utc": iso(T0),
                          "status": "FILLED", "reason": "FILLED", "quantity": 1, "price": "0.40",
                          "fee": str(cost.fee), "total_cost": str(cost.total_cost)})
-    lg.record_settlement(ACC, fill_id=f"f{n}", outcome="NO", evidence={"test": n},
-                         settled_at_utc=iso(T0 + timedelta(hours=14)))
+    if settle:
+        lg.record_settlement(account, fill_id=f"f{n}", outcome="NO", evidence={"test": n},
+                             settled_at_utc=iso(T0 + timedelta(hours=14)))
 
 
 def later(store, market: str, phase: str = "pre_close", status: str = "CAPTURED") -> None:
@@ -185,16 +192,21 @@ def test_weather_counts_come_from_the_stores(store, ledger, experiments):
     later(store, "kalshi:KXHIGHNY-26SEP24-B3", phase="recheck")  # not a later phase
     w = by_domain(report(store, ledger, experiments))["weather"]
     got = {p.key: p for p in w.prerequisites}
-    assert got["raw_evidence"].state is Y and dict(got["raw_evidence"].counts)["not_complete_decision"] == 1
-    assert got["market_quote_history"].state is Y and got["market_quote_history"].evidence_count == 1
+    # 2026-09-23 had a live attempt (partial decision) and nothing complete: a gap, not ignored (SF-4)
+    raw = got["raw_evidence"]
+    assert raw.state is P and raw.reason.startswith("3 of 6") and dict(raw.counts)["not_complete_decision"] == 1
+    assert dict(raw.counts)["capture_days"] == 2 and dict(raw.counts)["complete_days_pfm"] == 1
+    assert got["market_quote_history"].state is P and got["market_quote_history"].reason.startswith("1 of 2")
     assert got["model_estimate"].state is P and got["model_estimate"].evidence_count == 2
     assert got["decisions"].state is Y and dict(got["decisions"].counts) == {
-        "accounts": 1, "decisions": 3, "qualified": 1, "rejected": 2}
+        "decisions": 3, "qualified": 1, "rejected": 2, "research_decisions": 0, "research_qualified": 0,
+        "research_rejected": 0, "decision_capture_days": 1, "days_without_decision": 0}
     assert got["later_price"].state is P and got["later_price"].reason.startswith("1 of 3")
     assert dict(got["later_price"].counts)["later_missed_or_failed"] == 1 and got["later_price"].coverage_ref == "P0-1"
     assert got["settlement_linkage"].state is Y  # the one decided event was settled through a held position
     assert got["consensus"].state is NA
     assert w.research_ready.state is N and "model_estimate" in w.research_ready.reason
+    assert w.research_ready.state is N and "raw_evidence" in w.research_ready.reason
 
 
 def test_weather_rejected_only_events_are_not_linked_and_no_rejects_is_partial(store, ledger, experiments):
@@ -206,6 +218,7 @@ def test_weather_rejected_only_events_are_not_linked_and_no_rejects_is_partial(s
     lg2 = ShadowLedger(Path(ledger.path).with_name("l2.sqlite3"))
     lg2.open_account(ACC, starting_bankroll=Decimal("100"), strategy="t", opened_at_utc=iso(T0 - timedelta(days=1)),
                      sizing_policy_id="s", fill_policy_id="f", fee_schedule_id="k")
+    forward(store, "decision")
     decide(lg2, 1, qualification="QUALIFY", account=ACC)
     got = {p.key: p for p in by_domain(report(store, lg2, experiments))["weather"].prerequisites}
     assert got["decisions"].state is P  # no rejected decision: cannot show rejects are kept
@@ -241,7 +254,8 @@ def test_sports_from_odds_targets_consensus_and_polymarket(store, ledger, experi
     target(store, "g2-60m", "g2", "60m", start - timedelta(minutes=60), None)  # still PLANNED: not due
     s = by_domain(report(store, ledger, experiments))["sports"]
     got = {p.key: p for p in s.prerequisites}
-    assert got["raw_evidence"].state is Y and dict(got["raw_evidence"].counts)["odds_snapshots"] == 2
+    # one of the two stored paid reads held no offers: PARTIAL, not YES (SF-4)
+    assert got["raw_evidence"].state is P and dict(got["raw_evidence"].counts)["odds_snapshots"] == 2
     assert dict(got["raw_evidence"].counts)["odds_snapshots_with_offers"] == 1
     assert got["market_quote_history"].state is P and "Polymarket US" in got["market_quote_history"].reason
     assert "1 targets missed" in got["market_quote_history"].reason
@@ -281,7 +295,7 @@ def test_report_is_read_only_and_the_cli_prints_json_and_text(store, ledger, exp
     assert code == 0 and out["schema"] == rr.SCHEMA and out["version"] == rr.READINESS_VERSION
     assert [d["domain"] for d in out["domains"]] == ["weather", "sports"]
     raw = out["domains"][0]["prerequisites"][0]
-    assert raw["key"] == "raw_evidence" and raw["state"] == "YES" and raw["counts"]["complete_pfm"] == 1
+    assert raw["key"] == "raw_evidence" and raw["state"] == "YES" and raw["counts"]["complete_days_pfm"] == 1
     buf = io.StringIO()
     with redirect_stdout(buf):
         assert rr.main(["--db", str(store.path), "--text", "--experiments", str(experiments)],
@@ -324,3 +338,46 @@ def test_a_read_with_a_parse_problem_still_counts_as_holding_offers(store, ledge
     odds_snapshot(store, [bad])
     got = {p.key: p for p in by_domain(report(store, ledger, experiments))["sports"].prerequisites}
     assert got["raw_evidence"].state is Y and got["consensus"].state is N  # one clean book left: no consensus
+
+
+def test_accounts_are_never_pooled_and_settlement_matches_within_the_account(store, ledger, experiments):
+    forward(store, "decision")
+    for account in (ACC, RES):  # the same opportunity is recorded in both accounts
+        decide(ledger, 1, qualification="QUALIFY", account=account)
+        decide(ledger, 2, account=account)
+    fill_and_settle(ledger, 1, account=RES)  # only the research account holds and settles B1
+    fill_and_settle(ledger, 1, account=ACC, settle=False)  # the operational account holds it, unsettled
+    got = {p.key: p for p in by_domain(report(store, ledger, experiments))["weather"].prerequisites}
+    counts = dict(got["decisions"].counts)
+    assert counts["decisions"] == 2 and counts["research_decisions"] == 2  # not 4
+    link = got["settlement_linkage"]
+    assert link.state is N and dict(link.counts)["events_settled"] == 0  # the research settlement is not borrowed
+    assert dict(link.counts)["events_with_filled_position"] == 1
+
+
+def test_decisions_missing_for_a_capture_day_are_partial(store, ledger, experiments):
+    forward(store, "decision")
+    forward(store, "decision", day="2026-09-25")
+    decide(ledger, 1, qualification="QUALIFY")
+    decide(ledger, 2)
+    got = {p.key: p for p in by_domain(report(store, ledger, experiments))["weather"].prerequisites}
+    assert got["decisions"].state is P and "1 of 2 complete decision-capture days" in got["decisions"].reason
+    no_store = {p.key: p for p in by_domain(rr.build_report(Path(store.path).with_name("none.sqlite3"),
+                                                            ledger.path, now=NOW, experiments_root=experiments)
+                                            )["weather"].prerequisites}
+    assert no_store["decisions"].state is P and "capture days unknown" in no_store["decisions"].reason
+
+
+def test_readiness_parses_a_bounded_sample_of_odds_reads(store, ledger, experiments, monkeypatch):
+    from edge_lab import odds_consensus
+
+    for i in range(rr.CONSENSUS_SAMPLE + 7):
+        odds_snapshot(store, [odds_event(f"g{i}")], at=T0 + timedelta(minutes=i))
+    calls = []
+    real = odds_consensus.consensus_for_snapshot
+    monkeypatch.setattr(odds_consensus, "consensus_for_snapshot",
+                        lambda st, sid, **kw: calls.append(sid) or real(st, sid, **kw))
+    got = {p.key: p for p in by_domain(report(store, ledger, experiments))["sports"].prerequisites}
+    assert len(calls) == rr.CONSENSUS_SAMPLE and max(calls) == rr.CONSENSUS_SAMPLE + 7  # the newest ones only
+    assert got["raw_evidence"].state is Y and dict(got["raw_evidence"].counts)["odds_snapshots_with_offers"] == rr.CONSENSUS_SAMPLE + 7
+    assert got["consensus"].state is Y and f"the newest {rr.CONSENSUS_SAMPLE} of {rr.CONSENSUS_SAMPLE + 7}" in got["consensus"].reason

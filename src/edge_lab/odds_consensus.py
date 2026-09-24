@@ -23,7 +23,13 @@ RESEARCH BENCHMARK — NOT EXECUTABLE. Everything here is derived, read-only and
 - **Freshness:** per book, its market `last_update` (else the bookmaker's `last_update`)
   against the registry's odds max age, judged at the snapshot's receipt time; the proposition
   takes the worst of its books (`freshness.combine`). Unknown stays unknown.
-- **Point in time:** a consensus "as of T" uses only snapshots received at or before T.
+  Snapshot and event roll-ups (`freshness_at_receipt`) are the worst of what they show, UNKNOWN
+  when nothing is shown; a point-in-time read's `freshness_as_of` is the worst of that and the
+  receipt age at as_of, so it is never FRESH while any contributing book is stale or unknown.
+- **Point in time:** a consensus "as of T" uses only snapshots received at or before T. Newer
+  captures of an event that were unusable are surfaced (`newer_unusable`), never skipped silently.
+- **Bounded cost:** a metadata index, one payload in memory at a time; an event read parses only
+  the newest snapshot holding the event (and newer unusable ones), and only that event.
 - **Versioned and hashed:** `CONSENSUS_VERSION`; `input_sha256` identifies the exact inputs
   (stored payload hash, receipt time, odds format, version, parameters); `output_sha256` the
   derived content. The same inputs always give the same bytes.
@@ -40,9 +46,10 @@ import json
 import os
 import sys
 import uuid
+from contextlib import closing
 from dataclasses import dataclass, fields, is_dataclass, replace
 from datetime import datetime, timezone
-from decimal import ROUND_HALF_EVEN, Context, Decimal, localcontext
+from decimal import Decimal, localcontext
 from enum import Enum
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
@@ -63,7 +70,7 @@ MIN_BOOKS = 2  # definitional: one book's de-vig is not a cross-book consensus (
 SOURCE = get_source(odds_api.SOURCE_ID).legacy_name
 KIND = "odds"
 ODDS_MAX_AGE = get_source(odds_api.SOURCE_ID).max_age["odds"]
-_DECIMAL_CONTEXT = Context(prec=28, rounding=ROUND_HALF_EVEN)
+_DECIMAL_CONTEXT = odds_api.CONSENSUS_DECIMAL_CONTEXT
 UTC = timezone.utc
 
 
@@ -196,6 +203,18 @@ class EventConsensus:
     propositions: tuple[PropositionConsensus, ...]
     unsupported: tuple[UnsupportedGroup, ...]
     capture_targets: tuple[CaptureTarget, ...]
+    freshness_at_receipt: Freshness = Freshness.UNKNOWN  # worst of its propositions; UNKNOWN when none
+
+
+@dataclass(frozen=True)
+class UnusableCapture:
+    """A newer stored observation that mentions the event but gives it no usable consensus:
+    it failed closed (hash mismatch, unknown odds format, unknown receipt time) or the provider's
+    response did not include the event. Shown so an older result is never passed off as latest."""
+
+    snapshot_id: int
+    received_at_utc: str | None
+    problems: tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -213,8 +232,19 @@ class SnapshotConsensus:
     problems: tuple[str, ...]
     input_sha256: str
     output_sha256: str = ""
+    # True when the snapshot could not be used at all (payload hash mismatch, unknown or
+    # conflicting odds format): `events` is empty and `problems` says why.
+    failed_closed: bool = False
+    # Worst of the events' freshness (each the worst of its books, judged at receipt); UNKNOWN
+    # when there is no proposition at all. Unknown and stale propagate (freshness.combine).
+    freshness_at_receipt: Freshness = Freshness.UNKNOWN
     as_of_utc: str | None = None  # set only by point-in-time reads
-    freshness_as_of: Freshness | None = None  # the receipt time judged at as_of_utc
+    receipt_freshness_as_of: Freshness | None = None  # the receipt time alone, judged at as_of_utc
+    # What a display at as_of_utc must show: the worst of receipt_freshness_as_of and
+    # freshness_at_receipt. Never FRESH while any contributing book is stale or unknown.
+    freshness_as_of: Freshness | None = None
+    # Point-in-time event reads only: newer observations of the event that were unusable.
+    newer_unusable: tuple[UnusableCapture, ...] = ()
     schema: str = SCHEMA
     consensus_version: str = CONSENSUS_VERSION
     label: str = LABEL
@@ -373,9 +403,14 @@ def _input_sha256(snapshot_id: int, payload_sha256: str | None, received: str | 
         "payload_sha256": payload_sha256, "received_at_utc": received, "odds_format": fmt}))
 
 
+_VOLATILE = ("output_sha256", "as_of_utc", "receipt_freshness_as_of", "freshness_as_of", "newer_unusable")
+
+
 def _sealed(result: SnapshotConsensus) -> SnapshotConsensus:
+    """Roll freshness up (worst of the events shown; UNKNOWN when none) and hash the content."""
+    result = replace(result, freshness_at_receipt=combine(*(e.freshness_at_receipt for e in result.events)))
     body = result.to_dict()
-    for volatile in ("output_sha256", "as_of_utc", "freshness_as_of"):
+    for volatile in _VOLATILE:
         body.pop(volatile, None)
     return replace(result, output_sha256=sha256_hex(canonical_json(body)))
 
@@ -383,17 +418,19 @@ def _sealed(result: SnapshotConsensus) -> SnapshotConsensus:
 # --------------------------------------------------------------------------- builders
 
 
-def build_snapshot_consensus(row: Mapping[str, Any]) -> SnapshotConsensus:
+def build_snapshot_consensus(row: Mapping[str, Any], *, event_id: str | None = None) -> SnapshotConsensus:
     """The benchmark for one stored odds snapshot row (`id`, `fetched_at_utc`, `url`,
     `payload_sha256`, `payload_json`). Pure: no store, no clock, no network.
 
     Fails closed, with a problem and no events, when the stored payload does not match its
-    stored hash or its odds format is not stated by the stored request or URL."""
+    stored hash or its odds format is not stated by the stored request or URL. With `event_id`,
+    only that event is parsed (the integrity and format checks still cover the whole payload),
+    so an event read costs one event, not the whole slate."""
     with localcontext(_DECIMAL_CONTEXT):
-        return _build(row)
+        return _build(row, None if event_id is None else _native(str(event_id)))
 
 
-def _build(row: Mapping[str, Any]) -> SnapshotConsensus:
+def _build(row: Mapping[str, Any], only: str | None) -> SnapshotConsensus:
     snapshot_id = int(row["id"])
     received_dt = parse_utc(row["fetched_at_utc"])
     received = _iso(received_dt)
@@ -405,7 +442,7 @@ def _build(row: Mapping[str, Any]) -> SnapshotConsensus:
     if sha256_hex(text) != stored_sha:
         problems.append("PAYLOAD_HASH_MISMATCH: the stored payload does not match its stored sha256; not used")
         return _sealed(SnapshotConsensus(snapshot_id, received, stored_sha, None, None, None, None, (), tuple(problems),
-                                         _input_sha256(snapshot_id, stored_sha, received, None)))
+                                         _input_sha256(snapshot_id, stored_sha, received, None), failed_closed=True))
     payload = json.loads(text)
     payload = payload if isinstance(payload, Mapping) else {}
     request = payload.get("request") if isinstance(payload.get("request"), Mapping) else {}
@@ -418,8 +455,11 @@ def _build(row: Mapping[str, Any]) -> SnapshotConsensus:
                 input_sha256=_input_sha256(snapshot_id, stored_sha, received, fmt))
     if fmt is None:
         problems.append(fmt_problem or "ODDS_FORMAT_UNKNOWN")
-        return _sealed(SnapshotConsensus(events=(), problems=tuple(problems), **base))  # type: ignore[arg-type]
+        return _sealed(SnapshotConsensus(events=(), problems=tuple(problems), failed_closed=True,  # type: ignore[arg-type]
+                                         **base))
     raw_events = payload.get("events")
+    if only is not None and isinstance(raw_events, list):
+        raw_events = [e for e in raw_events if isinstance(e, Mapping) and str(e.get("id")) == only]
     parsed = odds_api.parse_odds(raw_events, odds_format=fmt, received_at_utc=received,
                                  evidence_id=f"snapshot:{snapshot_id}")
     problems += [f"PARSE: {p}" for p in parsed.problems]
@@ -449,7 +489,8 @@ def _build(row: Mapping[str, Any]) -> SnapshotConsensus:
             native, text("sport_key"), text("sport_title"), text("home_team"), text("away_team"),
             _iso(raw.get("commence_time")),
             len({b.get("key") for b in raw.get("bookmakers") or [] if isinstance(b, Mapping) and b.get("key")}),
-            tuple(props.get(native, ())), unsupported.get(native, ()), _targets(request, native)))
+            tuple(props.get(native, ())), unsupported.get(native, ()), _targets(request, native),
+            combine(*(p.freshness_at_receipt for p in props.get(native, ())))))
     events.sort(key=lambda e: (e.commence_time_utc or "", e.event_id))
     return _sealed(SnapshotConsensus(events=tuple(events), problems=tuple(problems), **base))  # type: ignore[arg-type]
 
@@ -465,22 +506,45 @@ def _check_as_of(as_of: datetime | None) -> datetime | None:
 def _at(result: SnapshotConsensus, as_of: datetime | None) -> SnapshotConsensus:
     if as_of is None:
         return result
-    return replace(result, as_of_utc=_iso(as_of),
-                   freshness_as_of=assess(result.received_at_utc, max_age=ODDS_MAX_AGE, now=as_of))
+    receipt = assess(result.received_at_utc, max_age=ODDS_MAX_AGE, now=as_of)
+    return replace(result, as_of_utc=_iso(as_of), receipt_freshness_as_of=receipt,
+                   freshness_as_of=combine(receipt, result.freshness_at_receipt))
 
 
-def _rows(store: Any) -> list[Mapping[str, Any]]:
-    """Every stored odds snapshot, oldest receipt first (ties by id). Read-only."""
-    rows = list(store.snapshots_of_kind(source=SOURCE, kind=KIND))
-    floor = datetime.min.replace(tzinfo=UTC)  # unknown receipt times first; never "known by T"
-    return sorted(rows, key=lambda r: (parse_utc(r["fetched_at_utc"]) or floor, int(r["id"])))
+_FLOOR = datetime.min.replace(tzinfo=UTC)  # unknown receipt times sort first and are never "known by T"
 
 
-def _known_at(row: Mapping[str, Any], as_of: datetime | None) -> bool:
-    received = parse_utc(row["fetched_at_utc"])
+def _index(store: Any, needle: str | None = None) -> list[tuple[datetime | None, int]]:
+    """(receipt instant, id) of every stored odds snapshot, oldest first, WITHOUT loading any
+    payload into Python. `needle` narrows to snapshots whose stored JSON contains that text
+    (SQLite `instr`), a cheap pre-filter that is always confirmed by parsing.
+
+    The evidence store has no public metadata-only read, and `storage.py` is outside this
+    module's lane, so this uses the store's own connection. A read-only store (`open_readonly`)
+    gives a `mode=ro`, `query_only` connection; nothing here writes."""
+    sql = "SELECT id, fetched_at_utc FROM snapshots WHERE source = ? AND kind = ?"
+    params: list[Any] = [SOURCE, KIND]
+    if needle is not None:
+        sql += " AND instr(payload_json, ?) > 0"
+        params.append(needle)
+    with closing(store._connect()) as conn:
+        rows = conn.execute(sql, params).fetchall()
+    return sorted(((parse_utc(r[1]), int(r[0])) for r in rows), key=lambda t: (t[0] or _FLOOR, t[1]))
+
+
+def _load(store: Any, snapshot_id: int) -> Mapping[str, Any] | None:
+    """One stored snapshot row, payload included: one payload in memory at a time."""
+    return store.snapshots_by_id([snapshot_id]).get(snapshot_id)
+
+
+def _known(received: datetime | None, as_of: datetime | None) -> bool:
     if as_of is None:
         return True
     return received is not None and received <= as_of  # an unknown receipt time is never "known by T"
+
+
+def _known_at(row: Mapping[str, Any], as_of: datetime | None) -> bool:
+    return _known(parse_utc(row["fetched_at_utc"]), as_of)
 
 
 def _only_event(result: SnapshotConsensus, native: str) -> SnapshotConsensus | None:
@@ -488,6 +552,10 @@ def _only_event(result: SnapshotConsensus, native: str) -> SnapshotConsensus | N
     if not events:
         return None
     return _sealed(replace(result, events=events))
+
+
+def _needle(native: str) -> str:
+    return json.dumps(native, ensure_ascii=False)  # the id as a JSON string, as stored
 
 
 def consensus_for_snapshot(store: Any, snapshot_id: int, *, as_of: datetime | None = None
@@ -511,39 +579,76 @@ def consensus_for_snapshot(store: Any, snapshot_id: int, *, as_of: datetime | No
 def consensus_series_for_event(store: Any, event_id: str, *, as_of: datetime | None = None
                                ) -> tuple[SnapshotConsensus, ...]:
     """Every stored observation of one event received at or before `as_of` (all when None),
-    oldest first, each restricted to that event. Accepts the native or `the_odds_api:` id."""
+    oldest first, each restricted to that event. A snapshot that mentions the event but failed
+    closed is kept in the series (`failed_closed`, no events, its problems), so a gap is visible.
+    Payloads are loaded one at a time. Accepts the native or `the_odds_api:` id."""
     at = _check_as_of(as_of)
     native = _native(str(event_id))
-    needle = json.dumps(native)
     out = []
-    for row in _rows(store):
-        if not _known_at(row, at) or needle not in row["payload_json"]:  # cheap pre-filter, then parse
+    for received, sid in _index(store, _needle(native)):
+        if not _known(received, at):
             continue
-        one = _only_event(build_snapshot_consensus(row), native)
+        row = _load(store, sid)
+        if row is None:
+            continue
+        result = build_snapshot_consensus(row, event_id=native)
+        one = result if result.failed_closed else _only_event(result, native)
         if one is not None:
             out.append(_at(one, at))
     return tuple(out)
 
 
 def consensus_for_event(store: Any, event_id: str, as_of: datetime) -> SnapshotConsensus | None:
-    """The latest observation of one event received at or before `as_of`, restricted to that
-    event, or None when nothing was knowable by then. `as_of` is required (point in time)."""
+    """The latest usable observation of one event received at or before `as_of`, restricted to
+    that event. `as_of` is required (point in time).
+
+    Bounded: snapshots are walked newest first and the walk stops at the first one that holds
+    the event, so only that snapshot and any newer unusable ones are parsed. Newer observations
+    that mention the event but failed closed, or whose response lacked the event, are returned
+    in `newer_unusable`, so an older result is never passed off as the latest capture. When no
+    usable observation exists but unusable ones do, the newest unusable one is returned with no
+    events and its problems. None only when nothing mentioning the event was knowable by then."""
     if as_of is None:
         raise ValueError("as_of is required: a consensus is always as of a time")
-    series = consensus_series_for_event(store, event_id, as_of=as_of)
-    return series[-1] if series else None
+    at = _check_as_of(as_of)
+    native = _native(str(event_id))
+    unusable: list[tuple[UnusableCapture, SnapshotConsensus]] = []
+    for received, sid in reversed(_index(store, _needle(native))):
+        if not _known(received, at):
+            continue
+        row = _load(store, sid)
+        if row is None:
+            continue
+        result = build_snapshot_consensus(row, event_id=native)
+        if result.failed_closed:
+            unusable.append((UnusableCapture(sid, result.received_at_utc, result.problems), result))
+            continue
+        one = _only_event(result, native)
+        if one is None:
+            absent = f"EVENT_ABSENT: snapshot {sid} mentions event {native} but its response does not include it"
+            gap = _sealed(replace(result, events=(), problems=result.problems + (absent,)))
+            unusable.append((UnusableCapture(sid, result.received_at_utc, gap.problems), gap))
+            continue
+        return _at(replace(one, newer_unusable=tuple(u for u, _ in unusable)), at)
+    if not unusable:
+        return None
+    newest = unusable[0][1]
+    return _at(replace(newest, newer_unusable=tuple(u for u, _ in unusable[1:])), at)
 
 
 def consensus_since(store: Any, since: datetime | None = None, *, as_of: datetime | None = None
                     ) -> tuple[SnapshotConsensus, ...]:
-    """Every stored odds snapshot received at or after `since` and at or before `as_of`."""
+    """Every stored odds snapshot received at or after `since` and at or before `as_of`,
+    oldest first. Payloads are loaded one at a time."""
     start, at = _check_as_of(since), _check_as_of(as_of)
     out = []
-    for row in _rows(store):
-        received = parse_utc(row["fetched_at_utc"])
+    for received, sid in _index(store):
         if start is not None and (received is None or received < start):
             continue
-        if _known_at(row, at):
+        if not _known(received, at):
+            continue
+        row = _load(store, sid)
+        if row is not None:
             out.append(_at(build_snapshot_consensus(row), at))
     return tuple(out)
 

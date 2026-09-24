@@ -41,7 +41,7 @@ import threading
 import uuid
 from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timedelta, timezone
-from decimal import Decimal, InvalidOperation
+from decimal import ROUND_HALF_EVEN, Context, Decimal, InvalidOperation, localcontext
 from enum import Enum
 from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping, Sequence
@@ -938,8 +938,9 @@ def devig_by_market(snapshot: OddsSnapshot) -> dict[tuple[str, str, str], DevigE
     """Research-only de-vig per (event, bookmaker, market) for the supported market keys.
 
     Spreads and totals are grouped by the normalized absolute line so both sides of one line
-    pair up. This is a per-book, whole-outcome-set view (it would de-vig a three-way set too);
-    the consensus benchmark never uses it. It pools only exact complements (`pair_offers`)."""
+    pair up. This is a legacy per-book, whole-outcome-set view: it would de-vig a three-way set
+    too, and it does not check that spread sides are exact opposites. Neither consensus uses it;
+    both pool only exact two-sided complements from `pair_offers`."""
     groups: dict[tuple[str, str, str], list[OddsOffer]] = {}
     for offer in snapshot.offers:
         if offer.market_key not in SUPPORTED_MARKETS:
@@ -1066,6 +1067,8 @@ def _median(values: Sequence[Decimal]) -> Decimal:
 
 CONSENSUS_VERSION = "odds-consensus-v1"
 PAIRED_DEVIG_METHOD = "proportional_two_way_v1"
+# Fixed arithmetic for every consensus figure, whatever the caller's decimal context is.
+CONSENSUS_DECIMAL_CONTEXT = Context(prec=28, rounding=ROUND_HALF_EVEN)
 _OVER_UNDER = ("Over", "Under")
 _DRAW_NAMES = frozenset({"draw", "tie"})
 
@@ -1244,7 +1247,13 @@ def _pair_one_market(offers: list[OddsOffer]) -> tuple[list[PairedDevig], list[U
 
 def pair_offers(snapshot: OddsSnapshot) -> tuple[tuple[PairedDevig, ...], tuple[UnpairedOffer, ...]]:
     """Every clean two-sided complement per (event, bookmaker, market, exact line), and every
-    other offer with the reason it was left out. Deterministic: sorted, never order-dependent."""
+    other offer with the reason it was left out. Deterministic: sorted, never order-dependent,
+    and computed in CONSENSUS_DECIMAL_CONTEXT whatever the caller's decimal context is."""
+    with localcontext(CONSENSUS_DECIMAL_CONTEXT):
+        return _pair_offers(snapshot)
+
+
+def _pair_offers(snapshot: OddsSnapshot) -> tuple[tuple[PairedDevig, ...], tuple[UnpairedOffer, ...]]:
     groups: dict[tuple[str, str, str], list[OddsOffer]] = {}
     for offer in snapshot.offers:
         groups.setdefault((offer.event_id, offer.bookmaker, offer.market_key), []).append(offer)
@@ -1294,6 +1303,12 @@ def consensus_by_market(snapshot: OddsSnapshot, *, min_books: int = 2
     bounds, versioned hashes, point-in-time reads) is `edge_lab.odds_consensus`."""
     if min_books < 2:
         raise ValueError("a consensus needs at least two books")
+    with localcontext(CONSENSUS_DECIMAL_CONTEXT):
+        return _consensus_by_market(snapshot, min_books)
+
+
+def _consensus_by_market(snapshot: OddsSnapshot, min_books: int
+                         ) -> dict[tuple[str, str, tuple[tuple[str, str | None], ...]], ConsensusEstimate]:
     out = {}
     for key, rows in group_propositions(pair_offers(snapshot)[0]).items():
         books = tuple(p.bookmaker for p in rows)
