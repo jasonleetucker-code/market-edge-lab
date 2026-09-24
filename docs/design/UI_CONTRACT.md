@@ -187,6 +187,17 @@ same-side observations); our assessment (never 50% for unknown); across venues (
 equivalence claimed without evidence); capital & timing; decision preview marked **Read-only ·
 Trading disabled**; rules & evidence disclosure. Desktop: main column + 320px inspector.
 
+*Across venues* renders `best_price.compare` (ADR 0027) for the page's side at the recorded
+decision's time and evaluated size; no size is ever entered. Its four claims (best observed
+quote, best gross cost for size, best verified total cost, best account-feasible route) are
+shown side by side, each with its own figure or its reason for absence; there is never one
+"best" verdict. Routes ranked by at least one claim come first, routes ranked by none
+separately; each shows quote, gross cost, fees (verified, partial, an unverified estimate or
+unavailable), verified total or — (never for a stale book), depth, tradable-cash release,
+rules status and claim status. Stale routes are named as not ranked. Related markets are
+listed as **RELATED MARKET — NOT ECONOMICALLY EQUIVALENT**, unpriced and unranked. States: populated, single captured route, all stale, refused payoff,
+not evaluated (no decision, no size, or an earlier target day), no captured book, read error.
+
 **Portfolio `/positions`** — account, metric strip with basis labels; Open / Settling /
 Closed / All; position rows; "How these balances are calculated"; settlement evidence. Never
 counts unrealized gains; an unreadable ledger is an error, not an empty portfolio.
@@ -225,6 +236,7 @@ delivery state stated honestly (recorded locally; phone delivery not recorded). 
 | No model | No model for this market |
 | No comparable venue | No equivalent venue price verified |
 | Stale quote | Stale quote — not actionable |
+| Comparator route, judged at its decision time | Fresh at decision time (plus the book's age now) / Stale at decision time — not ranked |
 | Stage A pass | Historical validation passed (never "Profitable") |
 | Zero capacity | New positions halted + binding reason |
 | Seven-day rule fails | Outside starter horizon |
@@ -296,3 +308,15 @@ directive), and the screenshots that justify it.
   (`cluster`). No token, layout or component change. Screenshots: `early`, `demo` and `broken`
   at 390x844 and 1440x900, reviewed locally by the author and described in PR #54 (not
   attached).
+- **2026-09-24 — Across venues from the comparator.** Approved by the 2026-09-24 next-build-chunk
+  directive, Deliverable 3 (`docs/owner/2026-09-24-next-build-chunk-directive.md`). §8 market
+  detail: the "Across venues" slot now renders `best_price.compare` (four separate claims,
+  per-route rows, related markets unranked, stale routes named) instead of a fixed "No
+  equivalent venue price verified" state. New component `venue_comparison` built from the
+  existing facts, row, badge, state-text and disclosure components; new state words for route
+  exclusions and rules equivalence in `presentation.STATES`. §9 gains the comparator's
+  decision-time freshness row: the comparator judges a book at the recorded decision time, so it
+  says "at decision time" and never plain "fresh" beside the Quote section's current-time
+  verdict; a single captured route reuses "No equivalent venue price verified". No token, CSS,
+  layout or navigation change. Markets rows get no comparison indicator: §8 fixes the board columns.
+  Screenshots: see the PR.

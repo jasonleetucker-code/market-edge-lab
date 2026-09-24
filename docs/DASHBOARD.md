@@ -134,7 +134,7 @@ disclosures.
 |---|---|---|
 | `/` | Terminal | Market overview: capture status (never "healthy" over an invalid capture), the selected shadow account's summary, the market board (All / Qualified / Watching / Blocked), What matters today, Activity, and a collapsed System & evidence record with every collector, receipt, blocker and account field. |
 | `/opportunities` | Markets | Search, domain strip, filters (venue, state, cash release, sort), and the board joining captured books (`data.observed_board`) with recorded decisions; every recorded decision payload in a technical disclosure. |
-| `/market?venue=&id=&side=` | Market detail | Quote, price history (two or more captured observations), our assessment, across venues, capital & timing, a read-only decision preview, rules & evidence. |
+| `/market?venue=&id=&side=` | Market detail | Quote, price history (two or more captured observations), our assessment, across venues (the `best_price` comparator's four claims at the recorded decision's evaluated size), capital & timing, a read-only decision preview, rules & evidence. |
 | `/positions` | Portfolio | Balances with basis labels; Open / Settling / Closed / All positions; accounting method; ledger record; settlement evidence from the receipt. |
 | `/outcome-board` | Outcomes | What matters today: outcome groups ranked by account impact, bounds labelled as bounds. |
 | `/risk` | Risk | Capacity verdict, limit rows, capital release windows, starter rule, withdrawal not enabled, policy details. |

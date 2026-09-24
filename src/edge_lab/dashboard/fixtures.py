@@ -9,8 +9,17 @@ never built here: the demo takes them from a real ledger replay (`demo.py`).
 
 from __future__ import annotations
 
+from dataclasses import replace
+from datetime import timedelta
 from decimal import Decimal
 
+from .. import best_price as bp
+from ..fee_schedules import (
+    POLYMARKET_US_EXCHANGE_SCOPE, CostModel, FeeScheduleStatus, QuadraticTakerSchedule, schedule_for,
+)
+from ..opportunity import (
+    DepthLadder, DepthLevel, Event, Market, MarketStatus, MarketTiming, Payoff, PriceGrid, PriceRange,
+)
 from . import presentation as pr
 
 T0 = "2026-09-23T21:55:04+00:00"
@@ -76,3 +85,67 @@ def synthetic_rows() -> list[pr.MarketRow]:
              "passengers in its first calendar year of full commercial service after the opening ceremony?",
              "≥ 1,000,000 passengers", {}, ()),
     ]
+
+
+# --------------------------------------------------------------------------- across venues (best_price)
+# SYNTHETIC routes run through the real comparator (`best_price.compare`): every claim, exclusion
+# and figure the gallery shows is the comparator's own output, never a hand-written verdict. No
+# cross-venue market has been shown rule-equivalent in real data; these pairs are constructed.
+
+CMP_AS_OF = "2026-09-23T22:00:00+00:00"
+_FRESH = "2026-09-23T21:59:30+00:00"
+_STALE = "2026-09-23T21:40:00+00:00"
+_SETTLES = "SYNTHETIC settlement source: DEMO city daily high, Sep 24"
+_EV_K = Event("weather", "weather:demo:DEMO-HIGH-0924", "2026-09-24", None, "DEMO-HIGH-0924", _SETTLES)
+_EV_P = replace(_EV_K, event_id="weather:demo:DEMO-HIGH-0924-pm")
+_EV_N = replace(_EV_K, event_id="weather:demo:DEMO-HIGH-0924-nv")
+_K = Market(venue="kalshi", market_id="kalshi:DEMO-HIGH-B67.5", native_id="DEMO-HIGH-B67.5", event_id=_EV_K.event_id,
+            outcome="67° to 68°", payoff=Payoff("binary", Decimal(1), "value in [67, 68]"), rules_sha256="ab" * 32,
+            status=MarketStatus.OPEN, rules_resolved=True, rules_detail="SYNTHETIC",
+            timing=MarketTiming(expected_resolution_utc="2026-09-25T14:00:00+00:00", settlement_timer_seconds=3600,
+                                lifecycle_status="active"),
+            price_grid=PriceGrid((PriceRange(Decimal(0), Decimal(1), Decimal("0.01")),), source="SYNTHETIC cent grid"))
+_P = replace(_K, venue="polymarket_us", market_id="polymarket_us:demo-high-67-68", native_id="demo-high-67-68",
+             event_id=_EV_P.event_id, rules_sha256="cd" * 32, timing=MarketTiming(lifecycle_status="open"))
+_N = replace(_K, venue="novig", market_id="novig:DEMO-HIGH-67-68", native_id="DEMO-HIGH-67-68", event_id=_EV_N.event_id,
+             rules_sha256="ef" * 32, timing=None)
+_SIBLING = replace(_K, market_id="kalshi:DEMO-HIGH-B69.5", native_id="DEMO-HIGH-B69.5", outcome="69° to 70°",
+                   payoff=Payoff("binary", Decimal(1), "value in [69, 70]"), rules_sha256="12" * 32)
+# A SYNTHETIC exact-fee double, so the gallery can show a supported verified-total claim. Real
+# Kalshi evidence is CONSERVATIVE_BOUND at best (ADR 0017).
+_EXACT_FEES = QuadraticTakerSchedule("SYNTHETIC-exact-fee-double", "kalshi", Decimal("0.07"), Decimal(1),
+                                     FeeScheduleStatus.VERIFIED, "SYNTHETIC gallery fee double", "2026-09-20T00:00:00Z",
+                                     cost_model=CostModel.EXACT)
+
+
+def _ladder(m: Market, *levels: tuple[str, str], at: str = _FRESH, truncated: bool = False) -> DepthLadder:
+    return DepthLadder(m.venue, m.market_id, "YES", tuple(DepthLevel(Decimal(a), Decimal(b)) for a, b in levels),
+                       truncated, at, None, f"snapshot:DEMO-{m.venue}", None)
+
+
+def synthetic_comparisons() -> dict[str, bp.Comparison]:
+    """name -> comparator output for the gallery: several venues with a related market and a stale
+    route; every route stale; a refused payoff; and one captured route with a truncated book (the
+    only shape real captures produce today)."""
+    pm_fees = schedule_for("polymarket_us", POLYMARKET_US_EXCHANGE_SCOPE)
+    at, age = pr.parse_utc(CMP_AS_OF), timedelta(minutes=5)
+    request = bp.PositionRequest(_EV_K, _K, "YES", 10)
+
+    def run(req: bp.PositionRequest, *routes: bp.Route) -> bp.Comparison:
+        return bp.compare(req, routes, as_of=at, max_book_age=age)
+
+    refused_market = replace(_K, payoff=replace(_K.payoff, kind="multi_outcome"))
+    return {
+        "multi": run(request,
+                     bp.Route(_EV_K, _K, _ladder(_K, ("0.34", "6"), ("0.35", "20")), _EXACT_FEES),
+                     bp.Route(_EV_P, _P, _ladder(_P, ("0.33", "40")), pm_fees),
+                     bp.Route(_EV_N, _N, _ladder(_N, ("0.31", "50"), at=_STALE), schedule_for("novig")),
+                     bp.Route(_EV_K, _SIBLING, _ladder(_SIBLING, ("0.12", "80")), _EXACT_FEES)),
+        "stale": run(request,
+                     bp.Route(_EV_K, _K, _ladder(_K, ("0.34", "30"), at=_STALE), _EXACT_FEES),
+                     bp.Route(_EV_P, _P, _ladder(_P, ("0.33", "40"), at=_STALE), pm_fees)),
+        "refused": run(bp.PositionRequest(_EV_K, refused_market, "YES", 10),
+                       bp.Route(_EV_K, refused_market, _ladder(refused_market, ("0.34", "30")), _EXACT_FEES)),
+        "single": run(bp.PositionRequest(_EV_K, _K, "YES", 1),
+                      bp.Route(_EV_K, _K, _ladder(_K, ("0.34", "3"), truncated=True), schedule_for("kalshi", "DEMO"))),
+    }

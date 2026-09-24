@@ -215,7 +215,7 @@ def detail(ctx: d.Context, p: pr.Params) -> cm.Page:
             f'<p class="page-sub">{esc(row.native_id)} · target {esc(pr.date_label(row.target_date) or "unknown")}'
             f' · closes {esc(pr.datetime_et(row.close_time_utc) or "time not captured")}</p></div></div>')
     main = [quote_section(row, side, p, ctx.now), history_section(ctx, row, side), assessment_section(row, side),
-            venues_section(row)]
+            venues_section(ctx, row, side)]
     side_col = [capital_section(row, side), ticket_section(row, side, p)]
     # Source order = the contract's phone order; Rules & evidence comes last, after the inspector.
     body = (head + '<div class="detail"><div class="detail-main">' + "".join(main) + "</div>"
@@ -316,13 +316,43 @@ def assessment_section(row: pr.MarketRow, side: str) -> str:
                      + c.disclosure("Exact recorded values", exact) + earlier, sid="as-h")
 
 
-def venues_section(row: pr.MarketRow) -> str:
-    only = (f"Only {pr.venue_label(row.venue)} is captured for this market. No equivalent venue price is verified: "
-            "a similar title on another venue is not settlement equivalence.")
-    return c.section("Across venues", c.empty_state("No equivalent venue price verified", only)
-                     + '<p class="note">Lowest observed quote, best verified total cost and best account-feasible '
-                       "route are shown only when rules equivalence, fees, depth and account access are proven.</p>",
-                     sid="xv-h")
+def comparison_body(result: d.VenueComparison, now=None) -> str:
+    """Every state of the across-venues slot. Only OK carries comparator figures; `now` only adds
+    each book's age today beside the comparator's decision-time freshness."""
+    if result.status == d.OK:
+        return c.venue_comparison(result.comparison, now=now)
+    if result.status == "NOT_EVALUATED":
+        return c.empty_state("Not evaluated yet", f"No comparison: {result.message}. The requested size is always the "
+                                                  "evaluated size; it is never entered here.")
+    if result.status == d.ERROR:
+        return c.error_state("Comparison unavailable", f"ERROR — {result.message}. This is not an empty comparison.")
+    why = result.message[:1].upper() + result.message[1:]
+    return c.unavailable("Nothing captured to compare", f"{why}. Nothing is ranked without captured evidence.")
+
+
+def venues_section(ctx: d.Context, row: pr.MarketRow, side: str) -> str:
+    """Across venues: the canonical comparator (best_price, ADR 0027) at the recorded decision's time
+    and evaluated size. A decision for an earlier target day, or none, is never compared."""
+    a = row.for_side(side)
+    note = ('<p class="note">Rules equivalence comes from captured rules, never a similar title. Captured prices are '
+            "delayed evidence; read-only, execution is not authorized.</p>")
+    if row.historical:
+        body = c.unavailable("No current comparison", "This market's decision is for an earlier target day. The "
+                                                     "comparator runs only at the current day's evaluated size.")
+        meta = None
+    elif a is None:
+        body = c.empty_state("Not evaluated yet", f"No decision is recorded for the {side} side of this market's "
+                                                  "current target day in this account, so there is no evaluated size "
+                                                  "to compare. No size is entered here.")
+        meta = None
+    else:
+        result = d.venue_comparison(ctx, row.market_id, side, a.size, a.decided_at_utc,
+                                     evidence_ids=a.raw.get("quote_evidence_ids"))
+        body = comparison_body(result, ctx.now)
+        size = pr.quantity(result.quantity)
+        meta = (f"{side} · {size} contract{'' if size == '1' else 's'} (evaluated size) · as of "
+                f"{pr.datetime_et(result.as_of_utc) or 'unknown time'}") if size else None
+    return c.section("Across venues", body + note, meta=meta, sid="xv-h")
 
 
 OLD_NOTE = '<p class="note">Decision for an earlier target day; not current.</p>'

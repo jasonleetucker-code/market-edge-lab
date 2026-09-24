@@ -10,6 +10,7 @@ from .. import fixtures
 from .. import presentation as pr
 from ..html import esc
 from . import common as cm
+from . import markets
 
 
 def view(ctx: d.Context, p: pr.Params) -> cm.Page:
@@ -67,6 +68,21 @@ def view(ctx: d.Context, p: pr.Params) -> cm.Page:
                            + c.timeline([("ok", "Decision capture", "complete", "6:00 PM EDT"),
                                          ("info", "Re-check capture", "scheduled", "6:10 PM EDT")]),
                            sid="g-act", flush=True))
+    cmps = fixtures.synthetic_comparisons()
+    for key, title in (("multi", "populated · several venues, a related market, a stale route"),
+                       ("single", "one captured route (today's real shape) · fees unverified"),
+                       ("stale", "every route stale · nothing ranked"),
+                       ("refused", "unsupported payoff · refused")):
+        size = pr.quantity(cmps[key].quantity)
+        parts.append(c.section(f"VenueComparison ({title})", c.venue_comparison(cmps[key]),
+                               meta=f"YES · {size} contract{'' if size == '1' else 's'} (evaluated size) · as of "
+                                    f"{pr.datetime_et(fixtures.CMP_AS_OF)}", sid=f"g-xv-{key}"))
+    xv_states = "".join(markets.comparison_body(d.VenueComparison(status, message)) for status, message in (
+        ("NOT_EVALUATED", "no size was evaluated for this side, so there is no requested size to compare"),
+        (d.NO_DATA, "the decision capture holds no market listing for this market"),
+        (d.ERROR, "OperationalError: database disk image is malformed"),
+    ))
+    parts.append(c.section("VenueComparison (not evaluated / no data / error)", xv_states, sid="g-xv-states"))
     parts.append(c.disclosure("EvidenceDisclosure", c.kv([("code", c.code("INVALID_CAPTURE")),
                                                           ("exact value", esc("0.05120000"))]), boxed=True))
     return cm.Page("Component gallery", "", "".join(parts))

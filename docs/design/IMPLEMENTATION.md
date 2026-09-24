@@ -62,14 +62,19 @@ After: the same deep links (relabelled Terminal, Markets, Portfolio, Outcomes, R
 | Venues and capabilities | `venues.VENUES` / `coverage_rows` |
 | Source health | `SnapshotStore.latest_source_health` + `sources` registry descriptions |
 | Fee verification | `fee_schedules` via `data.fee_rows` |
+| Across venues: the four claims, per-route quote, gross cost, fee, fee status, verified (claim) total, depth, tradable-cash ETA, exclusions, related markets, summary | `best_price.compare` via `data.venue_comparison`, inputs built as `exp001_stageb.evaluate_day` builds them: the decision capture's listing (`kalshi_quotes.market_from_kalshi` plus the `settlement_equivalence` downgrade) and book (`kalshi_quotes.ladders_from_orderbook`; depth limit from the stored request URL, unknown = truncated), `fee_schedules.schedule_for` on the market's own series, the Stage B book-age limit; size, time and quote evidence ids from the recorded decision (`sizing.final_size`, `as_of_utc`, `quote_evidence_ids`: a different book is refused) |
 
 **Dependencies recorded (shown as unavailable, never derived in the UI):**
 1. *Realized today* (calendar day): the engine reports trailing-24 h realized **loss**, not a
    calendar-day result. Shown as "not computed"; Risk shows the trailing figure.
 2. *Binding risk constraint*: `risk.assess` returns the capacity, not which headroom binds.
    Shown as the exact capacity plus the verdict.
-3. *Cross-venue comparison*: no rules equivalence or non-Kalshi fee evidence exists; detail
-   says "No equivalent venue price verified".
+3. *Cross-venue comparison*: the comparator runs on every captured route, but only Kalshi books
+   are captured into the evidence store, so a real comparison has one route and says "Only
+   Kalshi is captured for this market". Other venues appear once a collector stores their
+   books and discovery proves rules equivalence. Rejected (unsized) decisions have no
+   evaluated size, so they show "Not evaluated yet"; a counterfactual size needs Lane A's
+   sizing contract.
 4. *Sport/league identity*: no sports market is captured; the Sports tab says so.
 5. *Delivery status beyond the outbox*: phone delivery is not recorded; Alerts says so.
 6. *Price history*: only the decision and re-check captures of the latest target day are read
