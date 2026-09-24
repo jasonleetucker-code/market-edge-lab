@@ -238,7 +238,17 @@ historical, never current); an open target past its canonical deadline is "Overd
 in an "All targets" disclosure, whose books are the runner's record at capture (only the rows shown
 parse a stored response; parsed captures are memoized, bounded). States: populated, no targets, no captures yet, overdue (stale record),
 missed/failed/skipped/superseded rows, paid captures paused (the card's COST_BLOCKED, KEY_REJECTED,
-QUOTA_EXHAUSTED, QUOTA_UNKNOWN, DISCOVERY_STALE), source unavailable, read error. Venues (Tested ≠ connected), collected sources with freshness,
+QUOTA_EXHAUSTED, QUOTA_UNKNOWN, DISCOVERY_STALE), source unavailable, read error. Each captured
+row shown carries a "Consensus at this capture · RESEARCH BENCHMARK — NOT EXECUTABLE" disclosure: Lane
+C's `odds_consensus.consensus_for_event(store, event, as_of=the capture's receipt time)`, per exact
+proposition (moneyline, each spread line, each total line): the consensus probability per outcome
+(median of the books' de-vigged probabilities), range and MAD (method named), contributing books vs books
+quoting the market at any line, freshness (`freshness_as_of`, worst of books) and earliest/latest contributing update;
+offered prices as received and each book's de-vig in a separate nested disclosure and separate
+tables, never in the consensus table; unsupported groups with their reason codes. States: populated,
+insufficient books, unsupported, stale/unknown freshness, this capture unusable with an earlier one
+shown and newer unusable captures listed (`newer_unusable`), failed closed, no consensus, not
+installed, read error. Venues (Tested ≠ connected), collected sources with freshness,
 fee verification, venue registry and full receipt in disclosures.
 
 **Alerts `/alerts`** — Needs attention, Standing conditions, Recent notifications, Tests,
@@ -386,3 +396,17 @@ directive), and the screenshots that justify it.
   360x800, 390x844, 430x932, 768x1024, 1440x900 and 1920x1080 (Chromium), 390x844 and 1440x900
   (WebKit), and 180x400 / 720x450 as 200% zoom of 360 / 1440 (`tests/browser/capture.py`), reviewed
   locally by the author and described in the PR (not attached).
+- **2026-09-24 — Sportsbook consensus at a capture.** Approved by the owner directive of 2026-09-24
+  evening ("Terminal v1": sportsbook consensus labelled "RESEARCH BENCHMARK — NOT EXECUTABLE";
+  contract C4) and the coordinator's phase-3 assignment after Lane C's #79 merged. §8 Research & Data:
+  each captured row of the Odds capture targets section gains the "Consensus at this capture"
+  disclosure (no new navigation). Composed in `views/research.py` (`consensus_body`, `_proposition`)
+  from the existing facts, table, badge, state-text, empty/blocked/error/unavailable, disclosure and kv
+  components; no new component, token or CSS. New presentation helpers only: `pp_size` (an unsigned
+  probability spread in pp), `odds_market_label`, `freshness_code`. Offered prices and consensus
+  probabilities never share a table; a book's margin is shown in signed pp. The contract is read only
+  for the captured rows shown, at each capture's receipt time, memoized until an odds snapshot received by that time is added.
+  Screenshots: fixture states `odds` and `odds_issues` (a capture with stale, unsupported and
+  single-book lines; a later capture whose response lacked the game) and `/gallery` at 360x800 and
+  1440x900, 720x450 and 180x400 as 200% zoom (`tests/browser/capture.py`), reviewed locally by the
+  author and described in the PR (not attached).

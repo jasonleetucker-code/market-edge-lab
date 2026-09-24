@@ -139,7 +139,7 @@ disclosures.
 | `/positions` | Portfolio | Balances with basis labels; Open / Settling / Closed / All positions; accounting method; ledger record; settlement evidence from the receipt. |
 | `/outcome-board` | Outcomes | What matters today: outcome groups ranked by account impact, bounds labelled as bounds. |
 | `/risk` | Risk | Capacity verdict, limit rows, capital release windows, starter rule, withdrawal not enabled, policy details. |
-| `/experiments` | Research & Data | Tabs: Research (experiments, forward valid days, next preregistered look) and Data sources (venues, The Odds API card and its capture-target table, source health, fees, venue registry, full receipt). |
+| `/experiments` | Research & Data | Tabs: Research (experiments, forward valid days, next preregistered look) and Data sources (venues, The Odds API card and its capture-target table with the research-benchmark consensus at each capture shown, source health, fees, venue registry, full receipt). |
 | `/alerts` | Alerts | Attention items from blockers, failure records and the local notification outbox, grouped by origin (only production needs attention); nothing is sent. |
 | `/more` | More | Links to Risk, Research & Data, Alerts, System & evidence. |
 | `/gallery` | none | Component gallery, demo mode only. |
