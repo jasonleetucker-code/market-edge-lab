@@ -325,10 +325,26 @@ be written here when they are made.
     - the #50 coverage audit and safe P0 storage fixes;
     - settlement verification and a manual F09 checkpoint after the first real settlement;
     - review, merge and deploy of that work through `docs/deploy/DAILY_SHADOW_ACTIVATION.md`.
-  - **Not authorized:** a new unattended timer for later/closing-price capture (the proposed
-    schedule is an owner decision); any change to operational shadow fills or the frozen EXP-001
-    rule; orders, money, credentials, paid services, public exposure, SSH changes, Brisket
-    changes.
+  - **Not authorized at the time of this directive:** a new unattended timer for later/closing-price
+    capture. **Superseded only for that timer by the owner's 2026-09-24 11:24 ET follow-up below.**
+    The other exclusions remain: any change to operational shadow fills or the frozen EXP-001 rule;
+    orders, money, credentials, paid services, public exposure, SSH changes, Brisket changes.
+
+- **2026-09-24 11:24 ET, owner follow-up: freshness and later/closing-price schedule.**
+  - The owner confirmed the first ntfy TEST did **not** reach the phone. SUBMITTED remains only
+    provider acceptance; end-to-end delivery is unresolved and must not be claimed.
+  - The owner explicitly approved a scheduled later/closing-price capture.
+  - **Authorized:** ADR 0030 Option A: `edgelab-observe.timer` (:05/:20/:35/:50 each hour) and
+    `edgelab-observe-close.timer` (04:57:45 UTC), both `Persistent=false`, using the existing
+    read-only `observe plan/capture` path, protected windows, collector lock, pacing, bounded GETs,
+    append-only evidence and fail-closed semantics. Implementation, tests, reviewed merge and deployment
+    through `docs/deploy/DAILY_SHADOW_ACTIVATION.md` are authorized.
+  - **Still not authorized:** orders, real money, trading credentials, paid services, Gate 8+,
+    weakening freshness/provenance rules, or broad new unattended collectors not covered by this
+    approval.
+  - Issue #74 records the longer-term requirement for one cross-domain Freshness Orchestrator.
+    These ADR 0030 timers are an immediate evidence-preservation step and should later migrate under
+    that shared primitive without changing their evidence contract.
 
 ## Standing merge rule: docs-only and test-only PRs
 
@@ -430,9 +446,9 @@ A PR that fails any of these needs the usual authority: a directive grant or the
   experiment after seeing test performance.
 - Any real-money step (gates 8–10), any live-order path, and any Stage B *evaluation*
   for a model that did not pass Stage A.
-- Scheduled or unattended jobs **outside** the 2026-09-22 read-only VPS authorization and
-  the 2026-09-23 daily-shadow authorization,
-  including GitHub Actions cron, any paid host, and any authenticated source, without new
+- Scheduled or unattended jobs **outside** the 2026-09-22 read-only VPS authorization, the
+  2026-09-23 daily-shadow authorization, and the narrowly approved 2026-09-24 ADR 0030 observation
+  timers, including GitHub Actions cron, any paid host, and any authenticated source, without new
   owner approval.
 - Browser automation against any source whose terms have not been reviewed and recorded.
 
