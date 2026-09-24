@@ -127,7 +127,9 @@ KALSHI = VenueSpec(
                                    "forward collector order-book captures (tests/fixtures/forward)",
                                    "2026-09-22T22:00:00Z"),
         depth_read=CapabilityState(ConnectivityStage.LIVE_DATA_VERIFIED, False,
-                                   "order-book levels are captured; only the best level is priced"),
+                                   "order-book levels are captured; `evaluate` prices the best level, "
+                                   "`walk_ladder`/`price_depth_fill` price a quantity across levels "
+                                   "(best_price comparator, ADR 0027)"),
         history_read=CapabilityState(ConnectivityStage.LIVE_DATA_VERIFIED, False,
                                      "settled-market history (tests/fixtures/gate3/kalshi_markets_all_2026-09-22.json.gz)"),
         settlement_read=CapabilityState(ConnectivityStage.LIVE_DATA_VERIFIED, False,
@@ -156,14 +158,18 @@ POLYMARKET_US = VenueSpec(
                                      "(stage left at TESTED: LIVE_DATA_VERIFIED is for the coordinator to set)"),
         quote_read=CapabilityState(ConnectivityStage.TESTED, False, "GET /v1/markets/{slug}/book -> ExecutableQuote (documented example "
                                    "fixture); BBO has no size at the best price and is never a quote"),
-        depth_read=CapabilityState(ConnectivityStage.TESTED, False, "book levels parsed and validated; only the best level is priced"),
+        depth_read=CapabilityState(ConnectivityStage.TESTED, False, "book levels parsed and validated; "
+                                   "`walk_ladder`/`price_depth_fill` price a quantity across levels "
+                                   "(best_price comparator, ADR 0027); ladders are truncated unless proven complete"),
         history_read=CapabilityState(_P, False, "public gateway price history (docs); not implemented"),
         settlement_read=CapabilityState(ConnectivityStage.TESTED, False, "GET /v1/markets/{slug}/settlement parser (documented example)"),
         account_read=CapabilityState(_N, True, "api.polymarket.us portfolio endpoints (authenticated)"),
         order_write=CapabilityState(_N, True, "api.polymarket.us trading endpoints (authenticated); not authorized"),
     ),
     units=None, cash_timing=None,
-    notes="Polymarket US (a CFTC-regulated US exchange). Not Polymarket International. Units and fees unverified.",
+    notes="Polymarket US (a CFTC-regulated US exchange). Not Polymarket International. Fee schedule "
+          "captured (fee_schedules.POLYMARKET_US_TAKER_V1, a conservative bound with claim basis NONE, ADR 0027); "
+          "units unverified.",
 )
 
 POLYMARKET_INTERNATIONAL = VenueSpec(

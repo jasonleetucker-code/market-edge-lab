@@ -28,7 +28,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from decimal import ROUND_CEILING, ROUND_FLOOR, Decimal
+from decimal import ROUND_CEILING, ROUND_FLOOR, ROUND_HALF_EVEN, Decimal
 from enum import Enum
 from typing import Any, Iterable, Mapping
 
@@ -169,9 +169,86 @@ KALSHI_QUADRATIC_TAKER_V1 = QuadraticTakerSchedule(
     checked_at_utc="2026-09-23T02:20:00Z",
 )
 
+# Schedules a shadow account may pin (`get_fee_schedule`). Kalshi only: the Polymarket US
+# schedule below is reachable through `schedule_for` and is never pinned by an account.
 FEE_SCHEDULES: dict[str, QuadraticTakerSchedule] = {
     KALSHI_QUADRATIC_TAKER_V1.schedule_id: KALSHI_QUADRATIC_TAKER_V1,
 }
+
+
+# --------------------------------------------------------------------------- Polymarket US
+
+# Evidence: experiments/multi_venue/polymarket_us_fees_2026-09-24.md (docs.polymarket.us/fees,
+# "Effective exchange-wide from 12 AM ET, Thursday September 17, 2026"; the Exchange Rulebook
+# dated 2026-09-14, Rule 3.8). ADR 0027.
+POLYMARKET_US_TAKER_THETA = Decimal("0.0695")
+# The fee scope of a Polymarket US market: the exchange-wide schedule, for a market whose own
+# published `feeCoefficient` equals the schedule's theta (`polymarket_us.fee_scope`). Any other
+# scope (no coefficient, another value) has no fee model and is UNSUPPORTED.
+POLYMARKET_US_EXCHANGE_SCOPE = "EXCHANGE_THETA_0.0695"
+# The documented range of the fee formula's price ("p is the trade price ($0.01 to $0.99)").
+_PMUS_P_MIN, _PMUS_P_MAX = Decimal("0.01"), Decimal("0.99")
+
+
+def bankers_fee(theta: Decimal, contracts: int, price: Decimal) -> Decimal:
+    """The documented Polymarket US fee (or maker rebate) of ONE fill: theta x C x p x (1 - p),
+    rounded to the nearest $0.01 half to even (banker's rounding). Reporting only: an order
+    that fills against several resting orders can be charged less (the venue caps the order's
+    total), never more than the banker's rounding of its cumulative exact fee."""
+    p = Decimal(str(price))
+    return (theta * contracts * p * (1 - p)).quantize(CENT, rounding=ROUND_HALF_EVEN)
+
+
+@dataclass(frozen=True)
+class PolymarketUsTakerSchedule:
+    """Polymarket US exchange-wide taker fee, as a conservative upper bound (ADR 0027).
+
+    The venue charges theta x C x p x (1 - p) per fill, banker's-rounded to the cent, and caps
+    an order's total at the banker's rounding of its cumulative exact fee. This schedule
+    instead rounds each take UP to the cent. Ceiling >= banker's rounding, and a sum of
+    ceilings >= the ceiling of the sum, so whatever the split of an order into fills, the
+    venue's fee is at most this schedule's fee: no rounding allowance is needed on top.
+    The cash debit (price x contracts + fee) is also rounded up to the cent, because the
+    venue documents no rounding for the notional. A NO buy is a short sale of YES at 1 - q
+    (margin $1, net buying power -q); p(1 - p) is symmetric, so its fee is the same.
+    Outside the documented price range ($0.01 to $0.99) the fee is bounded by its value at
+    that range's edge (p(1 - p) grows towards 0.5). Taker only: maker rebates and volume
+    rebates can only lower the cost and are not counted."""
+
+    schedule_id: str
+    venue: str
+    theta: Decimal
+    status: FeeScheduleStatus  # base status, before any dated verification record
+    evidence: str
+    checked_at_utc: str
+    cost_model: CostModel = CostModel.CONSERVATIVE_UPPER_BOUND
+
+    def scope_of(self, native_id: str | None) -> str | None:
+        """This schedule exists for one scope only: the exchange-wide theta. Whether a market
+        is in that scope is decided before the schedule is chosen (`schedule_for`)."""
+        return POLYMARKET_US_EXCHANGE_SCOPE
+
+    def taker_buy(self, contracts: int, price: Decimal) -> FeeQuote:
+        if not isinstance(contracts, int) or isinstance(contracts, bool) or contracts <= 0:
+            raise ValueError("contracts must be a positive integer")
+        p = Decimal(str(price))
+        if not valid_price(p):
+            raise ValueError(f"{p} is not a valid binary-contract price")
+        bounded = min(max(p, _PMUS_P_MIN), _PMUS_P_MAX)  # p(1-p) at the edge bounds it outside the range
+        fee = (self.theta * contracts * bounded * (1 - bounded)).quantize(CENT, rounding=ROUND_CEILING)
+        total = (p * contracts + fee).quantize(CENT, rounding=ROUND_CEILING)
+        return FeeQuote(self.schedule_id, self.status, contracts, p, fee, total, total / contracts)
+
+
+POLYMARKET_US_TAKER_V1 = PolymarketUsTakerSchedule(
+    schedule_id="polymarket-us-taker-v1",
+    venue="polymarket_us",
+    theta=POLYMARKET_US_TAKER_THETA,
+    status=FeeScheduleStatus.UNVERIFIED_CURRENT_SCHEDULE,
+    evidence="experiments/multi_venue/polymarket_us_fees_2026-09-24.md (docs.polymarket.us/fees, effective "
+             "2026-09-17; Polymarket US Rulebook 2026-09-14 Rule 3.8)",
+    checked_at_utc="2026-09-24T01:39:45Z",
+)
 
 
 def get_fee_schedule(schedule_id: str) -> QuadraticTakerSchedule:
@@ -343,7 +420,53 @@ KALSHI_KXHIGHNY_VERIFICATION_2026_09_23 = FeeVerificationRecord(
     ),
 )
 
-FEE_VERIFICATIONS: tuple[FeeVerificationRecord, ...] = (KALSHI_KXHIGHNY_VERIFICATION_2026_09_23,)
+_PMUS_EVIDENCE = "experiments/multi_venue/polymarket_us_fees_2026-09-24.md"
+
+# Evidence: the official Polymarket US fee page and Exchange Rulebook, read 2026-09-24 (hashes and
+# excerpts in `_PMUS_EVIDENCE`). The formula, coefficient and rounding are documented, so the
+# schedule prices research routes. SCHEDULED_CHANGES cannot be verified: Rule 3.8(a) lets the
+# exchange change fees by posting a new schedule on its website, and no forward schedule or
+# fee-change feed is published. ACCOUNT_TYPE is unverified: there is no Polymarket US account,
+# and intermediated routes can add vendor fees. So the claim basis is NONE (ADR 0017): the fee
+# is a documented estimate, never a claim-grade total.
+POLYMARKET_US_VERIFICATION_2026_09_24 = FeeVerificationRecord(
+    verification_id="polymarket-us-fee-verification-2026-09-24",
+    schedule_id="polymarket-us-taker-v1",
+    venue="polymarket_us",
+    scope=(POLYMARKET_US_EXCHANGE_SCOPE,),
+    knowledge_time_utc="2026-09-24T01:39:45Z",
+    applies_from_utc="2026-09-17T00:00:00-04:00",
+    recheck_by_utc="2026-10-24T01:39:45Z",
+    account_type="direct",
+    # The schedule rounds every take up to the cent, which already bounds any split into fills.
+    rounding_allowance_per_contract=Decimal("0"),
+    components=(
+        ComponentEvidence(VerificationComponent.COEFFICIENT, ComponentState.VERIFIED,
+                          f"{_PMUS_EVIDENCE} (docs.polymarket.us/fees.md)",
+                          "taker fee = 0.0695 x C x p x (1-p), effective exchange-wide 2026-09-17 00:00 ET"),
+        ComponentEvidence(VerificationComponent.SERIES_MULTIPLIER, ComponentState.VERIFIED,
+                          f"{_PMUS_EVIDENCE} (fees page: exchange-wide; market field feeCoefficient)",
+                          "one exchange-wide theta. The per-market `feeCoefficient` field is documented only as "
+                          "'Fee coefficient', so the schedule prices only markets whose field equals 0.0695"),
+        ComponentEvidence(VerificationComponent.SCHEDULED_CHANGES, ComponentState.UNVERIFIED,
+                          f"{_PMUS_EVIDENCE} (Rulebook 2026-09-14, Rule 3.8(a))",
+                          "fees may change by posting an updated schedule on the website; no forward schedule "
+                          "or fee-change feed exists to check"),
+        ComponentEvidence(VerificationComponent.ROUNDING_FOR_ACCOUNT_TYPE, ComponentState.VERIFIED,
+                          f"{_PMUS_EVIDENCE} (fees page, Fee Rules)",
+                          "per fill: banker's rounding to $0.01; an order's total never exceeds the banker's "
+                          "rounding of its cumulative exact fee. The schedule's per-take ceiling bounds both"),
+        ComponentEvidence(VerificationComponent.ACCOUNT_TYPE, ComponentState.UNVERIFIED,
+                          f"{_PMUS_EVIDENCE} (partners/funding/vendor-fees)",
+                          "no Polymarket US account exists; an intermediary route can add a declared vendor fee"),
+        ComponentEvidence(VerificationComponent.MAKER_FEES, ComponentState.VERIFIED,
+                          f"{_PMUS_EVIDENCE} (fees page)",
+                          "maker rebate theta 0.0125 per fill (credited); the simulation is taker-only"),
+    ),
+)
+
+FEE_VERIFICATIONS: tuple[FeeVerificationRecord, ...] = (KALSHI_KXHIGHNY_VERIFICATION_2026_09_23,
+                                                         POLYMARKET_US_VERIFICATION_2026_09_24)
 
 
 def _base_state(schedule: Any, detail: str) -> FeeVerificationState:
@@ -518,10 +641,18 @@ class UnsupportedFeeSchedule:
         raise ValueError(f"{self.schedule_id}: {self.reason}")
 
 
-def schedule_for(venue: str, scope: str | None = None) -> QuadraticTakerSchedule | UnsupportedFeeSchedule:
+def schedule_for(venue: str, scope: str | None = None
+                 ) -> QuadraticTakerSchedule | PolymarketUsTakerSchedule | UnsupportedFeeSchedule:
     """The fee schedule for a venue and fee scope. Kalshi's general schedule covers only
-    Kalshi series that are not on the non-standard list; every other venue has its own
-    fees and stays unsupported until its own primary evidence is captured."""
+    Kalshi series that are not on the non-standard list. Polymarket US's exchange-wide
+    schedule covers only markets in `POLYMARKET_US_EXCHANGE_SCOPE` (their own `feeCoefficient`
+    equals the schedule's theta; `polymarket_us.fee_scope`). Every other venue or scope has
+    its own fees and stays unsupported until its own primary evidence is captured."""
+    if venue == "polymarket_us":
+        if scope == POLYMARKET_US_EXCHANGE_SCOPE:
+            return POLYMARKET_US_TAKER_V1
+        return UnsupportedFeeSchedule(venue, scope, "the market's fee coefficient is unknown or differs from the "
+                                                    "documented exchange-wide theta 0.0695")
     if venue != "kalshi":
         return UnsupportedFeeSchedule(venue, scope, "no fee schedule has been verified for this venue")
     if not scope:
