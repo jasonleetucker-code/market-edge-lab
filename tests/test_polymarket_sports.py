@@ -204,8 +204,28 @@ def test_listing_failure_partial_page_cap_and_malformed():
 # --------------------------------------------------------------------------- the access gate and refusals
 
 
-def test_the_terms_gate_blocks_every_networked_run_before_anything(tmp_path):
-    assert ps.OWNER_ACCESS_DECISION is None  # the 2026-09-24 review did not clear it
+def test_the_owner_risk_decision_is_the_gate_and_is_read_at_call_time(tmp_path, monkeypatch):
+    # The Terms did not clear collection; the owner's recorded risk decision (not a Polymarket grant) is the gate.
+    assert ps.OWNER_ACCESS_DECISION == "OWNER_RISK_DECISION_2026-09-24"
+    assert ps.access_decision_now() == ps.OWNER_ACCESS_DECISION and ps.access_decision_now(None) is None
+    db = _store(tmp_path)
+    opener = ScriptedOpener(EVENTS_P0.read_bytes(), EVENTS_P1.read_bytes())
+    code, report = ps.run_discover(db, clock=lambda: NOW, sleep=lambda s: None, opener=opener)  # the default gate
+    assert code == 0 and report["state"] == "FILTER_COMPLETE" and report["access_decision"] == ps.OWNER_ACCESS_DECISION
+    status = ps.terminal_view(db, now=NOW)
+    assert status["access"] == ps.ACCESS_ALLOWED == "ALLOWED_BY_OWNER_RISK_DECISION"
+    # Set to None after import: every networked run is blocked again, with no redeploy of callers.
+    monkeypatch.setattr(ps, "OWNER_ACCESS_DECISION", None)
+    blocked = ScriptedOpener()
+    for run in (ps.run_discover, ps.run_capture):
+        code, report = run(db, clock=lambda: NOW + timedelta(hours=7), sleep=lambda s: None, opener=blocked)
+        assert code == 0 and report["state"] == "BLOCKED_TERMS_REVIEW" and report["requests"] == 0
+    assert blocked.calls == [] and len(SnapshotStore(db).pm_sports_scans()) == 1
+    assert ps.terminal_view(db, now=NOW)["state"] == "BLOCKED_TERMS_REVIEW"
+
+
+def test_the_terms_gate_blocks_every_networked_run_before_anything(tmp_path, monkeypatch):
+    monkeypatch.setattr(ps, "OWNER_ACCESS_DECISION", None)
     db = _store(tmp_path)
     opener = ScriptedOpener()  # any call would fail: pop from an empty list
     for run in (ps.run_discover, ps.run_capture):
@@ -537,6 +557,7 @@ def test_related_markets_view_for_the_terminal(tmp_path):
     view = ps.related_markets(store, now=NOW)
     assert view["label"] == "RELATED MARKET — NOT ECONOMICALLY EQUIVALENT"
     assert view["executable"] is False and view["ranked"] is False and view["absence_is_evidence"] is False
+    assert view["source"] == ps.ATTRIBUTION == "Polymarket US (gateway.polymarket.us public API)"
     kc = view["events"]["e_kc_mia"]
     assert kc["state"] == ps.RELATED and kc["markets"][0]["market_slug"] == KC_MIA
     assert kc["markets"][0]["equivalent"] is False and "PAYOFF_UNSUPPORTED" in kc["markets"][0]["flags"]
@@ -547,7 +568,7 @@ def test_related_markets_view_for_the_terminal(tmp_path):
 def test_terminal_view_states(tmp_path):
     assert ps.terminal_view(tmp_path / "missing.sqlite3", now=NOW)["state"] == "NO_STORE"
     db = _store(tmp_path)
-    v = ps.terminal_view(db, now=NOW)
+    v = ps.terminal_view(db, now=NOW, access_decision=None)
     assert v["state"] == "BLOCKED_TERMS_REVIEW" and v["schema"] == "pm-sports-status/1"
     assert ps.terminal_view(db, now=NOW, access_decision=ALLOW)["state"] == "NO_SCAN"
     db2 = _discovered(tmp_path / "b")
@@ -558,7 +579,7 @@ def test_terminal_view_states(tmp_path):
 def test_freshness_records_for_the_fabric(tmp_path):
     db = _discovered(tmp_path)
     store = SnapshotStore.open_readonly(db)
-    disc, cap = ps.freshness_records(store, now=NOW)
+    disc, cap = ps.freshness_records(store, now=NOW, access_decision=None)
     assert disc["acquisition_mode"] == "POLL" and cap["acquisition_mode"] == "EVENT_RELATIVE"
     assert disc["mode"] == cap["mode"] == "EXTERNAL_SCHEDULE"
     assert disc["schedule_state"] == "PAUSED" and "BLOCKED_TERMS_REVIEW" in disc["why"]
@@ -571,12 +592,14 @@ def test_freshness_records_for_the_fabric(tmp_path):
     assert disc["schedule_state"] == "DUE" and disc["freshness"] == "stale"
 
 
-def test_fabric_provider_meets_the_c1_contract(tmp_path):
+def test_fabric_provider_meets_the_c1_contract(tmp_path, monkeypatch):
     fr = pytest.importorskip("edge_lab.freshness")
     if not hasattr(fr, "SourceFreshness"):
         pytest.skip("the Freshness Fabric types (Lane A, feat/freshness-fabric) are not on this branch yet")
     db = _discovered(tmp_path)
     ctx = fr.FabricContext(db=db)
+    assert [r.schedule_state for r in ps.fabric_provider(ctx, NOW)] == [fr.ScheduleState.NOT_DUE] * 2  # allowed
+    monkeypatch.setattr(ps, "OWNER_ACCESS_DECISION", None)  # the gate, read at call time
     disc, cap = ps.fabric_provider(ctx, NOW)
     assert (disc.policy, cap.policy) == ps.fabric_policies()  # equal to the declared policies
     # Fabric v1 (ADR 0031): run by its own timer, so EXTERNAL_SCHEDULE; the style is the underlying mode.
@@ -606,8 +629,9 @@ def test_fabric_provider_meets_the_c1_contract(tmp_path):
     assert [r.to_dict()["schedule_state"] for r in records] == ["PAUSED", "PAUSED"]
 
 
-def test_status_and_cli(tmp_path, capsys):
+def test_status_and_cli(tmp_path, capsys, monkeypatch):
     db = _discovered(tmp_path)
+    monkeypatch.setattr(ps, "OWNER_ACCESS_DECISION", None)  # no real clock-driven network run from a test
     assert ps.main(["status", "--db", str(db), "--market", KC_MIA]) == 0
     out = json.loads(capsys.readouterr().out)
     assert out["access"] == "BLOCKED_TERMS_REVIEW" and out["catalog"]["state"] in ("FILTER_COMPLETE", "STALE")
@@ -616,3 +640,24 @@ def test_status_and_cli(tmp_path, capsys):
 
     assert cli.main(["pm-sports", "capture", "--db", str(db)]) == 0  # the gate: no network, exit 0
     assert json.loads(capsys.readouterr().out)["state"] == "BLOCKED_TERMS_REVIEW"
+    # Out-of-range caps are a clean usage error, not a traceback.
+    assert cli.main(["pm-sports", "capture", "--db", str(db), "--max-requests", "51"]) == 2
+    assert cli.main(["pm-sports", "capture", "--db", str(db), "--max-books", "0"]) == 2
+    assert "--max-books must be in 1..20" in capsys.readouterr().err
+
+
+def test_at_most_100_requests_per_minute_per_run():
+    from edge_lab import http
+
+    now = [0.0]
+    req = ps._Requests(500, NOW + timedelta(minutes=3), lambda: NOW, lambda s: None, http.Pacer(0),
+                       opener=lambda r, t: None, monotonic=lambda: now[0])
+    for _ in range(ps.MAX_REQUESTS_PER_MINUTE):
+        req._open(None, 1.0)
+    with pytest.raises(ps.RequestRateCapReached):
+        req._open(None, 1.0)
+    now[0] = 60.0  # a minute later the window has room again
+    req._open(None, 1.0)
+    assert req.attempts == ps.MAX_REQUESTS_PER_MINUTE + 1
+    assert issubclass(ps.RequestRateCapReached, ps.RequestBudgetExhausted)  # deferred, never FAILED
+    assert ps.MAX_REQUESTS_PER_MINUTE == 100 and 60 / ps.PACER_INTERVAL_S <= ps.MAX_REQUESTS_PER_MINUTE

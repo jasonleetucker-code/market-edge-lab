@@ -9,10 +9,13 @@ Code: `src/edge_lab/polymarket_sports.py`. Decision: `docs/decisions/0032-polyma
 
 ## Verdict
 
-**NOT CLEARED for unattended collection. The pilot stays disabled.** Blocker: the owner must
-decide, and ideally obtain written permission from Polymarket US (the rate-limit page names
-support@polymarket.us for automated systems). No message was sent: sending one needs the
-owner's approval.
+**NOT CLEARED by the Terms themselves.** This verdict is unchanged. The owner has since taken
+a risk decision to run the pilot anyway: see "Owner decision (2026-09-24)" below. That decision,
+not the Terms, is the basis for activation.
+
+Written permission would come from Polymarket US. The API introduction names
+support@polymarket.us as its support contact, and the rate-limit page points automated systems
+needing higher limits to that same address. This lane sent no message.
 
 - **Automation.** Permitted only through authorized APIs. The public gateway is a documented,
   keyless API with a published per-IP limit, so bounded automated reads through it are
@@ -41,11 +44,52 @@ owner's approval.
 - **Eligibility.** The eligibility clause (18+, "legally permitted to access the DCM", KYC) is
   written for account holders. The pilot opens no account and sends no credential.
 
-The code enforces the verdict:
-- `polymarket_sports.OWNER_ACCESS_DECISION` is None, so every networked run stops before the
-  network with `BLOCKED_TERMS_REVIEW` (exit 0, nothing written).
-- The timers are committed only as `*.timer.proposed`.
-- The new source registry rows stay PLANNED.
+## Owner decision (2026-09-24)
+
+**What the owner said.** Relayed by the coordinator to this lane on 2026-09-24 at about
+19:15 ET. The owner's words, verbatim as relayed: "its my risk decision. just do it".
+
+**How it is recorded.**
+- It is an **OWNER RISK DECISION** to run the Polymarket US NFL pilot despite Terms §4 and §5.
+- It is **not** a grant from Polymarket US, and it does not change the verdict above: the Terms
+  themselves do not clear unattended collection.
+- The code names it: `polymarket_sports.OWNER_ACCESS_DECISION = "OWNER_RISK_DECISION_2026-09-24"`.
+- The gate reads that constant at call time. Setting it to None (and deploying) blocks every
+  networked run again, before the network: `BLOCKED_TERMS_REVIEW`, exit 0, nothing written.
+
+**The permission text: OWNER_ATTESTED_EXPRESS_PERMISSION — UNVERIFIED (no source artifact).**
+- **What it is.** Earlier in chat the owner pasted, or showed as a screenshot, a text signed
+  "Gregory Spielberg on behalf of Polymarket US". The coordinator relayed its substance. The
+  text itself is not in this repository.
+- **What it states, as relayed:**
+  - automated, unattended and repeated collection from the public gateway endpoints;
+  - retention for research and trading;
+  - commercial use, including trading.
+- **Its stated conditions:**
+  - a rate limit of 100 requests per minute;
+  - all data attributed to Polymarket US;
+  - no redistribution without prior written consent;
+  - it is revocable.
+- **Why it is unverified.**
+  - It has no sender address, no date and no message headers.
+  - It has no document that can be hashed.
+  - It has no channel that ties it to Polymarket US.
+  - It is therefore **not** the basis for activation; the owner's risk decision is.
+
+**Its conditions are honoured anyway** (they cost little):
+
+| Condition | How it is honoured |
+|---|---|
+| At most 100 requests per minute | `MAX_REQUESTS_PER_MINUTE = 100` is enforced per run: a 60 s window over HTTP attempts, and the rest is deferred, never FAILED. The 1 s pacer already keeps a run near 60 per minute. Discovery and capture share the pilot's lock, so they never run at once. |
+| Attribution to Polymarket US | Every stored page and book is a snapshot with `source_id=polymarket_us_public`, legacy source `polymarket_us`, and its gateway URL. The Terminal payloads carry `source: "Polymarket US (gateway.polymarket.us public API)"`. |
+| No redistribution | Research storage only, in the private evidence store. The dashboard is tailnet-private (ADR 0024). Nothing is published or shared. |
+| Revocable | If revoked, or if Polymarket US objects, set `OWNER_ACCESS_DECISION = None` and deploy, or disable both timers (ADR 0032, "Shutoff"). |
+
+**State of enforcement:**
+- The two timers are installed with the other units but are **not** enabled by the installer.
+  Enabling them is the runbook's §5e step.
+- The source registry rows stay PLANNED until a successful production discovery and capture have
+  been verified from stored rows.
 
 ## Sources read (plain GETs from the laptop, no credentials or cookies)
 
@@ -162,7 +206,10 @@ What the reads showed:
 ## What stays open
 
 - **Whether Polymarket US permits scheduled research reads by a non-trading, non-account holder.**
-  This is the blocker. Only the owner can resolve it (decision, or written permission).
+  This is still not established by any verifiable Polymarket US document.
+  - The pilot runs on the owner's risk decision.
+  - The attested permission text stays UNVERIFIED until a source artifact exists, such as the
+    original email with headers or a signed document. It would be recorded here with its hash.
 - **The Terms text itself.** It is published in a document the site embeds; its authority over
   API use comes from its own scope clause ("APIs"). If Polymarket US publishes a separate API or
   data licence, that document wins, and this review must be redone.

@@ -570,7 +570,9 @@ def read_events_listing(*, extra: Sequence[tuple[str, str]], limit: int = 50, ma
     budget, a run deadline), stops the scan: PARTIAL after at least one page, else FAILED. So a
     market missing from such a scan is never evidence that it does not exist.
     `get(url)` returns (payload, FetchResult); the default is a paced public GET.
-    `on_page(payload, result, url)` receives each raw page, for immutable storage."""
+    `on_page(payload, result, url)` receives each raw page, for immutable storage.
+    A building block, not a collector: it is not wired to any schedule and checks no access gate.
+    The NFL pilot calls it only through `polymarket_sports.run_discover` (ADR 0032)."""
     if get is None:
         pacer = http.Pacer(MIN_INTERVAL_S)
 

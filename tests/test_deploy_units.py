@@ -166,7 +166,7 @@ def test_readme_install_window_matches_the_capture_window():
 VERIFY = ROOT / "deploy" / "vps" / "verify_production.sh"
 VERIFY_STATES = (
     "NY_TIME", "IN_CAPTURE_WINDOW", "RUNNING_UNITS", "DEPLOYED_SHA", "TIMERS", "UNIT_RESULTS", "SHADOW_TIMER",
-    "SETTLEMENT_TIMER", "OBSERVE_TIMER", "OBSERVE_CLOSE_TIMER", "FRESHNESS_STATUS", "LATEST_JSON", "LATEST_JSON_AGE", "COLLECTOR_HEALTH", "VALID_DAY_OBSERVED", "SHADOW_DAILY",
+    "SETTLEMENT_TIMER", "OBSERVE_TIMER", "OBSERVE_CLOSE_TIMER", "PM_SPORTS_TIMER", "PM_SPORTS_DISCOVER_TIMER", "FRESHNESS_STATUS", "LATEST_JSON", "LATEST_JSON_AGE", "COLLECTOR_HEALTH", "VALID_DAY_OBSERVED", "SHADOW_DAILY",
     "LAST_FAILURE", "COLLECTOR_INSTALLED", "TIMERS_ENABLED", "PFM_CAPTURE_OBSERVED", "DECISION_CAPTURE_OBSERVED",
     "RECHECK_CAPTURE_OBSERVED", "DB_SIZES", "BACKUPS", "BACKUP_REPORTS_8D", "BACKUP_EVIDENCE_DB",
     "BACKUP_SHADOW_LEDGER", "RESTORE_EVIDENCE_DB", "RESTORE_SHADOW_LEDGER", "JOURNAL_WARNINGS_24H", "OOM_30D",
@@ -608,7 +608,9 @@ def test_odds_timer_ticks_every_15_minutes_without_catch_up_and_is_not_enabled_b
     assert "edgelab-odds" in units
     # The printed activation line enables the core timers only; the odds timer has its own runbook step.
     assert "enable --now ${CORE_TIMERS[*]/%/.timer}" in INSTALL and "enable --now ${UNITS" not in INSTALL
-    assert "SEPARATELY_ACTIVATED=edgelab-odds" in INSTALL
+    separate = re.search(r"SEPARATELY_ACTIVATED=\(([^)]*)\)", INSTALL).group(1).split()
+    assert "edgelab-odds" in separate  # never in CORE_TIMERS (built by membership)
+    assert 'case " ${SEPARATELY_ACTIVATED[*]} " in *" $u "*) ;; *) CORE_TIMERS+=("$u")' in INSTALL
     assert "systemctl enable" not in INSTALL.split("cat <<EOF")[0], "install.sh must not enable timers itself"
 
 

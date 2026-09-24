@@ -17,4 +17,12 @@ tailnet-only dashboard (landed, PR #46). 0025 the Market Edge Terminal v1 design
 split-cancel refusal (landed, PR #58); 0028 owner secrets file and ntfy relay (landed, PR #57);
 0029 Odds API game-relative capture policy and budget proof (landed, PR #59), all under the
 2026-09-24 directive. 0030 later and closing price observations (manual capture; the schedule is
-an owner decision), under the 2026-09-24 next-build-chunk directive. New decisions start at 0031.
+an owner decision), under the 2026-09-24 next-build-chunk directive.
+
+Under the 2026-09-24 (evening) Freshness Fabric and sports directive:
+- 0031: Freshness Fabric v1 (landed, PR #81).
+- 0032: the Polymarket US NFL research pilot. It runs on the owner's recorded risk decision; the
+  Terms do not clear it (PR #84).
+- 0033: the sportsbook consensus research benchmark (landed, PR #79).
+
+New decisions start at 0034.

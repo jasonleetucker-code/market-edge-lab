@@ -248,11 +248,15 @@ REGISTRY: dict[str, SourceSpec] = {
                 "docs.polymarket.us API Introduction (read 2026-09-23): the public API at "
                 "gateway.polymarket.us needs no key and is meant for reading and displaying "
                 "market data. Rate Limits page: public endpoints 20 requests/s per IP; on 429 "
-                "stop, wait >= 1 s, back off. The docs publish no separate data licence; the "
-                "polymarket.us Terms of Service page is a JavaScript app whose text was not "
-                "readable without a browser and was not reviewed. Research storage only; do not "
-                "redistribute. No authenticated endpoint (api.polymarket.us) is used. No VPN or "
-                "geolocation circumvention."
+                "stop, wait >= 1 s, back off. The docs publish no separate data licence. The Terms "
+                "(the document polymarket.us/tos embeds) were reviewed on 2026-09-24 "
+                "(experiments/multi_venue/polymarket_us_sports_terms_2026-09-24.md): they do NOT clear "
+                "unattended collection (license for the user's own trading; no scraping or bulk "
+                "downloads). The NFL pilot (ADR 0032) runs on the owner's recorded RISK DECISION of "
+                "2026-09-24, not on a Polymarket grant; an owner-attested permission text is UNVERIFIED, "
+                "but its conditions are honoured (<= 100 requests/min, Polymarket US attribution, no "
+                "redistribution). Research storage only. No authenticated endpoint (api.polymarket.us) "
+                "is used. No VPN or geolocation circumvention."
             ),
         ),
         SourceSpec(
@@ -281,9 +285,11 @@ REGISTRY: dict[str, SourceSpec] = {
                 "portals, and APIs') permit bots/automation only 'through authorized APIs', license market data "
                 "for personal, non-commercial use in connection with the user's trading, and prohibit "
                 "redistribution, scraping and bulk downloads unless expressly licensed. No geographic rule beyond "
-                "illegal-location and sanctions clauses. Verdict: NOT CLEARED for unattended collection until the "
-                "owner decides (ideally with written permission); research storage only, never redistributed. "
-                "No account, no authenticated endpoint, no VPN or geolocation circumvention."
+                "illegal-location and sanctions clauses. Verdict: NOT CLEARED by the Terms themselves; the pilot "
+                "runs on the owner's recorded risk decision of 2026-09-24 (polymarket_sports.OWNER_ACCESS_DECISION), "
+                "honouring an unverified attested permission's conditions: <= 100 requests/min, Polymarket US "
+                "attribution, no redistribution. Research storage only. No account, no authenticated endpoint, "
+                "no VPN or geolocation circumvention."
             ),
         ),
         SourceSpec(

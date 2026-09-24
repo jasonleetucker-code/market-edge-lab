@@ -13,8 +13,8 @@ Group=edgelab
 EnvironmentFile=/etc/market-edge-lab/env
 WorkingDirectory=/var/lib/market-edge-lab
 # No secrets. Planning is local and idempotent; GETs are sent only for due targets. The code
-# refuses every run (BLOCKED_TERMS_REVIEW, no network, exit 0) until an owner access decision is
-# recorded. Bounds per run: 20 books, 50 HTTP requests (retries included), a 1 s pacer, a
+# refuses every run (BLOCKED_TERMS_REVIEW, no network, exit 0) while no owner access decision is
+# in force. Bounds per run: 20 books, 50 HTTP requests (retries included, and at most 100 a minute), a 1 s pacer, a
 # 3-minute run deadline; protected windows are refused before the lock.
 ExecStart=/opt/market-edge-lab/venv/bin/python -m edge_lab.cli pm-sports capture --db /var/lib/market-edge-lab/db/edge_lab.sqlite3
 TimeoutStartSec=5min

@@ -9,10 +9,13 @@ service, no Odds API credit. The adapter is `edge_lab.polymarket_us`; this modul
 **Access gate.** The terms/access review
 (`experiments/multi_venue/polymarket_us_sports_terms_2026-09-24.md`) did not clear unattended
 collection: the Polymarket App Terms license market data for personal, non-commercial use in
-connection with the user's own trading and prohibit bulk downloads unless expressly licensed. So
-`OWNER_ACCESS_DECISION` is None and every networked run stops before the network with
-BLOCKED_TERMS_REVIEW (exit 0, nothing written). Only a recorded owner decision, referenced here in
-a reviewed change, lifts it.
+connection with the user's own trading and prohibit bulk downloads unless expressly licensed.
+The owner then took the risk decision to run the pilot anyway (2026-09-24, recorded in that
+review; it is an OWNER RISK DECISION, not a Polymarket grant). `OWNER_ACCESS_DECISION` names that
+decision; it is read at call time, and setting it to None blocks every networked run before the
+network with BLOCKED_TERMS_REVIEW (exit 0, nothing written). The conditions of an unverified
+permission text the owner attested are honoured anyway: at most `MAX_REQUESTS_PER_MINUTE` requests
+per minute, Polymarket US attribution on every stored snapshot, no redistribution.
 
 **Discovery** (`discover`, at most every 6 h). GET /v1/events filtered to the NFL tag, open events
 and the full-game winner (moneyline) market type, paged by limit/offset until an empty page, under
@@ -84,9 +87,17 @@ ODDS_MARKET_KEY = "h2h"  # the Odds API market a moneyline relates to (never equ
 DISCOVERY_FILTER: tuple[tuple[str, str], ...] = (
     ("tagSlug", LEAGUE), ("closed", "false"), ("sportsMarketTypes", MONEYLINE_TYPE))
 
-# Recorded owner decision that clears unattended networked runs (a repo reference), or None.
-# The 2026-09-24 terms review did not clear it: see the module docstring and ADR 0032.
-OWNER_ACCESS_DECISION: str | None = None
+# The recorded owner decision that allows unattended networked runs, or None (blocked). Read at call
+# time. The 2026-09-24 terms review did NOT clear collection under the Terms themselves; the owner
+# took the risk decision to run anyway (terms review, "Owner decision"). Set to None to stop.
+OWNER_ACCESS_DECISION: str | None = "OWNER_RISK_DECISION_2026-09-24"
+ACCESS_ALLOWED = "ALLOWED_BY_OWNER_RISK_DECISION"  # never "cleared": the Terms themselves did not clear it
+_GATE: Any = object()  # "use OWNER_ACCESS_DECISION as it is now" (never captured at import time)
+
+
+def access_decision_now(value: Any = _GATE) -> str | None:
+    """The access decision in force: an explicit value, else the module constant read now."""
+    return OWNER_ACCESS_DECISION if value is _GATE else value
 TERMS_REVIEW = "experiments/multi_venue/polymarket_us_sports_terms_2026-09-24.md"
 
 # Bounds (ADR 0032 has the worst-case arithmetic). Lower than the directive's caps where noted.
@@ -103,6 +114,7 @@ MIN_LEAD = timedelta(minutes=5)  # ... and never within 5 min of kickoff
 MAX_MARKETS_PER_SLOT = 20
 MAX_BOOKS_PER_RUN = 20
 MAX_HTTP_REQUESTS_PER_RUN = 50  # every HTTP attempt counts, retries included
+MAX_REQUESTS_PER_MINUTE = 100  # the attested permission's condition; the 1 s pacer keeps us near 60
 RETRIES = 1  # one retry per request, only for transient failures (edge_lab.http)
 PACER_INTERVAL_S = 1.0  # the docs allow 20/s per IP; 1/s is deliberate politeness
 MAX_RUN = timedelta(minutes=3)  # run deadline; edgelab-pm-sports*.service TimeoutStartSec=5min is the hard stop
@@ -114,6 +126,7 @@ SAME_GAME_WINDOW = timedelta(hours=36)  # beyond this the same teams are a diffe
 LABEL = "RELATED MARKET — NOT ECONOMICALLY EQUIVALENT"
 RESEARCH_LABEL = "RESEARCH BOOK CAPTURE — NOT AN EXECUTABLE PRICE CLAIM"
 DASHBOARD_SCHEMA = "pm-sports-status/1"
+ATTRIBUTION = "Polymarket US (gateway.polymarket.us public API)"  # every display of this data cites it
 
 SOURCE = get_source(polymarket_us.SOURCE_ID)  # page and book snapshots are stored under it
 HEALTH_DISCOVERY = get_source("polymarket_us_nfl_discovery").source_id
@@ -446,6 +459,10 @@ class RequestBudgetExhausted(RuntimeError):
     """This run has used its HTTP request allowance (retries included)."""
 
 
+class RequestRateCapReached(RequestBudgetExhausted):
+    """`MAX_REQUESTS_PER_MINUTE` HTTP attempts were made in the last 60 s: the rest is deferred."""
+
+
 @dataclass
 class _Requests:
     """Bounded public GETs: at most `limit` HTTP attempts (a retry counts), none started too close
@@ -459,10 +476,18 @@ class _Requests:
     opener: http.Opener | None = None
     attempts: int = 0
     calls: int = 0
+    monotonic: Callable[[], float] = time.monotonic
+    per_minute: int = MAX_REQUESTS_PER_MINUTE
+    recent: list[float] = field(default_factory=list)
 
     def _open(self, request: Request, timeout: float) -> Any:
         if self.attempts >= self.limit:
             raise RequestBudgetExhausted(f"HTTP request budget of {self.limit} used")
+        at = self.monotonic()
+        self.recent[:] = [t for t in self.recent if at - t < 60.0]
+        if len(self.recent) >= self.per_minute:
+            raise RequestRateCapReached(f"{self.per_minute} requests in the last 60 s; the rest is deferred")
+        self.recent.append(at)
         self.attempts += 1
         # The package's default opener, looked up per call (the test suite's no-network guard patches it).
         return (self.opener or http._default_opener)(request, timeout)
@@ -533,8 +558,8 @@ def discovery_due(store: SnapshotStore, now: datetime) -> tuple[bool, str | None
 
 def discover(store: SnapshotStore, *, clock: Clock | None = None, sleep: Sleep = time.sleep,
              opener: http.Opener | None = None, force: bool = False) -> tuple[int, dict[str, Any]]:
-    """One bounded discovery scan, then (network-free) planning. The caller holds the lock and has
-    checked the access gate and protected windows."""
+    """INTERNAL: one bounded discovery scan, then (network-free) planning. It does not check the
+    access gate or the protected windows: call `run_discover`, which does, then takes the lock."""
     clock = clock or _now
     now = clock()
     report: dict[str, Any] = {"command": "pm-sports discover", "now_utc": _iso(now), "policy_version": POLICY_VERSION,
@@ -841,8 +866,8 @@ def _retry_tick_before(deadline: datetime, after: datetime) -> bool:
 def capture(store: SnapshotStore, *, clock: Clock | None = None, sleep: Sleep = time.sleep,
             opener: http.Opener | None = None, max_books: int = MAX_BOOKS_PER_RUN,
             max_requests: int = MAX_HTTP_REQUESTS_PER_RUN) -> tuple[int, dict[str, Any]]:
-    """One bounded capture tick: plan (no network), expire, then book GETs for due targets. The
-    caller holds the lock and has checked the access gate and protected windows."""
+    """INTERNAL: one bounded capture tick: plan (no network), expire, then book GETs for due targets.
+    It does not check the access gate or the protected windows: call `run_capture`, which does."""
     if not 0 < max_books <= MAX_BOOKS_PER_RUN or not 0 < max_requests <= MAX_HTTP_REQUESTS_PER_RUN:
         raise ValueError(f"max_books must be in 1..{MAX_BOOKS_PER_RUN}, max_requests in 1..{MAX_HTTP_REQUESTS_PER_RUN}")
     clock = clock or _now
@@ -926,13 +951,13 @@ def access_refusal(command: str, access_decision: str | None) -> dict[str, Any] 
     if access_decision:
         return None
     return {"command": command, "state": "BLOCKED_TERMS_REVIEW", "requests": 0,
-            "detail": (f"unattended Polymarket US collection is not cleared by the terms review ({TERMS_REVIEW}); "
-                       "an owner decision must be recorded and referenced in polymarket_sports.OWNER_ACCESS_DECISION. "
-                       "No network, no writes.")}
+            "detail": (f"no owner access decision is in force (polymarket_sports.OWNER_ACCESS_DECISION is None); "
+                       f"the Terms do not clear unattended collection ({TERMS_REVIEW}). No network, no writes.")}
 
 
 def _run(command: str, db: Path, body: Callable[[SnapshotStore], tuple[int, dict[str, Any]]], *, clock: Clock,
-         access_decision: str | None) -> tuple[int, dict[str, Any]]:
+         access_decision: Any) -> tuple[int, dict[str, Any]]:
+    access_decision = access_decision_now(access_decision)
     refusal = access_refusal(command, access_decision)
     if refusal is not None:
         return 0, refusal
@@ -952,8 +977,9 @@ def _run(command: str, db: Path, body: Callable[[SnapshotStore], tuple[int, dict
 
 def run_discover(db: str | Path, *, clock: Clock | None = None, sleep: Sleep = time.sleep,
                  opener: http.Opener | None = None, force: bool = False,
-                 access_decision: str | None = OWNER_ACCESS_DECISION) -> tuple[int, dict[str, Any]]:
-    """`pm-sports discover`: access gate, protected windows, lock, cadence, one bounded scan."""
+                 access_decision: Any = _GATE) -> tuple[int, dict[str, Any]]:
+    """`pm-sports discover`: access gate (read now), protected windows, lock, cadence, one bounded scan.
+    The only public entry point for a networked discovery: `discover()` itself is internal."""
     clock = clock or _now
     return _run("pm-sports discover", Path(db),
                 lambda store: discover(store, clock=clock, sleep=sleep, opener=opener, force=force),
@@ -963,8 +989,9 @@ def run_discover(db: str | Path, *, clock: Clock | None = None, sleep: Sleep = t
 def run_capture(db: str | Path, *, clock: Clock | None = None, sleep: Sleep = time.sleep,
                 opener: http.Opener | None = None, max_books: int = MAX_BOOKS_PER_RUN,
                 max_requests: int = MAX_HTTP_REQUESTS_PER_RUN,
-                access_decision: str | None = OWNER_ACCESS_DECISION) -> tuple[int, dict[str, Any]]:
-    """`pm-sports capture`: access gate, protected windows, lock, one bounded capture tick."""
+                access_decision: Any = _GATE) -> tuple[int, dict[str, Any]]:
+    """`pm-sports capture`: access gate (read now), protected windows, lock, one bounded capture tick.
+    The only public entry point for networked captures: `capture()` itself is internal."""
     clock = clock or _now
     return _run("pm-sports capture", Path(db),
                 lambda store: capture(store, clock=clock, sleep=sleep, opener=opener, max_books=max_books,
@@ -999,7 +1026,7 @@ def related_markets(store: SnapshotStore, *, now: datetime) -> dict[str, Any]:
     how much was read. Nothing here is executable, ranked or compared with a sportsbook price."""
     scan = latest_usable_scan(store)
     events, odds_meta = odds_schedule(store)
-    out: dict[str, Any] = {"label": LABEL, "executable": False, "ranked": False, "absence_is_evidence": False,
+    out: dict[str, Any] = {"label": LABEL, "source": ATTRIBUTION, "executable": False, "ranked": False, "absence_is_evidence": False,
                            "odds_schedule": odds_meta, "catalog": catalog_state(store, now=now), "events": {}}
     markets = _scan_markets(scan) if scan is not None else []
     targets_by_market: dict[str, list[str]] = {}
@@ -1064,8 +1091,9 @@ def market_history(store: SnapshotStore, market_slug: str) -> list[dict[str, Any
     return out
 
 
-def status(store: SnapshotStore, *, now: datetime, access_decision: str | None = OWNER_ACCESS_DECISION) -> dict[str, Any]:
+def status(store: SnapshotStore, *, now: datetime, access_decision: Any = _GATE) -> dict[str, Any]:
     """Read-only summary: gate, catalog, targets by offset and state, next due, recent misses."""
+    access_decision = access_decision_now(access_decision)
     by_offset: dict[str, dict[str, int]] = {}
     upcoming, misses = [], []
     for t in store.pm_sports_targets():
@@ -1081,7 +1109,7 @@ def status(store: SnapshotStore, *, now: datetime, access_decision: str | None =
             misses.append({"target_id": t["target_id"], "reason": t["state_reason"], "at_utc": t["state_at_utc"]})
     due, next_due = discovery_due(store, now)
     return {"command": "pm-sports status", "now_utc": _iso(now), "policy_version": POLICY_VERSION,
-            "access": "CLEARED" if access_decision else "BLOCKED_TERMS_REVIEW", "access_decision": access_decision,
+            "access": ACCESS_ALLOWED if access_decision else "BLOCKED_TERMS_REVIEW", "access_decision": access_decision,
             "catalog": catalog_state(store, now=now), "discovery_due": due, "discovery_next_due_utc": next_due,
             "targets_by_offset": dict(sorted(by_offset.items())),
             "next_due": sorted(upcoming, key=lambda u: u["due_from_utc"])[:10],
@@ -1089,11 +1117,12 @@ def status(store: SnapshotStore, *, now: datetime, access_decision: str | None =
 
 
 def terminal_view(db_path: str | Path, *, now: datetime,
-                  access_decision: str | None = OWNER_ACCESS_DECISION) -> dict[str, Any]:
+                  access_decision: Any = _GATE) -> dict[str, Any]:
     """What the Terminal shows (read-only, network-free, never raises): schema pm-sports-status/1.
     `state`: BLOCKED_TERMS_REVIEW, NO_STORE, ERROR, NO_SCAN, or the catalog state."""
-    out: dict[str, Any] = {"schema": DASHBOARD_SCHEMA, "as_of_utc": iso_z(now), "label": LABEL,
-                           "access": "CLEARED" if access_decision else "BLOCKED_TERMS_REVIEW", "executable": False}
+    access_decision = access_decision_now(access_decision)
+    out: dict[str, Any] = {"schema": DASHBOARD_SCHEMA, "as_of_utc": iso_z(now), "label": LABEL, "source": ATTRIBUTION,
+                           "access": ACCESS_ALLOWED if access_decision else "BLOCKED_TERMS_REVIEW", "executable": False}
     try:
         store = SnapshotStore.open_readonly(db_path)
     except ReadOnlyStoreError as exc:
@@ -1130,7 +1159,7 @@ def _discovery_health(scans: Sequence[Any]) -> str:
 
 
 def freshness_records(store: SnapshotStore, *, now: datetime,
-                      access_decision: str | None = OWNER_ACCESS_DECISION) -> list[dict[str, Any]]:
+                      access_decision: Any = _GATE) -> list[dict[str, Any]]:
     """The two sources this pilot owns, one record each at `now`, as plain values: discovery
     (acquired by POLL) and research book captures (EVENT_RELATIVE), both run by their own timers
     (fabric mode EXTERNAL_SCHEDULE). `fabric_provider` turns them
@@ -1139,7 +1168,7 @@ def freshness_records(store: SnapshotStore, *, now: datetime,
     cat = catalog_state(store, now=now)
     scans = store.pm_sports_scans(league=LEAGUE, limit=1)
     usable = latest_usable_scan(store)
-    blocked = not access_decision
+    blocked = not access_decision_now(access_decision)
     protected = protected_window_at(now, now + MAX_RUN)
     complete = next((r for r in store.pm_sports_scans(league=LEAGUE) if int(r["filter_complete"])), None)
     # A receipt is a successful acquisition only: a scan read to its empty page. A partial scan is
@@ -1234,7 +1263,8 @@ def fabric_policies() -> tuple[Any, Any]:
     from .price_observations import PROTECTED_WINDOWS_ET
 
     windows = tuple(f"{name} {a:%H:%M}-{b:%H:%M} America/New_York" for name, a, b in PROTECTED_WINDOWS_ET)
-    gate = f"; disabled until an owner access decision ({TERMS_REVIEW})"
+    # Static text: the declared policy must not change with the gate (the fabric compares policies).
+    gate = f"; runs only while polymarket_sports.OWNER_ACCESS_DECISION is set (owner risk decision; {TERMS_REVIEW})"
     return (
         SourcePolicy(
             source_id=HEALTH_DISCOVERY, domain="sports", mode=AcquisitionMode.EXTERNAL_SCHEDULE,
@@ -1242,8 +1272,8 @@ def fabric_policies() -> tuple[Any, Any]:
             description="Polymarket US NFL moneyline discovery (a filtered /v1/events listing, never a full-catalog "
                         "COMPLETE); objective: the registered nfl_events max_age" + gate,
             policy_version=POLICY_VERSION,
-            schedule_owner="systemd edgelab-pm-sports-discover.timer (proposed, not installed) + "
-                           "edge_lab.polymarket_sports.discover",
+            schedule_owner="systemd edgelab-pm-sports-discover.timer 02,08,14,20:40 America/New_York (installed, "
+                           "enabled only by the runbook's pilot activation) + edge_lab.polymarket_sports.run_discover",
             max_useful_age=get_source(HEALTH_DISCOVERY).max_age["nfl_events"],
             min_safe_cadence=DISCOVERY_INTERVAL, max_useful_cadence=DISCOVERY_INTERVAL,
             pacing=f"{PACER_INTERVAL_S:g} s between requests; at most {MAX_DISCOVERY_PAGES} pages per scan",
@@ -1256,8 +1286,8 @@ def fabric_policies() -> tuple[Any, Any]:
             description="Polymarket US NFL research book captures at T-24h / T-6h / T-60m for markets related (never "
                         "equivalent) to an Odds API event; objective: the registered book max_age" + gate,
             policy_version=POLICY_VERSION,
-            schedule_owner="systemd edgelab-pm-sports.timer :10/:25/:40/:55 America/New_York (proposed, not "
-                           "installed) + edge_lab.polymarket_sports.capture",
+            schedule_owner="systemd edgelab-pm-sports.timer :10/:25/:40/:55 America/New_York (installed, enabled "
+                           "only by the runbook's pilot activation) + edge_lab.polymarket_sports.run_capture",
             max_useful_age=get_source(HEALTH_BOOK).max_age["book"],
             min_safe_cadence=TICK_INTERVAL, max_useful_cadence=TICK_INTERVAL,
             pacing=f"{PACER_INTERVAL_S:g} s between requests; own lock <db>.pm-sports.lock",
@@ -1314,7 +1344,7 @@ def fabric_provider(context: Any, now: datetime) -> list[Any]:
             receipt_ts=receipt, missed_count=rec["missed_count"],
             recent_misses=tuple(m[:200] for m in rec["recent_misses"]),
             usable_for_research=research, usable_for_decision=decision,
-            notes=(label, "the pilot timers are proposed and not installed; their state is not observable here"),
+            notes=(label, "whether the pilot timers are enabled is not observable here"),
             details={k: rec[k] for k in ("catalog_state", "last_attempt_status", "missed_scope", "planning_scan_utc")
                      if k in rec}))
     return out
@@ -1339,6 +1369,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     s.add_argument("--db", default="data/edge_lab.sqlite3")
     s.add_argument("--market", help="also print one market's targets and attempts (Polymarket US slug)")
     args = parser.parse_args(list(argv) if argv is not None else None)
+    if args.cmd == "capture" and not (0 < args.max_books <= MAX_BOOKS_PER_RUN
+                                      and 0 < args.max_requests <= MAX_HTTP_REQUESTS_PER_RUN):
+        print(f"--max-books must be in 1..{MAX_BOOKS_PER_RUN} and --max-requests in 1..{MAX_HTTP_REQUESTS_PER_RUN}",
+              file=sys.stderr)
+        return 2
     if args.cmd == "discover":
         code, report = run_discover(args.db, force=args.force)
     elif args.cmd == "capture":

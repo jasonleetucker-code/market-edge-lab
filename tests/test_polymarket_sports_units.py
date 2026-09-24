@@ -1,9 +1,7 @@
 """The Polymarket US NFL pilot units (ADR 0032): hardened, networked for the public gateway only,
-no secrets, non-persistent timers pinned to the code, and not enabled by the installer.
-
-The timers are committed as `*.timer.proposed`: install.sh (coordinator-owned) must list every
-`*.timer` in UNITS, and the separately activated set is a single value today. The coordinator
-renames them when it extends that set (see ADR 0032, "Coordinator integration")."""
+no secrets, non-persistent timers pinned to the code, installed with the other units but
+separately activated: install.sh never enables them (runbook section 5e does, under the owner's
+recorded risk decision)."""
 
 from __future__ import annotations
 
@@ -52,9 +50,9 @@ def test_services_are_hardened_bounded_and_load_no_secret():
     assert ps.MAX_RUN < timedelta(minutes=5)
 
 
-def test_proposed_timers_are_nonpersistent_staggered_and_pinned_to_the_code():
-    cap = _parse("edgelab-pm-sports.timer.proposed")
-    disc = _parse("edgelab-pm-sports-discover.timer.proposed")
+def test_timers_are_nonpersistent_staggered_and_pinned_to_the_code():
+    cap = _parse("edgelab-pm-sports.timer")
+    disc = _parse("edgelab-pm-sports-discover.timer")
     assert cap[("Timer", "OnCalendar")] == ["*-*-* *:10/15:00 America/New_York"]
     assert ps.TICK_INTERVAL == timedelta(minutes=15)
     assert cap[("Timer", "Persistent")] == ["false"] and disc[("Timer", "Persistent")] == ["false"]
@@ -81,7 +79,13 @@ def test_capture_ticks_next_to_the_settlement_windows_finish_before_them():
         assert (ps.protected_refusal(at, "pm-sports capture") is None) is allowed, et
 
 
-def test_the_installer_does_not_know_or_enable_the_pilot_timers():
+def test_the_installer_installs_but_never_enables_the_pilot_timers():
     units = re.search(r"UNITS=\(([^)]*)\)", INSTALL).group(1).split()
-    assert not [u for u in units if u.startswith("edgelab-pm-sports")]
-    assert not list(UNITS.glob("edgelab-pm-sports*.timer"))  # staged, never picked up by the installer's list
+    separate = re.search(r"SEPARATELY_ACTIVATED=\(([^)]*)\)", INSTALL).group(1).split()
+    for unit in ("edgelab-pm-sports", "edgelab-pm-sports-discover"):
+        assert unit in units and unit in separate  # installed and verified, activated separately
+        assert (UNITS / f"{unit}.timer").is_file() and (UNITS / f"{unit}.service").is_file()
+    assert not list(UNITS.glob("*.proposed"))
+    assert "systemctl enable" not in INSTALL.split("cat <<EOF")[0]  # the installer enables nothing itself
+    # The printed stop line names every separately activated timer too.
+    assert "disable --now ${CORE_TIMERS[*]/%/.timer} ${SEPARATELY_ACTIVATED[*]/%/.timer}" in INSTALL

@@ -1,11 +1,9 @@
-# PROPOSED unit (ADR 0032). Rename to edgelab-pm-sports-discover.timer only together with the
-# coordinator's install.sh change (add it to UNITS and to the separately activated set, so the
-# installer never enables it). Enable only after the owner access decision, exact-head CI green
-# and an independent review.
 [Unit]
 Description=Market Edge Lab: Polymarket US NFL discovery every 6 hours (ADR 0032)
 
 [Timer]
+# Installed with the other units but separately activated (install.sh SEPARATELY_ACTIVATED): the
+# installer never enables it. Runbook section 5e enables it under the owner's recorded risk decision.
 # 02:40, 08:40, 14:40 and 20:40 America/New_York: staggered off the odds (:00/:15), observe
 # (:05/:20) and pm-sports capture (:10/:25) ticks, and outside every protected window.
 OnCalendar=*-*-* 02,08,14,20:40:00 America/New_York

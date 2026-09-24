@@ -1,13 +1,26 @@
 # ADR 0032: Polymarket US NFL research pilot (bounded public discovery and research book captures)
 
-**Status:** Implemented, **disabled.** The access gate is closed; the timers are committed as
-`*.timer.proposed`. Authority: the owner directive of 2026-09-24 (evening),
-`docs/owner/2026-09-24-freshness-fabric-sports-directive.md`, section 17 items 2 and 3, and
-coordinator contract C2.
-- **Why disabled.** The terms/access review
-  (`experiments/multi_venue/polymarket_us_sports_terms_2026-09-24.md`) did **not** clear
-  unattended collection. The directive's pre-enable checklist therefore cannot be completed until
-  the owner decides.
+**Status:** Implemented. It runs under the **owner's recorded risk decision of 2026-09-24**; the
+Terms do **not** clear it.
+- **Gate.** `OWNER_ACCESS_DECISION = "OWNER_RISK_DECISION_2026-09-24"`, read at call time.
+- **Timers.** Installed and separately activated: install.sh never enables them. Runbook §5e does,
+  after review and exact-head CI.
+- **Authority:**
+  - the owner directive of 2026-09-24 (evening),
+    `docs/owner/2026-09-24-freshness-fabric-sports-directive.md`, section 17 items 2 and 3;
+  - coordinator contract C2;
+  - the owner's risk decision, relayed by the coordinator. Verbatim: "its my risk decision. just
+    do it".
+- **Terms.** The terms/access review
+  (`experiments/multi_venue/polymarket_us_sports_terms_2026-09-24.md`) found that the Terms do
+  **not** clear unattended collection. That verdict stands: the owner decision is a risk
+  acceptance, not a Polymarket grant.
+- **Attested permission.** An owner-attested permission text is recorded there as
+  OWNER_ATTESTED_EXPRESS_PERMISSION — UNVERIFIED (no source artifact). It is not the basis for
+  activation, but its conditions are honoured:
+  - at most 100 requests a minute;
+  - Polymarket US attribution;
+  - no redistribution.
 - **What this does not authorize:** no account, credential, order path, Polymarket International,
   VPN or geoblock circumvention, paid service or Odds API credit.
 
@@ -121,9 +134,18 @@ Two traps:
   - an unexpected error.
 
   Refusals exit 0: the terms gate, a protected window, lock busy, not due, budget, deadline.
-- **Access gate.** `OWNER_ACCESS_DECISION = None` refuses every networked run before the network
-  (BLOCKED_TERMS_REVIEW, exit 0, nothing written). Lifting it is a reviewed code change that
-  references the owner's recorded decision.
+- **Access gate.** `OWNER_ACCESS_DECISION`, read at call time by `run_discover` and `run_capture`
+  (`discover()`, `capture()` and `read_events_listing` are internal and never check it).
+  - Set, as now: the owner's risk decision allows networked runs.
+  - None: every networked run refuses before the network (BLOCKED_TERMS_REVIEW, exit 0, nothing
+    written).
+  - Changing it is a reviewed code change.
+- **Attested conditions.**
+  - `MAX_REQUESTS_PER_MINUTE = 100` is enforced per run over a 60 s window; the rest is deferred,
+    never FAILED.
+  - Every stored snapshot names `polymarket_us_public`, and every Terminal payload carries
+    `source: "Polymarket US (gateway.polymarket.us public API)"`.
+  - Storage is private: the dashboard is tailnet-only.
 - **Storage:** evidence schema **v7**, additive (`pm_sports_scans`, `pm_sports_targets`,
   `pm_sports_observations`, with triggers on those tables only).
   - Rollback: `python -m edge_lab.storage mark-v6-for-rollback --db PATH`. The real v6 code
@@ -180,8 +202,7 @@ Two traps:
 ## Shutoff
 
 - **Stop now:**
-  `sudo systemctl disable --now edgelab-pm-sports.timer edgelab-pm-sports-discover.timer`, once
-  the timers are installed.
+  `sudo systemctl disable --now edgelab-pm-sports.timer edgelab-pm-sports-discover.timer`.
 - **Close the gate in code:** set `polymarket_sports.OWNER_ACCESS_DECISION = None` and deploy.
   Every run then refuses before the network.
 - **Roll the schema back:** stop the timers, then
@@ -205,39 +226,34 @@ Two traps:
 
 ## Reconsider when
 
-- the owner records an access decision, or Polymarket US grants or denies written permission;
+- Polymarket US objects, revokes, rate-limits or blocks the host (shut off at once), or grants
+  or denies written permission through a verifiable channel;
+- the attested permission text gets a source artifact (record and hash it) or is withdrawn;
 - Polymarket US publishes an API or data licence, a main-line marker, or a total or cursor on its
   listings;
 - the Terms change (re-read and re-hash source 21 of the review);
 - a measured week shows the caps are too tight or too loose, or discovery storage matters.
 
-## Coordinator integration (not done by this lane)
+## Integration (done in this change)
 
-- **install.sh (Lane A / coordinator).**
-  - Extend the separately activated set to a list, for example
-    `SEPARATELY_ACTIVATED=(edgelab-odds edgelab-pm-sports edgelab-pm-sports-discover)`, and build
-    CORE_TIMERS by membership.
-  - Add both pilot units to `UNITS`.
-  - Rename the two `*.timer.proposed` files to `*.timer` in the same change.
-  - Update `tests/test_deploy_units.py`: its `SEPARATELY_ACTIVATED=edgelab-odds` assertion, and
-    `tests/test_polymarket_sports_units.py::test_the_installer_does_not_know_or_enable_the_pilot_timers`.
-- **Freshness Fabric registry: done in this change** (Lane A merged as `8c5b9e6`). One
-  `REGISTRY` entry,
+- **install.sh:**
+  - `SEPARATELY_ACTIVATED=(edgelab-odds edgelab-pm-sports edgelab-pm-sports-discover)`;
+  - CORE_TIMERS is built by membership;
+  - both pilot units are in `UNITS`: installed and verified, never enabled by the installer.
+- **Timers.** Renamed from `*.timer.proposed` to `*.timer`.
+- **Freshness Fabric registry.** One `REGISTRY` entry,
   `FabricProvider(polymarket_sports.FABRIC_PROVIDER_NAME, polymarket_sports.fabric_policies(), polymarket_sports.fabric_provider)`,
   plus `polymarket_sports` in the module's `from . import ...` line.
-  - The name is `polymarket_us_nfl_pilot`, because Lane A's own test registers a demo provider
-    named `polymarket_us_nfl`.
-  - Once the timers are renamed, `edgelab-pm-sports.timer` and `edgelab-pm-sports-discover.timer`
-    are already named in the policies' `schedule_owner`. The every-timer-is-explained test then
-    holds.
-- **Stop lines (runbook and README).** They must name `edgelab-pm-sports.timer` and
-  `edgelab-pm-sports-discover.timer` (services `edgelab-pm-sports.service` and
-  `edgelab-pm-sports-discover.service`) when the timers are installed.
-- **Runbook, HANDOFF and verify_production (coordinator):**
-  - a v7 → v6 rollback step, `mark-v6-for-rollback`, before the existing v6 → v5 one;
-  - an activation section: owner access decision, the gate code change, enabling both timers,
-    and verifying one discover and one capture from stored rows;
-  - a verify_production state for the two timers (installed/disabled) and the latest scan's
-    coverage;
-  - an index line for this ADR in `docs/decisions/README.md`;
-  - source rows in `docs/DATA_PROVENANCE.md`.
+  - The name is `polymarket_us_nfl_pilot`, because Lane A's test uses `polymarket_us_nfl` for a
+    demo.
+  - Both timers are named in the policies' `schedule_owner`.
+- **Runbook and README:**
+  - every stop and `is-enabled` line names `edgelab-pm-sports.timer` and
+    `edgelab-pm-sports-discover.timer`;
+  - the rollback has a v7 → v6 step (`mark-v6-for-rollback`) and removes the pilot units for
+    every target before this ADR;
+  - runbook §5e is the pilot activation.
+- **`verify_production.sh`.** Adds `PM_SPORTS_TIMER` and `PM_SPORTS_DISCOVER_TIMER`, as systemd
+  reports them.
+- **Also updated:** `docs/decisions/README.md` (index) and `docs/DATA_PROVENANCE.md` (source
+  rows and the v7 tables).

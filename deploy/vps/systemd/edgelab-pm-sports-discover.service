@@ -13,8 +13,8 @@ Group=edgelab
 EnvironmentFile=/etc/market-edge-lab/env
 WorkingDirectory=/var/lib/market-edge-lab
 # No secrets: the public gateway needs no key and none is loaded. The code refuses every run
-# (BLOCKED_TERMS_REVIEW, no network, exit 0) until an owner access decision is recorded
-# (edge_lab.polymarket_sports.OWNER_ACCESS_DECISION). Bounds: at most 6 pages, 12 HTTP requests
+# (BLOCKED_TERMS_REVIEW, no network, exit 0) while no owner access decision is in force
+# (edge_lab.polymarket_sports.OWNER_ACCESS_DECISION is None). Bounds: at most 6 pages, 12 HTTP requests
 # (one retry each), a 1 s pacer and a 3-minute run deadline; about 0.35 MB per page.
 ExecStart=/opt/market-edge-lab/venv/bin/python -m edge_lab.cli pm-sports discover --db /var/lib/market-edge-lab/db/edge_lab.sqlite3
 TimeoutStartSec=5min
