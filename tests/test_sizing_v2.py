@@ -608,6 +608,23 @@ def test_flat_unit_that_buys_no_contract_is_risk_limit():
     assert below.verdict == "ZERO_EDGE" and below.binding_constraint == "MIN_EDGE"
 
 
+def test_polymarket_us_schedule_from_pr58_maps_to_its_claim_basis():
+    # PR #58's Polymarket US schedule prices trades, but while its SETTLEMENT_AND_TRANSFER_FEES
+    # component is unverified the point-in-time claim basis is NONE: research sizing refuses it.
+    from edge_lab.fee_schedules import POLYMARKET_US_EXCHANGE_SCOPE, schedule_for, verification_at
+    schedule = schedule_for("polymarket_us", POLYMARKET_US_EXCHANGE_SCOPE, as_of=AS_OF)
+    poly = market("some-slug", venue="polymarket_us")
+    req = binary_request(candidate=PositionCandidate(poly, "YES", ("YES",), ladder(poly, "YES", [("0.40", 10)]),
+                                                     "ev", "cl"))
+    r = sv2.recommend(req, sv2.POLICY_C, fee_schedule=schedule)
+    if verification_at(schedule, AS_OF, "some-slug").claimable:
+        assert r.verdict == "SIZE"  # completed evidence: the claim path applies
+    else:
+        assert r.verdict == "UNSUPPORTED" and "FEE_UNVERIFIED" in r.explanation
+    # without an explicit schedule (the scope needs the market's own feeCoefficient) it is refused
+    assert sv2.recommend(req, sv2.POLICY_C).verdict == "UNSUPPORTED"
+
+
 def test_research_candidate_is_a_frozen_policy_in_the_engine():
     from edge_lab import sizing_eval
     c = sv2.POLICY_CANDIDATE

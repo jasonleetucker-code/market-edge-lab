@@ -50,9 +50,9 @@ verified on 2026-09-24 against publisher pages, DOIs or arXiv. Discrepancies are
 ### 2.1 Kelly (1956): the growth-optimal criterion
 
 - **Citation.** Kelly, J. L., Jr. "A New Interpretation of Information Rate." *Bell System
-  Technical Journal* 35(4): 917–926, 1956. doi:10.1002/j.1538-7305.1956.tb03809.x.
-  (Some later papers misattribute it to *IRE Trans. Information Theory*; the BSTJ venue is
-  the verified one.)
+  Technical Journal* 35(4): 917–926, 1956. doi:10.1002/j.1538-7305.1956.tb03809.x. It was
+  reprinted in *IRE Transactions on Information Theory* IT-2(3): 185–189, 1956, which is
+  why some papers cite that venue. Both are correct; the BSTJ article is the original.
 - **Method.** A gambler with a noisy private signal maximizes the expected logarithm of
   wealth. The maximal growth rate equals the information rate of the channel. With odds,
   the optimal fraction on a single binary bet bought at all-in price c and paying 1 is
@@ -352,13 +352,15 @@ risk.assess report + RiskPolicy  ->  PortfolioState (capacity, exposures, stops)
 edge-lab sizing simulate --paths 200 --rounds 250 --workers 18
 ```
 
-It is seeded and deterministic, and took about 22 minutes on 18 cores. Smaller `--paths`
+It is seeded and deterministic for a given Python version (the report records the Python version
+and the source hashes). Run 3 took about 13 minutes on 18 cores. Smaller `--paths`
 and `--rounds` give quick checks.
 
 ### 7.1 World model, and a failed first draft (recorded)
 
 - **Setup.**
-  - Each round is one cluster of 4 mutually exclusive brackets.
+  - Each round is one cluster of 4 mutually exclusive brackets. The two-cluster scenarios
+    (independent_clusters and the two duplicate scenarios) have two.
   - The market belief m ~ Dirichlet(2), and the truth q ~ Dirichlet(30 m). The market is
     therefore calibrated: E[q | m] = m, and a test checks it.
   - The model reports softmax(tau (log m + rho (log q - log m) + 0.15 z)). rho is the
@@ -378,12 +380,20 @@ and `--rounds` give quick checks.
   model as run 2, except that sizer-side scenarios drew separate worlds. It was superseded
   so those comparisons use common random numbers, and H-nominal-half and G were added to
   the sweeps. Its conclusions are the same.
-- **Variant runs.** Run 2 has **188** (18 distinct policy variants). Counting run 1, **359**
-  variant runs were evaluated.
+- **Run 2** (committed as `results/run2_superseded_*`, 188 variant runs) had a **confound
+  in policy H**: the engine applied the Kelly fraction *after* the shared cluster budget.
+  Joint 1/2 Kelly therefore got 1/2 × (the budget-capped optimum), while sequential
+  1/2 Kelly (D) got min(1/2 Kelly, cap). Found in review of PR #60 and fixed: the fraction
+  now applies before caps and budgets, and a test checks that. **Run 3** is the current
+  result. Same seed and size; simulation v2.
+  - Only the joint policies (H, H-nominal-half, H-RCK) changed.
+  - Every other variant, and the uncertainty comparison, is identical to run 2.
+- **Variant runs.** Run 3 has **188** (18 distinct policy variants). Counting runs 1 and 2,
+  **547** variant runs were evaluated.
 
 ### 7.2 Results by metric
 
-Wealth is shown as a multiple of the starting bankroll. The figures are from run 2.
+Wealth is shown as a multiple of the starting bankroll. The figures are from run 3.
 
 | Question | Winner | Evidence |
 |---|---|---|
@@ -391,11 +401,11 @@ Wealth is shown as a multiple of the starting bankroll. The figures are from run
 | Growth per unit of tail risk (edge real and calibrated) | **D 1/2 Kelly, G, H-nominal-half** | modest_edge: D +0.0048, p10 1.76×; G +0.0040, P(DD>50%) 0.02. C has p10 1.61× but CVaR5 0.25× and P(DD>50%) 0.49 |
 | Survival with no information (costs make it negative) | **robust policies F-half, G-robust, H, H-RCK** | Wealth unchanged (median 1.000), 0 drawdown. C: median 0.34×, 15% ruin. D: P(DD>50%) 0.59 |
 | Survival with an anti-informative model | **G-robust / H-RCK** (median -13%) | C, D, E, G (nominal) and H-nominal: 70-100% ruin. The nominal drawdown constraint does not protect against a wrong model |
-| Overconfident model (tau 1.5) | **H-RCK / G-robust**: P(DD>50%) 0.01, no ruin | C: 39% ruin; D: 13% ruin, p10 0.095×. Robust sets absorb part of the overconfidence |
-| Severe overconfidence (tau 2) | nothing is safe; **H-RCK** is least bad | H-RCK: ruin 0, p10 0.62×, P(DD>50%) 0.37. C: 78% ruin. D: 38% ruin |
+| Overconfident model (tau 1.5) | **H-RCK / G-robust**: P(DD>50%) 0.01, no ruin | C: 39% ruin; D: 13% ruin, p10 0.095×; H-nominal-half: 9% ruin, p10 0.23×. Robust sets absorb part of the overconfidence |
+| Severe overconfidence (tau 2) | nothing is safe; **H-RCK** is least bad | H-RCK: ruin 0, p10 0.61×, P(DD>50%) 0.40. C: 78% ruin. D: 38% ruin |
 | Unseen execution cost +$0.02 to +$0.04 per contract | robust policies are nearly unaffected | +$0.04: C growth ≈ 0 with 14% ruin; D p10 0.49×; H-RCK p10 0.97× |
 | Correlation misspecified (duplicate listings believed independent) | the **shared cap** helps the aggressive policies | C p5: 0.10× misspecified vs 0.79× with a shared cap; ruin 7% vs 3%. Robust and fractional policies rarely reach the cap |
-| Joint vs sequential cluster sizing | about the same at 1/2 Kelly | H-nominal-half vs D: growth +0.0045 vs +0.0048, P(DD>50%) 0.07 vs 0.12 (modest_edge). Joint trades a little growth for a thinner tail |
+| Joint vs sequential cluster sizing (now unconfounded, run 3) | about the same at 1/2 Kelly | modest_edge, H-nominal-half vs D: growth +0.0046 vs +0.0048, median 3.49× vs 3.80×, p10 1.72× vs 1.76×, P(DD>50%) 0.07 vs 0.12. Overconfident: ruin 9% vs 13%. Joint sizing gives up a little growth for a thinner tail; it is not a large effect in this world |
 | Capital locked | robust 1/2-Kelly policies commit about 0.1-2% of wealth per round | C commits 8-20% |
 
 Main tradeoff: with a robust set at n_eff = 100, the robust policies give up almost all of
@@ -414,6 +424,10 @@ automatically as that evidence accumulates.
 - **The result.** The rule selected **Dirichlet, n_eff = 30** (min p10 0.934).
 - **This is a flaw of the rule.** At n_eff 30 the policy barely trades (growth +0.00006),
   so the rule rewards abstention.
+- **The two families do not have matched coverage.** Wilson uses per-state one-sided 95%
+  bounds, with no multiplicity split. The Dirichlet box uses Bonferroni-split tails for at
+  least 90% joint posterior coverage. At the same n_eff the Dirichlet box is therefore
+  wider, so the comparison is partly a comparison of widths, not only of families.
 - **Family comparison per n_eff (min p10).** Mixed:
   - n 30: Dirichlet 0.934 vs Wilson 0.851;
   - n 100: Wilson 0.913 vs Dirichlet 0.887;
@@ -430,8 +444,9 @@ automatically as that evidence accumulates.
 - It shows nothing about whether EXP-001 has an edge.
 - The world model is ours. Real bracket markets may be miscalibrated in structured ways
   (favorite-longshot), depth may be thinner, and fills are adversely selected.
-- One cluster per round. There is no capital-lock across days, because positions settle
-  within the round, so turnover equals capital committed.
+- Every position settles within its round, so there is no capital lock across days, and
+  turnover equals capital committed. Most scenarios have one cluster per round; three have
+  two.
 - Hard caps in the study are cash, depth and 25% per cluster. The operational $1
   position cap would bind every policy at today's bankroll.
 
@@ -454,10 +469,13 @@ decision records. Its output is labelled IN-SAMPLE, not fills, and not evidence 
   - the robust Busseti-Ryu-Boyd drawdown constraint (alpha 0.7, beta 0.1);
   - hard caps through `risk.assess` and STARTER_MAX_7D_V1.
 
-  It and its single-candidate twin G-robust are the only variants with no ruin and
-  P(DD>50%) <= 0.01 in every main scenario. H-RCK has the better lower tail under
-  overconfidence (p10 0.896 vs 0.886; at tau 2, 0.62×). It is preferred because it sizes
-  the cluster jointly.
+  - In run 3, it and its single-candidate twin G-robust are the only variants with no ruin
+    and P(DD>50%) <= 0.01 in every main scenario. H-RCK has the slightly better lower tail
+    under overconfidence (p10 0.898 vs 0.886; at tau 2, 0.61×). It is preferred because it
+    sizes the cluster jointly.
+  - **It was chosen after seeing the results** of 188 variant runs over 18 variants. That is
+    a selection effect, so the choice is itself a hypothesis for the prospective experiment.
+  - It is frozen in the engine as `sizing_v2.POLICY_CANDIDATE` v1.
 - **Operational use:** only through the prospective experiment in
   `experiments/sizing_v2/PROPOSED_PREREGISTRATION.md`, after EXP-001 Stage B evidence
   exists.

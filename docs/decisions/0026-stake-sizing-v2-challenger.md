@@ -34,9 +34,9 @@ Phase 3 and owner correction 2). Research and shadow only. Nothing here changes 
    separately recorded sizing experiment passes its own criteria.
 
 **Decision.** Alternative 3.
-- `sizing.py`, `fees.py`, `exp001_shadow.py` and every EXP-001 artifact stay byte-identical.
-  `tests/test_sizing_v2.py` pins the three modules by SHA-256, and the existing invariant
-  pins the EXP-001 files. The operational account keeps `EXP-001-fixed-1-v1`.
+- `sizing.py`, `fees.py`, `exp001_shadow.py` and every EXP-001 artifact stay unchanged.
+  `tests/test_sizing_v2.py` pins the three modules by an LF-normalized content SHA-256, and
+  the existing invariant pins the EXP-001 files the same way. The operational account keeps `EXP-001-fixed-1-v1`.
 - `src/edge_lab/sizing_v2.py` separates seven layers, and each has one owner:
   1. **Probability model**: an input. A vector over the K mutually exclusive outcome states
      of one cluster; a binary is K = 2.
@@ -54,7 +54,9 @@ Phase 3 and owner correction 2). Research and shadow only. Nothing here changes 
      - The adverse vector comes out of the payoff: low P(YES) for a YES, high P(YES) for a
        NO, and the losing states' mass for a multi-state position. No side is assumed.
   3. **Execution cost**: `walk_ladder` with the market's `price_grid`, then
-     `price_depth_fill` under `schedule_for(venue, scope)`.
+     `price_depth_fill` under `schedule_for(venue, scope, as_of=...)` (`sizing_v2.fee_basis`).
+     A venue whose scope needs market metadata (Polymarket US `feeCoefficient`) must be
+     given its schedule explicitly; without one it is refused.
      - The CONSERVATIVE_BOUND per-contract allowance is added when that is the claim basis.
      - An unsupported schedule, or a claim basis of NONE, is UNSUPPORTED.
      - Nothing beyond the captured depth is priced.
@@ -65,8 +67,15 @@ Phase 3 and owner correction 2). Research and shadow only. Nothing here changes 
      - The search runs on the concave pre-rounding problem (bisection on the discrete
        derivative). A local scan then decides with the exact cent-rounded cost; small
        counts are scanned exhaustively.
-     - Joint (policy H): coordinate ascent under the shared cluster budget, or exhaustive
-       search on small grids.
+     - Joint (policy H): exhaustive search when the integer grid has at most 4,096 points.
+       Above that it uses coordinate ascent under the shared cluster budget, which is a
+       **heuristic**: it converges on this concave objective in the tested cases, but it is
+       not proven to find the integer optimum.
+     - **The Kelly fraction applies before limits.** A fractional policy takes floor(fraction
+       x the optimum of the problem whose caps and shared budget are divided by the
+       fraction), then re-imposes them. So 1/2 Kelly under a budget B is min(1/2 Kelly, B),
+       whether sized jointly or alone. The first version applied the fraction after the
+       budget, which halved the joint policy's capped size (review of PR #60; tested).
      - Policies A-H are frozen, versioned `SizingPolicyV2` values.
   6. **Hard caps after the optimizer**, each recorded and the binding one named:
      - liquidity, position, event, cluster, portfolio;
@@ -81,9 +90,14 @@ Phase 3 and owner correction 2). Research and shadow only. Nothing here changes 
 - Output: `SizingRecommendation` with the directive's fields plus a canonical input hash and
   output hash.
   - Money is Decimal, cent-quantized. Costs round up and limits round down.
-  - Fail-closed verdicts, in precedence order: UNSUPPORTED, STALE_DATA, RISK_LIMIT,
-    CAPITAL_HORIZON, UNCERTAINTY_TOO_HIGH, ZERO_EDGE, then LIQUIDITY_LIMIT or RISK_LIMIT
-    when a cap allows nothing.
+  - Fail-closed verdicts, in precedence order:
+    - UNSUPPORTED: a non-binary payoff, a market that is not OPEN, unresolved settlement
+      rules (as `opportunity.evaluate` refuses them), or refused fees;
+    - STALE_DATA: a missing, stale or malformed book, a missing model or model version, or a
+      missing or stale risk state;
+    - RISK_LIMIT, CAPITAL_HORIZON, UNCERTAINTY_TOO_HIGH, ZERO_EDGE;
+    - then LIQUIDITY_LIMIT or RISK_LIMIT when depth, tradable cash or a cap allows no
+      contract.
   - A missing input never yields SIZE. Cluster exposure that cannot be mapped to states is
     assumed lost in every state.
 - `src/edge_lab/sizing_eval.py` and `edge-lab sizing simulate|replay|policies` hold the

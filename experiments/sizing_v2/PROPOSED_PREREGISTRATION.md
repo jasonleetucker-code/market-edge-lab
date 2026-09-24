@@ -26,15 +26,49 @@ frozen operational rule `EXP-001-fixed-1-v1`, and stays inside the operational r
 ## Compared policies (exactly two; no others, no tuning)
 
 1. **Baseline:** `EXP-001-fixed-1-v1` (`sizing.py`), as the operational shadow account runs it.
-2. **Candidate:** `SV2-H-cluster-robust-rck` version 1 (`sizing_eval.H_RCK`).
+2. **Candidate:** `sizing_v2.POLICY_CANDIDATE`, which is `SV2-H-cluster-robust-rck` version 1,
+   frozen in the engine (any change is a new version and a new experiment).
    - Joint robust 1/2 Kelly over each day's KXHIGHNY bracket cluster.
    - The robust drawdown constraint E[(W'/W)^-lambda] <= 1 with alpha 0.7 and beta 0.1,
      evaluated at the worst admissible vector.
    - Hard caps from `exp001_shadow.RISK_POLICY` via `risk.assess`, plus STARTER_MAX_7D_V1.
-   - Why this candidate: in the simulation study it and its single-candidate twin were the
-     only variants with no ruin and P(drawdown > 50%) <= 0.01 in every main scenario,
-     including overconfident and anti-informative models (`docs/research/STAKE_SIZING_V2.md`
-     §7). The joint version was preferred for its lower tail under overconfidence.
+   - **How it was chosen: after the fact.** It was picked after seeing the simulation
+     study: 188 variant runs over 18 policy variants, in runs 2 and 3 (run 3 re-ran after
+     the fraction-before-budget fix) (`docs/research/STAKE_SIZING_V2.md` §7, §9).
+     - The reason: it kept ruin at zero and P(drawdown > 50%) small in every main scenario,
+       including overconfident and anti-informative models.
+     - Choosing the best of 18 on the same simulated worlds is a selection effect. This
+       experiment exists to test the choice on data that did not inform it.
+
+## Candidate universe (fixed)
+
+- **Decisions.** On each valid Stage B decision day, the universe is every (bracket, side)
+  pair of that day's KXHIGHNY event that the Stage B pipeline evaluates at the decision
+  time. That means every open bracket, both YES and NO, with a captured decision-time
+  ladder, whether or not the frozen signal qualifies it.
+  - The baseline trades only the frozen signal's QUALIFY decisions, 1 contract each.
+  - The candidate sizes the whole universe jointly, as one mutually exclusive cluster, and
+    may size any pair at zero.
+- **Excluded.** Brackets the engine refuses: UNSUPPORTED, STALE_DATA, RULES_UNRESOLVED or
+  MARKET_NOT_OPEN, or a settlement.resolve UNKNOWN. They are counted and reported, never
+  traded.
+
+## What the operational caps mean for this test (read before interpreting it)
+
+The candidate runs under the operational `RISK_POLICY`:
+- $1.00 per position;
+- $6.00 per event and per cluster;
+- $50.00 portfolio;
+- a $100.00 reserve;
+- loss limits $10 daily, $25 weekly, $50 drawdown.
+
+At KXHIGHNY prices a $1 position is 1 to about 3 contracts (fewer above 50 cents). So the
+candidate can differ from fixed-1 mainly by **abstaining**: its robust objective sizes zero
+where the fixed rule buys 1. It can add at most a couple of contracts where the edge is
+large, and spread a cluster budget of at most $6 across brackets. This is therefore
+**mostly a test of abstention (selectivity) plus small joint allocation**, not of Kelly
+growth at scale. A pass does not show that v2 would behave well with looser caps. That
+would need its own experiment.
 
 ## Inputs, fixed in advance
 
@@ -50,9 +84,11 @@ frozen operational rule `EXP-001-fixed-1-v1`, and stays inside the operational r
   CONSERVATIVE_BOUND claim adds its $0.0101-per-contract allowance, and a claim basis of
   NONE makes the day UNSUPPORTED for v2.
 - **Depth.** The captured decision-time ladder, walked with the market's price grid.
-- **Fills.** Both policies fill under the same `latency-confirmed-v1` rule. A v2 size larger
-  than the re-check book offers at or below the entry price is NO_FILL for the unfilled
-  part. No partial fill is priced.
+- **Fills (all-or-nothing).** Both policies fill under the same `latency-confirmed-v1` rule.
+  An order of N contracts fills in full only if the re-check book offers all N at or below
+  the order's limit price (the worst price of the decision-time walk). Otherwise the whole
+  order is NO_FILL. No partial fill is priced or recorded, consistent with `walk_ladder`,
+  which never prices a partial fill.
 - **Bankroll and risk state.**
   - A separate notional counterfactual account for each policy, starting at $1,000.00
     (the operational notional bankroll).

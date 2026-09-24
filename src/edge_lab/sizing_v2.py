@@ -1150,7 +1150,7 @@ def fee_basis(venue: str, native_id: str, as_of: datetime | str, *, fee_schedule
     A CONSERVATIVE_BOUND claim carries its documented per-contract allowance (ADR 0017)."""
     if fee_schedule is None:
         scope = KALSHI_QUADRATIC_TAKER_V1.scope_of(native_id) if venue == "kalshi" else None
-        fee_schedule = schedule_for(venue, scope)
+        fee_schedule = schedule_for(venue, scope, as_of=as_of)
     if isinstance(fee_schedule, UnsupportedFeeSchedule) or fee_schedule.status is FeeScheduleStatus.UNSUPPORTED:
         return fee_schedule, None, ZERO, f"FEE_UNSUPPORTED: {getattr(fee_schedule, 'reason', fee_schedule.schedule_id)}"
     state = verification_at(fee_schedule, as_of, native_id)

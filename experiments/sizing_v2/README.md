@@ -8,7 +8,8 @@ and `docs/research/STAKE_SIZING_V2.md`. It is **not** an experiment in the regis
 
 | File | What it is |
 |---|---|
-| `results/SIMULATION_REPORT_seed20260924.md`, `results/simulation_seed20260924.json` | Run 2, the current results: 188 variant runs, seed 20260924, 200 paths x 250 rounds |
+| `results/SIMULATION_REPORT_seed20260924.md`, `results/simulation_seed20260924.json` | Run 3, the current results: 188 variant runs, seed 20260924, 200 paths x 250 rounds, simulation v2 |
+| `results/run2_superseded_*` | Run 2: 188 variant runs. Superseded because the joint policy H applied the Kelly fraction after the shared budget (a confound fixed in PR #60 review). Only the H variants differ from run 3 |
 | `results/run1_superseded_*` | Run 1: 171 variant runs, kept because every run counts. Superseded because sizer-side scenarios did not share worlds (common random numbers) |
 | `PROPOSED_PREREGISTRATION.md` | The prospective sizing experiment that must pass before v2 may influence operational shadow fills. PROPOSED only |
 
@@ -18,7 +19,7 @@ Reproduce with:
 edge-lab sizing simulate --paths 200 --rounds 250 --workers 18
 ```
 
-It is deterministic for a fixed seed; about 22 minutes on 18 cores.
+It is deterministic for a fixed seed and Python version; about 13 minutes on 18 cores.
 
 **Replay over EXP-001 history:** SKIPPED (`edge-lab sizing replay --exp001`). The Gate 3
 dataset has no market prices, and the Stage A test split stays protected.
