@@ -236,6 +236,7 @@ class PilotState:
     that only `odds run --clear-cost-block` lifts. Deleting the file never lifts a block."""
 
     def __init__(self, ledger_path: Path, *, paid_history: bool = False, now_utc: str | None = None) -> None:
+        ledger_path = Path(ledger_path)  # defence in depth: callers may pass the CLI's strings
         self.path = ledger_path.with_name(ledger_path.name + ".pilot.json")
         self.status = "OK"
         try:
@@ -786,6 +787,8 @@ def smoke(db_path: str | Path, ledger_path: str | Path, settings: RunnerSettings
           environ: Mapping[str, str] | None = None) -> tuple[int, dict[str, Any]]:
     """Exactly one bounded paid read for activation, after a free quota reconcile. Refuses when
     the quota is unknown or insufficient. Records exactly which books and markets came back."""
+    # The CLI passes strings; normalise as run_tick and plan do (production crash, 2026-09-24).
+    db_path, ledger_path = Path(db_path), Path(ledger_path)
     now = clock()
     cfg = settings.config
     report: dict[str, Any] = {"command": "odds smoke", "now_utc": iso_z(now), "sport": settings.sport,
