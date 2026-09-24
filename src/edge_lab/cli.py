@@ -857,6 +857,10 @@ def main(argv: list[str] | None = None) -> int:
         from .dashboard import main as dashboard_main
 
         return dashboard_main(argv[1:])
+    if argv[:1] == ["sizing"]:  # stake sizing v2 research tools own their parser (ADR 0026)
+        from .sizing_eval import main as sizing_main
+
+        return sizing_main(argv[1:])
     args = build_parser().parse_args(argv)
 
     if args.command == "collect":
