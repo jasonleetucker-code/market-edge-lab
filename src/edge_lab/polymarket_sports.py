@@ -1121,7 +1121,8 @@ def _discovery_health(scans: Sequence[Any]) -> str:
 def freshness_records(store: SnapshotStore, *, now: datetime,
                       access_decision: str | None = OWNER_ACCESS_DECISION) -> list[dict[str, Any]]:
     """The two sources this pilot owns, one record each at `now`, as plain values: discovery
-    (mode POLL) and research book captures (mode EVENT_RELATIVE). `fabric_provider` turns them
+    (acquired by POLL) and research book captures (EVENT_RELATIVE), both run by their own timers
+    (fabric mode EXTERNAL_SCHEDULE). `fabric_provider` turns them
     into `freshness.SourceFreshness` (contract C1). Unknown stays None; missing is never zero."""
     due, next_due = discovery_due(store, now)
     cat = catalog_state(store, now=now)
@@ -1144,7 +1145,7 @@ def freshness_records(store: SnapshotStore, *, now: datetime,
     else:
         disc_state, disc_why = "NOT_DUE", f"next scan after {next_due} (paced on the last attempt)"
     discovery = {
-        "source_id": HEALTH_DISCOVERY, "domain": "sports", "acquisition_mode": "POLL",
+        "source_id": HEALTH_DISCOVERY, "domain": "sports", "mode": "EXTERNAL_SCHEDULE", "acquisition_mode": "POLL",
         "policy": {"max_useful_age_s": int(disc_max_age.total_seconds()),
                    "min_safe_cadence_s": int(DISCOVERY_INTERVAL.total_seconds()),
                    "max_useful_cadence_s": int(DISCOVERY_INTERVAL.total_seconds()), "policy_version": POLICY_VERSION},
@@ -1182,7 +1183,8 @@ def freshness_records(store: SnapshotStore, *, now: datetime,
     book_max_age = get_source(HEALTH_BOOK).max_age["book"]
     capture_age = None if last_capture is None else now - _t(last_capture)
     capture = {
-        "source_id": HEALTH_BOOK, "domain": "sports", "acquisition_mode": "EVENT_RELATIVE",
+        "source_id": HEALTH_BOOK, "domain": "sports", "mode": "EXTERNAL_SCHEDULE",
+        "acquisition_mode": "EVENT_RELATIVE",
         "policy": {"max_useful_age_s": int(book_max_age.total_seconds()),
                    "min_safe_cadence_s": int(TICK_INTERVAL.total_seconds()),
                    "max_useful_cadence_s": int(TICK_INTERVAL.total_seconds()), "policy_version": POLICY_VERSION,
@@ -1208,7 +1210,11 @@ def freshness_records(store: SnapshotStore, *, now: datetime,
 
 def fabric_policies() -> tuple[Any, Any]:
     """The two `freshness.SourcePolicy` records this provider declares (discovery, capture).
-    Built on call, so this module imports without the Freshness Fabric types."""
+    Built on call, so this module imports without the Freshness Fabric types.
+
+    Fabric v1 rule (ADR 0031): a registered source is observed as EXTERNAL_SCHEDULE, because its
+    own systemd timer runs it; the acquisition style is the `underlying_mode` (POLL for discovery,
+    EVENT_RELATIVE for the captures)."""
     from .freshness import AcquisitionMode, SourcePolicy
     from .price_observations import PROTECTED_WINDOWS_ET
 
@@ -1216,7 +1222,8 @@ def fabric_policies() -> tuple[Any, Any]:
     gate = f"; disabled until an owner access decision ({TERMS_REVIEW})"
     return (
         SourcePolicy(
-            source_id=HEALTH_DISCOVERY, domain="sports", mode=AcquisitionMode.POLL,
+            source_id=HEALTH_DISCOVERY, domain="sports", mode=AcquisitionMode.EXTERNAL_SCHEDULE,
+            underlying_mode=AcquisitionMode.POLL,
             description="Polymarket US NFL moneyline discovery (a filtered /v1/events listing, never a full-catalog "
                         "COMPLETE); objective: the registered nfl_events max_age" + gate,
             policy_version=POLICY_VERSION,
@@ -1229,7 +1236,8 @@ def fabric_policies() -> tuple[Any, Any]:
             protected_windows=windows,
             retry=f"{RETRIES} retry per request (429, 5xx, network); a failed scan is retried after 6 h"),
         SourcePolicy(
-            source_id=HEALTH_BOOK, domain="sports", mode=AcquisitionMode.EVENT_RELATIVE,
+            source_id=HEALTH_BOOK, domain="sports", mode=AcquisitionMode.EXTERNAL_SCHEDULE,
+            underlying_mode=AcquisitionMode.EVENT_RELATIVE,
             description="Polymarket US NFL research book captures at T-24h / T-6h / T-60m for markets related (never "
                         "equivalent) to an Odds API event; objective: the registered book max_age" + gate,
             policy_version=POLICY_VERSION,
@@ -1243,6 +1251,9 @@ def fabric_policies() -> tuple[Any, Any]:
             protected_windows=windows,
             retry="a FAILED target is retried by a later tick until its deadline, then MISSED; never fetched late"),
     )
+
+
+FABRIC_PROVIDER_NAME = "polymarket_us_nfl_pilot"  # the registry entry's name
 
 
 def fabric_provider(context: Any, now: datetime) -> list[Any]:

@@ -129,9 +129,15 @@ Two traps:
   - Rollback: `python -m edge_lab.storage mark-v6-for-rollback --db PATH`. The real v6 code
     (`e6dfb69`) opens and backs up a stamped store VERIFIED (a test).
   - Registry: `polymarket_us_nfl_discovery` and `polymarket_us_nfl_book` (health ids, PLANNED).
-- **Freshness Fabric (C1).** `freshness_records` gives discovery (POLL) and capture
-  (EVENT_RELATIVE) records; `fabric_provider(context, now)` is the provider (see "Coordinator
-  integration").
+- **Freshness Fabric (C1, ADR 0031).** `fabric_policies()` declares two `SourcePolicy` records
+  and `fabric_provider(context, now)` returns their `SourceFreshness` records. It reads
+  `context.db` read-only, and a missing or unreadable store is UNKNOWN, never an exception.
+  - Both policies are `EXTERNAL_SCHEDULE`, following the fabric v1 rule (ADR 0031: a source its
+    own timer runs is observed, never scheduled). The acquisition style is the `underlying_mode`:
+    POLL for discovery, EVENT_RELATIVE for the captures.
+  - The objectives are the registered `max_age` values (one owner per fact).
+  - The terms gate shows as PAUSED, and `usable_for_decision` is always false.
+  - The Fabric types are imported on call, so this module does not depend on them at import time.
 - **Terminal (Lane D).**
   - `polymarket_sports.terminal_view(db_path, now=...)` (schema `pm-sports-status/1`, read-only,
     never raises).
@@ -210,8 +216,16 @@ Two traps:
   - Rename the two `*.timer.proposed` files to `*.timer` in the same change.
   - Update `tests/test_deploy_units.py`: its `SEPARATELY_ACTIVATED=edgelab-odds` assertion, and
     `tests/test_polymarket_sports_units.py::test_the_installer_does_not_know_or_enable_the_pilot_timers`.
-- **Freshness Fabric registry.** Add one line: `polymarket_sports.fabric_provider`, with context
-  `{"db_path": ...}`, once `freshness.SourceFreshness` exists.
+- **Freshness Fabric registry**, once Lane A (`feat/freshness-fabric`) is on main. Add one
+  `REGISTRY` entry in `freshness_fabric.py`:
+
+  `FabricProvider(polymarket_sports.FABRIC_PROVIDER_NAME, polymarket_sports.fabric_policies(), polymarket_sports.fabric_provider)`
+
+  plus `polymarket_sports` in that module's `from . import ...` line.
+  - The name is `polymarket_us_nfl_pilot`: Lane A's own test registers a demo provider named
+    `polymarket_us_nfl`.
+  - Verified locally on a trial merge with `origin/feat/freshness-fabric` (`cea98c8`): Lane A's
+    fabric tests and this lane's tests pass.
 - **Runbook, HANDOFF and verify_production (coordinator):**
   - a v7 → v6 rollback step, `mark-v6-for-rollback`, before the existing v6 → v5 one;
   - an activation section: owner access decision, the gate code change, enabling both timers,
