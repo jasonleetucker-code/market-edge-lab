@@ -346,6 +346,33 @@ be written here when they are made.
     These ADR 0030 timers are an immediate evidence-preservation step and should later migrate under
     that shared primitive without changing their evidence contract.
 
+- **2026-09-24 (evening), Freshness Fabric v1 + sports prospective data directive.** Recorded in
+  `docs/owner/2026-09-24-freshness-fabric-sports-directive.md`.
+  - **Authorized (research / read-only):**
+    - Freshness Fabric v1 in `src/edge_lab/freshness.py` (a subordinate module allowed), observing
+      existing schedules as EXTERNAL_SCHEDULE with parity tests; no migration of working timers;
+    - one bounded Freshness supervisor timer (about every 5 minutes, local/status-oriented,
+      network-free preferred);
+    - a Polymarket US NFL research pilot on `polymarket_us.py`: public, unauthenticated catalog
+      discovery at most every 6 hours, and target-based research book captures around
+      T-24h / T-6h / T-60m;
+      - caps: NFL only, max 20 markets per slot, max 50 GETs per run, pacer 0.5 s or slower,
+        5-minute hard runtime, bounded retries;
+      - enabled only after a terms/access review, worst-case request/runtime and storage
+        estimates, failure tests, independent review and exact-head CI green;
+    - a deterministic, versioned sportsbook consensus research benchmark from stored Odds API
+      snapshots (no extra credits);
+    - a per-domain research-readiness report;
+    - Terminal v1 views for freshness, Odds targets, consensus and related markets;
+    - review, merge and deployment through `docs/deploy/DAILY_SHADOW_ACTIVATION.md`.
+  - **Not authorized:**
+    - orders, accounts, trading credentials, money movement, Gate 8+;
+    - buying credits or upgrading the Odds API; Action PRO; Outlier; player props; other sports;
+    - authenticated scraping, CAPTCHA, paywall or geoblock bypass, VPN evasion;
+    - a sports prediction model, auto-retraining, any EXP-001 change;
+    - public dashboard exposure, Brisket changes;
+    - ntfy work (out of scope for this mission).
+
 ## Standing merge rule: docs-only and test-only PRs
 
 Owner rule of 2026-09-22 (verbatim source: `docs/owner/2026-09-22-overnight-build-directive.md`).
@@ -448,7 +475,7 @@ A PR that fails any of these needs the usual authority: a directive grant or the
   for a model that did not pass Stage A.
 - Scheduled or unattended jobs **outside** the 2026-09-22 read-only VPS authorization, the
   2026-09-23 daily-shadow authorization, and the narrowly approved 2026-09-24 ADR 0030 observation
-  timers, including GitHub Actions cron, any paid host, and any authenticated source, without new
+  timers, the 2026-09-24 evening Freshness supervisor and Polymarket US NFL pilot timers, including GitHub Actions cron, any paid host, and any authenticated source, without new
   owner approval.
 - Browser automation against any source whose terms have not been reviewed and recorded.
 
