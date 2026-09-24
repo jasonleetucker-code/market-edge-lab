@@ -54,8 +54,18 @@ later decision wins and is recorded in `docs/EXECUTION_PLAN.md`.
 4. **Later / closing price capture.** General, not sports-only.
    - **Phases:** decision, recheck, post_decision_1h, post_decision_6h, pre_close, close,
      settlement_preceding, custom.
-   - **Stored per observation:** the full set listed by the owner. Repeated observations are
-     kept and never overwritten.
+   - **Stored per observation (the owner's list):** event id; market id; outcome/side; venue;
+     native market id; source timestamp; receipt timestamp; bid; ask; available depth; price
+     grid; freshness; rules identity/version; observation phase; target phase time; actual phase
+     time; source hash; collection status; reason if missed. Repeated observations are kept and
+     never overwritten.
+   - **Close semantics (the owner's list):** for each venue/market type determine trading close
+     time, event start, market suspension, settlement cutoff and the last valid executable quote
+     before close; if exact close cannot be established, label it "latest pre-close
+     observation", not "closing price".
+   - **Derived later:** quote movement, implied probability movement, CLV-like metrics, our price
+     vs later market, rejected-opportunity later movement, venue convergence, model-vs-market
+     convergence.
    - **"Closing price" is defined carefully.** Otherwise the label is "latest pre-close
      observation".
    - Metrics come later; CLV is not proof of profit.
@@ -134,3 +144,8 @@ later decision wins and is recorded in `docs/EXECUTION_PLAN.md`.
 - **Roadmap and handoff:** re-plan after the deliverables. Owner actions only when truly
   owner-only: the Odds API key (`EDGE_LAB_ODDS_API_KEY` in `/etc/market-edge-lab/secrets.env`,
   installed privately, never pasted in chat) and the ntfy phone subscription.
+
+## Coordinator note (2026-09-24)
+
+The field lists under Deliverable 4 were added after the original record, from the owner's
+message, because the first record referred to them without listing them (review of PR #68).

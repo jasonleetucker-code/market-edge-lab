@@ -117,7 +117,8 @@ def test_readme_install_window_matches_the_capture_window():
     assert all(int(end) >= 35 for end in ends), "README install window must cover 17:40-18:35 America/New_York"
     assert "America/New_York" in text and "edgelab-" in text
     runbook = (ROOT / "docs/deploy/DAILY_SHADOW_ACTIVATION.md").read_text()
-    assert "17:40 and 18:35 America/New_York" in runbook, "runbook and README windows diverge"
+    runbook_ends = re.findall(r"17:40 and (?:\*\*)?18:(\d\d) America/New_York", runbook)
+    assert runbook_ends and set(runbook_ends) == set(ends), "runbook and README windows diverge"
 
 
 # --------------------------------------------------------------------------- verify_production.sh

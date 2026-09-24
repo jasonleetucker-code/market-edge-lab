@@ -179,14 +179,16 @@ Chase Upside VPS (`deploy/vps/`).
 
 ## 6b. Planned multi-venue sources (read-only adapters; 2026-09-23 directive)
 
-Three sources are registered as `PLANNED`, with `collected_by=()`. Each has adapter code and
-fixture tests, but no collector job, no timer and no health profile. Evidence is in
+Four sources are registered as `PLANNED`, with `collected_by=()`. Each has adapter code and
+fixture tests, but no enabled collector timer and no health profile (the Odds API pilot's
+`edgelab-odds.timer` is installed and disabled until the owner's key exists; ADR 0029). Evidence is in
 `experiments/multi_venue/`.
 
 | Source id | Adapter | Access | What it is not |
 |---|---|---|---|
 | `polymarket_us_public` | `edge_lab.polymarket_us` | the public gateway `gateway.polymarket.us`, keyless, 20 req/s per IP. One bounded smoke GET was recorded | Not Polymarket International; no authenticated host. BBO is never a quote; fees are UNSUPPORTED |
 | `the_odds_api` | `edge_lab.odds_api` | The Odds API v4, free tier, a `READ_ONLY_DATA_FEED` key in `EDGE_LAB_ODDS_API_KEY` (not installed). Fixtures only | Offered odds and de-vigged probabilities are never executable prices |
+| `the_odds_api_discovery` | `edge_lab.odds_pilot` | the same key and host as `the_odds_api`; the quota-free events endpoint, paced at most every 6 h | Health rows for discovery only; a successful discovery never marks the odds feed healthy |
 | `novig_public_data` | `edge_lab.novig_data` | data.novig.com daily CSVs, no authentication. One manual read of the index and one day | End-of-day research data, never an executable quote. The live API is NEEDS_ACCESS |
 
 Provenance rules specific to these adapters:
@@ -234,22 +236,27 @@ identity.
 | Sizing, risk vetoes, starter-policy verdicts | `decision.sizing`, `decision.starter_policy`, `fill` NO_FILL reasons (RISK_VETO, STARTER_POLICY_INELIGIBLE, INSUFFICIENT_CASH) | stored |
 | Stale / missing / invalid capture days | status file and receipt (`INVALID_CAPTURE`, `invalid_days`), source health | stored |
 | Settlement of filled positions | ledger `settlement` rows with evidence and knowledge time | stored (first settlement due) |
-| Outcome of **rejected** markets | NWS CLI settlement evidence per day (Gate 2 procedure) re-derives every bracket's label | derivable; settlement refresh only fetches venue results for events with positions (gap 1) |
-| Later price movement | the +10–15 min re-check capture | partial: no price path after the re-check (gap 2) |
-| Research sizing (v2) per decision | not recorded in the ledger by design (ADR 0026) | counterfactual runner NEXT (gap 3) |
+| Outcome of **rejected** markets | venue settlement is fetched whole-event for events with a position (so rejected brackets on those days are covered); other days are not fetched prospectively | P1: backfillable from Kalshi (settled markets stay retrievable) and the IEM NWS archive; a backfill cannot show when the result first became known, so use Kalshi's reported settlement time (gap 1) |
+| Later price movement | the +10–15 min re-check capture; later/closing observations (ADR 0030, manual capture) | order-book depth after the re-check is P0 (lost unless captured); a scheduled capture is an owner decision (gap 2) |
+| Research sizing (v2) per decision | not recorded in the ledger by design (ADR 0026) | the counterfactual runner replays every decision into a derived artifact (gap 3) |
 | Sports odds history | Odds API snapshots with target times, coverage and quota (ADR 0029) | built; starts when the key is installed |
 
 **Gaps, in priority order (none needs a new store):**
-1. **Venue settlement for rejected-only events.** Label rejected brackets from the NWS CLI
-   evidence already captured (the Gate 2 procedure). Fetching venue settlement for events
-   without positions stays unscheduled unless that proves insufficient.
-2. **Closing price.** A bounded capture of the book at or near close for every evaluated market
-   would measure what rejected opportunities did later. It would be a new timer and needs its
-   own authorization; recorded, not built.
+1. **Venue settlement for rejected-only events.** Corrected 2026-09-24: no NWS CLI evidence is
+   captured prospectively on the VPS (the routine `collect` sources have no timer). Rejected
+   brackets on days with a position are covered by the whole-event settlement fetch; other days
+   are P1, backfillable from Kalshi and the IEM archive, using Kalshi's reported settlement
+   time as the knowledge time.
+2. **Closing price.** Built as manual capture (ADR 0030): phases from decision to close,
+   append-only, with "close" only within a stated tolerance of the trading close. The scheduled
+   capture is an owner decision; order-book depth after the re-check is lost until it runs.
 3. **Sizing v2 counterfactuals.** A read-only replay that writes research recommendations to
    an experiment output, never to the ledger.
 4. **A per-domain completeness check** before a domain is called research-ready: the table above
    filled for that domain (Domain Readiness matrix, `docs/OWNER_IDEAS.md`).
+
+The full coverage matrix, with P0/P1/P2 classification for every source and process, is
+`docs/research/LEARNING_HISTORY_COVERAGE.md`.
 
 ## 7. Adding a source
 
