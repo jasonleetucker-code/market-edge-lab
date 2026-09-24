@@ -5,8 +5,11 @@ This is the only file in `src/` allowed to send an HTTP POST with a body
 fixed headline to one ntfy topic on an allowlisted host. It names no venue host or trading
 path and does no request signing.
 
-Activation needs a separate owner approval: a first real send publishes data to an
-external service. Nothing in the daily run, a timer or a deploy file constructs this sink.
+Activation was approved by the owner on 2026-09-24 (docs/EXECUTION_PLAN.md): one test send
+and the relay below. The daily run never constructs this sink. The shadow unit has no network
+by design, so `relay_outbox` runs from its own unit (`edgelab-notify.service`, started after
+each daily run). It forwards new events from the local outbox through the same `dispatch`
+rules. Only `edge-lab notify relay|test` (cli.py) construct the sink.
 `sink_from_env` returns None unless `EDGE_LAB_NTFY_TOPIC_URL` is set.
 
 Rules:
@@ -54,14 +57,15 @@ import re
 import ssl
 import time
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Mapping
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit, urlunsplit
 from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener
 
 from .freshness import parse_utc
-from .notifications import DeliveryStatus, EventType, NotificationEvent, Severity, check_event
+from .notifications import (DeliveryStatus, EventType, JsonlOutbox, Limits, NotificationEvent, Severity, check_event,
+                            dispatch, event_from_dict, make_event)
 from .redaction import REDACTED, redact_text
 
 ENV_TOPIC_URL = "EDGE_LAB_NTFY_TOPIC_URL"
@@ -92,6 +96,7 @@ HEADLINES: Mapping[EventType, str] = {
     EventType.POSITION_EXPIRED: "A shadow position expired",
     EventType.SETTLED: "Shadow positions settled",
     EventType.SEVEN_DAY_POLICY_EXCEPTION: "Capital past its expected release",
+    EventType.TEST: "Test notification, no action needed",
 }
 FOOTER = "Open Market Edge for details."
 
@@ -389,3 +394,62 @@ def sink_from_env(environ: Mapping[str, str] | None = None, **kwargs: Any) -> Nt
         return None
     token = (env.get(ENV_TOKEN) or "").strip(" ") or None
     return NtfySink(topic_url, token=token, **kwargs)
+
+
+# --------------------------------------------------------------------------- relay and test send
+
+RELAY_NAME = "ntfy_relay.jsonl"
+# Only events this recent are relayed: a first activation, or a relay that was down, must not
+# replay days of history onto the phone. Older events stay in the outbox and the dashboard.
+RELAY_MAX_AGE = timedelta(hours=36)
+
+
+def _summarize(results: list[dict[str, Any]]) -> dict[str, int]:
+    by_status: dict[str, int] = {}
+    for r in results:
+        by_status[r["status"]] = by_status.get(r["status"], 0) + 1
+    return by_status
+
+
+def relay_outbox(outbox_path: str | os.PathLike[str], relay_path: str | os.PathLike[str], sink: Any, *, now: datetime,
+                 max_age: timedelta = RELAY_MAX_AGE, limits: Limits = Limits()) -> dict[str, Any]:
+    """Forward recent outbox events to `sink` once each, under the normal `dispatch` rules.
+
+    The relay history (`relay_path`) records only events the sink SUBMITTED. It is the dedupe
+    history for the next relay, so a FAILED or RATE_LIMITED event is tried again on a later
+    run, until it expires or ages past `max_age`. Never raises; returns counts only (no event
+    text, no topic)."""
+    try:
+        at = parse_utc(now)
+        if at is None:
+            raise ValueError("now must be timezone-aware")
+        events: list[NotificationEvent] = []
+        for line in JsonlOutbox(outbox_path).history():
+            event = event_from_dict(line)
+            created = None if event is None else parse_utc(event.created_at_utc)
+            if event is not None and created is not None and at - max_age <= created <= at:
+                events.append(event)
+        relay = JsonlOutbox(relay_path)
+        results = dispatch(events, [sink], now=at, history=relay.history(), limits=limits)
+        by_id = {e.event_id: e for e in events}
+        for r in results:
+            if r["status"] == DeliveryStatus.SUBMITTED.value and r["event_id"] in by_id:
+                relay.deliver(by_id[r["event_id"]])
+        return {"status": "ok", "candidates": len(events), "by_status": _summarize(results)}
+    except Exception as exc:  # noqa: BLE001 - a relay failure is a status, never an exception
+        return {"status": "failed", "reason": redact_text(f"{type(exc).__name__}: {exc}")[:200],
+                "candidates": 0, "by_status": {}}
+
+
+def send_test(sink: Any, *, now: datetime) -> dict[str, Any]:
+    """Send one fixed, non-sensitive TEST event. SUBMITTED means the server accepted it, not
+    that a phone showed it."""
+    at = parse_utc(now)
+    if at is None:
+        raise ValueError("now must be timezone-aware")
+    event = make_event(EventType.TEST, Severity.INFO, created_at=at, summary="Market Edge test notification",
+                       dedupe_key=f"test:{at.isoformat()}", ttl=timedelta(minutes=10))
+    results = dispatch([event], [sink], now=at)
+    return {"status": "ok", "by_status": _summarize(results),
+            "attempts": sum(r["attempts"] for r in results),
+            "error": next((r["error"] for r in results if r["error"]), None)}

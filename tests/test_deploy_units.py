@@ -427,3 +427,40 @@ def test_verify_production_malformed_latest_json_is_unknown(tmp_path, content, v
     assert states["LATEST_JSON_AGE"].startswith("UNKNOWN")
     shadow = states["SHADOW_DAILY"]
     assert shadow.startswith(("NOT_A_JSON_OBJECT", "UNPARSEABLE")) or json.loads(shadow)["state"] is None
+
+
+# --------------------------------------------------------------------------- ntfy relay + secrets (ADR 0028)
+
+def test_notify_relay_runs_in_its_own_networked_unit_after_each_daily_run():
+    relay = _parse("edgelab-notify.service")
+    assert relay[("Service", "ExecStart")] == [
+        "/opt/market-edge-lab/venv/bin/python -m edge_lab.cli notify relay --status-dir /var/lib/market-edge-lab-status"]
+    assert relay[("Service", "EnvironmentFile")] == ["/etc/market-edge-lab/env", "-/etc/market-edge-lab/secrets.env"]
+    assert ("Unit", "OnFailure") not in relay  # a relay failure never alerts about itself in a loop
+    assert not (UNITS / "edgelab-notify.timer").exists()
+    for name in ("edgelab-shadow.service", "edgelab-settlement.service"):
+        u = _parse(name)
+        assert u[("Unit", "OnSuccess")] == ["edgelab-notify.service"], name
+        assert u[("Unit", "OnFailure")] == ["edgelab-alert@%n.service edgelab-notify.service"], name
+        assert ("Service", "EnvironmentFile") in u and "-/etc/market-edge-lab/secrets.env" not in u[
+            ("Service", "EnvironmentFile")], f"{name} must not load the owner's secrets"
+    # The bookkeeping unit keeps no network: the push happens only in the relay.
+    assert _parse("edgelab-shadow.service")[("Service", "IPAddressDeny")] == ["any"]
+
+
+def test_only_units_that_need_a_secret_load_the_secrets_file():
+    loaders = sorted(p.name for p in UNITS.glob("*.service") if "secrets.env" in p.read_text())
+    assert set(loaders) <= {"edgelab-notify.service", "edgelab-odds.service"}, loaders
+    for name in loaders:
+        assert "-/etc/market-edge-lab/secrets.env" in _parse(name)[("Service", "EnvironmentFile")]
+
+
+def test_install_creates_the_secrets_file_once_and_never_reads_it():
+    assert 'SECRETS_FILE=$ETC/secrets.env' in INSTALL
+    assert 'if [ ! -e "$SECRETS_FILE" ]; then' in INSTALL
+    assert 'install -o root -g edgelab -m 0640 /dev/null "$SECRETS_FILE"' in INSTALL
+    reads = [line.strip() for line in INSTALL.splitlines()
+             if "SECRETS_FILE" in line and re.search(r"\b(cat|sed|grep|source|head|tail|cp|mv|awk)\b|<\s*\"?\$SECRETS", line)]
+    assert not reads, reads
+    assert "secrets file is root:edgelab 640" in INSTALL and "cannot read the secrets file" in INSTALL
+    assert "edgelab-notify" in INSTALL

@@ -3,7 +3,8 @@ Description=Market Edge Lab: bounded settlement-evidence refresh for pending eve
 Documentation=file:///opt/market-edge-lab/app/deploy/vps/README.md
 After=network-online.target
 Wants=network-online.target
-OnFailure=edgelab-alert@%n.service
+OnFailure=edgelab-alert@%n.service edgelab-notify.service
+OnSuccess=edgelab-notify.service
 
 [Service]
 Type=oneshot

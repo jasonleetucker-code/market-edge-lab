@@ -143,8 +143,13 @@ def test_a_malformed_token_is_refused_without_echoing_it(token):
     assert token not in str(err.value)
 
 
-def test_nothing_constructs_the_sink_outside_its_module(repo_root):
-    """Activation needs owner approval: no run path, timer or deploy file wires it in."""
+# The owner approved activation on 2026-09-24: `edge-lab notify relay|test` (cli.py) are the
+# ONLY constructors. The daily run, the shadow unit (no network) and every deploy file stay out.
+SINK_CONSTRUCTORS = {"src/edge_lab/cli.py"}
+
+
+def test_only_the_notify_commands_construct_the_sink(repo_root):
+    """No run path, timer or deploy file constructs the sink or names its secret variables."""
     wiring = re.compile(r"import\s+notify_ntfy|notify_ntfy\s+import|from\s+\S*notify_ntfy|NtfySink\(|sink_from_env\("
                         r"|EDGE_LAB_NTFY_")
     users = []
@@ -153,7 +158,11 @@ def test_nothing_constructs_the_sink_outside_its_module(repo_root):
             if path.is_file() and path.name != "notify_ntfy.py" and "__pycache__" not in path.parts:
                 if wiring.search(path.read_text(encoding="utf-8", errors="ignore")):
                     users.append(path.relative_to(repo_root).as_posix())
-    assert users == []
+    assert set(users) == SINK_CONSTRUCTORS
+    cli = (repo_root / "src/edge_lab/cli.py").read_text(encoding="utf-8")
+    assert "NtfySink(" not in cli and "EDGE_LAB_NTFY_" not in cli  # only via sink_from_env
+    daily = (repo_root / "src/edge_lab/daily.py").read_text(encoding="utf-8")
+    assert "notify_ntfy" not in daily  # the daily run never sends
 
 
 # ------------------------------------------------------------------ the target cannot be redirected
@@ -569,3 +578,84 @@ def test_notification_failure_changes_no_caller_state():
         "_target", "_has_token", "_redact", "_opener", "_sleep", "_clock", "_monotonic", "max_attempts", "backoff",
         "timeout", "deadline", "last_error", "last_attempts", "last_http_status", "_consecutive_failures",
         "_open_until"}
+
+
+# ------------------------------------------------------------------ relay and test send (2026-09-24)
+
+def _outbox_with(tmp_path, *events):
+    box = n.JsonlOutbox(tmp_path / "notifications.jsonl")
+    for e in events:
+        box.deliver(e)
+    return tmp_path / "notifications.jsonl", tmp_path / ntfy.RELAY_NAME
+
+
+def test_relay_forwards_each_recent_outbox_event_once(tmp_path):
+    outbox, relay = _outbox_with(tmp_path, ev(key="a"), ev(n.EventType.SETTLED, n.Severity.INFO, key="b"))
+    opener = Opener()
+    s, _ = make(opener=opener)
+    first = ntfy.relay_outbox(outbox, relay, s, now=NOW)
+    assert first == {"status": "ok", "candidates": 2, "by_status": {"SUBMITTED": 2}}
+    assert len(opener.requests) == 2
+    second = ntfy.relay_outbox(outbox, relay, s, now=NOW)
+    assert second["by_status"] == {"DEDUPED": 2}
+    assert len(opener.requests) == 2  # nothing re-sent
+
+
+def test_relay_retries_a_failed_event_on_the_next_run(tmp_path):
+    outbox, relay = _outbox_with(tmp_path, ev(key="a"))
+    down, _ = make(opener=Opener(http_error(400)))
+    assert ntfy.relay_outbox(outbox, relay, down, now=NOW)["by_status"] == {"FAILED": 1}
+    up, _ = make(opener=Opener())
+    assert ntfy.relay_outbox(outbox, relay, up, now=NOW)["by_status"] == {"SUBMITTED": 1}
+
+
+def test_relay_does_not_replay_old_history(tmp_path):
+    old = ev(key="old", created_at=NOW - ntfy.RELAY_MAX_AGE - timedelta(minutes=1))
+    outbox, relay = _outbox_with(tmp_path, old, ev(key="new"))
+    opener = Opener()
+    s, _ = make(opener=opener)
+    assert ntfy.relay_outbox(outbox, relay, s, now=NOW)["candidates"] == 1
+    assert len(opener.requests) == 1
+
+
+def test_relay_sends_only_the_fixed_headline(tmp_path):
+    secretish = ev(key="a", summary="EXP-001 B66.5 NO filled 1 @ 0.56; balance $999.44",
+                   market_id="kalshi:KXHIGHNY-26SEP24-B66.5", values={"stake": "0.56"})
+    outbox, relay = _outbox_with(tmp_path, secretish)
+    opener = Opener()
+    s, _ = make(opener=opener)
+    ntfy.relay_outbox(outbox, relay, s, now=NOW)
+    body = opener.requests[0].data.decode()
+    assert "0.56" not in body and "KXHIGHNY" not in body and "999" not in body
+    assert ntfy.HEADLINES[n.EventType.SOURCE_FAILURE] in body
+
+
+def test_relay_never_raises_and_reports_counts_only(tmp_path):
+    (tmp_path / "notifications.jsonl").write_text("not json\n{\"schema\": \"other\"}\n", encoding="utf-8")
+    s, _ = make()
+    out = ntfy.relay_outbox(tmp_path / "notifications.jsonl", tmp_path / ntfy.RELAY_NAME, s, now=NOW)
+    assert out == {"status": "ok", "candidates": 0, "by_status": {}}
+    broken = ntfy.relay_outbox(tmp_path / "notifications.jsonl", tmp_path / ntfy.RELAY_NAME, s, now="not a time")
+    assert broken["status"] == "failed" and TOPIC not in json.dumps(broken)
+
+
+def test_the_relay_history_is_not_written_for_a_failure(tmp_path):
+    outbox, relay = _outbox_with(tmp_path, ev(key="a"))
+    s, _ = make(opener=Opener(http_error(429)))
+    assert ntfy.relay_outbox(outbox, relay, s, now=NOW)["by_status"] == {"RATE_LIMITED": 1}
+    assert not relay.exists()
+
+
+def test_send_test_submits_one_fixed_event():
+    opener = Opener()
+    s, _ = make(opener=opener)
+    out = ntfy.send_test(s, now=NOW)
+    assert out["by_status"] == {"SUBMITTED": 1} and out["error"] is None
+    assert len(opener.requests) == 1
+    assert ntfy.HEADLINES[n.EventType.TEST] in opener.requests[0].data.decode()
+
+
+def test_an_outbox_line_round_trips_to_the_same_event():
+    e = ev(key="a", market_id="kalshi:X", values={"k": "v"}, ttl=timedelta(hours=1))
+    assert n.event_from_dict(e.to_dict()) == e
+    assert n.event_from_dict({"schema": n.SCHEMA, "type": "NOT_A_TYPE"}) is None

@@ -110,6 +110,42 @@ sudo systemctl enable --now edgelab-shadow.timer edgelab-settlement.timer
 systemctl list-timers 'edgelab-*'
 ```
 
+## 5a. ntfy push activation (ADR 0028; owner-approved 2026-09-24; root, once)
+
+The topic is a password on a public server. Generate it on the server and write it straight
+into the secrets file, never echoing, logging or committing it:
+
+```bash
+sudo python3 - <<'PY'
+import os, secrets
+path = "/etc/market-edge-lab/secrets.env"
+lines = [l for l in open(path).read().splitlines() if not l.startswith("EDGE_LAB_NTFY_TOPIC_URL=")]
+lines.append("EDGE_LAB_NTFY_TOPIC_URL=https://ntfy.sh/mel-" + secrets.token_urlsafe(32))
+tmp = path + ".new"
+with open(os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o640), "w") as fh:
+    fh.write("
+".join(lines) + "
+")
+os.chown(tmp, 0, __import__("grp").getgrnam("edgelab").gr_gid)
+os.replace(tmp, path)
+print("topic written")
+PY
+```
+
+Then send one test event as the service user, with the unit's own environment:
+
+```bash
+sudo systemd-run --wait --pipe --quiet -p User=edgelab -p Group=edgelab   -p EnvironmentFile=/etc/market-edge-lab/env -p EnvironmentFile=/etc/market-edge-lab/secrets.env   /opt/market-edge-lab/venv/bin/python -m edge_lab.cli notify test
+```
+
+Expect `{"by_status": {"SUBMITTED": 1}, ...}`. SUBMITTED means ntfy.sh accepted the message.
+It does **not** prove that a phone showed it.
+
+To subscribe, the owner reads the topic privately
+(`sudo grep NTFY /etc/market-edge-lab/secrets.env`) and adds it in the ntfy app (server
+`ntfy.sh`, topic = the part after `https://ntfy.sh/`). From then on, `edgelab-notify` relays new
+events after every shadow and settlement run. `journalctl -u edgelab-notify` shows counts only.
+
 ## 6. Verify over the next days: each state separately
 
 | State | Evidence |

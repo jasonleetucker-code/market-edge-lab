@@ -13,6 +13,8 @@
 #   /var/lib/market-edge-lab            private data: db/, backups/   (edgelab, 0700)
 #   /var/lib/market-edge-lab-status     non-sensitive status JSON     (edgelab, 0755)
 #   /etc/market-edge-lab/env            NWS_USER_AGENT etc.           (root:edgelab 0640)
+#   /etc/market-edge-lab/secrets.env    owner-installed secrets       (root:edgelab 0640)
+#                                       created empty once; NEVER read, rewritten or printed here
 set -euo pipefail
 
 SHA="" BUNDLE="" UA="" ALERT_URL=""
@@ -37,6 +39,7 @@ DATA=/var/lib/market-edge-lab
 STATUS=/var/lib/market-edge-lab-status
 ETC=/etc/market-edge-lab
 ENV_FILE=$ETC/env
+SECRETS_FILE=$ETC/secrets.env
 UNITS=(edgelab-pfm edgelab-decision edgelab-recheck edgelab-status edgelab-backup edgelab-shadow edgelab-settlement)
 # The unprivileged account that must NOT read private data (the Chase Upside app user).
 OTHER_USER=${EDGELAB_OTHER_USER:-dynasty}
@@ -85,6 +88,14 @@ tmp=$(mktemp "$ETC/env.XXXXXX")
   [ -n "$ALERT_URL" ] && echo "EDGE_LAB_ALERT_URL=$ALERT_URL"
 } > "$tmp"
 chown root:edgelab "$tmp"; chmod 0640 "$tmp"; mv -f "$tmp" "$ENV_FILE"
+# The owner's secrets (ADR 0028: the Odds API key, the ntfy topic URL) live in their own file,
+# because the env file above is regenerated on every install. Create it once, empty; after that
+# only its owner and mode are enforced. Its contents are never read, copied or printed here.
+if [ ! -e "$SECRETS_FILE" ]; then
+  install -o root -g edgelab -m 0640 /dev/null "$SECRETS_FILE"
+fi
+[ -f "$SECRETS_FILE" ] && [ ! -L "$SECRETS_FILE" ] || die "$SECRETS_FILE must be a regular file"
+chown root:edgelab "$SECRETS_FILE"; chmod 0640 "$SECRETS_FILE"
 
 echo "== 6/7 systemd units (installed, NOT enabled)"
 install -o root -g root -m 0644 "$APP_ROOT/app/deploy/vps/systemd/"edgelab-* "$APP_ROOT/app/deploy/vps/systemd/edgelab.slice" /etc/systemd/system/
@@ -93,6 +104,8 @@ for u in "${UNITS[@]}"; do
   systemd-analyze verify "/etc/systemd/system/$u.service" "/etc/systemd/system/$u.timer" || die "unit $u does not verify"
 done
 systemd-analyze verify "/etc/systemd/system/edgelab-alert@.service" 2>/dev/null || true
+# The notification relay has no timer: the daily units start it when they finish.
+systemd-analyze verify "/etc/systemd/system/edgelab-notify.service" || die "edgelab-notify does not verify"
 systemd-analyze verify "/etc/systemd/system/edgelab.slice" || die "edgelab.slice does not verify"
 # The read-only dashboard (ADR 0024) is installed, never enabled here: enabling it and
 # Tailscale Serve are the owner-approved steps in docs/DASHBOARD.md.
@@ -112,6 +125,7 @@ expect_not() { local what=$1; shift
 }
 mode() { stat -c '%U:%G %a' "$1"; }
 expect "env file is root:edgelab 640" test "$(mode "$ENV_FILE")" = "root:edgelab 640"
+expect "secrets file is root:edgelab 640" test "$(mode "$SECRETS_FILE")" = "root:edgelab 640"
 expect "data dir is edgelab:edgelab 700" test "$(mode "$DATA")" = "edgelab:edgelab 700"
 expect "db dir is edgelab:edgelab 700" test "$(mode "$DATA/db")" = "edgelab:edgelab 700"
 expect "ledger dir is edgelab:edgelab 700" test "$(mode "$DATA/ledger")" = "edgelab:edgelab 700"
@@ -119,9 +133,11 @@ expect "backups dir is edgelab:edgelab 700" test "$(mode "$DATA/backups")" = "ed
 expect "status dir is edgelab:edgelab 755" test "$(mode "$STATUS")" = "edgelab:edgelab 755"
 expect "database created" test -f "$DATA/db/edge_lab.sqlite3"
 expect "edgelab can read the env file" runuser -u edgelab -- test -r "$ENV_FILE"
+expect_not "edgelab cannot write the secrets file" runuser -u edgelab -- test -w "$SECRETS_FILE"
 expect "edgelab can write its database dir" runuser -u edgelab -- test -w "$DATA/db"
 if id -u "$OTHER_USER" >/dev/null 2>&1; then
   expect_not "$OTHER_USER cannot read the env file" runuser -u "$OTHER_USER" -- test -r "$ENV_FILE"
+  expect_not "$OTHER_USER cannot read the secrets file" runuser -u "$OTHER_USER" -- test -r "$SECRETS_FILE"
   expect_not "$OTHER_USER cannot list private data" runuser -u "$OTHER_USER" -- ls "$DATA"
   expect_not "$OTHER_USER cannot read the database" runuser -u "$OTHER_USER" -- test -r "$DATA/db/edge_lab.sqlite3"
   expect_not "$OTHER_USER cannot list backups" runuser -u "$OTHER_USER" -- ls "$DATA/backups"
