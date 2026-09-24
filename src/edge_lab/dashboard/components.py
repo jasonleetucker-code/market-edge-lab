@@ -667,3 +667,102 @@ def venue_comparison(cmp: Any, *, now: Any = None) -> str:
         ("execution authorized", esc("no")),
     ])))
     return "".join(parts)
+
+
+# --------------------------------------------------------------------------- research sizing (sizing_counterfactual)
+
+SIZING_NOTE = ("Research only: a counterfactual challenger policy replayed on recorded evidence. It is not a bet, "
+               "not an order and not the operational sizing policy; shadow fills stay on their current policy.")
+
+
+def _g(mapping: Any, key: str) -> Any:
+    return mapping.get(key) if isinstance(mapping, Mapping) else None
+
+
+def sizing_comparison(rows: Sequence[Mapping[str, Any]]) -> str:
+    """The compact policy comparison (A–H): each policy's own verdict and size, as the contract gives them."""
+    body = [[esc(pr.policy_label(r)), badge(_g(r, "verdict")),
+             num(pr.quantity(_g(r, "final_contracts")), reason="not computed"),
+             money_cell(_g(r, "final_amount"), reason="not computed"),
+             num(pr.percent(_g(r, "fraction_of_bankroll"), places=2), reason="not computed"),
+             code(_g(r, "binding_constraint"))] for r in rows]
+    return table(["policy", "verdict", "contracts", "amount", "of bankroll", "binding constraint"], body,
+                 right=(2, 3, 4), empty="no policy rows", caption="Research sizing by policy")
+
+
+def sizing_side(side: Mapping[str, Any]) -> str:
+    """One recorded side: the primary (challenger) policy's result, or the named reason it is unavailable."""
+    p = _g(side, "primary") or {}
+    head = (f'<h3 class="eyebrow">{esc(_g(side, "side") or "Side unknown")} side · decision '
+            f'{esc(pr.datetime_et(_g(side, "decision_time")) or "time not recorded")}</h3>')
+    recorded = (f'<p class="meta">Recorded decision: {badge(_g(side, "recorded_qualification"))} '
+                f'{code(_g(side, "recorded_reason"))} · model {esc(_g(side, "model_version") or "not recorded")} · '
+                f'decision {code(_g(side, "decision_id"))}</p>')
+    if not _g(side, "available"):
+        body = blocked_state(_g(side, "unavailable_reason") or "Unavailable",
+                             _g(side, "unavailable_detail") or "The sizing engine did not compute this side.")
+    else:
+        horizon = _g(p, "capital_horizon")
+        body = facts([
+            ("Challenger size (research)", num(pr.quantity(_g(p, "final_contracts")), reason="not computed")
+             + f'<span class="cell-sub">contracts · {esc(pr.money(_g(p, "final_amount")) or "amount not computed")} '
+               "cost</span>"),
+            ("Verdict", badge(_g(p, "verdict"))),
+            ("Binding constraint", code(_g(p, "binding_constraint"))),
+            ("Model probability", num(pr.percent(_g(p, "model_probability")), reason="not recorded")),
+            ("Conservative probability", num(pr.percent(_g(p, "conservative_probability")), reason="not recorded")),
+            ("Expected net edge / contract", num(pr.edge_cents(_g(p, "expected_net_edge")), reason="not computed")),
+            ("Entry price", num(pr.cents(_g(p, "entry_price")), reason="not computed")),
+            ("Estimated fee", money_cell(_g(p, "estimated_fee"), reason="not computed")),
+            ("Full-Kelly amount", money_cell(_g(p, "unconstrained_kelly_amount"), reason="not computed")),
+            ("Policy amount before caps", money_cell(_g(p, "policy_amount_before_caps"), reason="not computed")),
+            ("Bankroll basis", money_cell(_g(_g(p, "bankroll_basis"), "bankroll"), reason="not recorded")),
+            ("Capital horizon", badge("ELIGIBLE") if _g(horizon, "eligible") is True else
+             badge("STARTER_POLICY_INELIGIBLE") if _g(horizon, "eligible") is False else na("not recorded")),
+        ], wide=True, text_cols=(1, 2, 11))
+        if _g(p, "explanation"):
+            body += f'<p class="note">{esc(_g(p, "explanation"))}</p>'
+        caps = _g(p, "caps") or {}
+        basis = _g(p, "bankroll_basis") or {}
+        body += disclosure("Caps, bankroll basis and capital horizon", kv(
+            [(f"{k.replace('_', ' ')} cap", money_cell(_g(caps, k), reason="cap does not apply or unknown"))
+             for k in ("liquidity", "position", "event", "cluster", "portfolio", "cash_horizon", "drawdown")]
+            + [("most any cap allows", money_cell(_g(caps, "maximum_allowed"), reason="unknown")),
+               ("tradable cash", money_cell(_g(basis, "tradable_cash"), reason="not recorded")),
+               ("available risk budget", money_cell(_g(basis, "available_risk_budget"), reason="not recorded")),
+               ("secondary constraints", ul(_g(p, "secondary_constraints") or ())),
+               ("block reason", code(_g(p, "block_reason"))),
+               ("tradable-cash ETA (UTC)", esc(_g(horizon, "tradable_cash_release_eta_utc"))),
+               ("capital horizon reasons", ul(_g(horizon, "reasons") or ())),
+               ("counterfactual fill", badge_code(_g(p, "fill_status"))),
+               ("fill reason", code(_g(p, "fill_reason"))),
+               ("policy", esc(pr.policy_label(p))), ("decision id", code(_g(side, "decision_id")))]))
+    if _g(side, "top_of_book_limited"):
+        body += (f'<p class="note">{icon("triangle-alert", "ic-sm k-warn")} Depth: only the recorded top of book is '
+                 "used, so every liquidity cap is top-of-book-limited.</p>")
+    rows = _g(side, "comparison") or []
+    body += disclosure(f"Compare policies ({len(rows)})", sizing_comparison(rows), open_=bool(rows))
+    return head + recorded + body
+
+
+def research_sizing(panel: Mapping[str, Any]) -> str:
+    """RESEARCH SIZING / SHADOW SIZING CHALLENGER: Lane A's `panel_for_market` result, read-only.
+
+    Every figure is the contract's string, only formatted. There is no stake input, slider,
+    submit or order action, and nothing is labelled a recommendation to bet."""
+    label = f'<p class="eyebrow">{esc(_g(panel, "label") or "RESEARCH SIZING")}</p>'
+    primary = _g(panel, "primary_policy")
+    parts = [label, f'<p class="note">{esc(SIZING_NOTE)}</p>']
+    if primary:
+        parts.append(f'<p class="meta">Challenger policy {esc(pr.policy_label(primary))}'
+                     + (f" — {esc(_g(primary, 'description'))}" if _g(primary, "description") else "") + "</p>")
+    sides = [s for s in (_g(panel, "sides") or []) if isinstance(s, Mapping)]
+    if not _g(panel, "available") and not sides:
+        parts.append(blocked_state(_g(panel, "unavailable_reason") or "Unavailable",
+                                   _g(panel, "unavailable_detail") or "The research sizing panel is unavailable."))
+    parts.extend(sizing_side(s) for s in sides)
+    limits = _g(panel, "limitations") or ()
+    parts.append(disclosure("Limitations of this replay", ul(limits) + kv([
+        ("panel version", esc(_g(panel, "panel_version"))), ("market", code(_g(panel, "market_id"))),
+        ("replay clock (UTC)", esc(_g(panel, "as_of_utc")))])))
+    return "".join(parts)

@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import re
+import threading
 import tomllib
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta, timezone
@@ -593,6 +594,69 @@ def observed_board(store: SnapshotStore, *, mode: str = "live") -> ObservedBoard
                                     for side, q in quotes.items()}
     ordered = sorted(markets.values(), key=lambda m: m.market_id)
     return ObservedBoard(target, captures, ordered[:MAX_OBSERVED_MARKETS], len(ordered))
+
+
+# --------------------------------------------------------------------------- research sizing (sizing_counterfactual)
+
+RESEARCH_SIZING_MODULE = "edge_lab.sizing_counterfactual"
+_SIZING_CACHE: dict[tuple, Loaded] = {}
+_SIZING_CACHE_MAX = 64
+_SIZING_LOCK = threading.Lock()
+
+
+def _ledger_heads(ctx: Context) -> tuple | None:
+    """Every ledger account's head hash (from the replay this request already did), or None."""
+    heads = []
+    for view in ctx.accounts:
+        if view.status == ERROR:
+            return None
+        heads.append((view.account_id, view.state.last_entry_hash if view.state is not None else None))
+    return tuple(heads)
+
+
+def research_sizing(ctx: Context, market_id: str) -> Loaded:
+    """Lane A's read-only research sizing panel (`sizing_counterfactual.panel_for_market`) for one
+    market: OK with the panel dict (which may itself be unavailable with a named reason), NO_DATA
+    when the contract is not installed or no ledger is configured, ERROR on a read failure.
+
+    The panel replays the whole ledger, so results are cached by the ledger's head hashes (a new
+    entry changes a head and misses the cache). Nothing here sizes, formats or edits the result."""
+    import importlib
+
+    try:
+        module = importlib.import_module(RESEARCH_SIZING_MODULE)
+    except ImportError:
+        return Loaded(NO_DATA, message="the research sizing contract (sizing_counterfactual) is not installed in "
+                                       "this build")
+    if ctx.ledger.status == ERROR:
+        return Loaded(ERROR, message=ctx.ledger.message)
+    if ctx.ledger.status != OK:
+        return Loaded(NO_DATA, message=ctx.ledger.message or "no shadow ledger configured")
+    heads = _ledger_heads(ctx)
+    store = ctx.store.value if ctx.store.status == OK else None
+    key = (str(_resolved(ctx.config.ledger)), str(_resolved(ctx.config.db)), heads, market_id)
+    if heads is not None:
+        with _SIZING_LOCK:
+            hit = _SIZING_CACHE.get(key)
+        if hit is not None:
+            return hit
+    try:
+        panel = module.panel_for_market(store, ctx.ledger.value, market_id)
+    except Exception as exc:  # noqa: BLE001 - the contract never raises for missing data; anything else is shown
+        return Loaded(ERROR, message=short_error(exc, ctx.config))
+    if not isinstance(panel, dict):
+        return Loaded(ERROR, message="the research sizing contract returned no panel")
+    result = Loaded(OK, panel)
+    if heads is not None:
+        with _SIZING_LOCK:
+            if len(_SIZING_CACHE) >= _SIZING_CACHE_MAX:
+                _SIZING_CACHE.pop(next(iter(_SIZING_CACHE)))
+            _SIZING_CACHE[key] = result
+    return result
+
+
+def _resolved(path: Path | None) -> Path | None:
+    return None if path is None else path.resolve()
 
 
 # --------------------------------------------------------------------------- across venues (best_price, ADR 0027)

@@ -63,6 +63,7 @@ After: the same deep links (relabelled Terminal, Markets, Portfolio, Outcomes, R
 | Source health | `SnapshotStore.latest_source_health` + `sources` registry descriptions |
 | Fee verification | `fee_schedules` via `data.fee_rows` |
 | Across venues: the four claims, per-route quote, gross cost, fee, fee status, verified (claim) total, depth, tradable-cash ETA, exclusions, related markets, summary | `best_price.compare` via `data.venue_comparison`, inputs built as `exp001_stageb.evaluate_day` builds them: the decision capture's listing (`kalshi_quotes.market_from_kalshi` plus the `settlement_equivalence` downgrade) and book (`kalshi_quotes.ladders_from_orderbook`; depth limit from the stored request URL, unknown = truncated), `fee_schedules.schedule_for` on the market's own series, the Stage B book-age limit; size, time and quote evidence ids from the recorded decision (`sizing.final_size`, `as_of_utc`, `quote_evidence_ids`: a different book is refused) |
+| Research sizing: challenger (H) size, verdict, binding constraint, probabilities, expected net edge, entry price, fee, Kelly / pre-cap amounts, caps, bankroll basis, capital horizon, A–H comparison, unavailable reasons | `sizing_counterfactual.panel_for_market(store, ledger, market_id)` (Lane A, PR #64) via `data.research_sizing`, cached by the ledger accounts' head hashes; every number is the contract's string |
 
 **Dependencies recorded (shown as unavailable, never derived in the UI):**
 1. *Realized today* (calendar day): the engine reports trailing-24 h realized **loss**, not a
@@ -75,6 +76,9 @@ After: the same deep links (relabelled Terminal, Markets, Portfolio, Outcomes, R
    books and discovery proves rules equivalence. Rejected (unsized) decisions have no
    evaluated size, so they show "Not evaluated yet"; a counterfactual size needs Lane A's
    sizing contract.
+3a. *Research sizing*: shown only when `edge_lab.sizing_counterfactual` is installed (Lane A, PR #64);
+   before that the slot says the contract is not installed. The cache key is the ledger heads, so
+   evidence captured later (a confirmation quote) reaches the panel with the next ledger entry.
 4. *Sport/league identity*: no sports market is captured; the Sports tab says so.
 5. *Delivery status beyond the outbox*: phone delivery is not recorded; Alerts says so.
 6. *Price history*: only the decision and re-check captures of the latest target day are read

@@ -149,3 +149,79 @@ def synthetic_comparisons() -> dict[str, bp.Comparison]:
         "single": run(bp.PositionRequest(_EV_K, _K, "YES", 1),
                       bp.Route(_EV_K, _K, _ladder(_K, ("0.34", "3"), truncated=True), schedule_for("kalshi", "DEMO"))),
     }
+
+
+# --------------------------------------------------------------------------- research sizing (sizing_counterfactual)
+# SYNTHETIC panels in the exact shape of Lane A's `sizing_counterfactual.panel_for_market` contract
+# (panel_version 1). Every number is a string, as the contract gives it. Gallery and tests only.
+
+SIZING_LABEL = "RESEARCH SIZING - SHADOW SIZING CHALLENGER (counterfactual; not a bet recommendation)"
+SIZING_UNAVAILABLE = ("No model", "Fees unsupported", "Stale quote", "Rules unresolved",
+                      "Insufficient uncertainty evidence", "Risk state unavailable", "Unsupported payoff")
+_POLICIES = (("A", "sizing-v2-flat-1"), ("B", "sizing-v2-fixed-pct"), ("C", "sizing-v2-kelly-full"),
+             ("D", "sizing-v2-kelly-half"), ("E", "sizing-v2-kelly-quarter"), ("F", "sizing-v2-robust-kelly"),
+             ("G", "sizing-v2-drawdown-kelly"), ("H", "sizing-v2-candidate"))
+# letter -> (verdict, binding constraint, contracts, amount, fraction of bankroll): contract strings.
+_SIZES = {letter: ("SIZE", "NONE", "1", "0.36", "0.00036") for letter, _ in _POLICIES}
+_SIZES.update(C=("SIZE", "LIQUIDITY", "12", "4.32", "0.00432"), D=("SIZE", "POSITION_CAP", "6", "2.16", "0.00216"))
+
+
+def _comparison(h: tuple[str, str, str, str, str], *, refused: bool = False) -> list[dict]:
+    sizes = {**_SIZES, "H": h}
+    if refused:  # the engine refuses the same inputs under every policy
+        sizes = {letter: ("UNSUPPORTED", "MODEL_UNAVAILABLE", "0", "0", "0") for letter, _ in _POLICIES}
+    return [{"letter": letter, "policy_id": pid, "policy_version": "1", "verdict": sizes[letter][0],
+             "binding_constraint": sizes[letter][1], "final_contracts": sizes[letter][2],
+             "final_amount": sizes[letter][3], "bankroll_before": "1000.00", "fraction_of_bankroll": sizes[letter][4]}
+            for letter, pid in _POLICIES]
+
+
+def _panel(sides: list[dict], *, available: bool = True, reason: str | None = None,
+           detail: str | None = None) -> dict:
+    return {"panel_version": "1", "label": SIZING_LABEL, "market_id": "kalshi:DEMO-HIGHNY-B67.5",
+            "as_of_utc": T0, "available": available, "unavailable_reason": reason, "unavailable_detail": detail,
+            "primary_policy": {"letter": "H", "policy_id": "sizing-v2-candidate", "policy_version": "1",
+                               "description": "SYNTHETIC: robust fractional Kelly with hard caps"},
+            "sides": sides, "limitations": ["SYNTHETIC: depth is the recorded top of book only.",
+                                            "No statistical significance is implied by a few settlements."]}
+
+
+def _side(side: str, *, verdict: str = "SIZE", contracts: str = "3", amount: str = "1.08",
+          binding: str = "POSITION_CAP", fraction: str = "0.00108", reason: str | None = None) -> dict:
+    primary = {
+        "policy_id": "sizing-v2-candidate", "policy_version": "1", "verdict": verdict, "block_reason": None,
+        "bankroll_basis": {"bankroll": "1000.00", "tradable_cash": "998.64", "available_risk_budget": "24.00"},
+        "model_probability": "0.41", "conservative_probability": "0.38", "expected_net_edge": "0.0512",
+        "uncertainty": {"method": "recorded_bounds", "payout_probability_min": "0.38",
+                        "payout_probability_max": "0.44", "detail": "SYNTHETIC"},
+        "entry_price": "0.34", "estimated_fee": "0.06", "unconstrained_kelly_amount": "4.32",
+        "policy_amount_before_caps": "1.44",
+        "caps": {"liquidity": "40.80", "position": "1.08", "event": "5.00", "cluster": "5.00", "portfolio": "24.00",
+                 "cash_horizon": None, "drawdown": "12.00", "maximum_allowed": "1.08"},
+        "capital_horizon": {"policy_id": "STARTER_MAX_7D_V1", "eligible": True,
+                            "tradable_cash_release_eta_utc": "2026-09-25T02:00:00+00:00",
+                            "elapsed_hours_to_tradable": "52.1", "reasons": []},
+        "drawdown_cap": "12.00", "final_contracts": contracts, "final_amount": amount, "binding_constraint": binding,
+        "secondary_constraints": ["EVENT_CAP"],
+        "explanation": f"SYNTHETIC: {contracts} contracts under policy H; {binding} binds.",
+        "fill_status": "FILLED" if contracts != "0" else None, "fill_reason": None}
+    return {"side": side, "decision_id": f"dec-DEMO-{side}", "decision_time": T0,
+            "recorded_qualification": "QUALIFY" if reason is None else "REJECT",
+            "recorded_reason": "QUALIFY" if reason is None else "MODEL_UNAVAILABLE", "model_version": "demo",
+            "available": reason is None, "unavailable_reason": reason,
+            "unavailable_detail": None if reason is None else f"SYNTHETIC engine detail for: {reason}",
+            "top_of_book_limited": True, "primary": primary,
+            "comparison": _comparison((verdict, binding, contracts, amount, fraction), refused=reason is not None)}
+
+
+def synthetic_sizing_panels() -> dict[str, dict]:
+    """name -> a contract-shaped panel: sized (with the other side unavailable), a computed zero,
+    and each named whole-panel unavailable reason."""
+    panels = {
+        "sized": _panel([_side("YES"), _side("NO", reason="No model")]),
+        "zero": _panel([_side("YES", verdict="ZERO_EDGE", contracts="0", amount="0", binding="ZERO_EDGE",
+                              fraction="0")]),
+    }
+    for reason in SIZING_UNAVAILABLE:
+        panels[reason] = _panel([], available=False, reason=reason, detail=f"SYNTHETIC detail for: {reason}")
+    return panels

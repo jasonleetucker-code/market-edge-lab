@@ -198,6 +198,18 @@ rules status and claim status. Stale routes are named as not ranked. Related mar
 listed as **RELATED MARKET — NOT ECONOMICALLY EQUIVALENT**, unpriced and unranked. States: populated, single captured route, all stale, refused payoff,
 not evaluated (no decision, no size, or an earlier target day), no captured book, read error.
 
+*Research sizing* (after Across venues, main column) renders Lane A's read-only
+`sizing_counterfactual.panel_for_market` for the market's latest recorded decision, every side.
+It is labelled with the contract's **RESEARCH SIZING - SHADOW SIZING CHALLENGER** label and never
+"Recommended bet". It shows the challenger policy's (H) size, verdict, binding constraint,
+probabilities, expected net edge, entry price, fee, Kelly and pre-cap amounts, bankroll basis and
+capital horizon; caps and fill details in a disclosure; a compact A–H policy comparison; the
+top-of-book caveat; limitations. Every figure is the contract's string, only formatted. A side or
+panel the engine cannot compute shows its named reason (No model, Fees unsupported, Stale quote,
+Rules unresolved, Insufficient uncertainty evidence, Risk state unavailable, Unsupported payoff,
+…). No stake input, slider, submit or order action exists. States: sized, computed zero, a side
+unavailable, the whole panel unavailable, contract not installed, read error.
+
 **Portfolio `/positions`** — account, metric strip with basis labels; Open / Settling /
 Closed / All; position rows; "How these balances are calculated"; settlement evidence. Never
 counts unrealized gains; an unreadable ledger is an error, not an empty portfolio.
@@ -320,3 +332,9 @@ directive), and the screenshots that justify it.
   verdict; a single captured route reuses "No equivalent venue price verified". No token, CSS,
   layout or navigation change. Markets rows get no comparison indicator: §8 fixes the board columns.
   Screenshots: see the PR.
+- **2026-09-24 — Research sizing panel.** Approved by the 2026-09-24 next-build-chunk directive,
+  Deliverable 2. §8 market detail gains a "Research sizing" section after "Across venues" that
+  renders Lane A's `sizing_counterfactual.panel_for_market` contract (read-only, cached by the
+  ledger's head hashes). New component `research_sizing` built from the existing facts, badge,
+  table, disclosure and state components; new state words for the sizing-v2 verdicts. No token,
+  CSS, layout or navigation change. Risk & capital is unchanged. Screenshots: see the PR.
