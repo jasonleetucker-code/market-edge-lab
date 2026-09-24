@@ -375,7 +375,7 @@ def failure_alert(f: d.FailureRecord) -> Alert:
                      f"Recorded in {f.source}. No root confirmation of this check exists now (it may have expired "
                      "after 7 days), so it is not proven to be the runbook check. Production failures are recorded "
                      "separately in last_failure.json.", None, "Stored locally; never pushed (verification)",
-                     "VERIFICATION_UNCONFIRMED", f.record, f.origin)
+                     "VERIFICATION_UNCONFIRMED", f.record, "DEPLOYMENT_VERIFICATION")  # its file's origin, badge never mixed
     claimed = f.record.get("origin")
     why = f"Recorded in {f.source} by the failure hook."
     if claimed not in (None, "PRODUCTION"):

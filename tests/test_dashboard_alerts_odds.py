@@ -295,3 +295,11 @@ def test_an_unexpected_odds_state_is_unknown_never_passed_through(state):
     text = plain(c.odds_status_card({**_odds("ACTIVE", verified=True), "state": state}))
     assert text.startswith("The Odds API — UNKNOWN") and "CONNECTED" not in text.split("state (as reported)")[0]
 
+
+def test_a_verification_file_record_is_always_badged_as_verification(tmp_path):
+    for origin in (None, "PRODUCTION", "SOMETHING_NEW"):
+        (tmp_path / str(origin)).mkdir()
+        cfg = _status_dir(tmp_path / str(origin), verification=_record("edgelab-shadow.service", origin))
+        (alert,) = [a for a in cm.alerts(d.Context(cfg)) if "edgelab-shadow" in (a.subject or "")]
+        assert alert.group == "checks" and alert.origin == "DEPLOYMENT_VERIFICATION"
+
