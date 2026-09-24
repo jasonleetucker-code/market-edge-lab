@@ -165,6 +165,38 @@ def build_parser() -> argparse.ArgumentParser:
     )
     frozen.add_argument("--base", required=True, help="git ref to compare against, e.g. origin/main")
 
+    notify = subparsers.add_parser(
+        "notify", help="ntfy push (ADR 0022): relay the local outbox, or send one test event."
+    )
+    notify_sub = notify.add_subparsers(dest="notify_command", required=True)
+    n_relay = notify_sub.add_parser("relay", help="Forward recent outbox events to ntfy once each.")
+    n_relay.add_argument("--status-dir", required=True, help="directory holding notifications.jsonl")
+    notify_sub.add_parser("test", help="Send one fixed, non-sensitive TEST event.")
+
+    # --- odds: The Odds API free-tier NFL pilot (ADR 0029). Self-contained block.
+    odds = subparsers.add_parser(
+        "odds", help="The Odds API NFL pilot: game-relative captures under a 450-credit monthly ceiling."
+    )
+    odds_sub = odds.add_subparsers(dest="odds_command", required=True)
+    for name, text in (
+        ("run", "One idempotent tick: free discovery, targets, budget, at most one paid call."),
+        ("plan", "Read-only: enumerate the schedule and prove expected/worst-case monthly credits."),
+        ("smoke", "Exactly one bounded live odds read for activation (refuses if quota is unknown)."),
+    ):
+        o = odds_sub.add_parser(name, help=text)
+        o.add_argument("--db", default="data/edge_lab.sqlite3")
+        o.add_argument("--ledger", required=True, help="quota ledger JSON path")
+        o.add_argument("--sport", default="americanfootball_nfl")
+        o.add_argument("--markets", default="h2h,spreads,totals")
+        o.add_argument("--regions", default="us")
+        o.add_argument("--offsets", default="24h,6h,60m", help="capture offsets before kickoff")
+        if name == "plan":
+            o.add_argument("--offline", action="store_true", help="use the stored discovery; no network at all")
+        if name == "run":
+            o.add_argument("--clear-cost-block", action="store_true",
+                           help="after reviewing a COST_ANOMALY, allow paid calls again")
+    # --- end odds
+
     return parser
 
 
@@ -767,12 +799,68 @@ def _experiments(args: argparse.Namespace) -> int:
     return 1 if failed else 0
 
 
+def _notify(args: argparse.Namespace) -> int:
+    """ntfy relay/test. Prints counts only, never the topic or event text.
+
+    Exit 0 when the sink is not configured (nothing to do), and whatever the provider
+    answered: a notification failure must not raise an alert loop or change any run.
+    Exit 1 only for a configured but invalid topic, which an owner must fix."""
+    from . import daily, notify_ntfy
+
+    try:
+        sink = notify_ntfy.sink_from_env()
+    except notify_ntfy.NtfyConfigError:
+        print(json.dumps({"status": "config_error", "detail": "the configured ntfy topic URL or token is invalid"}))
+        return 1
+    if sink is None:
+        print(json.dumps({"status": "not_configured"}))
+        return 0
+    now = datetime.now(timezone.utc)
+    if args.notify_command == "test":
+        result = notify_ntfy.send_test(sink, now=now)
+    else:
+        status_dir = Path(args.status_dir)
+        result = notify_ntfy.relay_outbox(status_dir / daily.NOTIFICATIONS_NAME,
+                                          status_dir / notify_ntfy.RELAY_NAME, sink, now=now,
+                                          failure_path=status_dir / "last_failure.json")
+    print(json.dumps(result, sort_keys=True))
+    return 0
+
+
+def _odds(args: argparse.Namespace) -> int:
+    """The Odds API pilot (ADR 0029). Prints one JSON report; never the key."""
+    from dataclasses import replace as _replace
+
+    from . import odds_pilot
+    from .odds_schedule import PilotConfig, parse_offsets
+
+    def keys(text: str) -> tuple[str, ...]:
+        return tuple(part.strip() for part in text.split(",") if part.strip())
+
+    settings = odds_pilot.RunnerSettings(
+        sport=args.sport, markets=keys(args.markets), regions=keys(args.regions),
+        config=_replace(PilotConfig(), offsets=parse_offsets(args.offsets)),
+    )
+    if args.odds_command == "run":
+        code, report = odds_pilot.run_tick(args.db, args.ledger, settings, clear_cost_block=args.clear_cost_block)
+    elif args.odds_command == "plan":
+        code, report = odds_pilot.plan(args.db, args.ledger, settings, offline=args.offline)
+    else:
+        code, report = odds_pilot.smoke(args.db, args.ledger, settings)
+    print(json.dumps(report, sort_keys=True, indent=None if args.odds_command == "run" else 2, default=str))
+    return code
+
+
 def main(argv: list[str] | None = None) -> int:
     argv = sys.argv[1:] if argv is None else list(argv)
     if argv[:1] == ["dashboard"]:  # the dashboard owns its own argument parser
         from .dashboard import main as dashboard_main
 
         return dashboard_main(argv[1:])
+    if argv[:1] == ["sizing"]:  # stake sizing v2 research tools own their parser (ADR 0026)
+        from .sizing_eval import main as sizing_main
+
+        return sizing_main(argv[1:])
     args = build_parser().parse_args(argv)
 
     if args.command == "collect":
@@ -795,6 +883,10 @@ def main(argv: list[str] | None = None) -> int:
         return _settlement_audit(args)
     if args.command == "experiments":
         return _experiments(args)
+    if args.command == "notify":
+        return _notify(args)
+    if args.command == "odds":
+        return _odds(args)
 
     raise AssertionError(f"Unhandled command: {args.command}")
 

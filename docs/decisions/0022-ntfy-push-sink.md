@@ -161,3 +161,15 @@ timer or deploy file each need a separate owner approval recorded in the repo.
 - a self-hosted ntfy server is approved (then add it to `SELF_HOSTED_HOSTS` and the invariant,
   and consider `X-Cache: no` and `X-Firebase: no`);
 - or ntfy's publish API changes.
+
+## Amendment 2026-09-24: activation
+
+The owner approved activation (`docs/EXECUTION_PLAN.md`, 2026-09-24 entry). The sink itself is
+unchanged. ADR 0028 records the wiring:
+- `edge-lab notify relay` runs in its own `edgelab-notify.service`, started after the daily
+  units, and forwards recent outbox events once each through `dispatch`;
+- `edge-lab notify test` sends one fixed TEST event;
+- the topic lives only in `/etc/market-edge-lab/secrets.env`.
+
+The "nothing constructs the sink" invariant became "only `cli.py` constructs it, through
+`sink_from_env`". `daily.py`, the shadow unit and the deploy files still never do.

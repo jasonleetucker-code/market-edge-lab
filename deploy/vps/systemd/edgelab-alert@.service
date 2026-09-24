@@ -1,5 +1,7 @@
 [Unit]
 Description=Market Edge Lab: failure alert for %i
+# After recording the failure (last_failure.json), relay it as a fixed-headline push (ADR 0028).
+OnSuccess=edgelab-notify.service
 
 [Service]
 Slice=edgelab.slice

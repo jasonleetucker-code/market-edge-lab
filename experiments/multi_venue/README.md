@@ -9,7 +9,9 @@ documentation and terms say.
 |---|---|
 | `polymarket_us_smoke_2026-09-23.md` | The one bounded live GET of the Polymarket US public gateway, plus the docs and terms reviewed |
 | `novig_daily_data_capture_2026-09-23.md` | The one manual read of Novig's published daily files (index plus one day), and the fixture truncation |
+| `polymarket_us_fees_2026-09-24.md` | The official Polymarket US fee page, rules/settlement docs and Exchange Rulebook read for the fee schedule and the split-cancel payoff (ADR 0027): URLs, times, hashes, excerpts, what stays UNSUPPORTED |
 | `odds_api_docs_2026-09-23.md` | The one read of The Odds API v4 guide used to build fixtures. No API call was made: there is no key |
+| `odds_api_credit_rules_2026-09-24.md` | A re-read of the same guide (unchanged bytes) for the credit rules behind the NFL pilot's budget proof (ADR 0029). No API call was made |
 
 Rules that apply to everything here:
 
