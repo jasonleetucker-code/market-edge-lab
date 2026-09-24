@@ -37,6 +37,7 @@ NOTIFICATIONS_SHOWN = 50
 FAILURE_FILE = "last_failure.json"  # production unit failures only (alert.sh; verification.FAILURE_NAME)
 VERIFICATION_FILE = "last_verification.json"  # install-time checks (runbook §4.1; verification.VERIFICATION_NAME)
 ODDS_LEDGER_FILE = "odds_quota_ledger.json"  # the Odds API quota ledger, beside the evidence database
+FRESHNESS_FILE = "freshness.json"  # the Freshness Fabric supervisor's artifact (freshness_fabric.ARTIFACT_NAME)
 RECEIPT_SCHEMA = "edge-lab-shadow-daily-receipt/1"
 
 OPERATIONAL_ACCOUNT_ID = exp001_shadow.ACCOUNT_ID
@@ -245,6 +246,13 @@ class Context:
             return Loaded(OK, odds_pilot.dashboard_status(self.config.db, ledger, state, now=self.now))
         except Exception as exc:  # noqa: BLE001 - shown as an error state, never raised
             return Loaded(ERROR, message=short_error(exc, self.config))
+
+    @cached_property
+    def freshness_status(self) -> Loaded:
+        """The Freshness Fabric supervisor's current-state artifact (`freshness.json`, schema
+        `freshness-fabric-status/1`), read as written: OK with a `FreshnessReport`, NO_DATA when not
+        configured or not written yet, ERROR when unreadable or of another schema."""
+        return freshness_report(self)
 
     @cached_property
     def odds_targets(self) -> Loaded:
@@ -1113,3 +1121,39 @@ def odds_capture_targets(ctx: Context) -> Loaded:
         upcoming=tuple(by_id[t.target_id] for t in ahead[:ODDS_TARGETS_SHOWN]), by_state=by_state,
         last_change_utc=max(changes).astimezone(timezone.utc).isoformat() if changes else None,
         odds_max_age=max_age, sport=settings.sport, snapshots=parsed))
+
+
+# --------------------------------------------------------------------------- Freshness Fabric (freshness_fabric, ADR 0031)
+
+
+@dataclass(frozen=True)
+class FreshnessReport:
+    """The supervisor's artifact as written, plus how old the artifact itself is: `report_freshness`
+    is `freshness.assess(generated_at_utc, max_age=freshness_fabric.SUPERVISOR_MAX_AGE, now)`. Every
+    source figure stays the artifact's own (as of its generation); nothing is re-derived here."""
+
+    doc: dict[str, Any]
+    report_freshness: str  # FRESH | STALE | UNKNOWN
+    max_age: timedelta
+
+
+def freshness_report(ctx: Context) -> Loaded:
+    from .. import freshness_fabric as ff
+
+    loaded = ctx._status_file(FRESHNESS_FILE)
+    if loaded.status == NO_DATA:
+        if ctx.config.status_dir is None:
+            return loaded
+        return Loaded(NO_DATA, message=f"The Freshness Fabric supervisor (edgelab-freshness.timer) has not written "
+                                       f"{FRESHNESS_FILE} to the status directory yet")
+    if loaded.status != OK:
+        return loaded
+    doc = loaded.value
+    if doc.get("schema") != ff.SCHEMA:
+        return Loaded(ERROR, message=f"{FRESHNESS_FILE} has schema {str(doc.get('schema'))[:60]!r}, not {ff.SCHEMA}")
+    if not isinstance(doc.get("sources"), list) or not isinstance(doc.get("supervisor"), dict):
+        return Loaded(ERROR, message=f"{FRESHNESS_FILE} lacks its sources or supervisor section")
+    generated = doc.get("generated_at_utc") if isinstance(doc.get("generated_at_utc"), str) else None
+    fresh = assess_freshness(generated, max_age=ff.SUPERVISOR_MAX_AGE, now=ctx.now).value.upper()
+    return Loaded(OK, FreshnessReport(doc, fresh, ff.SUPERVISOR_MAX_AGE))
+

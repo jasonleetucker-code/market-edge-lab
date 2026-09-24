@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from decimal import Decimal
+from typing import Any
 
 from ...freshness import parse_utc
 from .. import components as c
@@ -13,6 +14,13 @@ from ..html import esc
 from . import alerts, research
 from . import common as cm
 from . import markets
+
+
+def _states_only(research: Any, loaded: d.Loaded, now: Any) -> str:
+    """The state blocks a report shows above its source rows (the rows are in the populated example)."""
+    if loaded.status != d.OK:
+        return research.freshness_body(loaded, now)
+    return research._supervisor_state(loaded.value.doc, loaded.value, now)
 
 
 def view(ctx: d.Context, p: pr.Params) -> cm.Page:
@@ -116,6 +124,16 @@ def view(ctx: d.Context, p: pr.Params) -> cm.Page:
     parts.append(c.section("Odds capture targets (empty / source unavailable / read error)",
                            "".join(research.odds_targets_body(targets[k], ok, tnow)
                                    for k in ("empty", "unavailable", "error")), sid="g-odds-t-states"))
+    fresh = fixtures.synthetic_freshness()
+    fnow = parse_utc(fixtures.FRESHNESS_NOW)
+    parts.append(c.section("Source freshness (populated · a fresh, missed, disagreeing SYNTHETIC source)",
+                           research.freshness_body(fresh["populated"], fnow), sid="g-fresh"))
+    parts.append(c.section("Source freshness (deferred: carried)", research.freshness_body(fresh["deferred_carried"], fnow),
+                           sid="g-fresh-carried"))
+    parts.append(c.section("Source freshness (stale report / partial / deferred, nothing carried / not written / error)",
+                           "".join(_states_only(research, fresh[k], fnow)
+                                   for k in ("stale", "partial", "deferred_empty", "missing", "error")),
+                           sid="g-fresh-states"))
     origin_rows = [
         cm.failure_alert(d.FailureRecord(d.FAILURE_FILE, fixtures.synthetic_failure_record("edgelab-decision.service"),
                                          "PRODUCTION", False)),

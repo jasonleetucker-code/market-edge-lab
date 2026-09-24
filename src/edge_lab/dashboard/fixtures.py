@@ -348,6 +348,52 @@ def synthetic_odds_targets() -> dict[str, Any]:
     }
 
 
+# SYNTHETIC Freshness Fabric reports: the real supervisor (`freshness_fabric.build_status` /
+# `deferred_status`) over an empty context (every source UNKNOWN, nothing configured), with one
+# SYNTHETIC source edited to show a fresh receipt, a missed run and a disagreement.
+FRESHNESS_NOW = "2026-09-24T21:00:00+00:00"
+
+
+def synthetic_freshness() -> dict[str, Any]:
+    """name -> a `data.Loaded` of `data.freshness_report`: populated, stale report, partial,
+    deferred with nothing carried, deferred carried, not written, read error."""
+    from datetime import datetime, timezone
+
+    from .. import freshness_fabric as ff
+    from ..freshness import FabricContext
+    from . import data as d
+
+    now = datetime(2026, 9, 24, 21, 0, tzinfo=timezone.utc)
+    doc = ff.build_status(FabricContext(), now)
+    doc["sources"] = [dict(x) for x in doc["sources"]]
+    first = doc["sources"][0]
+    first.update(freshness="FRESH", health="OK", schedule_state="MISSED", missed_count=1,
+                 receipt_ts_utc="2026-09-24T20:55:00Z", last_success_receipt_utc="2026-09-24T20:55:00Z", data_age_s=300.0,
+                 usable_for_research=True, usable_for_decision=True,
+                 recent_misses=["SYNTHETIC: 2026-09-23 decision capture"],
+                 disagreements=["SYNTHETIC: the timer tick falls outside the window the gate accepts"])
+    partial = {**doc, "supervisor": {**doc["supervisor"], "state": "PARTIAL",
+                                     "problems": ["SYNTHETIC provider: RuntimeError: boom"]}}
+    window = ("kalshi_close_tick", datetime(2026, 9, 25, 4, 55, 30, tzinfo=timezone.utc),
+              datetime(2026, 9, 25, 5, 1, tzinfo=timezone.utc))
+    empty_deferred = ff.deferred_status(FabricContext(), window[1], window)
+    carried = {**doc, "generated_at_utc": "2026-09-25T04:58:00Z", "sources_evaluated_at_utc": "2026-09-25T04:54:00Z",
+               "supervisor": {**empty_deferred["supervisor"], "problems": []},
+               "sources": [{**x, "carried_from_utc": "2026-09-25T04:54:00Z", "usable_for_decision": False}
+                           for x in doc["sources"]]}
+    max_age = ff.SUPERVISOR_MAX_AGE
+    return {
+        "populated": d.Loaded(d.OK, d.FreshnessReport(doc, "FRESH", max_age)),
+        "stale": d.Loaded(d.OK, d.FreshnessReport(doc, "STALE", max_age)),
+        "partial": d.Loaded(d.OK, d.FreshnessReport(partial, "FRESH", max_age)),
+        "deferred_empty": d.Loaded(d.OK, d.FreshnessReport(empty_deferred, "FRESH", max_age)),
+        "deferred_carried": d.Loaded(d.OK, d.FreshnessReport(carried, "FRESH", max_age)),
+        "missing": d.Loaded(d.NO_DATA, message="The Freshness Fabric supervisor (edgelab-freshness.timer) has not "
+                                               "written freshness.json to the status directory yet"),
+        "error": d.Loaded(d.ERROR, message="freshness.json has schema 'something-else/9', not freshness-fabric-status/1"),
+    }
+
+
 def synthetic_failure_record(unit: str, origin: str | None = None) -> dict:
     record = {"unit": unit, "failed_at_utc": T0, "invocation_id": "0123456789abcdef0123456789abcdef"}
     if origin is not None:

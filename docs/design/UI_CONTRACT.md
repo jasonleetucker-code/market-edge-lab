@@ -226,7 +226,16 @@ rule; withdrawal **Not enabled**; policy details disclosure.
 **Research & Data `/experiments`** — tabs Research | Data sources. Research: title, ID,
 research stage, historical result, forward valid days, next preregistered look, progress
 labelled "Observations toward the next scheduled evaluation", limitations, details. Data
-sources: The Odds API pilot card (`odds_pilot.dashboard_status`: "The Odds API — SETUP NEEDED" and
+sources: first the Source freshness section (the Freshness Fabric supervisor's `freshness.json`,
+schema `freshness-fabric-status/1`, read as written: what is fresh, what is due next and why; the sources needing attention
+(missed, blocked, failing or degraded, disagreeing) as rows and every source by domain in a disclosure; every
+source's acquisition mode with EXTERNAL_SCHEDULE shown as "supervised only · run by <schedule owner>";
+freshness, schedule state, health, next due, last successful receipt, research/decision usability, why,
+misses and disagreements; the report's own age judged by `generated_at_utc`; a protected-window deferral
+names the window (the Kalshi close-tick guard included) and the carried evaluation
+(`sources_evaluated_at_utc`, `carried_from_utc`); states: populated, stale report, partial, deferred with
+or without a carried evaluation, not written / not configured, read error or foreign schema), then The
+Odds API pilot card (`odds_pilot.dashboard_status`: "The Odds API — SETUP NEEDED" and
 so on; active only with a stored live read that held offers, never "connected"; offered odds are
 research only, never executable), then the Odds capture targets section (`data.odds_capture_targets`
 over the stored `odds_capture_targets` / `odds_capture_transitions` rows): a summary (targets, captured,
@@ -386,3 +395,16 @@ directive), and the screenshots that justify it.
   360x800, 390x844, 430x932, 768x1024, 1440x900 and 1920x1080 (Chromium), 390x844 and 1440x900
   (WebKit), and 180x400 / 720x450 as 200% zoom of 360 / 1440 (`tests/browser/capture.py`), reviewed
   locally by the author and described in the PR (not attached).
+- **2026-09-24 — Source freshness on Data sources.** Approved by the owner directive of 2026-09-24
+  evening ("Terminal v1": a freshness/source view that makes clear where the fabric only supervises an
+  external timer; contract C4) and the coordinator's phase-2 assignment after Lane A's #81 merged. §8
+  Research & Data: Data sources opens with "Source freshness", read from the supervisor's artifact (no
+  new navigation, no provider is run by the dashboard). Composed in `views/research.py`
+  (`freshness_section`, `freshness_body`, `fabric_source_row`) from the existing section, facts, row,
+  badge, state-text, empty/error/unavailable, disclosure, kv and list components; no new component,
+  token or CSS. New namespaced state words (SCHEDULE_*, HEALTH_*, SUPERVISOR_*) and presentation helpers
+  `prefixed_word`, `mode_label`, `window_label`, `duration_text` (formatting of the artifact's seconds).
+  Screenshots: fixture states `freshness` and `freshness_deferred` and `/gallery` at 360x800, 1440x900,
+  720x450 and 180x400 (200% zoom) (`tests/browser/capture.py`), reviewed locally by the author and
+  described in the PR (not attached).
+

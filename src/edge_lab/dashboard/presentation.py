@@ -384,7 +384,60 @@ STATES: dict[str, StateWord] = {
     "TARGET_OVERDUE": StateWord("Overdue", WARN_K),
     "TARGET_PENDING": StateWord("Not captured yet", ND_K),
     "TARGET_NO_CAPTURE": StateWord("Nothing captured", ND_K),
+    # Freshness Fabric (freshness.ScheduleState / SourceHealth, the supervisor's state), namespaced.
+    "SCHEDULE_DUE": StateWord("Due now", INFO_K),
+    "SCHEDULE_NOT_DUE": StateWord("Not due", ND_K),
+    "SCHEDULE_MISSED": StateWord("Missed", ERR_K),
+    "SCHEDULE_PAUSED": StateWord("Paused", WARN_K),
+    "SCHEDULE_BUDGET_BLOCKED": StateWord("Budget blocked", WARN_K),
+    "SCHEDULE_QUOTA_BLOCKED": StateWord("Quota blocked", WARN_K),
+    "SCHEDULE_PROTECTED_WINDOW": StateWord("Protected window", ND_K),
+    "SCHEDULE_LOCK_BUSY": StateWord("Lock busy", WARN_K),
+    "SCHEDULE_UNKNOWN": StateWord("Schedule unknown", WARN_K),
+    "HEALTH_OK": StateWord("Healthy", OK_K),
+    "HEALTH_DEGRADED": StateWord("Degraded", WARN_K),
+    "HEALTH_FAILING": StateWord("Failing", ERR_K),
+    "HEALTH_UNKNOWN": StateWord("Health unknown", WARN_K),
+    "SUPERVISOR_OK": StateWord("Supervisor OK", OK_K),
+    "SUPERVISOR_PARTIAL": StateWord("Partial: a provider failed", WARN_K),
+    "SUPERVISOR_DEFERRED_PROTECTED_WINDOW": StateWord("Deferred: protected window", WARN_K),
 }
+
+
+def prefixed_word(prefix: str, code: Any) -> StateWord:
+    """The word for a code in a namespaced family ("SCHEDULE_" + DUE); an unknown code stays neutral."""
+    return STATES.get(f"{prefix}_{code}") or state_word(code)
+
+
+ACQUISITION_MODES = {"EXTERNAL_SCHEDULE": "External schedule · supervised only", "STREAM": "Stream", "POLL": "Poll",
+                     "EVENT_RELATIVE": "Event-relative", "RELEASE_DRIVEN": "Release-driven", "MANUAL": "Manual"}
+WINDOW_LABELS = {"kalshi_close_tick": "Kalshi close-tick guard",
+                 "settlement_run_1115": "11:15 settlement run", "settlement_run_1615": "16:15 settlement run",
+                 "exp001_capture_window_and_shadow_run": "EXP-001 capture window and shadow run"}
+
+
+def mode_label(mode: Any) -> str:
+    return ACQUISITION_MODES.get(str(mode), str(mode))
+
+
+def window_label(name: Any) -> str:
+    return WINDOW_LABELS.get(str(name), str(name))
+
+
+def duration_text(seconds: Any) -> str | None:
+    """A recorded duration in seconds as "2 h 44 min" (formatting only; None stays None)."""
+    d = dec(seconds)
+    if d is None or d < 0:
+        return None
+    total = int(d)
+    days, rem = divmod(total, 86400)
+    hours, rem = divmod(rem, 3600)
+    minutes = rem // 60
+    if days:
+        return f"{days} d {hours} h" if hours and days < 3 else f"{days} d"
+    if hours:
+        return f"{hours} h {minutes} min" if minutes else f"{hours} h"
+    return f"{minutes} min" if minutes else f"{total} s"
 
 
 def state_word(code: Any) -> StateWord:
