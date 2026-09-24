@@ -150,9 +150,9 @@ sudo runuser -u edgelab -- /opt/market-edge-lab/venv/bin/python -m edge_lab.stor
 sudo runuser -u edgelab -- /opt/market-edge-lab/venv/bin/python -m edge_lab.storage mark-v4-for-rollback --db /var/lib/market-edge-lab/db/edge_lab.sqlite3   # 3b. stamp v5 -> v4 (only before ADR 0029)
 sudo mv /opt/market-edge-lab/app /opt/market-edge-lab/app.bad && sudo mv /opt/market-edge-lab/app.prev /opt/market-edge-lab/app   # 4. code
 sudo install -o root -g root -m 0644 /opt/market-edge-lab/app/deploy/vps/systemd/edgelab-* /opt/market-edge-lab/app/deploy/vps/systemd/edgelab.slice /etc/systemd/system/   # 5. units
-sudo rm -f /etc/systemd/system/edgelab-observe.service /etc/systemd/system/edgelab-observe.timer /etc/systemd/system/edgelab-observe-close.service /etc/systemd/system/edgelab-observe-close.timer
-# Only for a v4 rollback, also remove edgelab-odds.service and edgelab-odds.timer.
+sudo rm -f /etc/systemd/system/edgelab-observe.service /etc/systemd/system/edgelab-observe.timer /etc/systemd/system/edgelab-observe-close.service /etc/systemd/system/edgelab-observe-close.timer   # v5 and v4
 sudo systemctl daemon-reload
+# v4 ONLY (run separately): sudo rm -f /etc/systemd/system/edgelab-odds.service /etc/systemd/system/edgelab-odds.timer && sudo systemctl daemon-reload
 sudo systemctl enable --now edgelab-pfm.timer edgelab-decision.timer edgelab-recheck.timer edgelab-status.timer edgelab-backup.timer edgelab-shadow.timer edgelab-settlement.timer   # 6. core timers
 sudo systemctl restart edgelab-dashboard.service
 sudo systemctl start edgelab-backup.service                           # 7. VERIFIED on the old code
