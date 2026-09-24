@@ -618,6 +618,8 @@ def test_failed_and_successful_collections_are_recorded_as_source_health(paths, 
     tick(paths, provider, utc(2026, 10, 3, 17, 0))
     provider.odds_error = None
     tick(paths, provider, utc(2026, 10, 3, 20, 25))
+    spec = get_source(op.HEALTH_DISCOVERY)  # a registered source, not an unknown id on the dashboard
+    assert spec.status.value == "planned" and spec.max_age == {"events": timedelta(hours=6, minutes=30)}
     discovery = _health(paths[0], op.HEALTH_DISCOVERY)
     # failed (04:00); ok (10:00); ok (17:00, 6 h later). records = snapshots stored.
     assert [r["status"] for r in discovery] == ["failed", "ok", "ok"]

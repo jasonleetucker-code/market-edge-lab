@@ -117,7 +117,7 @@ class _LazyRun:
 # arrived (or failed to). The quota-free schedule discovery has its own id, so a successful
 # discovery is never shown as a healthy odds feed.
 HEALTH_ODDS = odds_api.SOURCE_ID
-HEALTH_DISCOVERY = f"{odds_api.SOURCE_ID}_discovery"
+HEALTH_DISCOVERY = odds_api.get_source("the_odds_api_discovery").source_id  # registered in sources.py
 
 
 def _health(store: SnapshotStore, run: _LazyRun, *, source_id: str, started_utc: str, started_mono: float,

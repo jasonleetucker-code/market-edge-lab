@@ -246,7 +246,23 @@ APPROVED_CREDENTIALS = {
         "approval_phrase": "The Odds API FREE-tier adapter foundation",
         "plan_phrase": "the owner may install The Odds API free read-only key",
     },
+    # The same key's quota-free schedule discovery, registered separately so its health is never
+    # read as odds-feed health (PR #67 review). It is not a second credential: see the test below.
+    "the_odds_api_discovery": {
+        "approval_phrase": "The Odds API FREE-tier adapter foundation",
+        "plan_phrase": "the owner may install The Odds API free read-only key",
+    },
 }
+
+
+def test_the_discovery_source_shares_the_one_odds_api_key():
+    from edge_lab.sources import get_source
+
+    odds, discovery = get_source("the_odds_api"), get_source("the_odds_api_discovery")
+    for field in ("credential_kind", "credential_env_var", "credential_transport", "owner_approval_ref",
+                  "base_url", "status", "requires_credentials"):
+        assert getattr(discovery, field) == getattr(odds, field), field
+    assert discovery.collected_by == () and discovery.legacy_name != odds.legacy_name
 
 
 def test_only_owner_approved_read_only_data_feed_credentials_exist():
