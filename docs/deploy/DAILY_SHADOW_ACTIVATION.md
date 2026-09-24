@@ -417,12 +417,16 @@ settlement run (about 11:15 and 16:15 ET):
    sudo mv /opt/market-edge-lab/app /opt/market-edge-lab/app.bad
    sudo mv /opt/market-edge-lab/app.prev /opt/market-edge-lab/app
    ```
-5. **Restore the previous units and remove units newer than the target code:**
+5. **Restore the previous units and remove units newer than the target code.** For a v5
+   rollback, remove only the ADR 0030 observation units:
    ```bash
    sudo install -o root -g root -m 0644 /opt/market-edge-lab/app/deploy/vps/systemd/edgelab-* /opt/market-edge-lab/app/deploy/vps/systemd/edgelab.slice /etc/systemd/system/
    sudo rm -f /etc/systemd/system/edgelab-observe.service /etc/systemd/system/edgelab-observe.timer \
      /etc/systemd/system/edgelab-observe-close.service /etc/systemd/system/edgelab-observe-close.timer
-   # Only when rolling farther back to v4 (before ADR 0029):
+   sudo systemctl daemon-reload
+   ```
+   **Only when the rollback target is v4** (before ADR 0029), additionally remove the Odds units:
+   ```bash
    sudo rm -f /etc/systemd/system/edgelab-odds.service /etc/systemd/system/edgelab-odds.timer
    sudo systemctl daemon-reload
    ```
