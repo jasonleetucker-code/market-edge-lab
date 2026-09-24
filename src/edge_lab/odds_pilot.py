@@ -786,6 +786,8 @@ def smoke(db_path: str | Path, ledger_path: str | Path, settings: RunnerSettings
           environ: Mapping[str, str] | None = None) -> tuple[int, dict[str, Any]]:
     """Exactly one bounded paid read for activation, after a free quota reconcile. Refuses when
     the quota is unknown or insufficient. Records exactly which books and markets came back."""
+    # The CLI passes strings; normalise as run_tick and plan do (production crash, 2026-09-24).
+    db_path, ledger_path = Path(db_path), Path(ledger_path)
     now = clock()
     cfg = settings.config
     report: dict[str, Any] = {"command": "odds smoke", "now_utc": iso_z(now), "sport": settings.sport,
