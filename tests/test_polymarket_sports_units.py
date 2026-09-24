@@ -72,6 +72,15 @@ def test_proposed_timers_are_nonpersistent_staggered_and_pinned_to_the_code():
             assert protected_window_at(start, start + ps.MAX_RUN) is None, (day, h)
 
 
+def test_capture_ticks_next_to_the_settlement_windows_finish_before_them():
+    day = datetime(2026, 9, 23, tzinfo=timezone.utc)  # EDT
+    for et, allowed in (("11:10", True), ("11:25", False), ("16:10", True), ("16:25", False), ("17:40", False),
+                        ("18:40", False), ("18:55", True)):
+        h, m = map(int, et.split(":"))
+        at = day + timedelta(hours=h + 4, minutes=m)
+        assert (ps.protected_refusal(at, "pm-sports capture") is None) is allowed, et
+
+
 def test_the_installer_does_not_know_or_enable_the_pilot_timers():
     units = re.search(r"UNITS=\(([^)]*)\)", INSTALL).group(1).split()
     assert not [u for u in units if u.startswith("edgelab-pm-sports")]

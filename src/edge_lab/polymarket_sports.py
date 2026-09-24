@@ -543,10 +543,13 @@ def discover(store: SnapshotStore, *, clock: Clock | None = None, sleep: Sleep =
     if not due and not force:
         report.update(state="NOT_DUE", next_due_utc=next_due)
         return 0, report
-    previous_usable = latest_usable_scan(store)
-    previous_age = _scan_age(previous_usable, now)
-    previously_stale = previous_age is None or previous_age > DISCOVERY_MAX_AGE
     last_attempt = (store.pm_sports_scans(league=LEAGUE, limit=1) or [None])[0]
+    # Was the catalog already stale when the previous attempt finished? (The alert is for the
+    # transition only: one non-zero exit when a failure first leaves captures without a catalog.)
+    previous_usable = latest_usable_scan(store)
+    at_last = _t(last_attempt["completed_at_utc"]) if last_attempt is not None else None
+    previous_age = _scan_age(previous_usable, at_last) if at_last is not None else None
+    was_stale = last_attempt is None or previous_age is None or previous_age > DISCOVERY_MAX_AGE
     run = _LazyRun(store, "pm-sports-discover")
     run_id = run.id()
     req = _Requests(2 * MAX_DISCOVERY_PAGES, now + MAX_RUN, clock, sleep, http.Pacer(PACER_INTERVAL_S, sleep=sleep), opener)
@@ -599,7 +602,7 @@ def discover(store: SnapshotStore, *, clock: Clock | None = None, sleep: Sleep =
     # Alert once, when this failure has just left captures without a usable catalog.
     usable_age = _scan_age(latest_usable_scan(store), clock())
     stale_now = usable_age is None or usable_age > DISCOVERY_MAX_AGE
-    newly = stale_now and (not previously_stale or last_attempt is None or int(last_attempt["pages_ok"]) > 0)
+    newly = stale_now and (last_attempt is None or int(last_attempt["pages_ok"]) > 0 or not was_stale)
     report["catalog_stale"] = stale_now
     return (1 if (failed and newly) else 0), report
 
@@ -697,7 +700,7 @@ def plan(store: SnapshotStore, *, now: datetime, run: _LazyRun | None = None) ->
     targets = {t["target_id"]: t for t in store.pm_sports_targets()}
     slot_counts: dict[tuple[str, str], int] = {}
     for t in targets.values():
-        if t["state"] != "SKIPPED_CAP":
+        if t["state"] not in ("SKIPPED_CAP", "SUPERSEDED"):
             key = (t["offset_label"], t["effective_utc"])
             slot_counts[key] = slot_counts.get(key, 0) + 1
     # Supersede open targets whose market now shows another game start.
@@ -1095,6 +1098,9 @@ def terminal_view(db_path: str | Path, *, now: datetime,
         store = SnapshotStore.open_readonly(db_path)
     except ReadOnlyStoreError as exc:
         out.update(state="NO_STORE", detail=str(exc))
+        return out
+    except Exception as exc:  # noqa: BLE001 - an unreadable file is shown as ERROR, never raised
+        out.update(state="ERROR", detail=f"evidence store unreadable: {type(exc).__name__}")
         return out
     try:
         out["status"] = status(store, now=now, access_decision=access_decision)

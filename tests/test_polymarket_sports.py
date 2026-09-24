@@ -329,6 +329,25 @@ def test_a_failure_that_makes_a_good_catalog_stale_alerts(tmp_path):
     assert code == 0 and report["catalog_stale"] is False  # still fresh enough: retried in 6 h, no alert
 
 
+def test_the_stale_transition_alerts_once_even_after_earlier_failures(tmp_path):
+    db = _discovered(tmp_path)
+    fail = ScriptedOpener
+    runs = []
+    for hours in (20, 26, 32):  # 13:00, 19:00 and 01:00 ET: outside the protected windows
+        at = NOW + timedelta(hours=hours)
+        code, report = ps.run_discover(db, clock=lambda: at, sleep=lambda s: None,
+                                       opener=fail(http_error(500), http_error(500)), access_decision=ALLOW)
+        runs.append((code, report["state"], report["catalog_stale"]))
+    # Still fresh at 20 h (no alert); stale from 26 h: one alert on the transition, then silence.
+    assert runs == [(0, "FAILED", False), (1, "FAILED", True), (0, "FAILED", True)]
+
+
+def test_a_corrupt_store_is_an_error_view_not_an_exception(tmp_path):
+    bad = tmp_path / "bad.sqlite3"
+    bad.write_bytes(b"not a database at all" * 100)
+    assert ps.terminal_view(bad, now=NOW)["state"] in ("ERROR", "NO_STORE")
+
+
 def test_no_odds_schedule_means_no_targets(tmp_path):
     db = _discovered(tmp_path, odds_events=None)
     assert SnapshotStore(db).pm_sports_targets() == []
