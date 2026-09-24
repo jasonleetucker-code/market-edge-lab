@@ -16,7 +16,8 @@ module does and does not do:
   any reconciliation in the current UTC month it is QUOTA_UNKNOWN. A malformed header or an
   ambiguous failure keeps the reservation and makes it QUOTA_UNKNOWN. It never guesses when
   the provider's month resets: counters reset only when the provider's own `used` header
-  goes down.
+  goes down by more than the calls in flight could explain (a smaller drop is an out-of-order
+  reading from concurrent calls and is ignored).
 - **Scheduled pulls only through the pilot runner.** Nothing here runs by itself. The one
   authorized schedule is the game-relative NFL pilot (`edge_lab.odds_pilot`, ADR 0029): the
   quota-free events endpoint discovers the schedule (`fetch_events`), and paid odds calls are
@@ -31,6 +32,7 @@ header is what gets booked.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import os
@@ -360,6 +362,17 @@ class QuotaLedger:
     def state(self) -> QuotaState:
         return QuotaState(self.snapshot()["state"])
 
+    def read_only_view(self, now: datetime | None = None) -> dict[str, Any]:
+        """The same view as `snapshot`, without taking the lock or writing anything (for the
+        dashboard, which must never mutate the ledger). The file is replaced atomically, so a
+        plain read sees one complete version. A missing file is an empty, QUOTA_UNKNOWN ledger;
+        a corrupt one raises, as everywhere else."""
+        data = self._load()
+        at = now or self._clock()
+        state, detail = self._state(data, at)
+        return {**data, "state": state.value, "detail": detail, "ceiling": self.ceiling,
+                "outstanding": self._outstanding(data), "exists": self.path.exists()}
+
     # -- mutations
 
     def reconcile(self, headers: Iterable[tuple[str, str]] | Mapping[str, str] | None) -> QuotaState:
@@ -371,17 +384,29 @@ class QuotaLedger:
                 data["quota_known"] = False
                 self._event(data, now, "reconcile_failed", reason="missing or malformed quota headers")
                 return QuotaState.QUOTA_UNKNOWN
-            self._apply_headers(data, now, parsed)
+            self._apply_headers(data, now, parsed, in_flight=self._outstanding(data))
             data["reconciled_month_utc"] = _month(now)
             self._event(data, now, "reconciled", remaining=parsed.remaining, used=parsed.used)
             return self._state(data, now)[0]
         return self._transaction(apply)
 
-    def _apply_headers(self, data: dict[str, Any], now: datetime, parsed: QuotaHeaders) -> None:
+    def _apply_headers(self, data: dict[str, Any], now: datetime, parsed: QuotaHeaders, *, in_flight: int = 0) -> None:
+        """Apply one provider reading. `in_flight` is the cost of calls that may have been
+        counted by a later reading already (outstanding reservations, plus the call being
+        settled). Concurrent calls can return their headers out of order, so a reading lower
+        than the previous one by no more than `in_flight` is a stale reading: it is recorded
+        and ignored, never taken as a reset (that would hand back credits already spent)."""
         previous = data.get("last_headers")
         if previous is not None and parsed.used < int(previous["used"]):
-            # The provider's own counter went down: its period reset. Only now are local
-            # counters reset, and only to what the provider reports.
+            drop = int(previous["used"]) - parsed.used
+            if drop <= in_flight:
+                self._event(data, now, "stale_reading_ignored", previous_used=int(previous["used"]),
+                            used=parsed.used, in_flight=in_flight)
+                data["quota_known"] = True
+                self._retire_settled_by_provider(data, now)
+                return
+            # The provider's own counter went down by more than concurrency can explain: its
+            # period reset. Only now are local counters reset, and only to what it reports.
             self._event(data, now, "provider_reset_observed", previous_used=int(previous["used"]),
                         used=parsed.used)
             data["used_local"] = parsed.used
@@ -450,7 +475,7 @@ class QuotaLedger:
                 return QuotaState.QUOTA_UNKNOWN
             del data["reservations"][reservation.reservation_id]
             data["used_local"] = int(data["used_local"]) + parsed.last
-            self._apply_headers(data, now, parsed)
+            self._apply_headers(data, now, parsed, in_flight=self._outstanding(data) + reservation.cost)
             self._event(data, now, "settled", reservation_id=reservation.reservation_id,
                         reserved=reservation.cost, charged=parsed.last)
             return self._state(data, now)[0]
@@ -726,6 +751,14 @@ class OddsOffer:
     decimal_odds: Decimal | None  # None when the raw price is not a valid quote
     market_last_update_utc: str | None
     executable: bool = False  # always False: offered odds are not fillable here
+    # Event identity as the provider stated it in the same response (None when absent; never
+    # filled in from another response). Used by `observation_identity` to link repeated
+    # observations without collapsing distinct events.
+    sport_key: str | None = None
+    league: str | None = None  # the provider's `sport_title`, e.g. "NFL"
+    home_team: str | None = None
+    away_team: str | None = None
+    commence_time_utc: str | None = None
 
 
 @dataclass(frozen=True)
@@ -740,9 +773,41 @@ class DevigEstimate:
     probabilities: tuple[Decimal, ...]
     overround: Decimal
     executable: bool = False
+    # (outcome name, normalized line) per probability, in the same order; () when unknown.
+    outcomes: tuple[tuple[str, str | None], ...] = ()
 
 
 RESEARCH_ONLY = "RESEARCH_ONLY_ESTIMATE"
+IMPLIED_WITH_MARGIN = "IMPLIED_FROM_OFFERED_ODDS_INCLUDES_MARGIN"
+RESEARCH_ONLY_CONSENSUS = "RESEARCH_ONLY_CONSENSUS"
+
+
+@dataclass(frozen=True)
+class ImpliedProbability:
+    """1 / decimal odds of one offer. It still contains the bookmaker's margin, so a complete
+    outcome set sums to more than 1. It is not a fair estimate and not a quote."""
+
+    label: str
+    offer_market_id: str
+    bookmaker: str
+    probability: Decimal
+    executable: bool = False
+
+
+@dataclass(frozen=True)
+class ConsensusEstimate:
+    """A research-only cross-book consensus: the per-outcome median of the books' de-vigged
+    estimates for one exact proposition (same event, market, outcomes and lines), renormalized
+    to sum to 1. It is not a quote, not a model and not executable anywhere."""
+
+    label: str
+    method: str
+    event_id: str
+    market_key: str
+    outcomes: tuple[tuple[str, str | None], ...]
+    probabilities: tuple[Decimal, ...]
+    bookmakers: tuple[str, ...]
+    executable: bool = False
 
 
 def devig_probabilities(decimal_odds: Sequence[Decimal | None]) -> DevigEstimate | None:
@@ -817,6 +882,13 @@ def parse_odds(payload: Any, *, odds_format: str, received_at_utc: str | None = 
         commence = raw_event.get("commence_time")
         commence_dt = parse_utc(commence)
         eid = event_id(native)
+
+        def _text(key: str) -> str | None:
+            value = raw_event.get(key)
+            return value if isinstance(value, str) and value else None
+        ident = dict(sport_key=_text("sport_key"), league=_text("sport_title"), home_team=_text("home_team"),
+                     away_team=_text("away_team"),
+                     commence_time_utc=commence_dt.astimezone(timezone.utc).isoformat() if commence_dt else None)
         events.append(Event(
             domain="sports", event_id=eid,
             target_date=commence_dt.date().isoformat() if commence_dt else "UNKNOWN",  # UTC date
@@ -847,7 +919,8 @@ def parse_odds(payload: Any, *, odds_format: str, received_at_utc: str | None = 
                         problems.append(f"{native}/{bkey}/{mkey}/{name}: invalid price {outcome.get('price')!r}")
                     mid = offer_market_id(native, bkey, mkey, name, point)
                     offers.append(OddsOffer(eid, mid, bkey, mkey, name, point, str(outcome.get("price")),
-                                            odds_format, decimal_odds, None if updated is None else str(updated)))
+                                            odds_format, decimal_odds, None if updated is None else str(updated),
+                                            **ident))
                     if decimal_odds is None:
                         continue  # the offer is kept as evidence; no Market with a made-up payoff
                     markets.append(Market(
@@ -872,8 +945,147 @@ def devig_by_market(snapshot: OddsSnapshot) -> dict[tuple[str, str, str], DevigE
         line = "" if offer.point is None else _abs_line(offer.point)
         groups.setdefault((offer.event_id, offer.bookmaker, f"{offer.market_key}{':' + line if line else ''}"),
                           []).append(offer)
-    return {k: None if k[2].endswith(":invalid-line") else devig_probabilities([o.decimal_odds for o in v])
-            for k, v in sorted(groups.items())}
+    out: dict[tuple[str, str, str], DevigEstimate | None] = {}
+    for k, v in sorted(groups.items()):
+        est = None if k[2].endswith(":invalid-line") else devig_probabilities([o.decimal_odds for o in v])
+        out[k] = None if est is None else replace(est, outcomes=tuple((o.outcome_name, normalize_line(o.point))
+                                                                      for o in v))
+    return out
+
+
+# --------------------------------------------------------------------------- observation identity
+
+
+def normalize_line(point: str | None) -> str | None:
+    """A spread/total line in one canonical text form ("44.50" and "44.5" are one line), or the
+    raw text unchanged when it is not a finite number (never guessed)."""
+    if point is None:
+        return None
+    try:
+        value = Decimal(str(point))
+    except InvalidOperation:
+        return str(point)
+    if not value.is_finite():
+        return str(point)
+    text = format(value.normalize(), "f")
+    return "0" if text in ("-0", "0") else text
+
+
+@dataclass(frozen=True)
+class ObservationIdentity:
+    """Everything that says which proposition an offered price was for.
+
+    Two observations belong to one time series only when EVERY field is equal: provider event
+    id, sport, league, home and away team, scheduled start, bookmaker, market, side and line.
+    Similar or equal team names never link two events with different provider ids or starts
+    (divisional rivals meet twice a season). A rescheduled game starts a new series; the
+    provider event id still ties the two for audit."""
+
+    provider: str
+    provider_event_id: str
+    sport_key: str | None
+    league: str | None
+    home_team: str | None
+    away_team: str | None
+    commence_time_utc: str | None
+    bookmaker: str
+    market_key: str
+    side: str
+    line: str | None
+
+    @property
+    def series_id(self) -> str:
+        text = json.dumps(asdict(self), sort_keys=True, ensure_ascii=False)
+        return "oddsser:" + hashlib.sha256(text.encode("utf-8")).hexdigest()[:32]
+
+    @property
+    def complete(self) -> bool:
+        """False when the response left any identity field out (sport, teams or start)."""
+        return None not in (self.sport_key, self.home_team, self.away_team, self.commence_time_utc)
+
+
+def observation_identity(offer: OddsOffer) -> ObservationIdentity:
+    native = offer.event_id.split(":", 1)[1] if offer.event_id.startswith(f"{VENUE}:") else offer.event_id
+    return ObservationIdentity(VENUE, native, offer.sport_key, offer.league, offer.home_team, offer.away_team,
+                               offer.commence_time_utc, offer.bookmaker, offer.market_key, offer.outcome_name,
+                               normalize_line(offer.point))
+
+
+@dataclass(frozen=True)
+class SeriesLinks:
+    """Offers grouped into time series, plus what could not be linked safely."""
+
+    series: dict[str, tuple[OddsOffer, ...]]
+    identity_conflicts: tuple[str, ...]  # one provider event id reported with different sport/teams
+    rescheduled: tuple[str, ...]  # one provider event id reported with different starts
+    incomplete: tuple[str, ...]  # series whose identity lacks sport, teams or start
+
+
+def link_series(offers: Iterable[OddsOffer]) -> SeriesLinks:
+    """Group repeated observations (from any number of snapshots) into series by their full
+    identity. An event id whose sport or teams disagree across observations is a conflict and
+    is reported; its observations stay in separate series, never merged."""
+    series: dict[str, list[OddsOffer]] = {}
+    seen_event: dict[str, set[tuple]] = {}
+    starts: dict[str, set[str | None]] = {}
+    incomplete: set[str] = set()
+    for offer in offers:
+        ident = observation_identity(offer)
+        series.setdefault(ident.series_id, []).append(offer)
+        seen_event.setdefault(ident.provider_event_id, set()).add(
+            (ident.sport_key, ident.league, ident.home_team, ident.away_team))
+        starts.setdefault(ident.provider_event_id, set()).add(ident.commence_time_utc)
+        if not ident.complete:
+            incomplete.add(ident.series_id)
+    conflicts = tuple(sorted(e for e, ids in seen_event.items() if len(ids) > 1))
+    moved = tuple(sorted(e for e, s in starts.items() if len(s) > 1))
+    return SeriesLinks({k: tuple(v) for k, v in sorted(series.items())}, conflicts, moved, tuple(sorted(incomplete)))
+
+
+# --------------------------------------------------------------------------- research estimates
+
+
+def implied_probability(offer: OddsOffer) -> ImpliedProbability | None:
+    """1 / decimal odds, margin included; None for an invalid price."""
+    if offer.decimal_odds is None or offer.decimal_odds <= 1:
+        return None
+    return ImpliedProbability(IMPLIED_WITH_MARGIN, offer.market_id, offer.bookmaker, Decimal(1) / offer.decimal_odds)
+
+
+def _median(values: Sequence[Decimal]) -> Decimal:
+    ordered = sorted(values)
+    mid = len(ordered) // 2
+    return ordered[mid] if len(ordered) % 2 else (ordered[mid - 1] + ordered[mid]) / 2
+
+
+def consensus_by_market(snapshot: OddsSnapshot, *, min_books: int = 2
+                        ) -> dict[tuple[str, str, tuple[tuple[str, str | None], ...]], ConsensusEstimate]:
+    """Research-only consensus per exact proposition across bookmakers.
+
+    Only books whose de-vigged outcome set is identical (same outcome names AND lines) are
+    combined, so a -3.5 spread is never pooled with a -3 one. Fewer than `min_books` books is
+    not a consensus and produces nothing."""
+    if min_books < 2:
+        raise ValueError("a consensus needs at least two books")
+    pooled: dict[tuple[str, str, tuple[tuple[str, str | None], ...]], list[tuple[str, dict]]] = {}
+    for (event, book, market), est in devig_by_market(snapshot).items():
+        if est is None or not est.outcomes:
+            continue
+        proposition = tuple(sorted(est.outcomes, key=lambda o: (o[0], o[1] or "")))
+        if len(set(proposition)) != len(proposition):
+            continue  # duplicate outcomes in one book's set: ambiguous, never pooled
+        pooled.setdefault((event, market.split(":", 1)[0], proposition), []).append(
+            (book, dict(zip(est.outcomes, est.probabilities))))
+    out = {}
+    for key, rows in sorted(pooled.items()):
+        books = tuple(sorted(b for b, _ in rows))
+        if len(set(books)) < min_books:
+            continue
+        medians = [_median([probs[o] for _, probs in rows]) for o in key[2]]
+        total = sum(medians, Decimal(0))
+        out[key] = ConsensusEstimate(RESEARCH_ONLY_CONSENSUS, "median_of_book_devig_v1", key[0], key[1], key[2],
+                                     tuple(m / total for m in medians), books)
+    return out
 
 
 def _abs_line(point: str) -> str:
