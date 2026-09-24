@@ -41,7 +41,7 @@ import threading
 import uuid
 from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timedelta, timezone
-from decimal import Decimal, InvalidOperation
+from decimal import ROUND_HALF_EVEN, Context, Decimal, InvalidOperation, localcontext
 from enum import Enum
 from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping, Sequence
@@ -937,7 +937,10 @@ def parse_odds(payload: Any, *, odds_format: str, received_at_utc: str | None = 
 def devig_by_market(snapshot: OddsSnapshot) -> dict[tuple[str, str, str], DevigEstimate | None]:
     """Research-only de-vig per (event, bookmaker, market) for the supported market keys.
 
-    Spreads and totals are grouped by the absolute line so both sides of one line pair up."""
+    Spreads and totals are grouped by the normalized absolute line so both sides of one line
+    pair up. This is a legacy per-book, whole-outcome-set view: it would de-vig a three-way set
+    too, and it does not check that spread sides are exact opposites. Neither consensus uses it;
+    both pool only exact two-sided complements from `pair_offers`."""
     groups: dict[tuple[str, str, str], list[OddsOffer]] = {}
     for offer in snapshot.offers:
         if offer.market_key not in SUPPORTED_MARKETS:
@@ -1058,33 +1061,263 @@ def _median(values: Sequence[Decimal]) -> Decimal:
     return ordered[mid] if len(ordered) % 2 else (ordered[mid - 1] + ordered[mid]) / 2
 
 
+# ---- consensus research benchmark (#9, ADR 0033). The canonical pairing and statistics live
+# here; `edge_lab.odds_consensus` builds the versioned, point-in-time benchmark from stored
+# snapshots on top of them. Nothing here is a price anyone can trade at.
+
+CONSENSUS_VERSION = "odds-consensus-v1"
+PAIRED_DEVIG_METHOD = "proportional_two_way_v1"
+# Fixed arithmetic for every consensus figure, whatever the caller's decimal context is.
+CONSENSUS_DECIMAL_CONTEXT = Context(prec=28, rounding=ROUND_HALF_EVEN)
+_OVER_UNDER = ("Over", "Under")
+_DRAW_NAMES = frozenset({"draw", "tie"})
+
+
+class PairingStatus(str, Enum):
+    """Why an offer did or did not enter a clean two-sided pair (one book, one exact line)."""
+
+    PAIRED = "PAIRED"
+    MARKET_NOT_SUPPORTED = "MARKET_NOT_SUPPORTED"  # market key outside h2h / spreads / totals
+    NOT_TWO_WAY = "NOT_TWO_WAY"  # h2h with a draw or three or more outcomes (no 3-way math yet)
+    MISSING_COMPLEMENT = "MISSING_COMPLEMENT"  # no exact opposite side at this line in this book
+    AMBIGUOUS_COMPLEMENT = "AMBIGUOUS_COMPLEMENT"  # a side or line listed twice by one book
+    INVALID_LINE = "INVALID_LINE"  # non-numeric line, a line on h2h, or no line on a spread/total
+    INVALID_PRICE = "INVALID_PRICE"  # this side or its complement has no valid quote
+    UNRECOGNIZED_OUTCOME = "UNRECOGNIZED_OUTCOME"  # not Over/Under, or not one of the event's two teams
+
+
+@dataclass(frozen=True)
+class PairedDevig:
+    """One book's clean two-sided complement at one exact line, de-vigged proportionally.
+
+    `offers` keep the offered prices exactly as received; `implied` is 1 / decimal odds (the
+    margin included); `probabilities` are the de-vigged research estimates (they sum to 1).
+    The three are different things and are never substituted for one another."""
+
+    event_id: str
+    bookmaker: str
+    market_key: str
+    proposition: tuple[tuple[str, str | None], tuple[str, str | None]]  # canonical order
+    offers: tuple[OddsOffer, OddsOffer]  # same order as `proposition`
+    implied: tuple[Decimal, Decimal]
+    probabilities: tuple[Decimal, Decimal]
+    overround: Decimal
+    label: str = RESEARCH_ONLY
+    method: str = PAIRED_DEVIG_METHOD
+    executable: bool = False
+
+
+@dataclass(frozen=True)
+class UnpairedOffer:
+    """An offer that is kept as evidence but enters no consensus, with the reason."""
+
+    offer: OddsOffer
+    status: PairingStatus
+    reason: str
+
+
+def _negated_line(line: str) -> str | None:
+    try:
+        value = Decimal(line)
+    except InvalidOperation:
+        return None
+    return normalize_line(str(-value)) if value.is_finite() else None
+
+
+def _numeric_line(point: str | None) -> str | None:
+    """The normalized line when `point` is a finite number, else None."""
+    if point is None:
+        return None
+    try:
+        value = Decimal(str(point))
+    except InvalidOperation:
+        return None
+    return normalize_line(str(point)) if value.is_finite() else None
+
+
+def _pair_one_market(offers: list[OddsOffer]) -> tuple[list[PairedDevig], list[UnpairedOffer]]:
+    """Pair the offers of one (event, bookmaker, market). Exact complements only:
+
+    - h2h: exactly two outcomes, no draw, no line; when the response names the event's home and
+      away teams, the two outcomes must be exactly those teams;
+    - spreads: (team A, line L) with (team B, line -L), the two teams of the event;
+    - totals: (Over, L) with (Under, L).
+    Anything else is unpaired with a reason. Nothing is guessed."""
+    first = offers[0]
+    market = first.market_key
+    paired: list[PairedDevig] = []
+    unpaired: list[UnpairedOffer] = []
+
+    def refuse(items: Iterable[OddsOffer], status: PairingStatus, reason: str) -> None:
+        unpaired.extend(UnpairedOffer(o, status, reason) for o in items)
+
+    if market not in SUPPORTED_MARKETS:
+        refuse(offers, PairingStatus.MARKET_NOT_SUPPORTED, f"market {market!r} has no consensus math")
+        return paired, unpaired
+    teams = {first.home_team, first.away_team} if first.home_team and first.away_team else None
+    known: set[str] | None = None  # the two team names a spread pairs between
+
+    def make_pair(a: OddsOffer, b: OddsOffer, a_line: str | None, b_line: str | None) -> None:
+        sides = sorted([(a, (a.outcome_name, a_line)), (b, (b.outcome_name, b_line))],
+                       key=lambda s: (s[1][0], s[1][1] or ""))
+        bad = [o for o, _ in sides if o.decimal_odds is None or o.decimal_odds <= 1]
+        if bad:
+            names = ", ".join(sorted(o.outcome_name for o in bad))
+            refuse([a, b], PairingStatus.INVALID_PRICE, f"no valid price for {names}; the pair is not de-vigged")
+            return
+        implied = tuple(Decimal(1) / o.decimal_odds for o, _ in sides)  # type: ignore[operator]
+        total = implied[0] + implied[1]
+        paired.append(PairedDevig(first.event_id, first.bookmaker, market, (sides[0][1], sides[1][1]),
+                                  (sides[0][0], sides[1][0]), (implied[0], implied[1]),
+                                  (implied[0] / total, implied[1] / total), total - 1))
+
+    if market == "h2h":
+        lined = [o for o in offers if o.point is not None]
+        if lined:
+            refuse(offers, PairingStatus.INVALID_LINE, "an h2h outcome carries a line")
+            return paired, unpaired
+        names = [o.outcome_name for o in offers]
+        if len(offers) != 2 or any(n.strip().lower() in _DRAW_NAMES for n in names):
+            refuse(offers, PairingStatus.NOT_TWO_WAY,
+                   f"h2h with {len(offers)} outcome(s) {sorted(names)}: not a clean two-way complement; "
+                   "three-way / draw math is not implemented")
+            return paired, unpaired
+        if names[0] == names[1]:
+            refuse(offers, PairingStatus.AMBIGUOUS_COMPLEMENT, f"h2h lists {names[0]!r} twice")
+            return paired, unpaired
+        if teams is not None and set(names) != teams:
+            refuse(offers, PairingStatus.UNRECOGNIZED_OUTCOME,
+                   f"h2h outcomes {sorted(names)} are not the event's teams {sorted(teams)}")
+            return paired, unpaired
+        make_pair(offers[0], offers[1], None, None)
+        return paired, unpaired
+
+    # spreads and totals: every offer needs a finite line, grouped by exact normalized line.
+    by_side: dict[tuple[str, str], list[OddsOffer]] = {}
+    for o in offers:
+        line = _numeric_line(o.point)
+        if line is None:
+            refuse([o], PairingStatus.INVALID_LINE, f"line {o.point!r} is not a finite number")
+            continue
+        if market == "totals" and o.outcome_name not in _OVER_UNDER:
+            refuse([o], PairingStatus.UNRECOGNIZED_OUTCOME, f"totals outcome {o.outcome_name!r} is not Over/Under")
+            continue
+        by_side.setdefault((o.outcome_name, line), []).append(o)
+    if market == "spreads":
+        names = {name for name, _ in by_side}
+        known = teams if teams is not None else (names if len(names) == 2 else None)
+        if known is None:
+            for side in sorted(by_side):
+                refuse(by_side[side], PairingStatus.UNRECOGNIZED_OUTCOME,
+                       f"spread outcomes {sorted(names)} do not name exactly two teams")
+            return paired, unpaired
+        for side in sorted(k for k in by_side if k[0] not in known):
+            refuse(by_side.pop(side), PairingStatus.UNRECOGNIZED_OUTCOME,
+                   f"spread outcome {side[0]!r} is not one of the event's teams {sorted(known)}")
+
+    def complement(side: tuple[str, str]) -> tuple[str, str] | None:
+        name, line = side
+        if market == "totals":
+            return ("Under" if name == "Over" else "Over", line)
+        other = sorted(known - {name})  # type: ignore[operator]
+        negated = _negated_line(line)
+        return (other[0], negated) if len(other) == 1 and negated is not None else None
+
+    done: set[tuple[str, str]] = set()
+    for side in sorted(by_side):
+        if side in done:
+            continue
+        done.add(side)
+        mate = complement(side)
+        mine = by_side[side]
+        theirs = by_side.get(mate, []) if mate is not None else []
+        if mate is not None:
+            done.add(mate)
+        if not theirs:
+            refuse(mine, PairingStatus.MISSING_COMPLEMENT,
+                   f"no {mate[0]} {mate[1]} from this book: not an exact opposite line" if mate else
+                   "no complement can be formed")
+        elif len(mine) > 1 or len(theirs) > 1:
+            refuse(mine + theirs, PairingStatus.AMBIGUOUS_COMPLEMENT,
+                   f"{side[0]} {side[1]} / {mate[0]} {mate[1]} listed more than once by this book")  # type: ignore[index]
+        else:
+            make_pair(mine[0], theirs[0], side[1], mate[1])  # type: ignore[index]
+    return paired, unpaired
+
+
+def pair_offers(snapshot: OddsSnapshot) -> tuple[tuple[PairedDevig, ...], tuple[UnpairedOffer, ...]]:
+    """Every clean two-sided complement per (event, bookmaker, market, exact line), and every
+    other offer with the reason it was left out. Deterministic: sorted, never order-dependent,
+    and computed in CONSENSUS_DECIMAL_CONTEXT whatever the caller's decimal context is."""
+    with localcontext(CONSENSUS_DECIMAL_CONTEXT):
+        return _pair_offers(snapshot)
+
+
+def _pair_offers(snapshot: OddsSnapshot) -> tuple[tuple[PairedDevig, ...], tuple[UnpairedOffer, ...]]:
+    groups: dict[tuple[str, str, str], list[OddsOffer]] = {}
+    for offer in snapshot.offers:
+        groups.setdefault((offer.event_id, offer.bookmaker, offer.market_key), []).append(offer)
+    paired: list[PairedDevig] = []
+    unpaired: list[UnpairedOffer] = []
+    for key in sorted(groups):
+        p, u = _pair_one_market(sorted(groups[key], key=lambda o: (o.outcome_name, o.point or "", o.raw_price)))
+        paired += p
+        unpaired += u
+    paired.sort(key=lambda p: (p.event_id, p.market_key, p.proposition, p.bookmaker))
+    unpaired.sort(key=lambda u: (u.offer.event_id, u.offer.market_key, u.offer.bookmaker, u.offer.outcome_name,
+                                 u.offer.point or "", u.status.value))
+    return tuple(paired), tuple(unpaired)
+
+
+def group_propositions(paired: Iterable[PairedDevig]
+                       ) -> dict[tuple[str, str, tuple[tuple[str, str | None], ...]], tuple[PairedDevig, ...]]:
+    """Paired de-vigs pooled by exact proposition: same event, market, outcome names AND lines.
+    A -3.5 spread is never pooled with -3, and "44.50" is the same line as "44.5"."""
+    pooled: dict[tuple[str, str, tuple[tuple[str, str | None], ...]], list[PairedDevig]] = {}
+    for p in paired:
+        pooled.setdefault((p.event_id, p.market_key, p.proposition), []).append(p)
+    return {k: tuple(sorted(v, key=lambda p: p.bookmaker)) for k, v in sorted(pooled.items())}
+
+
+def median(values: Sequence[Decimal]) -> Decimal:
+    """The median; the mean of the two middle values for an even count. Raises on no values."""
+    if not values:
+        raise ValueError("the median of no values is undefined")
+    return _median(values)
+
+
+def median_absolute_deviation(values: Sequence[Decimal]) -> Decimal:
+    """MAD = median(|x - median(x)|), unscaled (no 1.4826 normal-consistency factor)."""
+    centre = median(values)
+    return median([abs(v - centre) for v in values])
+
+
 def consensus_by_market(snapshot: OddsSnapshot, *, min_books: int = 2
                         ) -> dict[tuple[str, str, tuple[tuple[str, str | None], ...]], ConsensusEstimate]:
-    """Research-only consensus per exact proposition across bookmakers.
+    """Research-only consensus per exact proposition across bookmakers: the per-outcome median
+    of the books' paired de-vigged probabilities (`pair_offers`, `group_propositions`).
 
-    Only books whose de-vigged outcome set is identical (same outcome names AND lines) are
-    combined, so a -3.5 spread is never pooled with a -3 one. Fewer than `min_books` books is
-    not a consensus and produces nothing."""
+    Only clean two-sided complements at one exact line are pooled, so a -3.5 spread is never
+    combined with a -3 one and a three-way h2h is never de-vigged. Fewer than `min_books` books
+    is not a consensus and produces nothing. The full benchmark (dispersion, freshness, update
+    bounds, versioned hashes, point-in-time reads) is `edge_lab.odds_consensus`."""
     if min_books < 2:
         raise ValueError("a consensus needs at least two books")
-    pooled: dict[tuple[str, str, tuple[tuple[str, str | None], ...]], list[tuple[str, dict]]] = {}
-    for (event, book, market), est in devig_by_market(snapshot).items():
-        if est is None or not est.outcomes:
-            continue
-        proposition = tuple(sorted(est.outcomes, key=lambda o: (o[0], o[1] or "")))
-        if len(set(proposition)) != len(proposition):
-            continue  # duplicate outcomes in one book's set: ambiguous, never pooled
-        pooled.setdefault((event, market.split(":", 1)[0], proposition), []).append(
-            (book, dict(zip(est.outcomes, est.probabilities))))
+    with localcontext(CONSENSUS_DECIMAL_CONTEXT):
+        return _consensus_by_market(snapshot, min_books)
+
+
+def _consensus_by_market(snapshot: OddsSnapshot, min_books: int
+                         ) -> dict[tuple[str, str, tuple[tuple[str, str | None], ...]], ConsensusEstimate]:
     out = {}
-    for key, rows in sorted(pooled.items()):
-        books = tuple(sorted(b for b, _ in rows))
-        if len(set(books)) < min_books:
+    for key, rows in group_propositions(pair_offers(snapshot)[0]).items():
+        books = tuple(p.bookmaker for p in rows)
+        if len(set(books)) < min_books or len(set(books)) != len(books):
             continue
-        medians = [_median([probs[o] for _, probs in rows]) for o in key[2]]
+        medians = [median([p.probabilities[i] for p in rows]) for i in range(2)]
         total = sum(medians, Decimal(0))
-        out[key] = ConsensusEstimate(RESEARCH_ONLY_CONSENSUS, "median_of_book_devig_v1", key[0], key[1], key[2],
-                                     tuple(m / total for m in medians), books)
+        out[key] = ConsensusEstimate(RESEARCH_ONLY_CONSENSUS, f"{CONSENSUS_VERSION}:median_of_paired_devig",
+                                     key[0], key[1], key[2], tuple(m / total for m in medians), books)
     return out
 
 
@@ -1094,7 +1327,9 @@ def _abs_line(point: str) -> str:
         value = Decimal(point)
     except InvalidOperation:
         return "invalid-line"
-    return str(abs(value)) if value.is_finite() else "invalid-line"
+    if not value.is_finite():
+        return "invalid-line"
+    return normalize_line(str(abs(value))) or "invalid-line"  # "2.50" and "-2.5" are one line
 
 
 def coverage(snapshot: OddsSnapshot, *, requested_bookmakers: Sequence[str] = (),
