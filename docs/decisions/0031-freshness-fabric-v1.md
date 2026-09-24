@@ -61,9 +61,30 @@ Everything that existed before (`Freshness`, `assess`, `combine`, `require_fresh
   - `data_age` and `upstream_age`, derived from `as_of` so they can never disagree with it;
   - `missed_count`, `recent_misses`, `usable_for_research` and `usable_for_decision`;
   - `disagreements`, `notes`, and `details` (small, JSON-safe, no secrets);
-  - fail-closed constructor checks: FRESH requires `receipt_ts`; `usable_for_decision` requires
-    FRESH data and OK health; times must be zone-aware; a count must be a non-negative int or None.
-    The flag summarizes the fabric's view. It never replaces `require_fresh` at the point of use.
+  - fail-closed constructor checks:
+    - FRESH requires `receipt_ts`;
+    - `usable_for_research` requires a `receipt_ts` of known freshness. Last-known-good STALE data may
+      serve research; UNKNOWN never does, and that includes a future-dated receipt;
+    - `usable_for_decision` requires FRESH data and OK health;
+    - times must be zone-aware, and a count must be a non-negative int or None.
+  - `usable_flags(freshness, health, receipt_ts)` computes exactly this rule. A provider may be
+    stricter, never looser. The flags summarize the fabric's view; they never replace
+    `require_fresh` at the point of use.
+  - **Receipts are successes only.** `receipt_ts` and `last_success_receipt` come from the latest
+    *successful* acquisition. A run that did no work or failed never makes a source fresh or usable:
+    - LOCK_BUSY, NO_CAPTURE and NOT_CLOSED shadow runs;
+    - FAILED and SETTLEMENT_CONFLICT shadow runs;
+    - a NOT_EXECUTABLE observation;
+    - a rejected, partial or failed capture;
+    - a wrong-schema artifact.
+
+    `last_attempt` records any outcome.
+  - **`missed_count` scope** is named in each record's `details.missed_scope`:
+    - fixed daily ticks count the latest tick only (0/1);
+    - forward captures count closed target days in the last 7 without a complete capture;
+    - Odds and ADR 0030 count targets their scheduler recorded MISSED.
+
+    None means there is no evidence to judge.
 - `policy_freshness(policy, receipt, now)`: the canonical `assess` against the policy objective.
   A policy with no objective gives UNKNOWN.
 - `FabricContext`: read-only paths only (evidence DB, shadow ledger, Odds quota ledger and pilot
@@ -89,8 +110,9 @@ STALE a few minutes after its capture, and the record says so. Being on schedule
 
 No provider makes a network call, takes a lock, writes, or triggers anything.
 
-**Parity.** For the same inputs, the fabric's DUE equals `forward.would_proceed` at every minute
-through the windows. Its odds next-due equals the minimum of `odds_schedule.effective_due` over the
+**Parity.** For the same inputs, the fabric's DUE equals `forward.would_proceed` AND the phase's
+timer tick having passed, at every minute through the windows. The gate opens at 17:30 ET for pfm,
+but nothing runs it before the 17:45 tick: "gate open, timer at 17:45" is NOT_DUE. Its odds next-due equals the minimum of `odds_schedule.effective_due` over the
 open targets, and `odds_pilot.dashboard_status`. Its ADR 0030 next-due equals
 `price_observations.status`, and its close alignment equals `close_tick_alignment`.
 `tests/test_freshness_fabric.py` pins each of these.
@@ -125,10 +147,25 @@ to be named by some source's `schedule_owner`: the fabric explains every schedul
 - The artifact holds no paths, no environment values and no secrets.
 - **Isolation.** A provider that raises, omits a declared source, or returns an undeclared one is
   reported. Its declared sources become UNKNOWN records, and the other providers still run.
-- **Protected windows.** A `--write` run inside a `price_observations.PROTECTED_WINDOWS_ET` window
-  opens no store. It carries the previous evaluation forward: `sources_evaluated_at_utc` keeps its
-  old value, and the supervisor state is DEFERRED_PROTECTED_WINDOW. An operator's read without
-  `--write` always evaluates.
+- **Protected windows.** A `--write` run opens no store in two cases: inside a
+  `price_observations.PROTECTED_WINDOWS_ET` window, and inside the close guard. The close guard runs
+  from 2 min 15 s before to 3 min 15 s after the 04:57:45 UTC close tick, so the 04:56 run can never
+  overlap the close capture.
+  - It carries the previous evaluation forward only if that evaluation was made at most 15 minutes
+    before the window opened.
+  - Each carried record is re-assessed at `now` by pure arithmetic from its own receipt time and
+    objective: freshness and ages move on, and `usable_for_decision` is forced False. Its schedule
+    state is labelled as of `carried_from_utc`.
+  - Anything older, or missing, becomes UNKNOWN.
+  - `sources_evaluated_at_utc` is always the time of the evaluation actually shown (None when
+    nothing was carried).
+  - The supervisor state is DEFERRED_PROTECTED_WINDOW.
+  - The verifier checks both ages: `generated_at_utc` within 15 min, and `sources_evaluated_at_utc`
+    within 15 min, or within 95 min while deferred (the 70-minute evening window plus the 15-minute
+    carry margin plus a tick and slack).
+  - An operator's read without `--write` always evaluates.
+- **Problems** in the artifact are scrubbed of filesystem paths (exception messages can carry them).
+- **Durability.** After the atomic replace, the directory is fsynced (POSIX).
 - **Exit status.** 0 whenever a status was produced, 2 on bad arguments. Anything else is a genuine
   crash (a traceback in the journal). A STALE or MISSED source is data, never a failure.
 
@@ -138,16 +175,18 @@ to be named by some source's `schedule_owner`: the fabric explains every schedul
   :01, :06 ... :56.
   - This is staggered off every other edgelab tick: Odds :00/:15/:30/:45, observe
     :05/:20/:35/:50, and the daily :00/:05/:15/:30/:40/:45/:55 ticks.
-  - The 04:56 UTC run is over (TimeoutStartSec 60 s) before the 04:57:45 close tick. The next run
-    is 05:01, after the close confirmation. A test pins this.
+  - The 04:56 UTC run falls in the close guard and defers, opening no store. With TimeoutStartSec
+    120 s it could otherwise overlap the 04:57:45 close tick. The 05:01 run comes after the close
+    confirmation. A test pins this.
 - **Hardening.** Oneshot, `User=edgelab`, `Slice=edgelab.slice`, and the same hardening block as
   `edgelab-observe.service`, but network-free:
   - `RestrictAddressFamilies=AF_UNIX` and `IPAddressDeny=any`;
   - no `EnvironmentFile` (it needs no secret or setting, and the commit comes from `REVISION`);
   - `ReadWritePaths` covers the status dir only. The stores are opened with SQLite `mode=ro`, as the
     dashboard already does in production.
-- **Caps.** MemoryHigh 96M, MemoryMax 128M, CPUQuota 10%, TasksMax 8, Nice 10,
-  TimeoutStartSec 60 s.
+- **Caps.** MemoryHigh 96M, MemoryMax 128M, CPUQuota 10%, TasksMax 8, Nice 10, TimeoutStartSec 120 s.
+  At 10% CPU, a run of 1-3 CPU-seconds takes 10-30 s of wall time; 120 s leaves room for a cold
+  start. A timeout is silent (no OnFailure), so the margin matters.
 - **No `OnFailure=` alert.** A diagnostic on a 5-minute cadence that crashes would push up to 288
   times a day. Every push would also overwrite `last_failure.json`, which belongs to the evidence
   collectors. A crash is visible without that:
@@ -170,10 +209,17 @@ On the VPS, expect a run of 1-3 s of CPU at most, under the 10% quota.
 - **Reads per run:**
   - one read-only open per provider;
   - the `forward_captures`, `odds_targets` and `price_targets` tables and the latest source health;
-  - the stored odds snapshots, newest first, until one holds offers (`dashboard_status`);
+  - the stored odds snapshots, newest first and 8 per page (`SnapshotStore.snapshots_of_kind_newest`),
+    until one holds offers (`dashboard_status`). At most one page of payloads is in memory at a time,
+    however long the season's history.
   - at most 256 KB of receipt history and three manifests.
-- **Growth:** the `price_targets` read grows with history (about 40 targets a day). Revisit when
-  it passes about 50k rows, or when a run exceeds 10 s.
+- **Growth:**
+  - Odds payloads are bounded per page. Before review, the dashboard loaded every stored odds
+    payload: about 46 MB at 600 rows, which would have breached MemoryMax within a season. Each read
+    is now at most 8 payloads.
+  - The `forward_captures`, `odds_targets` and `price_targets` reads still grow with history (a few
+    rows a day, and about 40 targets a day). They carry no payloads: kilobytes, not megabytes.
+  - Revisit when `price_targets` passes about 50k rows, or when a run exceeds 30 s.
 
 ## Contract for later lanes
 
@@ -196,7 +242,10 @@ The provider rules:
 - make no network call, take no lock and write nothing;
 - report unknown as None or UNKNOWN;
 - put scheduler-versus-fabric conflicts in `disagreements`;
-- keep `max_useful_age` from `sources.REGISTRY`.
+- keep `max_useful_age` from `sources.REGISTRY`;
+- set the usable flags with `usable_flags(...)`. The constructor rejects looser flags, for example
+  `usable_for_research=True` on an UNKNOWN (for instance future-dated) receipt;
+- count only successful acquisitions as receipts, and name the `missed_scope`.
 
 Its timer must appear in a policy's `schedule_owner`. The every-timer-is-explained test enforces
 this.
@@ -232,8 +281,11 @@ this.
 - **Timer state.** The fabric cannot see whether a systemd timer is enabled. It is network-free and
   runs no `systemctl`. A MISSED fixed tick is inferred from receipts; the verifier checks the
   timers.
-- **Protected windows.** Inside them the artifact's sources can be up to about 70 minutes old
-  (17:40-18:50 ET). This is labelled, and a manual read still evaluates.
+- **Protected windows.** Inside them the artifact's evaluation can be up to about 85 minutes old
+  (17:40-18:50 ET plus the carry margin).
+  - It is labelled, re-assessed for freshness, and never decision-grade.
+  - The carried schedule states are as of the evaluation.
+  - A manual read still evaluates.
 - **Freshness versus schedule.** Freshness follows the registry objectives. Short objectives, such
   as books, therefore show STALE most of the time. That is truthful, and the schedule state carries
   "on time".

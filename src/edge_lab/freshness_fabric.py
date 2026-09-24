@@ -46,9 +46,11 @@ from .freshness import (
     SourceFreshness,
     SourceHealth,
     SourcePolicy,
+    assess,
     iso_z,
     parse_utc,
     policy_freshness,
+    usable_flags,
 )
 from .sources import get_source
 from .storage import ODDS_TARGET_FINAL_STATES, ReadOnlyStoreError, SnapshotStore
@@ -90,9 +92,32 @@ ODDS_TICK_MINUTES = (0, 15, 30, 45)  # edgelab-odds.timer
 SUPERVISOR_TIMER = "edgelab-freshness.timer"
 SUPERVISOR_TICK_MINUTES = tuple(range(1, 60, 5))  # edgelab-freshness.timer: *:01/5
 SUPERVISOR_MAX_AGE = timedelta(minutes=15)  # three missed ticks
+# The close capture runs from the 04:57:45 UTC tick to its confirming read 5 s after the 05:00:00Z close.
+# A supervisor run that could overlap it (TimeoutStartSec 120 s) defers like a protected window.
+CLOSE_GUARD = ("kalshi_close_tick", timedelta(minutes=2, seconds=15), timedelta(minutes=3, seconds=15))
+
+
+def close_guard_at(now: datetime) -> tuple[str, datetime, datetime] | None:
+    """(name, start, end) when `now` is inside [close tick - 2 min 15 s, close tick + 3 min 15 s)."""
+    for day in (now.date() - timedelta(days=1), now.date(), now.date() + timedelta(days=1)):
+        tick = datetime.combine(day, po.CLOSE_TICK_UTC, UTC)
+        start, end = tick - CLOSE_GUARD[1], tick + CLOSE_GUARD[2]
+        if start <= now < end:
+            return CLOSE_GUARD[0], start, end
+    return None
 
 # Early discovery of a schedule problem is the point: only the next few targets are checked.
 MAX_TARGETS_CHECKED = 50
+
+# Daily shadow runs that did their bookkeeping (edge_lab.daily EXIT states with exit code 0 that did
+# work). Everything else (LOCK_BUSY, NO_CAPTURE, NOT_CLOSED, INVALID_CAPTURE, FAILED, ...) is never a
+# receipt, so it can never make the source fresh or usable.
+SHADOW_SUCCESS_STATES = ("HEALTHY_TRADED", "HEALTHY_NO_SIGNAL", "PENDING_SETTLEMENT")
+
+# `missed_count` semantics, one per kind of schedule (reported in each record's details):
+MISSED_SCOPE_TICK = "the latest fixed timer tick only: 1 if it passed its grace without a recorded run, else 0"
+MISSED_SCOPE_DAYS = "closed target days in the last 7 (since the first capture) without a complete capture"
+MISSED_SCOPE_TARGETS = "targets recorded MISSED by the canonical scheduler (all stored targets)"
 
 
 # --------------------------------------------------------------------------- small helpers
@@ -383,10 +408,16 @@ def _forward_capture_record(policy: SourcePolicy, phase: str, store: SnapshotSto
     g = forward.gate(phase, store, now)
     window = {"start_utc": iso_z(g.window[0]), "end_utc": iso_z(g.window[1])}
 
-    if g.status is None:
-        state, next_due, intended = ScheduleState.DUE, min(g.window[0], now), tick_d
+    if g.status is None and now < tick_d:
+        # The gate would admit a run, but nothing runs it before its timer fires.
+        state, next_due, intended = ScheduleState.NOT_DUE, tick_d, tick_d
+        why = (f"gate open for {target.isoformat()} [{window['start_utc']}, {window['end_utc']}); "
+               f"the timer fires at {iso_z(tick_d)}")
+    elif g.status is None:
+        state, next_due, intended = ScheduleState.DUE, tick_d, tick_d
         why = (f"inside the canonical {phase} window for {target.isoformat()} "
-               f"[{window['start_utc']}, {window['end_utc']}) and no complete capture yet")
+               f"[{window['start_utc']}, {window['end_utc']}), after the {iso_z(tick_d)} timer tick, and no "
+               "complete capture yet")
     elif g.status == "skipped_duplicate" or done_today:
         state, next_due, intended = ScheduleState.NOT_DUE, tick_next, tick_next
         why = f"complete {phase} capture for {target.isoformat()}; next at the {iso_z(tick_next)} tick"
@@ -424,17 +455,18 @@ def _forward_capture_record(policy: SourcePolicy, phase: str, store: SnapshotSto
     health = {"complete": SourceHealth.OK, "partial": SourceHealth.DEGRADED, "failed": SourceHealth.FAILING,
               None: SourceHealth.UNKNOWN}[last]
     disagreement = forward_tick_disagreement(phase, store, target)
+    research, decision = usable_flags(freshness, health, receipt)
     return SourceFreshness(
         policy=policy, as_of=now, freshness=freshness, schedule_state=state, health=health, why_due=_clip(why),
         intended_at=intended, next_due=next_due, last_attempt=_t(rows[-1]["started_at_utc"]) if rows else None,
         last_success_receipt=receipt, receipt_ts=receipt, missed_count=len(misses), recent_misses=tuple(recent),
-        usable_for_research=receipt is not None,
-        usable_for_decision=freshness is Freshness.FRESH and health is SourceHealth.OK,
+        usable_for_research=research, usable_for_decision=decision,
         disagreements=(disagreement,) if disagreement else (),
         notes=("the day's validity (VALID/INVALID) is exp001.forward.status; a complete capture is not a valid day",),
         details={"timer": FORWARD_TIMERS[phase], "timer_tick_utc": iso_z(tick_d), "target_date": target.isoformat(),
                  "canonical_window": window, "gate_status": g.status or "PROCEED",
-                 "last_complete_target_date": complete[-1]["target_date"] if complete else None})
+                 "last_complete_target_date": complete[-1]["target_date"] if complete else None,
+                 "missed_scope": MISSED_SCOPE_DAYS})
 
 
 def _forward_status_record(ctx: FabricContext, now: datetime) -> SourceFreshness:
@@ -453,15 +485,17 @@ def _forward_status_record(ctx: FabricContext, now: datetime) -> SourceFreshness
     else:
         valid = data.get("last_closed_status")
         health = SourceHealth.OK if valid == "VALID" else SourceHealth.DEGRADED
+    # latest.json is written only by a completed status run, so its time is a receipt even when the
+    # day it describes is INVALID (that is data: health DEGRADED, never decision-grade).
     freshness = policy_freshness(policy, generated, now)
+    research, decision = usable_flags(freshness, health, generated)
     notes = tuple(_clip(r, 160) for r in (data.get("last_closed_reasons") or [])[:3]) if isinstance(data, dict) else ()
     return SourceFreshness(
         policy=policy, as_of=now, freshness=freshness, schedule_state=state, health=health, why_due=_clip(why),
         intended_at=next_due, next_due=next_due, last_attempt=generated, last_success_receipt=generated,
         receipt_ts=generated, missed_count=1 if state is ScheduleState.MISSED else 0 if generated else None,
-        usable_for_research=generated is not None,
-        usable_for_decision=freshness is Freshness.FRESH and health is SourceHealth.OK, notes=notes,
-        details={"file": state_file, "last_closed_target_date": data.get("last_closed_target_date") if isinstance(data, dict) else None,
+        usable_for_research=research, usable_for_decision=decision, notes=notes,
+        details={"missed_scope": MISSED_SCOPE_TICK, "file": state_file, "last_closed_target_date": data.get("last_closed_target_date") if isinstance(data, dict) else None,
                  "last_closed_status": valid, "valid_days": data.get("valid_days") if isinstance(data, dict) else None})
 
 
@@ -572,17 +606,19 @@ def _odds_records(ctx: FabricContext, now: datetime) -> list[SourceFreshness]:
         last_attempt=max((a for a in attempted if a), default=None), last_success_receipt=receipt, receipt_ts=receipt,
         missed_count=((ds.get("targets") or {}).get("by_state") or {}).get("MISSED", 0) if store is not None else None,
         recent_misses=tuple(_clip(f"{r['target_id']}: {r['reason']}", 200) for r in missed_rows[-5:]),
-        usable_for_research=receipt is not None, usable_for_decision=False,
+        usable_for_research=usable_flags(freshness, health, receipt)[0],
+        usable_for_decision=False,  # offered odds are a research benchmark, never an executable price
         disagreements=tuple(disagreements),
         notes=(ds.get("label") or odds_pilot.RESEARCH_LABEL, "the systemd timer state is not observable here")
               + ((f"evidence store: {problem}",) if problem else ()),
         details={"pilot_state": dstate, "quota_state": quota.get("state"), "quota_used_local": quota.get("used_local"),
                  "quota_provider_remaining": quota.get("provider_remaining"), "quota_ceiling": quota.get("ceiling"),
-                 "quota_outstanding": quota.get("outstanding"), "cost_blocked": bool(ds.get("cost_block")),
+                 "quota_outstanding": quota.get("outstanding"),
+                 "cost_blocked": None if dstate == "ERROR" else bool(ds.get("cost_block")),
                  "next_offset": next_capture.get("offset"), "next_event_id": next_capture.get("event_id"),
                  "open_targets": len(upcoming), "overdue_targets": len(overdue),
                  "targets_by_state": (ds.get("targets") or {}).get("by_state"),
-                 "live_read_verified": ds.get("live_read_verified")})
+                 "live_read_verified": ds.get("live_read_verified"), "missed_scope": MISSED_SCOPE_TARGETS})
 
     # ---- quota-free discovery
     disc = ds.get("discovery") or {}
@@ -609,8 +645,8 @@ def _odds_records(ctx: FabricContext, now: datetime) -> list[SourceFreshness]:
         policy=POLICY_ODDS_DISCOVERY, as_of=now, freshness=dfresh, schedule_state=dstate_s, health=dhealth,
         why_due=_clip(dwhy), intended_at=next_disc, next_due=next_disc if dstate_s is not ScheduleState.PAUSED else None,
         last_attempt=last_try_at or last_ok, last_success_receipt=last_ok, receipt_ts=last_ok,
-        usable_for_research=last_ok is not None,
-        usable_for_decision=dfresh is Freshness.FRESH and dhealth is SourceHealth.OK,
+        usable_for_research=usable_flags(dfresh, dhealth, last_ok)[0],
+        usable_for_decision=usable_flags(dfresh, dhealth, last_ok)[1],
         details={"events": disc.get("events"), "fresh_for_planning": disc.get("fresh"), "outcome": outcome})
     return [odds_record, discovery_record]
 
@@ -622,7 +658,9 @@ def odds_api_pilot(ctx: FabricContext, now: datetime) -> list[SourceFreshness]:
 
 # =========================================================================== ADR 0030 price observations
 
-_CAPTURED_STATES = ("CAPTURED", "NOT_EXECUTABLE")
+# Only an executable CAPTURED book is a successful receipt. NOT_EXECUTABLE rows are evidence, but
+# not a usable price, so they never make the source fresh.
+_CAPTURED_STATES = ("CAPTURED",)
 
 
 def observe_tick_for(due_from: datetime, deadline: datetime, now: datetime) -> datetime | None:
@@ -701,7 +739,7 @@ def _observation_record(policy: SourcePolicy, targets: Sequence[Mapping[str, Any
         by_state[t["state"] or "PLANNED"] = by_state.get(t["state"] or "PLANNED", 0) + 1
     freshness = policy_freshness(policy, receipt, now)
     details: dict[str, Any] = {"targets": len(targets), "by_state": dict(sorted(by_state.items())),
-                               "overdue": len(overdue)}
+                               "overdue": len(overdue), "missed_scope": MISSED_SCOPE_TARGETS}
     if close:
         details["close_tick_alignment"] = alignment["state"] if alignment else None
     else:
@@ -712,8 +750,8 @@ def _observation_record(policy: SourcePolicy, targets: Sequence[Mapping[str, Any
         last_attempt=_t(attempted[-1]["state_at_utc"]) if attempted else None, last_success_receipt=receipt,
         receipt_ts=receipt, missed_count=len(missed),
         recent_misses=tuple(_clip(f"{t['target_id']}: {t['state_reason']}", 200) for t in missed[-5:]),
-        usable_for_research=receipt is not None,
-        usable_for_decision=freshness is Freshness.FRESH and health is SourceHealth.OK,
+        usable_for_research=usable_flags(freshness, health, receipt)[0],
+        usable_for_decision=usable_flags(freshness, health, receipt)[1],
         disagreements=tuple(disagreements),
         notes=("receipt time is each observation's recorded_at_utc (seconds after receipt); "
                "decision/recheck rows are backfilled, not fetched",),
@@ -808,49 +846,59 @@ def _settlement_records(ctx: FabricContext, now: datetime) -> list[SourceFreshne
     refresh_status = ((((latest or {}).get("settlement") or {}).get("refresh")) or {}).get("status")
     health = {"ok": SourceHealth.OK, "skipped": SourceHealth.OK, "partial": SourceHealth.DEGRADED,
               "failed": SourceHealth.FAILING, "not_run": SourceHealth.FAILING}.get(refresh_status, SourceHealth.UNKNOWN)
-    if latest is not None and latest.get("state") == "FAILED":
+    if latest is not None and latest.get("state") in ("FAILED", "SETTLEMENT_CONFLICT"):
         health = SourceHealth.FAILING
+    elif latest is not None and latest.get("state") == "LOCK_BUSY":
+        health = SourceHealth.DEGRADED  # it did nothing; the next tick retries
     receipt = None
     store, problem = _open_store(ctx)
     if store is not None:
         for row in store.latest_source_health():
             if row["source_id"] == "kalshi_settlement":
-                receipt = _t(row["last_ok_at_utc"])
+                receipt = _t(row["last_ok_at_utc"])  # the latest status='ok' fetch only
     freshness = policy_freshness(POLICY_SETTLEMENT, receipt, now)
+    research, decision = usable_flags(freshness, health, receipt)
     settlement = SourceFreshness(
         policy=POLICY_SETTLEMENT, as_of=now, freshness=freshness, schedule_state=state, health=health,
         why_due=_clip(why), intended_at=next_due, next_due=next_due, last_attempt=ran_at,
         last_success_receipt=receipt, receipt_ts=receipt,
         missed_count=1 if state is ScheduleState.MISSED else 0 if ran_at else None,
-        usable_for_research=receipt is not None,
-        usable_for_decision=freshness is Freshness.FRESH and health is SourceHealth.OK,
+        usable_for_research=research, usable_for_decision=decision,
         notes=notes + ((f"due positions unknown: {due_problem}",) if due_problem else ())
               + ((f"evidence store: {problem}",) if problem else ())
               + ("freshness is the latest successful settlement-evidence fetch (source_health); a run with nothing "
                  "due fetches nothing",),
         details={"events_due": len(due) if due is not None else None, "events_due_sample": (due or [])[:5],
-                 "last_refresh_status": refresh_status, "last_run_state": (latest or {}).get("state")})
+                 "last_refresh_status": refresh_status, "last_run_state": (latest or {}).get("state"),
+                 "missed_scope": MISSED_SCOPE_TICK})
 
     # ---- shadow bookkeeping (18:40 ET)
+    # Only a run that did its bookkeeping is a receipt. LOCK_BUSY, NO_CAPTURE and NOT_CLOSED did
+    # no work; FAILED, SETTLEMENT_CONFLICT and INVALID_CAPTURE did not complete it cleanly. None of
+    # them ever makes this source fresh or usable.
     last_tick, next_tick = _daily_ticks(now, (SHADOW_TICK_ET,), eastern=True)
     latest = shadows[-1] if shadows else None
     ran_at = _t(latest.get("generated_at_utc")) if latest else None
+    success = [r for r in shadows if r.get("state") in SHADOW_SUCCESS_STATES]
+    receipt = _t(success[-1].get("generated_at_utc")) if success else None
     state, next_due, why = _tick_state(now, last_tick, next_tick, ran_at, DAILY_RUN_GRACE, "shadow bookkeeping")
     run_state = (latest or {}).get("state")
     if run_state == "LOCK_BUSY" and ran_at and ran_at >= last_tick - timedelta(minutes=1):
         state, why = ScheduleState.LOCK_BUSY, f"the {iso_z(last_tick)} run found the collector or ledger lock held"
     health = (SourceHealth.UNKNOWN if run_state is None
+              else SourceHealth.OK if run_state in SHADOW_SUCCESS_STATES
               else SourceHealth.FAILING if run_state in ("FAILED", "SETTLEMENT_CONFLICT")
-              else SourceHealth.DEGRADED if run_state == "INVALID_CAPTURE" else SourceHealth.OK)
-    freshness = policy_freshness(POLICY_SHADOW, ran_at, now)
+              else SourceHealth.DEGRADED)  # LOCK_BUSY, NO_CAPTURE, NOT_CLOSED, INVALID_CAPTURE, anything new
+    freshness = policy_freshness(POLICY_SHADOW, receipt, now)
+    research, decision = usable_flags(freshness, health, receipt)
     shadow = SourceFreshness(
         policy=POLICY_SHADOW, as_of=now, freshness=freshness, schedule_state=state, health=health, why_due=_clip(why),
-        intended_at=next_due, next_due=next_due, last_attempt=ran_at,
-        last_success_receipt=ran_at if health in (SourceHealth.OK, SourceHealth.DEGRADED) else None,
-        receipt_ts=ran_at, missed_count=1 if state is ScheduleState.MISSED else 0 if ran_at else None,
-        usable_for_research=ran_at is not None,
-        usable_for_decision=freshness is Freshness.FRESH and health is SourceHealth.OK, notes=notes,
-        details={"last_run_state": run_state, "problems": len((latest or {}).get("problems") or [])})
+        intended_at=next_due, next_due=next_due, last_attempt=ran_at, last_success_receipt=receipt,
+        receipt_ts=receipt, missed_count=1 if state is ScheduleState.MISSED else 0 if ran_at else None,
+        usable_for_research=research, usable_for_decision=decision, notes=notes,
+        details={"last_run_state": run_state,
+                 "problems": len(latest.get("problems") or []) if latest is not None else None,
+                 "missed_scope": MISSED_SCOPE_TICK})
     return [settlement, shadow]
 
 
@@ -903,9 +951,9 @@ def backups(ctx: FabricContext, now: datetime) -> list[SourceFreshness]:
             policy=policy, as_of=now, freshness=freshness, schedule_state=state, health=health, why_due=_clip(why),
             intended_at=next_due, next_due=next_due, last_attempt=at, last_success_receipt=at, receipt_ts=at,
             missed_count=1 if state is ScheduleState.MISSED else 0 if at else None,
-            usable_for_research=at is not None,
-            usable_for_decision=freshness is Freshness.FRESH and health is SourceHealth.OK, notes=notes,
-            details={"bundles": status}))
+            usable_for_research=usable_flags(freshness, health, at)[0],
+            usable_for_decision=usable_flags(freshness, health, at)[1], notes=notes,
+            details={"bundles": status, "missed_scope": MISSED_SCOPE_TICK}))
     return out
 
 
@@ -919,19 +967,20 @@ def supervisor_self(ctx: FabricContext, now: datetime) -> list[SourceFreshness]:
     if ctx.status_dir is None:
         return [unknown_record(policy, now, "status directory not configured", next_due=tick)]
     status, data = _read_json(ctx.status_dir / ARTIFACT_NAME)
-    previous = _t(data.get("generated_at_utc")) if status == "OK" and isinstance(data, dict) else None
     if status == "OK" and (not isinstance(data, dict) or data.get("schema") != SCHEMA):
         status = "WRONG_SCHEMA"
+    previous = _t(data.get("generated_at_utc")) if status == "OK" else None
     freshness = policy_freshness(policy, previous, now)
     health = (SourceHealth.OK if previous and freshness is Freshness.FRESH
               else SourceHealth.UNKNOWN if status == "MISSING" else SourceHealth.DEGRADED)
-    state = ScheduleState.NOT_DUE if freshness is Freshness.FRESH else ScheduleState.MISSED if previous else ScheduleState.UNKNOWN
+    state = (ScheduleState.NOT_DUE if freshness is Freshness.FRESH
+             else ScheduleState.MISSED if freshness is Freshness.STALE else ScheduleState.UNKNOWN)
     why = (f"previous artifact {iso_z(previous)}; next tick {iso_z(tick)}" if previous
            else f"no previous artifact ({status.lower()}); next tick {iso_z(tick)}")
     return [SourceFreshness(
         policy=policy, as_of=now, freshness=freshness, schedule_state=state, health=health, why_due=why,
         intended_at=tick, next_due=tick, last_attempt=previous, last_success_receipt=previous, receipt_ts=previous,
-        usable_for_research=previous is not None,
+        usable_for_research=usable_flags(freshness, health, previous)[0],
         notes=("judged from the artifact this run replaces; a crash shows as this record going STALE",),
         details={"previous_artifact": status,
                  "previous_state": ((data or {}).get("supervisor") or {}).get("state") if isinstance(data, dict) else None})]
@@ -1037,30 +1086,44 @@ def _bound(value: Any, depth: int = 0) -> Any:
     return _clip(value)
 
 
-def _summary(records: Sequence[SourceFreshness], now: datetime) -> dict[str, Any]:
-    def counts(key: Callable[[SourceFreshness], str]) -> dict[str, int]:
+def _summary(sources: Sequence[Mapping[str, Any]], now: datetime) -> dict[str, Any]:
+    """Counts and lists over the serialized records (the same for evaluated and carried sources)."""
+    def counts(key: str) -> dict[str, int]:
         out: dict[str, int] = {}
-        for r in records:
-            out[key(r)] = out.get(key(r), 0) + 1
+        for r in sources:
+            out[str(r.get(key))] = out.get(str(r.get(key)), 0) + 1
         return dict(sorted(out.items()))
 
-    upcoming = sorted((r for r in records if r.next_due is not None and r.next_due > now),
-                      key=lambda r: (r.next_due, r.source_id))
+    def ids(pred: Callable[[Mapping[str, Any]], bool]) -> list[str]:
+        return [r["source_id"] for r in sources if pred(r)]
+
+    upcoming = sorted(((_t(r.get("next_due_utc")), r) for r in sources
+                       if _t(r.get("next_due_utc")) is not None and _t(r.get("next_due_utc")) > now),
+                      key=lambda x: (x[0], x[1]["source_id"]))
+    blocked = {ScheduleState.PAUSED.value, ScheduleState.BUDGET_BLOCKED.value, ScheduleState.QUOTA_BLOCKED.value,
+               ScheduleState.LOCK_BUSY.value}
     return {
-        "sources": len(records),
-        "by_freshness": counts(lambda r: r.freshness.name),
-        "by_schedule_state": counts(lambda r: r.schedule_state.value),
-        "by_health": counts(lambda r: r.health.value),
-        "fresh": [r.source_id for r in records if r.freshness is Freshness.FRESH],
-        "due_now": [r.source_id for r in records if r.schedule_state is ScheduleState.DUE],
-        "missed": [r.source_id for r in records if r.schedule_state is ScheduleState.MISSED],
-        "blocked": [r.source_id for r in records if r.schedule_state in (
-            ScheduleState.PAUSED, ScheduleState.BUDGET_BLOCKED, ScheduleState.QUOTA_BLOCKED, ScheduleState.LOCK_BUSY)],
-        "unknown": [r.source_id for r in records if r.schedule_state is ScheduleState.UNKNOWN],
-        "disagreements": sum(len(r.disagreements) for r in records),
-        "next_due": [{"source_id": r.source_id, "next_due_utc": iso_z(r.next_due), "why": _clip(r.why_due, 160)}
-                     for r in upcoming[:5]],
+        "sources": len(sources),
+        "by_freshness": counts("freshness"),
+        "by_schedule_state": counts("schedule_state"),
+        "by_health": counts("health"),
+        "fresh": ids(lambda r: r.get("freshness") == Freshness.FRESH.name),
+        "due_now": ids(lambda r: r.get("schedule_state") == ScheduleState.DUE.value),
+        "missed": ids(lambda r: r.get("schedule_state") == ScheduleState.MISSED.value),
+        "blocked": ids(lambda r: r.get("schedule_state") in blocked),
+        "unknown": ids(lambda r: r.get("schedule_state") == ScheduleState.UNKNOWN.value),
+        "disagreements": sum(len(r.get("disagreements") or []) for r in sources),
+        "next_due": [{"source_id": r["source_id"], "next_due_utc": iso_z(at), "why": _clip(r.get("why_due"), 160)}
+                     for at, r in upcoming[:5]],
     }
+
+
+_PATHLIKE = re.compile(r"""(?:[A-Za-z]:)?[\\/][^\s'",;)\]]+""")
+
+
+def scrub(text: str) -> str:
+    """A problem text without filesystem paths (exception messages can carry them)."""
+    return _clip(_PATHLIKE.sub("<path>", str(text)), 200)
 
 
 def code_version() -> str | None:
@@ -1081,7 +1144,8 @@ def code_version() -> str | None:
 def build_status(ctx: FabricContext, now: datetime, registry: Sequence[FabricProvider] = REGISTRY) -> dict[str, Any]:
     """The status document: current state only. No paths, no environment, no secrets."""
     records, reports = evaluate(ctx, now, registry)
-    problems = [f"{r['provider']}: {p}" for r in reports for p in r["problems"]]
+    problems = [scrub(f"{r['provider']}: {p}") for r in reports for p in r["problems"]]
+    sources = [r.to_dict() for r in records]
     return {
         "schema": SCHEMA,
         "generated_at_utc": iso_z(now),
@@ -1093,30 +1157,80 @@ def build_status(ctx: FabricContext, now: datetime, registry: Sequence[FabricPro
             "providers": [{"provider": r["provider"], "state": r["state"]} for r in reports],
             "problems": problems,
         },
-        "summary": _summary(records, now),
+        "summary": _summary(sources, now),
         "policies": [p.to_dict() for entry in registry for p in entry.policies],
-        "sources": [r.to_dict() for r in records],
+        "sources": sources,
     }
 
 
-def deferred_status(ctx: FabricContext, now: datetime, window: tuple[str, datetime, datetime]) -> dict[str, Any]:
-    """Inside a protected window the supervisor opens no store: it carries the previous evaluation
-    forward, clearly labelled with the time it was made, and says why."""
+# A carried evaluation must have been made at most this long before the protected window opened.
+CARRY_MARGIN = timedelta(minutes=15)
+
+
+def _reassess_carried(source: Mapping[str, Any], now: datetime, evaluated: str) -> dict[str, Any]:
+    """A carried record re-judged at `now` by pure arithmetic from its own receipt time and objective:
+    ages and freshness move on, decision-grade use is off while deferred, and the schedule state is
+    as of the evaluation (labelled so)."""
+    receipt, upstream = _t(source.get("receipt_ts_utc")), _t(source.get("upstream_ts_utc"))
+    max_age = source.get("max_useful_age_s")
+    usable_age = isinstance(max_age, (int, float)) and not isinstance(max_age, bool) and max_age > 0
+    fresh = assess(receipt, max_age=timedelta(seconds=max_age), now=now) if usable_age else Freshness.UNKNOWN
+    return {
+        **source,
+        "freshness": fresh.name,
+        "data_age_s": round((now - receipt).total_seconds(), 3) if receipt else None,
+        "upstream_age_s": round((now - upstream).total_seconds(), 3) if upstream else None,
+        "usable_for_research": (bool(source.get("usable_for_research")) and receipt is not None
+                                and fresh is not Freshness.UNKNOWN),
+        "usable_for_decision": False,
+        "carried_from_utc": evaluated,
+        "why_due": _clip(f"carried from the {evaluated} evaluation (protected window): {source.get('why_due')}"),
+    }
+
+
+def deferred_status(ctx: FabricContext, now: datetime, window: tuple[str, datetime, datetime],
+                    registry: Sequence[FabricProvider] = REGISTRY) -> dict[str, Any]:
+    """Inside a protected window the supervisor opens no store. It carries the previous evaluation
+    forward only if that evaluation was made at most CARRY_MARGIN before the window opened; each
+    carried record is re-assessed at `now` from its receipt time (pure arithmetic) with decision-grade
+    use off. Anything it cannot carry is UNKNOWN. `sources_evaluated_at_utc` stays the time of the
+    evaluation actually carried (None when nothing is)."""
     status, previous = _read_json(ctx.status_dir / ARTIFACT_NAME) if ctx.status_dir else ("NOT_CONFIGURED", None)
     valid = status == "OK" and isinstance(previous, dict) and previous.get("schema") == SCHEMA
-    base = previous if valid else {"schema": SCHEMA, "sources_evaluated_at_utc": None, "fabric_version": FABRIC_VERSION,
-                                   "summary": None, "policies": [], "sources": []}
+    evaluated = _t(previous.get("sources_evaluated_at_utc")) if valid else None
+    problems: list[str] = []
+    if not valid:
+        problems.append(f"no previous evaluation to carry forward ({status.lower()})")
+    elif evaluated is None or evaluated > now or evaluated < window[1] - CARRY_MARGIN:
+        problems.append(f"the previous evaluation ({iso_z(evaluated)}) is too old to carry into the window "
+                        f"opened {iso_z(window[1])} (margin {int(CARRY_MARGIN.total_seconds() // 60)} min)")
+        evaluated = None
+    carried = ({s["source_id"]: s for s in previous.get("sources") or []
+                if isinstance(s, dict) and isinstance(s.get("source_id"), str)} if evaluated is not None else {})
+    sources = []
+    for entry in registry:
+        for policy in entry.policies:
+            if policy.source_id in carried:
+                sources.append(_reassess_carried(carried[policy.source_id], now, iso_z(evaluated)))
+            else:
+                sources.append(unknown_record(policy, now, f"not evaluated: inside the {window[0]} protected window "
+                                              "with no evaluation to carry").to_dict())
     return {
-        **base,
+        "schema": SCHEMA,
         "generated_at_utc": iso_z(now),
+        "sources_evaluated_at_utc": iso_z(evaluated),
+        "fabric_version": FABRIC_VERSION,
         "supervisor": {
             "state": "DEFERRED_PROTECTED_WINDOW", "code_version": code_version(), "network": "none",
-            "controls_schedules": False, "providers": [],
-            "problems": [] if valid else [f"no previous evaluation to carry forward ({status.lower()})"],
+            "controls_schedules": False, "providers": [], "problems": problems,
             "deferred": {"window": window[0], "from_utc": iso_z(window[1]), "to_utc": iso_z(window[2]),
-                         "detail": "no store opened inside a protected window; sources are as of "
-                                   "sources_evaluated_at_utc"},
+                         "detail": "no store opened inside a protected window; carried sources are re-assessed at "
+                                   "generated_at_utc from their receipt times, never decision-grade, and their "
+                                   "schedule states are as of sources_evaluated_at_utc"},
         },
+        "summary": _summary(sources, now),
+        "policies": [p.to_dict() for entry in registry for p in entry.policies],
+        "sources": sources,
     }
 
 
@@ -1153,10 +1267,22 @@ def write_status(text: str, status_dir: Path) -> Path:
             os.fsync(stream.fileno())
         os.chmod(tmp, 0o644)
         os.replace(tmp, target)
+        _fsync_dir(status_dir)
     finally:
         if tmp.exists():
             tmp.unlink()
     return target
+
+
+def _fsync_dir(directory: Path) -> None:
+    """Make the rename durable (POSIX). Windows cannot open a directory for fsync: skipped there."""
+    if os.name != "posix":
+        return
+    fd = os.open(directory, os.O_RDONLY)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
 
 
 def status(ctx: FabricContext, now: datetime, *, write: bool = False,
@@ -1165,8 +1291,8 @@ def status(ctx: FabricContext, now: datetime, *, write: bool = False,
     artifact is replaced; without it (an operator's read) everything is always evaluated."""
     if write and ctx.status_dir is None:
         raise ValueError("--write needs --status-dir")
-    window = po.protected_window_at(now, now + timedelta(minutes=1)) if write else None
-    doc = deferred_status(ctx, now, window) if window is not None else build_status(ctx, now, registry)
+    window = (po.protected_window_at(now, now + timedelta(minutes=1)) or close_guard_at(now)) if write else None
+    doc = deferred_status(ctx, now, window, registry) if window is not None else build_status(ctx, now, registry)
     text = render(doc)
     if write:
         write_status(text, ctx.status_dir)

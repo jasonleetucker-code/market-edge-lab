@@ -1033,20 +1033,15 @@ def test_the_webhook_fires_only_for_production_failures():
         'now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"']
 
 
-# Timers whose runbook/README lines are the coordinator's integration step (remove the entry then).
-
-
 def test_stop_and_rollback_name_every_timer_instead_of_a_glob():
     """`systemctl disable` does not reliably expand a glob for unit files, and the rollback deletes unit
     files after step 1: every stop command must name each installed timer."""
     timers = sorted(p.name for p in UNITS.glob("*.timer"))
     for path in (ROOT / "docs/deploy/DAILY_SHADOW_ACTIVATION.md", ROOT / "deploy/vps/README.md"):
-        text = path.read_text()
-        required = timers
-        lines = [line for line in text.splitlines() if "disable --now" in line]
+        lines = [line for line in path.read_text().splitlines() if "disable --now" in line]
         assert lines, path
         for line in lines:
             assert "*" not in line, (path, line)
             if "edgelab-pfm.timer" in line:  # a stop-everything line, not a single-timer example
-                assert all(t in line for t in required), (path, line)
+                assert all(t in line for t in timers), (path, line)
     assert "'edgelab-*.timer'" not in INSTALL

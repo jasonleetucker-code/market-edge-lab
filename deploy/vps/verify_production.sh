@@ -117,7 +117,15 @@ try:
     fresh = "CURRENT" if 0 <= age_min <= 15 else "STALE (older than 15 min, or future-dated; the supervisor may not be running)"
 except Exception:
     age, fresh = "UNKNOWN", "UNKNOWN (no parseable generated_at_utc)"
-print(f"FRESHNESS_STATUS\t{fresh}; age {age}; schema {schema}; supervisor {state}; "
+limit = 95 if state == "DEFERRED_PROTECTED_WINDOW" else 15
+try:
+    evaluated = datetime.fromisoformat(str(d.get("sources_evaluated_at_utc")).replace("Z", "+00:00"))
+    ev_min = (datetime.now(timezone.utc) - evaluated).total_seconds() / 60
+    evaluation = (f"EVALUATION_CURRENT ({ev_min:.1f} min)" if 0 <= ev_min <= limit
+                  else f"EVALUATION_STALE ({ev_min:.1f} min; limit {limit} min)")
+except Exception:
+    evaluation = "NO_EVALUATION (sources_evaluated_at_utc missing: every source is UNKNOWN)"
+print(f"FRESHNESS_STATUS\t{fresh}; age {age}; {evaluation}; schema {schema}; supervisor {state}; "
       f"sources {summary.get('sources')}; by_freshness {json.dumps(summary.get('by_freshness'), sort_keys=True)}; "
       f"disagreements {summary.get('disagreements')}")
 PY

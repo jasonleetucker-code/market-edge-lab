@@ -139,3 +139,27 @@ def test_provider_entry_validation():
         FabricProvider("Demo Provider", (policy(),), fn)
     with pytest.raises(ValueError):
         FabricProvider("demo", (policy(),), "not callable")
+
+
+def test_research_use_needs_a_receipt_of_known_freshness():
+    with pytest.raises(ValueError):
+        record(usable_for_research=True)  # no receipt
+    with pytest.raises(ValueError):
+        record(usable_for_research=True, receipt_ts=NOW + timedelta(hours=1))  # future-dated: UNKNOWN
+    with pytest.raises(ValueError):
+        record(usable_for_research="yes", receipt_ts=NOW, freshness=Freshness.STALE)
+    stale = record(usable_for_research=True, receipt_ts=NOW - timedelta(days=2), freshness=Freshness.STALE)
+    assert stale.usable_for_research and not stale.usable_for_decision  # last-known-good: research only
+
+
+def test_usable_flags_is_the_fail_closed_rule():
+    from edge_lab.freshness import usable_flags
+
+    assert usable_flags(Freshness.FRESH, SourceHealth.OK, NOW) == (True, True)
+    assert usable_flags(Freshness.FRESH, SourceHealth.DEGRADED, NOW) == (True, False)
+    assert usable_flags(Freshness.STALE, SourceHealth.OK, NOW) == (True, False)
+    assert usable_flags(Freshness.UNKNOWN, SourceHealth.OK, NOW) == (False, False)
+    assert usable_flags(Freshness.FRESH, SourceHealth.OK, None) == (False, False)
+    future = NOW + timedelta(hours=1)
+    fresh = policy_freshness(policy(), future, NOW)
+    assert fresh is Freshness.UNKNOWN and usable_flags(fresh, SourceHealth.OK, future) == (False, False)

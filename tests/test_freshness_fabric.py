@@ -127,13 +127,29 @@ def test_the_supervisor_tick_grid_is_staggered_and_clear_of_the_close_tick():
     others = set(ff.ODDS_TICK_MINUTES) | set(ff.OBSERVE_TICK_MINUTES) | {0, 5, 15, 30, 40, 45, 55}
     assert not set(ff.SUPERVISOR_TICK_MINUTES) & others
     # The close capture runs from the 04:57:45 UTC tick until its confirming read 5 s after the
-    # 05:00:00Z close: no supervisor run (at most TimeoutStartSec long) may overlap that span.
+    # 05:00:00Z close: a supervisor run (at most TimeoutStartSec long) that could overlap that span
+    # must start inside the close guard, where it defers and opens no store.
     close_tick = datetime.combine(D, po.CLOSE_TICK_UTC, UTC)
     close_done = datetime.combine(D, ff.dtime(5, 0, 30), UTC)
     timeout = _timeout("edgelab-freshness.service")
+    guarded = []
     for start in (close_tick.replace(minute=0, second=0) + timedelta(minutes=m + 60 * h)
                   for h in (0, 1) for m in ff.SUPERVISOR_TICK_MINUTES):
-        assert start + timeout < close_tick or start >= close_done, start
+        if not (start + timeout < close_tick or start >= close_done):
+            assert ff.close_guard_at(start) is not None, start
+            guarded.append(start)
+    assert guarded == [close_tick.replace(minute=56, second=0)]
+    assert ff.close_guard_at(close_done) is not None and ff.close_guard_at(close_tick.replace(hour=5, minute=1, second=0)) is None
+
+
+def test_inside_the_close_guard_the_write_defers(tmp_path, monkeypatch):
+    ctx = populated(tmp_path)
+    ff.status(ctx, z("2026-09-25T04:51:00Z"), write=True)
+    monkeypatch.setattr(ff.SnapshotStore, "open_readonly", lambda *a, **k: (_ for _ in ()).throw(AssertionError("opened")))
+    doc, _ = ff.status(ctx, z("2026-09-25T04:56:00Z"), write=True)
+    assert doc["supervisor"]["state"] == "DEFERRED_PROTECTED_WINDOW"
+    assert doc["supervisor"]["deferred"]["window"] == "kalshi_close_tick"
+    assert doc["sources_evaluated_at_utc"] == "2026-09-25T04:51:00Z"
 
 
 # =========================================================================== the supervisor unit
@@ -147,7 +163,7 @@ def test_freshness_unit_is_network_free_small_and_writes_only_the_status_dir():
     assert s[("Service", "ReadWritePaths")] == ["/var/lib/market-edge-lab-status"]
     assert s[("Service", "ProtectSystem")] == ["strict"] and s[("Service", "NoNewPrivileges")] == ["yes"]
     assert s[("Service", "MemoryMax")] == ["128M"] and s[("Service", "CPUQuota")] == ["10%"]
-    assert s[("Service", "TimeoutStartSec")] == ["60s"] and s[("Service", "UMask")] == ["0022"]
+    assert s[("Service", "TimeoutStartSec")] == ["120s"] and s[("Service", "UMask")] == ["0022"]
     assert ("Service", "EnvironmentFile") not in s  # no secrets, no settings
     assert ("Unit", "OnFailure") not in s and ("Unit", "OnSuccess") not in s  # ADR 0031: no alert spam
     # The same hardening block as the observation collector, except the network.
@@ -212,7 +228,9 @@ def test_forward_due_equals_the_canonical_gate_at_every_minute(db, setup):
         records = _forward(db, now)
         for phase in ("pfm", "decision", "recheck"):
             rec = records[f"exp001.forward.{phase}"]
-            assert (rec.schedule_state is ScheduleState.DUE) == forward.would_proceed(phase, ro, now), (phase, now)
+            # DUE = the canonical gate would proceed AND the phase's timer has fired (nothing runs it earlier).
+            due = forward.would_proceed(phase, ro, now) and now >= ff.forward_tick(phase, D)
+            assert (rec.schedule_state is ScheduleState.DUE) == due, (phase, now)
             assert rec.disagreements == (), (phase, now, rec.disagreements)
 
 
@@ -527,7 +545,7 @@ def test_settlement_lock_busy_failure_and_due_positions(tmp_path):
     write_history(tmp_path / "status", [receipt("2026-09-24T20:15:02+00:00", state="LOCK_BUSY", refresh="not_run")])
     rec = settle(tmp_path, z("2026-09-24T20:20:00Z"), ledger=tmp_path / "missing-ledger.sqlite3")
     assert rec["kalshi_settlement.refresh"].schedule_state is ScheduleState.LOCK_BUSY
-    assert rec["kalshi_settlement.refresh"].health is SourceHealth.FAILING
+    assert rec["kalshi_settlement.refresh"].health is SourceHealth.DEGRADED  # did nothing; the next tick retries
     assert rec["kalshi_settlement.refresh"].details["events_due"] == 0  # no ledger yet: nothing can be due
     assert rec["kalshi_settlement.refresh"].missed_count == 0
     unknown = settle(tmp_path, z("2026-09-24T20:20:00Z"))["kalshi_settlement.refresh"]
@@ -696,7 +714,9 @@ def test_inside_a_protected_window_the_write_opens_no_store_and_carries_the_last
     assert len(doc["sources"]) == sum(len(e.policies) for e in ff.REGISTRY)
     fresh = FabricContext(status_dir=tmp_path / "empty-status")
     first, _ = ff.status(fresh, z("2026-09-24T21:46:00Z"), write=True)
-    assert first["sources"] == [] and first["supervisor"]["problems"]
+    assert first["supervisor"]["problems"] and first["sources_evaluated_at_utc"] is None
+    assert len(first["sources"]) == len(doc["sources"])  # every declared source, all UNKNOWN
+    assert {s["schedule_state"] for s in first["sources"]} == {"UNKNOWN"}
 
 
 def test_an_operator_read_evaluates_even_inside_a_protected_window(tmp_path):
@@ -759,3 +779,188 @@ def test_every_source_record_carries_a_reason_and_valid_enums(tmp_path):
         if s["freshness"] == "FRESH":
             assert s["receipt_ts_utc"] is not None
     assert iso_z(z("2026-09-24T23:01:00Z")) == doc["generated_at_utc"]
+
+
+# =========================================================================== review fixes (PR #81)
+
+
+def test_only_a_successful_shadow_run_is_a_receipt(tmp_path):
+    status = tmp_path / "status"
+    ok = receipt("2026-09-23T22:40:03+00:00", refresh="not_requested", state="HEALTHY_NO_SIGNAL")
+    busy = receipt("2026-09-24T22:40:03+00:00", refresh="not_requested", state="LOCK_BUSY")
+    write_history(status, [ok, busy])
+    rec = settle(tmp_path, z("2026-09-24T23:00:00Z"))["exp001.shadow_daily"]
+    assert rec.schedule_state is ScheduleState.LOCK_BUSY and rec.health is SourceHealth.DEGRADED
+    assert rec.receipt_ts == rec.last_success_receipt == z("2026-09-23T22:40:03Z")  # the earlier success
+    assert rec.last_attempt == z("2026-09-24T22:40:03Z") and not rec.usable_for_decision
+    for state, health in (("NO_CAPTURE", SourceHealth.DEGRADED), ("NOT_CLOSED", SourceHealth.DEGRADED),
+                          ("INVALID_CAPTURE", SourceHealth.DEGRADED), ("FAILED", SourceHealth.FAILING),
+                          ("SETTLEMENT_CONFLICT", SourceHealth.FAILING)):
+        write_history(status, [receipt("2026-09-24T22:40:03+00:00", refresh="not_requested", state=state)])
+        rec = settle(tmp_path, z("2026-09-24T23:00:00Z"))["exp001.shadow_daily"]
+        assert rec.health is health, state
+        assert rec.receipt_ts is None and rec.freshness is Freshness.UNKNOWN, state  # no work: never fresh
+        assert not rec.usable_for_research and not rec.usable_for_decision, state
+    write_history(status, [receipt("2026-09-24T22:40:03+00:00", refresh="not_requested", state="PENDING_SETTLEMENT")])
+    rec = settle(tmp_path, z("2026-09-24T23:00:00Z"))["exp001.shadow_daily"]
+    assert rec.freshness is Freshness.FRESH and rec.usable_for_decision and rec.details["problems"] == 0
+    write_history(status, [])
+    assert settle(tmp_path, z("2026-09-24T23:00:00Z"))["exp001.shadow_daily"].details["problems"] is None
+
+
+def test_future_dated_receipts_are_unknown_and_never_usable(tmp_path):
+    status = tmp_path / "status"
+    status.mkdir()
+    now = z("2026-09-24T23:00:00Z")
+    (status / "latest.json").write_text(json.dumps({"generated_at_utc": "2026-09-25T02:00:00+00:00",
+                                                    "last_closed_status": "VALID"}))
+    rec = by_id(ff.forward_weather(FabricContext(status_dir=status), now))["exp001.forward.status"]
+    assert rec.freshness is Freshness.UNKNOWN and not rec.usable_for_research and not rec.usable_for_decision
+    write_history(status, [receipt("2026-09-25T02:00:00+00:00", refresh="not_requested", state="HEALTHY_TRADED")])
+    shadow = settle(tmp_path, now)["exp001.shadow_daily"]
+    assert shadow.freshness is Freshness.UNKNOWN and not shadow.usable_for_research
+    (status / ff.ARTIFACT_NAME).write_text(json.dumps({"schema": ff.SCHEMA, "generated_at_utc": "2026-09-25T02:00:00Z"}))
+    me = ff.supervisor_self(FabricContext(status_dir=status), now)[0]
+    assert me.freshness is Freshness.UNKNOWN and me.schedule_state is ScheduleState.UNKNOWN
+    assert not me.usable_for_research
+    manifest(tmp_path / "backups", "2026-09-25T02:00:00+00:00")
+    b = by_id(ff.backups(FabricContext(backups_dir=tmp_path / "backups"), now))["backup.evidence"]
+    assert b.freshness is Freshness.UNKNOWN and not b.usable_for_research
+
+
+def test_a_wrong_schema_previous_artifact_is_not_a_receipt(tmp_path):
+    status = tmp_path / "status"
+    status.mkdir()
+    (status / ff.ARTIFACT_NAME).write_text(json.dumps({"schema": "other/1", "generated_at_utc": "2026-09-24T22:58:00Z"}))
+    me = ff.supervisor_self(FabricContext(status_dir=status), z("2026-09-24T23:00:00Z"))[0]
+    assert me.receipt_ts is None and me.details["previous_artifact"] == "WRONG_SCHEMA"
+
+
+def test_pfm_gate_open_before_its_timer_is_not_due(db):
+    early = _forward(db, z("2026-09-24T21:35:00Z"))["exp001.forward.pfm"]  # 17:35 ET: gate open, timer 17:45
+    assert early.schedule_state is ScheduleState.NOT_DUE and "gate open" in early.why_due
+    assert early.next_due == z("2026-09-24T21:45:00Z") and early.details["gate_status"] == "PROCEED"
+    assert _forward(db, z("2026-09-24T21:46:00Z"))["exp001.forward.pfm"].schedule_state is ScheduleState.DUE
+
+
+def _refuse_store(monkeypatch):
+    def refuse(*args, **kwargs):
+        raise AssertionError("no store may be opened while deferred")
+
+    monkeypatch.setattr(ff.SnapshotStore, "open_readonly", refuse)
+
+
+def test_carried_records_are_reassessed_never_decision_grade_and_bounded_in_age(tmp_path, monkeypatch):
+    ctx = populated(tmp_path / "a")
+    ff.status(ctx, z("2026-09-24T21:30:00Z"), write=True)  # 17:30 ET, ten minutes before the window
+    ctx2 = populated(tmp_path / "b")
+    ff.status(ctx2, z("2026-09-24T20:00:00Z"), write=True)  # 16:00 ET: long before the 17:40 window
+    _refuse_store(monkeypatch)
+    doc, _ = ff.status(ctx, z("2026-09-24T22:45:00Z"), write=True)  # 18:45 ET
+    assert doc["sources_evaluated_at_utc"] == "2026-09-24T21:30:00Z"
+    for s in doc["sources"]:
+        assert s["usable_for_decision"] is False and s["carried_from_utc"] == "2026-09-24T21:30:00Z"
+        assert s["why_due"].startswith("carried from")
+        if s["receipt_ts_utc"]:
+            assert s["data_age_s"] == (z("2026-09-24T22:45:00Z") - z(s["receipt_ts_utc"])).total_seconds()
+    pfm = next(s for s in doc["sources"] if s["source_id"] == "exp001.forward.pfm")
+    assert pfm["freshness"] == "FRESH"  # re-judged at now from its 21:45:30 receipt; still not decision-grade
+    assert doc["summary"]["by_freshness"].get("FRESH", 0) == len(doc["summary"]["fresh"])
+    # An evaluation made long before the window is not carried: every source is UNKNOWN.
+    old, _ = ff.status(ctx2, z("2026-09-24T21:50:00Z"), write=True)
+    assert old["sources_evaluated_at_utc"] is None and "too old" in old["supervisor"]["problems"][0]
+    assert {s["freshness"] for s in old["sources"]} == {"UNKNOWN"}
+    assert old["summary"]["by_freshness"] == {"UNKNOWN": len(old["sources"])}
+
+
+def test_supervisor_problems_carry_no_paths(tmp_path):
+    pol = _policy()
+
+    def boom(ctx, now):
+        raise OSError(f"unable to open {tmp_path / 'secret-dir' / 'db.sqlite3'}")
+
+    doc = ff.build_status(FabricContext(), z("2026-09-24T12:00:00Z"), (FabricProvider("boom", (pol,), boom),))
+    assert "secret-dir" not in json.dumps(doc) and "<path>" in doc["supervisor"]["problems"][0]
+
+
+def test_odds_cost_block_is_unknown_when_the_pilot_state_is_unreadable(db, monkeypatch):
+    real = ff.odds_pilot.dashboard_status
+    monkeypatch.setattr(ff.odds_pilot, "dashboard_status", lambda *a, **k: dict(real(*a, **k), state="ERROR"))
+    rec = by_id(ff.odds_api_pilot(odds_ctx(db), z("2026-09-26T00:00:00Z")))["the_odds_api.nfl_odds"]
+    assert rec.details["cost_blocked"] is None
+
+
+def test_every_record_names_its_missed_count_scope(tmp_path):
+    doc, _ = ff.status(populated(tmp_path), z("2026-09-24T23:01:00Z"))
+    for s in doc["sources"]:
+        if s["missed_count"] is not None:
+            assert s["details"].get("missed_scope") in (ff.MISSED_SCOPE_TICK, ff.MISSED_SCOPE_DAYS,
+                                                        ff.MISSED_SCOPE_TARGETS), s["source_id"]
+
+
+# ---------------------------------------------------------------- bounded odds history read (SF-2)
+
+
+def _odds_event(eid: str, *, offers: bool) -> dict:
+    event = {"id": eid, "sport_key": SPORT, "commence_time": "2026-09-27T17:00:00Z",
+             "home_team": "Green Bay Packers", "away_team": "Atlanta Falcons"}
+    if not offers:
+        return {**event, "bookmakers": []}
+    return {**event, "bookmakers": [{"key": "draftkings", "title": "DraftKings", "last_update": "2026-09-26T16:00:00Z",
+                                     "markets": [{"key": "h2h", "outcomes": [
+                                         {"name": "Green Bay Packers", "price": -150},
+                                         {"name": "Atlanta Falcons", "price": 130}]}]}]}
+
+
+def _store_odds(store, run, *, offers: bool, at: str) -> int:
+    payload = {"sport": SPORT, "events": [_odds_event("e1", offers=offers)],
+               "request": {"purpose": "capture", "odds_format": "american"}}
+    return store.save_snapshot(run_id=run, source="the_odds_api", kind="odds", entity_id=SPORT,
+                               url="https://example.invalid/odds", payload=payload, fetched_at_utc=at)
+
+
+def test_newest_first_paged_read_is_bounded(db):
+    store = SnapshotStore(db)
+    store.start_run("r")
+    ids = [store.save_snapshot(run_id="r", source="the_odds_api", kind="odds",
+                               entity_id=SPORT if i % 2 else "other", url="https://example.invalid",
+                               payload={"i": i}) for i in range(7)]
+    rows = store.snapshots_of_kind_newest(source="the_odds_api", kind="odds", entity_id=SPORT, limit=2)
+    assert [r["id"] for r in rows] == [ids[5], ids[3]]
+    more = store.snapshots_of_kind_newest(source="the_odds_api", kind="odds", entity_id=SPORT, limit=2,
+                                          before_id=rows[-1]["id"])
+    assert [r["id"] for r in more] == [ids[1]]
+    with pytest.raises(ValueError):
+        store.snapshots_of_kind_newest(source="the_odds_api", kind="odds", limit=0)
+
+
+def test_dashboard_status_pages_the_odds_history_and_never_loads_all_of_it(db, monkeypatch):
+    import inspect
+
+    from edge_lab import odds_pilot
+
+    assert "snapshots_of_kind(" not in inspect.getsource(odds_pilot.dashboard_status)
+    store = SnapshotStore(db)
+    store.start_run("r")
+    _store_odds(store, "r", offers=True, at="2026-09-26T16:00:00+00:00")
+    for m in range(5):  # newer reads that held no offers
+        _store_odds(store, "r", offers=False, at=f"2026-09-26T16:1{m}:00+00:00")
+    loaded: list[int] = []
+    real = SnapshotStore.snapshots_of_kind_newest
+
+    def counting(self, **kwargs):
+        rows = real(self, **kwargs)
+        loaded.append(len(rows))
+        return rows
+
+    monkeypatch.setattr(SnapshotStore, "snapshots_of_kind_newest", counting)
+    ledger = db.with_name(ff.ODDS_LEDGER_FILE)
+    state = ledger.with_name(ledger.name + ".pilot.json")
+    now = z("2026-09-26T16:20:00Z")
+    full = odds_pilot.dashboard_status(db, ledger, state, now=now)
+    monkeypatch.setattr(odds_pilot, "DASHBOARD_ODDS_PAGE", 2)
+    loaded.clear()
+    paged = odds_pilot.dashboard_status(db, ledger, state, now=now)
+    assert paged == full  # the same answer as one big page
+    assert paged["live_read_verified"] is True and any("5 newer odds read" in p for p in paged["problems"])
+    assert loaded == [2, 2, 2] and max(loaded) <= 2  # at most one page of payloads in memory at a time

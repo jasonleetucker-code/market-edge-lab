@@ -11,7 +11,8 @@ Rules (see docs/DATA_PROVENANCE.md):
 
 Freshness Fabric v1 (issue #74, ADR 0031) extends this module with the shared vocabulary for
 "what is fresh, what is due next, and why": `AcquisitionMode`, `ScheduleState`,
-`SourceHealth`, the frozen records `SourcePolicy` and `SourceFreshness`, the read-only
+`SourceHealth`, the frozen records `SourcePolicy` and `SourceFreshness` (with the fail-closed
+`usable_flags` rule), the read-only
 `FabricContext`, and the provider protocol `Provider` (`provider(context, now) ->
 list[SourceFreshness]`). `edge_lab.freshness_fabric` holds the provider registry, the
 providers for the existing schedules and the supervisor.
@@ -236,6 +237,14 @@ def policy_freshness(policy: SourcePolicy, receipt: datetime | None, now: dateti
     return assess(receipt, max_age=policy.max_useful_age, now=now)
 
 
+def usable_flags(freshness: Freshness, health: SourceHealth, receipt_ts: datetime | None) -> tuple[bool, bool]:
+    """(usable_for_research, usable_for_decision) by the fabric's fail-closed rule: research needs a
+    successful receipt whose freshness is known (FRESH or STALE); decision needs FRESH and OK.
+    A provider may be stricter (pass False), never looser: `SourceFreshness` rejects looser flags."""
+    research = receipt_ts is not None and freshness is not Freshness.UNKNOWN
+    return research, research and freshness is Freshness.FRESH and health is SourceHealth.OK
+
+
 @dataclass(frozen=True)
 class SourceFreshness:
     """One source at one instant (`as_of`). Built by a provider; read by the supervisor and the UI.
@@ -292,9 +301,16 @@ class SourceFreshness:
                 raise ValueError(f"{name} must be a tuple")
         if not isinstance(self.why_due, str) or not self.why_due.strip():
             raise ValueError("why_due is required: say why the schedule stands where it does")
-        # Fail closed: FRESH needs a receipt time; decision-grade use needs FRESH data and OK health.
+        # Fail closed: FRESH needs a receipt time; research use needs a receipt of known freshness
+        # (last-known-good STALE data may serve research, UNKNOWN never); decision-grade use needs
+        # FRESH data and OK health. `usable_flags` computes exactly these.
         if self.freshness is Freshness.FRESH and self.receipt_ts is None:
             raise ValueError("a record without receipt_ts cannot be FRESH")
+        for name in ("usable_for_research", "usable_for_decision"):
+            if not isinstance(getattr(self, name), bool):
+                raise ValueError(f"{name} must be a bool")
+        if self.usable_for_research and (self.receipt_ts is None or self.freshness is Freshness.UNKNOWN):
+            raise ValueError("usable_for_research requires a receipt_ts of known freshness (never UNKNOWN)")
         if self.usable_for_decision and (self.freshness is not Freshness.FRESH or self.health is not SourceHealth.OK):
             raise ValueError("usable_for_decision requires FRESH data and OK health")
 

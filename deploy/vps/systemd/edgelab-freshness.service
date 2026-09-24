@@ -16,7 +16,7 @@ WorkingDirectory=/var/lib/market-edge-lab-status
 # only /var/lib/market-edge-lab-status/freshness.json (atomic replace, bounded, current state only).
 # Exit 0 whatever the sources say: a STALE or MISSED source is data, not a failure.
 ExecStart=/opt/market-edge-lab/venv/bin/python -m edge_lab.cli freshness status --write --db /var/lib/market-edge-lab/db/edge_lab.sqlite3 --ledger /var/lib/market-edge-lab/ledger/shadow_ledger.sqlite3 --odds-ledger /var/lib/market-edge-lab/db/odds_quota_ledger.json --backups-dir /var/lib/market-edge-lab/backups --status-dir /var/lib/market-edge-lab-status
-TimeoutStartSec=60s
+TimeoutStartSec=120s
 # The artifact is non-sensitive and read by the dashboard: 0644.
 UMask=0022
 # Small caps, well inside edgelab.slice: one short local read every 5 minutes.
