@@ -252,7 +252,8 @@ sports model and no strategy.
   - 2026-10 projection: worst case 450 (ceiling 450), expected 270;
   - provider remaining 500, spent 0, nothing outstanding;
   - 32 NFL events discovered through the free events endpoint.
-- **The one smoke read** (13:38:53Z; snapshot 22) was `CAPTURED`:
+- **The one smoke read** (started 13:38:53Z; evidence DB snapshot 22, received 13:38:54Z) was
+  `CAPTURED`:
   - 1 paid call, `credits_last` 3; quota 500 → 497 remaining;
   - 16 events and 856 offers; markets h2h, spreads and totals;
   - 9 books returned: betmgm, betonlineag, betrivers, betus, bovada, draftkings, fanduel,
@@ -271,7 +272,8 @@ sports model and no strategy.
 - **Timer.** `edgelab-odds.timer` was enabled at 13:40Z. It ticks every 15 minutes. The first
   paid slot is Thu 2026-09-24 14:15 ET (T-6h, ATL @ GB).
 - **First tick** (13:45Z) was `IDLE` with 0 paid calls:
-  - discovery refreshed 32 events through the free endpoint (`x-requests-last` 0);
+  - discovery refreshed 32 events through the free endpoint (`x-requests-last` 0; snapshot 23,
+    the first stored discovery);
   - 95 targets are PLANNED;
   - budget PROVEN: worst case 48 including the 3 spent.
 
