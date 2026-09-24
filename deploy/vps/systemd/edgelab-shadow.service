@@ -3,7 +3,7 @@ Description=Market Edge Lab: daily EXP-001 shadow bookkeeping from stored eviden
 Documentation=file:///opt/market-edge-lab/app/deploy/vps/README.md
 After=network-online.target
 Wants=network-online.target
-OnFailure=edgelab-alert@%n.service edgelab-notify.service
+OnFailure=edgelab-alert@%n.service
 OnSuccess=edgelab-notify.service
 
 [Service]

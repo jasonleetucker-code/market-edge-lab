@@ -145,24 +145,34 @@ def test_a_malformed_token_is_refused_without_echoing_it(token):
 
 # The owner approved activation on 2026-09-24: `edge-lab notify relay|test` (cli.py) are the
 # ONLY constructors. The daily run, the shadow unit (no network) and every deploy file stay out.
-SINK_CONSTRUCTORS = {"src/edge_lab/cli.py"}
+_CONSTRUCT = re.compile(r"import\s+notify_ntfy|notify_ntfy\s+import|from\s+\S*notify_ntfy|import\s[^\n]*\bnotify_ntfy\b"
+                        r"|NtfySink\(|sink_from_env\(")
+_SECRET_NAME = re.compile(r"EDGE_LAB_NTFY_")
 
 
-def test_only_the_notify_commands_construct_the_sink(repo_root):
-    """No run path, timer or deploy file constructs the sink or names its secret variables."""
-    wiring = re.compile(r"import\s+notify_ntfy|notify_ntfy\s+import|from\s+\S*notify_ntfy|NtfySink\(|sink_from_env\("
-                        r"|EDGE_LAB_NTFY_")
+def _users(repo_root, pattern):
     users = []
     for base in ("src", "deploy", "scripts"):
         for path in (repo_root / base).rglob("*"):
             if path.is_file() and path.name != "notify_ntfy.py" and "__pycache__" not in path.parts:
-                if wiring.search(path.read_text(encoding="utf-8", errors="ignore")):
+                if pattern.search(path.read_text(encoding="utf-8", errors="ignore")):
                     users.append(path.relative_to(repo_root).as_posix())
-    assert set(users) == SINK_CONSTRUCTORS
+    return set(users)
+
+
+def test_only_the_notify_commands_construct_the_sink(repo_root):
+    """No run path, timer or deploy file constructs the sink."""
+    assert _users(repo_root, _CONSTRUCT) == {"src/edge_lab/cli.py"}
     cli = (repo_root / "src/edge_lab/cli.py").read_text(encoding="utf-8")
-    assert "NtfySink(" not in cli and "EDGE_LAB_NTFY_" not in cli  # only via sink_from_env
-    daily = (repo_root / "src/edge_lab/daily.py").read_text(encoding="utf-8")
-    assert "notify_ntfy" not in daily  # the daily run never sends
+    assert cli.count("sink_from_env(") == 1 and "NtfySink(" not in cli
+    handler = cli[cli.index("def _notify("):cli.index("def main(")]
+    assert "sink_from_env(" in handler  # the one construction lives in the notify handler
+    assert "notify_ntfy" not in (repo_root / "src/edge_lab/daily.py").read_text(encoding="utf-8")
+
+
+def test_only_the_topic_script_names_the_secret_variables(repo_root):
+    """The topic lives in the secrets file; only the root-run topic writer names it."""
+    assert _users(repo_root, _SECRET_NAME) == {"deploy/vps/set_ntfy_topic.py"}
 
 
 # ------------------------------------------------------------------ the target cannot be redirected
@@ -597,7 +607,7 @@ def test_relay_forwards_each_recent_outbox_event_once(tmp_path):
     assert first == {"status": "ok", "candidates": 2, "by_status": {"SUBMITTED": 2}}
     assert len(opener.requests) == 2
     second = ntfy.relay_outbox(outbox, relay, s, now=NOW)
-    assert second["by_status"] == {"DEDUPED": 2}
+    assert second == {"status": "ok", "candidates": 0, "by_status": {}}  # already in the relay history
     assert len(opener.requests) == 2  # nothing re-sent
 
 
@@ -659,3 +669,109 @@ def test_an_outbox_line_round_trips_to_the_same_event():
     e = ev(key="a", market_id="kalshi:X", values={"k": "v"}, ttl=timedelta(hours=1))
     assert n.event_from_dict(e.to_dict()) == e
     assert n.event_from_dict({"schema": n.SCHEMA, "type": "NOT_A_TYPE"}) is None
+
+
+def test_relay_records_each_submission_at_once(tmp_path):
+    """A relay killed after the first send must not re-send it."""
+    outbox, relay = _outbox_with(tmp_path, ev(key="a"), ev(key="b"))
+
+    class DiesOnSecond:
+        sink_id = "ntfy"
+        calls = 0
+
+        def deliver(self, event):
+            self.calls += 1
+            if self.calls == 2:
+                raise KeyboardInterrupt  # stands in for SIGKILL mid-run
+            return n.DeliveryStatus.SUBMITTED
+
+    with pytest.raises(KeyboardInterrupt):
+        ntfy.relay_outbox(outbox, relay, DiesOnSecond(), now=NOW)
+    opener = Opener()
+    s, _ = make(opener=opener)
+    assert ntfy.relay_outbox(outbox, relay, s, now=NOW)["by_status"] == {"SUBMITTED": 1}
+    assert len(opener.requests) == 1
+
+
+def test_relay_dedupes_by_event_id_even_without_a_dedupe_key(tmp_path):
+    outbox, relay = _outbox_with(tmp_path, ev(key=""))
+    opener = Opener()
+    s, _ = make(opener=opener)
+    ntfy.relay_outbox(outbox, relay, s, now=NOW)
+    ntfy.relay_outbox(outbox, relay, s, now=NOW)
+    assert len(opener.requests) == 1
+
+
+def test_relay_pushes_a_unit_failure_that_left_no_outbox_event(tmp_path):
+    failure = tmp_path / "last_failure.json"
+    failure.write_text(json.dumps({"unit": "edgelab-shadow.service", "failed_at_utc": "2026-09-25T22:40:05Z"}))
+    opener = Opener()
+    s, _ = make(opener=opener)
+    out = ntfy.relay_outbox(tmp_path / "notifications.jsonl", tmp_path / ntfy.RELAY_NAME, s, now=NOW,
+                            failure_path=failure)
+    assert out["by_status"] == {"SUBMITTED": 1}
+    body = opener.requests[0].data.decode()
+    assert ntfy.HEADLINES[n.EventType.SOURCE_FAILURE] in body and "shadow" not in body
+    again = ntfy.relay_outbox(tmp_path / "notifications.jsonl", tmp_path / ntfy.RELAY_NAME, s, now=NOW,
+                              failure_path=failure)
+    assert again["candidates"] == 0 and len(opener.requests) == 1
+
+
+@pytest.mark.parametrize("record", [{"unit": "rm -rf /", "failed_at_utc": "2026-09-25T22:40:05Z"},
+                                    {"unit": "edgelab-shadow.service", "failed_at_utc": "yesterday"}, {}])
+def test_a_malformed_failure_record_is_ignored(record):
+    assert ntfy.unit_failure_event(record) is None
+
+
+def test_relay_skips_expired_events_and_reads_the_rotated_outbox(tmp_path):
+    expired = ev(key="gone", ttl=timedelta(minutes=1), created_at=NOW - timedelta(hours=1))
+    rotated = n.JsonlOutbox(tmp_path / "notifications.jsonl.1")
+    rotated.path = tmp_path / "notifications.jsonl.1"
+    rotated.deliver(ev(key="rotated"))
+    outbox, relay = _outbox_with(tmp_path, expired)
+    opener = Opener()
+    s, _ = make(opener=opener)
+    out = ntfy.relay_outbox(outbox, relay, s, now=NOW)
+    assert out["by_status"] == {"EXPIRED": 1, "SUBMITTED": 1}
+
+
+def test_relay_sends_critical_first_and_never_rate_limits_it(tmp_path):
+    flood = [ev(n.EventType.OPPORTUNITY_QUALIFIED, n.Severity.INFO, key=f"i{i}") for i in range(25)]
+    kill = ev(n.EventType.KILL_SWITCH, n.Severity.CRITICAL, key="kill")
+    outbox, relay = _outbox_with(tmp_path, *flood, kill)
+    opener = Opener()
+    s, _ = make(opener=opener)
+    out = ntfy.relay_outbox(outbox, relay, s, now=NOW)
+    assert out["by_status"] == {"SUBMITTED": 21, "RATE_LIMITED": 5}
+    assert ntfy.HEADLINES[n.EventType.KILL_SWITCH] in opener.requests[0].data.decode()
+
+
+# ------------------------------------------------------------------ CLI (edge-lab notify)
+
+def test_cli_without_a_topic_is_not_configured_and_exits_zero(monkeypatch, capsys, tmp_path):
+    from edge_lab import cli
+    monkeypatch.delenv(ntfy.ENV_TOPIC_URL, raising=False)
+    assert cli.main(["notify", "relay", "--status-dir", str(tmp_path)]) == 0
+    assert json.loads(capsys.readouterr().out) == {"status": "not_configured"}
+
+
+def test_cli_with_an_invalid_topic_exits_one_without_echoing_it(monkeypatch, capsys):
+    from edge_lab import cli
+    bad = "https://ntfy.sh/short-secret"
+    monkeypatch.setenv(ntfy.ENV_TOPIC_URL, bad)
+    assert cli.main(["notify", "test"]) == 1
+    out = capsys.readouterr().out
+    assert "short-secret" not in out and json.loads(out)["status"] == "config_error"
+
+
+def test_cli_prints_counts_only_never_the_topic(monkeypatch, capsys, tmp_path):
+    from edge_lab import cli
+    opener = Opener()
+    monkeypatch.setattr(ntfy, "sink_from_env", lambda *a, **k: make(opener=opener, now=lambda: datetime.now(UTC))[0])
+    _outbox_with(tmp_path, ev(key="a", created_at=datetime.now(UTC) - timedelta(minutes=1)))
+    assert cli.main(["notify", "relay", "--status-dir", str(tmp_path)]) == 0
+    out = capsys.readouterr().out
+    assert TOPIC not in out and json.loads(out)["by_status"] == {"SUBMITTED": 1}
+    assert cli.main(["notify", "test"]) == 0
+    out = capsys.readouterr().out
+    assert TOPIC not in out and json.loads(out)["by_status"] == {"SUBMITTED": 1}

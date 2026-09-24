@@ -797,7 +797,8 @@ def _notify(args: argparse.Namespace) -> int:
     else:
         status_dir = Path(args.status_dir)
         result = notify_ntfy.relay_outbox(status_dir / daily.NOTIFICATIONS_NAME,
-                                          status_dir / notify_ntfy.RELAY_NAME, sink, now=now)
+                                          status_dir / notify_ntfy.RELAY_NAME, sink, now=now,
+                                          failure_path=status_dir / "last_failure.json")
     print(json.dumps(result, sort_keys=True))
     return 0
 

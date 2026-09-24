@@ -13,7 +13,7 @@
 #   /var/lib/market-edge-lab            private data: db/, backups/   (edgelab, 0700)
 #   /var/lib/market-edge-lab-status     non-sensitive status JSON     (edgelab, 0755)
 #   /etc/market-edge-lab/env            NWS_USER_AGENT etc.           (root:edgelab 0640)
-#   /etc/market-edge-lab/secrets.env    owner-installed secrets       (root:edgelab 0640)
+#   /etc/market-edge-lab/secrets.env    owner-installed secrets       (root:root 0600)
 #                                       created empty once; NEVER read, rewritten or printed here
 set -euo pipefail
 
@@ -91,11 +91,13 @@ chown root:edgelab "$tmp"; chmod 0640 "$tmp"; mv -f "$tmp" "$ENV_FILE"
 # The owner's secrets (ADR 0028: the Odds API key, the ntfy topic URL) live in their own file,
 # because the env file above is regenerated on every install. Create it once, empty; after that
 # only its owner and mode are enforced. Its contents are never read, copied or printed here.
+# root:root 0600: systemd reads EnvironmentFile= as root before dropping privileges, so no
+# service account (the tailnet-reachable dashboard included) can read it.
 if [ ! -e "$SECRETS_FILE" ]; then
-  install -o root -g edgelab -m 0640 /dev/null "$SECRETS_FILE"
+  install -o root -g root -m 0600 /dev/null "$SECRETS_FILE"
 fi
 [ -f "$SECRETS_FILE" ] && [ ! -L "$SECRETS_FILE" ] || die "$SECRETS_FILE must be a regular file"
-chown root:edgelab "$SECRETS_FILE"; chmod 0640 "$SECRETS_FILE"
+chown root:root "$SECRETS_FILE"; chmod 0600 "$SECRETS_FILE"
 
 echo "== 6/7 systemd units (installed, NOT enabled)"
 install -o root -g root -m 0644 "$APP_ROOT/app/deploy/vps/systemd/"edgelab-* "$APP_ROOT/app/deploy/vps/systemd/edgelab.slice" /etc/systemd/system/
@@ -125,7 +127,7 @@ expect_not() { local what=$1; shift
 }
 mode() { stat -c '%U:%G %a' "$1"; }
 expect "env file is root:edgelab 640" test "$(mode "$ENV_FILE")" = "root:edgelab 640"
-expect "secrets file is root:edgelab 640" test "$(mode "$SECRETS_FILE")" = "root:edgelab 640"
+expect "secrets file is root:root 600" test "$(mode "$SECRETS_FILE")" = "root:root 600"
 expect "data dir is edgelab:edgelab 700" test "$(mode "$DATA")" = "edgelab:edgelab 700"
 expect "db dir is edgelab:edgelab 700" test "$(mode "$DATA/db")" = "edgelab:edgelab 700"
 expect "ledger dir is edgelab:edgelab 700" test "$(mode "$DATA/ledger")" = "edgelab:edgelab 700"
@@ -133,7 +135,7 @@ expect "backups dir is edgelab:edgelab 700" test "$(mode "$DATA/backups")" = "ed
 expect "status dir is edgelab:edgelab 755" test "$(mode "$STATUS")" = "edgelab:edgelab 755"
 expect "database created" test -f "$DATA/db/edge_lab.sqlite3"
 expect "edgelab can read the env file" runuser -u edgelab -- test -r "$ENV_FILE"
-expect_not "edgelab cannot write the secrets file" runuser -u edgelab -- test -w "$SECRETS_FILE"
+expect_not "edgelab cannot read the secrets file" runuser -u edgelab -- test -r "$SECRETS_FILE"
 expect "edgelab can write its database dir" runuser -u edgelab -- test -w "$DATA/db"
 if id -u "$OTHER_USER" >/dev/null 2>&1; then
   expect_not "$OTHER_USER cannot read the env file" runuser -u "$OTHER_USER" -- test -r "$ENV_FILE"

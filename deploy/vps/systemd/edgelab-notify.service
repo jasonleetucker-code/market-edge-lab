@@ -3,8 +3,9 @@ Description=Market Edge Lab: relay new local notifications to the owner's privat
 Documentation=file:///opt/market-edge-lab/app/deploy/vps/README.md
 After=network-online.target
 Wants=network-online.target
-# No timer and no OnFailure: started by edgelab-shadow/-settlement when they finish (OnSuccess=
-# and OnFailure=). A relay failure never changes a run, and it never alerts about itself in a loop.
+# No timer and no OnFailure: started by edgelab-shadow/-settlement when they succeed and by
+# edgelab-alert@ after it records a failure (OnSuccess=). A relay failure never changes a run, and
+# it never alerts about itself in a loop.
 
 [Service]
 Type=oneshot
@@ -12,10 +13,10 @@ Slice=edgelab.slice
 User=edgelab
 Group=edgelab
 EnvironmentFile=/etc/market-edge-lab/env
-# Owner-installed secrets (ADR 0028). Optional: without a topic the relay prints
-# not_configured and exits 0. install.sh creates the file empty and never rewrites it.
+# Owner-installed secrets (ADR 0028), root:root 0600, read by systemd before it drops to edgelab.
+# Optional: without a topic the relay prints not_configured and exits 0.
 EnvironmentFile=-/etc/market-edge-lab/secrets.env
-WorkingDirectory=/var/lib/market-edge-lab
+WorkingDirectory=/var/lib/market-edge-lab-status
 # Reads the non-sensitive outbox, sends at most the recent new events (3 attempts, 15 s each).
 ExecStart=/opt/market-edge-lab/venv/bin/python -m edge_lab.cli notify relay --status-dir /var/lib/market-edge-lab-status
 TimeoutStartSec=5min
@@ -38,4 +39,7 @@ RestrictSUIDSGID=yes
 RestrictNamespaces=yes
 LockPersonality=yes
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
-ReadWritePaths=/var/lib/market-edge-lab /var/lib/market-edge-lab-status
+# It reads the outbox and last_failure.json and writes only ntfy_relay.jsonl: no access to the
+# evidence database or the shadow ledger.
+ReadWritePaths=/var/lib/market-edge-lab-status
+InaccessiblePaths=/var/lib/market-edge-lab

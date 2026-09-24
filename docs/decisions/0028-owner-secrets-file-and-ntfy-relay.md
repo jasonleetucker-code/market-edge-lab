@@ -31,18 +31,29 @@ There was no place to put either value.
 ## Decision
 
 - **Secrets file.**
-  - `/etc/market-edge-lab/secrets.env` (root:edgelab 0640) holds owner-installed values:
+  - `/etc/market-edge-lab/secrets.env` (root:root 0600) holds owner-installed values:
     `EDGE_LAB_NTFY_TOPIC_URL` (and optionally `EDGE_LAB_NTFY_TOKEN`) and
     `EDGE_LAB_ODDS_API_KEY`.
   - install.sh creates it empty once, then only enforces its owner and mode. It never reads,
     copies, rewrites or prints its contents (test: `test_install_creates_the_secrets_file_once_and_never_reads_it`).
-  - The `dynasty` user cannot read it (install check).
+  - Neither `edgelab` nor `dynasty` can read it (install checks). systemd reads
+    `EnvironmentFile=` as root before dropping privileges, so the units still receive the values,
+    and the dashboard and every other `edgelab` process cannot open the file. A same-user process
+    could still read a running relay's `/proc/<pid>/environ`, but only for the seconds the relay
+    runs.
+  - The ntfy topic is written by the tested `deploy/vps/set_ntfy_topic.py`, run as root. It
+    keeps an existing topic unless `--force` is given, writes atomically and prints nothing
+    secret.
 - **Which units load it.** Only units that need a secret load it, and each loads it optionally
   (`EnvironmentFile=-…`). Today that is `edgelab-notify` and, later, `edgelab-odds` (pinned by
   test). The shadow, settlement and capture units do not load it.
-- **Relay unit.** `edgelab-notify.service` has no timer. `edgelab-shadow` and
-  `edgelab-settlement` start it through `OnSuccess=` and `OnFailure=`, so a failed run, which is
-  often the thing worth pushing, is relayed too.
+- **Relay unit.** `edgelab-notify.service` has no timer. It starts in two ways:
+  - `edgelab-shadow` and `edgelab-settlement` start it on success (`OnSuccess=`).
+  - `edgelab-alert@` starts it after recording a failure. A failure of any unit, including runs
+    killed before they wrote the outbox, is relayed from `last_failure.json` as the fixed
+    headline "A run or data source failed"; the unit name goes only into the dedupe key.
+  - Its write access is only the status directory. The database and ledger are inaccessible
+    to it.
   - It runs `edge-lab notify relay`, which reads the local outbox and forwards events from the
     last 36 h once each through the normal `dispatch` rules. Those rules cover refusal of
     secrets, expiry, dedupe (the relay keeps its own history of SUBMITTED events), rate limits
@@ -60,6 +71,12 @@ There was no place to put either value.
 
 ## Tradeoffs
 
+- **History and rate limits.** Each SUBMITTED event is written to the relay history immediately,
+  so a killed relay does not re-send. Dedupe is by `dedupe_key` and by `event_id`. The hourly
+  rate limit counts events by creation time, so a backlog retried later is capped per relay run
+  (20 INFO + 10 WARNING) rather than per clock hour. CRITICAL events are never capped.
+- **Alert URL.** `EDGE_LAB_ALERT_URL` must not point at the ntfy topic: `alert.sh` sends free
+  text.
 - **Delay.** Pushes arrive after the daily run finishes, not during it. At most the relay's own
   runtime is added.
 - **Retries.** A FAILED or RATE_LIMITED event is retried on the next relay, meaning the next

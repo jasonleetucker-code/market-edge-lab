@@ -43,8 +43,9 @@ go in environment variables.
 
 ## The owner secrets file (ADR 0028)
 
-`/etc/market-edge-lab/secrets.env` (root:edgelab 0640) is the only place on the server for
-owner-installed values. It is **not** the regenerated `env` file.
+`/etc/market-edge-lab/secrets.env` (root:root 0600) is the only place on the server for
+owner-installed values. systemd reads it as root before dropping to the service user, so no
+service account, including the tailnet-reachable dashboard, can read the file. It is **not** the regenerated `env` file.
 - install.sh creates it empty once. After that it only enforces the owner and mode, and never
   reads, copies or prints the contents.
 - Only the units that need a value load it, and each loads it optionally: `edgelab-notify`,

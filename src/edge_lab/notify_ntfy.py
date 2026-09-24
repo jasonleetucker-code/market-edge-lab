@@ -52,6 +52,7 @@ from __future__ import annotations
 import hashlib
 import http.client
 import ipaddress
+import json
 import os
 import re
 import ssl
@@ -411,30 +412,74 @@ def _summarize(results: list[dict[str, Any]]) -> dict[str, int]:
     return by_status
 
 
-def relay_outbox(outbox_path: str | os.PathLike[str], relay_path: str | os.PathLike[str], sink: Any, *, now: datetime,
-                 max_age: timedelta = RELAY_MAX_AGE, limits: Limits = Limits()) -> dict[str, Any]:
-    """Forward recent outbox events to `sink` once each, under the normal `dispatch` rules.
+class _RecordingSink:
+    """Wraps the sink so each SUBMITTED event is added to the relay history at once. A relay
+    killed mid-run then never re-sends what it already sent."""
 
-    The relay history (`relay_path`) records only events the sink SUBMITTED. It is the dedupe
-    history for the next relay, so a FAILED or RATE_LIMITED event is tried again on a later
-    run, until it expires or ages past `max_age`. Never raises; returns counts only (no event
-    text, no topic)."""
+    def __init__(self, sink: Any, history: JsonlOutbox) -> None:
+        self._sink, self._history = sink, history
+        self.sink_id = getattr(sink, "sink_id", "ntfy")
+        self.last_error: str | None = None
+        self.last_attempts: int | None = None
+
+    def deliver(self, event: NotificationEvent) -> DeliveryStatus:
+        status = self._sink.deliver(event)
+        self.last_error = getattr(self._sink, "last_error", None)
+        self.last_attempts = getattr(self._sink, "last_attempts", None)
+        if status is DeliveryStatus.SUBMITTED:
+            self._history.deliver(event)
+        return status
+
+
+def unit_failure_event(record: Mapping[str, Any]) -> NotificationEvent | None:
+    """The `last_failure.json` that `deploy/vps/alert.sh` writes, as a SOURCE_FAILURE event.
+
+    It covers runs killed before they could write the outbox (timeout, OOM, crash). The ntfy
+    headline stays fixed. The unit name goes only into the dedupe key, never to the phone."""
+    unit = str(record.get("unit") or "")
+    failed_at = parse_utc(record.get("failed_at_utc"))
+    if not re.fullmatch(r"edgelab-[a-z@.-]{1,80}", unit) or failed_at is None:
+        return None
+    return make_event(EventType.SOURCE_FAILURE, Severity.WARNING, created_at=failed_at,
+                      summary="A Market Edge unit failed", dedupe_key=f"unit-failure:{unit}:{failed_at.isoformat()}",
+                      ttl=RELAY_MAX_AGE)
+
+
+def relay_outbox(outbox_path: str | os.PathLike[str], relay_path: str | os.PathLike[str], sink: Any, *, now: datetime,
+                 max_age: timedelta = RELAY_MAX_AGE, limits: Limits = Limits(),
+                 failure_path: str | os.PathLike[str] | None = None) -> dict[str, Any]:
+    """Forward recent outbox events (and the last unit failure) to `sink` once each, under the
+    normal `dispatch` rules.
+
+    The relay history (`relay_path`) records each event as soon as the sink SUBMITTED it. It is
+    the dedupe history for later relays, by `dedupe_key` (in `dispatch`) and by `event_id` (here).
+    A FAILED or RATE_LIMITED event is tried again on a later run, until it expires or ages past
+    `max_age`. The hourly rate limit counts events by creation time, so a backlog retried
+    later is capped per relay run rather than per clock hour. Never raises. Returns counts only
+    (no event text, no topic)."""
     try:
         at = parse_utc(now)
         if at is None:
             raise ValueError("now must be timezone-aware")
-        events: list[NotificationEvent] = []
-        for line in JsonlOutbox(outbox_path).history():
-            event = event_from_dict(line)
-            created = None if event is None else parse_utc(event.created_at_utc)
-            if event is not None and created is not None and at - max_age <= created <= at:
-                events.append(event)
         relay = JsonlOutbox(relay_path)
-        results = dispatch(events, [sink], now=at, history=relay.history(), limits=limits)
-        by_id = {e.event_id: e for e in events}
-        for r in results:
-            if r["status"] == DeliveryStatus.SUBMITTED.value and r["event_id"] in by_id:
-                relay.deliver(by_id[r["event_id"]])
+        history = relay.history()
+        sent_ids = {h.get("event_id") for h in history}
+        candidates: list[NotificationEvent] = [e for e in map(event_from_dict, JsonlOutbox(outbox_path).history()) if e]
+        if failure_path is not None:
+            try:
+                record = json.loads(open(failure_path, encoding="utf-8").read())
+            except (OSError, ValueError):
+                record = None
+            failure = unit_failure_event(record) if isinstance(record, Mapping) else None
+            if failure is not None:
+                candidates.append(failure)
+        events: list[NotificationEvent] = []
+        for event in candidates:
+            created = parse_utc(event.created_at_utc)
+            if (created is not None and at - max_age <= created <= at and event.event_id not in sent_ids
+                    and event.event_id not in {e.event_id for e in events}):
+                events.append(event)
+        results = dispatch(events, [_RecordingSink(sink, relay)], now=at, history=history, limits=limits)
         return {"status": "ok", "candidates": len(events), "by_status": _summarize(results)}
     except Exception as exc:  # noqa: BLE001 - a relay failure is a status, never an exception
         return {"status": "failed", "reason": redact_text(f"{type(exc).__name__}: {exc}")[:200],

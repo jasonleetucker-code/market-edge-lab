@@ -49,8 +49,9 @@ units: `docs/deploy/DAILY_SHADOW_ACTIVATION.md`.
 | `/opt/market-edge-lab/app` | root, read-only | code at a pinned commit (`REVISION`) |
 | `/opt/market-edge-lab/venv` | root | stdlib-only venv; a `.pth` points at `app/src` |
 | `/var/lib/market-edge-lab/{db,backups}` | `edgelab:edgelab` 0700 | private evidence database and backups |
-| `/var/lib/market-edge-lab-status` | `edgelab:edgelab` 0755 | `latest.json`, `last_failure.json` (non-sensitive) |
-| `/etc/market-edge-lab/env` | `root:edgelab` 0640 | `NWS_USER_AGENT`, `EDGE_LAB_CODE_VERSION`, optional `EDGE_LAB_ALERT_URL` |
+| `/var/lib/market-edge-lab-status` | `edgelab:edgelab` 0755 | `latest.json`, `last_failure.json`, `notifications.jsonl`, `ntfy_relay.jsonl` (non-sensitive) |
+| `/etc/market-edge-lab/env` | `root:edgelab` 0640 | `NWS_USER_AGENT`, `EDGE_LAB_CODE_VERSION`, optional `EDGE_LAB_ALERT_URL` (regenerated on every install) |
+| `/etc/market-edge-lab/secrets.env` | `root:root` 0600 | owner-installed secrets (ntfy topic, Odds API key); created empty once, never read by install; systemd loads it for `edgelab-notify` only (ADR 0028) |
 
 Other accounts, including the Chase Upside user `dynasty`, can read only the status
 directory. `install.sh` checks this and refuses to finish otherwise.
