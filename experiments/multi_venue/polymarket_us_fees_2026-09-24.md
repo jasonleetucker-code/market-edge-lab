@@ -71,12 +71,21 @@ record's `knowledge_time_utc`.
 
 What the bound covers:
 - **The fee.** Ceiling ≥ banker's rounding, and a sum of ceilings ≥ the ceiling of the sum.
-  So the fee bound holds for any split of an order into fills.
-- **The cash debit.** The fee bound does **not** cover it. The notional's rounding is
-  undocumented, ticks are $0.001, and an order can run as several fills or orders. The
-  per-take ceiling bounds a single fill only. So the record carries a rounding allowance
-  of **$0.01 per contract**: up to one cent per fill, with whole-contract fills. Fractional
-  fills are not covered and are never priced.
+  So the fee bound holds for any split of one order into fills.
+- **The cash debit, and several orders.** The fee bound does **not** cover these:
+  - the notional's rounding is undocumented, and ticks are $0.001;
+  - a quantity can run as several fills or as separate orders;
+  - each order's banker's-rounded fee can be up to $0.005 above exact.
+
+  The per-take ceiling bounds a single fill of a single order only. So the record carries
+  a rounding allowance of **$0.015 per contract**: $0.005 of fee rounding per order plus
+  up to one cent of notional rounding per fill, assuming whole-contract fills and orders.
+
+  Worked example: 100 contracts at $0.321 bought as 100 one-contract orders. Each order
+  costs 0.321 + 0.02 (the banker's fee), rounded up to $0.35, so the total is $35.00. The
+  schedule's single-take cost is $33.62, and $33.62 + 100 × $0.015 = $35.12 covers it. The
+  earlier $0.01 allowance gave $34.62 and did not. Random whole-contract splits are tested
+  too. Fractional fills are not covered and are never priced.
 
 Several components are unverified: SCHEDULED_CHANGES, ROUNDING_FOR_ACCOUNT_TYPE (the debit),
 ACCOUNT_TYPE and SETTLEMENT_AND_TRANSFER_FEES. So the ADR 0017 claim basis is **NONE**, and

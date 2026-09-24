@@ -168,8 +168,42 @@ def test_record_components_match_the_evidence():
     assert parse_utc(RECORD.applies_from_utc) == datetime(2026, 9, 17, 4, tzinfo=UTC)  # 12 AM ET
     assert parse_utc(RECORD.applies_from_utc) == parse_utc(POLYMARKET_US_EFFECTIVE_FROM_UTC)
     assert "polymarket_us_fees_2026-09-24.md" in PM.evidence
-    # The fee bound covers any fill split; the undocumented notional rounding needs this allowance.
-    assert RECORD.rounding_allowance_per_contract == D("0.01")
+    # The fee bound covers any fill split; per-order fee rounding plus the undocumented notional
+    # rounding need this allowance.
+    assert RECORD.rounding_allowance_per_contract == D("0.015")
+
+
+def _worst_orders(orders: list[tuple[int, Decimal]]) -> Decimal:
+    """The worst real debit of separate orders under the documented rules: each order's fee is
+    the banker's rounding of its exact fee, and its notional + fee rounds UP to the cent (the
+    notional's rounding is undocumented, so assume the worst)."""
+    return sum(((p * c + bankers_fee(TAKER, c, p)).quantize(D("0.01"), rounding=ROUND_CEILING)
+                for c, p in orders), D(0))
+
+
+def test_the_allowance_covers_100_one_contract_orders_at_0_321():
+    """The re-review's worked example: 100 contracts at 0.321 as 100 one-contract orders."""
+    single = PM.taker_buy(100, D("0.321"))
+    assert (single.fee, single.total_cost) == (D("1.52"), D("33.62"))  # ceil(1.5148...), ceil(32.10 + 1.52)
+    assert bankers_fee(TAKER, 1, D("0.321")) == D("0.02")  # 0.01514... -> 0.02 per order
+    actual = _worst_orders([(1, D("0.321"))] * 100)
+    assert actual == D("35.00")  # 0.321 + 0.02 = 0.341 -> 0.35, times 100
+    assert single.total_cost + D("0.01") * 100 == D("34.62") < actual  # the old allowance fell short
+    assert single.total_cost + RECORD.rounding_allowance_per_contract * 100 == D("35.12") >= actual
+
+
+def test_the_allowance_covers_any_split_into_whole_contract_orders():
+    rng = random.Random(58)
+    for _ in range(1000):
+        price = D(rng.randint(1, 999)) / 1000  # the $0.001 tick
+        total = rng.randint(1, 200)
+        sizes, left = [], total
+        while left:
+            size = rng.randint(1, left)
+            sizes.append(size)
+            left -= size
+        bound = PM.taker_buy(total, price).total_cost + RECORD.rounding_allowance_per_contract * total
+        assert _worst_orders([(s, price) for s in sizes]) <= bound, (price, sizes)
 
 
 def test_unverified_settlement_or_transfer_fees_block_any_claim_grade():

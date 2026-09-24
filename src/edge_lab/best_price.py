@@ -411,14 +411,22 @@ def _order(r: RouteAssessment) -> tuple:
 def proven_cheaper(a: RouteAssessment, b: RouteAssessment) -> bool:
     """Is `a`'s real total cost PROVEN below `b`'s? Both need claim-grade totals.
 
-    `a.claim_total_cost` is an upper bound on what `a` really costs (exact when VERIFIED). What
-    `b` really costs is known exactly only when its fee is VERIFIED (EXACT); under
-    CONSERVATIVE_BOUND it lies between its gross cost (a taker never pays less than price x
-    quantity) and its claim total. So `a` is proven cheaper only when its bound is below `b`'s
-    exact total, or below `b`'s gross cost. Two overlapping bounds prove no order."""
+    `a.claim_total_cost` is an upper bound on what `a` really costs. It always includes the
+    record's allowance, even under EXACT, so it is never below the real cost.
+
+    What `b` really costs:
+    - known exactly only when its fee is VERIFIED (EXACT). Then it is `b.total_cost`, the
+      schedule's exact debit. It is never `b.claim_total_cost`, which a nonzero allowance
+      would inflate;
+    - under CONSERVATIVE_BOUND, only known to lie between its gross cost and its claim total.
+
+    The gross floor assumes the real debit is at least price x quantity: a taker's fee is never
+    negative, and no rebate takes the debit below the notional. That is proven for the Kalshi
+    direct-member schedule only (ADR 0017). It must be re-proven for any other venue before its
+    records can reach CONSERVATIVE_BOUND. Two overlapping bounds prove no order."""
     if a.claim_total_cost is None or b.claim_total_cost is None:
         return False
-    floor = b.claim_total_cost if b.fee_status == FeeStatus.VERIFIED.value else b.gross_cost
+    floor = b.total_cost if b.fee_status == FeeStatus.VERIFIED.value else b.gross_cost
     return floor is not None and a.claim_total_cost < floor
 
 
@@ -516,7 +524,7 @@ def _name(venue: str) -> str:
 
 def _cost_range(r: RouteAssessment) -> str:
     if r.fee_status == FeeStatus.VERIFIED.value:
-        return f"{_name(r.venue)} exactly {_usd(r.claim_total_cost)}"
+        return f"{_name(r.venue)} exactly {_usd(r.total_cost)}"
     return f"{_name(r.venue)} between {_usd(r.gross_cost)} and {_usd(r.claim_total_cost)}"
 
 
@@ -537,8 +545,10 @@ def _route_line(r: RouteAssessment) -> str:
     closed = "" if r.market_status == MarketStatus.OPEN.value else f"; market {r.market_status}"
     gross = _usd(r.gross_cost)
     if r.claim_total_cost is not None and Exclusion.NOT_FRESH.value not in ex:
-        bound = " at most" if r.fee_status == FeeStatus.CONSERVATIVE_BOUND.value else ""
-        return f"{where}{bound} {_usd(r.claim_total_cost)} total ({gross} gross, fees {r.fee_status}){closed}"
+        if r.fee_status == FeeStatus.VERIFIED.value:
+            extra = "" if r.claim_total_cost == r.total_cost else f"; claim total {_usd(r.claim_total_cost)} with allowance"
+            return f"{where} {_usd(r.total_cost)} total, exact ({gross} gross, fees VERIFIED{extra}){closed}"
+        return f"{where} at most {_usd(r.claim_total_cost)} total ({gross} gross, fees {r.fee_status}){closed}"
     if r.claim_total_cost is not None:
         return f"{where} {gross} gross; total not claimed{fresh}{closed}"
     if r.fee_status == FeeStatus.UNVERIFIED.value and r.fee is not None:
@@ -571,7 +581,7 @@ def summarize(request: PositionRequest, routes: tuple[RouteAssessment, ...], rel
         best, rest = verified[0], verified[1:]
         proven = [r for r in rest if proven_cheaper(best, r)]
         exact_ties = [r for r in rest if best.fee_status == r.fee_status == FeeStatus.VERIFIED.value
-                      and r.claim_total_cost == best.claim_total_cost]
+                      and r.total_cost == best.total_cost]
         unordered = [r for r in rest if r not in proven and r not in exact_ties]
         if proven:
             lines.append(f"On verified total cost, {label(best)} is cheaper than "

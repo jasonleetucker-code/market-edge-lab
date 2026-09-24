@@ -184,7 +184,9 @@ PAYOFF_ALTERNATIVE_SETTLEMENT = "binary_alternative_settlement"  # sports: LFMP 
 _DASHES = "-/" + "".join(map(chr, range(0x2010, 0x2016)))  # ASCII hyphen and slash, Unicode dashes
 # "50-50", "50/50", "50 50", "fifty-fifty", "$0.50", "$0.5", "$.5", "0.50 per", "0.5 per".
 _SPLIT_LANGUAGE = re.compile(r"\b50(?:\s*[" + re.escape(_DASHES) + r"]\s*|\s+)50\b|fifty[\s-]+fifty"
-                             r"|\$\s*0?\.50?\b|\b0?\.50?\s+per\b", re.IGNORECASE)
+                             r"|\$\s*0?\.50?\b|\b0?\.50?\s+per\b|\b(?:50|fifty)\s+cents?\b"
+                             r"|\bhalf\s+(?:of\s+)?(?:the\s+|its\s+)?(?:payout|value|settlement|\$\s*1\b|a\s+dollar)",
+                             re.IGNORECASE)
 # A settlement at a price determined later (Sports and Weather FAQs): never a fixed payout.
 _LFMP_LANGUAGE = re.compile(r"last[\s-]+fair[\s-]+market[\s-]+price|\bLFMP\b", re.IGNORECASE)
 _SPORTS_FIELDS = ("sportsMarketType", "sportsMarketTypeV2", "gameStartTime")

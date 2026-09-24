@@ -50,6 +50,10 @@ def test_every_captured_market_states_a_50_50_cancellation_and_is_split_on_cance
     "Void markets settle at $0.5 per contract.",
     "Void markets settle at 0.5 per contract.",
     "If cancelled this market resolves 50 50.",
+    "Each contract settles at 50 cents if the game is cancelled.",
+    "Contracts pay fifty cents on a tie.",
+    "On a tie each contract pays half of the payout.",
+    "A void market settles at half a dollar.",
     "resolves 50–50 if cancelled",
 ])
 def test_split_language_variants_are_recognised(text):
@@ -80,7 +84,8 @@ def test_last_fair_market_price_language_fails_closed_in_any_market(category, te
 
 
 @pytest.mark.parametrize("text", ["Resolves Yes if BTC is above $50,000.", "Resolves Yes above 0.55.",
-                                  "The high must reach 50 degrees.", "Pays $0.55 per share only if Yes."])
+                                  "The high must reach 50 degrees.", "Pays $0.55 per share only if Yes.",
+                                  "Resolves Yes if a team leads at half time.", "Price above 150 cents."])
 def test_ordinary_numbers_are_not_split_language(text):
     assert pm.payoff_kind(raw(text, category="crypto"))[0] == "binary"
 

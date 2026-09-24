@@ -85,8 +85,12 @@ For split settlement (5A):
   - It says "A is cheaper than B" only when `proven_cheaper(A, B)` holds. Both need a
     verified total, and A's claim total (an upper bound on A's real cost) must be below
     either:
-    - B's exact total, when B's fee is VERIFIED (EXACT); or
-    - B's gross cost, which is a lower bound on any taker's real cost.
+    - B's exact total (`total_cost`), when B's fee is VERIFIED (EXACT). Never B's claim
+      total, which an EXACT record's nonzero allowance would inflate; or
+    - B's gross cost, the lower bound on a taker's real cost. This floor assumes the real
+      debit is at least price × quantity. That is proven for the Kalshi direct-member
+      schedule only, and must be re-proven for any other venue before its records can
+      reach CONSERVATIVE_BOUND.
 
     Two overlapping bounds prove nothing. They are printed as ranges with "No proven order"
     (for example "Kalshi between $4.00 and $4.2710"). Equal totals are "equal" only when
@@ -101,11 +105,21 @@ For split settlement (5A):
   - The venue rounds each fill's **fee** half to even and caps an order's total fee. The
     schedule instead rounds each take's fee **up** to the cent. That bounds the fee for any
     split into fills.
-  - The **cash debit** is a different matter. Notional rounding is undocumented, ticks are
-    $0.001, and an order can execute as several fills or orders. The schedule rounds each
-    take's debit up to the cent, which bounds a single fill only. So the record carries a
-    rounding allowance of **$0.01 per contract**, assuming whole-contract fills; fractional
-    fills are never priced. ROUNDING_FOR_ACCOUNT_TYPE stays UNVERIFIED.
+  - The **cash debit** is a different matter:
+    - notional rounding is undocumented;
+    - ticks are $0.001;
+    - a quantity can execute as several fills or as separate orders, and each order's
+      banker's-rounded fee can sit up to $0.005 above exact.
+
+    The schedule rounds each take's debit up to the cent, which bounds a single fill of a
+    single order only. So the record carries a rounding allowance of **$0.015 per contract**
+    ($0.005 of fee rounding per order + $0.01 of notional rounding per fill). That covers
+    several fills or orders of whole contracts, and is tested over random splits.
+
+    Worked example: 100 contracts at 0.321 bought as 100 one-contract orders can cost
+    $35.00. The single-take cost is $33.62, so the bound is $33.62 + $1.50 = $35.12. The
+    earlier $0.01 allowance gave $34.62, which fell short. Fractional fills are never priced.
+    ROUNDING_FOR_ACCOUNT_TYPE stays UNVERIFIED.
   - Below $0.01 and above $0.99 (outside the documented range), the fee is bounded by its
     value at the range edge.
   - `schedule_for("polymarket_us", scope)` returns it only for `POLYMARKET_US_EXCHANGE_SCOPE`.
@@ -135,7 +149,8 @@ For split settlement (5A):
   - `binary_alternative_settlement` when the rules text of any market (sports or not) names
     a last-fair-market-price settlement ("last fair market price", "LFMP");
   - `binary_split_on_cancel` when the rules text states a split: "50-50", "50/50", "50 50",
-    "fifty-fifty", "$0.50", "$0.5", or "0.5(0) per";
+    "fifty-fifty", "$0.50", "$0.5", "0.5(0) per", "50 cents", "fifty cents", or "half of
+    the payout / value / settlement / $1" and "half a dollar";
   - `binary_alternative_settlement` for a sports market with neither (Sports FAQs:
     cancellation or no-contest settles at the last fair market price, a tie at $0.50,
     co-winners at $1/n);
@@ -153,7 +168,7 @@ For split settlement (5A):
 
 **Tradeoffs.**
 - The Polymarket US estimate can overstate the fee by up to 1 cent per take, plus 1 cent on
-  the debit, and a claim would add $0.01 per contract on top. That is acceptable for an
+  the debit, and a claim would add $0.015 per contract on top. That is acceptable for an
   estimate that is never claim-grade today.
 - Matching split or last-fair-market-price language is textual, so a false positive refuses
   a market that might be binary. That fails closed, by design.

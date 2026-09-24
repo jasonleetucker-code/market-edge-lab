@@ -213,11 +213,12 @@ class PolymarketUsTakerSchedule:
     ceilings >= the ceiling of the sum, so whatever the split of an order into fills, the
     venue's FEE is at most this schedule's fee.
     The FEE bound does not cover the cash debit. The venue documents no rounding for the
-    notional (price x contracts, on a $0.001 tick), and an order can execute as several fills
-    or orders. This schedule rounds each take's debit up to the cent, which bounds a single
-    fill only. The verification record therefore carries a rounding allowance of $0.01 per
-    contract. It assumes each fill is a whole number of contracts, with at most one cent of
-    notional rounding each. Fractional fills are not bounded, and are never priced here
+    notional (price x contracts, on a $0.001 tick), and a quantity can execute as several fills
+    or separate orders. This schedule rounds each take's debit up to the cent, which bounds a
+    single fill of a single order only. The verification record therefore carries a rounding
+    allowance of $0.015 per contract. That covers up to $0.005 of banker's fee rounding per
+    order and up to one cent of notional rounding per fill, assuming whole-contract fills and
+    orders. Fractional fills are not bounded, and are never priced here
     (`price_depth_fill`). A NO buy is a short sale of YES at 1 - q
     (margin $1, net buying power -q); p(1 - p) is symmetric, so its fee is the same.
     Outside the documented price range ($0.01 to $0.99) the fee is bounded by its value at
@@ -453,10 +454,17 @@ POLYMARKET_US_VERIFICATION_2026_09_24 = FeeVerificationRecord(
     applies_from_utc="2026-09-17T00:00:00-04:00",
     recheck_by_utc="2026-10-24T01:39:45Z",
     account_type="direct",
-    # The per-take ceiling bounds the FEE for any split into fills. The notional's rounding is
-    # undocumented, so up to one cent per fill is allowed; with whole-contract fills that is at
-    # most $0.01 per contract. Fractional fills are not covered (never priced by price_depth_fill).
-    rounding_allowance_per_contract=Decimal("0.01"),
+    # The schedule's cost is at least the exact notional plus the exact fee. A real execution
+    # can exceed that in two ways, each at most once per whole contract:
+    # - fee: the venue banker's-rounds each ORDER's cumulative fee, at most $0.005 above exact,
+    #   and an order of whole contracts has at least one contract;
+    # - notional: its rounding is undocumented; allow up to one cent per fill.
+    # So $0.015 per contract covers any split into several fills or orders of whole contracts.
+    # Example: 100 contracts at 0.321 bought as 100 one-contract orders can cost $35.00
+    # (0.321 + 0.02 fee, rounded up to $0.35 each). The schedule's single-take cost is $33.62:
+    # $33.62 + 100 x $0.015 = $35.12 covers it, while $0.01 would give $34.62 and not.
+    # Fractional fills are not covered (never priced by price_depth_fill).
+    rounding_allowance_per_contract=Decimal("0.015"),
     components=(
         ComponentEvidence(VerificationComponent.COEFFICIENT, ComponentState.VERIFIED,
                           f"{_PMUS_EVIDENCE} (docs.polymarket.us/fees.md)",
@@ -473,8 +481,9 @@ POLYMARKET_US_VERIFICATION_2026_09_24 = FeeVerificationRecord(
                           f"{_PMUS_EVIDENCE} (fees page, Fee Rules; Rulebook 10.1(c) $0.001 tick)",
                           "FEE rounding documented: banker's rounding to $0.01 per fill, an order's total never "
                           "above the banker's rounding of its cumulative exact fee (the per-take ceiling bounds "
-                          "it). The cash-debit (notional) rounding is NOT documented: allowance $0.01 per "
-                          "contract, assuming whole-contract fills"),
+                          "it). The cash-debit (notional) rounding is NOT documented. Allowance $0.015 per "
+                          "contract ($0.005 per-order fee rounding + $0.01 notional per fill), assuming "
+                          "whole-contract fills and orders"),
         ComponentEvidence(VerificationComponent.ACCOUNT_TYPE, ComponentState.UNVERIFIED,
                           f"{_PMUS_EVIDENCE} (partners/funding/vendor-fees)",
                           "no Polymarket US account exists; an intermediary route can add a declared vendor fee"),

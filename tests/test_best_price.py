@@ -182,6 +182,38 @@ def test_two_conservative_bounds_are_never_ordered(monkeypatch):
     assert "is cheaper than" not in result.summary and "No proven order" in result.summary
 
 
+def test_an_exact_record_with_an_allowance_uses_the_exact_total_as_the_floor(monkeypatch):
+    """An EXACT record may still carry a nonzero allowance, which inflates the claim total. The
+    loser's floor is its exact total, never that inflated claim total."""
+    from edge_lab import fee_schedules as fs
+
+    exact_kalshi = QuadraticTakerSchedule("test-kalshi-exact", "kalshi", D("0.07"), D(1), FeeScheduleStatus.VERIFIED,
+                                          "test double", "2026-09-24T00:00:00Z", cost_model=CostModel.EXACT)
+    record = fs.FeeVerificationRecord(
+        verification_id="test-exact-with-allowance", schedule_id=exact_kalshi.schedule_id, venue="kalshi",
+        scope=("KXHIGHNY",), knowledge_time_utc="2026-09-24T00:00:00Z", applies_from_utc="2026-09-01T00:00:00Z",
+        recheck_by_utc="2026-10-24T00:00:00Z", rounding_allowance_per_contract=D("0.05"),
+        components=tuple(fs.ComponentEvidence(c, fs.ComponentState.VERIFIED, "test", "test")
+                         for c in fs.VerificationComponent))
+    monkeypatch.setattr(fs, "FEE_VERIFICATIONS", (*fs.FEE_VERIFICATIONS, record))
+    twin_market = replace(K_MARKET, market_id="kalshi:KXHIGHNY-26SEP25-EXACT", native_id="KXHIGHNY-26SEP25-EXACT")
+    exact_route = Route(K_EVENT, twin_market, ladder(twin_market, ("0.40", "10")), exact_kalshi)
+    result = run(k_route(("0.40", "10")), exact_route)
+    bound_route = next(r for r in result.routes if r.market_id == K_MARKET.market_id)
+    exact = next(r for r in result.routes if r.market_id == twin_market.market_id)
+    assert exact.fee_status == "VERIFIED" and exact.claim_basis == "EXACT"
+    assert (exact.total_cost, exact.claim_total_cost) == (D("4.17"), D("4.67"))  # + 10 x $0.05
+    # The bound route ($4.2710) is the lowest claim total, below the inflated $4.67, but not
+    # below the exact $4.17: no order is proven.
+    assert bound_route.claim_total_cost == D("4.2710")
+    assert not bp.proven_cheaper(bound_route, exact)
+    verified = claim(result, ClaimKind.BEST_VERIFIED_TOTAL_COST)
+    assert verified.market_id == K_MARKET.market_id and verified.proven_below == ()
+    assert "is cheaper than" not in result.summary
+    assert "Kalshi exactly $4.17" in result.summary and "$4.67" in result.summary
+    assert "$4.17 total, exact ($4.00 gross, fees VERIFIED; claim total $4.67 with allowance)" in result.summary
+
+
 def test_equal_exact_totals_are_equal_not_cheaper():
     twin = replace(P_MARKET, market_id="polymarket_us:twin", native_id="twin")
     result = run(p_route(("0.30", "20"), fees=EXACT), p_route(("0.30", "20"), fees=EXACT, market=twin),
@@ -399,7 +431,7 @@ def test_cheaper_never_appears_without_verified_totals_on_both_sides():
         for loser in verified.proven_below:
             winner, other = by_id[verified.market_id], by_id[loser]
             assert bp.proven_cheaper(winner, other)
-            floor = other.claim_total_cost if other.fee_status == "VERIFIED" else other.gross_cost
+            floor = other.total_cost if other.fee_status == "VERIFIED" else other.gross_cost
             assert winner.claim_total_cost < floor
         for r in result.routes:
             if r.claim_total_cost is None or r.freshness != "fresh":
