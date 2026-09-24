@@ -1120,7 +1120,9 @@ def _summary(sources: Sequence[Mapping[str, Any]], now: datetime) -> dict[str, A
     }
 
 
-_PATHLIKE = re.compile(r"""(?:[A-Za-z]:)?[\\/][^\s'",;)\]]+""")
+# A path starts the text or follows whitespace/punctuation, never a word character: "America/New_York"
+# and "17:40-18:35" stay intact; "/etc/market-edge-lab/secrets.env" and "C:\x" are scrubbed.
+_PATHLIKE = re.compile(r"""(?<![\w.-])(?:[A-Za-z]:)?[\\/][^\s'",;)\]]+""")
 
 
 def scrub(text: str) -> str:

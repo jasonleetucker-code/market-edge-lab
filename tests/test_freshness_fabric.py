@@ -970,3 +970,10 @@ def test_dashboard_status_pages_the_odds_history_and_never_loads_all_of_it(db, m
     assert paged == full  # the same answer as one big page
     assert paged["live_read_verified"] is True and any("5 newer odds read" in p for p in paged["problems"])
     assert loaded == [2, 2, 2] and max(loaded) <= 2  # at most one page of payloads in memory at a time
+
+
+def test_path_scrub_leaves_time_zone_names_intact():
+    kept = "inside 17:40-18:35 America/New_York: ticks do nothing"
+    assert ff.scrub(kept) == kept
+    assert ff.scrub("add the key to /etc/market-edge-lab/secrets.env first") == "add the key to <path> first"
+    assert ff.scrub(r"open C:\Users\x\db.sqlite3 failed") == "open <path> failed"
