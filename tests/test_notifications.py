@@ -206,3 +206,119 @@ def test_outbox_stays_under_the_dashboard_read_limit(tmp_path):
     from edge_lab.dashboard.data import STATUS_FILE_MAX_BYTES
     outbox = n.JsonlOutbox(tmp_path / "out.jsonl")
     assert outbox.max_bytes < STATUS_FILE_MAX_BYTES
+
+
+# ---------------------------------------------------------------- origin (ADR 0020 amendment, 2026-09-24)
+
+class External:
+    """An external sink that records what it was given. It declares nothing, so it counts as external."""
+
+    sink_id = "push"
+
+    def __init__(self):
+        self.got = []
+
+    def deliver(self, event):
+        self.got.append(event)
+        return n.DeliveryStatus.SUBMITTED
+
+
+def test_the_origin_vocabulary_is_exactly_the_directive_list():
+    assert {o.value for o in n.Origin} == {"PRODUCTION", "TEST", "DEPLOYMENT_VERIFICATION", "MANUAL_DIAGNOSTIC",
+                                           "REPLAY", "DEMO"}
+    assert n.NEVER_PUSHED_ORIGINS == {n.Origin.DEPLOYMENT_VERIFICATION, n.Origin.REPLAY, n.Origin.DEMO}
+
+
+@pytest.mark.parametrize("origin", list(n.Origin))
+def test_the_origin_survives_the_outbox_round_trip(tmp_path, origin):
+    outbox = n.JsonlOutbox(tmp_path / "out.jsonl")
+    e = ev(origin=origin, ttl=timedelta(hours=1), values={"k": "v"})
+    outbox.deliver(e)
+    (line,) = outbox.history()
+    assert line["origin"] == origin.value
+    assert n.event_from_dict(line) == e
+
+
+def test_an_old_outbox_line_without_origin_reads_as_production():
+    old = ev().to_dict()
+    del old["origin"]
+    assert n.event_from_dict(old).origin is n.Origin.PRODUCTION
+    assert n.origin_of(old) is n.Origin.PRODUCTION
+
+
+@pytest.mark.parametrize("bad", ["NOT_AN_ORIGIN", "production", 7, ["DEMO"]])
+def test_an_unknown_origin_is_not_guessed(bad):
+    assert n.event_from_dict({**ev().to_dict(), "origin": bad}) is None
+
+
+def test_the_event_id_does_not_depend_on_the_origin():
+    """Ids of events relayed before the field existed must not change, or the relay would re-send them."""
+    assert len({ev(origin=o).event_id for o in n.Origin}) == 1
+
+
+def test_only_production_reaches_an_external_sink_by_default(tmp_path):
+    outbox, push = n.JsonlOutbox(tmp_path / "out.jsonl"), External()
+    events = [ev(origin=o, key=o.value) for o in n.Origin]
+    results = n.dispatch(events, [outbox, push], now=NOW)
+    assert [e.origin for e in push.got] == [n.Origin.PRODUCTION]
+    held = {r["origin"] for r in results if r["status"] == "HELD_BY_ORIGIN"}
+    assert held == {o.value for o in n.Origin} - {"PRODUCTION"}
+    assert all(r["sink"] == "push" for r in results if r["status"] == "HELD_BY_ORIGIN")
+    # Every origin is still stored locally, for the dashboard.
+    assert {h["origin"] for h in outbox.history()} == {o.value for o in n.Origin}
+
+
+def test_test_and_manual_diagnostic_are_pushed_only_when_requested():
+    push = External()
+    n.dispatch([ev(origin=n.Origin.TEST, key="t"), ev(origin=n.Origin.MANUAL_DIAGNOSTIC, key="m")], [push], now=NOW)
+    assert push.got == []
+    n.dispatch([ev(origin=n.Origin.TEST, key="t"), ev(origin=n.Origin.MANUAL_DIAGNOSTIC, key="m")], [push], now=NOW,
+               push_origins=[n.Origin.MANUAL_DIAGNOSTIC])
+    assert [e.origin for e in push.got] == [n.Origin.MANUAL_DIAGNOSTIC]
+
+
+@pytest.mark.parametrize("origin", sorted(n.NEVER_PUSHED_ORIGINS))
+def test_verification_replay_and_demo_can_never_be_requested(origin):
+    push = External()
+    with pytest.raises(ValueError):
+        n.dispatch([ev(origin=origin)], [push], now=NOW, push_origins=[origin])
+    assert push.got == []
+
+
+def test_the_disabled_sms_sink_counts_as_external():
+    (r,) = n.dispatch([ev(origin=n.Origin.DEMO)], [n.DisabledSmsSink()], now=NOW)
+    assert r["status"] == "HELD_BY_ORIGIN"
+
+
+def test_a_verification_event_never_dedupes_or_rate_limits_a_production_one(tmp_path):
+    outbox = n.JsonlOutbox(tmp_path / "out.jsonl")
+    noise = [ev(key=f"v{i}", origin=n.Origin.DEPLOYMENT_VERIFICATION) for i in range(50)]
+    n.dispatch([*noise, ev(key="same", origin=n.Origin.DEPLOYMENT_VERIFICATION)], [outbox], now=NOW)
+    push = External()
+    results = n.dispatch([ev(key="same"), ev(key="other")], [outbox, push], now=NOW, history=outbox.history())
+    assert [r["status"] for r in results if r["sink"] == "push"] == ["SUBMITTED", "SUBMITTED"]
+
+
+def test_a_held_event_uses_no_rate_limit_budget():
+    push = External()
+    demo = [ev(n.EventType.OPPORTUNITY_QUALIFIED, n.Severity.INFO, key=f"d{i}", origin=n.Origin.DEMO)
+            for i in range(100)]
+    real = [ev(n.EventType.OPPORTUNITY_QUALIFIED, n.Severity.INFO, key=f"p{i}") for i in range(5)]
+    results = n.dispatch([*demo, *real], [push], now=NOW)
+    assert len(push.got) == 5 and sum(r["status"] == "HELD_BY_ORIGIN" for r in results) == 100
+
+
+def test_events_from_a_receipt_carry_the_callers_origin():
+    receipt = {"state": "FAILED", "generated_at_utc": NOW.isoformat(), "problems": ["x"], "days": []}
+    (prod,) = n.events_from_receipt(receipt, now=NOW)
+    (replay,) = n.events_from_receipt(receipt, now=NOW, origin=n.Origin.REPLAY)
+    assert prod.origin is n.Origin.PRODUCTION and replay.origin is n.Origin.REPLAY
+    assert prod.event_id == replay.event_id
+
+
+def test_the_daily_run_writes_production_events(tmp_path):
+    receipt = {"state": "FAILED", "generated_at_utc": NOW.isoformat(), "problems": ["x"], "days": []}
+    out = daily._notify(tmp_path, receipt)
+    assert out["status"] == "ok" and out["delivered"] == 1
+    (line,) = n.JsonlOutbox(tmp_path / daily.NOTIFICATIONS_NAME).history()
+    assert line["origin"] == "PRODUCTION"

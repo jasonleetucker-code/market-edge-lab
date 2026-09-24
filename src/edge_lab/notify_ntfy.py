@@ -39,6 +39,11 @@ Rules:
   sending for a cooldown (a simple circuit breaker). The 15-second budget is best-effort:
   the urllib timeout applies to each socket operation, not the whole request, and DNS
   resolution has no timeout at all.
+- **Origin.** `dispatch` holds back every event whose origin may not be pushed (ADR 0020
+  amendment). As a second layer, the sink itself refuses DEPLOYMENT_VERIFICATION, REPLAY and
+  DEMO events (HELD_BY_ORIGIN, nothing sent). An explicitly requested TEST or
+  MANUAL_DIAGNOSTIC push names its origin in the title and body, so it never reads as a
+  production incident.
 - **Never raises.** Every failure becomes a status, with a redacted `last_error`. A
   notification failure never changes risk, trading or ledger state.
 - **Secrets.** The topic is effectively a password on a public server, and the optional
@@ -65,8 +70,8 @@ from urllib.parse import urlsplit, urlunsplit
 from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener
 
 from .freshness import parse_utc
-from .notifications import (DeliveryStatus, EventType, JsonlOutbox, Limits, NotificationEvent, Severity, check_event,
-                            dispatch, event_from_dict, make_event)
+from .notifications import (NEVER_PUSHED_ORIGINS, DeliveryStatus, EventType, JsonlOutbox, Limits, NotificationEvent,
+                            Origin, Severity, check_event, dispatch, event_from_dict, make_event)
 from .redaction import REDACTED, redact_text
 
 ENV_TOPIC_URL = "EDGE_LAB_NTFY_TOPIC_URL"
@@ -100,6 +105,12 @@ HEADLINES: Mapping[EventType, str] = {
     EventType.TEST: "Test notification, no action needed",
 }
 FOOTER = "Open Market Edge for details."
+# A fixed first line for a non-PRODUCTION event that is pushed on explicit request. Origins that
+# are never pushed have no line: the sink refuses them.
+ORIGIN_NOTES: Mapping[Origin, str] = {
+    Origin.TEST: "Test, not a production incident.",
+    Origin.MANUAL_DIAGNOSTIC: "Manual diagnostic, not a production incident.",
+}
 
 MAX_ATTEMPTS = 3
 BACKOFF_SECONDS = 1.0
@@ -196,9 +207,12 @@ def sequence_id(dedupe_key: str, key: bytes) -> str | None:
 
 
 def payload(event: NotificationEvent, key: bytes) -> tuple[dict[str, str], bytes]:
-    """Headers and body for one event: type, severity and a fixed headline, nothing else."""
+    """Headers and body for one event: type, severity, origin (unless PRODUCTION) and a fixed
+    headline, nothing else."""
+    marker = "" if event.origin is Origin.PRODUCTION else f"{event.origin.value} "
+    note = ORIGIN_NOTES.get(event.origin, "") if event.type is not EventType.TEST else ""
     headers = {
-        "X-Title": f"Market Edge {event.severity.value}: {event.type.value}",
+        "X-Title": f"Market Edge {marker}{event.severity.value}: {event.type.value}",
         "X-Priority": PRIORITY[event.severity],
         "X-Tags": f"{event.severity.value.lower()},{event.type.value.lower()}",
         "Content-Type": "text/plain; charset=utf-8",
@@ -206,7 +220,7 @@ def payload(event: NotificationEvent, key: bytes) -> tuple[dict[str, str], bytes
     seq = sequence_id(event.dedupe_key, key)
     if seq is not None:
         headers["X-Sequence-ID"] = seq
-    return headers, f"{HEADLINES[event.type]}. {FOOTER}".encode("utf-8")
+    return headers, f"{note + ' ' if note else ''}{HEADLINES[event.type]}. {FOOTER}".encode("utf-8")
 
 
 class _NoRedirect(HTTPRedirectHandler):
@@ -259,6 +273,7 @@ class NtfySink:
                  "backoff", "timeout", "deadline", "last_error", "last_attempts", "last_http_status",
                  "_consecutive_failures", "_open_until")
     sink_id = "ntfy"
+    external = True
 
     def __init__(self, topic_url: str, *, token: str | None = None, opener: Opener | None = None,
                  sleep: Callable[[float], None] = time.sleep, clock: Callable[[], datetime] | None = None,
@@ -322,6 +337,8 @@ class NtfySink:
         return status
 
     def _deliver(self, event: NotificationEvent) -> DeliveryStatus:
+        if event.origin in NEVER_PUSHED_ORIGINS:  # second layer behind dispatch
+            return DeliveryStatus.HELD_BY_ORIGIN
         refused = check_event(event)
         if refused is not None:
             return refused
@@ -403,6 +420,7 @@ RELAY_NAME = "ntfy_relay.jsonl"
 # Only events this recent are relayed: a first activation, or a relay that was down, must not
 # replay days of history onto the phone. Older events stay in the outbox and the dashboard.
 RELAY_MAX_AGE = timedelta(hours=36)
+INVOCATION_ID = re.compile(r"[0-9a-f]{32}")  # a systemd InvocationID, as alert.sh records it
 
 
 def _summarize(results: list[dict[str, Any]]) -> dict[str, int]:
@@ -438,21 +456,41 @@ def unit_failure_event(record: Mapping[str, Any]) -> NotificationEvent | None:
     """The `last_failure.json` that `deploy/vps/alert.sh` writes, as a SOURCE_FAILURE event.
 
     It covers runs killed before they could write the outbox (timeout, OOM, crash). The ntfy
-    headline stays fixed. The unit name goes only into the dedupe key, never to the phone."""
+    headline stays fixed. The unit name goes only into the dedupe key, never to the phone.
+
+    The origin is the one alert.sh recorded for that exact invocation: DEPLOYMENT_VERIFICATION
+    only when the root-run check confirmed it (runbook §4.1, ADR 0028 amendment). A record
+    without an origin, or with an unreadable one, is PRODUCTION: a garbled field never
+    silences a real failure."""
     unit = str(record.get("unit") or "")
     failed_at = parse_utc(record.get("failed_at_utc"))
     if not re.fullmatch(r"edgelab-[A-Za-z0-9_@.-]{1,80}", unit) or failed_at is None:
         return None
+    try:
+        origin = Origin(record.get("origin") or Origin.PRODUCTION.value)
+    except (ValueError, TypeError):
+        origin = Origin.PRODUCTION
+    invocation = record.get("invocation_id")
+    valid = isinstance(invocation, str) and INVOCATION_ID.fullmatch(invocation) is not None
+    values = {"invocation_id": invocation} if valid else {}
     return make_event(EventType.SOURCE_FAILURE, Severity.WARNING, created_at=failed_at,
-                      summary="A Market Edge unit failed", dedupe_key=f"unit-failure:{unit}:{failed_at.isoformat()}",
-                      ttl=RELAY_MAX_AGE)
+                      summary=("A Market Edge unit failed closed as expected (deployment verification)"
+                               if origin is Origin.DEPLOYMENT_VERIFICATION else "A Market Edge unit failed"),
+                      dedupe_key=f"unit-failure:{unit}:{failed_at.isoformat()}", ttl=RELAY_MAX_AGE,
+                      values=values, origin=origin)
 
 
 def relay_outbox(outbox_path: str | os.PathLike[str], relay_path: str | os.PathLike[str], sink: Any, *, now: datetime,
                  max_age: timedelta = RELAY_MAX_AGE, limits: Limits = Limits(),
-                 failure_path: str | os.PathLike[str] | None = None) -> dict[str, Any]:
+                 failure_path: str | os.PathLike[str] | None = None,
+                 push_origins: tuple[Origin, ...] = ()) -> dict[str, Any]:
     """Forward recent outbox events (and the last unit failure) to `sink` once each, under the
     normal `dispatch` rules.
+
+    Only PRODUCTION events are pushed, unless the caller explicitly names MANUAL_DIAGNOSTIC (or
+    TEST) in `push_origins`; the relay unit never does. Any other event is counted as
+    HELD_BY_ORIGIN and left where it is: the outbox and last_failure.json are never modified,
+    so the dashboard still shows it. A held event is not written to the relay history.
 
     The relay history (`relay_path`) records each event as soon as the sink SUBMITTED it. It is
     the dedupe history for later relays, by `dedupe_key` (in `dispatch`) and by `event_id` (here).
@@ -483,7 +521,8 @@ def relay_outbox(outbox_path: str | os.PathLike[str], relay_path: str | os.PathL
             if (created is not None and at - max_age <= created <= at and event.event_id not in sent_ids
                     and event.event_id not in {e.event_id for e in events}):
                 events.append(event)
-        results = dispatch(events, [_RecordingSink(sink, relay)], now=at, history=history, limits=limits)
+        results = dispatch(events, [_RecordingSink(sink, relay)], now=at, history=history, limits=limits,
+                           push_origins=push_origins)
         return {"status": "ok", "candidates": len(events), "by_status": _summarize(results)}
     except Exception as exc:  # noqa: BLE001 - a relay failure is a status, never an exception
         return {"status": "failed", "reason": redact_text(f"{type(exc).__name__}: {exc}")[:200],
@@ -491,14 +530,15 @@ def relay_outbox(outbox_path: str | os.PathLike[str], relay_path: str | os.PathL
 
 
 def send_test(sink: Any, *, now: datetime) -> dict[str, Any]:
-    """Send one fixed, non-sensitive TEST event. SUBMITTED means the server accepted it, not
-    that a phone showed it."""
+    """Send one fixed, non-sensitive TEST event (origin TEST). SUBMITTED means the server
+    accepted it, not that a phone showed it. This explicit command is the only path that
+    pushes a TEST event."""
     at = parse_utc(now)
     if at is None:
         raise ValueError("now must be timezone-aware")
     event = make_event(EventType.TEST, Severity.INFO, created_at=at, summary="Market Edge test notification",
-                       dedupe_key=f"test:{at.isoformat()}", ttl=timedelta(minutes=10))
-    results = dispatch([event], [sink], now=at)
+                       dedupe_key=f"test:{at.isoformat()}", ttl=timedelta(minutes=10), origin=Origin.TEST)
+    results = dispatch([event], [sink], now=at, push_origins=(Origin.TEST,))
     return {"status": "ok", "by_status": _summarize(results),
             "attempts": sum(r["attempts"] for r in results),
             "error": next((r["error"] for r in results if r["error"]), None)}

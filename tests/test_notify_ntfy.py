@@ -788,3 +788,120 @@ def test_a_failed_history_write_never_re_sends_in_the_same_run(tmp_path, monkeyp
     monkeypatch.setattr(n.JsonlOutbox, "deliver", boom)
     out = ntfy.relay_outbox(outbox, relay, s, now=NOW)
     assert out["by_status"] == {"SUBMITTED": 1} and len(opener.requests) == 1
+
+
+# ------------------------------------------------------------------ origin (ADR 0020/0028 amendments, 2026-09-24)
+
+INVOCATION = "0123456789abcdef0123456789abcdef"
+
+
+def _failure(tmp_path, **fields):
+    path = tmp_path / "last_failure.json"
+    path.write_text(json.dumps({"unit": "edgelab-decision.service", "failed_at_utc": "2026-09-25T22:40:05Z",
+                                "invocation_id": INVOCATION, **fields}) + "\n", encoding="utf-8")
+    return path
+
+
+def _relay_failure(tmp_path, failure, **kw):
+    opener = Opener()
+    s, _ = make(opener=opener)
+    out = ntfy.relay_outbox(tmp_path / "notifications.jsonl", tmp_path / ntfy.RELAY_NAME, s, now=NOW,
+                            failure_path=failure, **kw)
+    return out, opener
+
+
+def test_a_genuine_production_unit_failure_is_pushed(tmp_path):
+    out, opener = _relay_failure(tmp_path, _failure(tmp_path, origin="PRODUCTION"))
+    assert out["by_status"] == {"SUBMITTED": 1} and len(opener.requests) == 1
+    assert headers(opener.requests[0])["x-title"] == "Market Edge WARNING: SOURCE_FAILURE"
+    assert opener.requests[0].data == b"A run or data source failed. Open Market Edge for details."
+
+
+def test_an_intentional_fail_closed_check_is_stored_not_pushed(tmp_path):
+    failure = _failure(tmp_path, origin="DEPLOYMENT_VERIFICATION")
+    before = failure.read_bytes()
+    event = ntfy.unit_failure_event(json.loads(before))
+    assert event.origin is n.Origin.DEPLOYMENT_VERIFICATION and event.values == {"invocation_id": INVOCATION}
+    out, opener = _relay_failure(tmp_path, failure)
+    assert out["by_status"] == {"HELD_BY_ORIGIN": 1} and opener.requests == []
+    assert failure.read_bytes() == before  # still there for the dashboard
+    assert not (tmp_path / ntfy.RELAY_NAME).exists()  # not recorded as sent, and never retried as sent
+    again, opener = _relay_failure(tmp_path, failure)
+    assert again["by_status"] == {"HELD_BY_ORIGIN": 1} and opener.requests == []
+
+
+def test_a_real_failure_of_the_same_unit_during_a_deployment_still_pushes(tmp_path):
+    """alert.sh records PRODUCTION for any invocation root did not confirm, whatever else is going on."""
+    _relay_failure(tmp_path, _failure(tmp_path, origin="DEPLOYMENT_VERIFICATION"))
+    real = _failure(tmp_path, origin="PRODUCTION", failed_at_utc="2026-09-25T22:41:00Z",
+                    invocation_id="f" * 32)
+    out, opener = _relay_failure(tmp_path, real)
+    assert out["by_status"] == {"SUBMITTED": 1} and len(opener.requests) == 1
+
+
+@pytest.mark.parametrize("origin", [None, "", "production", "NOT_AN_ORIGIN", 3, ["DEPLOYMENT_VERIFICATION"]])
+def test_a_failure_record_with_a_missing_or_garbled_origin_is_production(tmp_path, origin):
+    record = {"unit": "edgelab-shadow.service", "failed_at_utc": "2026-09-25T22:40:05Z"}
+    if origin is not None:
+        record["origin"] = origin
+    assert ntfy.unit_failure_event(record).origin is n.Origin.PRODUCTION
+
+
+def test_an_old_failure_record_is_still_pushed(tmp_path):
+    failure = tmp_path / "last_failure.json"
+    failure.write_text('{"unit": "edgelab-shadow.service", "failed_at_utc": "2026-09-25T22:40:05Z"}\n')
+    out, _ = _relay_failure(tmp_path, failure)
+    assert out["by_status"] == {"SUBMITTED": 1}
+
+
+@pytest.mark.parametrize("origin", [n.Origin.TEST, n.Origin.MANUAL_DIAGNOSTIC, n.Origin.REPLAY, n.Origin.DEMO,
+                                    n.Origin.DEPLOYMENT_VERIFICATION])
+def test_the_relay_holds_every_non_production_outbox_event(tmp_path, origin):
+    outbox, relay = _outbox_with(tmp_path, ev(key="x", origin=origin), ev(key="p"))
+    opener = Opener()
+    s, _ = make(opener=opener)
+    out = ntfy.relay_outbox(outbox, relay, s, now=NOW)
+    assert out["by_status"] == {"HELD_BY_ORIGIN": 1, "SUBMITTED": 1} and len(opener.requests) == 1
+    assert [h["origin"] for h in n.JsonlOutbox(outbox).history()] == [origin.value, "PRODUCTION"]
+
+
+def test_a_manual_diagnostic_is_pushed_only_on_request_and_says_so(tmp_path):
+    outbox, relay = _outbox_with(tmp_path, ev(key="m", origin=n.Origin.MANUAL_DIAGNOSTIC))
+    opener = Opener()
+    s, _ = make(opener=opener)
+    out = ntfy.relay_outbox(outbox, relay, s, now=NOW, push_origins=(n.Origin.MANUAL_DIAGNOSTIC,))
+    assert out["by_status"] == {"SUBMITTED": 1}
+    (request,) = opener.requests
+    assert headers(request)["x-title"] == "Market Edge MANUAL_DIAGNOSTIC WARNING: SOURCE_FAILURE"
+    assert request.data.decode().startswith("Manual diagnostic, not a production incident. ")
+
+
+@pytest.mark.parametrize("origin", sorted(n.NEVER_PUSHED_ORIGINS))
+def test_demo_replay_and_verification_are_never_pushed_even_if_requested(tmp_path, origin):
+    outbox, relay = _outbox_with(tmp_path, ev(key="x", origin=origin))
+    opener = Opener()
+    s, _ = make(opener=opener)
+    out = ntfy.relay_outbox(outbox, relay, s, now=NOW, push_origins=(origin,))
+    assert out["status"] == "failed" and opener.requests == []
+    # Second layer: the sink itself refuses them, whoever calls it.
+    assert s.deliver(ev(origin=origin)) is n.DeliveryStatus.HELD_BY_ORIGIN
+    assert opener.requests == [] and s.last_attempts == 0
+
+
+def test_the_explicit_test_command_sends_a_test_origin_event():
+    opener = Opener()
+    s, _ = make(opener=opener)
+    assert ntfy.send_test(s, now=NOW)["by_status"] == {"SUBMITTED": 1}
+    (request,) = opener.requests
+    assert headers(request)["x-title"] == "Market Edge TEST INFO: TEST"
+    assert request.data == b"Test notification, no action needed. Open Market Edge for details."
+
+
+def test_a_relay_failure_leaves_the_outbox_and_failure_record_untouched(tmp_path):
+    outbox, relay = _outbox_with(tmp_path, ev(key="a"), ev(key="v", origin=n.Origin.DEPLOYMENT_VERIFICATION))
+    failure = _failure(tmp_path, origin="PRODUCTION")
+    snapshot = (outbox.read_bytes(), failure.read_bytes())
+    s, _ = make(opener=Opener(OSError("down")))
+    out = ntfy.relay_outbox(outbox, relay, s, now=NOW, failure_path=failure)
+    assert out["status"] == "ok" and out["by_status"] == {"FAILED": 2, "HELD_BY_ORIGIN": 1}
+    assert (outbox.read_bytes(), failure.read_bytes()) == snapshot

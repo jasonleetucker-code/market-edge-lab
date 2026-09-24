@@ -49,3 +49,53 @@ webhook in `alert.sh`.
 registration and delivery receipts compared). Add it as a sink behind the same contract.
 Network delivery then needs a reviewed exception to the POST invariant, or a shell/systemd
 sender.
+
+## Amendment 2026-09-24: event origin
+
+Authority: owner directive of 2026-09-24, Deliverable 5
+(`docs/owner/2026-09-24-next-build-chunk-directive.md`).
+
+**Problem.** An event did not say why it existed. Runbook §4.1 deliberately makes the decision
+unit fail, to prove the collector fails closed. That failure then reached the owner's phone as
+"A run or data source failed", the same push a real incident gets.
+
+**Decision.**
+- **Field.** `NotificationEvent.origin` is an `Origin` enum with six values: PRODUCTION, TEST,
+  DEPLOYMENT_VERIFICATION, MANUAL_DIAGNOSTIC, REPLAY and DEMO.
+  - It is serialized in the outbox as `"origin": "<VALUE>"`, and the schema stays
+    `edge-lab-notification/1` because the field is additive.
+  - A line without the field reads as PRODUCTION. An unknown value makes `event_from_dict`
+    return None, never a guess.
+  - The event id leaves the origin out, so the ids of events already relayed do not change.
+- **Who sets it.** Whoever creates the event. `daily._notify` passes PRODUCTION explicitly,
+  `send_test` passes TEST, and unit failures take the origin that `alert.sh` recorded (ADR 0028
+  amendment). It is never inferred from the clock, from a deployment being in progress, or
+  from free text.
+- **Delivery policy, enforced in `dispatch`.** A sink declares `external = False` only if it
+  keeps events on this host (the outbox). A sink that declares nothing counts as external.
+  An external sink gets:
+  - PRODUCTION by default;
+  - TEST and MANUAL_DIAGNOSTIC only when the caller names them in `push_origins`, which only
+    `send_test` does, and only for TEST;
+  - DEPLOYMENT_VERIFICATION, REPLAY and DEMO never. Naming them is a ValueError.
+
+  A held event is recorded as HELD_BY_ORIGIN for that sink and still written to the local
+  sinks. As a second layer, the ntfy sink itself refuses the never-pushed origins.
+- **No interference.** Dedupe and rate limits count only the history of the same origin. An
+  event held on every sink uses no budget. A burst of test, demo or verification events can
+  therefore never dedupe or rate-limit a production alert.
+- **Pushed non-PRODUCTION events are labelled.** An explicitly requested TEST or
+  MANUAL_DIAGNOSTIC push names its origin in the ntfy title, and the body opens with a fixed
+  line such as "Manual diagnostic, not a production incident."
+
+**Tradeoffs.**
+- A caller that builds an event without passing `origin` gets PRODUCTION, which keeps old
+  callers working. New replay, demo or diagnostic producers must set their origin. The
+  dashboard demo (`dashboard/demo.py`) writes to a demo status directory that the relay never
+  reads, so it cannot push. It should still pass `origin=Origin.DEMO` when its owner next
+  touches it.
+- **Rollback.** Code from before this amendment ignores `origin` and would treat a stored
+  DEPLOYMENT_VERIFICATION record as a production failure. That is the fail-loud direction.
+
+**Reconsider when:** a new producer needs a pushed origin other than PRODUCTION or TEST. Add it
+to `REQUESTABLE_PUSH_ORIGINS` in a reviewed change, never as configuration.

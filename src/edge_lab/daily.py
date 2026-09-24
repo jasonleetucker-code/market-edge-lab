@@ -328,7 +328,10 @@ def _notify(status_dir: Path | None, receipt: dict[str, Any]) -> dict[str, Any]:
         now = parse_utc(receipt.get("generated_at_utc"))
         exceptions = [e for acct in (receipt.get("accounts") or {}).values() if isinstance(acct, dict)
                       for e in ((acct.get("starter_policy") or {}).get("exceptions") or [])]
-        events = notifications.events_from_receipt(receipt, now=now, exceptions=exceptions)
+        # The scheduled daily run is the live system, so its events are PRODUCTION. The origin is
+        # stated here, by the code that knows it, never inferred later.
+        events = notifications.events_from_receipt(receipt, now=now, exceptions=exceptions,
+                                                   origin=notifications.Origin.PRODUCTION)
         outbox = notifications.JsonlOutbox(status_dir / NOTIFICATIONS_NAME)
         results = notifications.dispatch(events, [outbox, notifications.DisabledSmsSink()], now=now,
                                          history=outbox.history())

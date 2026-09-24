@@ -95,3 +95,106 @@ There was no place to put either value.
   for the shadow unit);
 - a self-hosted ntfy server is approved (ADR 0022's list);
 - secrets move to a real secret manager.
+
+## Amendment 2026-09-24: the fail-closed check is DEPLOYMENT_VERIFICATION, bound to its invocation
+
+Authority: owner directive of 2026-09-24, Deliverable 5
+(`docs/owner/2026-09-24-next-build-chunk-directive.md`). See also the ADR 0020 amendment
+(event origin).
+
+### Problem
+
+Every install runs runbook §4.1: start `edgelab-decision.service` outside its window and expect
+`rejected_out_of_window`. The unit then fails on purpose, and the chain below pushed that
+failure to the owner's phone as "A run or data source failed", exactly like a real incident:
+
+`OnFailure=edgelab-alert@` → `alert.sh` writes `last_failure.json` → `OnSuccess=edgelab-notify`
+→ push.
+
+The fix must not weaken real alerts. A genuine failure of any unit must still push, including
+the decision unit and including a failure during a deployment. The origin must also never be
+guessed from the clock or from "a deployment is happening".
+
+### Alternatives
+
+1. **Suppress alerts during a deployment window, or by time of day.** Rejected. That is the
+   clock inference the directive forbids, and it would hide a real failure in that window.
+2. **An environment variable or runtime drop-in on the unit.** Rejected. `systemctl start` cannot
+   scope an environment to one invocation. A drop-in marks every invocation until it is removed,
+   so an aborted check would leave production failures mislabelled.
+3. **A separate "verify" copy of the unit, or a transient `systemd-run` unit.** Rejected. It
+   would not exercise the installed unit file, and the copy could drift from it.
+4. **Classify by the failure text alone (`rejected_out_of_window`).** Rejected. A production
+   timer that fires late is rejected with the same status, and that is a real incident.
+5. **A root-issued confirmation bound to the exact systemd InvocationID, checked by `alert.sh`.**
+   Chosen.
+
+### Decision
+
+- **`deploy/vps/verify_fail_closed.sh` runs the check, as root.**
+  - **Refusals.** It refuses unless it runs as root and `edgelab-decision.service` is idle
+    (`inactive` or `failed`). It can then only start a new invocation, never join a scheduled
+    one.
+  - **Arming.** It writes `armed-edgelab-decision.service` in `/run/market-edge-lab-verify`. The
+    directory is root-owned and 0755, on tmpfs, so a reboot clears it. A trap removes the file on
+    exit.
+  - **Running the real unit.** It starts the real, installed unit, then reads the invocation's
+    `InvocationID`, `Result` and `ExecMainStatus`, and that invocation's own journal lines
+    (`_SYSTEMD_INVOCATION_ID=`, which only root can read).
+  - **Confirmation.** It writes `confirmed-<InvocationID>` only if all of these hold:
+    - the ID is new;
+    - `Result=exit-code` and `ExecMainStatus=1`;
+    - the collector printed `"phase": "decision"` and `"status": "rejected_out_of_window"`.
+
+    The file is root-owned, 0644, and its content is exactly
+    `{"unit": "edgelab-decision.service", "invocation_id": "<id>", "status": "rejected_out_of_window"}`.
+  - **Finish.** It waits until `last_failure.json` names the invocation and reports the origin
+    recorded there. Then it runs `reset-failed` on that one unit (never `edgelab-*`). It exits 1,
+    with a reason, for anything else.
+- **`alert.sh` (as `edgelab`) decides per invocation.**
+  - It takes the failed invocation from `MONITOR_INVOCATION_ID`, which systemd 251+ passes to
+    `OnFailure=` units (the VPS runs 255), falling back to `systemctl show`.
+  - It records `origin: DEPLOYMENT_VERIFICATION` only if all of these hold:
+    - that ID's confirmation exists and matches the expected content byte for byte;
+    - the confirmation and its directory are owned by root, not symlinks, and not group- or
+      world-writable;
+    - `MONITOR_SERVICE_RESULT=exit-code` and `MONITOR_EXIT_STATUS=1`.
+
+    Everything else is `PRODUCTION`.
+  - The check can confirm only after the unit has failed. So only while this unit is armed,
+    `alert.sh` waits up to 40 s (inside the alert unit's 60 s limit) for the confirmation. The
+    wait ends as soon as the confirmation appears or the check disarms. The armed file alone
+    never changes an origin.
+  - `last_failure.json` is now
+    `{"unit", "failed_at_utc", "invocation_id" (null if unknown), "origin"}`.
+  - The optional `EDGE_LAB_ALERT_URL` webhook fires for PRODUCTION only.
+- **The relay** reads the origin through `notify_ntfy.unit_failure_event`: a missing or garbled
+  value is PRODUCTION. It holds a DEPLOYMENT_VERIFICATION failure (`HELD_BY_ORIGIN`) and leaves
+  `last_failure.json` as it is, for the dashboard.
+- **Why a real failure still alerts.**
+  - A production failure of the same unit has a different InvocationID, so it has no
+    confirmation, even while a check is armed. After at most 40 s it is recorded as PRODUCTION
+    and pushed.
+  - A check whose unit fails another way (timeout, crash, a different status) is never
+    confirmed. It stays PRODUCTION too.
+  - No `edgelab` process can write the root-owned directory, so a compromised or buggy service
+    cannot mark its own failure as verification.
+  - Tests: `tests/test_deploy_units.py` runs both scripts against stubbed `systemctl` and
+    `journalctl`. `tests/test_notify_ntfy.py` covers the relay.
+
+### Tradeoffs
+
+- **Delay.** While a check is armed, a failure of the decision unit is recorded up to 40 s later.
+  No other unit ever waits.
+- **Script death.** If the check script dies before confirming (for example SIGKILL), the
+  failure is pushed as PRODUCTION. That is a false alarm, never a missed one.
+- **Overwrites.** `last_failure.json` still holds only the latest failure. A verification record
+  can overwrite an earlier production record that was already relayed. The journal keeps both.
+- **Old records.** Records written before this amendment have no origin and read as PRODUCTION.
+
+### Reconsider when
+
+- the fail-closed check must cover more units than the decision collector (extend the script's
+  unit list and each unit's expected status in one reviewed place);
+- systemd gains a supported way to pass per-invocation metadata to `OnFailure=` units;
+- `last_failure.json` becomes a history rather than a single latest record.
