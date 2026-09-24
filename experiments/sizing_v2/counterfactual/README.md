@@ -18,12 +18,14 @@ every reason. Each policy runs on its own isolated simulated account.
 | C | `SV2-C-full-kelly` v1 |
 | D | `SV2-D-half-kelly` v1 |
 | E | `SV2-E-quarter-kelly` v1 |
-| F | `SV2-F-robust-kelly` v1 (robust Kelly at fraction 1; `sizing_eval.F_HALF` is the 1/2 variant) |
+| F | `SV2-F-robust-half-kelly` v1 (`sizing_eval.F_HALF`, robust 1/2 Kelly: the directive's robust *fractional* Kelly; coordinator decision on PR #64. `sizing_v2.POLICY_F`, robust Kelly at fraction 1, is unchanged) |
 | G | `SV2-G-risk-constrained-kelly` v1 |
 | H | `SV2-H-cluster-robust-rck` v1 (`sizing_v2.POLICY_CANDIDATE`) |
 
-The runner defines no new policy. The only engine change is the additive `sizing_v2.precheck`, a
-read-only helper that returns the engine's own pre-optimizer refusal reason.
+The runner defines no new policy; every entry is an existing versioned object, referenced. The
+only engine change is the additive `sizing_v2.precheck`, a read-only helper that returns the
+engine's own pre-optimizer refusal reason. `edge-lab sizing -h` lists `counterfactual` (a small
+additive entry in the `sizing_eval` parser).
 
 ## Point-in-time rules
 

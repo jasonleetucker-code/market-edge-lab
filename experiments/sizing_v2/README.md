@@ -12,6 +12,7 @@ and `docs/research/STAKE_SIZING_V2.md`. It is **not** an experiment in the regis
 | `results/run2_superseded_*` | Run 2: 188 variant runs. Superseded because the joint policy H applied the Kelly fraction after the shared budget (a confound fixed in PR #60 review). Only the H variants differ from run 3 |
 | `results/run1_superseded_*` | Run 1: 171 variant runs, kept because every run counts. Superseded because sizer-side scenarios did not share worlds (common random numbers) |
 | `PROPOSED_PREREGISTRATION.md` | The prospective sizing experiment that must pass before v2 may influence operational shadow fills. PROPOSED only |
+| `counterfactual/README.md` | The read-only counterfactual runner (`edge-lab sizing counterfactual`): recorded shadow decisions replayed point-in-time through policies A-H. RESEARCH only; no real-data run recorded yet |
 
 Reproduce with:
 

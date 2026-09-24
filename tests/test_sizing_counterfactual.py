@@ -499,6 +499,17 @@ def test_cli_writes_only_the_output_and_leaves_inputs_byte_unchanged(tmp_path, c
         assert hashlib.sha256(text.encode("utf-8")).hexdigest() == digest
 
 
+def test_sizing_help_lists_counterfactual_and_both_entry_points_dispatch(capsys):
+    from edge_lab import sizing_eval
+
+    with pytest.raises(SystemExit):
+        cli.main(["sizing", "-h"])
+    assert "counterfactual" in capsys.readouterr().out
+    with pytest.raises(SystemExit):
+        sizing_eval.main(["counterfactual", "-h"])
+    assert "--ledger" in capsys.readouterr().out
+
+
 def test_the_runner_never_imports_the_frozen_sizing_path_or_writes_a_ledger():
     text = (ROOT / "src" / "edge_lab" / "sizing_counterfactual.py").read_text(encoding="utf-8")
     assert "from .sizing import" not in text and "import sizing\n" not in text
@@ -507,8 +518,22 @@ def test_the_runner_never_imports_the_frozen_sizing_path_or_writes_a_ledger():
 
 
 def test_existing_policies_keep_their_frozen_semantics():
-    assert [p for _, p in cf.POLICY_SET][:7] == list(sv2.POLICIES[:7])
-    assert dict(cf.POLICY_SET)["H"] is sv2.POLICY_CANDIDATE
+    from edge_lab import sizing_eval
+
+    letters = dict(cf.POLICY_SET)
+    assert list(letters) == list("ABCDEFGH")
+    for letter, policy in zip("ABCDEG", (sv2.POLICY_A, sv2.POLICY_B, sv2.POLICY_C, sv2.POLICY_D, sv2.POLICY_E,
+                                          sv2.POLICY_G)):
+        assert letters[letter] is policy
+    # F is the directive's robust FRACTIONAL Kelly: the existing versioned robust 1/2 Kelly, referenced.
+    assert letters["F"] is sizing_eval.F_HALF
+    assert sizing_eval.F_HALF.to_dict() == {
+        "policy_id": "SV2-F-robust-half-kelly", "policy_version": "1", "rule": "KELLY",
+        "description": "F variant: robust 1/2 Kelly", "unit_amount": None, "bankroll_fraction": None,
+        "min_edge": "0", "kelly_fraction": "0.5", "robust": True, "drawdown_alpha": None, "drawdown_beta": None,
+        "robust_constraint": False, "cvar_level": None, "cvar_max_loss": None, "joint": False}
+    assert sv2.POLICY_F.kelly_fraction == Decimal(1) and sv2.POLICY_F.policy_id == "SV2-F-robust-kelly"  # unchanged
+    assert letters["H"] is sv2.POLICY_CANDIDATE
     assert sv2.POLICY_CANDIDATE.to_dict() == {
         "policy_id": "SV2-H-cluster-robust-rck", "policy_version": "1", "rule": "KELLY",
         "description": "H variant: joint robust 1/2 Kelly + robust drawdown constraint (alpha 0.7, beta 0.1)",

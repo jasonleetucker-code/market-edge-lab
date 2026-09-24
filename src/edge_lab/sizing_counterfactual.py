@@ -128,6 +128,7 @@ from .opportunity import (
 )
 from .risk import RiskPolicy
 from .shadow_ledger import AccountState, LedgerError, Position, knowledge_time, replay
+from .sizing_eval import F_HALF
 from .sizing_v2 import SizingPolicyV2
 from .starter_policy import StarterVerdict
 
@@ -147,9 +148,12 @@ ONE = Decimal(1)
 STATES = ("YES", "NO")
 YES_STATES = ("YES",)
 
+# The directive's letters. F is "robust / pessimistic FRACTIONAL Kelly": the existing versioned
+# robust 1/2 Kelly (`sizing_eval.F_HALF`, SV2-F-robust-half-kelly v1), referenced, not copied.
+# (`sizing_v2.POLICY_F` is robust Kelly at fraction 1 and is unchanged.) H is the candidate.
 POLICY_SET: tuple[tuple[str, SizingPolicyV2], ...] = (
     ("A", sv2.POLICY_A), ("B", sv2.POLICY_B), ("C", sv2.POLICY_C), ("D", sv2.POLICY_D), ("E", sv2.POLICY_E),
-    ("F", sv2.POLICY_F), ("G", sv2.POLICY_G), ("H", sv2.POLICY_CANDIDATE),
+    ("F", F_HALF), ("G", sv2.POLICY_G), ("H", sv2.POLICY_CANDIDATE),
 )
 PRIMARY_LETTER = "H"
 
@@ -254,7 +258,7 @@ def source_hash(path: Path) -> str:
     return hashlib.sha256(text).hexdigest()
 
 
-_SOURCES = ("sizing_counterfactual.py", "sizing_v2.py", "risk.py", "fill_policy.py", "fee_schedules.py",
+_SOURCES = ("sizing_counterfactual.py", "sizing_v2.py", "sizing_eval.py","risk.py", "fill_policy.py", "fee_schedules.py",
             "opportunity.py", "shadow_ledger.py", "starter_policy.py", "exp001_shadow.py", "settlement.py")
 
 
