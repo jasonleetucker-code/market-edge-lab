@@ -1,0 +1,112 @@
+{
+    "@context": [
+        "https://geojson.org/geojson-ld/geojson-context.jsonld",
+        {
+            "@version": "1.1",
+            "wx": "https://api.weather.gov/ontology#",
+            "s": "https://schema.org/",
+            "geo": "http://www.opengis.net/ont/geosparql#",
+            "unit": "http://codes.wmo.int/common/unit/",
+            "@vocab": "https://api.weather.gov/ontology#",
+            "geometry": {
+                "@id": "s:GeoCoordinates",
+                "@type": "geo:wktLiteral"
+            },
+            "city": "s:addressLocality",
+            "state": "s:addressRegion",
+            "distance": {
+                "@id": "s:Distance",
+                "@type": "s:QuantitativeValue"
+            },
+            "bearing": {
+                "@type": "s:QuantitativeValue"
+            },
+            "value": {
+                "@id": "s:value"
+            },
+            "unitCode": {
+                "@id": "s:unitCode",
+                "@type": "@id"
+            },
+            "forecastOffice": {
+                "@type": "@id"
+            },
+            "forecastGridData": {
+                "@type": "@id"
+            },
+            "publicZone": {
+                "@type": "@id"
+            },
+            "county": {
+                "@type": "@id"
+            }
+        }
+    ],
+    "id": "https://api.weather.gov/points/44.8831,-93.2289",
+    "type": "Feature",
+    "geometry": {
+        "type": "Point",
+        "coordinates": [
+            -93.2289,
+            44.8831
+        ]
+    },
+    "properties": {
+        "@id": "https://api.weather.gov/points/44.8831,-93.2289",
+        "@type": "wx:Point",
+        "cwa": "MPX",
+        "type": "land",
+        "forecastOffice": "https://api.weather.gov/offices/MPX",
+        "gridId": "MPX",
+        "gridX": 110,
+        "gridY": 68,
+        "forecast": "https://api.weather.gov/gridpoints/MPX/110,68/forecast",
+        "forecastHourly": "https://api.weather.gov/gridpoints/MPX/110,68/forecast/hourly",
+        "forecastGridData": "https://api.weather.gov/gridpoints/MPX/110,68",
+        "observationStations": "https://api.weather.gov/gridpoints/MPX/110,68/stations",
+        "relativeLocation": {
+            "type": "Feature",
+            "geometry": {
+                "type": "Point",
+                "coordinates": [
+                    -93.2824451,
+                    44.8743539
+                ]
+            },
+            "properties": {
+                "city": "Richfield",
+                "state": "MN",
+                "distance": {
+                    "unitCode": "wmoUnit:m",
+                    "value": 1253.0497351429
+                },
+                "bearing": {
+                    "unitCode": "wmoUnit:degree_(angle)",
+                    "value": 77
+                }
+            }
+        },
+        "forecastZone": "https://api.weather.gov/zones/forecast/MNZ060",
+        "county": "https://api.weather.gov/zones/county/MNC053",
+        "fireWeatherZone": "https://api.weather.gov/zones/fire/MNZ060",
+        "timeZone": "America/Chicago",
+        "radarStation": "KMPX",
+        "astronomicalData": {
+            "sunrise": "2026-09-23T07:01:33-05:00",
+            "sunset": "2026-09-23T19:08:48-05:00",
+            "transit": "2026-09-23T13:05:11-05:00",
+            "civilTwilightBegin": "2026-09-23T06:32:25-05:00",
+            "civilTwilightEnd": "2026-09-23T19:37:56-05:00",
+            "nauticalTwilightBegin": "2026-09-23T05:58:09-05:00",
+            "nauticalTwilightEnd": "2026-09-23T20:12:12-05:00",
+            "astronomicalTwilightBegin": "2026-09-23T05:23:03-05:00",
+            "astronomicalTwilightEnd": "2026-09-23T20:47:18-05:00"
+        },
+        "nwr": {
+            "transmitter": "KEC65",
+            "sameCode": "027053",
+            "areaBroadcast": "https://api.weather.gov/radio/KEC65/broadcast",
+            "pointBroadcast": "https://api.weather.gov/points/44.8831,-93.2289/radio"
+        }
+    }
+}
