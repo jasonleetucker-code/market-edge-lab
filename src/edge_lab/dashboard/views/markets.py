@@ -345,7 +345,8 @@ def venues_section(ctx: d.Context, row: pr.MarketRow, side: str) -> str:
                                                   "to compare. No size is entered here.")
         meta = None
     else:
-        result = d.venue_comparison(ctx, row.market_id, side, a.size, a.decided_at_utc)
+        result = d.venue_comparison(ctx, row.market_id, side, a.size, a.decided_at_utc,
+                                     evidence_ids=a.raw.get("quote_evidence_ids"))
         body = comparison_body(result)
         size = pr.quantity(result.quantity)
         meta = (f"{side} · {size} contract{'' if size == '1' else 's'} (evaluated size) · as of "

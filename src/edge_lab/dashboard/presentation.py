@@ -962,14 +962,18 @@ TOTAL_CLAIMS = ("BEST_VERIFIED_TOTAL_COST", "BEST_ACCOUNT_FEASIBLE_ROUTE")
 
 def claim_value_text(claim: Any, route: Any) -> str | None:
     """The claim's own figure: a quote is cents per contract, the others dollars for the whole size.
-    A total under a conservative fee bound reads "at most"."""
+    A total under a conservative fee bound reads "at most"; an exact total that carries the claim
+    allowance says so (the exact debit is on the route row)."""
     if claim is None or not claim.supported or claim.value is None:
         return None
     if claim.kind == "BEST_OBSERVED_QUOTE":
         return cents(claim.value)
     text = money(claim.value)
-    if claim.kind in TOTAL_CLAIMS and route is not None and route.fee_status == "CONSERVATIVE_BOUND":
-        return f"at most {text}"
+    if claim.kind in TOTAL_CLAIMS and route is not None:
+        if route.fee_status == "CONSERVATIVE_BOUND":
+            return f"at most {text}"
+        if route.total_cost != claim.value:  # an exact fee, but the claim figure carries the record's allowance
+            return f"{text} incl. claim allowance"
     return text
 
 

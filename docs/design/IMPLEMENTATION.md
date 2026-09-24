@@ -62,7 +62,7 @@ After: the same deep links (relabelled Terminal, Markets, Portfolio, Outcomes, R
 | Venues and capabilities | `venues.VENUES` / `coverage_rows` |
 | Source health | `SnapshotStore.latest_source_health` + `sources` registry descriptions |
 | Fee verification | `fee_schedules` via `data.fee_rows` |
-| Across venues: the four claims, per-route quote, gross cost, fee, fee status, verified (claim) total, depth, tradable-cash ETA, exclusions, related markets, summary | `best_price.compare` via `data.venue_comparison`: the decision capture's listing (`kalshi_quotes.market_from_kalshi`) and book (`kalshi_quotes.ladders_from_orderbook`, depth limit from the stored request URL), `fee_schedules.schedule_for`, the Stage B book-age limit; size and time from the recorded decision (`sizing.final_size`, `as_of_utc`) |
+| Across venues: the four claims, per-route quote, gross cost, fee, fee status, verified (claim) total, depth, tradable-cash ETA, exclusions, related markets, summary | `best_price.compare` via `data.venue_comparison`, inputs built as `exp001_stageb.evaluate_day` builds them: the decision capture's listing (`kalshi_quotes.market_from_kalshi` plus the `settlement_equivalence` downgrade) and book (`kalshi_quotes.ladders_from_orderbook`; depth limit from the stored request URL, unknown = truncated), `fee_schedules.schedule_for` on the market's own series, the Stage B book-age limit; size, time and quote evidence ids from the recorded decision (`sizing.final_size`, `as_of_utc`, `quote_evidence_ids`: a different book is refused) |
 
 **Dependencies recorded (shown as unavailable, never derived in the UI):**
 1. *Realized today* (calendar day): the engine reports trailing-24 h realized **loss**, not a

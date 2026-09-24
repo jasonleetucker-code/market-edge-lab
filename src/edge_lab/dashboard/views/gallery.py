@@ -73,8 +73,9 @@ def view(ctx: d.Context, p: pr.Params) -> cm.Page:
                        ("single", "one captured route (today's real shape) · fees unverified"),
                        ("stale", "every route stale · nothing ranked"),
                        ("refused", "unsupported payoff · refused")):
+        size = pr.quantity(cmps[key].quantity)
         parts.append(c.section(f"VenueComparison ({title})", c.venue_comparison(cmps[key]),
-                               meta=f"YES · {pr.quantity(cmps[key].quantity)} contracts (evaluated size) · as of "
+                               meta=f"YES · {size} contract{'' if size == '1' else 's'} (evaluated size) · as of "
                                     f"{pr.datetime_et(fixtures.CMP_AS_OF)}", sid=f"g-xv-{key}"))
     xv_states = "".join(markets.comparison_body(d.VenueComparison(status, message)) for status, message in (
         ("NOT_EVALUATED", "no size was evaluated for this side, so there is no requested size to compare"),
@@ -82,6 +83,6 @@ def view(ctx: d.Context, p: pr.Params) -> cm.Page:
         (d.ERROR, "OperationalError: database disk image is malformed"),
     ))
     parts.append(c.section("VenueComparison (not evaluated / no data / error)", xv_states, sid="g-xv-states"))
-    parts.append(c.disclosure("EvidenceDisclosure",c.kv([("code", c.code("INVALID_CAPTURE")),
+    parts.append(c.disclosure("EvidenceDisclosure", c.kv([("code", c.code("INVALID_CAPTURE")),
                                                           ("exact value", esc("0.05120000"))]), boxed=True))
     return cm.Page("Component gallery", "", "".join(parts))

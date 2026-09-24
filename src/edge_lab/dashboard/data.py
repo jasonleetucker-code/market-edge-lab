@@ -14,7 +14,7 @@ from __future__ import annotations
 import json
 import re
 import tomllib
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta, timezone
 from functools import cached_property
 from pathlib import Path
@@ -616,36 +616,49 @@ class VenueComparison:
     book_phase: str = COMPARISON_PHASE
 
 
-def _depth_limit(url: str | None) -> int | None:
-    """The `depth` the book was requested with, read from the stored request URL (None: not limited)."""
+UNKNOWN_DEPTH = 0  # passed as the depth limit when the request depth is unknown: every side counts as truncated
+
+
+def _depth_limit(url: str | None) -> int:
+    """The `depth` the book was requested with, from the stored request URL. When the URL does not
+    say, the depth is unknown and every side is treated as possibly truncated (fail closed), so a
+    ladder that runs out reads DEPTH_UNKNOWN, never "the complete book offers less"."""
     from urllib.parse import parse_qsl, urlsplit
 
     for key, value in parse_qsl(urlsplit(url or "").query):
-        if key == "depth" and value.isdigit():
+        if key == "depth" and value.isascii() and value.isdecimal():
             return int(value)
-    return None
+    return UNKNOWN_DEPTH
 
 
-def venue_comparison(ctx: Context, market_id: str, side: str, quantity: Any, as_of_utc: str | None) -> VenueComparison:
+def venue_comparison(ctx: Context, market_id: str, side: str, quantity: Any, as_of_utc: str | None,
+                     evidence_ids: Any = ()) -> VenueComparison:
     """Run `best_price.compare` for one captured market at its recorded decision time and size.
 
-    Inputs come only from stored evidence through the canonical adapters: the decision capture's
-    market listing (`kalshi_quotes.market_from_kalshi`), its captured book for `side`
-    (`kalshi_quotes.ladders_from_orderbook`, depth limit from the stored request URL), the venue's
-    fee schedule (`fee_schedules.schedule_for`) and the engine's book-age limit. The routes are
+    Inputs come only from stored evidence through the canonical adapters, built as
+    `exp001_stageb.evaluate_day` builds them: the decision capture's market listing
+    (`kalshi_quotes.market_from_kalshi`, with the same `settlement_equivalence` downgrade of
+    `rules_resolved`), its captured book for `side` (`kalshi_quotes.ladders_from_orderbook`, depth
+    limit from the stored request URL, unknown = truncated), the fee schedule for the market's own
+    series (`fee_schedules.schedule_for`) and the engine's book-age limit. When the decision
+    recorded its quote evidence ids (`evidence_ids`), the book must be one of them. The routes are
     every captured route for this market; today only its own venue is captured, so no other venue
     is ever compared or ranked."""
     from decimal import Decimal, InvalidOperation
 
     from .. import best_price
-    from ..exp001_stageb import STAGE_B_POLICY, event_for
+    from ..discovery import _series_scope  # the comparator's own scope rule (best_price uses it too)
+    from ..exp001_stageb import STAGE_B_POLICY, event_for, settlement_equivalence
     from ..kalshi_quotes import ladders_from_orderbook, market_from_kalshi
 
     try:
         qty = Decimal(str(quantity)) if quantity is not None and not isinstance(quantity, bool) else None
     except InvalidOperation:
         qty = None
-    if qty is None or not qty.is_finite() or qty <= 0:
+    if qty is not None and qty.is_finite() and qty == 0:
+        return VenueComparison("NOT_EVALUATED", "the recorded size for this side is 0 contracts, so there is nothing "
+                                                "to compare", quantity=qty)
+    if qty is None or not qty.is_finite() or qty < 0:
         return VenueComparison("NOT_EVALUATED", "no size was evaluated for this side, so there is no requested size "
                                                 "to compare")
     at = parse_utc(as_of_utc)
@@ -656,24 +669,35 @@ def venue_comparison(ctx: Context, market_id: str, side: str, quantity: Any, as_
     if ctx.observed.status != OK:
         return VenueComparison(NO_DATA, ctx.observed.message or "no market books captured", quantity=qty,
                                as_of_utc=at.isoformat())
-    market = next((m for m in ctx.observed.value.markets if m.market_id == market_id), None)
+    board = ctx.observed.value
+    market = next((m for m in board.markets if m.market_id == market_id), None)
+    if market is None and board.total_markets > len(board.markets):
+        return VenueComparison(NO_DATA, f"this market is beyond the {len(board.markets)} captured markets the "
+                                        "dashboard reads", quantity=qty, as_of_utc=at.isoformat())
     if market is None or market.raw is None:
         return VenueComparison(NO_DATA, "the decision capture holds no market listing for this market",
                                quantity=qty, as_of_utc=at.isoformat())
+    book = market.books.get(COMPARISON_PHASE)
+    recorded = [str(e) for e in evidence_ids if e] if isinstance(evidence_ids, (list, tuple)) else []
+    if book is not None and recorded and book.evidence_id not in recorded:
+        return VenueComparison(NO_DATA, f"the captured book ({book.evidence_id}) is not the one the decision read "
+                                        f"({', '.join(recorded)})", quantity=qty, as_of_utc=at.isoformat())
     try:
         target = datetime.fromisoformat(market.target_date).date()
         event = event_for(target)
         # Only the expected event ticker maps to the normalized event (as in exp001_stageb.evaluate_day).
         mapping = {forward.event_ticker_for(target): event.event_id}
-        book = market.books.get(COMPARISON_PHASE)
         contract = market_from_kalshi(market.raw, event_id_for_ticker=mapping,
                                       timing_source=None if book is None else f"decision_capture:{book.capture_id}")
+        equivalent, why_not = settlement_equivalence(market.raw, target)
+        if contract.rules_resolved and not equivalent:
+            contract = replace(contract, rules_resolved=False, rules_detail=f"settlement equivalence: {why_not}")
         ladder = None
         if book is not None:
             ladder = ladders_from_orderbook(contract.native_id, book.payload, received_at_utc=book.received_at_utc,
                                             evidence_id=book.evidence_id, depth_limit=_depth_limit(book.url)).get(side)
         route = best_price.Route(event, contract, ladder,
-                                 fee_schedules.schedule_for(contract.venue, forward.SERIES, as_of=at))
+                                 fee_schedules.schedule_for(contract.venue, _series_scope(contract), as_of=at))
         result = best_price.compare(best_price.PositionRequest(event, contract, side, qty), [route], as_of=at,
                                     max_book_age=STAGE_B_POLICY.max_book_age)
     except Exception as exc:  # noqa: BLE001 - shown as an error state, never raised

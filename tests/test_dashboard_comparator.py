@@ -122,7 +122,7 @@ def test_stale_routes_are_named_and_never_ranked(cmps):
     assert "Not ranked because the book is stale or of unknown age: novig:DEMO-HIGH-67-68." in multi
     assert "Routes not ranked by any claim" in multi and "Stale quote — not ranked" in multi
     stale = plain(c.venue_comparison(cmps["stale"]))
-    assert stale.count("Not claimed") == 4
+    assert stale.count("Stale quote — not ranked Not claimed") == 4  # every claim, for the same reason
     assert "Routes ranked by at least one claim" not in stale
     assert "kalshi:DEMO-HIGH-B67.5, polymarket_us:demo-high-67-68" in stale
 
@@ -155,7 +155,7 @@ def test_bounds_that_overlap_prove_no_order():
     claim = cmp.claim("BEST_VERIFIED_TOTAL_COST")
     two = dataclasses.replace(claim, candidates=(claim.market_id, "polymarket_us:demo-high-67-68"), proven_below=())
     shown = dataclasses.replace(cmp, claims=tuple(two if c_.kind == claim.kind else c_ for c_ in cmp.claims))
-    assert "No proven order against: polymarket_us:demo-high-67-68 (cost bounds overlap)" in plain(
+    assert "No proven order against: polymarket_us:demo-high-67-68 (bounds overlap or totals tie)" in plain(
         c.venue_comparison(shown))
 
 
@@ -167,7 +167,12 @@ def test_claim_value_text_formats_without_computing():
     assert pr.claim_value_text(make("BEST_OBSERVED_QUOTE", "0.4825"), route) == "48.25¢"
     assert pr.claim_value_text(make("BEST_GROSS_COST_FOR_SIZE", "4.05"), bound) == "$4.05"
     assert pr.claim_value_text(make("BEST_VERIFIED_TOTAL_COST", "4.331"), bound) == "at most $4.331"
-    assert pr.claim_value_text(make("BEST_VERIFIED_TOTAL_COST", "4.331"), route) == "$4.331"
+    exact = dataclasses.replace(route, fee_status="VERIFIED", total_cost=Decimal("4.331"))
+    assert pr.claim_value_text(make("BEST_VERIFIED_TOTAL_COST", "4.331"), exact) == "$4.331"
+    # An exact fee whose claim figure carries the record's allowance is never shown as the bare debit.
+    padded = dataclasses.replace(exact, total_cost=Decimal("4.23"))
+    assert pr.claim_value_text(make("BEST_VERIFIED_TOTAL_COST", "4.331"), padded) == "$4.331 incl. claim allowance"
+    assert pr.claim_value_text(make("BEST_ACCOUNT_FEASIBLE_ROUTE", "4.331"), padded) ==         "$4.331 incl. claim allowance"
     absent = bp.Claim("BEST_VERIFIED_TOTAL_COST", False, None, None, None, "", "FEE_UNVERIFIED", "", ())
     assert pr.claim_value_text(absent, route) is None
 
@@ -227,10 +232,68 @@ def test_adapter_runs_the_comparator_on_the_decision_capture(demo):
 
 @pytest.mark.parametrize("url,depth", [
     ("https://api.elections.kalshi.com/trade-api/v2/markets/X/orderbook?depth=100", 100),
-    ("demo://book/DEMO-B67.5", None), (None, None), ("https://x/y?depth=abc", None),
+    ("demo://book/DEMO-B67.5", d.UNKNOWN_DEPTH), (None, d.UNKNOWN_DEPTH), ("https://x/y?depth=abc", d.UNKNOWN_DEPTH),
+    ("https://x/y?depth=²", d.UNKNOWN_DEPTH),
 ])
 def test_depth_limit_comes_from_the_stored_request_url(url, depth):
     assert d._depth_limit(url) == depth
+
+
+def test_unknown_request_depth_fails_closed_to_depth_unknown(demo):
+    """With no recorded request depth, a ladder that runs out is DEPTH_UNKNOWN, never INSUFFICIENT_DEPTH."""
+    ctx = d.Context(demo)
+    market = next(m for m in ctx.observed.value.markets if m.market_id == "kalshi:DEMO-B71.5")
+    book = market.books["decision"]
+    assert d._depth_limit(book.url) == d.UNKNOWN_DEPTH  # the demo's URLs carry no depth
+    as_of = (datetime.fromisoformat(book.received_at_utc) + timedelta(seconds=30)).isoformat()
+    (route,) = d.venue_comparison(ctx, market.market_id, "YES", 100000, as_of).comparison.routes
+    assert route.liquidity == "DEPTH_UNKNOWN" and "INSUFFICIENT_DEPTH" not in route.exclusions
+
+
+def test_the_book_must_be_the_one_the_decision_read(demo):
+    ctx = d.Context(demo)
+    market = next(m for m in ctx.observed.value.markets if m.market_id == "kalshi:DEMO-B71.5")
+    book = market.books["decision"]
+    as_of = (datetime.fromisoformat(book.received_at_utc) + timedelta(seconds=30)).isoformat()
+    other = d.venue_comparison(ctx, market.market_id, "YES", 1, as_of, evidence_ids=["snapshot:999999"])
+    assert other.status == d.NO_DATA and "not the one the decision read" in other.message
+    same = d.venue_comparison(ctx, market.market_id, "YES", 1, as_of, evidence_ids=[book.evidence_id])
+    assert same.status == d.OK
+    assert d.venue_comparison(ctx, market.market_id, "YES", 1, as_of, evidence_ids="snapshot:9").status == d.OK
+
+
+def test_a_zero_size_is_not_a_missing_size(demo):
+    result = d.venue_comparison(d.Context(demo), "kalshi:DEMO-B71.5", "YES", 0, "2026-09-23T15:00:00+00:00")
+    assert result.status == "NOT_EVALUATED" and "0 contracts" in result.message
+
+
+def test_adapter_failures_are_errors_without_paths(demo, monkeypatch):
+    ctx = d.Context(demo)
+    market = next(m for m in ctx.observed.value.markets if m.market_id == "kalshi:DEMO-B71.5")
+    monkeypatch.setattr(market, "target_date", "not-a-date")
+    result = d.venue_comparison(ctx, market.market_id, "YES", 1, "2026-09-23T15:00:00+00:00")
+    assert result.status == d.ERROR and result.comparison is None and "\\" not in result.message
+
+
+def test_a_market_beyond_the_board_cap_says_so(demo, monkeypatch):
+    ctx = d.Context(demo)
+    monkeypatch.setattr(ctx.observed.value, "total_markets", len(ctx.observed.value.markets) + 5)
+    result = d.venue_comparison(ctx, "kalshi:NOT-SHOWN", "YES", 1, "2026-09-23T15:00:00+00:00")
+    assert result.status == d.NO_DATA and "beyond the" in result.message
+
+
+def test_a_stale_routes_total_is_not_claimed(cmps):
+    kalshi = next(r for r in cmps["stale"].routes if r.venue == "kalshi")
+    assert kalshi.claim_total_cost is not None and "NOT_FRESH" in kalshi.exclusions
+    text = plain(c.comparison_route(kalshi))
+    assert "Verified total — Not claimed (stale book)" in text and pr.money(kalshi.claim_total_cost) not in text
+
+
+def test_an_earlier_target_day_is_never_compared(demo):
+    ctx = d.Context(demo)
+    row = next(r for r in markets.cm.board_rows(ctx, markets.pr.parse_params("/market", "")) if r.observed)
+    html = markets.venues_section(ctx, dataclasses.replace(row, historical=True), "YES")
+    assert "No current comparison" in html and "Best observed quote" not in html
 
 
 # --------------------------------------------------------------------------- pages

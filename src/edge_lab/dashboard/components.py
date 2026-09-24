@@ -509,7 +509,7 @@ def comparison_claims(cmp: Any) -> str:
                 open_ = [m for m in claim.candidates if m != claim.market_id and m not in claim.proven_below]
                 if open_:
                     value += (f'<span class="cell-sub">No proven order against: {esc(", ".join(open_))} '
-                              "(cost bounds overlap)</span>")
+                              "(bounds overlap or totals tie)</span>")
         else:
             value = badge(claim.reason) + '<span class="cell-sub">Not claimed</span>'
         if claim.stale_candidates:
@@ -521,8 +521,9 @@ def comparison_claims(cmp: Any) -> str:
 
 def _fee_cell(r: Any) -> str:
     note = pr.FEE_STATUS_NOTES.get(r.fee_status, str(r.fee_status))
-    if "FEE_NOT_PRICED" in r.exclusions and r.fee is None:
-        note = "Fee not priced"
+    if r.fee is None and r.fee_status != "UNSUPPORTED":
+        # The evidence grade exists, but no fee was priced (no fillable walk, or pricing failed).
+        note = f"Fee not priced · evidence: {pr.state_word(r.fee_status).label.lower()}"
     value = money_cell(r.fee, reason="fee unknown: " + note.lower())
     return value + f'<span class="cell-sub">{esc(note)}</span>'
 
@@ -531,6 +532,9 @@ def _total_cell(r: Any) -> str:
     if r.claim_total_cost is None:
         return na("no verified total: the fee evidence does not support a claim") + \
             '<span class="cell-sub">Not verified</span>'
+    if "NOT_FRESH" in r.exclusions:  # as the comparator's summary: a stale book's total is not claimed
+        return na("total not claimed: the book is stale or of unknown age") + \
+            '<span class="cell-sub">Not claimed (stale book)</span>'
     if r.fee_status != "VERIFIED":
         sub = "At most (conservative bound)"
     elif r.claim_total_cost == r.total_cost:
@@ -606,8 +610,10 @@ def venue_comparison(cmp: Any) -> str:
     if stale:
         parts.append(f'<p class="note">{icon("triangle-alert", "ic-sm k-warn")} Not ranked because the book is stale '
                      f'or of unknown age: {esc(", ".join(stale))}.</p>')
-    if len(cmp.routes) <= 1 and not cmp.related:
-        only = pr.venue_label(cmp.routes[0].venue) if cmp.routes else "No venue"
+    if not cmp.routes:
+        parts.append('<p class="note">No route for this market was captured, so nothing is compared.</p>')
+    elif len(cmp.routes) == 1 and not cmp.related:
+        only = pr.venue_label(cmp.routes[0].venue)
         parts.append(f'<p class="note">Only {esc(only)} is captured for this market. No other venue\'s book is '
                      "stored, so nothing is ranked across venues; the claims cover this one route.</p>")
     # Eligible comparisons first, excluded or unproven ones separately (a grouping, not a ranking).
