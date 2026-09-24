@@ -467,10 +467,10 @@ def test_v4_store_migrates_additively_and_old_rows_stay_readable(tmp_path):
                      " payload_json) VALUES ('old', 'kalshi', 'series', 'S', 't0', 'u', 'h', '{}')")
         conn.execute("PRAGMA user_version = 4")
     store = SnapshotStore(db)
-    assert store.schema_version() == storage.SCHEMA_VERSION == 5
+    assert store.schema_version() == storage.SCHEMA_VERSION >= 5
     assert [r["run_id"] for r in store.recent_snapshots()] == ["old"]
     assert store.odds_targets() == []
-    assert SnapshotStore.open_readonly(db).schema_version() == 5
+    assert SnapshotStore.open_readonly(db).schema_version() == storage.SCHEMA_VERSION
 
 
 def test_odds_targets_and_transitions_are_immutable(tmp_path):

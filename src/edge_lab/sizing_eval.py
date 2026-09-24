@@ -694,6 +694,11 @@ def _write(report: dict[str, Any], out_dir: Path) -> tuple[Path, Path]:
 
 
 def main(argv: list[str] | None = None) -> int:
+    argv = sys.argv[1:] if argv is None else list(argv)
+    if argv[:1] == ["counterfactual"]:  # the counterfactual runner owns its own arguments
+        from .sizing_counterfactual import main as counterfactual_main
+
+        return counterfactual_main(argv[1:])
     parser = argparse.ArgumentParser(prog="edge-lab sizing", description="Stake sizing v2 research tools "
                                      "(RESEARCH SIZING; shadow/research only).")
     sub = parser.add_subparsers(dest="sizing_command", required=True)
@@ -709,6 +714,8 @@ def main(argv: list[str] | None = None) -> int:
     rep.add_argument("--exp001", action="store_true", help="inspect EXP-001 history for replayable prices")
     rep.add_argument("--input", help="JSON file with a list of point-in-time decision records")
     sub.add_parser("policies", help="List the canonical sizing policies A-H.")
+    sub.add_parser("counterfactual", help="Read-only counterfactual replay of recorded shadow decisions through "
+                   "policies A-H (RESEARCH ONLY; see `edge-lab sizing counterfactual -h`).")
     args = parser.parse_args(argv)
 
     if args.sizing_command == "policies":

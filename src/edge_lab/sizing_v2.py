@@ -1456,6 +1456,27 @@ def _explain(r: Mapping[str, Any], policy: SizingPolicyV2, reason: str, summary:
     return " ".join(parts)
 
 
+def precheck(request: SizingRequest, config: SizingConfig = DEFAULT_CONFIG, *,
+             fee_schedule: Any = None) -> tuple[Verdict | None, str]:
+    """The fail-closed verdict and exact reason `recommend` gives this single request before
+    any optimization, or (None, "") when the request reaches the optimizer.
+
+    Additive, read-only helper (counterfactual runner and research panel): it runs the same
+    `_prepare` and held-position check as `recommend_cluster`, so it cannot disagree with
+    it. The reason text starts with its machine-readable code (for example
+    "MODEL_MISSING: ..."). No policy is involved: the pre-checks are policy-independent."""
+    as_of = parse_utc(request.as_of_utc)
+    if as_of is None:
+        raise ValueError("as_of_utc must be a timezone-aware time")
+    prep = _prepare(request, config, fee_schedule, as_of)
+    if prep.blocked is not None:
+        return prep.blocked, prep.reason
+    held = _held_problem(request)
+    if held:
+        return Verdict.UNSUPPORTED, held
+    return None, ""
+
+
 def recommend(request: SizingRequest, policy: SizingPolicyV2, config: SizingConfig = DEFAULT_CONFIG, *,
               fee_schedule: Any = None) -> SizingRecommendation:
     """One candidate. `fee_schedule` overrides `schedule_for` (tests and replacement schedules)."""
