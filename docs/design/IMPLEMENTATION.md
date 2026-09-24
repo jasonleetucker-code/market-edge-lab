@@ -56,8 +56,9 @@ After: the same deep links (relabelled Terminal, Markets, Portfolio, Outcomes, R
 | Capture status, reasons, valid days | `latest.json` (collector) or `forward.summary` (evidence DB) |
 | Next capture windows | `forward.windows` (the collector schedule; not proof a timer runs) |
 | Pipeline state, days, settlements, conflicts, missing days | `shadow_daily.json` receipt |
-| Notifications | local outbox `notifications.jsonl` |
-| Unit failure | `last_failure.json` |
+| Notifications | local outbox `notifications.jsonl`; origin by `notifications.origin_of` (missing = PRODUCTION, unknown = unrecognised); delivery wording by the origin push policy |
+| Unit failure / verification | `last_failure.json` (always production) and `last_verification.json` (a confirmed check when `verification.verification_confirmed`, else "root confirmation not found or expired"; never an incident) |
+| The Odds API card | `odds_pilot.dashboard_status(db, ledger, <ledger>.pilot.json, now=...)`; ledger `--odds-ledger`, default `odds_quota_ledger.json` beside `--db` |
 | Experiments, Stage A result, report names, Stage B plan looks, limitations | experiment registry + `gate4/stage_a_result.json` |
 | Venues and capabilities | `venues.VENUES` / `coverage_rows` |
 | Source health | `SnapshotStore.latest_source_health` + `sources` registry descriptions |

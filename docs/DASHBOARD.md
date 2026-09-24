@@ -30,7 +30,8 @@ never writes to any store, and never recommends a withdrawal.
 |---|---|---|
 | `--db` | evidence SQLite store | `SnapshotStore.open_readonly` (SQLite `mode=ro` + `query_only`); `forward.summary`, `latest_source_health` |
 | `--ledger` | shadow ledger SQLite file | `ShadowLedger.open_readonly`; `accounts`, `entries`, `state` (hash-chain replay) |
-| `--status-dir` | `latest.json` (collector), `shadow_daily.json` (pipeline receipt), `last_failure.json` | JSON, fixed names only, 2 MB cap, every field optional |
+| `--status-dir` | `latest.json` (collector), `shadow_daily.json` (pipeline receipt), `last_failure.json` (production unit failures), `last_verification.json` (deployment verification records) | JSON, fixed names only, 2 MB cap, every field optional |
+| `--odds-ledger` | The Odds API quota ledger (default `odds_quota_ledger.json` beside `--db`) and its `<ledger>.pilot.json` runner state | `odds_pilot.dashboard_status`: read without locking or writing, no key, no network |
 | `--experiments-root` | `experiments/` (defaults to this checkout's) | `experiments.validate_all` / `load`; Stage A result JSON; report **file names** only |
 
 Figures come from the canonical modules only: `shadow_ledger.replay` (balances, P&L),
@@ -139,7 +140,7 @@ disclosures.
 | `/outcome-board` | Outcomes | What matters today: outcome groups ranked by account impact, bounds labelled as bounds. |
 | `/risk` | Risk | Capacity verdict, limit rows, capital release windows, starter rule, withdrawal not enabled, policy details. |
 | `/experiments` | Research & Data | Tabs: Research (experiments, forward valid days, next preregistered look) and Data sources (venues, source health, fees, venue registry, full receipt). |
-| `/alerts` | Alerts | Attention items from blockers, failure records and the local notification outbox; nothing is sent. |
+| `/alerts` | Alerts | Attention items from blockers, failure records and the local notification outbox, grouped by origin (only production needs attention); nothing is sent. |
 | `/more` | More | Links to Risk, Research & Data, Alerts, System & evidence. |
 | `/gallery` | none | Component gallery, demo mode only. |
 | `/healthz` | none | Plain `ok`. No data. |
