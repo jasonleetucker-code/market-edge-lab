@@ -136,8 +136,12 @@ remains MANUAL EMERGENCY FALLBACK ONLY.
 1. **ntfy:** approved and activated. The owner still needs to subscribe on the phone.
 2. **F09 cadence:** manual, roughly weekly, plus after notable ledger events. No timer.
 3. **Root SSH:** a separate future security task, outside Market Edge missions.
-4. **Brisket:** repaired in the Brisket repository (#1405). The failing refresh units are
-   handled there.
+4. **Brisket:** the `/api/health` fix is done (riskittogetthebrisket#1405, deployed `15b43f4`,
+   verified). The owner scoped this session to that fix only. The six failing `dynasty-*` refresh
+   units are diagnosed and handed off in riskittogetthebrisket#1409:
+   - #1407 is a ready fix for the import-path and EvidenceStatus failures;
+   - #1406 records the DLF root cause and needs an owner decision;
+   - playerctx is on a WIP branch.
 
 ## UI (Terminal v1)
 

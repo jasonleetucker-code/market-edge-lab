@@ -127,9 +127,9 @@ recorded below and in the Domain Readiness matrix. Gate 7 is unchanged and **not
 15. #27 Action PRO; #32 execution modes (gate 8+); #33 SMS provider; broader venues.
 16. **Security task, separate:** root SSH hardening. It stays out of scope for Market Edge
     missions (owner decision 2026-09-24; no key, sshd, sudo or root-login changes here).
-17. **Brisket follow-ups** (other repository): the shared `No module named 'src'` failure in
-    three refresh units, the `EvidenceStatus` serialization bug, and `public-league-warmup`
-    accepting 503. Recorded in Brisket's owner intake.
+17. **Brisket follow-ups** (other repository; not Market Edge work): the six failing refresh
+    units are handed off in riskittogetthebrisket#1409 (PRs #1406 and #1407 are paused). Also
+    `public-league-warmup` should accept 503.
 
 **BLOCKED** (named blocker)
 - Odds API live data: the owner's free key (one `sudoedit` step).
