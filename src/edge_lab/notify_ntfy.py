@@ -427,7 +427,10 @@ class _RecordingSink:
         self.last_error = getattr(self._sink, "last_error", None)
         self.last_attempts = getattr(self._sink, "last_attempts", None)
         if status is DeliveryStatus.SUBMITTED:
-            self._history.deliver(event)
+            try:
+                self._history.deliver(event)
+            except OSError as exc:  # the push went out; never let dispatch re-send it this run
+                self.last_error = f"relay history not written: {type(exc).__name__}"
         return status
 
 
@@ -438,7 +441,7 @@ def unit_failure_event(record: Mapping[str, Any]) -> NotificationEvent | None:
     headline stays fixed. The unit name goes only into the dedupe key, never to the phone."""
     unit = str(record.get("unit") or "")
     failed_at = parse_utc(record.get("failed_at_utc"))
-    if not re.fullmatch(r"edgelab-[a-z@.-]{1,80}", unit) or failed_at is None:
+    if not re.fullmatch(r"edgelab-[A-Za-z0-9_@.-]{1,80}", unit) or failed_at is None:
         return None
     return make_event(EventType.SOURCE_FAILURE, Severity.WARNING, created_at=failed_at,
                       summary="A Market Edge unit failed", dedupe_key=f"unit-failure:{unit}:{failed_at.isoformat()}",
@@ -467,7 +470,8 @@ def relay_outbox(outbox_path: str | os.PathLike[str], relay_path: str | os.PathL
         candidates: list[NotificationEvent] = [e for e in map(event_from_dict, JsonlOutbox(outbox_path).history()) if e]
         if failure_path is not None:
             try:
-                record = json.loads(open(failure_path, encoding="utf-8").read())
+                with open(failure_path, encoding="utf-8") as fh:
+                    record = json.loads(fh.read())
             except (OSError, ValueError):
                 record = None
             failure = unit_failure_event(record) if isinstance(record, Mapping) else None

@@ -775,3 +775,16 @@ def test_cli_prints_counts_only_never_the_topic(monkeypatch, capsys, tmp_path):
     assert cli.main(["notify", "test"]) == 0
     out = capsys.readouterr().out
     assert TOPIC not in out and json.loads(out)["by_status"] == {"SUBMITTED": 1}
+
+
+def test_a_failed_history_write_never_re_sends_in_the_same_run(tmp_path, monkeypatch):
+    outbox, relay = _outbox_with(tmp_path, ev(key="a"))
+    opener = Opener()
+    s, _ = make(opener=opener)
+
+    def boom(self, event):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(n.JsonlOutbox, "deliver", boom)
+    out = ntfy.relay_outbox(outbox, relay, s, now=NOW)
+    assert out["by_status"] == {"SUBMITTED": 1} and len(opener.requests) == 1

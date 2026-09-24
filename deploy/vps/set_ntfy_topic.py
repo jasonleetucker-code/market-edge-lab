@@ -32,6 +32,13 @@ def _is_topic_line(line: str) -> bool:
     return stripped.startswith(KEY + "=")
 
 
+def _has_topic(line: str) -> bool:
+    """A usable topic line: plain KEY=value with a value. An `export` line or an empty value is
+    not what systemd's EnvironmentFile parser (or sink_from_env) treats as configured."""
+    stripped = line.strip()
+    return stripped.startswith(KEY + "=") and bool(stripped[len(KEY) + 1:].strip())
+
+
 def new_topic_url() -> str:
     return "https://ntfy.sh/mel-" + secrets.token_urlsafe(32)  # 47 characters, [-_A-Za-z0-9]
 
@@ -43,7 +50,7 @@ def write_topic(path: str, *, force: bool = False, uid: int = 0, gid: int = 0) -
             lines = fh.read().splitlines()
     except FileNotFoundError:
         lines = []
-    if any(_is_topic_line(line) for line in lines) and not force:
+    if any(_has_topic(line) for line in lines) and not force:
         return "kept"
     lines = [line for line in lines if not _is_topic_line(line)]
     lines.append(f"{KEY}={new_topic_url()}")
@@ -58,6 +65,12 @@ def write_topic(path: str, *, force: bool = False, uid: int = 0, gid: int = 0) -
             os.chown(tmp, uid, gid)
         os.chmod(tmp, 0o600)
         os.replace(tmp, path)
+        if hasattr(os, "O_DIRECTORY"):  # make the rename itself durable
+            dfd = os.open(os.path.dirname(os.path.abspath(path)), os.O_DIRECTORY)
+            try:
+                os.fsync(dfd)
+            finally:
+                os.close(dfd)
     except BaseException:
         try:
             os.unlink(tmp)

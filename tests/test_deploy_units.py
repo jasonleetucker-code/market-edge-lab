@@ -508,8 +508,12 @@ def test_topic_writer_adds_a_topic_keeps_other_lines_and_prints_nothing_secret(t
 def test_topic_writer_keeps_an_existing_topic_unless_forced(tmp_path):
     mod = _topic_module()
     path = tmp_path / "secrets.env"
-    path.write_text("export EDGE_LAB_NTFY_TOPIC_URL=https://ntfy.sh/mel-existing-topic-000\n")
+    path.write_text("export EDGE_LAB_NTFY_TOPIC_URL=https://ntfy.sh/mel-old-export-form-000\n")
     uid, gid = (os.getuid(), os.getgid()) if hasattr(os, "getuid") else (0, 0)
+    # An `export` line is not a topic systemd would load: it is replaced, not kept.
+    assert mod.write_topic(str(path), uid=uid, gid=gid) == "written"
+    assert "mel-old-export-form-000" not in path.read_text()
+    path.write_text("EDGE_LAB_NTFY_TOPIC_URL=https://ntfy.sh/mel-existing-topic-000" + chr(10))
     assert mod.write_topic(str(path), uid=uid, gid=gid) == "kept"
     assert "mel-existing-topic-000" in path.read_text()
     assert mod.write_topic(str(path), force=True, uid=uid, gid=gid) == "written"
@@ -523,3 +527,12 @@ def test_runbook_uses_the_tested_topic_writer_not_an_inline_snippet():
     section = runbook[runbook.index("## 5a."):runbook.index("## 6.")]
     assert "deploy/vps/set_ntfy_topic.py" in section and "python3 - <<" not in section
     assert "EDGE_LAB_ALERT_URL" in section  # the warning not to point it at the topic
+
+
+def test_topic_writer_treats_an_empty_value_as_unset(tmp_path):
+    mod = _topic_module()
+    path = tmp_path / "secrets.env"
+    path.write_text("EDGE_LAB_NTFY_TOPIC_URL=" + chr(10))
+    uid, gid = (os.getuid(), os.getgid()) if hasattr(os, "getuid") else (0, 0)
+    assert mod.write_topic(str(path), uid=uid, gid=gid) == "written"
+    assert len(_topic(path.read_text())) == 1
