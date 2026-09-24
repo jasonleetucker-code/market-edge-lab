@@ -50,9 +50,10 @@ from pathlib import Path
 from typing import Any, Iterable, Sequence
 
 from . import sizing_v2 as sv2
+from .opportunity import DepthLadder, DepthLevel
 from .sizing_v2 import CoreCandidate, CoreProblem, IntegerLadderCostCurve, SizingPolicyV2
 
-SIM_VERSION = "1"
+SIM_VERSION = "2"  # v2: fractions applied before caps/budgets (engine), provenance recorded
 LABEL = ("SIMULATION evidence: synthetic markets and outcomes. Not a backtest, not an edge claim, "
          "not authority to change any shadow fill.")
 REPLAY_LABEL = ("IN-SAMPLE replay: historical prices are not fills, and this is not evidence of an edge.")
@@ -135,11 +136,7 @@ G_ROBUST = SizingPolicyV2("SV2-G-robust-rck-half", "1", "KELLY",
                           "G variant: robust 1/2 Kelly with the robust drawdown constraint (alpha 0.7, beta 0.1)",
                           kelly_fraction=Decimal("0.5"), robust=True, drawdown_alpha=Decimal("0.7"),
                           drawdown_beta=Decimal("0.1"), robust_constraint=True)
-H_RCK = SizingPolicyV2("SV2-H-cluster-robust-rck", "1", "KELLY",
-                       "H variant: joint robust 1/2 Kelly + robust drawdown constraint (alpha 0.7, beta 0.1)",
-                       kelly_fraction=Decimal("0.5"), robust=True, joint=True, drawdown_alpha=Decimal("0.7"),
-                       drawdown_beta=Decimal("0.1"), robust_constraint=True)
-
+H_RCK = sv2.POLICY_CANDIDATE  # promoted to a frozen policy in sizing_v2 after the study
 H_NOMINAL = SizingPolicyV2("SV2-H-cluster-nominal-half", "1", "KELLY",
                            "H variant: joint NOMINAL 1/2 Kelly (isolates joint vs sequential sizing; compare D)",
                            kelly_fraction=Decimal("0.5"), joint=True)
@@ -329,11 +326,11 @@ def run_path(cfg: StudyConfig, sc: Scenario, world: list[list[_Cluster]], varian
                 chosen = [(p, c, n) for (_, p, c), n in zip(cands, sol.counts) if n]
             else:
                 for _, payout, curve in cands:
-                    bound = sv2._affordable(curve, cash_left, curve.max_contracts)
+                    bound = sv2.affordable(curve, cash_left, curve.max_contracts)
                     core = (CoreCandidate("c", payout, curve, bound),)
                     sol = sv2.solve(policy, CoreProblem(start, tuple(base), tuple(cluster.model), uset, core, None),
                                     reference=False)
-                    n = min(sol.counts[0], sv2._affordable(curve, min(group_left[group], cash_left), bound))
+                    n = min(sol.counts[0], sv2.affordable(curve, min(group_left[group], cash_left), bound))
                     if n:
                         cost = curve.cost(n)
                         cash_left -= cost
@@ -477,14 +474,31 @@ def run_study(cfg: StudyConfig, *, workers: int = 1, only: Iterable[str] | None 
                      "uncertainty": [_variant_dict(v) for v in UNCERTAINTY_VARIANTS],
                      "sweep_policies": [p.policy_id for p in SWEEP_POLICIES],
                      "sweeps": [{"parameter": n, "meaning": m, "values": list(vals)} for n, m, vals in SWEEPS]},
+        "provenance": provenance(),
         "variant_runs_evaluated": runs,
         "distinct_policy_variants": len({v.variant_id for v in MAIN_VARIANTS + UNCERTAINTY_VARIANTS}),
         "results": results,
-        "elapsed_seconds": round(time.time() - started, 1),
     }
+    # Wall-clock time varies by machine, so it is printed, never written to the outputs.
+    report_elapsed = round(time.time() - started, 1)
+    print(f"elapsed {report_elapsed} s", file=sys.stderr)
     if results["uncertainty"] and all(s in results["uncertainty"] for s in UNCERTAINTY_SCENARIOS):
         report["uncertainty_selection"] = select_uncertainty_method(results["uncertainty"])
     return report
+
+
+def provenance() -> dict[str, Any]:
+    """What produced the numbers: the Python version and the LF-normalized SHA-256 of the
+    simulation and engine sources. Identical inputs on the same Python give identical outputs."""
+    import hashlib
+    import platform
+
+    here = Path(__file__).resolve().parent
+    hashes = {}
+    for name in ("sizing_v2.py", "sizing_eval.py", "fee_schedules.py", "opportunity.py"):
+        text = (here / name).read_text(encoding="utf-8")
+        hashes[name] = hashlib.sha256(text.encode("utf-8")).hexdigest()
+    return {"python": platform.python_version(), "source_sha256": hashes}
 
 
 def _variant_dict(v: Variant) -> dict[str, Any]:
@@ -550,7 +564,9 @@ def render_report(report: dict[str, Any]) -> str:
         out += ["## Sensitivity sweeps (base scenario `modest_edge`)", ""]
         for key, rows in report["results"]["sweep"].items():
             out += [f"### {key}", ""] + _table(rows) + [""]
-    out.append(f"Elapsed {report['elapsed_seconds']} s.")
+    prov = report.get("provenance", {})
+    out.append(f"Provenance: Python {prov.get('python')}; source SHA-256 (LF-normalized) "
+               + ", ".join(f"`{k}` {v[:12]}" for k, v in sorted(prov.get("source_sha256", {}).items())) + ".")
     return "\n".join(out) + "\n"
 
 
@@ -594,26 +610,46 @@ def replay_records(records: Sequence[dict[str, Any]], policies: Sequence[SizingP
                    cluster_cap_fraction: float = 0.25) -> dict[str, Any]:
     """Counterfactual replay of point-in-time decision records (IN-SAMPLE, not fills).
 
-    Each record: {"as_of_utc", "states": [...], "model_probabilities": [...], "outcome_state",
-    "candidates": [{"side", "yes_states": [...], "asks": [[price, size], ...]}]}. Prices are
-    dollars on the cent grid. Records are replayed in `as_of_utc` order."""
+    Each record: {"as_of_utc", "venue", "states": [...], "model_probabilities": [...],
+    "outcome_state", "candidates": [{"native_id", "side", "yes_states": [...],
+    "asks": [[price, size], ...]}]}. Prices are dollars. Costs come from the engine: the
+    venue's `schedule_for` schedule, its point-in-time claim basis and allowance
+    (`sizing_v2.fee_basis`), and `ExactCostCurve` over the ladder. A candidate whose fees are
+    unsupported or unverified is refused and counted, never priced with a guessed fee.
+    Records are replayed in `as_of_utc` order."""
     ordered = sorted(records, key=lambda r: r["as_of_utc"])
-    out = {"label": REPLAY_LABEL, "records": len(ordered), "policies": {}}
+    out: dict[str, Any] = {"label": REPLAY_LABEL, "records": len(ordered), "policies": {}, "refused": {}}
+    curves = []
+    for rec in ordered:
+        venue = rec.get("venue", "")
+        states = tuple(rec["states"])
+        priced = []
+        for c in rec["candidates"]:
+            native = c.get("native_id", "")
+            schedule, _, allowance, refused = sv2.fee_basis(venue, native, rec["as_of_utc"])
+            if refused:
+                key = refused.split(":", 1)[0]
+                out["refused"][key] = out["refused"].get(key, 0) + 1
+                continue
+            ladder = DepthLadder(venue, f"{venue}:{native}", c["side"],
+                                 tuple(DepthLevel(Decimal(str(px)), Decimal(str(sz))) for px, sz in c["asks"]),
+                                 False, rec["as_of_utc"], rec["as_of_utc"], "replay")
+            curve = sv2.ExactCostCurve(ladder, schedule, allowance_per_contract=allowance)
+            if curve.problem or curve.max_contracts < 1:
+                out["refused"]["INVALID_OR_EMPTY_BOOK"] = out["refused"].get("INVALID_OR_EMPTY_BOOK", 0) + 1
+                continue
+            priced.append((native, sv2.payout_vector(states, c["yes_states"], c["side"]), curve))
+        curves.append(priced)
     for policy in policies:
         wealth, trades, path = bankroll, 0, []
-        for rec in ordered:
+        for rec, priced in zip(ordered, curves):
             states = tuple(rec["states"])
             p = [float(x) for x in rec["model_probabilities"]]
             uset = sv2.dirichlet_box(states, p, n_eff, gamma=gamma)
             outcome = states.index(rec["outcome_state"])
             base = [wealth] * len(states)
-            cands = []
-            for c in rec["candidates"]:
-                levels = [(int(round(Decimal(str(px)) * 10000)), int(sz)) for px, sz in c["asks"]]
-                curve = IntegerLadderCostCurve(levels)
-                payout = sv2._payout(states, c["yes_states"], c["side"])
-                cands.append(CoreCandidate(c.get("market_id", "m"), payout, curve,
-                                           sv2._affordable(curve, wealth, curve.max_contracts)))
+            cands = [CoreCandidate(native, payout, curve, sv2.affordable(curve, wealth, curve.max_contracts))
+                     for native, payout, curve in priced]
             realized, left = 0.0, cluster_cap_fraction * wealth
             if policy.joint and cands:
                 sol = sv2.solve(policy, CoreProblem(wealth, tuple(base), tuple(p), uset, tuple(cands), left))
@@ -622,7 +658,7 @@ def replay_records(records: Sequence[dict[str, Any]], policies: Sequence[SizingP
                 picks = []
                 for cand in cands:
                     sol = sv2.solve(policy, CoreProblem(wealth, tuple(base), tuple(p), uset, (cand,), None))
-                    n = min(sol.counts[0], sv2._affordable(cand.curve, left, cand.cap))
+                    n = min(sol.counts[0], sv2.affordable(cand.curve, left, cand.cap))
                     if n:
                         cost = cand.curve.cost(n)
                         left -= cost

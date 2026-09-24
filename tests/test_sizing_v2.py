@@ -104,7 +104,7 @@ def test_bisection_matches_a_full_scan_with_fees():
         w = rng.uniform(200, 5000)
         problem = CoreProblem(w, (w, w), (p, 1 - p), sv2.binary_interval(p, p, p),
                               (CoreCandidate("m", (1, 0), curve, curve.max_contracts),))
-        hi = sv2._affordable(curve, w, curve.max_contracts)
+        hi = sv2.affordable(curve, w, curve.max_contracts)
         f = lambda n: sv2.log_growth(problem, (n,), robust=False)  # noqa: E731
         g = lambda n: sv2.log_growth(problem, (n,), robust=False, smooth=True)  # noqa: E731
         got = sv2.solve(sv2.POLICY_C, problem).counts[0]
@@ -526,3 +526,90 @@ def test_only_plain_binary_paying_one_is_supported(kind):
     req = binary_request()
     r = rec(replace(req, candidate=replace(req.candidate, market=market(kind=kind))))
     assert r.verdict == "UNSUPPORTED" and "PAYOFF_UNSUPPORTED" in r.explanation and r.recommended_contracts == 0
+
+
+# --------------------------------------------------------------------------- review fixes (PR #60)
+
+
+def test_closed_market_or_unresolved_rules_is_unsupported_never_size():
+    req = binary_request(0.55, 0.55, 0.55)
+    closed = replace(req.candidate.market, status=MarketStatus.CLOSED, rules_resolved=False)
+    r = rec(replace(req, candidate=replace(req.candidate, market=closed)))
+    assert r.verdict == "UNSUPPORTED" and "MARKET_NOT_OPEN" in r.explanation and r.recommended_contracts == 0
+    unresolved = replace(req.candidate.market, rules_resolved=False, rules_detail="threshold not in captured rules")
+    r = rec(replace(req, candidate=replace(req.candidate, market=unresolved)))
+    assert r.verdict == "UNSUPPORTED" and "RULES_UNRESOLVED" in r.explanation
+    unknown = replace(req.candidate.market, status=MarketStatus.UNKNOWN)
+    assert rec(replace(req, candidate=replace(req.candidate, market=unknown))).verdict == "UNSUPPORTED"
+
+
+@pytest.mark.parametrize("version", [None, ""])
+def test_missing_model_version_is_stale_data(version):
+    r = rec(binary_request(model_version=version))
+    assert r.verdict == "STALE_DATA" and "MODEL_VERSION_MISSING" in r.explanation and r.recommended_contracts == 0
+
+
+def test_fraction_is_applied_before_a_shared_budget_joint_equals_sequential():
+    # 1/2 Kelly under budget B must be min(1/2 Kelly, B) whether sized jointly or alone.
+    curve = IntegerLadderCostCurve([(4000, 100000)], coefficient=Decimal(0))
+    joint_half = sv2.SizingPolicyV2("t-joint-half", "1", "KELLY", "t", kelly_fraction=Decimal("0.5"), joint=True)
+    for budget in (500.0, 1000.0, 2000.0, 5000.0):
+        problem = CoreProblem(10000.0, (10000.0, 10000.0), (0.55, 0.45), sv2.binary_interval(0.55, 0.55, 0.55),
+                              (CoreCandidate("m", (1, 0), curve, 25000),), budget)
+        full = sv2.solve(sv2.POLICY_C, replace(problem, budget=None)).counts[0]  # 6,250
+        got = sv2.solve(joint_half, problem).counts[0]
+        assert abs(got - min(full // 2, sv2.affordable(curve, budget, 25000))) <= 1, (budget, got)
+
+
+def test_joint_reports_the_true_unconstrained_kelly_and_a_sub_contract_position_cap():
+    p = (0.15, 0.45, 0.30, 0.10)
+    reqs = []
+    for state, price in (("B2", "0.35"), ("B3", "0.22")):
+        m = market(f"KXHIGHNY-26SEP25-{state}")
+        cand = PositionCandidate(m, "YES", (state,), ladder(m, "YES", [(price, 100000)]), "ev", "cl")
+        reqs.append(SizingRequest(AS_OF, STATES, cand, p, sv2.dirichlet_box(STATES, p, 5000), "m v1", AS_OF,
+                                  portfolio(max_position_risk=Decimal("0.20")), starter()))
+    out = sv2.recommend_cluster(reqs, sv2.POLICY_H, fee_schedule=ZERO_FEE)
+    for r in out:
+        assert r.verdict == "RISK_LIMIT" and r.binding_constraint == "POSITION_CAP" and r.recommended_contracts == 0
+    assert out[0].unconstrained_kelly_amount > Decimal("100")  # not capped by the $0.20 position cap
+
+
+def test_cash_that_buys_no_contract_is_risk_limit_not_zero_edge():
+    r = rec(binary_request(pf=portfolio(tradable_cash=Decimal("0.30"))))
+    assert r.verdict == "RISK_LIMIT" and r.binding_constraint == "TRADABLE_CASH"
+    capped = rec(binary_request(pf=portfolio(tradable_cash=Decimal("100"))))
+    assert capped.binding_constraint == "TRADABLE_CASH" and capped.recommended_amount == Decimal("100.00")
+
+
+def test_cluster_requests_must_share_one_uncertainty_set():
+    a = binary_request()
+    b = replace(binary_request(), uncertainty=sv2.binary_interval(0.55, 0.40, 0.70))
+    with pytest.raises(ValueError):
+        sv2.recommend_cluster([a, b], sv2.POLICY_H, fee_schedule=ZERO_FEE)
+    wrong = replace(binary_request(), uncertainty=sv2.dirichlet_box(STATES, (0.25,) * 4, 50))
+    with pytest.raises(ValueError):
+        rec(wrong)
+
+
+def test_invalid_book_is_stale_data():
+    m = market()
+    req = binary_request()
+    bad = ladder(m, "YES", [("0.45", 10), ("0.40", 10)])  # not ascending
+    r = rec(replace(req, candidate=replace(req.candidate, ladder=bad)))
+    assert r.verdict == "STALE_DATA" and "INVALID_BOOK" in r.explanation
+
+
+def test_flat_unit_that_buys_no_contract_is_risk_limit():
+    tiny = sv2.SizingPolicyV2("t-flat", "1", "FLAT_UNIT", "t", unit_amount=Decimal("0.30"), min_edge=Decimal("0.05"))
+    r = rec(binary_request(0.55, 0.55, 0.55), tiny)
+    assert r.verdict == "RISK_LIMIT" and r.binding_constraint == "FLAT_UNIT"
+    below = rec(binary_request(0.43, 0.43, 0.43), sv2.POLICY_A)
+    assert below.verdict == "ZERO_EDGE" and below.binding_constraint == "MIN_EDGE"
+
+
+def test_research_candidate_is_a_frozen_policy_in_the_engine():
+    from edge_lab import sizing_eval
+    c = sv2.POLICY_CANDIDATE
+    assert sizing_eval.H_RCK is c and c.policy_id == "SV2-H-cluster-robust-rck" and c.policy_version == "1"
+    assert c.joint and c.robust and c.robust_constraint and c.kelly_fraction == Decimal("0.5")

@@ -91,12 +91,22 @@ def test_exp001_replay_is_skipped_with_the_reason():
 
 
 def test_record_replay_is_labelled_in_sample():
-    record = {"as_of_utc": "2026-09-24T22:00:00+00:00", "states": ["a", "b"], "model_probabilities": [0.7, 0.3],
-              "outcome_state": "a", "candidates": [{"side": "YES", "yes_states": ["a"], "asks": [["0.50", 50]]}]}
+    record = {"as_of_utc": "2026-09-24T22:00:00+00:00", "venue": "kalshi", "states": ["a", "b"],
+              "model_probabilities": [0.7, 0.3], "outcome_state": "a",
+              "candidates": [{"native_id": "KXHIGHNY-26SEP25-B1", "side": "YES", "yes_states": ["a"],
+                              "asks": [["0.50", 50]]}]}
     out = se.replay_records([record], (sv2.POLICY_C, sv2.POLICY_H))
-    assert out["label"].startswith("IN-SAMPLE") and out["records"] == 1
+    assert out["label"].startswith("IN-SAMPLE") and out["records"] == 1 and out["refused"] == {}
     assert out["policies"][sv2.POLICY_C.policy_id]["trades"] == 1
     assert out["policies"][sv2.POLICY_C.policy_id]["terminal_wealth"] > 1000
+
+
+def test_record_replay_refuses_venues_without_a_verified_fee_schedule():
+    record = {"as_of_utc": "2026-09-24T22:00:00+00:00", "venue": "polymarket_us", "states": ["a", "b"],
+              "model_probabilities": [0.7, 0.3], "outcome_state": "a",
+              "candidates": [{"native_id": "some-slug", "side": "YES", "yes_states": ["a"], "asks": [["0.50", 50]]}]}
+    out = se.replay_records([record], (sv2.POLICY_C,))
+    assert out["refused"] == {"FEE_UNSUPPORTED": 1} and out["policies"][sv2.POLICY_C.policy_id]["trades"] == 0
 
 
 def test_cli_sizing_commands(capsys, tmp_path):
@@ -108,8 +118,9 @@ def test_cli_sizing_commands(capsys, tmp_path):
     assert list(tmp_path.glob("simulation_seed*.json")) and list(tmp_path.glob("SIMULATION_REPORT_seed*.md"))
     capsys.readouterr()
     rec = tmp_path / "r.json"
-    rec.write_text(json.dumps([{"as_of_utc": "2026-09-24T22:00:00+00:00", "states": ["a", "b"],
+    rec.write_text(json.dumps([{"as_of_utc": "2026-09-24T22:00:00+00:00", "venue": "kalshi", "states": ["a", "b"],
                                 "model_probabilities": [0.6, 0.4], "outcome_state": "b",
-                                "candidates": [{"side": "YES", "yes_states": ["a"], "asks": [["0.45", 10]]}]}]))
+                                "candidates": [{"native_id": "KXHIGHNY-26SEP25-B1", "side": "YES",
+                                                "yes_states": ["a"], "asks": [["0.45", 10]]}]}]))
     assert cli_main(["sizing", "replay", "--input", str(rec)]) == 0
     assert "IN-SAMPLE" in capsys.readouterr().out

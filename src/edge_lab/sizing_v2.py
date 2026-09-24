@@ -38,17 +38,21 @@ The layers are separate, and each has one owner:
 
 Fail-closed rules (explicit, in precedence order):
 
-- UNSUPPORTED: a payoff that is not binary paying 1; a side other than YES/NO; states the
-  outcome mapping does not know; an unsupported fee schedule; a fee schedule whose
-  point-in-time claim basis is NONE (config `require_fee_claim`).
-- STALE_DATA: a missing or stale book, model estimate or risk state, or any input
-  timestamped after the decision time.
+- UNSUPPORTED: a payoff that is not a plain binary paying 1; a side other than YES/NO; states
+  the outcome mapping does not know; a market that is not OPEN (MARKET_NOT_OPEN) or whose
+  settlement rules are not resolved (RULES_UNRESOLVED), as `opportunity.evaluate` refuses
+  both; an unsupported fee schedule; a fee schedule whose point-in-time claim basis is NONE
+  (config `require_fee_claim`).
+- STALE_DATA: a missing, stale or malformed (INVALID_BOOK) book; a missing model estimate or
+  model version; a missing or stale risk state; any input timestamped after the decision time.
 - RISK_LIMIT: any risk breach, or zero remaining risk capacity.
 - CAPITAL_HORIZON: no STARTER_MAX_7D_V1 verdict (unknown release), or an ineligible one.
 - UNCERTAINTY_TOO_HIGH: no admissible probability set (unknown uncertainty is unbounded),
   or a positive nominal edge that the robust objective sizes to zero.
-- ZERO_EDGE: no positive expected net edge (or no log-growth benefit) at the nominal model.
-- LIQUIDITY_LIMIT / RISK_LIMIT: the policy wanted contracts, but a hard cap allows none.
+- ZERO_EDGE: no positive expected net edge (or no log-growth benefit) at the nominal model,
+  or a flat/fixed rule's entry threshold is not met.
+- LIQUIDITY_LIMIT / RISK_LIMIT: the policy wanted contracts, but depth, tradable cash or a
+  hard cap allows none.
 
 Missing values stay None. An unknown input never becomes zero risk and never yields SIZE.
 Open exposure in the cluster that the caller cannot map to outcome states is assumed to be
@@ -64,7 +68,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
-from dataclasses import dataclass, fields, is_dataclass
+from dataclasses import dataclass, fields, is_dataclass, replace
 from datetime import datetime, timedelta
 from decimal import ROUND_CEILING, ROUND_FLOOR, Decimal
 from enum import Enum
@@ -73,13 +77,15 @@ from typing import Any, Callable, Iterable, Mapping, Protocol, Sequence
 
 from .conservative import ProbabilityBounds, wilson_bounds
 from .fee_schedules import (
-    ClaimBasis, FeeScheduleStatus, FeeVerificationState, QuadraticTakerSchedule, UnsupportedFeeSchedule,
+    KALSHI_QUADRATIC_TAKER_V1, ClaimBasis, FeeScheduleStatus, FeeVerificationState, UnsupportedFeeSchedule,
     schedule_for, verification_at,
 )
 from .freshness import Freshness
 from .freshness import assess as freshness_assess
 from .freshness import parse_utc
-from .opportunity import DepthCost, DepthLadder, DepthStatus, FeeSchedule, Market, price_depth_fill, walk_ladder
+from .opportunity import (
+    DepthCost, DepthLadder, DepthStatus, FeeSchedule, Market, MarketStatus, price_depth_fill, walk_ladder,
+)
 from .risk import RiskPolicy, RiskReport
 from .starter_policy import StarterVerdict
 
@@ -604,6 +610,13 @@ POLICY_G = SizingPolicyV2("SV2-G-risk-constrained-kelly", _V, "KELLY",
 POLICY_H = SizingPolicyV2("SV2-H-cluster-kelly", _V, "KELLY",
                           "H: joint robust 1/2 Kelly over every candidate of a cluster, shared cluster budget",
                           kelly_fraction=Decimal("0.5"), robust=True, joint=True)
+# The research candidate chosen AFTER the simulation study (188 variant runs over 18 policy
+# variants, docs/research/STAKE_SIZING_V2.md §9). Frozen here; a change is a new version.
+POLICY_CANDIDATE = SizingPolicyV2("SV2-H-cluster-robust-rck", _V, "KELLY",
+                                  "H variant: joint robust 1/2 Kelly + robust drawdown constraint (alpha 0.7, "
+                                  "beta 0.1)", kelly_fraction=Decimal("0.5"), robust=True, joint=True,
+                                  drawdown_alpha=Decimal("0.7"), drawdown_beta=Decimal("0.1"),
+                                  robust_constraint=True)
 POLICIES: tuple[SizingPolicyV2, ...] = (POLICY_A, POLICY_B, POLICY_C, POLICY_D, POLICY_E, POLICY_F, POLICY_G,
                                         POLICY_H)
 
@@ -635,9 +648,14 @@ class CoreProblem:
 class CoreSolution:
     counts: tuple[int, ...]  # the policy's contracts, before hard caps
     kelly_counts: tuple[int, ...]  # the nominal full-Kelly optimum within the same bounds
-    robust_counts: tuple[int, ...] | None  # the robust optimum (robust policies only)
+    robust_counts: tuple[int, ...] | None  # the robust optimum the fraction is taken of (robust policies)
     rule_binding: str
     adverse: tuple[float, ...] | None  # the admissible vector minimizing E[log W] at `counts`
+    wanted: tuple[int, ...] = ()  # the policy's counts before candidate caps and the shared budget
+    # Per candidate, what stopped the optimum the policy took its fraction of: "CAP" (the
+    # candidate's depth/cash cap), "BUDGET" (the shared budget; computed only with `reference`),
+    # or None (the objective itself).
+    limited: tuple[str | None, ...] = ()
 
 
 def state_wealth(problem: CoreProblem, counts: Sequence[int], *, smooth: bool = False) -> list[float]:
@@ -753,7 +771,8 @@ def _largest_feasible(pred: Callable[[int], bool], hi: int) -> int:
     return lo
 
 
-def _affordable(curve: CostCurve, budget: float | None, hi: int) -> int:
+def affordable(curve: CostCurve, budget: float | None, hi: int) -> int:
+    """The most contracts, at most `hi` and the curve's depth, whose cost fits in `budget`."""
     top = min(hi, curve.max_contracts)
     if budget is None:
         return max(0, top)
@@ -776,10 +795,10 @@ def _spent(problem: CoreProblem, counts: Sequence[int], skip: int = -1) -> float
 def _maximize(problem: CoreProblem, *, robust: bool) -> tuple[int, ...]:
     cands = problem.candidates
     if len(cands) == 1:
-        hi = _affordable(cands[0].curve, problem.budget, cands[0].cap)
+        hi = affordable(cands[0].curve, problem.budget, cands[0].cap)
         return (_argmax_1d(lambda n: log_growth(problem, (n,), robust=robust), hi,
                            lambda n: log_growth(problem, (n,), robust=robust, smooth=True)),)
-    caps = [_affordable(c.curve, problem.budget, c.cap) for c in cands]
+    caps = [affordable(c.curve, problem.budget, c.cap) for c in cands]
     grid = 1
     for cap in caps:
         grid *= cap + 1
@@ -790,7 +809,7 @@ def _maximize(problem: CoreProblem, *, robust: bool) -> tuple[int, ...]:
         changed = False
         for j, cand in enumerate(cands):
             left = None if problem.budget is None else problem.budget - _spent(problem, counts, skip=j)
-            hi = _affordable(cand.curve, left, cand.cap)
+            hi = affordable(cand.curve, left, cand.cap)
 
             def f(n: int, j: int = j, smooth: bool = False) -> float:
                 trial = list(counts)
@@ -852,15 +871,30 @@ def nominal_edge(problem: CoreProblem, j: int) -> float | None:
     return sum(p for p, a in zip(problem.nominal, cand.payout) if a) - cand.curve.cost(1)
 
 
+def _relaxed(problem: CoreProblem, frac: float) -> CoreProblem:
+    """The problem with every candidate cap and the shared budget divided by `frac` (within
+    the priced depth): the optimum a fractional policy takes its fraction of."""
+    if frac >= 1:
+        return problem
+    cands = tuple(replace(c, cap=min(c.curve.max_contracts, math.floor(c.cap / frac + 1e-9)))
+                  for c in problem.candidates)
+    return replace(problem, candidates=cands, budget=None if problem.budget is None else problem.budget / frac)
+
+
 def solve(policy: SizingPolicyV2, problem: CoreProblem, *, reference: bool = True) -> CoreSolution:
     """The policy's integer contract counts for every candidate, before hard caps.
 
-    `reference` False skips optima the policy does not need (the nominal full-Kelly count for
-    a robust or flat policy); the simulation uses it for speed. The counts are unchanged."""
-    need_kelly = reference or (policy.rule == "KELLY" and not policy.robust)
-    kelly = _maximize(problem, robust=False) if need_kelly else tuple(0 for _ in problem.candidates)
-    robust_counts = _maximize(problem, robust=True) if policy.robust and policy.rule == "KELLY" else None
-    binding = "KELLY_OBJECTIVE"
+    Candidate caps and the shared budget in `problem` are limits, applied AFTER the policy's
+    fraction: a fractional Kelly policy takes floor(fraction x the optimum of the problem with
+    those limits divided by the fraction), then the limits are re-imposed. So 1/2 Kelly under a
+    budget B is min(1/2 x Kelly, B), whether the candidates are sized jointly or one at a time.
+    `reference` False skips the nominal full-Kelly reference count when the policy does not
+    need it (the simulation uses it for speed); the policy's counts are unchanged."""
+    k = len(problem.candidates)
+    frac = float(policy.kelly_fraction) if policy.rule == "KELLY" else 1.0
+    uses_kelly = policy.rule == "KELLY" and not policy.robust and frac >= 1
+    kelly = _maximize(problem, robust=False) if (reference or uses_kelly) else tuple(0 for _ in range(k))
+    robust_counts = None
     if policy.rule in ("FLAT_UNIT", "FIXED_FRACTION"):
         amount = float(policy.unit_amount) if policy.rule == "FLAT_UNIT" else float(policy.bankroll_fraction) * problem.wealth
         counts, left = [], problem.budget
@@ -869,17 +903,29 @@ def solve(policy: SizingPolicyV2, problem: CoreProblem, *, reference: bool = Tru
             n = 0
             if edge is not None and edge >= float(policy.min_edge):
                 limit = amount if left is None else min(amount, left)
-                n = _affordable(cand.curve, limit, cand.cap)
+                n = affordable(cand.curve, limit, cand.cap)
             counts.append(n)
             if left is not None and n:
                 left -= cand.curve.cost(n)
-        out = tuple(counts)
+        out = wanted = tuple(counts)
+        limited = tuple(None for _ in counts)
         binding = policy.rule
     else:
-        base = robust_counts if policy.robust else kelly
+        search = _relaxed(problem, frac)
+        base = kelly if uses_kelly else _maximize(search, robust=policy.robust)
+        robust_counts = base if policy.robust else None
+        free = None
+        if reference and search.budget is not None:
+            free = _maximize(replace(search, budget=None), robust=policy.robust)
+        limited = tuple("CAP" if c.cap > 0 and n >= c.cap else
+                        "BUDGET" if free is not None and free[j] > n else None
+                        for j, (c, n) in enumerate(zip(search.candidates, base)))
         binding = "ROBUST_OBJECTIVE" if policy.robust else "KELLY_OBJECTIVE"
-        frac = float(policy.kelly_fraction)
-        out = tuple(math.floor(frac * n + 1e-9) for n in base)
+        wanted = tuple(math.floor(frac * n + 1e-9) for n in base)
+        out = tuple(min(c.cap, n) for c, n in zip(problem.candidates, wanted))
+        if problem.budget is not None:
+            budget = problem.budget
+            out, _ = _scale_down(out, lambda c: _spent(problem, c) <= budget + 1e-9)
         lam = policy.drawdown_lambda
         if lam is not None:
             out, hit = _scale_down(out, lambda c: drawdown_measure(problem, c, lam, robust=policy.robust_constraint)
@@ -892,7 +938,7 @@ def solve(policy: SizingPolicyV2, problem: CoreProblem, *, reference: bool = Tru
     probe = out if any(out) else tuple(1 if j == 0 and c.curve.max_contracts >= 1 else 0
                                        for j, c in enumerate(problem.candidates))
     adverse = adverse_vector(problem, probe) if problem.uncertainty is not None else None
-    return CoreSolution(out, kelly, robust_counts, binding, adverse)
+    return CoreSolution(out, kelly, robust_counts, binding, adverse, wanted, limited)
 
 
 # =========================================================================== engine inputs
@@ -1088,11 +1134,32 @@ def _prob(x: float | None) -> Decimal | None:
     return None if x is None else Decimal(repr(min(1.0, max(0.0, x)))).quantize(PROB_GRID)
 
 
-def _payout(states: Sequence[str], yes_states: Sequence[str], side: str) -> tuple[int, ...]:
+def payout_vector(states: Sequence[str], yes_states: Sequence[str], side: str) -> tuple[int, ...]:
     ys = set(yes_states)
     if side == "YES":
         return tuple(1 if s in ys else 0 for s in states)
     return tuple(0 if s in ys else 1 for s in states)
+
+
+def fee_basis(venue: str, native_id: str, as_of: datetime | str, *, fee_schedule: Any = None,
+              require_claim: bool = True) -> tuple[Any, FeeVerificationState | None, Decimal, str | None]:
+    """(schedule, point-in-time verification, per-contract allowance, refusal reason or None).
+
+    The schedule is `schedule_for(venue, scope)` unless one is given. Refused: an unsupported
+    schedule (FEE_UNSUPPORTED) and, with `require_claim`, a claim basis of NONE (FEE_UNVERIFIED).
+    A CONSERVATIVE_BOUND claim carries its documented per-contract allowance (ADR 0017)."""
+    if fee_schedule is None:
+        scope = KALSHI_QUADRATIC_TAKER_V1.scope_of(native_id) if venue == "kalshi" else None
+        fee_schedule = schedule_for(venue, scope)
+    if isinstance(fee_schedule, UnsupportedFeeSchedule) or fee_schedule.status is FeeScheduleStatus.UNSUPPORTED:
+        return fee_schedule, None, ZERO, f"FEE_UNSUPPORTED: {getattr(fee_schedule, 'reason', fee_schedule.schedule_id)}"
+    state = verification_at(fee_schedule, as_of, native_id)
+    if require_claim and not state.claimable:
+        return fee_schedule, state, ZERO, f"FEE_UNVERIFIED: {state.detail}"
+    allowance = ZERO
+    if state.claim_basis is ClaimBasis.CONSERVATIVE_BOUND:
+        allowance = state.rounding_allowance_per_contract or ZERO
+    return fee_schedule, state, allowance, None
 
 
 @dataclass
@@ -1131,17 +1198,19 @@ def _prepare(req: SizingRequest, config: SizingConfig, fee_schedule: Any, as_of:
         return block(Verdict.UNSUPPORTED, f"PAYOFF_UNSUPPORTED: {market.payoff.kind} paying {market.payoff.amount}")
     if not cand.yes_states or not set(cand.yes_states) <= set(req.states):
         return block(Verdict.UNSUPPORTED, "OUTCOME_MAPPING_UNKNOWN: the YES states are not in the outcome space")
-    out.payout = _payout(req.states, cand.yes_states, cand.side)
+    out.payout = payout_vector(req.states, cand.yes_states, cand.side)
     if all(out.payout) or not any(out.payout):
         return block(Verdict.UNSUPPORTED, "PAYOFF_DEGENERATE: the position pays in every state or in none")
-    schedule = fee_schedule if fee_schedule is not None else schedule_for(
-        market.venue, QuadraticTakerSchedule._scope(market.venue, market.native_id))
+    if market.status is not MarketStatus.OPEN:
+        return block(Verdict.UNSUPPORTED, f"MARKET_NOT_OPEN: market status is {market.status.value}")
+    if not market.rules_resolved:
+        return block(Verdict.UNSUPPORTED, f"RULES_UNRESOLVED: {market.rules_detail}")
+    schedule, out.fee_state, allowance, refused = fee_basis(market.venue, market.native_id, as_of,
+                                                            fee_schedule=fee_schedule,
+                                                            require_claim=config.require_fee_claim)
     out.schedule_id = schedule.schedule_id
-    if isinstance(schedule, UnsupportedFeeSchedule) or schedule.status is FeeScheduleStatus.UNSUPPORTED:
-        return block(Verdict.UNSUPPORTED, f"FEE_UNSUPPORTED: {getattr(schedule, 'reason', schedule.schedule_id)}")
-    out.fee_state = verification_at(schedule, as_of, market.native_id)
-    if config.require_fee_claim and not out.fee_state.claimable:
-        return block(Verdict.UNSUPPORTED, f"FEE_UNVERIFIED: {out.fee_state.detail}")
+    if refused:
+        return block(Verdict.UNSUPPORTED, refused)
 
     if cand.ladder is None:
         return block(Verdict.STALE_DATA, "BOOK_MISSING: no captured ask ladder")
@@ -1152,6 +1221,8 @@ def _prepare(req: SizingRequest, config: SizingConfig, fee_schedule: Any, as_of:
         return block(Verdict.STALE_DATA, problem)
     if req.model_probabilities is None:
         return block(Verdict.STALE_DATA, "MODEL_MISSING: no model probability")
+    if not req.model_version:
+        return block(Verdict.STALE_DATA, "MODEL_VERSION_MISSING: the model's identity is unknown")
     problem = _age_check(req.model_generated_at_utc, config.max_model_age, as_of, "model")
     if problem:
         return block(Verdict.STALE_DATA, problem)
@@ -1172,12 +1243,9 @@ def _prepare(req: SizingRequest, config: SizingConfig, fee_schedule: Any, as_of:
     if req.uncertainty is None:
         return block(Verdict.UNCERTAINTY_TOO_HIGH, "UNCERTAINTY_UNKNOWN: no admissible probability set")
 
-    allowance = ZERO
-    if out.fee_state.claim_basis is ClaimBasis.CONSERVATIVE_BOUND:
-        allowance = out.fee_state.rounding_allowance_per_contract or ZERO
     out.curve = ExactCostCurve(cand.ladder, schedule, price_grid=market.price_grid, allowance_per_contract=allowance)
     if out.curve.problem:
-        return block(Verdict.LIQUIDITY_LIMIT, out.curve.problem)
+        return block(Verdict.STALE_DATA, out.curve.problem)  # a malformed book is not usable current data
     if out.curve.max_contracts < 1:
         return block(Verdict.LIQUIDITY_LIMIT, "NO_DEPTH: the captured ladder offers no whole contract")
     return out
@@ -1220,7 +1288,7 @@ def _initial_book(req: SizingRequest) -> _Book:
     mapped = ZERO
     for h in req.held:
         mapped += h.cost
-        pays = _payout(req.states, h.yes_states, h.side)
+        pays = payout_vector(req.states, h.yes_states, h.side)
         for k, a in enumerate(pays):
             base[k] += (h.contracts if a else 0) - float(h.cost)
     # Cluster exposure the caller could not map to states is assumed lost in every state.
@@ -1322,17 +1390,19 @@ def recommend_cluster(requests: Sequence[SizingRequest], policy: SizingPolicyV2,
         return []
     first = requests[0]
     for r in requests[1:]:
-        if (r.as_of_utc, r.states, r.model_probabilities, r.portfolio, r.held, r.candidate.outcome_cluster) != (
-                first.as_of_utc, first.states, first.model_probabilities, first.portfolio, first.held,
-                first.candidate.outcome_cluster):
-            raise ValueError("a cluster request shares its time, states, model, portfolio, holdings and cluster")
+        if (r.as_of_utc, r.states, r.model_probabilities, r.uncertainty, r.portfolio, r.held,
+                r.candidate.outcome_cluster) != (
+                first.as_of_utc, first.states, first.model_probabilities, first.uncertainty, first.portfolio,
+                first.held, first.candidate.outcome_cluster):
+            raise ValueError("a cluster request shares its time, states, model, uncertainty set, portfolio, "
+                             "holdings and cluster")
     as_of = parse_utc(first.as_of_utc)
     if as_of is None:
         raise ValueError("as_of_utc must be a timezone-aware time")
     if first.model_probabilities is not None:
         _check_vector(first.model_probabilities, len(first.states), "model_probabilities")
     if first.uncertainty is not None:
-        if tuple(first.uncertainty.states) != tuple(first.states):
+        if tuple(first.uncertainty.states) != tuple(first.states) or len(first.uncertainty.nominal) != len(first.states):
             raise ValueError("the uncertainty set is over different states")
         if first.model_probabilities is not None and any(
                 abs(a - b) > 1e-9 for a, b in zip(first.uncertainty.nominal, first.model_probabilities)):
@@ -1370,95 +1440,105 @@ def _size_one(prep: _Prepared, policy: SizingPolicyV2, config: SizingConfig, boo
     cand = CoreCandidate(req.candidate.market.market_id, prep.payout, curve, cash_bound)
     problem = _problem(req, book, (cand,), None)
     sol = solve(policy, problem)
-    # An optimum stopped by the captured depth (or by cash) is bound by it, not by the rule.
-    base = sol.robust_counts if policy.robust and sol.robust_counts is not None else sol.kelly_counts
+    # A policy size stopped by the captured depth or by tradable cash is bound by it, not by the rule.
     clipped = None
-    if policy.rule == "KELLY" and cash_bound > 0 and base[0] == cash_bound:
-        clipped = "LIQUIDITY" if cash_bound == curve.max_contracts else "RESERVE_FLOOR"
-    return _apply_caps(prep, policy, config, book, problem, sol, 0, shared_binding=clipped)
+    if sol.wanted and (sol.wanted[0] > cash_bound or sol.limited[0] == "CAP"):
+        clipped = "LIQUIDITY" if cash_bound == curve.max_contracts else "TRADABLE_CASH"
+    return _apply_caps(prep, policy, config, book, problem, sol, shared_binding=clipped, cash_bound=cash_bound)
 
 
 def _size_joint(preps: list[_Prepared], live: list[int], policy: SizingPolicyV2, config: SizingConfig, book: _Book,
                 out: list[SizingRecommendation | None]) -> None:
+    """Policy H: one joint optimum under the cluster's shared budgets; per-candidate caps after."""
     req = preps[live[0]].request
     pf = req.portfolio
     assert pf is not None
-    cands, caps_by = [], []
+    cash = pf.tradable_cash - book.spent
+    cands, dollars = [], None
     for i in live:
         p = preps[i]
         assert p.curve is not None and p.payout is not None
-        dollar = _dollar_caps(p.request, book)
-        own = min(p.curve.max_contracts, p.curve.max_affordable(dollar["POSITION_CAP"]),
-                  p.curve.max_affordable(dollar["EVENT_CAP"]))
-        cands.append(CoreCandidate(p.request.candidate.market.market_id, p.payout, p.curve, own))
-        caps_by.append(dollar)
+        dollars = dollars or _dollar_caps(p.request, book)
+        cands.append(CoreCandidate(p.request.candidate.market.market_id, p.payout, p.curve,
+                                   p.curve.max_affordable(cash)))
+    assert dollars is not None
     shared_names = ("CLUSTER_CAP", "PORTFOLIO_CAP", "RESERVE_FLOOR", "DRAWDOWN_CAP", "RISK_BUDGET")
-    shared = {n: caps_by[0][n] for n in shared_names}
-    tightest = min(shared_names, key=lambda n: (shared[n], shared_names.index(n)))
-    budget = float(max(ZERO, shared[tightest]))
+    tightest = min(shared_names, key=lambda n: (dollars[n], shared_names.index(n)))
+    budget = float(max(ZERO, min(dollars[tightest], cash)))
+    if dollars[tightest] > cash:
+        tightest = "TRADABLE_CASH"
     problem = _problem(req, book, tuple(cands), budget)
     sol = solve(policy, problem)
-    free = solve(policy, _problem(req, book, tuple(cands), float(pf.tradable_cash)))
+    # The unconstrained Kelly reference: the joint nominal optimum limited only by depth and cash.
+    free_kelly = _maximize(_problem(req, book, tuple(cands), float(cash)), robust=False)
     for j, i in enumerate(live):
-        # The reference Kelly count is the joint optimum without the shared budget: a candidate
-        # the budget squeezed out still has an edge, and says so (RISK_LIMIT at the shared cap).
-        single = CoreSolution((sol.counts[j],), (free.kelly_counts[j],),
-                              None if free.robust_counts is None else (free.robust_counts[j],), sol.rule_binding,
-                              sol.adverse)
-        wanted_more = free.counts[j] > sol.counts[j]
+        single = CoreSolution((sol.counts[j],), (free_kelly[j],),
+                              None if sol.robust_counts is None else (sol.robust_counts[j],), sol.rule_binding,
+                              sol.adverse, (sol.wanted[j],), (sol.limited[j],))
         one = CoreProblem(problem.wealth, tuple(book.base), problem.nominal, problem.uncertainty, (cands[j],), None)
-        out[i] = _apply_caps(preps[i], policy, config, book, one, single, 0,
-                             shared_binding=tightest if wanted_more else None, joint_free=free.counts[j])
+        stop = None
+        if sol.limited[j] == "CAP":
+            stop = "LIQUIDITY" if cands[j].cap == cands[j].curve.max_contracts else "TRADABLE_CASH"
+        elif sol.limited[j] == "BUDGET" or (sol.wanted[j] > sol.counts[j]
+                                            and sol.rule_binding not in ("RISK_CONSTRAINT", "CVAR_CAP")):
+            stop = tightest
+        out[i] = _apply_caps(preps[i], policy, config, book, one, single, shared_binding=stop,
+                             cash_bound=cands[j].cap)
 
 
 def _apply_caps(prep: _Prepared, policy: SizingPolicyV2, config: SizingConfig, book: _Book, problem: CoreProblem,
-                sol: CoreSolution, j: int, *, shared_binding: str | None,
-                joint_free: int | None = None) -> SizingRecommendation:
+                sol: CoreSolution, *, shared_binding: str | None, cash_bound: int) -> SizingRecommendation:
     req, curve = prep.request, prep.curve
     assert curve is not None and prep.payout is not None and req.portfolio is not None
     pf = req.portfolio
     dollars: dict[str, Decimal | None] = dict(_dollar_caps(req, book))
     dollars["LIQUIDITY"] = curve.total(curve.max_contracts)
     dollars["CASH_HORIZON"] = None  # an eligible STARTER_MAX_7D_V1 verdict imposes no dollar cap
-    policy_n = sol.counts[j]
+    policy_n = sol.counts[0]
+    wanted = sol.wanted[0] if sol.wanted else policy_n
     limits: list[tuple[str, int]] = [("SIZING_RULE", policy_n), ("LIQUIDITY", curve.max_contracts)]
     for name in CAP_ORDER[2:-1]:
         limits.append((name, curve.max_affordable(dollars[name])))  # type: ignore[arg-type]
+    by_name = dict(limits)
     final = min(v for _, v in limits)
     cap_limits = [(n, v) for n, v in limits if n != "SIZING_RULE"]
     max_allowed_n = min(v for _, v in cap_limits)
     if shared_binding is not None and final == policy_n:
-        binding = shared_binding  # the joint optimizer stopped at a shared budget
+        binding = shared_binding  # depth, cash or a shared budget stopped the policy's size
     else:
-        binding = next(n for n in CAP_ORDER if n in dict(limits) and dict(limits)[n] == final)
+        binding = next(n for n in CAP_ORDER if n in by_name and by_name[n] == final)
     secondary = tuple(n for n, v in sorted(cap_limits, key=lambda x: (x[1], CAP_ORDER.index(x[0])))
-                      if n != binding and v < (joint_free if joint_free is not None else policy_n))
+                      if n != binding and v < wanted)
 
     edge1 = nominal_edge(problem, 0)
     kelly_n = sol.kelly_counts[0]
     if final > 0:
         verdict = Verdict.SIZE
-    elif edge1 is None or edge1 <= 0 or kelly_n == 0:
+    elif edge1 is None or edge1 <= 0:
         verdict, binding = Verdict.ZERO_EDGE, "NO_EDGE"
+    elif cash_bound == 0:
+        verdict, binding = Verdict.RISK_LIMIT, "TRADABLE_CASH"  # an edge, but cash buys no contract
+    elif policy.rule == "KELLY" and kelly_n == 0:
+        verdict, binding = Verdict.ZERO_EDGE, "NO_GROWTH"  # an edge per contract, but no log-growth benefit
+    elif policy_n == 0 and sol.rule_binding in ("RISK_CONSTRAINT", "CVAR_CAP"):
+        verdict, binding = Verdict.RISK_LIMIT, sol.rule_binding
+    elif policy_n == 0 and (wanted > 0 or shared_binding is not None):
+        # the policy wanted contracts; depth, cash or a shared budget left none
+        binding = shared_binding or binding
+        verdict = Verdict.LIQUIDITY_LIMIT if binding == "LIQUIDITY" else Verdict.RISK_LIMIT
     elif policy_n == 0:
         if policy.robust and sol.robust_counts is not None and sol.robust_counts[0] == 0:
             verdict, binding = Verdict.UNCERTAINTY_TOO_HIGH, "ROBUST_OBJECTIVE"
-        elif sol.rule_binding in ("RISK_CONSTRAINT", "CVAR_CAP"):
-            verdict, binding = Verdict.RISK_LIMIT, sol.rule_binding
         elif policy.rule == "KELLY":
-            # The fraction of the optimum rounds below one whole contract.
-            verdict, binding = Verdict.RISK_LIMIT, "SIZING_RULE"
+            verdict, binding = Verdict.RISK_LIMIT, "SIZING_RULE"  # the fraction rounds below one contract
+        elif edge1 < float(policy.min_edge):
+            verdict, binding = Verdict.ZERO_EDGE, "MIN_EDGE"  # below the rule's entry threshold
         else:
-            # FLAT_UNIT / FIXED_FRACTION: below the entry threshold, or the unit buys no contract.
-            verdict, binding = Verdict.ZERO_EDGE, sol.rule_binding
+            verdict, binding = Verdict.RISK_LIMIT, policy.rule  # the unit buys no whole contract
     elif binding == "LIQUIDITY":
         verdict = Verdict.LIQUIDITY_LIMIT
     else:
         verdict = Verdict.RISK_LIMIT
-    if final == 0 and policy_n == 0 and shared_binding is not None and verdict is not Verdict.ZERO_EDGE:
-        # a joint optimum that gave this candidate nothing because a shared budget ran out
-        verdict = Verdict.LIQUIDITY_LIMIT if shared_binding == "LIQUIDITY" else Verdict.RISK_LIMIT
-        binding = shared_binding
     if final > 0 and binding == "SIZING_RULE" and sol.rule_binding in ("RISK_CONSTRAINT", "CVAR_CAP"):
         binding = sol.rule_binding
 
@@ -1484,7 +1564,7 @@ def _apply_caps(prep: _Prepared, policy: SizingPolicyV2, config: SizingConfig, b
         all_in = curve.total(probe) / probe  # type: ignore[operator]
         edge = Decimal(repr(p_pay)) - all_in
     kelly_amount = curve.total(kelly_n)
-    policy_amount = curve.total(policy_n)
+    policy_amount = curve.total(min(wanted, curve.max_contracts))
     max_allowed = curve.total(max_allowed_n)
 
     if final > 0:  # the recommendation occupies the budgets of the next candidate in the cluster
