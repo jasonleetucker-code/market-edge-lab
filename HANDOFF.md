@@ -8,9 +8,9 @@ the next-build-chunk directive (`docs/owner/2026-09-24-next-build-chunk-directiv
 the owner's ntfy / Odds API activation request._
 
 ```
-STATUS: PARTIAL. All seven deliverables are built. Six are merged and deployed; PR #70 (the
-  alerts-by-origin and Odds status UI) is in CI. The Odds API is live. ntfy phone delivery
-  awaits the owner. The first real settlement (11:15 ET run) is not yet observed.
+STATUS: PARTIAL. All seven deliverables are built, merged and deployed (production 6497af3).
+  The Odds API is live. ntfy phone delivery awaits the owner. The first real settlement
+  (11:15 ET run) is not yet observed.
 ACCEPTANCE: the next-build-chunk directive (seven deliverables, settlement checkpoint, safety
   sections) and the owner's activation request (Part A ntfy, Part B Odds API; secrets never
   printed, read back, logged or committed).
@@ -23,13 +23,22 @@ EVIDENCE:
     - #68 later/closing price observations, manual only (4; ADR 0030; evidence schema v6);
     - #66 notification origin (5);
     - #67 Odds API readiness and the #50 coverage audit (6, 7);
-    - #71 Odds smoke string-path fix (a production crash before any request).
-  - Production is 2e3e172, installed 2026-09-24 13:37Z via DAILY_SHADOW_ACTIVATION.md:
+    - #71 Odds smoke string-path fix (a production crash before any request);
+    - #70 alerts by notification origin and the Odds API status card (5, 6 UI), plus #53 and
+      #63 (other sessions' Terminal follow-ups, reconciled by Lane B).
+  - Production is 6497af3, installed 2026-09-24 ~14:00Z (after 2e3e172 at 13:37Z). Both installs
+    used DAILY_SHADOW_ACTIVATION.md. The second waited for the host's load to drop below the
+    preflight limit (a Brisket scrape). For each install:
     - preflight PASS, and backups of both stores VERIFIED before and after the install;
     - verify_fail_closed.sh: FAIL_CLOSED_CHECK: PASS; the relay reported HELD_BY_ORIGIN 1 (not
       pushed);
     - shadow dry run PENDING_SETTLEMENT; dashboard active;
     - 8 timers; no failed edgelab units.
+  - The live dashboard (6497af3):
+    - /alerts groups "Verification check: edgelab-decision.service refused as expected" under
+      "Tests, verification checks and diagnostics", not as an incident;
+    - Data sources shows "The Odds API — ACTIVE · LIVE READ VERIFIED" with the research-only,
+      not-executable label.
   - The manual settlement dry run (runbook §4.3) was skipped on purpose: the scheduled
     11:15 ET run is the first real settlement path.
   - ntfy (Part A):
@@ -56,7 +65,10 @@ UNRESOLVED:
   - The first real settlement, due in the 11:15 ET run. Verify event, outcome, source, payout,
     fees, P&L, cash release, equity for both accounts, no duplicates and the hash chain. If the
     ledger changed, take the manual F09 checkpoint (procedure below).
-  - PR #70: merge on green CI, then deploy outside 11:13-11:30 and 17:40-18:50 ET.
+  - PR #73: the venue registry still says The Odds API is "not connected" (stage TESTED) above
+    the ACTIVE card. #73 moves only catalog_read/quote_read to LIVE_DATA_VERIFIED. It is in
+    review; deploy after the settlement window.
+  - A later-price row in the Terminal (optional in Deliverable 4) is not built.
   - The first paid Odds slots (14:15 and 19:15 ET): confirm CAPTURED or MISSED with a reason,
     3 credits each.
   - Later/closing price capture has no timer. The proposed schedule is an owner decision

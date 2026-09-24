@@ -119,7 +119,7 @@ recorded below and in the Domain Readiness matrix. Gate 7 is unchanged and **not
 11. **#30 cross-venue weather comparison** (Kalshi vs a Polymarket US weather market). It
     waits on resolved Polymarket rules and fees that reach claim grade.
 12. **Odds capture targets in Terminal v1** (CAPTURED / MISSED / SKIPPED_BUDGET). The
-    status card and the alerts-by-origin view are PR #70; a per-target table follows it.
+    status card and the alerts-by-origin view are live (PR #70); a per-target table follows.
 
 **LATER** (wanted; not on the 2026-10-22 path)
 13. Sports baseline / preregistered models (domain 3; #5, #9), each as its own preregistered
@@ -164,8 +164,8 @@ Deliberately no numerical score: no weights have been validated. States:
 | 10 Long-tail discovery | U | U | U | U | U | U | U | U | U | U | U | U | Discovery only |
 
 **Why priorities moved (2026-09-24, second re-run).**
-- **All seven next-build-chunk deliverables are built** and, except PR #70 (the alerts and
-  Odds status UI), merged and deployed. The counterfactual runner, the sizing panel, the
+- **All seven next-build-chunk deliverables are built, merged and deployed** (production
+  6497af3). The counterfactual runner, the sizing panel, the
   comparator UI, manual price observations, the notification origin and the coverage audit
   moved out of NEXT.
 - **The Odds API is no longer blocked.** The key is installed, the budget is PROVEN, and the
