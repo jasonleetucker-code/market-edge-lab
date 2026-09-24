@@ -343,6 +343,15 @@ STATES: dict[str, StateWord] = {
     "NO_EQUIVALENT_ROUTE": StateWord("No equivalent route", ND_K),
     "NO_ELIGIBLE_ROUTE": StateWord("No eligible route", ND_K),
     "ALL_GATES_PASSED": StateWord("Passes every claim gate", OK_K),
+    # research sizing verdicts (sizing_v2.Verdict, via sizing_counterfactual.panel_for_market)
+    "SIZE": StateWord("Sized (research)", INFO_K),
+    "ZERO_EDGE": StateWord("Zero: no edge after costs", ND_K),
+    "UNCERTAINTY_TOO_HIGH": StateWord("Zero: uncertainty too high", ND_K),
+    "LIQUIDITY_LIMIT": StateWord("Limited by liquidity", WARN_K),
+    "RISK_LIMIT": StateWord("Limited by risk caps", WARN_K),
+    "STALE_DATA": StateWord("Stale data", WARN_K),
+    "CAPITAL_HORIZON": StateWord("Outside capital horizon", WARN_K),
+    "PENDING": StateWord("Pending: not yet known", ND_K),
 }
 
 
@@ -988,6 +997,14 @@ FEE_STATUS_NOTES = {
 ROUTE_FRESHNESS = {"fresh": ("FRESH", "Fresh at decision time"),
                    "stale": ("NOT_FRESH", "Stale at decision time — not ranked"),
                    "unknown": ("UNKNOWN", "Book age unknown — not ranked")}
+
+
+def policy_label(row: Mapping[str, Any] | None) -> str:
+    """"H · sizing-v2-candidate v1" from a panel's policy fields (letter optional)."""
+    if not isinstance(row, Mapping):
+        return "policy unknown"
+    head = " · ".join(str(x) for x in (row.get("letter"), row.get("policy_id")) if x)
+    return f"{head} v{row['policy_version']}" if row.get("policy_version") else (head or "policy unknown")
 
 
 def route_freshness(value: Any) -> tuple[str, str]:

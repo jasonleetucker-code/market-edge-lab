@@ -91,11 +91,7 @@ _ABS_PATH = re.compile(r"(?:[A-Za-z]:)?(?:[\\/][^\s\\/:'\"]+)+[\\/]?")
 def short_error(exc: BaseException, config: Config | None = None, limit: int = 200) -> str:
     """A one-line message: the exception class and its text with every path reduced to its
     final name. No traceback, no directories, no environment values."""
-    text = str(exc).splitlines()[0] if str(exc) else ""
-    for p in (config.paths() if config else []):
-        for variant in {str(p), str(p.resolve())}:
-            text = text.replace(variant, p.name)
-    text = _ABS_PATH.sub(lambda m: re.split(r"[\\/]", m.group(0).rstrip("\\/"))[-1], text)
+    text = scrub_paths(str(exc).splitlines()[0] if str(exc) else "", config)
     text = f"{type(exc).__name__}: {text}" if text else type(exc).__name__
     return text if len(text) <= limit else text[: limit - 1] + "…"
 
@@ -593,6 +589,85 @@ def observed_board(store: SnapshotStore, *, mode: str = "live") -> ObservedBoard
                                     for side, q in quotes.items()}
     ordered = sorted(markets.values(), key=lambda m: m.market_id)
     return ObservedBoard(target, captures, ordered[:MAX_OBSERVED_MARKETS], len(ordered))
+
+
+# --------------------------------------------------------------------------- research sizing (sizing_counterfactual)
+
+RESEARCH_SIZING_MODULE = "edge_lab.sizing_counterfactual"
+
+
+def _sizing_module(ctx: Context) -> tuple[Any, Loaded | None]:
+    """The research sizing contract, or the state that replaces it (not installed / broken)."""
+    import importlib
+
+    try:
+        return importlib.import_module(RESEARCH_SIZING_MODULE), None
+    except ModuleNotFoundError as exc:
+        if exc.name != RESEARCH_SIZING_MODULE:  # installed, but one of its own imports is missing
+            return None, Loaded(ERROR, message=short_error(exc, ctx.config))
+        return None, Loaded(NO_DATA, message="the research sizing contract (sizing_counterfactual) is not installed "
+                                             "in this build")
+    except Exception as exc:  # noqa: BLE001 - a module that fails to import is broken, not absent
+        return None, Loaded(ERROR, message=short_error(exc, ctx.config))
+
+
+def research_sizing(ctx: Context, market_id: str) -> Loaded:
+    """Lane A's read-only research sizing panel for one market: OK with the panel dict (which may
+    itself be unavailable with a named reason), NO_DATA when the contract is not installed or no
+    ledger is configured, ERROR on a read failure or a broken contract.
+
+    One `build_panel_bundle` replay per request serves every market on the page; the contract
+    memoizes it across requests (ledger heads, evidence DB snapshot id, config, code), so the
+    dashboard keeps no cache of its own. A replay made without a readable evidence database
+    carries a caveat in `message`. Nothing here sizes or edits a figure; free-text details are
+    only scrubbed of paths."""
+    module, problem = _sizing_module(ctx)
+    if problem is not None:
+        return problem
+    if ctx.ledger.status == ERROR:
+        return Loaded(ERROR, message=ctx.ledger.message)
+    if ctx.ledger.status != OK:
+        return Loaded(NO_DATA, message=ctx.ledger.message or "no shadow ledger configured")
+    store = ctx.store.value if ctx.store.status == OK else None
+    caveat = ""
+    if ctx.store.status != OK:
+        why = "cannot be read" if ctx.store.status == ERROR else "is not available"
+        caveat = (f"Replayed without the evidence database, which {why} ({ctx.store.message}): captured "
+                  "settlements and confirmation quotes are missing from this replay.")
+    try:
+        if hasattr(module, "build_panel_bundle") and hasattr(module, "panel_for_market_from_bundle"):
+            bundle = ctx.__dict__.get("_sizing_bundle")
+            if bundle is None:
+                bundle = ctx.__dict__["_sizing_bundle"] = module.build_panel_bundle(store, ctx.ledger.value)
+            panel = module.panel_for_market_from_bundle(bundle, market_id)
+        else:
+            panel = module.panel_for_market(store, ctx.ledger.value, market_id)
+    except Exception as exc:  # noqa: BLE001 - the contract never raises for missing data; anything else is shown
+        return Loaded(ERROR, message=short_error(exc, ctx.config))
+    if not isinstance(panel, dict):
+        return Loaded(ERROR, message="the research sizing contract returned no panel")
+    return Loaded(OK, _scrubbed(panel, ctx.config), message=caveat)
+
+
+def scrub_paths(text: Any, config: Config | None = None) -> Any:
+    """A free-text detail with every filesystem path reduced to its final name (as `short_error`)."""
+    if not isinstance(text, str):
+        return text
+    for p in (config.paths() if config else []):
+        for variant in {str(p), str(p.resolve())}:
+            text = text.replace(variant, p.name)
+    return _ABS_PATH.sub(lambda m: re.split(r"[\\/]", m.group(0).rstrip("\\/"))[-1], text)
+
+
+def _scrubbed(panel: dict[str, Any], config: Config) -> dict[str, Any]:
+    """A copy of the panel whose free-text `unavailable_detail`s carry no paths (engine text may quote
+    an OS error). Figures and every other field are untouched."""
+    out = dict(panel, unavailable_detail=scrub_paths(panel.get("unavailable_detail"), config))
+    sides = panel.get("sides")
+    if isinstance(sides, list):
+        out["sides"] = [dict(s, unavailable_detail=scrub_paths(s.get("unavailable_detail"), config))
+                        if isinstance(s, dict) else s for s in sides]
+    return out
 
 
 # --------------------------------------------------------------------------- across venues (best_price, ADR 0027)

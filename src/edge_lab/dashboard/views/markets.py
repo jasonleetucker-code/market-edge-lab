@@ -215,7 +215,7 @@ def detail(ctx: d.Context, p: pr.Params) -> cm.Page:
             f'<p class="page-sub">{esc(row.native_id)} · target {esc(pr.date_label(row.target_date) or "unknown")}'
             f' · closes {esc(pr.datetime_et(row.close_time_utc) or "time not captured")}</p></div></div>')
     main = [quote_section(row, side, p, ctx.now), history_section(ctx, row, side), assessment_section(row, side),
-            venues_section(ctx, row, side)]
+            venues_section(ctx, row, side), sizing_section(ctx, row)]
     side_col = [capital_section(row, side), ticket_section(row, side, p)]
     # Source order = the contract's phone order; Rules & evidence comes last, after the inspector.
     body = (head + '<div class="detail"><div class="detail-main">' + "".join(main) + "</div>"
@@ -328,6 +328,23 @@ def comparison_body(result: d.VenueComparison, now=None) -> str:
         return c.error_state("Comparison unavailable", f"ERROR — {result.message}. This is not an empty comparison.")
     why = result.message[:1].upper() + result.message[1:]
     return c.unavailable("Nothing captured to compare", f"{why}. Nothing is ranked without captured evidence.")
+
+
+def sizing_body(result: d.Loaded) -> str:
+    """Every state of the research sizing slot. The panel itself names any unavailable reason."""
+    if result.status == d.OK:
+        return c.research_sizing(result.value, note=result.message)
+    if result.status == d.ERROR:
+        return c.error_state("Research sizing unavailable", f"ERROR — {result.message}. This is not a zero size.")
+    why = result.message[:1].upper() + result.message[1:]
+    return c.unavailable("Research sizing not available", f"{why}. No size is shown rather than a guessed one.")
+
+
+def sizing_section(ctx: d.Context, row: pr.MarketRow) -> str:
+    """RESEARCH SIZING · SHADOW SIZING CHALLENGER (Lane A's sizing_counterfactual.panel_for_market),
+    for every recorded side of the market's latest decision. Read-only; no stake input."""
+    return c.section("Research sizing", sizing_body(d.research_sizing(ctx, row.market_id)),
+                     meta="Shadow sizing challenger · counterfactual · not a bet · all shadow accounts' decisions", sid="rs-h")
 
 
 def venues_section(ctx: d.Context, row: pr.MarketRow, side: str) -> str:

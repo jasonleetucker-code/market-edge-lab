@@ -83,6 +83,18 @@ def view(ctx: d.Context, p: pr.Params) -> cm.Page:
         (d.ERROR, "OperationalError: database disk image is malformed"),
     ))
     parts.append(c.section("VenueComparison (not evaluated / no data / error)", xv_states, sid="g-xv-states"))
+    panels = fixtures.synthetic_sizing_panels()
+    parts.append(c.section("ResearchSizing (sized · other side unavailable)", c.research_sizing(panels["sized"]),
+                           meta="shadow sizing challenger · counterfactual", sid="g-rs-sized"))
+    parts.append(c.section("ResearchSizing (computed zero)", c.research_sizing(panels["zero"]), sid="g-rs-zero"))
+    reasons = "".join(c.research_sizing(panels[r]) for r in (*fixtures.SIZING_UNAVAILABLE,
+                                                               *fixtures.SIZING_NO_SIDES))
+    parts.append(c.section("ResearchSizing (each unavailable reason)", reasons, sid="g-rs-unavail"))
+    parts.append(c.section("ResearchSizing (not installed / read error)",
+                           markets.sizing_body(d.Loaded(d.NO_DATA, message="the research sizing contract "
+                                                        "(sizing_counterfactual) is not installed in this build"))
+                           + markets.sizing_body(d.Loaded(d.ERROR, message="LedgerError: chain broken at entry 12")),
+                           sid="g-rs-states"))
     parts.append(c.disclosure("EvidenceDisclosure", c.kv([("code", c.code("INVALID_CAPTURE")),
                                                           ("exact value", esc("0.05120000"))]), boxed=True))
     return cm.Page("Component gallery", "", "".join(parts))

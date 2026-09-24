@@ -184,7 +184,7 @@ YES/NO tiles. Empty result: "No matches in captured data" + Clear filters.
 **Market detail `/market?venue=&id=&side=&account=`** — identity validated against stored
 records. Order: breadcrumb; labels + full question; quote summary; price history (only with ≥2
 same-side observations); our assessment (never 50% for unknown); across venues (no
-equivalence claimed without evidence); capital & timing; decision preview marked **Read-only ·
+equivalence claimed without evidence); research sizing (read-only challenger); capital & timing; decision preview marked **Read-only ·
 Trading disabled**; rules & evidence disclosure. Desktop: main column + 320px inspector.
 
 *Across venues* renders `best_price.compare` (ADR 0027) for the page's side at the recorded
@@ -197,6 +197,18 @@ unavailable), verified total or — (never for a stale book), depth, tradable-ca
 rules status and claim status. Stale routes are named as not ranked. Related markets are
 listed as **RELATED MARKET — NOT ECONOMICALLY EQUIVALENT**, unpriced and unranked. States: populated, single captured route, all stale, refused payoff,
 not evaluated (no decision, no size, or an earlier target day), no captured book, read error.
+
+*Research sizing* (after Across venues, main column) renders Lane A's read-only
+`sizing_counterfactual` panel for the market's latest recorded decision, every side.
+It is labelled with the contract's **RESEARCH SIZING - SHADOW SIZING CHALLENGER** label and never
+"Recommended bet". It shows the challenger policy's (H) size, verdict, binding constraint,
+probabilities, expected net edge, entry price, fee, Kelly and pre-cap amounts, bankroll basis and
+capital horizon; caps and fill details in a disclosure; a compact A–H policy comparison; the
+top-of-book caveat; limitations. Every figure is the contract's string, only formatted. A side or
+panel the engine cannot compute shows its named reason (No model, Fees unsupported, Stale quote,
+Rules unresolved, Insufficient uncertainty evidence, Risk state unavailable, Unsupported payoff,
+…). No stake input, slider, submit or order action exists. States: sized, computed zero, a side
+unavailable, the whole panel unavailable, contract not installed, read error.
 
 **Portfolio `/positions`** — account, metric strip with basis labels; Open / Settling /
 Closed / All; position rows; "How these balances are calculated"; settlement evidence. Never
@@ -318,5 +330,14 @@ directive), and the screenshots that justify it.
   decision-time freshness row: the comparator judges a book at the recorded decision time, so it
   says "at decision time" and never plain "fresh" beside the Quote section's current-time
   verdict; a single captured route reuses "No equivalent venue price verified". No token, CSS,
-  layout or navigation change. Markets rows get no comparison indicator: §8 fixes the board columns.
-  Screenshots: see the PR.
+  layout or navigation change. Markets rows get no comparison indicator: §8 fixes the board
+  columns. Screenshots: 360x800 and 1440x900 (`tests/browser/capture.py`), reviewed locally by
+  the author and described in PR #65 (not attached).
+- **2026-09-24 — Research sizing panel.** Approved by the 2026-09-24 next-build-chunk directive,
+  Deliverable 2. §8 market detail gains a "Research sizing" section after "Across venues" that
+  renders Lane A's `sizing_counterfactual` panel contract (read-only; one memoized replay per
+  request). New component `research_sizing` built from the existing facts, badge,
+  table, disclosure and state components; new state words for the sizing-v2 verdicts. No token,
+  CSS, layout or navigation change. Risk & capital is unchanged. Screenshots: 360x800 and
+  1440x900 (`tests/browser/capture.py`), reviewed locally by the author and described in PR #69
+  (not attached).
