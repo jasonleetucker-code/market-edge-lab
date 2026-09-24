@@ -51,8 +51,15 @@ origin=PRODUCTION
 if [ -n "$invocation" ] && [ "${MONITOR_SERVICE_RESULT:-unknown}" = "exit-code" ] \
     && [ "${MONITOR_EXIT_STATUS:-unknown}" = "1" ] && trusted "$verify_dir"; then
   confirm="$verify_dir/confirmed-$invocation"
+  armed="$verify_dir/armed-$unit"
+  # An armed file older than 15 minutes is stale (the check was killed, or the host lost power):
+  # treat it as not armed, so no alert ever waits on it. This only decides whether to wait. The
+  # origin still comes from the confirmation alone.
+  if [ -e "$armed" ] && [ -z "$(find "$armed" -maxdepth 0 -mmin -15 2>/dev/null)" ]; then
+    armed="$verify_dir/.stale-armed-ignored"
+  fi
   waited=0
-  while [ ! -e "$confirm" ] && [ -e "$verify_dir/armed-$unit" ] && [ "$waited" -lt "$wait_s" ]; do
+  while [ ! -e "$confirm" ] && [ -e "$armed" ] && [ "$waited" -lt "$wait_s" ]; do
     sleep 1
     waited=$((waited + 1))
   done

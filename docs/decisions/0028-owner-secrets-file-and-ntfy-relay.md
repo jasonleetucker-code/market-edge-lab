@@ -166,6 +166,9 @@ guessed from the clock or from "a deployment is happening".
 - **`alert.sh` (as `edgelab`) decides per invocation.**
   - It takes the failed invocation from `MONITOR_INVOCATION_ID`, which systemd 251+ passes to
     `OnFailure=` units (the VPS runs 255), falling back to `systemctl show`.
+    **Requirement: systemd ≥ 251.** On an older systemd the `MONITOR_SERVICE_RESULT` and
+    `MONITOR_EXIT_STATUS` values are absent. Every failure then fails closed to PRODUCTION: the
+    check cannot be recorded as verification, and it pushes as before.
   - It records `origin: DEPLOYMENT_VERIFICATION` only if all of these hold:
     - that ID's confirmation exists and matches byte for byte;
     - the confirmation and its directory are owned by root, not symlinks, and not group- or
@@ -183,6 +186,12 @@ guessed from the clock or from "a deployment is happening".
     `mktemp` and an atomic rename.
   - **Waiting.** Only while this unit is armed, `alert.sh` waits up to 40 s (inside the alert
     unit's 60 s limit) for the confirmation. The armed file alone never changes an origin.
+    - `alert.sh` treats an armed file older than 15 minutes (by mtime) as not armed, and the
+      check removes leftover armed files at startup, under its lock.
+    - A stale file (a killed check, a power loss) therefore can never add 40 s to later alerts.
+      With the webhook's ~33 s, those 40 s could otherwise push `edgelab-alert@` past
+      `TimeoutStartSec=60` and skip the relay.
+    - This age test decides only whether to wait, never the origin.
   - **Webhook.** The optional `EDGE_LAB_ALERT_URL` webhook fires for PRODUCTION only.
 - **The relay** reads both files (`last_verification.json` sits beside `last_failure.json`).
   - A record is DEPLOYMENT_VERIFICATION only if it says so **and** root's confirmation of its
@@ -207,7 +216,7 @@ guessed from the clock or from "a deployment is happening".
   No other unit ever waits.
 - **Script death.** If the check script dies before confirming (for example SIGKILL), the
   failure is pushed as PRODUCTION: a false alarm, never a missed one. An armed file left behind
-  by a SIGKILL only delays decision-unit alerts by 40 s, until the next check replaces it.
+  is ignored once it is 15 minutes old, and removed by the next check.
 - **Single records.** `last_failure.json` and `last_verification.json` each hold only the
   latest record. The journal keeps every failure.
 - **Old records.** Records written before this amendment have no origin and read as PRODUCTION.

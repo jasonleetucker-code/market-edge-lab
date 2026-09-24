@@ -14,7 +14,9 @@
 #    - edgelab-decision.timer is not due within 5 minutes.
 # 2. Arm: write armed-edgelab-decision.service in /var/lib/market-edge-lab-verify (root-owned,
 #    0755). While it exists, alert.sh waits (bounded) for a confirmation of the invocation that
-#    failed. The armed file alone never changes an origin. A trap removes it on exit.
+#    failed. The armed file alone never changes an origin. A trap removes it on exit. A file
+#    left by a killed check is removed at the next start, and alert.sh ignores one older than
+#    15 minutes.
 # 3. Start the real, installed unit. It must fail with rejected_out_of_window.
 # 4. Read that invocation's InvocationID, Result and ExecMainStatus, and its own journal lines.
 #    Confirm only if all of these hold:
@@ -52,6 +54,8 @@ umask 022
 mkdir -p -- "$verify_dir" && chmod 0755 -- "$verify_dir" || stop "REFUSED: cannot create $verify_dir"
 [ "$(stat -c %u -- "$verify_dir")" = "$owner_uid" ] || stop "REFUSED: $verify_dir is not owned by uid $owner_uid"
 exec 9>"$verify_dir/.lock" && flock -n 9 || stop "REFUSED: another fail-closed check is running"
+# Holding the lock, any armed file is a leftover of a killed check: remove it.
+rm -f -- "$verify_dir"/armed-*
 find "$verify_dir" -maxdepth 1 -type f -name 'confirmed-*' -mtime +7 -delete 2>/dev/null || true
 
 state=$(systemctl show -p ActiveState --value -- "$unit" 2>/dev/null) || stop "REFUSED: cannot read the state of $unit"

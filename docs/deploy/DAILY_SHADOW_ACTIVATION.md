@@ -171,8 +171,9 @@ sudo systemd-run --wait --pipe --quiet -p User=edgelab -p Group=edgelab -p Slice
   - It also runs after every `edgelab-alert@` failure alert. A PRODUCTION unit failure then
     arrives as the fixed headline "A run or data source failed".
   - **Origin rule.** Only PRODUCTION events are pushed. The §4.1 fail-closed check is recorded
-    as DEPLOYMENT_VERIFICATION in `last_verification.json` and shown locally, but never pushed;
-    `last_failure.json` holds production failures only. TEST
+    as DEPLOYMENT_VERIFICATION in `last_verification.json` and the journal, but never pushed.
+    The dashboard shows it once Lane B's alerts PR lands. `last_failure.json` holds production
+    failures only. TEST
     events are pushed only by `notify test`. MANUAL_DIAGNOSTIC events are pushed only on
     explicit request, and REPLAY and DEMO events never. The relay journal counts held events
     as `HELD_BY_ORIGIN`.

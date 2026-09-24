@@ -779,6 +779,30 @@ def test_a_real_failure_of_the_same_unit_while_a_check_is_armed_still_pushes(box
     assert _relay(box)[0] == {"SUBMITTED": 1}
 
 
+def test_a_stale_armed_file_never_delays_an_alert(box):
+    """A check killed (or a power loss) can leave armed-* behind; after 15 minutes it is ignored."""
+    import time
+
+    armed = box["verify"] / f"armed-{DECISION}"
+    armed.write_text('{"unit": "edgelab-decision.service"}\n')
+    twenty_minutes_ago = time.time() - 20 * 60
+    os.utime(armed, (twenty_minutes_ago, twenty_minutes_ago))
+    started = time.monotonic()
+    name, record = _alert(box, EDGE_LAB_VERIFY_WAIT_SECONDS="40")
+    assert time.monotonic() - started < 10  # no 40 s wait
+    assert name == "last_failure.json" and record["origin"] == "PRODUCTION" and _pushed(box)
+    assert armed.exists()  # alert.sh only reads the verify directory
+
+
+def test_the_check_removes_leftover_armed_files_at_startup(box):
+    leftovers = [box["verify"] / f"armed-{DECISION}", box["verify"] / "armed-edgelab-recheck.service"]
+    for path in leftovers:
+        path.write_text("{}\n")
+    code, out = _fail_closed(box, STUB_STATE="active")  # removed even when the check then refuses
+    assert code == 1 and "REFUSED" in out
+    assert not any(p.exists() for p in leftovers)
+
+
 def test_the_alert_waits_for_a_confirmation_while_a_check_is_armed(box):
     import threading
 
