@@ -221,16 +221,18 @@ Two traps:
   - Rename the two `*.timer.proposed` files to `*.timer` in the same change.
   - Update `tests/test_deploy_units.py`: its `SEPARATELY_ACTIVATED=edgelab-odds` assertion, and
     `tests/test_polymarket_sports_units.py::test_the_installer_does_not_know_or_enable_the_pilot_timers`.
-- **Freshness Fabric registry**, once Lane A (`feat/freshness-fabric`) is on main. Add one
-  `REGISTRY` entry in `freshness_fabric.py`:
-
-  `FabricProvider(polymarket_sports.FABRIC_PROVIDER_NAME, polymarket_sports.fabric_policies(), polymarket_sports.fabric_provider)`
-
-  plus `polymarket_sports` in that module's `from . import ...` line.
-  - The name is `polymarket_us_nfl_pilot`: Lane A's own test registers a demo provider named
-    `polymarket_us_nfl`.
-  - Verified locally on a trial merge with `origin/feat/freshness-fabric` (`4df9b68`, which has the tightened `usable_flags` contract): Lane A's
-    fabric tests and this lane's tests pass.
+- **Freshness Fabric registry: done in this change** (Lane A merged as `8c5b9e6`). One
+  `REGISTRY` entry,
+  `FabricProvider(polymarket_sports.FABRIC_PROVIDER_NAME, polymarket_sports.fabric_policies(), polymarket_sports.fabric_provider)`,
+  plus `polymarket_sports` in the module's `from . import ...` line.
+  - The name is `polymarket_us_nfl_pilot`, because Lane A's own test registers a demo provider
+    named `polymarket_us_nfl`.
+  - Once the timers are renamed, `edgelab-pm-sports.timer` and `edgelab-pm-sports-discover.timer`
+    are already named in the policies' `schedule_owner`. The every-timer-is-explained test then
+    holds.
+- **Stop lines (runbook and README).** They must name `edgelab-pm-sports.timer` and
+  `edgelab-pm-sports-discover.timer` (services `edgelab-pm-sports.service` and
+  `edgelab-pm-sports-discover.service`) when the timers are installed.
 - **Runbook, HANDOFF and verify_production (coordinator):**
   - a v7 → v6 rollback step, `mark-v6-for-rollback`, before the existing v6 → v5 one;
   - an activation section: owner access decision, the gate code change, enabling both timers,
