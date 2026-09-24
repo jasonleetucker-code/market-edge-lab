@@ -147,7 +147,7 @@ enabled state. New units are installed but not enabled.
 ## 5. Activate (owner)
 
 ```bash
-sudo systemctl enable --now edgelab-shadow.timer edgelab-settlement.timer edgelab-observe.timer edgelab-observe-close.timer
+sudo systemctl enable --now edgelab-shadow.timer edgelab-settlement.timer edgelab-observe.timer edgelab-observe-close.timer edgelab-freshness.timer
 systemctl list-timers 'edgelab-*'
 ```
 
@@ -279,6 +279,31 @@ sports model and no strategy.
 
   `odds_pilot.dashboard_status` reports `ACTIVE`, with `live_read_verified: true`.
 
+## 5d. Freshness Fabric supervisor (ADR 0031; owner directive 2026-09-24 evening)
+
+`edgelab-freshness.timer` runs every 5 minutes at :01, :06 and so on.
+- **What it touches.** It is network-free (AF_UNIX only). It reads the evidence DB, the shadow
+  ledger, the Odds quota ledger and the status files, all read-only, and writes only
+  `/var/lib/market-edge-lab-status/freshness.json` (schema `freshness-fabric-status/1`).
+- **What it controls.** Nothing. It explains every existing schedule as EXTERNAL_SCHEDULE: what
+  refreshes next, when, why, how stale each source is, and whether it is usable. Parity
+  differences are listed in `disagreements`, never silently resolved.
+- **Protected windows.** Inside one, it opens no store and carries the previous evaluation forward
+  as `DEFERRED_PROTECTED_WINDOW`.
+- **No alert.** It has no OnFailure alert by design. A crash shows as a failed unit and a stale
+  `freshness.json`, never as up to 288 pushes a day.
+
+It is enabled with the core timers in §5. Check it with:
+
+```bash
+systemctl is-enabled edgelab-freshness.timer; systemctl list-timers edgelab-freshness.timer
+sudo runuser -u edgelab -- /opt/market-edge-lab/venv/bin/python -m edge_lab.cli freshness status --db /var/lib/market-edge-lab/db/edge_lab.sqlite3 --ledger /var/lib/market-edge-lab/ledger/shadow_ledger.sqlite3 --odds-ledger /var/lib/market-edge-lab/db/odds_quota_ledger.json --status-dir /var/lib/market-edge-lab-status
+bash /opt/market-edge-lab/app/deploy/vps/verify_production.sh | grep -E 'FRESHNESS|TIMERS'
+```
+
+Stop it alone with `sudo systemctl disable --now edgelab-freshness.timer`. No collector depends
+on it.
+
 ## 5c. Later/closing price observations: scheduled Option A (ADR 0030)
 
 Authority: the 2026-09-24 next-build-chunk directive built the manual mechanism; the owner explicitly
@@ -408,8 +433,8 @@ settlement run (about 11:15 and 16:15 ET):
    timers: `disable` does not reliably expand a glob for unit files, and step 5 deletes unit files, so
    every timer must really be disabled first.
    ```bash
-   sudo systemctl disable --now edgelab-pfm.timer edgelab-decision.timer edgelab-recheck.timer edgelab-status.timer edgelab-backup.timer edgelab-shadow.timer edgelab-settlement.timer edgelab-observe.timer edgelab-observe-close.timer edgelab-odds.timer
-   systemctl is-enabled edgelab-pfm.timer edgelab-decision.timer edgelab-recheck.timer edgelab-status.timer edgelab-backup.timer edgelab-shadow.timer edgelab-settlement.timer edgelab-observe.timer edgelab-observe-close.timer edgelab-odds.timer   # expect disabled (or not-found) for every one
+   sudo systemctl disable --now edgelab-pfm.timer edgelab-decision.timer edgelab-recheck.timer edgelab-status.timer edgelab-backup.timer edgelab-shadow.timer edgelab-settlement.timer edgelab-observe.timer edgelab-observe-close.timer edgelab-freshness.timer edgelab-odds.timer
+   systemctl is-enabled edgelab-pfm.timer edgelab-decision.timer edgelab-recheck.timer edgelab-status.timer edgelab-backup.timer edgelab-shadow.timer edgelab-settlement.timer edgelab-observe.timer edgelab-observe-close.timer edgelab-freshness.timer edgelab-odds.timer   # expect disabled (or not-found) for every one
    systemctl list-units 'edgelab-*' --state=running --no-legend   # expect no capture job
    ```
 2. **Make a verified backup (still the new code):**
@@ -435,6 +460,12 @@ settlement run (about 11:15 and 16:15 ET):
    sudo install -o root -g root -m 0644 /opt/market-edge-lab/app/deploy/vps/systemd/edgelab-* /opt/market-edge-lab/app/deploy/vps/systemd/edgelab.slice /etc/systemd/system/
    sudo rm -f /etc/systemd/system/edgelab-observe.service /etc/systemd/system/edgelab-observe.timer \
      /etc/systemd/system/edgelab-observe-close.service /etc/systemd/system/edgelab-observe-close.timer
+   sudo systemctl daemon-reload
+   ```
+   Rolling back to code from before ADR 0031 (before the Freshness supervisor), also remove its units.
+   It has no schema of its own, and its `freshness.json` can stay:
+   ```bash
+   sudo rm -f /etc/systemd/system/edgelab-freshness.service /etc/systemd/system/edgelab-freshness.timer
    sudo systemctl daemon-reload
    ```
    **Only when the rollback target is v4** (before ADR 0029), additionally remove the Odds units:
@@ -466,4 +497,4 @@ settlement run (about 11:15 and 16:15 ET):
 Re-installing the newer code later stamps it again: the migration is idempotent, and every row
 written meanwhile is kept. The shadow
 ledger's schema did not change (v1), so the rolled-back code reads it. To stop all collection
-and keep the data: `sudo systemctl disable --now edgelab-pfm.timer edgelab-decision.timer edgelab-recheck.timer edgelab-status.timer edgelab-backup.timer edgelab-shadow.timer edgelab-settlement.timer edgelab-observe.timer edgelab-observe-close.timer edgelab-odds.timer` (named, not a glob).
+and keep the data: `sudo systemctl disable --now edgelab-pfm.timer edgelab-decision.timer edgelab-recheck.timer edgelab-status.timer edgelab-backup.timer edgelab-shadow.timer edgelab-settlement.timer edgelab-observe.timer edgelab-observe-close.timer edgelab-freshness.timer edgelab-odds.timer` (named, not a glob).

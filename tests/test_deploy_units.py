@@ -166,7 +166,7 @@ def test_readme_install_window_matches_the_capture_window():
 VERIFY = ROOT / "deploy" / "vps" / "verify_production.sh"
 VERIFY_STATES = (
     "NY_TIME", "IN_CAPTURE_WINDOW", "RUNNING_UNITS", "DEPLOYED_SHA", "TIMERS", "UNIT_RESULTS", "SHADOW_TIMER",
-    "SETTLEMENT_TIMER", "OBSERVE_TIMER", "OBSERVE_CLOSE_TIMER", "LATEST_JSON", "LATEST_JSON_AGE", "COLLECTOR_HEALTH", "VALID_DAY_OBSERVED", "SHADOW_DAILY",
+    "SETTLEMENT_TIMER", "OBSERVE_TIMER", "OBSERVE_CLOSE_TIMER", "FRESHNESS_STATUS", "LATEST_JSON", "LATEST_JSON_AGE", "COLLECTOR_HEALTH", "VALID_DAY_OBSERVED", "SHADOW_DAILY",
     "LAST_FAILURE", "COLLECTOR_INSTALLED", "TIMERS_ENABLED", "PFM_CAPTURE_OBSERVED", "DECISION_CAPTURE_OBSERVED",
     "RECHECK_CAPTURE_OBSERVED", "DB_SIZES", "BACKUPS", "BACKUP_REPORTS_8D", "BACKUP_EVIDENCE_DB",
     "BACKUP_SHADOW_LEDGER", "RESTORE_EVIDENCE_DB", "RESTORE_SHADOW_LEDGER", "JOURNAL_WARNINGS_24H", "OOM_30D",
@@ -241,7 +241,7 @@ def _verify_code_lines():
 def _embedded_python():
     text = VERIFY.read_text()
     bodies = re.findall(r"<<'PY'[^\n]*\n(.*?)\nPY\n", text, re.S)
-    assert len(bodies) == 3, "expected the latest.json, shadow_daily.json and backup-journal parsers"
+    assert len(bodies) == 4, "expected the latest.json, freshness.json, shadow_daily.json and backup-journal parsers"
     return bodies
 
 
@@ -268,7 +268,8 @@ def test_verify_production_reports_every_state_separately():
         assert re.search(rf"\b{name}\b", text), f"no STATE line for {name}"
     assert "STATE %s: %s" in text and "SUMMARY" in text and "One state does not imply the next" in text
     assert "NOT_READABLE_WITHOUT_PRIVILEGE" in text
-    for timer in ("pfm", "decision", "recheck", "status", "backup", "shadow", "settlement", "observe", "observe-close"):
+    for timer in ("pfm", "decision", "recheck", "status", "backup", "shadow", "settlement", "observe", "observe-close",
+                  "freshness"):
         assert re.search(rf"NAMES=\([^)]*(?<![\w-]){timer}(?![\w-])", text)
     assert "set -u" in text
 
@@ -1033,7 +1034,6 @@ def test_the_webhook_fires_only_for_production_failures():
 
 
 # Timers whose runbook/README lines are the coordinator's integration step (remove the entry then).
-PENDING_RUNBOOK_TIMERS = frozenset({"edgelab-freshness.timer"})
 
 
 def test_stop_and_rollback_name_every_timer_instead_of_a_glob():
@@ -1042,11 +1042,7 @@ def test_stop_and_rollback_name_every_timer_instead_of_a_glob():
     timers = sorted(p.name for p in UNITS.glob("*.timer"))
     for path in (ROOT / "docs/deploy/DAILY_SHADOW_ACTIVATION.md", ROOT / "deploy/vps/README.md"):
         text = path.read_text()
-        # The Freshness supervisor timer (ADR 0031) lands before the coordinator's runbook/README
-        # update. Until a document mentions it at all, its stop lines may omit it; from the moment
-        # the document names it anywhere, every stop-everything line must name it too. The
-        # installer's own printed stop line (CORE_TIMERS) already includes it.
-        required = [t for t in timers if t not in PENDING_RUNBOOK_TIMERS or t.removesuffix(".timer") in text]
+        required = timers
         lines = [line for line in text.splitlines() if "disable --now" in line]
         assert lines, path
         for line in lines:
