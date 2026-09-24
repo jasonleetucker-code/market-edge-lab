@@ -707,3 +707,19 @@ def test_the_traceback_of_an_unexpected_error_is_logged_redacted(paths, monkeypa
     code, report = tick(paths, provider, utc(2026, 10, 3, 10, 15))
     err = capsys.readouterr().err
     assert code == 1 and "Traceback" in err and "RuntimeError" in err and FAKE not in err
+
+
+def test_every_entry_point_accepts_string_paths_as_the_cli_passes_them(paths):
+    """Production 2026-09-24: `edge-lab odds smoke` crashed with AttributeError ('str' has no
+    with_name) before any request, because smoke() did not normalise the CLI's string paths."""
+    db, ledger = str(paths[0]), str(paths[1])
+    provider = Provider()
+    code, report = op.smoke(db, ledger, op.RunnerSettings(), clock=Clock(utc(2026, 10, 1, 12)),
+                            opener=provider, environ=ENV)
+    assert code == 0 and report["state"] == "CAPTURED" and len(provider.paid()) == 1
+    code, report = op.plan(db, ledger, op.RunnerSettings(), clock=Clock(utc(2026, 10, 1, 12, 5)),
+                           opener=Provider(), environ=ENV)
+    assert code == 0 and report["state"] == "PROVEN"
+    code, report = op.run_tick(db, ledger, op.RunnerSettings(), clock=Clock(utc(2026, 10, 1, 12, 10)),
+                               opener=Provider(), environ=ENV)
+    assert code == 0 and report["state"] == "IDLE" and "error_kind" not in report
