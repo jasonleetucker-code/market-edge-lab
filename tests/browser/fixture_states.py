@@ -6,7 +6,7 @@ and status-file shapes, and returns a dashboard Config with a fixed clock:
 - early: the production-shaped early state from the owner's screenshots (a fresh status report,
   an INVALID last capture, no decisions, both shadow accounts opened with no activity);
 - demo: the synthetic populated demo (`edge_lab.dashboard.demo.build_demo`), watermarked;
-- broken: malformed and unreadable sources (corrupt JSON, a non-SQLite ledger).
+- broken: malformed and unreadable sources (corrupt JSON, a non-SQLite ledger and evidence DB).
 """
 
 from __future__ import annotations
@@ -65,7 +65,9 @@ def broken(root: Path | None = None) -> tuple[Config, Path]:
     (status / "shadow_daily.json").write_text("[1, 2]", encoding="utf-8")
     bad = root / "shadow_ledger.sqlite3"
     bad.write_bytes(b"this is not a sqlite database at all" * 20)
-    cfg = Config(ledger=bad, status_dir=status, experiments_root=REPO / "experiments",
+    bad_db = root / "edge_lab.sqlite3"
+    bad_db.write_bytes(b"this is not an evidence database either" * 20)
+    cfg = Config(db=bad_db, ledger=bad, status_dir=status, experiments_root=REPO / "experiments",
                  clock=lambda: EARLY_NOW + timedelta(hours=40))
     return cfg, root
 

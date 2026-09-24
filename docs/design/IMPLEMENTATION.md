@@ -44,6 +44,7 @@ After: the same deep links (relabelled Terminal, Markets, Portfolio, Outcomes, R
 | Limit caps | `exp001_shadow.RISK_POLICY` (and research policy if registered) |
 | Withdrawal figures and status | `risk.withdrawal_assessment` (always NOT_RECOMMENDED) |
 | Outcome groups, exposure, bounds, account impact, horizons | `outcome_board.build_board` |
+| Outcome group title (plain language) | `presentation.cluster_label` over the group's recorded `outcome_cluster` (raw id kept in "Why it matters") |
 | Quotes on tape, board and detail (ask, size, capture time) | `data.observed_board` → `kalshi_quotes.quotes_from_orderbook` over the latest target day's decision and re-check captures |
 | Price change | difference of two captured asks of the same side (presentation; not an edge, not P&L) |
 | Model and conservative probability, price at decision, fee, all-in cost, net edge, fee status, claim basis, size, binding constraint | recorded decision payloads (Gate 5 engine at decision time) |

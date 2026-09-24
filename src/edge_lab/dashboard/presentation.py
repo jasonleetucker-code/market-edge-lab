@@ -517,6 +517,25 @@ def domain_of(event_id: Any, fallback: Any = None) -> str:
     return "other"
 
 
+# Outcome-cluster ids with a known meaning, mapped to plain language. Only patterns listed here
+# get a label; anything else is shown as its raw id, never a guessed description.
+_CLUSTER_LABELS = (
+    # EXP-001 (exp001_stageb): the Central Park daily maximum temperature for one target day.
+    (re.compile(r"weather:us-nyc-central-park:([0-9]{4}-[0-9]{2}-[0-9]{2})"), "NYC Central Park high temperature"),
+)
+
+
+def cluster_label(cluster: Any) -> str:
+    """A plain-language outcome-cluster label ("NYC Central Park high temperature · Sep 24"), else the raw id."""
+    raw = str(cluster) if cluster is not None else ""
+    for pattern, label in _CLUSTER_LABELS:
+        m = pattern.fullmatch(raw)
+        day = date_label(m.group(1)) if m else None
+        if day:
+            return f"{label} · {day}"
+    return raw
+
+
 @dataclass(frozen=True)
 class QuoteSide:
     """The latest captured executable buy price for one side of one market."""

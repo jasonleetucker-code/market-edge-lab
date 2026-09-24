@@ -87,7 +87,8 @@ def make_app(config: d.Config) -> Callable[[dict[str, Any], Callable], Iterable[
             try:
                 p = params or pr.Params()
                 from .components import tape as tape_html
-                tape = tape_html(pr.tape_rows(cm.board_rows(ctx, p)), p)
+                tape = tape_html(pr.tape_rows(cm.board_rows(ctx, p)), p,
+                                 unavailable=ctx.observed.status == d.ERROR)
             except Exception as exc:  # noqa: BLE001 - the tape never fails a page
                 print(f"dashboard: tape unavailable: {d.short_error(exc, config)}", file=sys.stderr)
                 tape = ""

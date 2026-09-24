@@ -107,7 +107,7 @@ def matters(ctx: d.Context, p: pr.Params) -> str:
         body = c.empty_state("No open exposure", "The account loaded and holds no open shadow positions.")
     else:
         top = max((g.current_exposure for g in groups), default=0)
-        items = [c.row(esc(g.outcome_cluster), sub=f"{len(g.positions)} linked position(s) · settles "
+        items = [c.row(esc(pr.cluster_label(g.outcome_cluster)), sub=f"{len(g.positions)} linked position(s) · settles "
                        f"{pr.datetime_et(g.settles_by_utc) or 'time unknown'}",
                        aside=c.money_cell(g.current_exposure),
                        body=c.bar(g.current_exposure, top, label=f"Exposure {pr.money(g.current_exposure)}"))
