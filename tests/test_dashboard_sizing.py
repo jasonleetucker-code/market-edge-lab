@@ -292,3 +292,10 @@ def test_fixtures_have_the_real_contracts_shape(demo, monkeypatch):
         table = html[html.index("Research sizing by policy"):]
         assert "$0.00" not in table and "0.00%" not in table
 
+
+def test_a_replay_without_a_configured_database_says_so(fake_contract, demo, tmp_path):
+    for cfg in (dataclasses.replace(demo, db=None), dataclasses.replace(demo, db=tmp_path / "missing.sqlite3")):
+        result = d.research_sizing(d.Context(cfg), "kalshi:DEMO-B71.5")
+        assert result.status == d.OK and "Replayed without the evidence database, which is not available" in \
+            result.message and str(tmp_path) not in result.message
+

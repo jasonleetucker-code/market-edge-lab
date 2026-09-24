@@ -92,11 +92,7 @@ _ABS_PATH = re.compile(r"(?:[A-Za-z]:)?(?:[\\/][^\s\\/:'\"]+)+[\\/]?")
 def short_error(exc: BaseException, config: Config | None = None, limit: int = 200) -> str:
     """A one-line message: the exception class and its text with every path reduced to its
     final name. No traceback, no directories, no environment values."""
-    text = str(exc).splitlines()[0] if str(exc) else ""
-    for p in (config.paths() if config else []):
-        for variant in {str(p), str(p.resolve())}:
-            text = text.replace(variant, p.name)
-    text = _ABS_PATH.sub(lambda m: re.split(r"[\\/]", m.group(0).rstrip("\\/"))[-1], text)
+    text = scrub_paths(str(exc).splitlines()[0] if str(exc) else "", config)
     text = f"{type(exc).__name__}: {text}" if text else type(exc).__name__
     return text if len(text) <= limit else text[: limit - 1] + "…"
 
@@ -642,8 +638,9 @@ def research_sizing(ctx: Context, market_id: str) -> Loaded:
     heads = _ledger_heads(ctx)
     store = ctx.store.value if ctx.store.status == OK else None
     caveat = ""
-    if ctx.store.status == ERROR:
-        caveat = (f"Replayed without the evidence database, which cannot be read ({ctx.store.message}): captured "
+    if ctx.store.status != OK:
+        why = "cannot be read" if ctx.store.status == ERROR else "is not available"
+        caveat = (f"Replayed without the evidence database, which {why} ({ctx.store.message}): captured "
                   "settlements and confirmation quotes are missing from this replay.")
     cacheable = heads is not None and ctx.store.status != ERROR
     key = (str(_resolved(ctx.config.ledger)), str(_resolved(ctx.config.db)), ctx.store.status, heads, market_id)
