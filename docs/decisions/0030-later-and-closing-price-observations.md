@@ -141,7 +141,7 @@ Polymarket US books go through `save_snapshot` (source `polymarket_us`, kind `bo
   - Persistent targets.
   - `decision`/`recheck` observations backfilled from the forward captures' own snapshots.
   - Every overdue open target marked `MISSED` with its reason, for example
-    `NOT_CAPTURED_BY_DEADLINE ... (manual capture only; no timer is authorized)` or
+    `NOT_CAPTURED_BY_DEADLINE ... under scheduled ADR0030_OPTION_A` or
     `PLANNED_AFTER_DEADLINE`.
 - **No network.** Idempotent. It takes the same collector lock, so it also refuses to run inside a
   protected window (below).
