@@ -236,6 +236,7 @@ class PilotState:
     that only `odds run --clear-cost-block` lifts. Deleting the file never lifts a block."""
 
     def __init__(self, ledger_path: Path, *, paid_history: bool = False, now_utc: str | None = None) -> None:
+        ledger_path = Path(ledger_path)  # defence in depth: callers may pass the CLI's strings
         self.path = ledger_path.with_name(ledger_path.name + ".pilot.json")
         self.status = "OK"
         try:

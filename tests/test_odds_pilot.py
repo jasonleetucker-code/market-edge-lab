@@ -719,7 +719,7 @@ def test_every_entry_point_accepts_string_paths_as_the_cli_passes_them(paths):
     assert code == 0 and report["state"] == "CAPTURED" and len(provider.paid()) == 1
     code, report = op.plan(db, ledger, op.RunnerSettings(), clock=Clock(utc(2026, 10, 1, 12, 5)),
                            opener=Provider(), environ=ENV)
-    assert "state" in report
+    assert code == 0 and report["state"] == "PROVEN"
     code, report = op.run_tick(db, ledger, op.RunnerSettings(), clock=Clock(utc(2026, 10, 1, 12, 10)),
                                opener=Provider(), environ=ENV)
-    assert "state" in report or "outcome" in report
+    assert code == 0 and report["state"] == "IDLE" and "error_kind" not in report
