@@ -867,6 +867,7 @@ def smoke(db_path: str | Path, ledger_path: str | Path, settings: RunnerSettings
 # --------------------------------------------------------------------------- dashboard status (read-only)
 
 DASHBOARD_SCHEMA = "odds-pilot-status/1"
+DASHBOARD_ODDS_PAGE = 8  # stored odds payloads read per page while looking for the newest one with offers
 RESEARCH_LABEL = "OFFERED ODDS - RESEARCH ONLY, NOT EXECUTABLE"
 DASHBOARD_STATES = ("ERROR", "COST_BLOCKED", "KEY_REJECTED", "SETUP_NEEDED", "DEGRADED", "QUOTA_EXHAUSTED",
                     "QUOTA_UNKNOWN", "DISCOVERY_FAILED", "DISCOVERY_STALE", "ACTIVE")
@@ -955,19 +956,26 @@ def dashboard_status(db_path: str | Path, ledger_path: str | Path, state_path: s
     health: dict[str, Any] = {}
     if store is not None:
         try:
-            odds_rows = [r for r in store.snapshots_of_kind(source=SOURCE, kind="odds")
-                         if r["entity_id"] == settings.sport]
-            for row in reversed(odds_rows):
-                payload = json.loads(row["payload_json"])
-                request = payload.get("request") or {}
-                parsed = odds_api.parse_odds(payload.get("events"),
-                                             odds_format=request.get("odds_format", settings.odds_format))
-                if latest_odds is None:
-                    latest_odds = row
-                if parsed.offers:
-                    verified = (row, parsed, request)
+            # Newest first, one bounded page at a time (ADR 0031 review SF-2): memory holds at most
+            # DASHBOARD_ODDS_PAGE payloads, however long the history. Same result as a full scan.
+            before: int | None = None
+            while verified is None:
+                page = store.snapshots_of_kind_newest(source=SOURCE, kind="odds", entity_id=settings.sport,
+                                                      limit=DASHBOARD_ODDS_PAGE, before_id=before)
+                if not page:
                     break
-                empty_reads_since += 1
+                for row in page:
+                    payload = json.loads(row["payload_json"])
+                    request = payload.get("request") or {}
+                    parsed = odds_api.parse_odds(payload.get("events"),
+                                                 odds_format=request.get("odds_format", settings.odds_format))
+                    if latest_odds is None:
+                        latest_odds = row
+                    if parsed.offers:
+                        verified = (row, parsed, request)
+                        break
+                    empty_reads_since += 1
+                before = int(page[-1]["id"])
             latest_events = store.latest_snapshot(source=SOURCE, kind="events", entity_id=settings.sport)
             rows = store.odds_targets(sport=settings.sport)
             health = {r["source_id"]: dict(r) for r in store.latest_source_health()
