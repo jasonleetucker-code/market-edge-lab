@@ -1109,67 +1109,96 @@ def terminal_view(db_path: str | Path, *, now: datetime,
 # --------------------------------------------------------------------------- Freshness Fabric provider
 
 
+def _discovery_health(scans: Sequence[Any]) -> str:
+    if not scans:
+        return "UNKNOWN"
+    last = scans[0]
+    if last["coverage_state"] == "FAILED":
+        return "FAILING"
+    return "OK" if int(last["filter_complete"]) else "DEGRADED"
+
+
 def freshness_records(store: SnapshotStore, *, now: datetime,
                       access_decision: str | None = OWNER_ACCESS_DECISION) -> list[dict[str, Any]]:
-    """The two sources this pilot owns, one record each at `now` (Freshness Fabric contract C1):
-    discovery (mode POLL) and research book captures (mode EVENT_RELATIVE). Plain values;
-    `fabric_provider` turns them into `freshness.SourceFreshness` when that type exists.
-    Unknown stays None; missing is never zero."""
+    """The two sources this pilot owns, one record each at `now`, as plain values: discovery
+    (mode POLL) and research book captures (mode EVENT_RELATIVE). `fabric_provider` turns them
+    into `freshness.SourceFreshness` (contract C1). Unknown stays None; missing is never zero."""
     due, next_due = discovery_due(store, now)
     cat = catalog_state(store, now=now)
     scans = store.pm_sports_scans(league=LEAGUE, limit=1)
     usable = latest_usable_scan(store)
     blocked = not access_decision
+    protected = protected_window_at(now, now + MAX_RUN)
     disc_received = usable["completed_at_utc"] if usable is not None else None
-    disc_fresh = (Freshness.UNKNOWN if usable is None else
-                  Freshness.FRESH if now - _t(disc_received) <= DISCOVERY_INTERVAL + timedelta(minutes=30)
-                  else Freshness.STALE)
+    disc_age = None if usable is None else now - _t(disc_received)
+    disc_max_age = get_source(HEALTH_DISCOVERY).max_age["nfl_events"]
+    disc_fresh = (Freshness.UNKNOWN if disc_age is None else
+                  Freshness.FRESH if disc_age <= disc_max_age else Freshness.STALE)
+    if blocked:
+        disc_state, disc_why = "PAUSED", f"BLOCKED_TERMS_REVIEW: {TERMS_REVIEW}"
+    elif due and protected is not None:
+        disc_state, disc_why = "PROTECTED_WINDOW", f"due, but inside {protected[0]}: runs refuse it"
+    elif due:
+        disc_state, disc_why = "DUE", ("no scan on record" if not scans else
+                                       f"the last attempt is at least {int(DISCOVERY_INTERVAL.total_seconds() // 3600)} h old")
+    else:
+        disc_state, disc_why = "NOT_DUE", f"next scan after {next_due} (paced on the last attempt)"
     discovery = {
         "source_id": HEALTH_DISCOVERY, "domain": "sports", "acquisition_mode": "POLL",
-        "policy": {"max_useful_age_s": int((DISCOVERY_INTERVAL + timedelta(minutes=30)).total_seconds()),
+        "policy": {"max_useful_age_s": int(disc_max_age.total_seconds()),
                    "min_safe_cadence_s": int(DISCOVERY_INTERVAL.total_seconds()),
                    "max_useful_cadence_s": int(DISCOVERY_INTERVAL.total_seconds()), "policy_version": POLICY_VERSION},
-        "intended_utc": None, "next_due_utc": next_due,
+        "intended_utc": next_due, "next_due_utc": None if blocked else next_due,
         "last_attempt_utc": scans[0]["completed_at_utc"] if scans else None,
         "last_success_utc": disc_received, "upstream_utc": None, "receipt_utc": disc_received,
-        "data_age_s": None if usable is None else int((now - _t(disc_received)).total_seconds()),
-        "health": cat["state"], "freshness": disc_fresh.value,
-        "schedule_state": "PAUSED" if blocked else ("DUE" if due else "NOT_DUE"),
-        "why": (f"BLOCKED_TERMS_REVIEW: {TERMS_REVIEW}" if blocked else
-                "never run" if not scans else f"every {int(DISCOVERY_INTERVAL.total_seconds() // 3600)} h after the last attempt"),
+        "data_age_s": None if disc_age is None else int(disc_age.total_seconds()),
+        "health": _discovery_health(scans), "catalog_state": cat["state"], "freshness": disc_fresh.value,
+        "schedule_state": disc_state, "why": disc_why, "missed_count": None, "recent_misses": [],
         "controls": {"pacer_s": PACER_INTERVAL_S, "max_http_requests": 2 * MAX_DISCOVERY_PAGES,
                      "max_pages": MAX_DISCOVERY_PAGES, "retries": RETRIES, "protected_windows": "price_observations",
                      "lock": "<db>.pm-sports.lock", "run_deadline_s": int(MAX_RUN.total_seconds())}}
     targets = store.pm_sports_targets()
-    open_targets = [t for t in targets if t["state"] in (None, "FAILED") and _t(t["deadline_utc"]) >= now]
-    nxt = min(open_targets, key=lambda t: t["due_from_utc"], default=None)
+    open_targets = sorted((t for t in targets if t["state"] in (None, "FAILED") and _t(t["deadline_utc"]) >= now),
+                          key=lambda t: t["due_from_utc"])
+    overdue = [t for t in targets if t["state"] in (None, "FAILED") and _t(t["deadline_utc"]) < now]
+    nxt = open_targets[0] if open_targets else None
     captured = [t for t in targets if t["state"] == "CAPTURED"]
     last_capture = max((t["state_at_utc"] for t in captured), default=None)
-    last_attempt = max((t["state_at_utc"] for t in targets if t["state"] in ("CAPTURED", "FAILED", "NOT_EXECUTABLE")),
-                       default=None)
-    missed_recent = [t for t in targets if t["state"] == "MISSED" and _t(t["state_at_utc"])
-                     and now - _t(t["state_at_utc"]) <= timedelta(days=1)]
+    attempted = sorted((t for t in targets if t["state"] in ("CAPTURED", "FAILED", "NOT_EXECUTABLE", "MISSED")),
+                       key=lambda t: t["state_at_utc"] or "")
+    missed = sorted((t for t in targets if t["state"] == "MISSED"), key=lambda t: t["state_at_utc"] or "")
     if blocked:
         sched, why = "PAUSED", f"BLOCKED_TERMS_REVIEW: {TERMS_REVIEW}"
+    elif nxt is not None and _t(nxt["due_from_utc"]) <= now and protected is not None:
+        sched, why = "PROTECTED_WINDOW", f"{nxt['target_id']} is due, but inside {protected[0]}: runs refuse it"
     elif nxt is not None and _t(nxt["due_from_utc"]) <= now:
-        hit = protected_window_at(now, now + MAX_RUN)
-        sched, why = ("PROTECTED_WINDOW", f"inside {hit[0]}") if hit else ("DUE", f"{nxt['target_id']} is due")
-    elif missed_recent:
-        sched, why = "MISSED", f"{len(missed_recent)} target(s) MISSED in the last 24 h"
+        sched, why = "DUE", f"{nxt['target_id']} is inside its due window"
+    elif overdue:
+        sched, why = "MISSED", f"{len(overdue)} open target(s) passed their deadline (the next tick marks them MISSED)"
     else:
-        sched, why = "NOT_DUE", (f"next target {nxt['target_id']}" if nxt is not None else "no open target")
+        sched, why = "NOT_DUE", (f"next target {nxt['target_id']} due from {nxt['due_from_utc']}" if nxt is not None
+                                 else "no open target; targets come from discovery and the Odds API schedule")
+    last_status = attempted[-1]["state"] if attempted else None
+    book_max_age = get_source(HEALTH_BOOK).max_age["book"]
+    capture_age = None if last_capture is None else now - _t(last_capture)
     capture = {
         "source_id": HEALTH_BOOK, "domain": "sports", "acquisition_mode": "EVENT_RELATIVE",
-        "policy": {"max_useful_age_s": None, "min_safe_cadence_s": int(TICK_INTERVAL.total_seconds()),
+        "policy": {"max_useful_age_s": int(book_max_age.total_seconds()),
+                   "min_safe_cadence_s": int(TICK_INTERVAL.total_seconds()),
                    "max_useful_cadence_s": int(TICK_INTERVAL.total_seconds()), "policy_version": POLICY_VERSION,
                    "offsets": [o.label for o in OFFSETS]},
         "intended_utc": nxt["target_utc"] if nxt is not None else None,
-        "next_due_utc": nxt["due_from_utc"] if nxt is not None else None,
-        "last_attempt_utc": last_attempt, "last_success_utc": last_capture, "upstream_utc": None,
-        "receipt_utc": last_capture, "data_age_s": None if last_capture is None else int((now - _t(last_capture)).total_seconds()),
-        "health": cat["state"],
-        # Event-relative: a capture is judged against its own due window, not a rolling age.
-        "freshness": Freshness.UNKNOWN.value, "schedule_state": sched, "why": why,
+        "next_due_utc": None if blocked or nxt is None else nxt["due_from_utc"],
+        "last_attempt_utc": attempted[-1]["state_at_utc"] if attempted else None, "last_attempt_status": last_status,
+        "last_success_utc": last_capture, "upstream_utc": None, "receipt_utc": last_capture,
+        "data_age_s": None if capture_age is None else int(capture_age.total_seconds()),
+        "health": "UNKNOWN" if last_status is None else "DEGRADED" if last_status in ("FAILED", "MISSED") else "OK",
+        # Event-relative: each capture is judged against its own due window (the row's freshness);
+        # this rolling age against the registered book max_age says only how old the newest book is.
+        "freshness": (Freshness.UNKNOWN if capture_age is None else
+                      Freshness.FRESH if capture_age <= book_max_age else Freshness.STALE).value,
+        "schedule_state": sched, "why": why, "missed_count": len(missed),
+        "recent_misses": [f"{t['target_id']}: {t['state_reason']}" for t in missed[-5:]],
         "controls": {"pacer_s": PACER_INTERVAL_S, "max_books_per_run": MAX_BOOKS_PER_RUN,
                      "max_http_requests_per_run": MAX_HTTP_REQUESTS_PER_RUN, "max_markets_per_slot": MAX_MARKETS_PER_SLOT,
                      "retries": RETRIES, "protected_windows": "price_observations", "lock": "<db>.pm-sports.lock",
@@ -1177,15 +1206,80 @@ def freshness_records(store: SnapshotStore, *, now: datetime,
     return [discovery, capture]
 
 
-def fabric_provider(context: Mapping[str, Any], now: datetime) -> list[Any]:
-    """Freshness Fabric provider (contract C1: `provider(context, now) -> list[SourceFreshness]`).
-    `context["db_path"]` is the evidence store. Read-only; opens the store read-only."""
-    from . import freshness as fabric
+def fabric_policies() -> tuple[Any, Any]:
+    """The two `freshness.SourcePolicy` records this provider declares (discovery, capture).
+    Built on call, so this module imports without the Freshness Fabric types."""
+    from .freshness import AcquisitionMode, SourcePolicy
+    from .price_observations import PROTECTED_WINDOWS_ET
 
-    store = SnapshotStore.open_readonly(context["db_path"])
-    records = freshness_records(store, now=now)
-    make = getattr(fabric, "source_freshness_from_mapping", None)
-    return [make(r) for r in records] if make is not None else records
+    windows = tuple(f"{name} {a:%H:%M}-{b:%H:%M} America/New_York" for name, a, b in PROTECTED_WINDOWS_ET)
+    gate = f"; disabled until an owner access decision ({TERMS_REVIEW})"
+    return (
+        SourcePolicy(
+            source_id=HEALTH_DISCOVERY, domain="sports", mode=AcquisitionMode.POLL,
+            description="Polymarket US NFL moneyline discovery (a filtered /v1/events listing, never a full-catalog "
+                        "COMPLETE); objective: the registered nfl_events max_age" + gate,
+            policy_version=POLICY_VERSION,
+            schedule_owner="systemd edgelab-pm-sports-discover.timer (proposed, not installed) + "
+                           "edge_lab.polymarket_sports.discover",
+            max_useful_age=get_source(HEALTH_DISCOVERY).max_age["nfl_events"],
+            min_safe_cadence=DISCOVERY_INTERVAL, max_useful_cadence=DISCOVERY_INTERVAL,
+            pacing=f"{PACER_INTERVAL_S:g} s between requests; at most {MAX_DISCOVERY_PAGES} pages per scan",
+            budget=f"at most {2 * MAX_DISCOVERY_PAGES} HTTP requests per scan, retries included",
+            protected_windows=windows,
+            retry=f"{RETRIES} retry per request (429, 5xx, network); a failed scan is retried after 6 h"),
+        SourcePolicy(
+            source_id=HEALTH_BOOK, domain="sports", mode=AcquisitionMode.EVENT_RELATIVE,
+            description="Polymarket US NFL research book captures at T-24h / T-6h / T-60m for markets related (never "
+                        "equivalent) to an Odds API event; objective: the registered book max_age" + gate,
+            policy_version=POLICY_VERSION,
+            schedule_owner="systemd edgelab-pm-sports.timer :10/:25/:40/:55 America/New_York (proposed, not "
+                           "installed) + edge_lab.polymarket_sports.capture",
+            max_useful_age=get_source(HEALTH_BOOK).max_age["book"],
+            min_safe_cadence=TICK_INTERVAL, max_useful_cadence=TICK_INTERVAL,
+            pacing=f"{PACER_INTERVAL_S:g} s between requests; own lock <db>.pm-sports.lock",
+            budget=(f"at most {MAX_BOOKS_PER_RUN} books and {MAX_HTTP_REQUESTS_PER_RUN} HTTP requests per run; "
+                    f"{MAX_MARKETS_PER_SLOT} markets per slot"),
+            protected_windows=windows,
+            retry="a FAILED target is retried by a later tick until its deadline, then MISSED; never fetched late"),
+    )
+
+
+def fabric_provider(context: Any, now: datetime) -> list[Any]:
+    """Freshness Fabric provider (contract C1: `provider(context, now) -> list[SourceFreshness]`).
+    Reads `context.db` read-only: no network, no lock, no write. A missing or unreadable store is
+    reported as UNKNOWN, never raised into the supervisor."""
+    from .freshness import Freshness as F, ScheduleState, SourceFreshness, SourceHealth, policy_freshness
+
+    disc_policy, cap_policy = fabric_policies()
+    db = getattr(context, "db", None)
+
+    def unknown(policy: Any, why: str) -> Any:
+        return SourceFreshness(policy=policy, as_of=now, freshness=F.UNKNOWN, schedule_state=ScheduleState.UNKNOWN,
+                               health=SourceHealth.UNKNOWN, why_due=why)
+
+    if db is None or not Path(db).is_file():
+        why = "evidence store not configured" if db is None else "evidence store does not exist"
+        return [unknown(disc_policy, why), unknown(cap_policy, why)]
+    try:
+        disc, cap = freshness_records(SnapshotStore.open_readonly(db), now=now)
+    except Exception as exc:  # noqa: BLE001 - reported as UNKNOWN; the supervisor must not fail on it
+        why = f"evidence store unreadable ({type(exc).__name__})"
+        return [unknown(disc_policy, why), unknown(cap_policy, why)]
+    out = []
+    for policy, rec, label in ((disc_policy, disc, LABEL), (cap_policy, cap, RESEARCH_LABEL)):
+        receipt = _t(rec["receipt_utc"])
+        out.append(SourceFreshness(
+            policy=policy, as_of=now, freshness=policy_freshness(policy, receipt, now),
+            schedule_state=ScheduleState(rec["schedule_state"]), health=SourceHealth(rec["health"]),
+            why_due=rec["why"][:300], intended_at=_t(rec["intended_utc"]), next_due=_t(rec["next_due_utc"]),
+            last_attempt=_t(rec["last_attempt_utc"]), last_success_receipt=_t(rec["last_success_utc"]),
+            receipt_ts=receipt, missed_count=rec["missed_count"],
+            recent_misses=tuple(m[:200] for m in rec["recent_misses"]),
+            usable_for_research=receipt is not None, usable_for_decision=False,
+            notes=(label, "the pilot timers are proposed and not installed; their state is not observable here"),
+            details={k: rec[k] for k in ("catalog_state", "last_attempt_status") if k in rec}))
+    return out
 
 
 # --------------------------------------------------------------------------- CLI
@@ -1229,6 +1323,6 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 __all__ = [
     "AMBIGUOUS", "LABEL", "NflMarket", "RELATED", "Relationship", "UNMATCHED", "capture", "catalog_from_events",
-    "catalog_state", "discover", "fabric_provider", "freshness_records", "main", "market_history", "plan",
+    "catalog_state", "discover", "fabric_policies", "fabric_provider", "freshness_records", "main", "market_history", "plan",
     "related_markets", "relate", "rules_clauses", "run_capture", "run_discover", "status", "terminal_view",
 ]

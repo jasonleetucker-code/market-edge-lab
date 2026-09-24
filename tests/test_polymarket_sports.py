@@ -539,11 +539,36 @@ def test_freshness_records_for_the_fabric(tmp_path):
     assert disc["acquisition_mode"] == "POLL" and cap["acquisition_mode"] == "EVENT_RELATIVE"
     assert disc["schedule_state"] == "PAUSED" and "BLOCKED_TERMS_REVIEW" in disc["why"]
     disc, cap = ps.freshness_records(store, now=NOW, access_decision=ALLOW)
-    assert disc["schedule_state"] == "NOT_DUE" and disc["freshness"] == "fresh" and disc["health"] == "FILTER_COMPLETE"
+    assert disc["schedule_state"] == "NOT_DUE" and disc["freshness"] == "fresh" and disc["health"] == "OK"
+    assert disc["catalog_state"] == "FILTER_COMPLETE"
     assert cap["schedule_state"] == "NOT_DUE" and cap["next_due_utc"] and cap["last_success_utc"] is None
     assert cap["freshness"] == "unknown" and cap["data_age_s"] is None  # missing is never zero
     disc, _ = ps.freshness_records(store, now=NOW + timedelta(hours=7), access_decision=ALLOW)
     assert disc["schedule_state"] == "DUE" and disc["freshness"] == "stale"
+
+
+def test_fabric_provider_meets_the_c1_contract(tmp_path):
+    fr = pytest.importorskip("edge_lab.freshness")
+    if not hasattr(fr, "SourceFreshness"):
+        pytest.skip("the Freshness Fabric types (Lane A, feat/freshness-fabric) are not on this branch yet")
+    db = _discovered(tmp_path)
+    ctx = fr.FabricContext(db=db)
+    disc, cap = ps.fabric_provider(ctx, NOW)
+    assert (disc.policy, cap.policy) == ps.fabric_policies()  # equal to the declared policies
+    assert disc.source_id == "polymarket_us_nfl_discovery" and disc.policy.mode is fr.AcquisitionMode.POLL
+    assert cap.source_id == "polymarket_us_nfl_book" and cap.policy.mode is fr.AcquisitionMode.EVENT_RELATIVE
+    assert disc.as_of == NOW and disc.schedule_state is fr.ScheduleState.PAUSED  # the terms gate
+    assert disc.freshness is fr.Freshness.FRESH and disc.health is fr.SourceHealth.OK and disc.receipt_ts is not None
+    assert cap.freshness is fr.Freshness.UNKNOWN and cap.receipt_ts is None and cap.health is fr.SourceHealth.UNKNOWN
+    assert not disc.usable_for_decision and not cap.usable_for_decision
+    missing = ps.fabric_provider(fr.FabricContext(db=tmp_path / "none.sqlite3"), NOW)
+    assert [r.schedule_state for r in missing] == [fr.ScheduleState.UNKNOWN] * 2
+    assert [r.freshness for r in missing] == [fr.Freshness.UNKNOWN] * 2
+    fabric = pytest.importorskip("edge_lab.freshness_fabric")
+    entry = fr.FabricProvider("polymarket_us_nfl", ps.fabric_policies(), ps.fabric_provider)
+    records, reports = fabric.evaluate(ctx, NOW, registry=(entry,))
+    assert reports == [{"provider": "polymarket_us_nfl", "state": "OK", "problems": []}]
+    assert [r.to_dict()["schedule_state"] for r in records] == ["PAUSED", "PAUSED"]
 
 
 def test_status_and_cli(tmp_path, capsys):
