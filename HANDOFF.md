@@ -3,61 +3,105 @@
 This is the live state of the repository. Each session overwrites it; it is not a history
 (git log is the history). Format: `AI_INSTRUCTIONS.md` → Handoff format.
 
-_Last updated: 2026-09-24 ~11:40 America/New_York by the ChatGPT Market session after the
-owner's 11:24 ET follow-up on ntfy delivery, scheduled later/closing observations, and the
-always-on freshness requirement (#74)._
+_Last updated: 2026-09-24 ~16:45 America/New_York (VPS clock) by the laptop Claude session that
+reviewed, merged and deployed PR #76._
 
 ```
-STATUS: PARTIAL. Production remains faadaa1 and healthy as last verified. PR #76 is open for the
-  newly approved scheduled later/closing-price observations; it is NOT merged or deployed yet.
-  The first ntfy TEST was accepted by ntfy (SUBMITTED) but the owner confirmed it did NOT arrive
-  on the phone. Odds API remains live under the existing 450-credit monthly ceiling.
+STATUS: PARTIAL.
+  - PR #76 (ADR 0030 Option A observation timers): MERGED, DEPLOYED and PRODUCTION_VERIFIED for
+    install, timers and the first scheduled plan run.
+  - Not yet observed: a scheduled network capture (first due ~19:05 ET) or a close capture
+    (00:57:45 ET).
+  - ntfy phone delivery is unresolved: the server path is proven clean, and the phone/subscription
+    side needs the owner.
+  - No settlement was due today.
 ACCEPTANCE:
-  - owner follow-up 2026-09-24 11:24 ET: record failed ntfy phone delivery honestly and approve
-    scheduled later/closing-price capture;
-  - issue #74: preserve continuous/staggered freshness as a P0 design rule while keeping the
-    generalized Freshness Orchestrator as NEXT;
-  - no change to Gate 7, EXP-001, execution authority, credentials or paid-service authority.
+  - owner follow-up 2026-09-24 (ntfy TEST not received; ADR 0030 Option A approved; #74);
+  - owner instructions for PR #76 review, merge, deploy and timer verification (not-before-due
+    evidence rules).
 EVIDENCE:
-  - PR #75 merged as 0a13672, bringing main's handoff to production faadaa1 and releasing the
-    previous coordinator claim.
-  - ntfy: exactly one prior TEST was SUBMITTED/accepted by ntfy; owner confirmation at 11:24 ET:
-    PHONE DELIVERY FAILED / NOTHING RECEIVED. Provider acceptance is not end-to-end success.
-  - Owner approved ADR 0030 Option A at 11:24 ET.
-  - PR #76 implements the approved schedule:
-    - edgelab-observe.timer: :05, :20, :35, :50 each hour, Persistent=false;
-    - edgelab-observe-close.timer: 04:57:45 UTC, Persistent=false;
-    - both reuse observe plan/capture, protected windows, the collector lock, Kalshi pacer,
-      bounded GETs, append-only evidence and MISSED accounting;
-    - installer, read-only verifier, tests, rollback docs, execution authority and roadmap updated;
-    - observation status no longer claims manual-only operation.
-  - Existing ADR 0030 estimate for EXP-001 Option A: about 30 network GETs/day across five actual
-    capture windows; idle ticks make no request/write; under ~100 MB/year projected payload storage.
-  - Production facts carried forward from faadaa1:
-    - 8 timers active before PR #76 deployment; no edgelab failed units in the last verification;
-    - first 2026-09-24 settlement check exited 0 with nothing due; first real settlement is possible
-      from 2026-09-25 11:15 ET;
-    - shadow ledger remained 30 entries and verified against the 2026-09-23T224720Z checkpoint;
-    - Odds API smoke: 3 credits, 16 events, 856 offers, 9 books; 497 remaining at smoke time.
+  - PR #76 review. The PR arrived at 47459fc with CI red on both Pythons. Fixed on the PR branch,
+    under a work claim:
+    - two blockers: a primitive row with two owners, and a stale NOT_AUTHORIZED test;
+    - should-fix items, over two independent re-reviews:
+      - `observe status` reports the approved policy separately from systemd's real timer state,
+        and adds `close_tick_alignment`;
+      - a retryable failure no longer alerts; exit 1 only when no unprotected scheduled tick
+        remains before the deadline (the protected windows are counted);
+      - close groups cannot be starved (CLOSE_GUARD);
+      - the close tick and retry interval are pinned to the timer files by test;
+      - stop and rollback commands name all 10 timers (no glob) and check is-enabled;
+      - a v5 rollback re-enables Odds;
+      - the verifier reports the observation timers.
+    - Final head e8b04c1: CI green on 3.11 and 3.12; full local suite 2239 passed. Re-review
+      READY with no blockers.
+    - Squash-merged as 9d66c907b0a63612aed2b8696f4a9c9a9be57c81 (GitHub state MERGED).
+  - DEPLOYED 9d66c90 at 2026-09-24 16:31 ET (20:31Z) via DAILY_SHADOW_ACTIVATION.md:
+    - after the 16:15 ET settlement run finished and the protected window closed;
+    - preflight PASS; both stores VERIFIED before and after; install exit 0;
+    - FAIL_CLOSED_CHECK PASS, recorded as DEPLOYMENT_VERIFICATION with HELD_BY_ORIGIN 1 (not
+      pushed);
+    - shadow dry run PENDING_SETTLEMENT; dashboard 200.
+  - PRODUCTION_VERIFIED (verify_production.sh, 20:36Z):
+    - DEPLOYED_SHA 9d66c90; TIMERS 9/9 core and observation enabled, plus edgelab-odds (10
+      enabled); failed units: none;
+    - COLLECTOR_HEALTH VALID; backups and restores of both stores VERIFIED;
+    - Chase Upside HEALTHY: Brisket /api/health 200. Brisket was not touched.
+  - Observation timers were enabled 20:32Z. Both show enabled/active, Persistent=no.
+    - edgelab-observe.timer (AccuracySec 15s): first trigger 16:35 ET, Result success.
+    - edgelab-observe-close.timer (AccuracySec 1s): next 2026-09-25 04:57:45Z; not yet triggered.
+    - `systemd-analyze calendar` normalizes the expressions to :05/:20/:35/:50
+      America/New_York and daily 04:57:45 UTC.
+  - First scheduled tick (16:35 ET, exit 0):
+    - `observe plan`: 6 decision markets, 42 targets planned;
+    - 24 decision/recheck rows backfilled from the stored forward captures;
+    - 12 post-decision targets MISSED with PLANNED_AFTER_DEADLINE. Those decisions were made on
+      2026-09-23, before any schedule; nothing was fabricated late.
+    - `observe capture`: NOTHING_DUE, 0 requests.
+  - `observe status`: timers enabled/active (systemd); close_tick_alignment ALIGNED (6 of 6).
+    The source-confirmed KXHIGHNY close is 2026-09-25T05:00:00Z (production evidence DB), and
+    each close window is 04:57:30-04:59:50Z.
+  - Odds API:
+    - 14:15 ET T-6h target (ATL @ GB) CAPTURED at 18:15:07Z: snapshot 24, 1 event, 9 books,
+      3 credits.
+    - Quota: 6 used, 494 remaining, no reservations. The 19:15 ET T-60m target is PLANNED.
+  - Settlement: the 11:15 and 16:15 ET runs exited 0 with nothing due. The ledger is unchanged at
+    30 entries and VERIFIED against the 2026-09-23T224720Z checkpoint. No F09 checkpoint was
+    triggered.
+  - ntfy diagnosis. Read-only, run as edgelab with the relay's EnvironmentFile; it printed no
+    topic.
+    - The configured URL is well formed: https, ntfy.sh, one topic segment, valid charset, at
+      least 32 characters, contains uppercase, no whitespace or quotes, no token.
+    - The post-rotation TEST was sent 12:43:57Z, 14 min after the owner's rotation (secrets.env
+      mtime 12:29:23Z).
+    - ntfy.sh's cache for the configured topic holds exactly that message: "Market Edge INFO: TEST",
+      id o7zaiYbOTCOe, 12:43:59Z, priority 2 (low), expires 2026-09-25 00:43:59Z.
+    - The server path is therefore clean: Market Edge sent it, ntfy accepted and stored it on the
+      configured topic.
 UNRESOLVED:
-  - PR #76 needs exact-head CI and independent deployment/systemd review, then merge and deployment
-    through docs/deploy/DAILY_SHADOW_ACTIVATION.md outside protected capture/settlement windows.
-  - After deployment, verify both observation timers enabled/active, run observe status, and confirm
-    actual CAPTURED/MISSED evidence for the next due targets; do not infer capture from timer state.
-  - ntfy end-to-end phone delivery is broken/unverified. Diagnose subscription/client delivery
-    without reading the secret topic into an agent transcript. A later TEST can prove delivery only
-    after remediation and with appropriate owner authorization for the send.
-  - First paid Odds targets today (14:15 and 19:15 ET) still need CAPTURED/MISSED verification.
-  - First real settlement: 2026-09-25 11:15 ET at the earliest; after a real ledger change take the
-    manual F09 checkpoint and verify payout, fees, P&L, cash release, equity, duplicates and hash chain.
-  - A later-price row in Terminal v1 remains optional/unbuilt.
-  - Fee re-checks remain: Kalshi by 2026-10-23T13:39:48Z; Polymarket US by 2026-10-24T01:39Z.
-BLOCKERS:
-  - PR #76 merge/deploy: exact-head CI + independent review.
-  - ntfy phone delivery: subscription/client path needs diagnosis; no secret exposure.
-NEXT ACTION: independently review PR #76, resolve any blocker, require exact-head CI green, merge,
-  deploy via DAILY_SHADOW_ACTIVATION.md, verify the two new timers and first observation evidence,
-  then diagnose ntfy delivery without rotating/exposing the topic unless evidence requires it.
+  - The first scheduled network observations:
+    - ~19:05 ET: post_decision_1h for tonight's decisions;
+    - 00:50 ET: pre_close;
+    - 00:57:45 ET: close.
+    Verify each as CAPTURED / MISSED / FAILED / NOT_EXECUTABLE / PARTIAL_RETRYING from stored rows.
+    Never infer them from timer state.
+  - ntfy phone delivery: PROVIDER SUBMITTED / PHONE DELIVERY FAILED OR UNVERIFIED. The remaining
+    problem is on the phone/subscription side. Likely causes:
+    (a) the subscribed topic differs (topics are case-sensitive; this one has uppercase and 32+
+        characters);
+    (b) priority 2 displays as a quiet notification that is easy to miss;
+    (c) app notifications are disabled.
+  - The Odds 19:15 ET T-60m target is pending.
+  - First real settlement: the 2026-09-25 11:15 ET run at the earliest (16:15 ET if Kalshi has
+    not settled). Then verify fully and take the manual F09 checkpoint.
+  - Close-time risk: re-check close_tick_alignment after the 2026-11-01 DST change (ADR 0030).
+  - Fee re-checks: Kalshi by 2026-10-23T13:39:48Z; Polymarket US by 2026-10-24T01:39Z.
+BLOCKERS: ntfy end-to-end delivery needs an owner check on the phone; no agent can see it.
+NEXT ACTION: the owner opens the configured topic in the ntfy app before 2026-09-24 20:43 ET.
+  - If the TEST is listed, the subscription is right; fix notification display (priority or app
+    settings).
+  - If it is not listed, re-subscribe to the exact topic.
+  Proving a repair then needs one additional TEST send, which needs the owner's explicit OK.
 ```
 
 ## Daily operation (what runs by itself)
@@ -74,10 +118,10 @@ NEXT ACTION: independently review PR #76, resolve any blocker, require exact-hea
 | always | edgelab-dashboard | read-only dashboard, tailnet-only (Tailscale Serve) |
 | after shadow/settlement/any failure alert | edgelab-notify | relays new outbox events and unit failures to ntfy (fixed headlines) |
 | every 15 min | edgelab-odds | game-relative NFL odds capture (T-24h/T-6h/T-60m) under the 450-credit budget; enabled 2026-09-24 13:40Z; a paid call only for an admitted slot |
+| :05, :20, :35, :50 | edgelab-observe | ADR 0030 Option A: plan later/closing-price targets, then bounded capture only when due; deferred in protected windows; enabled 2026-09-24 20:32Z |
+| 04:57:45 UTC | edgelab-observe-close | the KXHIGHNY close-window capture (close 05:00:00Z; `observe status` → `close_tick_alignment`); enabled 2026-09-24 20:32Z |
 
-**Pending PR #76, not yet production:** add `edgelab-observe` at :05/:20/:35/:50 each hour and
-`edgelab-observe-close` at 04:57:45 UTC. Until deployment, production still has the eight timers
-recorded above.
+Production has 10 enabled timers: 7 original core, 2 observation and 1 Odds.
 
 Read the state without sudo: `cat /var/lib/market-edge-lab-status/latest.json` and
 `shadow_daily.json`, or `bash /opt/market-edge-lab/app/deploy/vps/verify_production.sh`
