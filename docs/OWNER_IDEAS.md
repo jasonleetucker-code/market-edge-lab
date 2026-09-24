@@ -46,7 +46,7 @@ column lists which issues each primitive serves.
 | Stake sizing (research challenger) | `src/edge_lab/sizing_v2.py` (evaluation in sizing_eval.py) | BUILT 2026-09-24, research only (ADR 0026): robust log-growth optimizer over the payoff's admissible uncertainty set, reusing risk, starter policy, depth and fees. The counterfactual runner `sizing_counterfactual.py` (PR #64) replays every recorded decision through policies A-H into a derived artifact, and Terminal v1 shows it read-only as RESEARCH SIZING (PR #69). `sizing.py` remains the frozen operational path; v2 influences fills only after its own experiment passes | #6 #3 #32 |
 | Best-price-for-size comparator | `src/edge_lab/best_price.py` | BUILT 2026-09-24 (ADR 0027): one comparator over the shared depth, grid, fee, equivalence, freshness and venue primitives; honest claim ladder; cross-venue "cheaper" only on proven order. Shown in the market detail "Across venues" slot (PR #65), with no arithmetic in the UI | #30 #9 |
 | Sports odds capture scheduling | `src/edge_lab/odds_schedule.py` (runner odds_pilot.py; adapter odds_api.py) | BUILT 2026-09-24 (ADR 0029): game-relative T-24h/T-6h/T-60m targets, persisted with intended times, worst-case budget proof under 450 credits. ACTIVE on production since 2026-09-24 13:40Z (budget PROVEN, one smoke read CAPTURED, redaction verified; runbook §5b activation record) | #29 #5 #9 #50 |
-| Later / closing price observations | `src/edge_lab/price_observations.py` | BUILT 2026-09-24 (ADR 0030, PR #68). **Option A schedule approved 2026-09-24 11:24 ET**; timer implementation/review/deploy is NOW. "Close" remains only within the stored tolerance; missed point-in-time targets remain MISSED | #74 #50 #30 #9 #29 |
+| Later / closing price observations | `src/edge_lab/price_observations.py` | BUILT 2026-09-24 (ADR 0030, PR #68). **Option A schedule approved 2026-09-24 11:24 ET**; PR #76 merged (9d66c90) and DEPLOYED 2026-09-24 20:31Z, timers enabled 20:32Z, first scheduled plan 20:35Z (42 targets; close tick ALIGNED). First scheduled network capture pending. "Close" remains only within the stored tolerance; missed point-in-time targets remain MISSED | #74 #50 #30 #9 #29 |
 | Capital-eligibility policies | `src/edge_lab/starter_policy.py` | BUILT (`STARTER_MAX_7D_V1`, ADR 0018); enforced prospectively in the operational shadow account | #32 #6 |
 | Notification system | `src/edge_lab/notifications.py` | BUILT (contract, local outbox, SMS sink disabled; ADR 0020). ntfy relay is ACTIVE, but the first TEST was only SUBMITTED by ntfy and **did not arrive on the owner's phone** (confirmed 2026-09-24 11:24 ET); end-to-end delivery is unresolved. Secrets remain only in `/etc/market-edge-lab/secrets.env` (root:root 0600). Origin controls remain unchanged | #33 #3 #32 |
 | Execution-ticket contract | `src/edge_lab/execution_ticket.py` | BUILT (data contract plus an ordered pre-submit control chain, PR #43; `EXECUTION_NOT_AUTHORIZED` always fails) | #32 #33 #30 |
@@ -106,9 +106,9 @@ recorded below and in the Domain Readiness matrix. Gate 7 is unchanged and **not
 7. **#33 ntfy.** The topic was rotated by the owner on 2026-09-24 after exposure. One TEST was
    SUBMITTED by ntfy, but the owner confirmed at 11:24 ET that **nothing arrived on the phone**.
    End-to-end delivery is unresolved; diagnose before claiming the alert path works.
-8. **Scheduled later/closing observations** (ADR 0030; #74/#50). The owner approved Option A at
-   11:24 ET. Implement/review/deploy the two bounded non-persistent timers now so point-in-time
-   depth after the re-check stops being needlessly lost.
+8. **Scheduled later/closing observations** (ADR 0030; #74/#50). Option A is deployed (PR #76,
+   9d66c90; both timers enabled 2026-09-24 20:32Z). Verify the first real captures from stored
+   rows. Re-check `close_tick_alignment` after the 2026-11-01 DST change.
 9. **#74 freshness fabric.** Treat continuous freshness, staggered collection, explicit missed-target
    accounting and fail-closed decision freshness as permanent design rules now. The generalized
    cross-domain orchestrator is NEXT; do not destabilize the running weather/Odds pipelines to rush
@@ -142,8 +142,9 @@ recorded below and in the Domain Readiness matrix. Gate 7 is unchanged and **not
     `public-league-warmup` should accept 503.
 
 **BLOCKED** (named blocker)
-- ntfy end-to-end phone delivery: the first TEST was SUBMITTED by ntfy but the owner confirmed it
-  did not arrive. Diagnose subscription/client delivery; do not expose the secret topic.
+- ntfy end-to-end phone delivery: the TEST was SUBMITTED, and ntfy.sh holds it on the configured
+  topic (server path proven clean 2026-09-24). The remaining problem is the phone/subscription side,
+  which needs an owner check. Proving a fix needs one more TEST, with the owner's OK.
 - SMS: provider choice and approval. Novig live API: developer credentials.
 - Polymarket US claim-grade totals: settlement/transfer fees, debit rounding, account type and
   scheduled changes are all unverified.
