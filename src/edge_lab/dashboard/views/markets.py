@@ -83,9 +83,13 @@ def view(ctx: d.Context, p: pr.Params) -> cm.Page:
     in_domain = [r for r in all_rows if p.domain == "all" or r.domain == p.domain]
     filtered = pr.sort_rows(pr.filter_rows(all_rows, p), p.sort)
     page_rows, pages = pr.page_slice(filtered, p.page)
-    sub = "Observed prices and model assessments. " + (
-        f"Coverage: {cm.coverage_text(ctx.observed.value)}." if ctx.observed.status == d.OK
-        else "No captured coverage yet.")
+    if ctx.observed.status == d.OK:
+        coverage = f"Coverage: {cm.coverage_text(ctx.observed.value)}."
+    elif ctx.observed.status == d.ERROR:
+        coverage = "Captured coverage unavailable (read error)."
+    else:
+        coverage = "No captured coverage yet."
+    sub = "Observed prices and model assessments. " + coverage
     switch = c.account_switch(p, "/opportunities", {k: v for k, v in p.filters().items() if k != "account"})
     parts = [c.page_head("Markets", sub, extra=switch)]
     if p.account == "research":

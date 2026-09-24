@@ -284,3 +284,12 @@ directive), and the screenshots that justify it.
   in "Why it matters". No token, layout or component-style change. Screenshots: the
   `early`, `demo` and `broken` states at 390x844 and 1440x900 (`tests/browser/capture.py`),
   reviewed in the PR.
+- **2026-09-23 — honest board coverage on read error; plain labels on position rows.**
+  Approved by the owner's session request (Terminal v1 follow-ups, second batch). (1) The
+  Terminal "Market board" section meta read "No captured books" when the evidence database
+  could not be read; it now reads "Captured books unavailable" on ERROR and keeps "No captured
+  books" for NO_DATA. The Markets page subtitle likewise reads "Captured coverage unavailable
+  (read error)." on ERROR (its coverage line already did). (2) Portfolio position row
+  subtitles use `presentation.cluster_label`; the raw id stays in "Position details"
+  (`cluster`). No token, layout or component change. Screenshots: `early`, `demo` and `broken`
+  at 390x844 and 1440x900, reviewed in the PR.

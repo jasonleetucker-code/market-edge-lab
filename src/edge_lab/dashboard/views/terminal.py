@@ -79,6 +79,8 @@ def board(ctx: d.Context, p: pr.Params) -> str:
 
 
 def _coverage(ctx: d.Context) -> str:
+    if ctx.observed.status == d.ERROR:
+        return "Captured books unavailable"
     if ctx.observed.status != d.OK:
         return "No captured books"
     return cm.coverage_text(ctx.observed.value)

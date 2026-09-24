@@ -57,6 +57,12 @@ UNRESOLVED:
   - Terminal v1 follow-ups (tape read-error state, plain outcome labels): branch
     ui/tape-unavailable-cluster-labels, PR open, NOT deployed. Deploy only with
     DAILY_SHADOW_ACTIVATION.md at an owner-chosen time outside 17:40-18:35 ET.
+  - Terminal v1 follow-ups, second batch (board/Markets coverage wording on read error,
+    plain labels on Portfolio position rows): branch ui/board-meta-portfolio-labels,
+    stacked on ui/tape-unavailable-cluster-labels, PR open, NOT deployed. Same deploy rule.
+  - tests/test_risk_foundation.py::test_capacity_respects_loss_and_drawdown_headroom fails
+    since ~2026-09-24T01:00Z: wall-clock time leaks into the ledger's knowledge time
+    (out-of-order fill). Unrelated to the UI PRs; it fails their CI until fixed.
   - Settlement lifecycle on real data: not yet observed (positions settle after Kalshi
     publishes 2026-09-24's result; the settlement timer runs 11:15 and 16:15 ET).
   - F09 residual (ADR 0021): entries after 2026-09-23T22:47:20Z are unanchored until the

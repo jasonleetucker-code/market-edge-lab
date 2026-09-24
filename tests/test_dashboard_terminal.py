@@ -437,11 +437,11 @@ def test_cluster_label_maps_known_patterns_only(cluster, expected):
     assert pr.cluster_label(cluster) == expected
 
 
-def test_outcome_titles_are_plain_language_and_keep_the_raw_id_in_details(tmp_path):
+def _app_with_exp001_position(tmp_path, cluster):
+    """The `early` fixture plus one open operational position on `cluster`."""
     from edge_lab.dashboard.demo import _decision, _fill
     cfg, _ = early(tmp_path)
     now = cfg.clock()
-    cluster = "weather:us-nyc-central-park:2026-09-24"
     account = shadow.OPERATIONAL.account_id
     dec = _decision(account, 1, now - timedelta(hours=1), "kalshi:KXHIGHNY-26SEP24-B66.5", "NO", True, "QUALIFY",
                     "0.62", "0.56", "0.0172", "0.58", "0.04")
@@ -449,7 +449,12 @@ def test_outcome_titles_are_plain_language_and_keep_the_raw_id_in_details(tmp_pa
     ledger = ShadowLedger(cfg.ledger)
     ledger.record_decision(account, dec)
     ledger.record_fill(account, _fill(dec, True, "0.56", "0.0172", "0.58", now + timedelta(days=1)))
-    app = make_app(cfg)
+    return make_app(cfg)
+
+
+def test_outcome_titles_are_plain_language_and_keep_the_raw_id_in_details(tmp_path):
+    cluster = "weather:us-nyc-central-park:2026-09-24"
+    app = _app_with_exp001_position(tmp_path, cluster)
     label = "NYC Central Park high temperature · Sep 24"
     outcomes = text(call(app, "/outcome-board")[2])
     title = outcomes.split('<ul class="rows">')[1].split("<details")[0]
@@ -460,6 +465,49 @@ def test_outcome_titles_are_plain_language_and_keep_the_raw_id_in_details(tmp_pa
     terminal = text(call(app, "/")[2])
     matters = terminal.split('id="matters-h"')[1]
     assert label in matters and cluster not in matters
+
+
+def test_position_rows_use_the_plain_label_and_keep_the_raw_cluster_in_details(tmp_path):
+    cluster = "weather:us-nyc-central-park:2026-09-24"
+    body = text(call(_app_with_exp001_position(tmp_path, cluster), "/positions")[2])
+    row = body.split('<li class="row">')[1].split("</li>")[0]
+    sub = row.split('<p class="row-sub">')[1].split("</p>")[0]
+    assert sub == "Kalshi · NYC Central Park high temperature · Sep 24"
+    details = row.split("Position details")[1]
+    assert f"<dt>cluster</dt><dd>{cluster}</dd>" in details  # the raw id stays in the kv
+
+
+def test_position_row_keeps_an_unknown_cluster_raw(tmp_path):
+    body = text(call(_app_with_exp001_position(tmp_path, "DEMO-NYC-HIGH"), "/positions")[2])
+    sub = body.split('<p class="row-sub">')[1].split("</p>")[0]
+    assert sub.endswith(" · DEMO-NYC-HIGH")
+
+
+def board_meta(body: str) -> str:
+    return body.split('id="board-h"')[1].split('<span class="section-meta">')[1].split("</span>")[0]
+
+
+def test_board_meta_says_unavailable_on_read_error_never_empty(tmp_path):
+    from fixture_states import broken
+    cfg, _ = broken(tmp_path)
+    app = make_app(cfg)
+    home = text(call(app, "/")[2])
+    assert board_meta(home) == "Captured books unavailable"
+    assert "Market data unavailable" in home and "No captured books" not in home
+    markets = text(call(app, "/opportunities")[2])
+    assert "Captured coverage unavailable (read error)." in markets
+    assert "Captured books unavailable (read error)" in markets
+    assert "No captured coverage yet." not in markets and "No books captured yet" not in markets
+
+
+def test_board_meta_keeps_no_captured_books_for_no_data(tmp_path):
+    for cfg in (Config(clock=lambda: NOW), Config(db=tmp_path / "missing.sqlite3", clock=lambda: NOW)):
+        app = make_app(cfg)
+        home = text(call(app, "/")[2])
+        assert board_meta(home) == "No captured books" and "unavailable" not in board_meta(home)
+        markets = text(call(app, "/opportunities")[2])
+        assert "No captured coverage yet." in markets and "No books captured yet" in markets
+        assert "Captured coverage unavailable" not in markets
 
 
 def test_price_change_needs_two_comparable_observations():
