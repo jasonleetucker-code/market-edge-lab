@@ -72,12 +72,44 @@ enabled state. New units are installed but not enabled.
 
 ## 4. Dry runs (owner, outside the capture window)
 
-1. Check that the collector still fails closed:
+1. Check that the collector still fails closed. Use the check script, not a bare `systemctl start`
+   of the decision unit: its intentional failure would otherwise reach the owner's phone as
+   "A run or data source failed" (ADR 0028 amendment).
    ```bash
-   sudo systemctl start edgelab-decision.service
-   sudo journalctl -u edgelab-decision -n 20 --no-pager
+   sudo bash /opt/market-edge-lab/app/deploy/vps/verify_fail_closed.sh
    ```
-   Expect `rejected_out_of_window`. Then `sudo systemctl reset-failed 'edgelab-*'`.
+   - **What it does.**
+     - It refuses unless it runs as root, no other check is running, `edgelab-decision.service`
+       is idle and `edgelab-decision.timer` is not due within 5 minutes.
+     - It arms a check in `/var/lib/market-edge-lab-verify` (root-owned) and starts the real
+       unit, then reads the new invocation's own journal lines.
+     - It writes a root-owned confirmation named by the invocation ID only if that exact
+       invocation failed with exit status 1, printed `"status": "rejected_out_of_window"`, and
+       the timer did not trigger meanwhile.
+     - `alert.sh` then records that failure in `last_verification.json` (never in
+       `last_failure.json`, which stays production-only) with
+       `"origin": "DEPLOYMENT_VERIFICATION"`.
+     - `edgelab-notify` holds it (`HELD_BY_ORIGIN`) instead of pushing it, after checking the
+       root-owned confirmation again.
+     - Finally the script clears the failed state of that one unit.
+   - **Expect**, on the last lines:
+     `CONFIRMED: invocation <id> failed closed (rejected_out_of_window)`, a
+     `RECORDED: {..., "origin": "DEPLOYMENT_VERIFICATION"}` line and
+     `FAIL_CLOSED_CHECK: PASS`. `journalctl -u edgelab-notify -n 1 --no-pager` then shows
+     `"HELD_BY_ORIGIN": 1`.
+   - **Anything else stops the install** and prints `FAIL_CLOSED_CHECK: ...` with a reason (exit 1):
+     - `NOT_CONFIRMED`: the unit succeeded, so the collector did not fail closed. If it says
+       `skipped_duplicate` or `complete`, the check ran inside the capture window. Or the unit
+       failed another way (timeout, crash, a different status), or the timer fired during the
+       check. Such a failure stays a PRODUCTION alert and is pushed, as it should be.
+     - `ALERT_NOT_RECORDED` or `ORIGIN_NOT_VERIFICATION`: the alert path did not record it as
+       expected.
+     - `REFUSED`: not root, another check is running, the unit is running, or the timer is due
+       within 5 minutes.
+
+     A genuine failure of any unit, including this one, stays PRODUCTION and pushes, even
+     while this check runs. Do not use `reset-failed 'edgelab-*'`: it would also clear real
+     failures of other units.
 2. Run the bookkeeping (no network) and read the receipt:
    ```bash
    sudo systemctl start edgelab-shadow.service
@@ -136,8 +168,15 @@ sudo systemd-run --wait --pipe --quiet -p User=edgelab -p Group=edgelab -p Slice
   the part after `https://ntfy.sh/`.
 - **What then happens automatically:**
   - `edgelab-notify` relays new outbox events after every shadow and settlement run.
-  - It also runs after every `edgelab-alert@` failure alert. The unit failure then arrives as
-    the fixed headline "A run or data source failed".
+  - It also runs after every `edgelab-alert@` failure alert. A PRODUCTION unit failure then
+    arrives as the fixed headline "A run or data source failed".
+  - **Origin rule.** Only PRODUCTION events are pushed. The §4.1 fail-closed check is recorded
+    as DEPLOYMENT_VERIFICATION in `last_verification.json` and the journal, but never pushed.
+    The dashboard shows it once Lane B's alerts PR lands. `last_failure.json` holds production
+    failures only. TEST
+    events are pushed only by `notify test`. MANUAL_DIAGNOSTIC events are pushed only on
+    explicit request, and REPLAY and DEMO events never. The relay journal counts held events
+    as `HELD_BY_ORIGIN`.
   - `journalctl -u edgelab-notify` shows counts only.
 - **Rules:**
   - Do not run `edge-lab notify relay` by hand while the unit is active.

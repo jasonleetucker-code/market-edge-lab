@@ -39,6 +39,9 @@ units: `docs/deploy/DAILY_SHADOW_ACTIVATION.md`.
 - **Failures:** any failed or invalid run triggers `edgelab-alert@`. It writes to the
   journal and to `last_failure.json` in the status directory. If the owner set
   `EDGE_LAB_ALERT_URL` in the env file, it also sends a one-line push.
+  - **Exception:** the fail-closed check (`verify_fail_closed.sh`, runbook §4.1) is recorded in
+    `last_verification.json` instead and is never pushed. Root confirms that exact invocation in
+    `/var/lib/market-edge-lab-verify` (ADR 0028 amendment).
 - **Caps per run:** `MemoryMax=256M`, `CPUQuota=25%`, `TasksMax=32`, `Nice=5`.
 - **Hardening:** `ProtectSystem=strict` with write access only to the two data directories,
   plus `ProtectHome` and `NoNewPrivileges`.
@@ -50,7 +53,8 @@ units: `docs/deploy/DAILY_SHADOW_ACTIVATION.md`.
 | `/opt/market-edge-lab/app` | root, read-only | code at a pinned commit (`REVISION`) |
 | `/opt/market-edge-lab/venv` | root | stdlib-only venv; a `.pth` points at `app/src` |
 | `/var/lib/market-edge-lab/{db,backups}` | `edgelab:edgelab` 0700 | private evidence database and backups |
-| `/var/lib/market-edge-lab-status` | `edgelab:edgelab` 0755 | `latest.json`, `last_failure.json`, `notifications.jsonl`, `ntfy_relay.jsonl` (non-sensitive) |
+| `/var/lib/market-edge-lab-status` | `edgelab:edgelab` 0755 | `latest.json`, `last_failure.json` (production failures only), `last_verification.json` (the §4.1 fail-closed check), `notifications.jsonl`, `ntfy_relay.jsonl` (non-sensitive) |
+| `/var/lib/market-edge-lab-verify` | `root:root` 0755 | the fail-closed check's `armed-*` marker and `confirmed-<InvocationID>` files; created by `verify_fail_closed.sh`, never writable by `edgelab` (ADR 0028) |
 | `/etc/market-edge-lab/env` | `root:edgelab` 0640 | `NWS_USER_AGENT`, `EDGE_LAB_CODE_VERSION`, optional `EDGE_LAB_ALERT_URL` (regenerated on every install) |
 | `/etc/market-edge-lab/secrets.env` | `root:root` 0600 | owner-installed secrets (ntfy topic, Odds API key); created empty once, never read by install; systemd loads it for `edgelab-notify` only (ADR 0028) |
 

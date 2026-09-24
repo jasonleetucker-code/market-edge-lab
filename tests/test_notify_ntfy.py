@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 import socket
 import ssl
+import sys
 from datetime import datetime, timedelta, timezone
 from urllib.error import HTTPError, URLError
 from urllib.request import Request
@@ -788,3 +790,193 @@ def test_a_failed_history_write_never_re_sends_in_the_same_run(tmp_path, monkeyp
     monkeypatch.setattr(n.JsonlOutbox, "deliver", boom)
     out = ntfy.relay_outbox(outbox, relay, s, now=NOW)
     assert out["by_status"] == {"SUBMITTED": 1} and len(opener.requests) == 1
+
+
+# ------------------------------------------------------------------ origin (ADR 0020/0028 amendments, 2026-09-24)
+
+INVOCATION = "0123456789abcdef0123456789abcdef"
+
+
+POSIX_ONLY = pytest.mark.skipif(sys.platform == "win32" or not hasattr(os, "getuid"),
+                                reason="root-ownership and mode checks need POSIX uids and permission bits")
+
+
+def _failure(tmp_path, name="last_failure.json", **fields):
+    path = tmp_path / name
+    path.write_text(json.dumps({"unit": "edgelab-decision.service", "failed_at_utc": "2026-09-25T22:40:05Z",
+                                "invocation_id": INVOCATION, **fields}) + "\n", encoding="utf-8")
+    return path
+
+
+def _verification(tmp_path, **fields):
+    return _failure(tmp_path, ntfy.VERIFICATION_NAME, origin="DEPLOYMENT_VERIFICATION", **fields)
+
+
+def _confirm(tmp_path, invocation=INVOCATION, unit="edgelab-decision.service", mode=0o644,
+             status="rejected_out_of_window"):
+    """What verify_fail_closed.sh writes, as root; here the test user stands in for root."""
+    verify = tmp_path / "verify"
+    verify.mkdir(exist_ok=True)
+    verify.chmod(0o755)
+    path = verify / f"confirmed-{invocation}"
+    path.write_text(f'{{"unit": "{unit}", "invocation_id": "{invocation}", "status": "{status}"}}\n')
+    path.chmod(mode)
+    return path
+
+
+def _relay_failure(tmp_path, failure, **kw):
+    opener = Opener()
+    s, _ = make(opener=opener)
+    trust = {"verify_dir": tmp_path / "verify", "trusted_uid": os.getuid() if hasattr(os, "getuid") else 0}
+    out = ntfy.relay_outbox(tmp_path / "notifications.jsonl", tmp_path / ntfy.RELAY_NAME, s, now=NOW,
+                            failure_path=failure, **{**trust, **kw})
+    return out, opener
+
+
+def test_a_genuine_production_unit_failure_is_pushed(tmp_path):
+    out, opener = _relay_failure(tmp_path, _failure(tmp_path, origin="PRODUCTION"))
+    assert out["by_status"] == {"SUBMITTED": 1} and len(opener.requests) == 1
+    assert headers(opener.requests[0])["x-title"] == "Market Edge WARNING: SOURCE_FAILURE"
+    assert opener.requests[0].data == b"A run or data source failed. Open Market Edge for details."
+
+
+@POSIX_ONLY
+def test_an_intentional_fail_closed_check_is_stored_not_pushed(tmp_path):
+    _confirm(tmp_path)
+    verification = _verification(tmp_path)
+    before = verification.read_bytes()
+    event = ntfy.unit_failure_event(json.loads(before), verify_dir=tmp_path / "verify", trusted_uid=os.getuid())
+    assert event.origin is n.Origin.DEPLOYMENT_VERIFICATION and event.values == {"invocation_id": INVOCATION}
+    out, opener = _relay_failure(tmp_path, tmp_path / "last_failure.json")  # the relay finds the sibling file
+    assert out["by_status"] == {"HELD_BY_ORIGIN": 1} and opener.requests == []
+    assert verification.read_bytes() == before  # still there for the dashboard
+    assert not (tmp_path / ntfy.RELAY_NAME).exists()  # not recorded as sent, and never retried as sent
+    again, opener = _relay_failure(tmp_path, tmp_path / "last_failure.json")
+    assert again["by_status"] == {"HELD_BY_ORIGIN": 1} and opener.requests == []
+
+
+@POSIX_ONLY
+def test_a_verification_never_hides_an_unrelayed_production_failure(tmp_path):
+    """The two records live in separate files, so a check cannot overwrite a real failure."""
+    _confirm(tmp_path)
+    _verification(tmp_path)
+    real = _failure(tmp_path, origin="PRODUCTION", unit="edgelab-shadow.service", invocation_id="f" * 32,
+                    failed_at_utc="2026-09-25T22:39:00Z")
+    out, opener = _relay_failure(tmp_path, real)
+    assert out["by_status"] == {"HELD_BY_ORIGIN": 1, "SUBMITTED": 1} and len(opener.requests) == 1
+
+
+def test_a_real_failure_of_the_same_unit_during_a_deployment_still_pushes(tmp_path):
+    """alert.sh records PRODUCTION for any invocation root did not confirm, whatever else is going on."""
+    _confirm(tmp_path)  # the check confirmed its own invocation...
+    real = _failure(tmp_path, origin="PRODUCTION", failed_at_utc="2026-09-25T22:41:00Z",
+                    invocation_id="f" * 32)  # ...but this is another one
+    out, opener = _relay_failure(tmp_path, real)
+    assert out["by_status"] == {"SUBMITTED": 1} and len(opener.requests) == 1
+
+
+@pytest.mark.parametrize("case", ["no-confirmation", "other-invocation", "other-unit", "other-status",
+                                  "world-writable", "not-root-owned", "symlink", "no-invocation"])
+def test_a_verification_claim_without_roots_exact_confirmation_is_pushed(tmp_path, case):
+    """The status directory is writable by every edgelab process, so the record's origin alone
+    is never trusted: a forged or unconfirmed DEPLOYMENT_VERIFICATION record is PRODUCTION."""
+    posix = sys.platform != "win32" and hasattr(os, "getuid")
+    kw, fields = {}, {}
+    if case == "other-invocation":
+        _confirm(tmp_path, invocation="f" * 32)
+    elif case == "other-unit":
+        _confirm(tmp_path, unit="edgelab-shadow.service")
+    elif case == "other-status":
+        _confirm(tmp_path, status="rejected_no_decision_capture")
+    elif case == "world-writable":
+        _confirm(tmp_path, mode=0o666)
+    elif case == "not-root-owned":
+        _confirm(tmp_path)
+        kw["trusted_uid"] = (os.getuid() if posix else 0) + 1
+    elif case == "symlink":
+        real = _confirm(tmp_path, invocation="e" * 32)
+        link = tmp_path / "verify" / f"confirmed-{INVOCATION}"
+        try:
+            link.symlink_to(real)
+        except OSError:
+            pytest.skip("symlinks need privileges on this platform")
+        real.write_text(link.read_text().replace("e" * 32, INVOCATION))
+    elif case == "no-invocation":
+        _confirm(tmp_path)
+        fields["invocation_id"] = None
+    for name in ("last_failure.json", ntfy.VERIFICATION_NAME):  # a forged claim in either file
+        for f in tmp_path.glob("*.json*"):
+            f.unlink()
+        path = _failure(tmp_path, name, origin="DEPLOYMENT_VERIFICATION", **fields)
+        out, opener = _relay_failure(tmp_path, tmp_path / "last_failure.json", **kw)
+        assert out["by_status"] == {"SUBMITTED": 1} and len(opener.requests) == 1, (case, name)
+        assert opener.requests[0].data == b"A run or data source failed. Open Market Edge for details."
+        assert path.exists()
+
+
+@pytest.mark.parametrize("origin", [None, "", "production", "NOT_AN_ORIGIN", 3, ["DEPLOYMENT_VERIFICATION"]])
+def test_a_failure_record_with_a_missing_or_garbled_origin_is_production(tmp_path, origin):
+    record = {"unit": "edgelab-shadow.service", "failed_at_utc": "2026-09-25T22:40:05Z"}
+    if origin is not None:
+        record["origin"] = origin
+    assert ntfy.unit_failure_event(record).origin is n.Origin.PRODUCTION
+
+
+def test_an_old_failure_record_is_still_pushed(tmp_path):
+    failure = tmp_path / "last_failure.json"
+    failure.write_text('{"unit": "edgelab-shadow.service", "failed_at_utc": "2026-09-25T22:40:05Z"}\n')
+    out, _ = _relay_failure(tmp_path, failure)
+    assert out["by_status"] == {"SUBMITTED": 1}
+
+
+@pytest.mark.parametrize("origin", [n.Origin.TEST, n.Origin.MANUAL_DIAGNOSTIC, n.Origin.REPLAY, n.Origin.DEMO,
+                                    n.Origin.DEPLOYMENT_VERIFICATION])
+def test_the_relay_holds_every_non_production_outbox_event(tmp_path, origin):
+    outbox, relay = _outbox_with(tmp_path, ev(key="x", origin=origin), ev(key="p"))
+    opener = Opener()
+    s, _ = make(opener=opener)
+    out = ntfy.relay_outbox(outbox, relay, s, now=NOW)
+    assert out["by_status"] == {"HELD_BY_ORIGIN": 1, "SUBMITTED": 1} and len(opener.requests) == 1
+    assert [h["origin"] for h in n.JsonlOutbox(outbox).history()] == [origin.value, "PRODUCTION"]
+
+
+def test_a_manual_diagnostic_is_pushed_only_on_request_and_says_so(tmp_path):
+    outbox, relay = _outbox_with(tmp_path, ev(key="m", origin=n.Origin.MANUAL_DIAGNOSTIC))
+    opener = Opener()
+    s, _ = make(opener=opener)
+    out = ntfy.relay_outbox(outbox, relay, s, now=NOW, push_origins=(n.Origin.MANUAL_DIAGNOSTIC,))
+    assert out["by_status"] == {"SUBMITTED": 1}
+    (request,) = opener.requests
+    assert headers(request)["x-title"] == "Market Edge MANUAL_DIAGNOSTIC WARNING: SOURCE_FAILURE"
+    assert request.data.decode().startswith("Manual diagnostic, not a production incident. ")
+
+
+@pytest.mark.parametrize("origin", sorted(n.NEVER_PUSHED_ORIGINS))
+def test_demo_replay_and_verification_are_never_pushed_even_if_requested(tmp_path, origin):
+    outbox, relay = _outbox_with(tmp_path, ev(key="x", origin=origin))
+    opener = Opener()
+    s, _ = make(opener=opener)
+    out = ntfy.relay_outbox(outbox, relay, s, now=NOW, push_origins=(origin,))
+    assert out["status"] == "failed" and opener.requests == []
+    # Second layer: the sink itself refuses them, whoever calls it.
+    assert s.deliver(ev(origin=origin)) is n.DeliveryStatus.HELD_BY_ORIGIN
+    assert opener.requests == [] and s.last_attempts == 0
+
+
+def test_the_explicit_test_command_sends_a_test_origin_event():
+    opener = Opener()
+    s, _ = make(opener=opener)
+    assert ntfy.send_test(s, now=NOW)["by_status"] == {"SUBMITTED": 1}
+    (request,) = opener.requests
+    assert headers(request)["x-title"] == "Market Edge TEST INFO: TEST"
+    assert request.data == b"Test notification, no action needed. Open Market Edge for details."
+
+
+def test_a_relay_failure_leaves_the_outbox_and_failure_record_untouched(tmp_path):
+    outbox, relay = _outbox_with(tmp_path, ev(key="a"), ev(key="v", origin=n.Origin.DEPLOYMENT_VERIFICATION))
+    failure = _failure(tmp_path, origin="PRODUCTION")
+    snapshot = (outbox.read_bytes(), failure.read_bytes())
+    s, _ = make(opener=Opener(OSError("down")))
+    out = ntfy.relay_outbox(outbox, relay, s, now=NOW, failure_path=failure)
+    assert out["status"] == "ok" and out["by_status"] == {"FAILED": 2, "HELD_BY_ORIGIN": 1}
+    assert (outbox.read_bytes(), failure.read_bytes()) == snapshot

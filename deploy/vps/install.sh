@@ -12,6 +12,10 @@
 #   /opt/market-edge-lab/venv           stdlib-only venv (no pip), .pth -> app/src
 #   /var/lib/market-edge-lab            private data: db/, backups/   (edgelab, 0700)
 #   /var/lib/market-edge-lab-status     non-sensitive status JSON     (edgelab, 0755)
+#                                       incl. last_failure.json (production only) and
+#                                       last_verification.json (the section 4.1 fail-closed check)
+#   /var/lib/market-edge-lab-verify     fail-closed check confirmations (root:root 0755);
+#                                       created by verify_fail_closed.sh, not by this script
 #   /etc/market-edge-lab/env            NWS_USER_AGENT etc.           (root:edgelab 0640)
 #   /etc/market-edge-lab/secrets.env    owner-installed secrets       (root:root 0600)
 #                                       created empty once; NEVER read, rewritten or printed here
@@ -160,10 +164,11 @@ cat <<EOF
 
 INSTALL OK: $SHA
 Next (owner):
-  1. Fail-closed dry run (outside the window it must be rejected before any order-book request):
-       sudo systemctl start edgelab-decision.service; sudo journalctl -u edgelab-decision -n 20 --no-pager
-     Expect "status": "rejected_out_of_window" and a failed unit (that is correct). Then:
-       sudo systemctl reset-failed 'edgelab-*'
+  1. Fail-closed dry run (outside the window it must be rejected before any order-book request).
+     Use the check script: its failure is recorded as DEPLOYMENT_VERIFICATION, not pushed
+     (runbook section 4.1, ADR 0028):
+       sudo bash /opt/market-edge-lab/app/deploy/vps/verify_fail_closed.sh
+     Expect "FAIL_CLOSED_CHECK: PASS". Anything else stops here.
   2. Activate the schedule:
        sudo systemctl enable --now ${CORE_TIMERS[*]/%/.timer}
        systemctl list-timers 'edgelab-*'

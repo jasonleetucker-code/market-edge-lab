@@ -580,3 +580,411 @@ def test_odds_ticks_inside_the_capture_window_are_deferred_in_code():
 
     assert in_quiet_window(et(10, 4, 17, 45, 4)) and in_quiet_window(et(12, 6, 18, 30, 5))
     assert not in_quiet_window(et(10, 4, 17, 30, 4)) and not in_quiet_window(et(12, 6, 18, 45, 5))
+
+
+# --------------------------------------------------------------------------- failure origin (ADR 0028 amendment)
+
+ALERT = ROOT / "deploy" / "vps" / "alert.sh"
+FAIL_CLOSED = ROOT / "deploy" / "vps" / "verify_fail_closed.sh"
+RUNBOOK = (ROOT / "docs" / "deploy" / "DAILY_SHADOW_ACTIVATION.md").read_text(encoding="utf-8")
+INV = "0123456789abcdef0123456789abcdef"
+OTHER_INV = "fedcba9876543210fedcba9876543210"
+DECISION = "edgelab-decision.service"
+
+
+def _collector_stdout(phase, status):
+    """Exactly what `edge-lab forward capture` prints (cli.py), so the check's match is tied to it."""
+    from datetime import date
+
+    from edge_lab.forward import CaptureOutcome
+
+    outcome = CaptureOutcome(phase, date(2026, 9, 25), status, ["now outside the window"])
+    return json.dumps({"run_id": "r1", **outcome.as_dict()}, indent=2, sort_keys=True) + "\n"
+
+
+REJECTED = _collector_stdout("decision", "rejected_out_of_window")
+
+
+def _confirmation(unit=DECISION, invocation=INV, status="rejected_out_of_window"):
+    return f'{{"unit": "{unit}", "invocation_id": "{invocation}", "status": "{status}"}}\n'
+
+
+@pytest.fixture
+def box(tmp_path):
+    """A status dir, a verify dir and stubbed system commands (no systemd, no network, no syslog)."""
+    bash = shutil.which("bash")
+    if bash is None or sys.platform != "linux":
+        pytest.skip("needs bash on Linux")
+    status, verify, stubs = tmp_path / "status", tmp_path / "verify", tmp_path / "stubs"
+    for d in (status, verify, stubs):
+        d.mkdir()
+        d.chmod(0o755)
+    scripts = {
+        "logger": 'printf "%s\\n" "$*" >> "$STUBS/logger.log"',
+        "curl": 'touch "$STUBS/curl.called"',
+        "hostname": "echo testhost",
+        "journalctl": 'cat "$STUBS/journal" 2>/dev/null; exit 0',
+        # show -p <Prop> --value -- <unit> | start -- <unit> | reset-failed -- <unit>
+        "systemctl": r'''
+case "$1" in
+  show)
+    case "$3" in
+      ActiveState) echo "${STUB_STATE:-inactive}" ;;
+      InvocationID) if [ -e "$STUBS/started" ]; then echo "${STUB_NEW_ID:-}"; else echo "${STUB_OLD_ID:-}"; fi ;;
+      Result) echo "${STUB_RESULT:-exit-code}" ;;
+      ExecMainStatus) echo "${STUB_STATUS:-1}" ;;
+      LastTriggerUSec)
+        if [ -e "$STUBS/started" ] && [ -n "${STUB_TRIGGER_AFTER:-}" ]; then echo "$STUB_TRIGGER_AFTER"
+        else echo "${STUB_TRIGGER:-Thu 2026-09-24 17:50:00 EDT}"; fi ;;
+      NextElapseUSecRealtime) echo "${STUB_NEXT:-}" ;;
+    esac ;;
+  start)
+    touch "$STUBS/started"
+    if [ "${STUB_START_RC:-1}" != 0 ]; then
+      # OnFailure=: systemd starts the alert asynchronously, with the failed invocation's details.
+      ( MONITOR_INVOCATION_ID="$STUB_NEW_ID" MONITOR_SERVICE_RESULT="${STUB_RESULT:-exit-code}" \
+        MONITOR_EXIT_STATUS="${STUB_STATUS:-1}" bash "$ALERT" "$3" >/dev/null 2>&1 9>&-; \
+        touch "$STUBS/alert.done" ) >/dev/null 2>&1 9>&- &
+    fi
+    exit "${STUB_START_RC:-1}" ;;
+  reset-failed) echo "$3" >> "$STUBS/reset.log" ;;
+esac
+''',
+    }
+    for name, body in scripts.items():
+        path = stubs / name
+        path.write_text("#!/bin/sh\n" + body.lstrip("\n") + "\n", encoding="utf-8")
+        path.chmod(0o755)
+    env = {**os.environ, "PATH": f"{stubs}{os.pathsep}{os.environ.get('PATH', '')}", "STUBS": str(stubs),
+           "ALERT": str(ALERT), "EDGE_LAB_STATUS_DIR": str(status), "EDGE_LAB_VERIFY_DIR": str(verify),
+           "EDGE_LAB_VERIFY_OWNER_UID": str(os.getuid()), "EDGE_LAB_VERIFY_WAIT_SECONDS": "10",
+           "EDGE_LAB_VERIFY_JOURNAL_WAIT_SECONDS": "1", "EDGE_LAB_VERIFY_RECORD_WAIT_SECONDS": "20",
+           "EDGE_LAB_ALERT_URL": "https://alerts.invalid/hook"}
+    for key in ("MONITOR_INVOCATION_ID", "MONITOR_SERVICE_RESULT", "MONITOR_EXIT_STATUS"):
+        env.pop(key, None)
+    return {"bash": bash, "status": status, "verify": verify, "stubs": stubs, "env": env}
+
+
+def _records(box):
+    """The failure records alert.sh wrote, by file name."""
+    out = {}
+    for name in ("last_failure.json", "last_verification.json"):
+        path = box["status"] / name
+        if path.exists():
+            out[name] = json.loads(path.read_text())
+    return out
+
+
+def _alert(box, unit=DECISION, **env):
+    """Run alert.sh as its OnFailure= unit would, and return (file name, record) it wrote."""
+    run_env = {**box["env"], "MONITOR_SERVICE_RESULT": "exit-code", "MONITOR_EXIT_STATUS": "1",
+               "MONITOR_INVOCATION_ID": INV, **env}
+    run_env = {k: v for k, v in run_env.items() if v is not None}
+    result = subprocess.run([box["bash"], str(ALERT), unit], capture_output=True, text=True, timeout=60, env=run_env)
+    assert result.returncode == 0, result.stderr
+    (item,) = _records(box).items()
+    return item
+
+
+def _confirm(box, text=None, invocation=INV, mode=0o644):
+    path = box["verify"] / f"confirmed-{invocation}"
+    path.write_text(_confirmation(invocation=invocation) if text is None else text, encoding="utf-8")
+    path.chmod(mode)
+    return path
+
+
+def _pushed(box):
+    return (box["stubs"] / "curl.called").exists()
+
+
+def _relay(box):
+    """What the relay unit does with the records: counts by status, and what reached the push sink."""
+    from datetime import datetime, timezone
+
+    from edge_lab import notifications as n
+    from edge_lab import notify_ntfy
+
+    class Push:
+        sink_id = "ntfy"
+
+        def __init__(self):
+            self.got = []
+
+        def deliver(self, event):
+            self.got.append(event)
+            return n.DeliveryStatus.SUBMITTED
+
+    push = Push()
+    latest = max(r["failed_at_utc"] for r in _records(box).values())
+    now = datetime.fromisoformat(latest.replace("Z", "+00:00")).astimezone(timezone.utc)
+    out = notify_ntfy.relay_outbox(box["status"] / "notifications.jsonl", box["status"] / notify_ntfy.RELAY_NAME,
+                                   push, now=now, failure_path=box["status"] / "last_failure.json",
+                                   verify_dir=box["verify"], trusted_uid=os.getuid())
+    return out["by_status"], push.got
+
+
+def test_alert_scripts_have_lf_endings_and_parse():
+    bash = shutil.which("bash")
+    for script in (ALERT, FAIL_CLOSED):
+        raw = script.read_bytes()
+        assert raw.startswith(b"#!/usr/bin/env bash\n") and b"\r\n" not in raw, script.name
+        if bash is not None:
+            result = subprocess.run([bash, "-n", str(script)], capture_output=True, text=True, timeout=30)
+            assert result.returncode == 0, result.stderr
+
+
+def test_a_genuine_production_failure_is_recorded_and_pushed(box):
+    name, record = _alert(box)
+    assert name == "last_failure.json"
+    assert record == {"unit": DECISION, "failed_at_utc": record["failed_at_utc"], "invocation_id": INV,
+                      "origin": "PRODUCTION"}
+    assert _pushed(box)  # the optional webhook fires for a production failure
+    by_status, got = _relay(box)
+    assert by_status == {"SUBMITTED": 1} and got[0].origin.value == "PRODUCTION"
+    assert "user.err" in (box["stubs"] / "logger.log").read_text()
+    assert list(box["status"].glob(".*")) == []  # no temporary file left behind
+
+
+def test_a_confirmed_fail_closed_check_is_recorded_as_verification_and_not_pushed(box):
+    _confirm(box)
+    name, record = _alert(box)
+    assert name == "last_verification.json"
+    assert record["origin"] == "DEPLOYMENT_VERIFICATION" and record["invocation_id"] == INV
+    assert not _pushed(box)
+    by_status, got = _relay(box)
+    assert by_status == {"HELD_BY_ORIGIN": 1} and got == []
+    assert "DEPLOYMENT_VERIFICATION" in (box["stubs"] / "logger.log").read_text()
+
+
+def test_a_verification_never_overwrites_an_unrelayed_production_failure(box):
+    _alert(box, "edgelab-shadow.service", MONITOR_INVOCATION_ID=OTHER_INV)
+    earlier = (box["status"] / "last_failure.json").read_bytes()
+    _confirm(box)
+    subprocess.run([box["bash"], str(ALERT), DECISION], capture_output=True, text=True, timeout=60,
+                   env={**box["env"], "MONITOR_SERVICE_RESULT": "exit-code", "MONITOR_EXIT_STATUS": "1",
+                        "MONITOR_INVOCATION_ID": INV}, check=True)
+    assert (box["status"] / "last_failure.json").read_bytes() == earlier
+    assert _records(box)["last_verification.json"]["origin"] == "DEPLOYMENT_VERIFICATION"
+    by_status, got = _relay(box)
+    assert by_status == {"SUBMITTED": 1, "HELD_BY_ORIGIN": 1}
+    assert [e.values.get("invocation_id") for e in got] == [OTHER_INV]
+
+
+def test_a_real_failure_of_the_same_unit_while_a_check_is_armed_still_pushes(box):
+    """The check is running (armed) and has confirmed its own invocation, but this is another one."""
+    (box["verify"] / f"armed-{DECISION}").write_text('{"unit": "edgelab-decision.service"}\n')
+    _confirm(box, invocation=OTHER_INV)
+    name, record = _alert(box, EDGE_LAB_VERIFY_WAIT_SECONDS="1")
+    assert name == "last_failure.json" and record["origin"] == "PRODUCTION" and _pushed(box)
+    assert _relay(box)[0] == {"SUBMITTED": 1}
+
+
+def test_a_stale_armed_file_never_delays_an_alert(box):
+    """A check killed (or a power loss) can leave armed-* behind; after 15 minutes it is ignored."""
+    import time
+
+    armed = box["verify"] / f"armed-{DECISION}"
+    armed.write_text('{"unit": "edgelab-decision.service"}\n')
+    twenty_minutes_ago = time.time() - 20 * 60
+    os.utime(armed, (twenty_minutes_ago, twenty_minutes_ago))
+    started = time.monotonic()
+    name, record = _alert(box, EDGE_LAB_VERIFY_WAIT_SECONDS="40")
+    assert time.monotonic() - started < 10  # no 40 s wait
+    assert name == "last_failure.json" and record["origin"] == "PRODUCTION" and _pushed(box)
+    assert armed.exists()  # alert.sh only reads the verify directory
+
+
+def test_the_check_removes_leftover_armed_files_at_startup(box):
+    leftovers = [box["verify"] / f"armed-{DECISION}", box["verify"] / "armed-edgelab-recheck.service"]
+    for path in leftovers:
+        path.write_text("{}\n")
+    code, out = _fail_closed(box, STUB_STATE="active")  # removed even when the check then refuses
+    assert code == 1 and "REFUSED" in out
+    assert not any(p.exists() for p in leftovers)
+
+
+def test_the_alert_waits_for_a_confirmation_while_a_check_is_armed(box):
+    import threading
+
+    (box["verify"] / f"armed-{DECISION}").write_text('{"unit": "edgelab-decision.service"}\n')
+    timer = threading.Timer(1.5, _confirm, args=(box,))
+    timer.start()
+    try:
+        name, record = _alert(box)
+    finally:
+        timer.join()
+    assert name == "last_verification.json" and record["origin"] == "DEPLOYMENT_VERIFICATION" and not _pushed(box)
+
+
+@pytest.mark.parametrize("case", ["timeout", "exit-status-2", "no-result", "no-exit-status", "other-status",
+                                  "other-unit", "extra-text", "world-writable", "not-root-owned", "symlink",
+                                  "no-invocation", "bad-invocation"])
+def test_anything_short_of_an_exact_trusted_confirmation_stays_production(box, case):
+    env = {}
+    if case == "timeout":
+        _confirm(box)
+        env["MONITOR_SERVICE_RESULT"] = "timeout"
+    elif case == "exit-status-2":
+        _confirm(box)
+        env["MONITOR_EXIT_STATUS"] = "2"
+    elif case == "no-result":  # unknown result details fail closed
+        _confirm(box)
+        env["MONITOR_SERVICE_RESULT"] = None
+    elif case == "no-exit-status":
+        _confirm(box)
+        env["MONITOR_EXIT_STATUS"] = None
+    elif case == "other-status":
+        _confirm(box, text=_confirmation(status="rejected_no_decision_capture"))
+    elif case == "other-unit":
+        _confirm(box, text=_confirmation(unit="edgelab-shadow.service"))
+    elif case == "extra-text":
+        _confirm(box, text=_confirmation() + "trailing\n")
+    elif case == "world-writable":
+        _confirm(box, mode=0o666)
+    elif case == "not-root-owned":
+        _confirm(box)
+        env["EDGE_LAB_VERIFY_OWNER_UID"] = str(os.getuid() + 1)
+    elif case == "symlink":
+        real = box["verify"] / "elsewhere"
+        real.write_text(_confirmation())
+        (box["verify"] / f"confirmed-{INV}").symlink_to(real)
+    elif case == "no-invocation":
+        _confirm(box)
+        env["MONITOR_INVOCATION_ID"] = ""  # and the stubbed systemctl knows none either
+    elif case == "bad-invocation":
+        _confirm(box)
+        env["MONITOR_INVOCATION_ID"] = INV[:-1] + "Z"
+    name, record = _alert(box, **env)
+    assert name == "last_failure.json" and record["origin"] == "PRODUCTION" and _pushed(box)
+    if case in ("no-invocation", "bad-invocation"):
+        assert record["invocation_id"] is None
+    assert _relay(box)[0] == {"SUBMITTED": 1}
+
+
+def _fail_closed(box, journal=REJECTED, **env):
+    if journal is not None:
+        (box["stubs"] / "journal").write_text(journal)
+    run_env = {**box["env"], "STUB_OLD_ID": OTHER_INV, "STUB_NEW_ID": INV, **env}
+    result = subprocess.run([box["bash"], str(FAIL_CLOSED)], capture_output=True, text=True, timeout=120,
+                            env=run_env)
+    return result.returncode, result.stdout
+
+
+def _wait_for_alert(box, seconds=30):
+    """Wait for the stubbed OnFailure= alert to finish, then return the records it wrote."""
+    import time
+
+    deadline = time.monotonic() + seconds
+    done = box["stubs"] / "alert.done"
+    while not done.exists() and time.monotonic() < deadline:
+        time.sleep(0.2)
+    return _records(box)
+
+
+def _epoch_in(seconds):
+    import time
+
+    return f"@{int(time.time()) + seconds}"
+
+
+def test_the_runbook_check_records_its_own_failure_as_deployment_verification(box):
+    code, out = _fail_closed(box, STUB_NEXT=_epoch_in(3600))
+    assert code == 0, out
+    assert "FAIL_CLOSED_CHECK: PASS" in out and f"CONFIRMED: invocation {INV}" in out
+    records = _wait_for_alert(box)
+    assert list(records) == ["last_verification.json"]  # last_failure.json stays production-only
+    record = records["last_verification.json"]
+    assert record["origin"] == "DEPLOYMENT_VERIFICATION" and record["invocation_id"] == INV
+    assert not _pushed(box)
+    assert _relay(box) == ({"HELD_BY_ORIGIN": 1}, [])
+    assert not (box["verify"] / f"armed-{DECISION}").exists()  # disarmed
+    assert (box["verify"] / f"confirmed-{INV}").exists()  # kept: the relay checks it again
+    assert (box["stubs"] / "reset.log").read_text().split() == [DECISION]  # only this unit
+
+
+def test_the_check_tidies_only_confirmations_far_older_than_the_relay_window(box):
+    old, recent = _confirm(box, invocation="a" * 32), _confirm(box, invocation="b" * 32)
+    eight_days_ago = __import__("time").time() - 8 * 86400
+    os.utime(old, (eight_days_ago, eight_days_ago))
+    code, out = _fail_closed(box)
+    assert code == 0, out
+    assert not old.exists() and recent.exists()
+    _wait_for_alert(box)
+
+
+@pytest.mark.parametrize("journal,env", [
+    (_collector_stdout("decision", "partial"), {}),  # a real capture problem
+    ("Traceback (most recent call last):\nOSError: disk full\n", {}),  # a crash
+    ("", {}),  # nothing readable
+    (_collector_stdout("recheck", "rejected_out_of_window"), {}),
+    (REJECTED, {"STUB_RESULT": "timeout"}),
+    (REJECTED, {"STUB_STATUS": "2"}),
+    (REJECTED, {"STUB_TRIGGER_AFTER": "Thu 2026-09-24 18:02:00 EDT"}),  # the timer fired meanwhile
+], ids=["partial", "crash", "no-journal", "other-phase", "timeout", "exit-status-2", "timer-triggered"])
+def test_a_check_that_fails_for_another_reason_stays_a_production_alert(box, journal, env):
+    code, out = _fail_closed(box, journal=journal, **env)
+    assert code == 1 and "NOT_CONFIRMED" in out
+    assert not list(box["verify"].glob("confirmed-*"))
+    assert not (box["verify"] / f"armed-{DECISION}").exists()
+    records = _wait_for_alert(box)
+    assert list(records) == ["last_failure.json"]
+    assert records["last_failure.json"]["origin"] == "PRODUCTION" and records["last_failure.json"]["invocation_id"] == INV
+    assert _pushed(box) and _relay(box)[0] == {"SUBMITTED": 1}
+
+
+@pytest.mark.parametrize("journal,reason", [
+    (_collector_stdout("decision", "skipped_duplicate"), "skipped_duplicate. It ran inside its capture window"),
+    (_collector_stdout("decision", "complete"), "captured an order book (complete)"),
+    ("", "did NOT fail closed"),
+], ids=["skipped-duplicate", "complete", "unknown"])
+def test_a_check_whose_unit_succeeds_is_reported_and_confirms_nothing(box, journal, reason):
+    code, out = _fail_closed(box, journal=journal, STUB_START_RC="0")
+    assert code == 1 and reason in out
+    assert not list(box["verify"].glob("confirmed-*")) and _records(box) == {}
+
+
+@pytest.mark.parametrize("env,reason", [({"STUB_STATE": "activating"}, "is 'activating'"),
+                                        ({"STUB_STATE": "active"}, "is 'active'"),
+                                        ({"EDGE_LAB_VERIFY_OWNER_UID": "999999"}, "run as root"),
+                                        ({"STUB_NEXT": "soon"}, "fires within 5 minutes"),
+                                        ({"STUB_NEXT": "not a time"}, "cannot read when"),
+                                        ({"STUB_NEW_ID": OTHER_INV}, "no new invocation")])
+def test_the_check_refuses_to_join_a_running_or_imminent_unit_or_run_unprivileged(box, env, reason):
+    if env.get("STUB_NEXT") == "soon":
+        env = {"STUB_NEXT": _epoch_in(120)}
+    code, out = _fail_closed(box, **env)
+    assert code == 1 and reason in out, out
+    assert not list(box["verify"].glob("confirmed-*"))
+    if "STUB_NEW_ID" not in env:
+        assert not (box["stubs"] / "started").exists()  # it never started the unit
+    else:
+        assert _wait_for_alert(box)["last_failure.json"]["origin"] == "PRODUCTION"
+
+
+def test_two_checks_never_run_at_once(box):
+    import fcntl
+
+    with open(box["verify"] / ".lock", "w") as held:
+        fcntl.flock(held, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        code, out = _fail_closed(box)
+    assert code == 1 and "another fail-closed check is running" in out
+    assert not (box["stubs"] / "started").exists()
+
+
+def test_the_runbook_and_the_installer_run_the_fail_closed_check_through_the_verified_path():
+    section = RUNBOOK[RUNBOOK.index("## 4. Dry runs"):RUNBOOK.index("## 5. Activate")]
+    next_steps = INSTALL[INSTALL.index("INSTALL OK"):]
+    for text in (section, next_steps):
+        assert "sudo bash /opt/market-edge-lab/app/deploy/vps/verify_fail_closed.sh" in text
+        assert "systemctl start edgelab-decision.service" not in text  # a bare start would page the owner
+        assert "sudo systemctl reset-failed 'edgelab-*'" not in text  # never clear every unit's failure
+        assert "FAIL_CLOSED_CHECK: PASS" in text
+
+
+def test_the_webhook_fires_only_for_production_failures():
+    text = ALERT.read_text()
+    assert '[ "$origin" = PRODUCTION ] && [ -n "${EDGE_LAB_ALERT_URL:-}" ]' in text
+    assert text.count("curl ") == 1
+    # The origin is never decided from the clock: `date` only stamps the record.
+    assert [line for line in text.splitlines() if "date " in line and not line.lstrip().startswith("#")] == [
+        'now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"']
