@@ -47,6 +47,7 @@ column lists which issues each primitive serves.
 | Execution-ticket contract | `src/edge_lab/execution_ticket.py` | BUILT (data contract plus an ordered pre-submit control chain, PR #43; `EXECUTION_NOT_AUTHORIZED` always fails) | #32 #33 #30 |
 | Operator views | `src/edge_lab/dashboard/` | BUILT (read-only; on chaseupside reachable only on the owner's tailnet via Tailscale Serve, ADR 0024) | #3 #6 #10 |
 | Design system (Market Edge Terminal v1) | `docs/design/UI_CONTRACT.md` | BUILT (implemented in dashboard presentation.py, components.py, html.py and static/tokens.css; shell, tokens, fonts, components, honest states, gallery; ADR 0025, issue #47). Every user-visible feature reuses it per docs/design/FEATURE_INTEGRATION.md | #47 #3 #6 #9 #10 #29 #30 #32 #33 |
+| Longitudinal learning history | `docs/DATA_PROVENANCE.md` | FOUNDATION BUILT in immutable snapshots/documents, forward captures, experiment records, opportunity reasons and the shadow ledger; issue #50 makes prospective learning-history completeness a cross-domain acceptance rule. A generalized derived learning/reporting layer is NEXT only when additional domains produce data; do not create a duplicate evidence store | #50 #5 #7 #9 #27 #29 #30 |
 
 ## Index
 
@@ -64,6 +65,7 @@ column lists which issues each primitive serves.
 | #30 | Multi-venue coverage, best-price comparison, unique-market discovery | **Foundation IMPLEMENTED** (registry PR #38; Polymarket US adapter TESTED + one smoke read, Novig daily files TESTED, discovery, PR #39; depth ladders for both book venues and per-market price grids, PR #42); best-price-for-size comparator NEXT; Novig live API BLOCKED (credentials) | Best-price claims still need proven rules equivalence and per-venue fee evidence (Polymarket US fees are UNSUPPORTED today). |
 | #29 | The Odds API free tier (quota-capped sports odds pilot) | **Adapter IMPLEMENTED on fixtures** (PR #39: quota ledger, 450-credit ceiling, redaction, SETUP_NEEDED); live pulls BLOCKED (owner key + activation plan) | Sportsbook-consensus input for #5/#9. Offered odds and de-vigged values are never executable prices. |
 | #27 | Action PRO permission and comparative sports-data subscription value | **LATER / BLOCKED** (no purchase authorized) | Paid source; needs the #7 ROI gate and a sports experiment that would use it. |
+| #50 | Longitudinal learning dataset across every domain, including rejected opportunities | **NOW as a permanent data-design rule; NEXT for a generalized cross-domain learning/reporting layer** | Existing provenance, opportunity/rejection, experiment and shadow-ledger primitives already preserve much of the required history. Every new domain should preserve point-in-time observations, model/version context, decisions and rejections, later outcomes and failures before it is called research-ready. No automatic retraining or self-modifying decision policy is authorized. |
 
 ## Roadmap (re-run 2026-09-23 evening, production activation directive)
 
@@ -88,35 +90,36 @@ venue-specific data, then models, then (later, separately authorized) execution.
    approves one.
 4. **Re-check Kalshi scheduled fee changes by 2026-10-23** (calendar-bound; otherwise
    claimability silently lapses).
+5. **#50 learning-history completeness rule.** Apply the existing provenance/decision-history contract to every new domain from its first prospective observation. Preserve rejected/non-actioned evaluations and later outcomes; do not wait for a future model to discover that the necessary history was never stored. This is a data-design rule, not authorization for new collectors or automatic retraining.
 
 **NEXT** (ready once the named prerequisite lands)
-5. **#30 best-price-for-size comparator.** Engineering is unblocked: both book venues now
+6. **#30 best-price-for-size comparator.** Engineering is unblocked: both book venues now
    emit `DepthLadder`s on one primitive and carry `Market.price_grid`. A result becomes
    meaningful (not just gross cost) only with rules-equivalence evidence and Polymarket US fee
    evidence (fees are UNSUPPORTED today). Parallel lane: yes. Oct 22: gross-cost comparison
    is feasible, and a claimable comparison depends on fee evidence.
-6. **#30 cross-venue weather comparison** (Kalshi KXHIGHNY vs any Polymarket US weather
+7. **#30 cross-venue weather comparison** (Kalshi KXHIGHNY vs any Polymarket US weather
    market). Weather is the only domain with a model. Depends on 5 plus a Polymarket US weather
    catalog read and rules equivalence. Also depends on modelling or refusing the "resolves
    50-50" payoff seen in Polymarket US rules (PR #42 finding).
-7. **#29 live Odds API pilot.** Built on fixtures. Depends on the owner's free key and an
+8. **#29 live Odds API pilot.** Built on fixtures. Depends on the owner's free key and an
    approved activation and quota plan.
-8. **#33 ntfy push activation.** Built and disabled. Depends on owner approval for the first
+9. **#33 ntfy push activation.** Built and disabled. Depends on owner approval for the first
    external send and on choosing a private topic. It would carry only fixed headlines.
-9. **#3 / #6 dashboard and board on real data.** Now reachable privately on the phone. It
+10. **#3 / #6 dashboard and board on real data.** Now reachable privately on the phone. It
    fills as real shadow days arrive; no new build is needed first.
 
 **LATER** (wanted; not on the 2026-10-22 path)
-10. **#5 / #9 sports models and consensus comparison.** Each needs a preregistered
+11. **#5 / #9 sports models and consensus comparison.** Each needs a preregistered
     experiment. They reuse #29 data, discovery and the opportunity engine.
-11. **#27 Action PRO ingestion.** Schema ideas are in the audit (§7.10). It needs the
+12. **#27 Action PRO ingestion.** Schema ideas are in the audit (§7.10). It needs the
     owner's recorded permission evidence, a credential decision (login) and a sports
     experiment that would use it.
-12. **#32 execution modes** (human-approved API, then bounded automation). The ticket control
+13. **#32 execution modes** (human-approved API, then bounded automation). The ticket control
     chain is built; execution needs a gate 8+ decision, a credentials policy and an execution
     boundary (Hummingbot lessons, audit §7.8).
-13. **#33 SMS provider**, after ntfy proves the event model on a phone.
-14. **Broader venues** (ProphetX, IBKR/ForecastEx), after the comparator shows incremental
+14. **#33 SMS provider**, after ntfy proves the event model on a phone.
+15. **Broader venues** (ProphetX, IBKR/ForecastEx), after the comparator shows incremental
     catalog value.
 
 **BLOCKED** (named blocker)
@@ -158,6 +161,13 @@ Related owner records that are not ideas:
   its own branch and file claim. It does not touch Gate 3 files.
 
 ## Review log
+
+- **2026-09-23: issue #50 longitudinal learning-history intake.**
+  - Classification: **NOW as a permanent data-design rule; NEXT for a generalized derived learning/reporting layer once multiple domains have prospective data**.
+  - Dependencies/overlap: extends the existing provenance store, event/market identity, opportunity reason codes, experiment registry and shadow ledger; it does not create a second memory database.
+  - Shared leverage: the same history supports weather, sports, macro, crypto and later domains, plus source-ROI analysis for #27/#29 and venue-quality analysis for #30.
+  - Safe parallel lane: coverage/schema audits may run independently, but any new scheduled collection still needs its own authorization. No automatic retraining, live execution or gate advancement is authorized.
+  - Roadmap effect: no 2026-10-22 extension; prospective storage is required before sophisticated modeling so rejected opportunities, failures and point-in-time inputs are not lost.
 
 - **2026-09-23 (evening): production activation directive and GitHub audit follow-ups
   (PRs #42, #43, #44, #45; #46 from the parallel Tailscale session).**
