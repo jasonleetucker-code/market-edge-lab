@@ -72,6 +72,7 @@ column lists which issues each primitive serves.
 | #27 | Action PRO permission and comparative sports-data subscription value | **LATER / BLOCKED** (no purchase authorized) | Paid source; needs the #7 ROI gate and a sports experiment that would use it. |
 | #50 | Longitudinal learning dataset across every domain, including rejected opportunities | **NOW as a permanent data-design rule; NEXT for a generalized cross-domain learning/reporting layer** | Existing provenance, opportunity/rejection, experiment and shadow-ledger primitives already preserve much of the required history. Every new domain should preserve point-in-time observations, model/version context, decisions and rejections, later outcomes and failures before it is called research-ready. No automatic retraining or self-modifying decision policy is authorized. |
 | #74 | Always-on freshness fabric — staggered 24/7 adaptive collection | **NOW as a P0 data-design/operational rule; NEXT for the generalized orchestrator** | One shared freshness supervisor should eventually own source cadence, staggering, streaming/polling choice, quotas, missed-target accounting and decision-time freshness. Immediate action: ADR 0030 Option A is approved so currently lost later/closing depth begins being preserved without waiting for the full orchestrator. |
+| #86 | Cross-domain prospective evidence — collect learning-ready data before models exist | **NOW: portfolio + Multi-City Weather v1 design; gated collectors one source at a time** (2026-09-24 evening directive) | Extends #7/#50/#74/#82 and serves #30; duplicates none. Irrecoverable point-in-time evidence first; every source registered, market-relevant, outcome-labelled, budgeted, and scheduled through #74. Record: `docs/owner/2026-09-24-cross-domain-prospective-evidence-directive.md`. COLLECT ≠ MODEL ≠ VALIDATED ≠ ACTIONABLE. |
 
 ## Roadmap (re-run 2026-09-24 after the next-build-chunk directive and the Odds / ntfy activation)
 
@@ -113,6 +114,13 @@ recorded below and in the Domain Readiness matrix. Gate 7 is unchanged and **not
    accounting and fail-closed decision freshness as permanent design rules now. The generalized
    cross-domain orchestrator is NEXT; do not destabilize the running weather/Odds pipelines to rush
    a refactor.
+
+9a. **#86 cross-domain prospective evidence: Wave 1.** Produce the acquisition portfolio,
+   the source-readiness classification and the combined resource budget. Design Multi-City
+   Weather v1, including verification of recurring Kalshi weather families, rules and stations.
+   Its implementation starts after the Freshness Fabric + sports lanes are merged and deployed.
+   Queued behind those lanes, with no forked abstraction: new collectors become #74 providers;
+   readiness extends `research_readiness.py`; one shared release/event calendar primitive.
 
 **NEXT** (ready once the named prerequisite lands)
 10. **Sizing v2 evidence** (#6). The counterfactual runner and the read-only RESEARCH SIZING
@@ -209,6 +217,20 @@ Related owner records that are not ideas:
   its own branch and file claim. It does not touch Gate 3 files.
 
 ## Review log
+
+- **2026-09-24 (evening, later): #86 cross-domain prospective evidence intake.**
+  - One new canonical idea (#86). It extends #7, #50, #74 and #82 and serves #30; it duplicates none.
+  - **NOW:** Wave 1 planning and the Multi-City Weather v1 design (non-overlapping with the active
+    Freshness/sports lanes).
+  - **NEXT:** Multi-City Weather v1 collection after those lanes deploy; then macro with vintages,
+    BTC/ETH, EIA, SEC EDGAR.
+  - **LATER:** specialized culture sources, broad news, polling, social, licensed feeds.
+  - **Shared primitives reused:**
+    - scheduling: #74 providers;
+    - venue evidence: SnapshotStore and the venue adapters;
+    - readiness: `research_readiness.py`;
+    - a new shared release/event calendar, to be designed once.
+  - No gate change. No paid source. The 2026-10-22 date is unchanged.
 
 - **2026-09-24 11:24 ET: freshness / notification follow-up.**
   - New owner idea #74: always-on staggered freshness is NOW as a permanent P0 design rule;
