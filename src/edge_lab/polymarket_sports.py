@@ -1115,6 +1115,10 @@ def terminal_view(db_path: str | Path, *, now: datetime,
 # --------------------------------------------------------------------------- Freshness Fabric provider
 
 
+MISSED_SCOPE_DISCOVERY = "none: discovery keeps no targets; a late or failed scan shows as STALE or FAILING"
+MISSED_SCOPE_TARGETS = "research book targets recorded MISSED by pm-sports capture (all stored targets)"
+
+
 def _discovery_health(scans: Sequence[Any]) -> str:
     if not scans:
         return "UNKNOWN"
@@ -1136,8 +1140,11 @@ def freshness_records(store: SnapshotStore, *, now: datetime,
     usable = latest_usable_scan(store)
     blocked = not access_decision
     protected = protected_window_at(now, now + MAX_RUN)
-    disc_received = usable["completed_at_utc"] if usable is not None else None
-    disc_age = None if usable is None else now - _t(disc_received)
+    complete = next((r for r in store.pm_sports_scans(league=LEAGUE) if int(r["filter_complete"])), None)
+    # A receipt is a successful acquisition only: a scan read to its empty page. A partial scan is
+    # still usable for planning (what it read is real), but it is an attempt, not a receipt.
+    disc_received = complete["completed_at_utc"] if complete is not None else None
+    disc_age = None if disc_received is None else now - _t(disc_received)
     disc_max_age = get_source(HEALTH_DISCOVERY).max_age["nfl_events"]
     disc_fresh = (Freshness.UNKNOWN if disc_age is None else
                   Freshness.FRESH if disc_age <= disc_max_age else Freshness.STALE)
@@ -1161,6 +1168,7 @@ def freshness_records(store: SnapshotStore, *, now: datetime,
         "data_age_s": None if disc_age is None else int(disc_age.total_seconds()),
         "health": _discovery_health(scans), "catalog_state": cat["state"], "freshness": disc_fresh.value,
         "schedule_state": disc_state, "why": disc_why, "missed_count": None, "recent_misses": [],
+        "missed_scope": MISSED_SCOPE_DISCOVERY, "planning_scan_utc": usable["completed_at_utc"] if usable else None,
         "controls": {"pacer_s": PACER_INTERVAL_S, "max_http_requests": 2 * MAX_DISCOVERY_PAGES,
                      "max_pages": MAX_DISCOVERY_PAGES, "retries": RETRIES, "protected_windows": "price_observations",
                      "lock": "<db>.pm-sports.lock", "run_deadline_s": int(MAX_RUN.total_seconds())}}
@@ -1205,7 +1213,7 @@ def freshness_records(store: SnapshotStore, *, now: datetime,
         # this rolling age against the registered book max_age says only how old the newest book is.
         "freshness": (Freshness.UNKNOWN if capture_age is None else
                       Freshness.FRESH if capture_age <= book_max_age else Freshness.STALE).value,
-        "schedule_state": sched, "why": why, "missed_count": len(missed),
+        "schedule_state": sched, "why": why, "missed_count": len(missed), "missed_scope": MISSED_SCOPE_TARGETS,
         "recent_misses": [f"{t['target_id']}: {t['state_reason']}" for t in missed[-5:]],
         "controls": {"pacer_s": PACER_INTERVAL_S, "max_books_per_run": MAX_BOOKS_PER_RUN,
                      "max_http_requests_per_run": MAX_HTTP_REQUESTS_PER_RUN, "max_markets_per_slot": MAX_MARKETS_PER_SLOT,
@@ -1266,7 +1274,16 @@ def fabric_provider(context: Any, now: datetime) -> list[Any]:
     """Freshness Fabric provider (contract C1: `provider(context, now) -> list[SourceFreshness]`).
     Reads `context.db` read-only: no network, no lock, no write. A missing or unreadable store is
     reported as UNKNOWN, never raised into the supervisor."""
+    from . import freshness as fabric
     from .freshness import Freshness as F, ScheduleState, SourceFreshness, SourceHealth, policy_freshness
+
+    def flags(freshness: Any, health: Any, receipt: datetime | None) -> tuple[bool, bool]:
+        """The fabric's fail-closed rule (`freshness.usable_flags`); this pilot is stricter on the
+        second flag: research evidence is never decision-grade."""
+        rule = getattr(fabric, "usable_flags", None)
+        research = (rule(freshness, health, receipt)[0] if rule is not None
+                    else receipt is not None and freshness is not F.UNKNOWN)
+        return research, False
 
     disc_policy, cap_policy = fabric_policies()
     db = getattr(context, "db", None)
@@ -1286,16 +1303,19 @@ def fabric_provider(context: Any, now: datetime) -> list[Any]:
     out = []
     for policy, rec, label in ((disc_policy, disc, LABEL), (cap_policy, cap, RESEARCH_LABEL)):
         receipt = _t(rec["receipt_utc"])
+        freshness, health = policy_freshness(policy, receipt, now), SourceHealth(rec["health"])
+        research, decision = flags(freshness, health, receipt)
         out.append(SourceFreshness(
-            policy=policy, as_of=now, freshness=policy_freshness(policy, receipt, now),
-            schedule_state=ScheduleState(rec["schedule_state"]), health=SourceHealth(rec["health"]),
+            policy=policy, as_of=now, freshness=freshness,
+            schedule_state=ScheduleState(rec["schedule_state"]), health=health,
             why_due=rec["why"][:300], intended_at=_t(rec["intended_utc"]), next_due=_t(rec["next_due_utc"]),
             last_attempt=_t(rec["last_attempt_utc"]), last_success_receipt=_t(rec["last_success_utc"]),
             receipt_ts=receipt, missed_count=rec["missed_count"],
             recent_misses=tuple(m[:200] for m in rec["recent_misses"]),
-            usable_for_research=receipt is not None, usable_for_decision=False,
+            usable_for_research=research, usable_for_decision=decision,
             notes=(label, "the pilot timers are proposed and not installed; their state is not observable here"),
-            details={k: rec[k] for k in ("catalog_state", "last_attempt_status") if k in rec}))
+            details={k: rec[k] for k in ("catalog_state", "last_attempt_status", "missed_scope", "planning_scan_utc")
+                     if k in rec}))
     return out
 
 

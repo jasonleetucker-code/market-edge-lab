@@ -298,6 +298,10 @@ def test_partial_catalog_is_recorded_and_plans_only_what_was_seen(tmp_path):
     scan = store.pm_sports_scans()[0]
     assert scan["coverage_state"] == "PARTIAL" and scan["filter_complete"] == 0 and scan["requests"] == 3
     assert ps.catalog_state(store, now=NOW)["state"] == "PARTIAL_CATALOG"
+    disc, _ = ps.freshness_records(store, now=NOW, access_decision=ALLOW)
+    # A partial scan plans what it read, but it is an attempt, never a receipt.
+    assert disc["receipt_utc"] is None and disc["freshness"] == "unknown" and disc["health"] == "DEGRADED"
+    assert disc["planning_scan_utc"] is not None and disc["last_attempt_utc"] is not None
     assert store.latest_source_health()[0]["status"] == "partial"
     assert store.pm_sports_targets()  # the markets that were read are still usable
 
@@ -585,6 +589,11 @@ def test_fabric_provider_meets_the_c1_contract(tmp_path):
     assert disc.freshness is fr.Freshness.FRESH and disc.health is fr.SourceHealth.OK and disc.receipt_ts is not None
     assert cap.freshness is fr.Freshness.UNKNOWN and cap.receipt_ts is None and cap.health is fr.SourceHealth.UNKNOWN
     assert not disc.usable_for_decision and not cap.usable_for_decision
+    assert disc.usable_for_research and not cap.usable_for_research  # a receipt of known freshness only
+    assert cap.details["missed_scope"] == ps.MISSED_SCOPE_TARGETS and cap.missed_count == 0
+    if hasattr(fr, "usable_flags"):  # never looser than the fabric's rule
+        assert (disc.usable_for_research, False) == (fr.usable_flags(disc.freshness, disc.health, disc.receipt_ts)[0],
+                                                     disc.usable_for_decision)
     missing = ps.fabric_provider(fr.FabricContext(db=tmp_path / "none.sqlite3"), NOW)
     assert [r.schedule_state for r in missing] == [fr.ScheduleState.UNKNOWN] * 2
     assert [r.freshness for r in missing] == [fr.Freshness.UNKNOWN] * 2
