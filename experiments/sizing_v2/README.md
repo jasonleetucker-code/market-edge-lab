@@ -24,7 +24,19 @@ It is deterministic for a fixed seed and Python version; about 13 minutes on 18 
 The PR #60 re-review fixes changed only the recommendation layer: starter-verdict binding,
 market timing, held-position validation, and joint caps inside the optimizer. The simulation
 calls `solve` directly and was not affected. A full re-run after those fixes reproduced run
-3's results exactly. The committed files carry that re-run's provenance (source hashes).
+3's results exactly. The committed files carry that re-run's provenance: the source hashes of
+commit 59f7ebd.
+
+The final re-review fixes changed only `_prepare`, `_size_one`, `_apply_caps` and
+`recommend_cluster`, none of which the simulation calls:
+- binding the starter verdict to the market's timing;
+- keeping single-candidate caps inside the solver;
+- refusing duplicate market ids;
+- inconsistent cash;
+- binding precedence.
+
+`solve` and `sizing_eval.py` are unchanged, so the numbers are unchanged. Only the recorded
+`sizing_v2.py` hash is older than the current source.
 
 **Replay over EXP-001 history:** SKIPPED (`edge-lab sizing replay --exp001`). The Gate 3
 dataset has no market prices, and the Stage A test split stays protected.

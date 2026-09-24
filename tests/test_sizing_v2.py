@@ -37,10 +37,16 @@ ZERO_FEE = QuadraticTakerSchedule("test-zero-fee", "kalshi", Decimal(0), Decimal
 BIG = Decimal("1000000")
 
 
-def market(native="KXHIGHNY-26SEP25-B1", *, venue="kalshi", kind="binary", amount=Decimal(1)):
+TIMING = MarketTiming(event_end_utc=(T + timedelta(days=1)).isoformat(),
+                      close_time_utc=(T + timedelta(hours=20)).isoformat(),
+                      expected_resolution_utc=(T + timedelta(days=1, hours=2)).isoformat(),
+                      settlement_timer_seconds=3600, lifecycle_status="active", source="test-timing-evidence")
+
+
+def market(native="KXHIGHNY-26SEP25-B1", *, venue="kalshi", kind="binary", amount=Decimal(1), timing=TIMING):
     return Market(venue=venue, market_id=f"{venue}:{native}", native_id=native, event_id="ev", outcome=native,
                   payoff=Payoff(kind, amount, "test"), rules_sha256=None, status=MarketStatus.OPEN,
-                  rules_resolved=True, rules_detail="test")
+                  rules_resolved=True, rules_detail="test", timing=timing)
 
 
 def ladder(m, side, levels, *, received=AS_OF, truncated=False):
@@ -58,8 +64,11 @@ def portfolio(**over):
 
 
 def starter(eligible=True):
-    return StarterVerdict("STARTER_MAX_7D_V1", eligible, () if eligible else ("HORIZON_OVER_7D",), AS_OF, None, None,
-                          None, None, None, None, None, 168, ())
+    """A verdict computed for TIMING at the decision time (what starter_policy.assess records)."""
+    return StarterVerdict("STARTER_MAX_7D_V1", eligible, () if eligible else ("HORIZON_OVER_7D",), AS_OF,
+                          TIMING.event_end_utc, (T + timedelta(days=3, hours=3)).isoformat(),
+                          (T + timedelta(days=3, hours=3)).isoformat(), None, None, None, "75.0000", 168, (),
+                          timing_source=TIMING.source)
 
 
 def binary_request(p=0.55, lo=0.50, hi=0.60, *, side="YES", price="0.40", size=100000, pf=None, **over):
@@ -659,8 +668,7 @@ def test_open_market_past_its_close_or_not_open_lifecycle_is_unsupported(timing)
     m = replace(req.candidate.market, timing=timing)
     r = rec(replace(req, candidate=replace(req.candidate, market=m)))
     assert r.verdict == "UNSUPPORTED" and "MARKET_NOT_OPEN" in r.explanation
-    ok = replace(req.candidate.market, timing=MarketTiming(close_time_utc=(T + timedelta(hours=3)).isoformat(),
-                                                           lifecycle_status="active"))
+    ok = replace(req.candidate.market, timing=replace(TIMING, close_time_utc=(T + timedelta(hours=3)).isoformat()))
     assert rec(replace(req, candidate=replace(req.candidate, market=ok))).verdict == "SIZE"
 
 
@@ -714,3 +722,54 @@ def test_cluster_requests_must_share_correlated_clusters():
     b = binary_request()
     with pytest.raises(ValueError):
         sv2.recommend_cluster([a, b], sv2.POLICY_H, fee_schedule=ZERO_FEE)
+
+
+# --------------------------------------------------------------------------- final re-review fixes (PR #60)
+
+
+@pytest.mark.parametrize("timing,reason", [
+    (None, "STARTER_VERDICT_UNBOUND"),
+    (MarketTiming(lifecycle_status="active"), "STARTER_VERDICT_UNBOUND"),
+    (replace(TIMING, event_end_utc=(T + timedelta(days=60)).isoformat(),
+             close_time_utc=(T + timedelta(days=60)).isoformat()), "STARTER_VERDICT_MISMATCH"),
+    (replace(TIMING, source="another-market-evidence"), "STARTER_VERDICT_MISMATCH"),
+    (replace(TIMING, expected_resolution_utc=(T + timedelta(days=9)).isoformat()), "STARTER_VERDICT_MISMATCH"),
+])
+def test_a_starter_verdict_from_another_market_is_refused(timing, reason):
+    req = binary_request()
+    m = replace(req.candidate.market, timing=timing)
+    r = rec(replace(req, candidate=replace(req.candidate, market=m)))
+    assert r.verdict == "CAPITAL_HORIZON" and reason in r.explanation and r.recommended_contracts == 0
+
+
+def test_single_candidate_caps_inside_the_solver_keep_the_drawdown_constraint_reviewer_case():
+    pf = portfolio(bankroll=Decimal("1000"), tradable_cash=Decimal("700"), max_position_risk=Decimal("20"))
+    held = HeldPosition("kalshi:KXHIGHNY-26SEP25-B1", "YES", ("YES",), 600, Decimal("300"))
+    req = binary_request(0.5, 0.47, 0.53, side="NO", price="0.40", pf=pf, held=(held,))
+    r = rec(req, sv2.POLICY_CANDIDATE)
+    n = r.recommended_contracts
+    curve = IntegerLadderCostCurve([(4000, 100000)], coefficient=Decimal(0))
+    problem = CoreProblem(1000.0, (1300.0, 700.0), (0.5, 0.5), sv2.binary_interval(0.5, 0.47, 0.53),
+                          (CoreCandidate("no", (0, 1), curve, 100000),))
+    lam = sv2.POLICY_CANDIDATE.drawdown_lambda
+    assert r.recommended_amount <= Decimal("20")
+    assert n == 0 or sv2.drawdown_measure(problem, (n,), lam, robust=True) <= 1 + 1e-12, (n, r.verdict)
+    assert r.verdict != "SIZE" and r.binding_constraint == "RISK_CONSTRAINT"
+
+
+def test_duplicate_market_ids_in_one_cluster_are_refused():
+    a = binary_request(pf=portfolio(max_position_risk=Decimal("50")))
+    out = sv2.recommend_cluster([a, a], sv2.POLICY_C, fee_schedule=ZERO_FEE)
+    assert all(r.verdict == "UNSUPPORTED" and "DUPLICATE_MARKET" in r.explanation for r in out)
+
+
+def test_tradable_cash_above_bankroll_is_inconsistent():
+    r = rec(binary_request(pf=portfolio(bankroll=Decimal("100"), tradable_cash=Decimal("500"))))
+    assert r.verdict == "STALE_DATA" and "RISK_STATE_INCONSISTENT" in r.explanation
+
+
+def test_drawdown_constraint_is_reported_as_binding_even_with_a_cap_present():
+    pf = portfolio(max_position_risk=Decimal("5000"))
+    r = rec(binary_request(0.60, 0.60, 0.60, pf=pf), sv2.POLICY_G)
+    assert r.verdict == "SIZE" and r.binding_constraint == "RISK_CONSTRAINT"
+    assert "POSITION_CAP" not in r.secondary_constraints or r.position_cap >= r.recommended_amount

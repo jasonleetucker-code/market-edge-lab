@@ -1186,6 +1186,34 @@ class _Prepared:
     schedule_id: str | None = None
 
 
+def _starter_mismatch(verdict: StarterVerdict, market: Market) -> str | None:
+    """Why `verdict` cannot be this market's STARTER_MAX_7D_V1 verdict, or None.
+
+    A verdict carries no market id, so it is bound through the timing it was computed from:
+    - the market must state its timing, with at least an event end or a timing source;
+    - the verdict's event end must equal the market's (both unknown counts as equal only
+      when the timing source matches);
+    - the verdict's timing source must equal the market's;
+    - its resolution ETA must not precede the market's own expected resolution.
+    Anything else is refused (CAPITAL_HORIZON): a verdict from another market never admits
+    this one."""
+    timing = market.timing
+    if timing is None:
+        return "STARTER_VERDICT_UNBOUND: the market states no timing, so the verdict cannot be matched to it"
+    if timing.event_end_utc is None and timing.source is None:
+        return "STARTER_VERDICT_UNBOUND: the market's timing has neither an event end nor a source"
+    if parse_utc(verdict.event_end_utc) != parse_utc(timing.event_end_utc):
+        return (f"STARTER_VERDICT_MISMATCH: verdict event end {verdict.event_end_utc} is not the market's "
+                f"{timing.event_end_utc}")
+    if verdict.timing_source != timing.source:
+        return (f"STARTER_VERDICT_MISMATCH: verdict timing source {verdict.timing_source!r} is not the market's "
+                f"{timing.source!r}")
+    expected, eta = parse_utc(timing.expected_resolution_utc), parse_utc(verdict.resolution_eta_utc)
+    if expected is not None and eta is not None and eta < expected:
+        return "STARTER_VERDICT_MISMATCH: the verdict resolves before the market's own expected resolution"
+    return None
+
+
 def _age_check(ts: str | None, max_age: timedelta, as_of: datetime, what: str) -> str | None:
     at = parse_utc(ts)
     if at is None:
@@ -1255,6 +1283,8 @@ def _prepare(req: SizingRequest, config: SizingConfig, fee_schedule: Any, as_of:
 
     if req.portfolio.bankroll <= 0 or req.portfolio.tradable_cash < 0:
         return block(Verdict.RISK_LIMIT, "BANKROLL_NOT_POSITIVE: no positive bankroll to size against")
+    if req.portfolio.tradable_cash > req.portfolio.bankroll:
+        return block(Verdict.STALE_DATA, "RISK_STATE_INCONSISTENT: tradable cash exceeds equity at cost basis")
     if req.portfolio.breaches:
         return block(Verdict.RISK_LIMIT, f"RISK_BREACH: {', '.join(req.portfolio.breaches)}")
     if req.portfolio.available_risk_budget <= 0:
@@ -1273,6 +1303,9 @@ def _prepare(req: SizingRequest, config: SizingConfig, fee_schedule: Any, as_of:
     if as_of - committed > config.max_starter_age:
         return block(Verdict.STALE_DATA, f"STARTER_VERDICT_STALE: computed for {committed.isoformat()}, more than "
                                          f"{config.max_starter_age} before the decision")
+    mismatch = _starter_mismatch(req.starter, market)
+    if mismatch:
+        return block(Verdict.CAPITAL_HORIZON, mismatch)
     if not req.starter.eligible:
         return block(Verdict.CAPITAL_HORIZON, f"STARTER_MAX_7D_V1: {', '.join(req.starter.reasons)}")
     if req.uncertainty is None:
@@ -1456,6 +1489,14 @@ def recommend_cluster(requests: Sequence[SizingRequest], policy: SizingPolicyV2,
             raise ValueError("the uncertainty set's nominal vector is not the model's")
 
     preps = [_prepare(r, config, fee_schedule, as_of) for r in requests]
+    seen: dict[str, int] = {}
+    for r in requests:
+        seen[r.candidate.market.market_id] = seen.get(r.candidate.market.market_id, 0) + 1
+    for prep in preps:
+        mid = prep.request.candidate.market.market_id
+        if seen[mid] > 1 and prep.blocked is None:
+            prep.blocked, prep.reason = Verdict.UNSUPPORTED, (
+                f"DUPLICATE_MARKET: {mid} appears {seen[mid]} times in one cluster request; each market is sized once")
     held_problem = _held_problem(first)
     if held_problem:
         for prep in preps:
@@ -1485,18 +1526,36 @@ def _problem(req: SizingRequest, book: _Book, cands: tuple[CoreCandidate, ...], 
 
 
 def _size_one(prep: _Prepared, policy: SizingPolicyV2, config: SizingConfig, book: _Book) -> SizingRecommendation:
+    """One candidate, with every hard cap inside the solver.
+
+    The candidate's cap is the tightest of depth, tradable cash and every dollar cap. So the
+    count the policy's drawdown constraint was checked on is the count recommended; clipping
+    after the solver could break that constraint when the cluster already holds a hedge. A
+    second solve with only depth and cash limits gives the policy's pre-cap size, which is
+    reported and names the binding cap."""
     req, curve = prep.request, prep.curve
     assert curve is not None and prep.payout is not None and req.portfolio is not None
     pf = req.portfolio
     cash_bound = curve.max_affordable(pf.tradable_cash - book.spent)
-    cand = CoreCandidate(req.candidate.market.market_id, prep.payout, curve, cash_bound)
-    problem = _problem(req, book, (cand,), None)
-    sol = solve(policy, problem)
-    # A policy size stopped by the captured depth or by tradable cash is bound by it, not by the rule.
-    clipped = None
-    if sol.wanted and (sol.wanted[0] > cash_bound or sol.limited[0] == "CAP"):
-        clipped = "LIQUIDITY" if cash_bound == curve.max_contracts else "TRADABLE_CASH"
-    return _apply_caps(prep, policy, config, book, problem, sol, shared_binding=clipped, cash_bound=cash_bound)
+    dollars = _dollar_caps(req, book)
+    limits = [("LIQUIDITY" if cash_bound == curve.max_contracts else "TRADABLE_CASH", cash_bound)]
+    limits += [(name, curve.max_affordable(dollars[name])) for name in CAP_ORDER[2:-1]]
+    cap = min(v for _, v in limits)
+    cap_name = next(n for n, v in limits if v == cap)
+    free_problem = _problem(req, book, (CoreCandidate(req.candidate.market.market_id, prep.payout, curve,
+                                                      cash_bound),), None)
+    free = solve(policy, free_problem)
+    problem = replace(free_problem, candidates=(replace(free_problem.candidates[0], cap=cap),))
+    capped = solve(policy, problem, reference=False)
+    sol = CoreSolution(capped.counts, free.kelly_counts, capped.robust_counts if policy.robust else None,
+                       capped.rule_binding, capped.adverse, (free.counts[0],), capped.limited)
+    stop = None
+    if capped.counts[0] < free.counts[0] or (capped.limited and capped.limited[0] == "CAP"
+                                             and capped.counts[0] >= cap and cap < cash_bound):
+        stop = cap_name
+    elif free.limited and free.limited[0] == "CAP":
+        stop = "LIQUIDITY" if cash_bound == curve.max_contracts else "TRADABLE_CASH"
+    return _apply_caps(prep, policy, config, book, problem, sol, shared_binding=stop, cash_bound=cash_bound)
 
 
 def _size_joint(preps: list[_Prepared], live: list[int], policy: SizingPolicyV2, config: SizingConfig, book: _Book,
@@ -1536,7 +1595,7 @@ def _size_joint(preps: list[_Prepared], live: list[int], policy: SizingPolicyV2,
     # The unconstrained Kelly reference: the joint nominal optimum limited only by depth and cash.
     free_cands = tuple(replace(c, cap=preps[i].curve.max_affordable(cash)) for c, i in zip(cands, live))
     free_kelly = _maximize(_problem(req, book, free_cands, float(cash)), robust=False)
-    for _ in range(64):  # caps only shrink, so this terminates; 64 is a safety bound
+    for _ in range(64):  # each pass lowers at least one leg's cap, so this should settle; 64 bounds it
         problem = _problem(req, book, tuple(cands), budget)
         sol = solve(policy, problem)
         trial = copy.deepcopy(book)
@@ -1562,7 +1621,8 @@ def _size_joint(preps: list[_Prepared], live: list[int], policy: SizingPolicyV2,
             cands[j] = replace(cands[j], cap=recs[j].recommended_contracts)
             cap_names[j] = recs[j].binding_constraint
     else:
-        raise RuntimeError("joint sizing did not converge")  # unreachable: caps strictly shrink
+        # Not expected: every pass strictly lowers a cap. Fail loudly rather than size unchecked.
+        raise RuntimeError("joint sizing did not settle within 64 passes")
     book.base, book.spent, book.event_extra, book.cluster_extra = (trial.base, trial.spent, trial.event_extra,
                                                                     trial.cluster_extra)
     for j, i in enumerate(live):
@@ -1586,8 +1646,10 @@ def _apply_caps(prep: _Prepared, policy: SizingPolicyV2, config: SizingConfig, b
     final = min(v for _, v in limits)
     cap_limits = [(n, v) for n, v in limits if n != "SIZING_RULE"]
     max_allowed_n = min(v for _, v in cap_limits)
-    if shared_binding is not None and final == policy_n:
-        binding = shared_binding  # depth, cash or a shared budget stopped the policy's size
+    if final == policy_n and final > 0 and sol.rule_binding in ("RISK_CONSTRAINT", "CVAR_CAP"):
+        binding = sol.rule_binding  # the policy's own risk constraint set the size (caps go to secondary)
+    elif shared_binding is not None and final == policy_n:
+        binding = shared_binding  # depth, cash or a cap stopped the policy's size
     else:
         binding = next(n for n in CAP_ORDER if n in by_name and by_name[n] == final)
     secondary = tuple(n for n, v in sorted(cap_limits, key=lambda x: (x[1], CAP_ORDER.index(x[0])))
