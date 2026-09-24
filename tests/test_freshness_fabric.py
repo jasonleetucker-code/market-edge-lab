@@ -866,6 +866,12 @@ def test_carried_records_are_reassessed_never_decision_grade_and_bounded_in_age(
     pfm = next(s for s in doc["sources"] if s["source_id"] == "exp001.forward.pfm")
     assert pfm["freshness"] == "FRESH"  # re-judged at now from its 21:45:30 receipt; still not decision-grade
     assert doc["summary"]["by_freshness"].get("FRESH", 0) == len(doc["summary"]["fresh"])
+    # Repeated deferred runs keep one label and the original reason (no nesting per run).
+    first = {s["source_id"]: s["why_due"] for s in doc["sources"]}
+    for at in ("2026-09-24T22:46:00Z", "2026-09-24T22:48:00Z"):  # 18:46 and 18:48 ET, still deferred
+        again, _ = ff.status(ctx, z(at), write=True)
+    for s in again["sources"]:
+        assert s["why_due"] == first[s["source_id"]] and s["why_due"].count("carried from") == 1
     # An evaluation made long before the window is not carried: every source is UNKNOWN.
     old, _ = ff.status(ctx2, z("2026-09-24T21:50:00Z"), write=True)
     assert old["sources_evaluated_at_utc"] is None and "too old" in old["supervisor"]["problems"][0]

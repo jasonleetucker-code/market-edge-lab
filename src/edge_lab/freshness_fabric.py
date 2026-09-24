@@ -93,7 +93,9 @@ SUPERVISOR_TIMER = "edgelab-freshness.timer"
 SUPERVISOR_TICK_MINUTES = tuple(range(1, 60, 5))  # edgelab-freshness.timer: *:01/5
 SUPERVISOR_MAX_AGE = timedelta(minutes=15)  # three missed ticks
 # The close capture runs from the 04:57:45 UTC tick to its confirming read 5 s after the 05:00:00Z close.
-# A supervisor run that could overlap it (TimeoutStartSec 120 s) defers like a protected window.
+# A supervisor run that could overlap its normal course (TimeoutStartSec 120 s) defers like a protected window.
+# A slow close run may last to its 4-minute limit (05:01:45Z) past the guard's end; that overlap is harmless,
+# because the supervisor only reads (mode=ro; WAL readers never block the writer).
 CLOSE_GUARD = ("kalshi_close_tick", timedelta(minutes=2, seconds=15), timedelta(minutes=3, seconds=15))
 
 
@@ -1145,7 +1147,9 @@ def build_status(ctx: FabricContext, now: datetime, registry: Sequence[FabricPro
     """The status document: current state only. No paths, no environment, no secrets."""
     records, reports = evaluate(ctx, now, registry)
     problems = [scrub(f"{r['provider']}: {p}") for r in reports for p in r["problems"]]
-    sources = [r.to_dict() for r in records]
+    # The artifact holds no filesystem paths (ADR 0031): a provider's why_due text may name one.
+    sources = [{**d, "why_due": _PATHLIKE.sub("<path>", d["why_due"]) if isinstance(d.get("why_due"), str) else d.get("why_due")}
+               for d in (r.to_dict() for r in records)]
     return {
         "schema": SCHEMA,
         "generated_at_utc": iso_z(now),
@@ -1184,7 +1188,9 @@ def _reassess_carried(source: Mapping[str, Any], now: datetime, evaluated: str) 
                                 and fresh is not Freshness.UNKNOWN),
         "usable_for_decision": False,
         "carried_from_utc": evaluated,
-        "why_due": _clip(f"carried from the {evaluated} evaluation (protected window): {source.get('why_due')}"),
+        # Label once: a record already carried keeps its label and original reason (no nesting per run).
+        "why_due": source.get("why_due") if source.get("carried_from_utc") else _clip(
+            f"carried from the {evaluated} evaluation (protected window): {source.get('why_due')}"),
     }
 
 
