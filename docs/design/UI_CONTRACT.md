@@ -276,20 +276,23 @@ A design change is a dated entry here: what changed, why, who approved it (owner
 directive), and the screenshots that justify it.
 
 - **2026-09-23 — tape read-error state; plain outcome labels.** Approved by the owner's
-  session request (Terminal v1 follow-ups). (1) §7: the tape gains an unavailable variant,
+  session request (Terminal v1 follow-ups; merge reconciliation assigned by the 2026-09-24
+  next-build-chunk directive, Lane B). (1) §7: the tape gains an unavailable variant,
   so an unreadable evidence database reads "Captured quotes unavailable (read error)."
   instead of the zero-quotes wording, which had presented a read failure as an empty day.
   (2) Outcome group titles on Outcomes and Terminal "What matters today" use
   `presentation.cluster_label`: known cluster patterns only, raw id otherwise, raw id always
   in "Why it matters". No token, layout or component-style change. Screenshots: the
   `early`, `demo` and `broken` states at 390x844 and 1440x900 (`tests/browser/capture.py`),
-  reviewed in the PR.
+  reviewed locally by the author and described in PR #53 (not attached).
 - **2026-09-23 — honest board coverage on read error; plain labels on position rows.**
-  Approved by the owner's session request (Terminal v1 follow-ups, second batch). (1) The
+  Approved by the owner's session request (Terminal v1 follow-ups, second batch; merge
+  reconciliation assigned by the 2026-09-24 next-build-chunk directive, Lane B). (1) The
   Terminal "Market board" section meta read "No captured books" when the evidence database
   could not be read; it now reads "Captured books unavailable" on ERROR and keeps "No captured
   books" for NO_DATA. The Markets page subtitle likewise reads "Captured coverage unavailable
   (read error)." on ERROR (its coverage line already did). (2) Portfolio position row
   subtitles use `presentation.cluster_label`; the raw id stays in "Position details"
   (`cluster`). No token, layout or component change. Screenshots: `early`, `demo` and `broken`
-  at 390x844 and 1440x900, reviewed in the PR.
+  at 390x844 and 1440x900, reviewed locally by the author and described in PR #54 (not
+  attached).
