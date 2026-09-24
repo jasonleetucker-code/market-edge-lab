@@ -133,6 +133,17 @@ def test_install_script_knows_every_timer_and_keeps_the_ledger_private():
     assert "edgelab.slice" in INSTALL
 
 
+def test_adr0030_rollback_removes_observation_units_without_dropping_odds_on_v5():
+    runbook = (ROOT / "docs/deploy/DAILY_SHADOW_ACTIVATION.md").read_text()
+    readme = (ROOT / "deploy/vps/README.md").read_text()
+    for text in (runbook, readme):
+        assert "edgelab-observe.service" in text and "edgelab-observe-close.timer" in text
+        assert "v4" in text and "edgelab-odds.service" in text
+    v5 = runbook[runbook.index("For a v5"):runbook.index("Only when the rollback target is v4")]
+    assert "edgelab-observe.service" in v5
+    assert "edgelab-odds.service" not in v5
+
+
 def test_readme_install_window_matches_the_capture_window():
     text = (ROOT / "deploy/vps/README.md").read_text()
     ends = re.findall(r"17:40 and (?:\*\*)?18:(\d\d)", text)
