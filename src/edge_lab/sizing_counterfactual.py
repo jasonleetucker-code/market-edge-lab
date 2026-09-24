@@ -44,13 +44,23 @@ Inputs, reconstructed only from what was known at each decision time (`as_of`):
   quote's receipt time. The cash debit is the engine's all-in cost (fees plus the ADR 0017
   claim allowance), so net P&L is a conservative lower bound. An invalid Stage B day never
   fills (`STAGE_B_DAY_INVALID`), exactly as the canonical path.
+  Fill facts appear on a row only once the fill is known by the replay clock (else `PENDING`),
+  and no confirmation quote received after the cutoff is ever read. The canonical path's
+  fill-time STARTER_MAX_7D_V1 re-check and pre-fill risk veto are not reproduced (the cost is
+  reserved at the decision instead).
 - **Settlements**: attached only once known (knowledge time <= the replay clock). Outcomes come
-  from the captured settlement evidence under the canonical rules (`exp001_shadow.settlement_index`
-  with `known_by`, `official_outcome`, `event_settlement_problems`), known at the first
-  capture that makes them conclusive, or from ledger settlement entries at their
-  `shadow_ledger.knowledge_time`. A ledger settlement that disagrees with the captured evidence
-  fails closed: no settlement is attached (`SETTLEMENT_CONFLICT`). Evidence captured later
-  that contradicts an outcome is reported (`CONTRADICTED_LATER`), never applied retroactively.
+  from the captured settlement evidence under the canonical rules (the semantics of
+  `exp001_shadow.settlement_index` with `known_by`, `official_outcome`,
+  `event_settlement_problems`), known at the first capture that makes them conclusive
+  (`settlement_first_known`: one pass, held equal to the per-time construction by a test), or
+  from ledger settlement entries at their `shadow_ledger.knowledge_time`. The first source to
+  know an outcome books it; a disagreeing source (`SOURCES_DISAGREE`) or later contradicting
+  evidence (`CONTRADICTED_LATER`) is reported, never applied retroactively.
+- **Slots**: one decision per slot. Accounts that decided the same slot under different ids
+  are merged (the operational account's record preferred, `recorded_in_accounts` lists all);
+  materially different content fails closed (`DECISION_RECORDS_DISAGREE`).
+- **Policy H** is sized one candidate at a time here, so its joint (cluster) component is
+  inert: H behaves as robust 1/2 Kelly with the robust drawdown constraint.
 
 Per-policy state is isolated: settled cash, reservations and open positions, event and
 cluster exposure (through `risk.assess`), realized P&L, drawdown, high-water mark and capital
@@ -66,19 +76,31 @@ No statistical significance is implied by a few settlements.
 
 ----------------------------------------------------------------------------- panel contract
 
-`panel_for_market(store, ledger, market_id, *, as_of=None, config=DEFAULT_CONFIG,
-policies=POLICY_SET) -> dict` (pure, read-only) for the Terminal v1 research sizing panel
-(labelled RESEARCH SIZING / SHADOW SIZING CHALLENGER, never "Recommended bet"). It replays the
-ledger up to the latest recorded decision on `market_id` (at or before `as_of` when given)
-and returns the canonical per-policy counterfactual rows for that decision. Keys:
+For the Terminal v1 research sizing panel (labelled RESEARCH SIZING / SHADOW SIZING
+CHALLENGER, never "Recommended bet"). All read-only; none raises for missing or unreadable data.
 
-- `panel_version` ("1"), `label`, `market_id`, `as_of_utc` (replay clock used, or None);
+- `build_panel_bundle(store, ledger, *, as_of=None, config=DEFAULT_CONFIG, policies=POLICY_SET,
+  use_cache=True) -> dict`: ONE replay of every policy over every decision up to `as_of`
+  (default: the latest known input). Memoized in-process (thread-safe, 2 entries) by
+  `panel_cache_key(store, ledger, *, as_of=None, config=..., policies=...) -> str` = ledger
+  account head hashes + the evidence database's highest snapshot id + cutoff + config +
+  policies + code hashes. An opaque in-process object; `clear_panel_cache()` empties the memo.
+- `panel_for_market_from_bundle(bundle, market_id) -> dict`: the panel for the latest recorded
+  decision on `market_id`, read from a bundle (pure, cheap, returns a fresh dict).
+- `panel_for_market(store, ledger, market_id, *, as_of=None, config=DEFAULT_CONFIG,
+  policies=POLICY_SET) -> dict`: thin wrapper over the two.
+
+The recommendation is the one computed at the decision's own time; `fill_status` is as known by
+the bundle's cutoff. Panel keys:
+
+- `panel_version` ("1"), `label`, `market_id`, `as_of_utc` (the bundle's replay clock, or None);
 - `available` (bool), `unavailable_reason` (None or one of `UNAVAILABLE_REASONS`),
   `unavailable_detail` (the exact engine/runner reason text, or None);
 - `primary_policy`: {policy_id, policy_version, letter, description} (H, the candidate);
 - `sides`: one entry per recorded side of that decision time, YES first. Each entry:
   `side`, `decision_id`, `decision_time`, `recorded_qualification`, `recorded_reason`,
-  `model_version`, `available`, `unavailable_reason`, `unavailable_detail`, `top_of_book_limited`,
+  `model_version`, `recorded_in_accounts`, `merged_decision_ids`, `available`,
+  `unavailable_reason`, `unavailable_detail`, `top_of_book_limited`,
   and `primary` = the H row: `policy_id`, `policy_version`, `verdict`, `block_reason`,
   `bankroll_basis` {bankroll, tradable_cash, available_risk_budget}, `model_probability`,
   `conservative_probability`, `expected_net_edge`, `uncertainty` {method,
@@ -97,27 +119,30 @@ Every number is a string (Decimal) or None, so the UI does no arithmetic. When t
 compute, `available` is false and `unavailable_reason` names why: "No model", "Fees
 unsupported", "Stale quote", "Rules unresolved", "Insufficient uncertainty evidence", "Risk
 state unavailable", "Unsupported payoff", "Market not open", "Capital horizon unknown",
-"Evidence incomplete", "No recorded decision", "Ledger unavailable". A computed zero (for
-example ZERO_EDGE or a cap) is available, with its verdict and binding constraint.
-The replay costs one full pass over the ledger per call; callers may cache by ledger head hash.
+"Evidence incomplete", "No recorded decision", "Ledger unavailable", "No sizing policy". A
+computed zero (for example ZERO_EDGE or a cap) is available, with its verdict and binding
+constraint.
 """
 
 from __future__ import annotations
 
 import argparse
+import copy
 import hashlib
 import heapq
 import json
 import math
 import os
+import sqlite3
 import sys
+import threading
 from dataclasses import dataclass, field, fields, replace
 from datetime import date, datetime, timedelta, timezone
 from decimal import ROUND_FLOOR, Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 
-from . import exp001_shadow, forward, risk
+from . import exp001_shadow, forward, risk, settlement
 from . import sizing_v2 as sv2
 from .fill_policy import FILLED, LATENCY_CONFIRMED_V1, simulate_fill
 from .freshness import Freshness, parse_utc
@@ -178,9 +203,27 @@ UNAVAILABLE_HORIZON = "Capital horizon unknown"
 UNAVAILABLE_EVIDENCE = "Evidence incomplete"
 UNAVAILABLE_NO_DECISION = "No recorded decision"
 UNAVAILABLE_LEDGER = "Ledger unavailable"
+LIMITATIONS = (
+    "Depth: only the recorded top of book is used; every liquidity cap is top-of-book-limited.",
+    "Fills: latency-confirmed-v1 on the recorded entry quote and the captured re-check quote; a counterfactual "
+    "size larger than the displayed size does not fill. The canonical path's fill-time STARTER_MAX_7D_V1 re-check "
+    "and pre-fill risk veto are not reproduced: the cost is reserved at the decision instead.",
+    "Market timing is the decision's own recorded STARTER_MAX_7D_V1 verdict; decisions without one are refused "
+    "(CAPITAL_HORIZON), never re-assessed at replay time.",
+    "Model: each market is two states (YES, NO); other brackets of the same event are unmapped cluster exposure, "
+    "which the engine treats as lost in every state (conservative). No joint bracket vector is reconstructed.",
+    "Policy H's joint (cluster) component is INERT in this replay: every decision is sized as a single candidate, "
+    "so H behaves as robust 1/2 Kelly with the robust drawdown constraint (equivalent to sizing_eval.G_ROBUST).",
+    "Fees: the KXHIGHNY fee verification record is claimable from 2026-09-23 until its re-check date "
+    "2026-10-23T13:39:48Z; decisions after that fail closed (FEE_UNVERIFIED) until a new record exists.",
+    "Costs include the ADR 0017 claim allowance, so P&L is a conservative lower bound.",
+    "No statistical significance is implied by a small number of settlements.",
+)
+UNAVAILABLE_NO_POLICY = "No sizing policy"
 UNAVAILABLE_REASONS = (UNAVAILABLE_NO_MODEL, UNAVAILABLE_FEES, UNAVAILABLE_STALE_QUOTE, UNAVAILABLE_RULES,
                        UNAVAILABLE_UNCERTAINTY, UNAVAILABLE_RISK_STATE, UNAVAILABLE_PAYOFF, UNAVAILABLE_MARKET,
-                       UNAVAILABLE_HORIZON, UNAVAILABLE_EVIDENCE, UNAVAILABLE_NO_DECISION, UNAVAILABLE_LEDGER)
+                       UNAVAILABLE_HORIZON, UNAVAILABLE_EVIDENCE, UNAVAILABLE_NO_DECISION, UNAVAILABLE_LEDGER,
+                       UNAVAILABLE_NO_POLICY)
 
 
 @dataclass(frozen=True)
@@ -229,8 +272,10 @@ def _s(value: Decimal | None) -> str | None:
 
 
 def _m(value: Decimal) -> str:
-    """Simulated money as a cent string. Costs are whole cents and payouts whole dollars, so
-    this never rounds; it only makes "1000" and "1000.00" one spelling."""
+    """Simulated money as a cent string. Assumption: every simulated amount is a sum of engine
+    costs (cent-quantized, rounded up by `sizing_v2`), whole-dollar payouts and a cent-exact
+    starting bankroll, so this never actually rounds; it only makes "1000" and "1000.00" one
+    spelling. A sub-cent starting bankroll would be floored here (and should not be configured)."""
     return str(value.quantize(sv2.CENT, rounding=ROUND_FLOOR))
 
 
@@ -258,7 +303,7 @@ def source_hash(path: Path) -> str:
     return hashlib.sha256(text).hexdigest()
 
 
-_SOURCES = ("sizing_counterfactual.py", "sizing_v2.py", "sizing_eval.py","risk.py", "fill_policy.py", "fee_schedules.py",
+_SOURCES = ("sizing_counterfactual.py", "sizing_v2.py", "sizing_eval.py", "risk.py", "fill_policy.py", "fee_schedules.py",
             "opportunity.py", "shadow_ledger.py", "starter_policy.py", "exp001_shadow.py", "settlement.py")
 
 
@@ -294,6 +339,8 @@ class DecisionRecord:
     target_date: str | None
     fills: tuple[Mapping[str, Any], ...]  # recorded fill payloads (any account), known by the cutoff
     problem: str | None  # a runner-level defect: the decision cannot be replayed as recorded
+    slot: str | None = None  # "<target date>|<market>|<side>": one decision per slot
+    merged_ids: tuple[str, ...] = ()  # other decision ids recorded for the same slot (other accounts)
 
     def sort_key(self) -> tuple[Any, ...]:
         return (self.as_of, self.market_id, self.side, self.decision_id)
@@ -321,6 +368,7 @@ class ReplayInputs:
     evidence_ids: set[str] = field(default_factory=set)
     _confirmations: dict[str, tuple[ExecutableQuote | None, str]] = field(default_factory=dict)
     _rechecks: dict[str, dict[tuple[str, str], ExecutableQuote] | None] = field(default_factory=dict)
+    _recheck_errors: dict[str, str] = field(default_factory=dict)
     _fills: dict[tuple[str, int], "_FillResult"] = field(default_factory=dict)
 
     def decisions_hash(self) -> str:
@@ -361,7 +409,8 @@ def load_inputs(store: Any, ledger: Any, *, cutoff: datetime | None = None,
             if known is not None and (latest is None or known > latest):
                 latest = known
 
-    settlement_times = _settlement_times(store)
+    settlement_rows = _settlement_rows(store)
+    settlement_times = sorted({t for t in (parse_utc(r["fetched_at_utc"]) for r in settlement_rows) if t is not None})
     if cutoff is None:
         candidates = [t for t in [latest, *settlement_times] if t is not None]
         if not candidates:
@@ -387,10 +436,50 @@ def load_inputs(store: Any, ledger: Any, *, cutoff: datetime | None = None,
                 ledger_settlements.setdefault(str(payload.get("market_id")), []).append((known, payload))
 
     records = [_merge_decision(did, entries, fills.get(did, [])) for did, entries in decisions.items()]
+    records = _dedupe_slots(records)
     records.sort(key=DecisionRecord.sort_key)
     markets = sorted({r.market_id for r in records if r.market_id})
-    outcomes, evidence = _outcomes(store, markets, ledger_settlements, cutoff)
+    outcomes, evidence = _outcomes(settlement_rows, markets, ledger_settlements, cutoff)
     return ReplayInputs(records, outcomes, cutoff, heads, store, config, evidence)
+
+
+def _material(d: DecisionRecord) -> Any:
+    """What must agree when two accounts decided the same slot (ids and sizing may differ)."""
+    opp = {k: v for k, v in d.opportunity.items() if k != "opportunity_id"}
+    return (d.as_of_utc, d.market_id, d.side, d.event_id, d.cluster, d.qualification, d.reasons, d.model_version,
+            d.day_status, json.dumps(opp, sort_keys=True, default=str))
+
+
+def _dedupe_slots(records: list[DecisionRecord]) -> list[DecisionRecord]:
+    """One decision per slot. Accounts that decided the same slot under different decision ids
+    (for example a demo or an older engine) are merged into one record, preferring the
+    operational account's; if their material content differs, the slot fails closed
+    (DECISION_RECORDS_DISAGREE). Records without a slot are kept as they are."""
+    by_slot: dict[str, list[DecisionRecord]] = {}
+    out: list[DecisionRecord] = []
+    for r in records:
+        if r.slot:
+            by_slot.setdefault(r.slot, []).append(r)
+        else:
+            out.append(r)
+    operational = exp001_shadow.ACCOUNT_ID
+    for slot in sorted(by_slot):
+        group = sorted(by_slot[slot], key=lambda r: (operational not in r.accounts, r.accounts, r.decision_id))
+        keep = group[0]
+        if len(group) > 1:
+            others = group[1:]
+            problem = keep.problem
+            if problem is None and any(_material(o) != _material(keep) or o.problem for o in others):
+                problem = (f"DECISION_RECORDS_DISAGREE: slot {slot} was decided with different content by "
+                           f"{', '.join(o.decision_id for o in group)}")
+            accounts = tuple(sorted({a for r in group for a in r.accounts}))
+            starter = keep.starter or next((o.starter for o in others if o.starter), None)
+            fills = tuple(sorted({json.dumps(f, sort_keys=True, default=str): f for r in group
+                                  for f in r.fills}.values(), key=lambda f: json.dumps(f, sort_keys=True, default=str)))
+            keep = replace(keep, accounts=accounts, starter=starter, fills=fills, problem=problem,
+                           merged_ids=tuple(o.decision_id for o in others))
+        out.append(keep)
+    return out
 
 
 def _merge_decision(did: str, entries: list[tuple[str, dict[str, Any]]],
@@ -424,7 +513,8 @@ def _merge_decision(did: str, entries: list[tuple[str, dict[str, Any]]],
         qualification=str(first.get("qualification")), reason=first.get("reason"),
         reasons=tuple(str(r) for r in reasons), model_version=first.get("model_version") or opp.get("model_version"),
         opportunity=opp, starter=starter, day_status=first.get("stage_b_day_status"), target_date=target,
-        fills=tuple(sorted(fills, key=lambda f: json.dumps(f, sort_keys=True, default=str))), problem=problem)
+        fills=tuple(sorted(fills, key=lambda f: json.dumps(f, sort_keys=True, default=str))), problem=problem,
+        slot=slot or None)
 
 
 # ---------------------------------------------------------------- settlement outcomes
@@ -439,68 +529,145 @@ def _settlement_rows(store: Any) -> list[Any]:
     return rows
 
 
-def _settlement_times(store: Any) -> list[datetime]:
-    return sorted({t for t in (parse_utc(r["fetched_at_utc"]) for r in _settlement_rows(store)) if t is not None})
+def _event_of(entry: Mapping[str, Any] | None) -> str | None:
+    event = (entry or {}).get("market", {}).get("event_ticker")
+    return event if isinstance(event, str) and event else None
 
 
-def _outcomes(store: Any, market_ids: Sequence[str], ledger_settlements: Mapping[str, list[tuple[datetime, dict]]],
+def _index_add(index: dict[str, dict[str, Any]], by_event: dict[str, set[str]], row: Any) -> tuple[set[str], set[str]]:
+    """Fold one settlement snapshot into the index exactly as `exp001_shadow.settlement_index`
+    does (latest snapshot id per ticker wins; yes/no variants accumulate across captures; the
+    result is independent of fold order). Returns (touched tickers, touched events)."""
+    tickers: set[str] = set()
+    events: set[str] = set()
+    for market in json.loads(row["payload_json"]).get("markets") or []:
+        if not isinstance(market, dict) or not isinstance(market.get("ticker"), str):
+            continue
+        ticker = market["ticker"]
+        current = index.get(ticker)
+        parsed = settlement.parse_value(market.get("expiration_value"))
+        variant = (market.get("result"), str(parsed.normalize()) if parsed is not None else None)
+        variants = (current or {}).get("variants", set())
+        if variant[0] in ("yes", "no"):
+            variants = variants | {variant}
+        before = _event_of(current)
+        if current is None or int(row["id"]) > current["snapshot_id"]:
+            index[ticker] = {"market": market, "snapshot_id": int(row["id"]),
+                             "evidence_available_utc": row["fetched_at_utc"], "variants": variants}
+        else:
+            current["variants"] = variants
+        after = _event_of(index[ticker])
+        if before and before != after:
+            by_event.get(before, set()).discard(ticker)
+            events.add(before)
+        if after:
+            by_event.setdefault(after, set()).add(ticker)
+            events.add(after)
+        tickers.add(ticker)
+    return tickers, events
+
+
+def settlement_first_known(rows: Iterable[Any], natives: Iterable[str], cutoff: datetime
+                           ) -> tuple[dict[str, tuple[datetime, dict[str, Any], str, str]], dict[str, dict[str, Any]],
+                                      dict[str, str]]:
+    """For each native ticker, the FIRST capture time at which its outcome was conclusive under the
+    canonical rules, in ONE pass over the settlement snapshots in fetch-time order.
+
+    Identical to evaluating, at every distinct fetch time t <= cutoff,
+    `settlement_index(store, known_by=t)` + `event_settlement_problems` + `official_outcome`
+    (the test holds the two equal), but linear: each capture is folded in once, and only the
+    events it touches are re-checked. Returns ({ticker: (t, entry, outcome, why)}, the index at
+    the cutoff, the event problems at the cutoff)."""
+    timed = []
+    for row in rows:
+        t = parse_utc(row["fetched_at_utc"])
+        if t is not None and t <= cutoff:
+            timed.append((t, int(row["id"]), row))
+    timed.sort(key=lambda x: (x[0], x[1]))
+    pending = set(natives)
+    index: dict[str, dict[str, Any]] = {}
+    by_event: dict[str, set[str]] = {}
+    problems: dict[str, str] = {}
+    found: dict[str, tuple[datetime, dict[str, Any], str, str]] = {}
+    i = 0
+    while i < len(timed):
+        t = timed[i][0]
+        tickers: set[str] = set()
+        events: set[str] = set()
+        while i < len(timed) and timed[i][0] == t:  # every capture received at t counts at t
+            tk, ev = _index_add(index, by_event, timed[i][2])
+            tickers |= tk
+            events |= ev
+            i += 1
+        if events:
+            sub = {tk: index[tk] for ev in events for tk in by_event.get(ev, ())}
+            for ev in events:
+                problems.pop(ev, None)
+            problems.update(exp001_shadow.event_settlement_problems(sub))
+        candidates = (tickers | {tk for ev in events for tk in by_event.get(ev, ())}) & pending
+        for ticker in sorted(candidates):
+            entry = index.get(ticker)
+            if entry is None or len(entry["variants"]) > 1:
+                continue
+            event = _event_of(entry)
+            if event is None or problems.get(event):
+                continue
+            outcome, why = exp001_shadow.official_outcome(entry["market"])
+            if outcome is None:
+                continue
+            found[ticker] = (t, copy.deepcopy(entry), outcome, why)
+            pending.discard(ticker)
+    return found, index, problems
+
+
+def _outcomes(rows: Sequence[Any], market_ids: Sequence[str],
+              ledger_settlements: Mapping[str, list[tuple[datetime, dict]]],
               cutoff: datetime) -> tuple[dict[str, Outcome], set[str]]:
-    """The outcome per market and when it became known, under the canonical settlement rules."""
+    """The outcome per market and when it became known, under the canonical settlement rules.
+
+    Point-in-time: an outcome is booked when it first became known, from whichever source knew
+    it first (captured evidence or a ledger settlement entry), as the canonical path books it.
+    Later evidence that contradicts it, or another source that disagrees, is reported in
+    `detail` and never applied retroactively (later information must not change earlier states)."""
     evidence: set[str] = set()
     found: dict[str, Outcome] = {}
     natives = {m: m.split(":", 1)[1] for m in market_ids if m.startswith("kalshi:")}
-    times = [t for t in _settlement_times(store) if t <= cutoff]
-    pending = set(natives)
-    for t in times:  # the first capture time at which each outcome is conclusive
-        if not pending:
-            break
-        index = exp001_shadow.settlement_index(store, known_by=t)
-        problems = exp001_shadow.event_settlement_problems(index)
-        for mid in sorted(pending):
-            entry = index.get(natives[mid])
-            if entry is None or len(entry["variants"]) > 1:
-                continue
-            market = entry["market"]
-            event = market.get("event_ticker")
-            if not isinstance(event, str) or not event or problems.get(event):
-                continue
-            outcome, why = exp001_shadow.official_outcome(market)
-            if outcome is None:
-                continue
-            reported = parse_utc(str(market.get("settlement_ts") or market.get("expiration_time")
-                                     or market.get("close_time") or ""))
-            received = parse_utc(entry["evidence_available_utc"])
-            settled = reported if reported is not None and received is not None and reported <= received else received
-            found[mid] = Outcome(mid, outcome, t, settled, "evidence_db", why, (f"snapshot:{entry['snapshot_id']}",))
-            pending.discard(mid)
-    if times and found:
-        # Point-in-time: an outcome is booked when it first became conclusive, as the canonical
-        # path books it. Evidence captured later that contradicts it is reported here, never
-        # applied retroactively (that would let later information change earlier states).
-        final = exp001_shadow.settlement_index(store, known_by=cutoff)
-        final_problems = exp001_shadow.event_settlement_problems(final)
-        for mid, out in list(found.items()):
-            entry = final.get(natives[mid])
-            latest = exp001_shadow.official_outcome(entry["market"])[0] if entry else None
-            event = str((entry or {}).get("market", {}).get("event_ticker") or "")
-            if entry is None or len(entry["variants"]) > 1 or latest != out.outcome or final_problems.get(event):
-                found[mid] = replace(out, detail=out.detail + "; CONTRADICTED_LATER: evidence captured by the cutoff "
-                                                              "contradicts this outcome (reported, not applied)")
+    first, final, final_problems = settlement_first_known(rows, natives.values(), cutoff)
+    for mid, native in natives.items():
+        if native not in first:
+            continue
+        t, entry, outcome, why = first[native]
+        market = entry["market"]
+        reported = parse_utc(str(market.get("settlement_ts") or market.get("expiration_time")
+                                 or market.get("close_time") or ""))
+        received = parse_utc(entry["evidence_available_utc"])
+        settled = reported if reported is not None and received is not None and reported <= received else received
+        out = Outcome(mid, outcome, t, settled, "evidence_db", why, (f"snapshot:{entry['snapshot_id']}",))
+        latest_entry = final.get(native)
+        latest = exp001_shadow.official_outcome(latest_entry["market"])[0] if latest_entry else None
+        if (latest_entry is None or len(latest_entry["variants"]) > 1 or latest != outcome
+                or final_problems.get(_event_of(latest_entry) or "")):
+            out = replace(out, detail=out.detail + "; CONTRADICTED_LATER: evidence captured by the cutoff "
+                                                   "contradicts this outcome (reported, not applied)")
+        found[mid] = out
     for mid in market_ids:
-        rows = sorted(ledger_settlements.get(mid, []), key=lambda x: x[0])
-        led = [(k, p) for k, p in rows if p.get("outcome") in ("YES", "NO")]
+        led = sorted(((k, p) for k, p in ledger_settlements.get(mid, []) if p.get("outcome") in ("YES", "NO")),
+                     key=lambda x: x[0])
+        if not led:
+            continue
         current = found.get(mid)
-        if led:
-            outcomes = {p["outcome"] for _, p in led}
-            if len(outcomes) > 1 or (current is not None and current.outcome not in (None, *outcomes)):
-                found[mid] = Outcome(mid, None, None, None, "conflict",
-                                     "SETTLEMENT_CONFLICT: ledger settlements and captured evidence disagree")
-                continue
-            if current is None:
-                known, p = led[0]
-                settled = parse_utc(p.get("settled_at_utc"))
-                found[mid] = Outcome(mid, p["outcome"], known, settled if settled and settled <= known else known,
-                                     "ledger", "ledger settlement entry")
+        known, p = led[0]
+        disagree = {q["outcome"] for _, q in led} | ({current.outcome} if current is not None else set())
+        if current is None or known < current.known_at:  # type: ignore[operator]
+            settled = parse_utc(p.get("settled_at_utc"))
+            current = Outcome(mid, p["outcome"], known, settled if settled and settled <= known else known,
+                              "ledger", "ledger settlement entry")
+        if len(disagree) > 1:
+            current = replace(current, detail=current.detail + "; SOURCES_DISAGREE: ledger settlement entries and "
+                                                               "captured evidence state different outcomes "
+                                                               f"{sorted(disagree)} (the first known is booked; "
+                                                               "reported, not applied)")
+        found[mid] = current
     for out in found.values():
         evidence.update(out.evidence_ids)
     return found, evidence
@@ -567,18 +734,29 @@ def _confirmation(inputs: ReplayInputs, d: DecisionRecord) -> tuple[ExecutableQu
             quote = None if quotes is None else quotes.get((d.market_id, d.side))
             if quote is not None:
                 result = (quote, "DAY_RECHECK_CAPTURE")
+            elif d.target_date in inputs._recheck_errors:
+                result = (None, f"RECHECK_UNAVAILABLE: {inputs._recheck_errors[d.target_date]}")
+    if result[0] is not None:
+        # Never read past the replay clock: a quote received after the cutoff was not known.
+        received = parse_utc(result[0].received_at_utc)
+        if received is None or received > inputs.cutoff:
+            result = (None, "CONFIRMATION_AFTER_CUTOFF")
     inputs._confirmations[d.decision_id] = result
     return result
 
 
 def _recheck_quotes(inputs: ReplayInputs, target: str) -> dict[tuple[str, str], ExecutableQuote] | None:
+    """The day's re-check quotes (the canonical capture chosen by `forward.day_status`), each
+    later filtered to the replay clock by `_confirmation`. A day whose evidence cannot be read
+    has no confirmation; the error text is recorded (provenance `recheck_errors`)."""
     if target not in inputs._rechecks:
         quotes = None
         try:
             day = forward.day_status(inputs.store, date.fromisoformat(target), mode=inputs.config.mode)
             quotes = exp001_shadow._recheck_quotes(inputs.store, day, inputs.config.mode)
-        except Exception:  # noqa: BLE001 - missing or old evidence: no confirmation, reported as such
+        except (ValueError, KeyError, TypeError, LookupError, sqlite3.Error, OSError, RuntimeError) as exc:
             quotes = None
+            inputs._recheck_errors[target] = f"{type(exc).__name__}: {exc}"
         inputs._rechecks[target] = quotes
     return inputs._rechecks[target]
 
@@ -892,6 +1070,8 @@ def _run_policy(inputs: ReplayInputs, letter: str, policy: SizingPolicyV2,
             break
         if kind == "DECISION":
             d = inputs.decisions[int(ref)]
+            if sim.curve[0][0] is None:  # the equity curve starts at the first decision
+                sim.curve[0] = (at, sim.curve[0][1])
             before = sim.equity
             cash_before = sim.cash
             row, rec = _decide(inputs, sim, d, sibs.get((d.market_id, d.as_of), {}))
@@ -919,11 +1099,10 @@ def _run_policy(inputs: ReplayInputs, letter: str, policy: SizingPolicyV2,
                 sim.positions[pos.position_id] = pos
                 sim.order.append(pos.position_id)
                 sim.cash -= amount
-                fill = execution(inputs, d, n)
+                fill = execution(inputs, d, n)  # scheduled for the time it becomes known, not shown before
                 pos.fill = fill
                 row_by_position[pos.position_id] = row
-                row.update({"fill_status": fill.status, "fill_reason": fill.reason, "fill_basis": fill.basis,
-                            "fill_known_utc": _iso(fill.known_at), "position_status": "RESERVED"})
+                row.update({"fill_status": "PENDING", "position_status": "RESERVED"})
                 heapq.heappush(heap, (fill.known_at, fill.rank, seq, "FILL", pos.position_id))
                 seq += 1
             rows.append(row)
@@ -931,6 +1110,8 @@ def _run_policy(inputs: ReplayInputs, letter: str, policy: SizingPolicyV2,
             pos = sim.positions[ref]
             row = row_by_position[ref]
             assert pos.fill is not None
+            row.update({"fill_status": pos.fill.status, "fill_reason": pos.fill.reason, "fill_basis": pos.fill.basis,
+                        "fill_known_utc": _iso(at)})
             if pos.fill.status == FILLED:
                 pos.status = "OPEN"
                 row["position_status"] = "OPEN"
@@ -1003,10 +1184,12 @@ class CounterfactualSizingRun:
     metrics: dict[str, Any]
     events: tuple[dict[str, Any], ...]
     label: str = LABEL
+    limitations: tuple[str, ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
         out = {f.name: getattr(self, f.name) for f in fields(self)}
         out["events"] = list(self.events)
+        out["limitations"] = list(self.limitations)
         return out
 
 
@@ -1030,15 +1213,21 @@ def _drawdowns(curve: Sequence[tuple[datetime | None, Decimal]], window: timedel
         frac = float(dd / peak) if peak > 0 else 0.0
         max_frac = max(max_frac, frac)
         fracs.append(frac)
+    # Worst decline inside any window of length `window`: for each curve point j, the peak over
+    # the window ending at t_j, where equity is a step function (the value in force at the
+    # window's start is the last point at or before it). The first point is the first decision.
     worst_roll = ZERO
-    timed = [(t, e) for t, e in curve]
-    for i, (ti, ei) in enumerate(timed):
-        for tj, ej in timed[i + 1:]:
-            if ti is not None and tj is not None and tj - ti > window:
-                break
-            worst_roll = max(worst_roll, ei - ej)
+    for j, (tj, ej) in enumerate(curve):
+        peak_j = ej
+        for ti, ei in reversed(curve[:j]):
+            peak_j = max(peak_j, ei)
+            if ti is None or tj is None or ti <= tj - window:
+                break  # this value is the one in force at the window's start
+        worst_roll = max(worst_roll, peak_j - ej)
     return {"max_drawdown": _m(max_dd), "max_drawdown_fraction": _f(max_frac),
             "avg_drawdown_fraction": _f(sum(fracs) / len(fracs)) if fracs else None,
+            "avg_drawdown_basis": "event-averaged: mean over the equity-curve points (the first decision and each "
+                                  "settlement), not time-weighted",
             "worst_rolling_drawdown": _m(worst_roll),
             "rolling_window_hours": int(window.total_seconds() // 3600),
             "high_water_mark": _m(max(e for _, e in curve))}
@@ -1150,7 +1339,7 @@ def build_runs(inputs: ReplayInputs, policies: Sequence[tuple[str, SizingPolicyV
             net_pnl=_m(sim.realized), max_drawdown=metrics["max_drawdown"], turnover=metrics["turnover"],
             capital_lock=lock, veto_counts=metrics["verdict_counts"],
             cap_counts={k: v for k, v in metrics["binding_counts"].items() if k in CAP_NAMES},
-            metrics=metrics, events=tuple(rows)))
+            metrics=metrics, events=tuple(rows), limitations=LIMITATIONS))
     return runs
 
 
@@ -1173,24 +1362,12 @@ def run_counterfactual(store: Any, ledger: Any, *, cutoff: datetime | None = Non
                                                           if q is not None and q.evidence_id}),
             "outcomes": {k: {"outcome": v.outcome, "known_utc": _iso(v.known_at), "source": v.source,
                              "detail": v.detail} for k, v in sorted(inputs.outcomes.items())},
+            "recheck_errors": dict(sorted(inputs._recheck_errors.items())),
         },
         "limitations": LIMITATIONS,
         "policies": [{"letter": letter, **p.to_dict()} for letter, p in policies],
         "runs": [r.to_dict() for r in runs],
     }
-
-
-LIMITATIONS = (
-    "Depth: only the recorded top of book is used; every liquidity cap is top-of-book-limited.",
-    "Fills: latency-confirmed-v1 on the recorded entry quote and the captured re-check quote; a counterfactual "
-    "size larger than the displayed size does not fill.",
-    "Market timing is the decision's own recorded STARTER_MAX_7D_V1 verdict; decisions without one are refused "
-    "(CAPITAL_HORIZON), never re-assessed at replay time.",
-    "Model: each market is two states (YES, NO); other brackets of the same event are unmapped cluster exposure, "
-    "which the engine treats as lost in every state (conservative). No joint bracket vector is reconstructed.",
-    "Costs include the ADR 0017 claim allowance, so P&L is a conservative lower bound.",
-    "No statistical significance is implied by a small number of settlements.",
-)
 
 
 def canonical_json(bundle: Mapping[str, Any]) -> str:
@@ -1260,62 +1437,135 @@ def _panel_primary(row: Mapping[str, Any], d: DecisionRecord) -> dict[str, Any]:
     }
 
 
-def panel_for_market(store: Any, ledger: Any, market_id: str, *, as_of: datetime | str | None = None,
-                     config: CounterfactualConfig = DEFAULT_CONFIG,
-                     policies: Sequence[tuple[str, SizingPolicyV2]] = POLICY_SET) -> dict[str, Any]:
-    """Per-policy research sizing for the latest recorded decision on `market_id`. Read-only.
+PANEL_BUNDLE_VERSION = "1"
+_PANEL_CACHE: dict[str, dict[str, Any]] = {}
+_PANEL_CACHE_MAX = 2
+_PANEL_LOCK = threading.Lock()
+_PANEL_ERRORS = (CounterfactualInputError, LedgerError, ValueError, TypeError, KeyError, OSError, sqlite3.Error,
+                 RuntimeError, ArithmeticError)
 
-    See the module docstring for the returned keys. Never raises for missing data: an input
-    that cannot be read yields `available: false` with a named `unavailable_reason`."""
-    primary_letter = PRIMARY_LETTER if any(l == PRIMARY_LETTER for l, _ in policies) else policies[0][0]
-    primary_policy = dict(policies)[primary_letter]
-    out: dict[str, Any] = {
-        "panel_version": PANEL_VERSION, "label": PANEL_LABEL, "market_id": market_id, "as_of_utc": None,
-        "available": False, "unavailable_reason": None, "unavailable_detail": None,
-        "primary_policy": {"letter": primary_letter, "policy_id": primary_policy.policy_id,
-                           "policy_version": primary_policy.policy_version,
-                           "description": primary_policy.description},
-        "sides": [], "limitations": list(LIMITATIONS),
+
+def clear_panel_cache() -> None:
+    with _PANEL_LOCK:
+        _PANEL_CACHE.clear()
+
+
+def panel_cache_key(store: Any, ledger: Any, *, as_of: datetime | str | None = None,
+                    config: CounterfactualConfig = DEFAULT_CONFIG,
+                    policies: Sequence[tuple[str, SizingPolicyV2]] = POLICY_SET) -> str:
+    """What a panel bundle depends on: every ledger account's head hash, the evidence database's
+    highest snapshot id, the cutoff, the config, the policies and the code. Cheap relative to a
+    replay (one hash-chain pass over the ledger, one indexed query)."""
+    heads = {acct: replay(ledger.entries(acct)).last_entry_hash for acct in sorted(ledger.accounts())}
+    max_id = None
+    if store is not None:
+        latest = list(store.recent_snapshots(limit=1))
+        max_id = int(latest[0]["id"]) if latest else 0
+    cutoff = parse_utc(as_of) if as_of is not None else None
+    return "cfpb-" + sv2.canonical_hash({
+        "v": PANEL_BUNDLE_VERSION, "runner": RUNNER_VERSION, "heads": heads, "evidence_max_snapshot_id": max_id,
+        "as_of": _iso(cutoff), "config": config.to_dict(), "policies": [[l, p.to_dict()] for l, p in policies],
+        "code": code_hashes()})[:40]
+
+
+def build_panel_bundle(store: Any, ledger: Any, *, as_of: datetime | str | None = None,
+                       config: CounterfactualConfig = DEFAULT_CONFIG,
+                       policies: Sequence[tuple[str, SizingPolicyV2]] = POLICY_SET,
+                       use_cache: bool = True) -> dict[str, Any]:
+    """One replay of every policy over every decision up to `as_of` (default: the latest known
+    input), shared by every market's panel. Memoized in-process by `panel_cache_key`, so it is
+    recomputed only when the ledger, the evidence database, the cutoff, the config, the policies
+    or the code change. Read-only; never raises for unreadable inputs (the bundle is then
+    unavailable, with a named reason, and is not cached). The bundle is an in-process object:
+    read it only through `panel_for_market_from_bundle`."""
+    policies = tuple(policies or ())
+    bundle: dict[str, Any] = {
+        "panel_bundle_version": PANEL_BUNDLE_VERSION, "cache_key": None, "as_of_utc": None, "available": False,
+        "unavailable_reason": None, "unavailable_detail": None, "policies": policies,
+        "primary_letter": (PRIMARY_LETTER if any(l == PRIMARY_LETTER for l, _ in policies)
+                           else (policies[0][0] if policies else None)),
+        "decisions": {}, "rows": {},
     }
+    if not policies:
+        bundle.update(unavailable_reason=UNAVAILABLE_NO_POLICY, unavailable_detail="no sizing policy was given")
+        return bundle
+    if ledger is None:
+        bundle.update(unavailable_reason=UNAVAILABLE_LEDGER, unavailable_detail="no shadow ledger")
+        return bundle
     limit = parse_utc(as_of) if as_of is not None else None
     if as_of is not None and limit is None:
-        out.update(unavailable_reason=UNAVAILABLE_EVIDENCE, unavailable_detail="as_of is not a timezone-aware time")
-        return out
-    if ledger is None:
-        out.update(unavailable_reason=UNAVAILABLE_LEDGER, unavailable_detail="no shadow ledger")
-        return out
+        bundle.update(unavailable_reason=UNAVAILABLE_EVIDENCE, unavailable_detail="as_of is not a timezone-aware time")
+        return bundle
+    try:
+        key = panel_cache_key(store, ledger, as_of=limit, config=config, policies=policies)
+    except _PANEL_ERRORS as exc:
+        bundle.update(unavailable_reason=UNAVAILABLE_LEDGER, unavailable_detail=f"{type(exc).__name__}: {exc}")
+        return bundle
+    if use_cache:
+        with _PANEL_LOCK:
+            if key in _PANEL_CACHE:
+                return _PANEL_CACHE[key]
     try:
         inputs = load_inputs(store, ledger, cutoff=limit, config=config)
-    except (CounterfactualInputError, LedgerError, ValueError, OSError) as exc:
-        out.update(unavailable_reason=UNAVAILABLE_LEDGER, unavailable_detail=str(exc))
+        rows = {letter: {r["decision_id"]: r for r in _run_policy(inputs, letter, policy)[1]}
+                for letter, policy in policies}
+    except _PANEL_ERRORS as exc:
+        bundle.update(unavailable_reason=UNAVAILABLE_LEDGER, unavailable_detail=f"{type(exc).__name__}: {exc}")
+        return bundle
+    decisions: dict[str, list[DecisionRecord]] = {}
+    for d in inputs.decisions:
+        decisions.setdefault(d.market_id, []).append(d)
+    bundle.update(cache_key=key, as_of_utc=_iso(inputs.cutoff), available=True, decisions=decisions, rows=rows)
+    if use_cache:
+        with _PANEL_LOCK:
+            while len(_PANEL_CACHE) >= _PANEL_CACHE_MAX:
+                _PANEL_CACHE.pop(next(iter(_PANEL_CACHE)))
+            _PANEL_CACHE[key] = bundle
+    return bundle
+
+
+def panel_for_market_from_bundle(bundle: Mapping[str, Any], market_id: str) -> dict[str, Any]:
+    """The research sizing panel for the latest recorded decision on `market_id`, read from a
+    `build_panel_bundle` result. Pure; returns a fresh dict (the shared bundle is never exposed).
+
+    The recommendation is the one computed at the decision's own time (nothing after it can
+    change it); `fill_status` is as known by the bundle's cutoff (`as_of_utc`)."""
+    policies = tuple(bundle.get("policies") or ())
+    letter = bundle.get("primary_letter")
+    primary = dict(policies).get(letter) if letter else None
+    out: dict[str, Any] = {
+        "panel_version": PANEL_VERSION, "label": PANEL_LABEL, "market_id": market_id,
+        "as_of_utc": bundle.get("as_of_utc"), "available": False, "unavailable_reason": None,
+        "unavailable_detail": None,
+        "primary_policy": None if primary is None else {
+            "letter": letter, "policy_id": primary.policy_id, "policy_version": primary.policy_version,
+            "description": primary.description},
+        "sides": [], "limitations": list(LIMITATIONS),
+    }
+    if not bundle.get("available"):
+        out.update(unavailable_reason=bundle.get("unavailable_reason") or UNAVAILABLE_LEDGER,
+                   unavailable_detail=bundle.get("unavailable_detail"))
         return out
-    mine = [d for d in inputs.decisions if d.market_id == market_id]
+    mine = bundle["decisions"].get(market_id) or []
     if not mine:
         out.update(unavailable_reason=UNAVAILABLE_NO_DECISION,
-                   unavailable_detail=f"no decision recorded for {market_id} by {_iso(inputs.cutoff)}")
+                   unavailable_detail=f"no decision recorded for {market_id} by {bundle.get('as_of_utc')}")
         return out
     latest = max(d.as_of for d in mine)
-    out["as_of_utc"] = _iso(latest)
-    # The decision is sized at its own time: nothing after it can change the recommendation.
-    inputs.cutoff = latest
-    rows_by_policy: dict[str, dict[str, dict[str, Any]]] = {}
-    wanted = {d.decision_id for d in mine if d.as_of == latest}
-    for letter, policy in policies:
-        _, rows = _run_policy(inputs, letter, policy, stop_after=latest)
-        rows_by_policy[letter] = {r["decision_id"]: r for r in rows if r["decision_id"] in wanted}
     at_latest = sorted((d for d in mine if d.as_of == latest), key=lambda d: (d.side != "YES", d.side, d.decision_id))
+    rows = bundle["rows"]
     for d in at_latest:
-        prow = rows_by_policy[primary_letter].get(d.decision_id)
+        prow = rows.get(letter, {}).get(d.decision_id)
         if prow is None:
             continue
         reason = _unavailable(prow["verdict"], prow.get("block_reason"))
         comparison = []
-        for letter, policy in policies:
-            r = rows_by_policy[letter].get(d.decision_id)
+        for pl, policy in policies:
+            r = rows.get(pl, {}).get(d.decision_id)
             if r is None:
                 continue
             bank = _dec(r.get("bankroll_before"))
-            comparison.append({"letter": letter, "policy_id": policy.policy_id, "policy_version": policy.policy_version,
+            comparison.append({"letter": pl, "policy_id": policy.policy_id, "policy_version": policy.policy_version,
                                "verdict": r["verdict"], "binding_constraint": r["binding_constraint"],
                                "final_contracts": str(r["contracts"]), "final_amount": r["recommended_size"],
                                "bankroll_before": r.get("bankroll_before"),
@@ -1323,6 +1573,7 @@ def panel_for_market(store: Any, ledger: Any, market_id: str, *, as_of: datetime
         out["sides"].append({
             "side": d.side, "decision_id": d.decision_id, "decision_time": d.as_of_utc,
             "recorded_qualification": d.qualification, "recorded_reason": d.reason, "model_version": d.model_version,
+            "recorded_in_accounts": list(d.accounts), "merged_decision_ids": list(d.merged_ids),
             "available": reason is None, "unavailable_reason": reason,
             "unavailable_detail": prow.get("block_reason") if reason else None, "top_of_book_limited": True,
             "primary": _panel_primary(prow, d), "comparison": comparison})
@@ -1331,7 +1582,17 @@ def panel_for_market(store: Any, ledger: Any, market_id: str, *, as_of: datetime
         out.update(unavailable_reason=first["unavailable_reason"], unavailable_detail=first["unavailable_detail"])
     else:
         out["available"] = bool(out["sides"])
-    return out
+    return copy.deepcopy(out)
+
+
+def panel_for_market(store: Any, ledger: Any, market_id: str, *, as_of: datetime | str | None = None,
+                     config: CounterfactualConfig = DEFAULT_CONFIG,
+                     policies: Sequence[tuple[str, SizingPolicyV2]] = POLICY_SET) -> dict[str, Any]:
+    """Thin wrapper: `panel_for_market_from_bundle(build_panel_bundle(...), market_id)`. The
+    bundle is memoized, so repeated calls for different markets replay once per input change.
+    Never raises for missing or unreadable data."""
+    return panel_for_market_from_bundle(build_panel_bundle(store, ledger, as_of=as_of, config=config,
+                                                           policies=policies), market_id)
 
 
 # =========================================================================== CLI
@@ -1357,15 +1618,24 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--out", required=True, help="output JSON path for the derived run bundle")
     parser.add_argument("--as-of", help="dataset cutoff (ISO time with offset); default: latest known input")
     parser.add_argument("--accounts", nargs="*", help="ledger accounts to read (default: all)")
+    parser.add_argument("--overwrite", action="store_true",
+                        help="replace an existing --out file (refused by default; never an input or its sidecar)")
     args = parser.parse_args(argv)
 
     out = Path(args.out).resolve()
     for name, value in (("--db", args.db), ("--ledger", args.ledger)):
-        if out == Path(value).resolve():
-            print(f"refusing: --out is the same file as {name}", file=sys.stderr)
-            return 2
+        base = Path(value).resolve()
+        # The input itself and SQLite's sidecar files of it are never an output.
+        for protected in (base, *(base.with_name(base.name + s) for s in ("-wal", "-shm", "-journal"))):
+            if out == protected:
+                print(f"refusing: --out is {name} or one of its SQLite sidecar files ({protected.name})",
+                      file=sys.stderr)
+                return 2
     if out.is_dir():
         print("refusing: --out is a directory", file=sys.stderr)
+        return 2
+    if out.exists() and not args.overwrite:
+        print(f"refusing: {out} exists; pass --overwrite to replace it, or name a new file", file=sys.stderr)
         return 2
     cutoff = None
     if args.as_of:
@@ -1377,7 +1647,7 @@ def main(argv: list[str] | None = None) -> int:
         ledger = ShadowLedger.open_readonly(args.ledger)
         store = SnapshotStore.open_readonly(args.db)
         bundle = run_counterfactual(store, ledger, cutoff=cutoff, accounts=args.accounts)
-    except (LedgerError, CounterfactualInputError, RuntimeError, OSError, ValueError) as exc:
+    except (LedgerError, CounterfactualInputError, RuntimeError, OSError, ValueError, sqlite3.Error) as exc:
         print(f"counterfactual run failed closed: {exc}", file=sys.stderr)
         return 1
     _write_atomic(out, canonical_json(bundle))

@@ -402,7 +402,8 @@ def test_precheck_agrees_with_recommend():
 PANEL_KEYS = {"panel_version", "label", "market_id", "as_of_utc", "available", "unavailable_reason",
               "unavailable_detail", "primary_policy", "sides", "limitations"}
 SIDE_KEYS = {"side", "decision_id", "decision_time", "recorded_qualification", "recorded_reason", "model_version",
-             "available", "unavailable_reason", "unavailable_detail", "top_of_book_limited", "primary", "comparison"}
+             "available", "unavailable_reason", "unavailable_detail", "top_of_book_limited", "primary", "comparison",
+             "recorded_in_accounts", "merged_decision_ids"}
 PRIMARY_KEYS = {"policy_id", "policy_version", "verdict", "block_reason", "bankroll_basis", "model_probability",
                 "conservative_probability", "expected_net_edge", "uncertainty", "entry_price", "estimated_fee",
                 "unconstrained_kelly_amount", "policy_amount_before_caps", "caps", "capital_horizon", "drawdown_cap",
@@ -459,7 +460,8 @@ def test_panel_respects_as_of(tmp_path):
     late["slot"] = "2026-09-27|kalshi:KXHIGHNY-26SEP26-B67.5|YES"
     led = build_ledger(tmp_path / "l.sqlite3", [early, late])
     panel = cf.panel_for_market(None, led, "kalshi:KXHIGHNY-26SEP26-B67.5", as_of=T0 + timedelta(hours=1), config=CFG)
-    assert panel["as_of_utc"] == iso(T0) and panel["sides"][0]["decision_id"] == "dec-1"
+    assert panel["as_of_utc"] == iso(T0 + timedelta(hours=1))  # the replay clock
+    assert panel["sides"][0]["decision_id"] == "dec-1" and panel["sides"][0]["decision_time"] == iso(T0)
 
 
 # --------------------------------------------------------------------------- read-only inputs, CLI
