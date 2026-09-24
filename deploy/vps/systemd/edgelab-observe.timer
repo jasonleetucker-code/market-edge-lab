@@ -1,0 +1,14 @@
+[Unit]
+Description=Market Edge Lab: staggered due-target check for later-price observations (ADR 0030)
+
+[Timer]
+# :05, :20, :35 and :50 every hour. The planner/capture code makes no network request
+# unless a target is due and refuses protected capture/settlement windows itself.
+OnCalendar=*-*-* *:05/15:00 America/New_York
+AccuracySec=15s
+# Missed ticks are not replayed late. The next tick records expired point-in-time targets as MISSED.
+Persistent=false
+Unit=edgelab-observe.service
+
+[Install]
+WantedBy=timers.target
