@@ -4,6 +4,7 @@ Documentation=file:///opt/market-edge-lab/app/deploy/vps/README.md
 After=network-online.target
 Wants=network-online.target
 OnFailure=edgelab-alert@%n.service
+OnSuccess=edgelab-notify.service
 
 [Service]
 Type=oneshot

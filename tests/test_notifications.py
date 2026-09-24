@@ -38,7 +38,7 @@ def test_every_directive_event_type_exists():
     assert {e.value for e in n.EventType} == {
         "SOURCE_FAILURE", "CAPTURE_INVALID", "OPPORTUNITY_QUALIFIED", "PRICE_TARGET_REACHED", "APPROVAL_REQUIRED",
         "QUOTE_EXPIRING", "RISK_VETO", "KILL_SWITCH", "POSITION_FILLED", "POSITION_PARTIAL", "POSITION_EXPIRED",
-        "SETTLED", "SEVEN_DAY_POLICY_EXCEPTION"}
+        "SETTLED", "SEVEN_DAY_POLICY_EXCEPTION", "TEST"}
 
 
 def test_event_carries_the_contract_fields_and_a_deterministic_id():

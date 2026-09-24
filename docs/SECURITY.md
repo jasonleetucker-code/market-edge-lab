@@ -32,14 +32,27 @@ credential, and the registry cannot hold one.
 | Variable | Purpose | Status |
 |---|---|---|
 | `NWS_USER_AGENT` | NWS identification with contact info | in use (not secret, but personal) |
-| `EDGE_LAB_ODDS_API_KEY` | The Odds API free-tier key (`CredentialKind.READ_ONLY_DATA_FEED`) | registered, not installed |
-| `EDGE_LAB_NTFY_TOPIC_URL` | ntfy push topic URL (`https://ntfy.sh/<topic>`); the topic name is effectively a secret (ADR 0022) | not set; the sink is disabled; sending needs owner approval |
+| `EDGE_LAB_ODDS_API_KEY` | The Odds API free-tier key (`CredentialKind.READ_ONLY_DATA_FEED`) | owner installs it in `/etc/market-edge-lab/secrets.env` (ADR 0028); not installed yet |
+| `EDGE_LAB_NTFY_TOPIC_URL` | ntfy push topic URL (`https://ntfy.sh/<topic>`); the topic name is effectively a secret (ADR 0022) | owner-approved 2026-09-24; lives only in `/etc/market-edge-lab/secrets.env`, read only by `edgelab-notify` (ADR 0028) |
 | `EDGE_LAB_NTFY_TOKEN` | optional ntfy access token, read only by `notify_ntfy.py` | not created |
 | `EDGE_LAB_RESEARCH_<PROVIDER>_KEY` | read-only research data API keys | not created |
 | `EDGE_LAB_TRADING_<VENUE>_KEY_ID` / `_PRIVATE_KEY_PATH` | execution credentials, execution component only | not created, not authorized |
 
 Private keys are referenced by **file path** outside the repository. Their contents never
 go in environment variables.
+
+## The owner secrets file (ADR 0028)
+
+`/etc/market-edge-lab/secrets.env` (root:root 0600) is the only place on the server for
+owner-installed values. systemd reads it as root before dropping to the service user, so no
+service account, including the tailnet-reachable dashboard, can read the file. It is **not** the regenerated `env` file.
+- install.sh creates it empty once. After that it only enforces the owner and mode, and never
+  reads, copies or prints the contents.
+- Only the units that need a value load it, and each loads it optionally: `edgelab-notify`,
+  and later `edgelab-odds`.
+- Edit it as root with `sudoedit /etc/market-edge-lab/secrets.env`. Never paste its values into
+  chat, git, tickets, logs or notifications.
+- Read a value back only privately, as root, on the server.
 
 ## The Odds API key (read-only data feed)
 

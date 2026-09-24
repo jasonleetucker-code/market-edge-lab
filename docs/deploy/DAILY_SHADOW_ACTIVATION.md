@@ -110,6 +110,41 @@ sudo systemctl enable --now edgelab-shadow.timer edgelab-settlement.timer
 systemctl list-timers 'edgelab-*'
 ```
 
+## 5a. ntfy push activation (ADR 0028; owner-approved 2026-09-24; root, once)
+
+The topic is a password on a public server. It is generated on the server and written
+straight into the secrets file, which is `root:root 0600`: systemd reads `EnvironmentFile=` as
+root, so no service account can read the file. Nothing prints the topic. If a topic already
+exists, the script keeps it, because replacing it would break the phone subscription. Use
+`--force` only to rotate a topic on purpose.
+
+```bash
+sudo python3 /opt/market-edge-lab/app/deploy/vps/set_ntfy_topic.py
+```
+
+Then send one test event as the service user, with the relay unit's own environment and slice:
+
+```bash
+sudo systemd-run --wait --pipe --quiet -p User=edgelab -p Group=edgelab -p Slice=edgelab.slice -p EnvironmentFile=/etc/market-edge-lab/env -p EnvironmentFile=/etc/market-edge-lab/secrets.env /opt/market-edge-lab/venv/bin/python -m edge_lab.cli notify test
+```
+
+- **Expected output:** `{"by_status": {"SUBMITTED": 1}, ...}`. SUBMITTED means ntfy.sh accepted
+  the message. It does **not** prove that a phone showed it.
+- **Subscribing (owner only).** The owner reads the topic privately, on the server:
+  `sudo grep NTFY /etc/market-edge-lab/secrets.env`. Never do this in an agent session, whose
+  transcript would keep the topic. Then subscribe in the ntfy app: server `ntfy.sh`, topic =
+  the part after `https://ntfy.sh/`.
+- **What then happens automatically:**
+  - `edgelab-notify` relays new outbox events after every shadow and settlement run.
+  - It also runs after every `edgelab-alert@` failure alert. The unit failure then arrives as
+    the fixed headline "A run or data source failed".
+  - `journalctl -u edgelab-notify` shows counts only.
+- **Rules:**
+  - Do not run `edge-lab notify relay` by hand while the unit is active.
+  - Do not point `EDGE_LAB_ALERT_URL` at the ntfy topic. `alert.sh` sends free text (unit and
+    host names), which would break the fixed-headline rule and double every push. Leave it unset
+    or on a different channel.
+
 ## 6. Verify over the next days: each state separately
 
 | State | Evidence |

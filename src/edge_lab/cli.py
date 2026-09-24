@@ -165,6 +165,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
     frozen.add_argument("--base", required=True, help="git ref to compare against, e.g. origin/main")
 
+    notify = subparsers.add_parser(
+        "notify", help="ntfy push (ADR 0022): relay the local outbox, or send one test event."
+    )
+    notify_sub = notify.add_subparsers(dest="notify_command", required=True)
+    n_relay = notify_sub.add_parser("relay", help="Forward recent outbox events to ntfy once each.")
+    n_relay.add_argument("--status-dir", required=True, help="directory holding notifications.jsonl")
+    notify_sub.add_parser("test", help="Send one fixed, non-sensitive TEST event.")
+
     return parser
 
 
@@ -767,6 +775,34 @@ def _experiments(args: argparse.Namespace) -> int:
     return 1 if failed else 0
 
 
+def _notify(args: argparse.Namespace) -> int:
+    """ntfy relay/test. Prints counts only, never the topic or event text.
+
+    Exit 0 when the sink is not configured (nothing to do), and whatever the provider
+    answered: a notification failure must not raise an alert loop or change any run.
+    Exit 1 only for a configured but invalid topic, which an owner must fix."""
+    from . import daily, notify_ntfy
+
+    try:
+        sink = notify_ntfy.sink_from_env()
+    except notify_ntfy.NtfyConfigError:
+        print(json.dumps({"status": "config_error", "detail": "the configured ntfy topic URL or token is invalid"}))
+        return 1
+    if sink is None:
+        print(json.dumps({"status": "not_configured"}))
+        return 0
+    now = datetime.now(timezone.utc)
+    if args.notify_command == "test":
+        result = notify_ntfy.send_test(sink, now=now)
+    else:
+        status_dir = Path(args.status_dir)
+        result = notify_ntfy.relay_outbox(status_dir / daily.NOTIFICATIONS_NAME,
+                                          status_dir / notify_ntfy.RELAY_NAME, sink, now=now,
+                                          failure_path=status_dir / "last_failure.json")
+    print(json.dumps(result, sort_keys=True))
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     argv = sys.argv[1:] if argv is None else list(argv)
     if argv[:1] == ["dashboard"]:  # the dashboard owns its own argument parser
@@ -795,6 +831,8 @@ def main(argv: list[str] | None = None) -> int:
         return _settlement_audit(args)
     if args.command == "experiments":
         return _experiments(args)
+    if args.command == "notify":
+        return _notify(args)
 
     raise AssertionError(f"Unhandled command: {args.command}")
 

@@ -48,7 +48,11 @@ def test_every_service_is_in_the_shared_slice_with_caps_and_hardening():
         if path.name not in ("edgelab-alert@.service", "edgelab-dashboard.service"):
             assert u[("Service", "User")] == ["edgelab"] and u[("Service", "MemoryMax")] == ["256M"], path.name
             assert u[("Service", "ProtectSystem")] == ["strict"] and u[("Service", "NoNewPrivileges")] == ["yes"]
-            assert u[("Service", "ReadWritePaths")] == ["/var/lib/market-edge-lab /var/lib/market-edge-lab-status"]
+            if path.name == "edgelab-notify.service":  # the relay needs only the status directory
+                assert u[("Service", "ReadWritePaths")] == ["/var/lib/market-edge-lab-status"]
+                assert u[("Service", "InaccessiblePaths")] == ["/var/lib/market-edge-lab"]
+            else:
+                assert u[("Service", "ReadWritePaths")] == ["/var/lib/market-edge-lab /var/lib/market-edge-lab-status"]
     s = _parse("edgelab.slice")
     assert s[("Slice", "MemoryMax")] == ["384M"] and s[("Slice", "CPUQuota")] == ["25%"]
 
@@ -427,3 +431,108 @@ def test_verify_production_malformed_latest_json_is_unknown(tmp_path, content, v
     assert states["LATEST_JSON_AGE"].startswith("UNKNOWN")
     shadow = states["SHADOW_DAILY"]
     assert shadow.startswith(("NOT_A_JSON_OBJECT", "UNPARSEABLE")) or json.loads(shadow)["state"] is None
+
+
+# --------------------------------------------------------------------------- ntfy relay + secrets (ADR 0028)
+
+def test_notify_relay_runs_in_its_own_networked_unit_after_each_daily_run():
+    relay = _parse("edgelab-notify.service")
+    assert relay[("Service", "ExecStart")] == [
+        "/opt/market-edge-lab/venv/bin/python -m edge_lab.cli notify relay --status-dir /var/lib/market-edge-lab-status"]
+    assert relay[("Service", "EnvironmentFile")] == ["/etc/market-edge-lab/env", "-/etc/market-edge-lab/secrets.env"]
+    assert ("Unit", "OnFailure") not in relay  # a relay failure never alerts about itself in a loop
+    assert not (UNITS / "edgelab-notify.timer").exists()
+    for name in ("edgelab-shadow.service", "edgelab-settlement.service"):
+        u = _parse(name)
+        assert u[("Unit", "OnSuccess")] == ["edgelab-notify.service"], name
+        assert u[("Unit", "OnFailure")] == ["edgelab-alert@%n.service"], name
+        assert ("Service", "EnvironmentFile") in u and "-/etc/market-edge-lab/secrets.env" not in u[
+            ("Service", "EnvironmentFile")], f"{name} must not load the owner's secrets"
+    # A failure is recorded by alert.sh (last_failure.json) first, then relayed as a fixed headline.
+    assert _parse("edgelab-alert@.service")[("Unit", "OnSuccess")] == ["edgelab-notify.service"]
+    # The bookkeeping unit keeps no network: the push happens only in the relay.
+    assert _parse("edgelab-shadow.service")[("Service", "IPAddressDeny")] == ["any"]
+
+
+def test_only_units_that_need_a_secret_load_the_secrets_file():
+    loaders = sorted(p.name for p in UNITS.glob("*.service") if "secrets.env" in p.read_text())
+    assert set(loaders) <= {"edgelab-notify.service", "edgelab-odds.service"}, loaders
+    for name in loaders:
+        assert "-/etc/market-edge-lab/secrets.env" in _parse(name)[("Service", "EnvironmentFile")]
+
+
+def test_install_creates_the_secrets_file_once_and_never_reads_it():
+    assert 'SECRETS_FILE=$ETC/secrets.env' in INSTALL
+    assert 'if [ ! -e "$SECRETS_FILE" ]; then' in INSTALL
+    assert 'install -o root -g root -m 0600 /dev/null "$SECRETS_FILE"' in INSTALL
+    assert 'chown root:root "$SECRETS_FILE"; chmod 0600 "$SECRETS_FILE"' in INSTALL
+    reads = [line.strip() for line in INSTALL.splitlines()
+             if "SECRETS_FILE" in line and re.search(r"\b(cat|sed|grep|source|head|tail|cp|mv|awk)\b|<\s*\"?\$SECRETS", line)]
+    assert not reads, reads
+    assert "secrets file is root:root 600" in INSTALL
+    assert 'expect_not "edgelab cannot read the secrets file"' in INSTALL
+    assert "cannot read the secrets file" in INSTALL
+    assert "edgelab-notify" in INSTALL
+
+
+# --------------------------------------------------------------------------- topic writer (ADR 0028)
+
+def _topic_module():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("set_ntfy_topic", ROOT / "deploy/vps/set_ntfy_topic.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def _topic(text):
+    return [line for line in text.splitlines() if line.startswith("EDGE_LAB_NTFY_TOPIC_URL=")]
+
+
+def test_topic_writer_adds_a_topic_keeps_other_lines_and_prints_nothing_secret(tmp_path, capsys):
+    mod = _topic_module()
+    path = tmp_path / "secrets.env"
+    path.write_text("EDGE_LAB_ODDS_API_KEY=abc\n")
+    uid, gid = (os.getuid(), os.getgid()) if hasattr(os, "getuid") else (0, 0)
+    assert mod.write_topic(str(path), uid=uid, gid=gid) == "written"
+    text = path.read_text()
+    assert "EDGE_LAB_ODDS_API_KEY=abc" in text and len(_topic(text)) == 1
+    url = _topic(text)[0].split("=", 1)[1]
+    from edge_lab import notify_ntfy
+    assert notify_ntfy.parse_topic_url(url)  # a valid, allowlisted topic URL
+    assert url not in capsys.readouterr().out
+    if hasattr(os, "getuid"):
+        assert (path.stat().st_mode & 0o777) == 0o600
+
+
+def test_topic_writer_keeps_an_existing_topic_unless_forced(tmp_path):
+    mod = _topic_module()
+    path = tmp_path / "secrets.env"
+    path.write_text("export EDGE_LAB_NTFY_TOPIC_URL=https://ntfy.sh/mel-old-export-form-000\n")
+    uid, gid = (os.getuid(), os.getgid()) if hasattr(os, "getuid") else (0, 0)
+    # An `export` line is not a topic systemd would load: it is replaced, not kept.
+    assert mod.write_topic(str(path), uid=uid, gid=gid) == "written"
+    assert "mel-old-export-form-000" not in path.read_text()
+    path.write_text("EDGE_LAB_NTFY_TOPIC_URL=https://ntfy.sh/mel-existing-topic-000" + chr(10))
+    assert mod.write_topic(str(path), uid=uid, gid=gid) == "kept"
+    assert "mel-existing-topic-000" in path.read_text()
+    assert mod.write_topic(str(path), force=True, uid=uid, gid=gid) == "written"
+    text = path.read_text()
+    assert "mel-existing-topic-000" not in text and len(_topic(text)) == 1
+    assert not list(tmp_path.glob("secrets.env.new.*"))
+
+
+def test_runbook_uses_the_tested_topic_writer_not_an_inline_snippet():
+    runbook = (ROOT / "docs/deploy/DAILY_SHADOW_ACTIVATION.md").read_text()
+    section = runbook[runbook.index("## 5a."):runbook.index("## 6.")]
+    assert "deploy/vps/set_ntfy_topic.py" in section and "python3 - <<" not in section
+    assert "EDGE_LAB_ALERT_URL" in section  # the warning not to point it at the topic
+
+
+def test_topic_writer_treats_an_empty_value_as_unset(tmp_path):
+    mod = _topic_module()
+    path = tmp_path / "secrets.env"
+    path.write_text("EDGE_LAB_NTFY_TOPIC_URL=" + chr(10))
+    uid, gid = (os.getuid(), os.getgid()) if hasattr(os, "getuid") else (0, 0)
+    assert mod.write_topic(str(path), uid=uid, gid=gid) == "written"
+    assert len(_topic(path.read_text())) == 1
