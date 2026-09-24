@@ -163,6 +163,15 @@ def target_books(t: d.OddsTarget) -> str:
         "recorded at capture" if t.books_source == d.BOOKS_RECORDED else None, t.books_note) if x))
 
 
+def _books_flag(t: d.OddsTarget) -> str | None:
+    """A short history-table flag for a books note (the full note is on the row)."""
+    note = t.books_note or ""
+    if t.books is None:
+        return None
+    return " · ".join(x for x in ("event not in the response" if "not in the stored response" in note else None,
+                                  "may be incomplete" if "parse problem" in note else None) if x) or None
+
+
 def _at_receipt(t: d.OddsTarget) -> str:
     """A captured row's freshness at receipt, in the existing state words ("Fresh at receipt")."""
     if t.freshness == d.NOT_EVALUATED:
@@ -213,6 +222,130 @@ def _transitions(t: d.OddsTarget) -> str:
                      esc(x.get("credits_last"))] for x in t.transitions], wrap=(2,), caption="State history")
 
 
+# --------------------------------------------------------------------------- sportsbook consensus (ADR 0033)
+
+CONSENSUS_LABEL = "RESEARCH BENCHMARK — NOT EXECUTABLE"  # odds_consensus.LABEL (tested equal)
+CONSENSUS_NOTE = ("A consensus probability is the median, across books, of each book's de-vigged two-way probability "
+                  "at one exact line: a research estimate, not a price anyone can trade at. Offered prices are "
+                  "each book's quote as received; their implied probability still includes the book's margin. "
+                  "Spreads and totals are never combined across lines.")
+DISPERSION_TEXT = "range (max − min) and MAD (median absolute deviation, unscaled) of the books' de-vigged probabilities"
+
+
+def _side(name: Any, line: Any, market: Any = None) -> str:
+    """An outcome with its exact line as the contract normalized it; a spread's positive line gets "+"."""
+    if line is None:
+        return str(name)
+    text = str(line)
+    signed = market == "spreads" and text[:1] not in "+-" and text not in ("0", "0.0")
+    return f"{name} +{text}" if signed else f"{name} {text}"
+
+
+def _proposition(p: Any) -> str:
+    """One proposition: its consensus table, then (separately) the offered prices and each book's de-vig."""
+    title = f"{pr.odds_market_label(p.market_key)} · " + " / ".join(_side(n, ln, p.market_key) for n, ln in p.outcomes)
+    status = p.status.value if hasattr(p.status, "value") else str(p.status)
+    # The market-level last_update when any book gave one, else the bookmaker-level one (both are the contract's).
+    bounds, basis = ((p.market_update, "market last_update") if p.market_update.known
+                     else (p.bookmaker_update, "bookmaker last_update"))
+    # One compact facts grid per outcome (readable at 360 px without scrolling), never a price in it.
+    consensus = "".join(c.facts([
+        ("Outcome", esc(_side(o.outcome_name, o.line, p.market_key))),
+        ("Consensus probability", c.num(pr.percent(o.consensus_probability), reason="no consensus: fewer than two books")),
+        ("Range · MAD", c.num(" · ".join(x or "—" for x in (pr.pp_size(o.range), pr.pp_size(o.mad)))
+                              if o.range is not None or o.mad is not None else None, reason="not computed")),
+        ("Books (contributing of quoting)", c.num(f"{pr.count(o.book_count)} of {pr.count(p.market_bookmaker_count)}")),
+    ], wide=True, text_cols=(0,)) for o in p.consensus)
+    consensus = f'<div role="group" aria-label="{esc("Consensus probability, " + title)}">{consensus}</div>'
+    head = c.facts([
+        ("Status", c.state_text(status)),
+        ("Freshness at receipt", c.badge(pr.freshness_code(p.freshness_at_receipt),
+                                         label=f"{pr.state_word(pr.freshness_code(p.freshness_at_receipt)).label} "
+                                               "(worst of books)")),
+        ("Earliest contributing update", c.txt(pr.datetime_et(bounds.earliest_utc), reason="no usable update time")
+         + _sub(basis)),
+        ("Latest contributing update", c.txt(pr.datetime_et(bounds.latest_utc), reason="no usable update time")
+         + _sub(f"{pr.count(bounds.unknown)} book(s) without one" if bounds.unknown else None)),
+    ], wide=True, text_cols=(0, 1, 2, 3))
+    offered = c.table(
+        ["book", "outcome", "offered price (as received)", "implied incl. margin"],
+        [[esc(o.bookmaker), esc(_side(o.outcome_name, o.line, p.market_key)), c.code(f"{o.raw_price} ({o.odds_format})"),
+          c.num(pr.percent(o.implied_probability_with_margin), reason="not a valid quote")] for o in p.offered],
+        wrap=(1,), right=(3,), caption=f"Offered prices, {title}")
+    books = c.table(
+        ["book", "de-vigged " + " / ".join(_side(n, ln, p.market_key) for n, ln in p.outcomes), "margin (overround)",
+         "freshness at receipt", "update basis"],
+        [[esc(b.bookmaker), c.num(" / ".join(pr.percent(x) or "—" for x in b.probabilities)),
+          c.num(pr.pp(b.overround)), c.state_text(pr.freshness_code(b.freshness_at_receipt)),
+          esc(b.update_basis or "none")] for b in p.books], right=(1, 2), caption=f"Each book's de-vig, {title}")
+    return (f'<h4 class="eyebrow">{esc(title)}</h4>' + head
+            + (f'<p class="note">{esc(p.reason)}</p>' if p.reason else "")
+            + '<p class="meta">Consensus probability (research estimate, not a price)</p>' + consensus
+            + c.disclosure(f"Offered prices as received ({pr.count(len(p.offered))}) and each book's de-vig",
+                           '<p class="note">Offered prices are sportsbook quotes, not probabilities and not '
+                           'executable.</p>' + offered + books))
+
+
+def consensus_body(result: d.Loaded | None, capture_snapshot_id: Any = None) -> str:
+    """Every state of one capture's consensus: populated, insufficient books, unsupported groups,
+    stale / unknown freshness, this capture unusable (an earlier one shown), newer captures unusable,
+    no consensus, not installed / unavailable, read error. Strings and figures are the contract's."""
+    if result is None:
+        return ""
+    if result.status == d.ERROR:
+        return c.error_state("Consensus unavailable (read error)",
+                             f"ERROR — {result.message}. This is not an empty benchmark.")
+    if result.status != d.OK:
+        return c.unavailable("Consensus unavailable", result.message[:1].upper() + result.message[1:] + ".")
+    r = result.value
+    if r is None:
+        return c.empty_state("No consensus for this capture", "No stored odds response holding this event had been "
+                                                             "received by this capture's time.")
+    out = [f'<p class="eyebrow">{esc(r.label)}</p>']
+    unusable = list(r.newer_unusable or ())
+    if unusable:
+        out.append(c.empty_state(
+            f"{pr.count(len(unusable))} newer capture{'' if len(unusable) == 1 else 's'} of this event unusable",
+            "; ".join(f"snapshot {u.snapshot_id} ({pr.datetime_et(u.received_at_utc) or 'receipt time unknown'}): "
+                      + ", ".join(u.problems) for u in unusable), kind="warn"))
+    event = r.events[0] if r.events else None
+    if r.failed_closed or event is None:
+        out.append(c.blocked_state("No usable consensus at this capture",
+                                   f"Snapshot {r.snapshot_id}: " + ("; ".join(r.problems) or "no event in it") + "."))
+        return "".join(out)
+    if capture_snapshot_id is not None and r.snapshot_id != capture_snapshot_id:
+        out.append(c.empty_state("This capture is not used", f"Its response gave this event no usable consensus; the "
+                                 f"latest usable earlier capture is shown: snapshot {r.snapshot_id}, received "
+                                 f"{pr.datetime_et(r.received_at_utc) or 'at an unknown time'}.", kind="warn"))
+    fresh = pr.freshness_code(r.freshness_as_of)
+    out.append(c.facts([
+        ("Snapshot", c.code(r.snapshot_id) + _sub(f"received {pr.datetime_et(r.received_at_utc)}"
+                                                  if r.received_at_utc else None)),
+        ("Freshness at this capture", c.badge(fresh, label=f"{pr.state_word(fresh).label} (worst of books)")
+         + _sub(f"as of {pr.datetime_et(r.as_of_utc)}" if r.as_of_utc else None)),
+        ("Books quoting this event", c.num(pr.count(event.bookmaker_count))),
+        ("Consensus version", c.code(r.consensus_version)),
+    ], wide=True, text_cols=(1,)))
+    order = {"h2h": 0, "spreads": 1, "totals": 2}
+    props = sorted(event.propositions, key=lambda p: (order.get(p.market_key, 9), p.market_key,
+                                                      tuple(ln or "" for _, ln in p.outcomes)))
+    out += [_proposition(p) for p in props] or [c.empty_state(
+        "No proposition paired", "No book offered a clean two-sided market for this event in this capture.")]
+    if event.unsupported:
+        out.append('<h4 class="eyebrow">Not in any consensus (unsupported)</h4>' + c.table(
+            ["market", "line", "reason code", "reasons", "books"],
+            [[esc(pr.odds_market_label(g.market_key)), esc(g.line or "—"), c.code(g.status), esc("; ".join(g.reasons)),
+              esc(", ".join(g.bookmakers))] for g in event.unsupported], wrap=(3, 4), caption="Unsupported groups"))
+    detail = [("dispersion method", c.code(getattr(event.propositions[0].consensus[0], "dispersion_method", None)
+                                           if event.propositions else None) + _sub(DISPERSION_TEXT)),
+              ("input sha256", c.code(r.input_sha256)), ("output sha256", c.code(r.output_sha256)),
+              ("odds format", c.code(r.odds_format)), ("purpose", c.code(r.purpose)), ("slot", c.code(r.slot_id)),
+              ("problems", c.ul(r.problems, empty="none"))]
+    out.append(c.disclosure("Consensus provenance", c.kv(detail)))
+    out.append(f'<p class="note">{esc(CONSENSUS_NOTE)}</p>')
+    return "".join(out)
+
+
 def target_row(t: d.OddsTarget, now: Any, max_age: Any = None) -> str:
     """One capture target: event, horizon, intended time, receipt, state, credits, books, freshness."""
     facts = [("Intended (ET)", _intended(t)), ("Actual receipt", _receipt(t)), ("Credits", target_credits(t)),
@@ -233,8 +366,10 @@ def target_row(t: d.OddsTarget, now: Any, max_age: Any = None) -> str:
         ("recorded at capture", esc(c._json_text(t.detail)) if t.detail else c.na("nothing recorded")),
     ]) + _transitions(t))
     sub = f"{t.offset_label} · kickoff {pr.datetime_et(t.commence_utc) or 'not recorded'}"
+    consensus = (c.disclosure(f"Consensus at this capture · {CONSENSUS_LABEL}",
+                              consensus_body(t.consensus, t.snapshot_id)) if t.consensus is not None else "")
     return c.row(esc(pr.odds_event_label(t.away_team, t.home_team, t.event_id)), sub=sub, aside=c.badge(t.state),
-                 body=c.facts(facts, wide=True, text_cols=(0, 1, 4, 5)) + detail)
+                 body=c.facts(facts, wide=True, text_cols=(0, 1, 4, 5)) + consensus + detail)
 
 
 def targets_table(targets: d.OddsTargets) -> str:
@@ -247,8 +382,9 @@ def targets_table(targets: d.OddsTargets) -> str:
           c.state_text(t.state),
           c.num(pr.count(t.credits_last), reason="not recorded") + _sub(_shared(t, None)),
           c.num(pr.count(len(t.books)) if t.books is not None else None, reason=t.books_note or "not captured")
-          + _sub("may be incomplete" if t.books is not None and t.books_note else None),
-          _at_receipt(t) if t.state == "CAPTURED" else c.state_text(t.freshness)] for t in rows], wrap=(0,), right=(5, 6), caption="Odds capture targets")
+          + _sub(_books_flag(t)),
+          _at_receipt(t) if t.state == "CAPTURED" else c.state_text(t.freshness)] for t in rows],
+        wrap=(0,), right=(5, 6), caption="Odds capture targets")
     more = (f'<p class="note">{esc(pr.count(left_out))} older targets are not listed here; every target stays in '
             "the evidence database.</p>" if left_out > 0 else "")
     return table + more

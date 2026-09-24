@@ -906,6 +906,7 @@ class OddsTarget:
     books_source: str | None = None
     shared_targets: int | None = None
     transitions: tuple[dict[str, Any], ...] | None = None  # loaded for the rows shown, else None
+    consensus: "Loaded | None" = None  # CAPTURED rows shown: `odds_consensus_at_capture`, else None
 
 
 @dataclass(frozen=True)
@@ -1096,6 +1097,7 @@ def odds_capture_targets(ctx: Context) -> Loaded:
         t = replace(t, transitions=history[t.target_id])
         if t.state != "CAPTURED":
             return t
+        t = replace(t, consensus=odds_consensus_at_capture(ctx, t.event_id, t.captured_at_utc))
         if t.snapshot_id in parsed:
             return _parsed_books(t, parsed[t.snapshot_id], t.captured_at_utc)
         why = ("no snapshot recorded" if t.snapshot_id is None else
@@ -1113,3 +1115,55 @@ def odds_capture_targets(ctx: Context) -> Loaded:
         upcoming=tuple(by_id[t.target_id] for t in ahead[:ODDS_TARGETS_SHOWN]), by_state=by_state,
         last_change_utc=max(changes).astimezone(timezone.utc).isoformat() if changes else None,
         odds_max_age=max_age, sport=settings.sport, snapshots=parsed))
+
+
+# --------------------------------------------------------------------------- sportsbook consensus (odds_consensus, ADR 0033)
+
+ODDS_CONSENSUS_MODULE = "edge_lab.odds_consensus"
+ODDS_CONSENSUS_CACHE_MAX = 64
+# Results by (database, event, as_of, newest stored snapshot id): a point-in-time read changes only
+# when a snapshot is added, and any addition changes the newest id, so an entry is never stale.
+_CONSENSUS: "OrderedDict[tuple, Any]" = OrderedDict()
+
+
+def odds_consensus_at_capture(ctx: Context, event_id: str, received_utc: Any) -> Loaded:
+    """Lane C's research benchmark for one event as of one capture's receipt time:
+    `odds_consensus.consensus_for_event(store, event_id, as_of=receipt)` (the latest usable stored
+    observation of the event known then; newer unusable ones listed). OK carries the
+    `SnapshotConsensus` or None (nothing holding the event was known by then); NO_DATA when the
+    evidence database or the contract is unavailable, or the receipt time is unknown; ERROR on a read
+    failure. Called only for the captured rows a page shows (each call parses one event of one
+    snapshot, plus newer unusable ones), and memoized until any snapshot is added. Nothing here
+    computes a probability."""
+    import importlib
+
+    if ctx.store.status != OK:
+        return ctx.store
+    as_of = parse_utc(received_utc)
+    if as_of is None:
+        return Loaded(NO_DATA, message="the capture's receipt time is not recorded, so no point-in-time consensus "
+                                       "can be read")
+    try:
+        module = importlib.import_module(ODDS_CONSENSUS_MODULE)
+    except ModuleNotFoundError as exc:
+        if exc.name != ODDS_CONSENSUS_MODULE:
+            return Loaded(ERROR, message=short_error(exc, ctx.config))
+        return Loaded(NO_DATA, message="the consensus research benchmark (odds_consensus) is not installed in this "
+                                       "build")
+    except Exception as exc:  # noqa: BLE001 - a module that fails to import is broken, not absent
+        return Loaded(ERROR, message=short_error(exc, ctx.config))
+    store, at = ctx.store.value, as_of.astimezone(timezone.utc)
+    try:
+        newest = next(iter(store.recent_snapshots(limit=1)), None)
+        key = (str(store.path), str(event_id), at.isoformat(), None if newest is None else int(newest["id"]))
+        if key in _CONSENSUS:
+            _CONSENSUS.move_to_end(key)
+            return Loaded(OK, _CONSENSUS[key])
+        result = module.consensus_for_event(store, str(event_id), at)
+    except Exception as exc:  # noqa: BLE001 - shown as an error state on this row only
+        return Loaded(ERROR, message=short_error(exc, ctx.config))
+    _CONSENSUS[key] = result
+    while len(_CONSENSUS) > ODDS_CONSENSUS_CACHE_MAX:
+        _CONSENSUS.popitem(last=False)
+    return Loaded(OK, result)
+

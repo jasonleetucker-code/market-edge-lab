@@ -348,6 +348,76 @@ def synthetic_odds_targets() -> dict[str, Any]:
     }
 
 
+# SYNTHETIC sportsbook consensus: SYNTHETIC stored rows run through the real contract
+# (`odds_consensus.build_snapshot_consensus`), so every figure the gallery shows is its own output.
+CONSENSUS_RECEIVED = "2026-09-24T18:15:41Z"
+
+
+def _book(key: str, updated: str | None, markets: list) -> dict:
+    return {"key": key, **({"last_update": updated} if updated else {}), "markets": markets}
+
+
+def _consensus_event(*, mixed: bool) -> dict:
+    home, away = "SYNTHETIC Home", "SYNTHETIC Away"
+
+    def o(name: str, price: int, point: float | None = None) -> dict:
+        return {"name": name, "price": price, **({"point": point} if point is not None else {})}
+
+    def core(i: int) -> list:
+        return [{"key": "h2h", "outcomes": [o(home, -150 - 4 * i), o(away, 128 + 4 * i)]},
+                {"key": "spreads", "outcomes": [o(home, -110, -3.5), o(away, -110, 3.5)]},
+                {"key": "totals", "outcomes": [o("Over", -108 - i, 47.5), o("Under", -112 + i, 47.5)]}]
+    fresh = "2026-09-24T18:14:30Z"
+    books = [_book(f"SYNTHETIC-book-{c}", fresh, core(i)) for i, c in enumerate("abc")]
+    if mixed:
+        books += [_book("SYNTHETIC-book-stale", "2026-09-24T17:40:00Z", core(3)),
+                  _book("SYNTHETIC-book-no-time", None, core(4)),
+                  _book("SYNTHETIC-book-alt", fresh, [
+                      {"key": "spreads", "outcomes": [o(home, -104, -4.5), o(away, -116, 4.5)]},
+                      {"key": "totals", "outcomes": [o("Over", -105, 44.5)]},
+                      {"key": "h2h", "outcomes": [o(home, 180), o(away, 200), o("Draw", 900)]}])]
+    return {"id": "DEMO-NFL-1", "sport_key": "SYNTHETIC_nfl", "sport_title": "SYNTHETIC", "home_team": home,
+            "away_team": away, "commence_time": "2026-09-25T00:15:00Z", "bookmakers": books}
+
+
+def _consensus_row(sid: int, events: list, *, bad_hash: bool = False) -> dict:
+    from ..provenance import canonical_json, sha256_hex
+
+    text = canonical_json({"sport": "SYNTHETIC_nfl", "events": events,
+                           "request": {"purpose": "capture", "odds_format": "american", "slot_id": "SYNTHETIC-slot"}})
+    return {"id": sid, "fetched_at_utc": CONSENSUS_RECEIVED, "url": "synthetic://odds",
+            "payload_sha256": "0" * 64 if bad_hash else sha256_hex(text), "payload_json": text}
+
+
+def synthetic_consensus() -> dict[str, Any]:
+    """name -> (a `data.Loaded` of `odds_consensus.consensus_for_event`'s result, the capture's snapshot id):
+    populated with stale, unknown, insufficient and unsupported books; all fresh; this capture
+    unusable with an earlier one shown; failed closed; none; not installed; read error. Point-in-time
+    fields are those of a read at the capture's own receipt time (receipt age zero, so
+    `freshness_as_of` equals the books' worst freshness at receipt)."""
+    from .. import odds_consensus as oc
+    from . import data as d
+
+    def at_receipt(result: Any, **extra: Any) -> Any:
+        return replace(result, as_of_utc=result.received_at_utc, freshness_as_of=result.freshness_at_receipt, **extra)
+    mixed = at_receipt(oc.build_snapshot_consensus(_consensus_row(901, [_consensus_event(mixed=True)])))
+    fresh = at_receipt(oc.build_snapshot_consensus(_consensus_row(902, [_consensus_event(mixed=False)])))
+    gap = oc.UnusableCapture(903, "2026-09-24T23:15:20Z", ("EVENT_ABSENT: snapshot 903 mentions event DEMO-NFL-1 "
+                                                           "but its response does not include it",))
+    broken = at_receipt(oc.build_snapshot_consensus(_consensus_row(904, [_consensus_event(mixed=False)],
+                                                                   bad_hash=True)))
+    return {
+        "populated": (d.Loaded(d.OK, mixed), 901),
+        "fresh": (d.Loaded(d.OK, fresh), 902),
+        "fallback": (d.Loaded(d.OK, replace(fresh, newer_unusable=(gap,))), 903),
+        "failed_closed": (d.Loaded(d.OK, broken), 904),
+        "none": (d.Loaded(d.OK, None), 905),
+        "unavailable": (d.Loaded(d.NO_DATA, message="the consensus research benchmark (odds_consensus) is not "
+                                                    "installed in this build"), 906),
+        "error": (d.Loaded(d.ERROR, message="OperationalError: database disk image is malformed"), 907),
+    }
+
+
 def synthetic_failure_record(unit: str, origin: str | None = None) -> dict:
     record = {"unit": unit, "failed_at_utc": T0, "invocation_id": "0123456789abcdef0123456789abcdef"}
     if origin is not None:

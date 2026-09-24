@@ -267,7 +267,7 @@ def test_the_real_quota_exhausted_fixture_blocks_and_marks_the_overdue_target():
         _, body = get(cfg)
         text = plain(section(body, "odds-t-h"))
         assert "Paid captures paused — Quota exhausted" in text
-        assert "1 open target past the deadline" in text and "Missed 2" in text and "Failed 1" in text
+        assert "1 open target past the deadline" in text and "Missed 3" in text and "Failed 1" in text
     finally:
         shutil.rmtree(root, ignore_errors=True)
 
@@ -341,19 +341,26 @@ def test_parsing_is_bounded_to_the_rows_shown_and_memoized(tmp_path, monkeypatch
         for gone in ("T-24h", "T-6h"):
             store.record_odds_transition(target_id=t[gone].target_id, state="MISSED", at_utc="2026-09-11T00:00:00Z",
                                          reason="expired while PLANNED")
-    calls = []
+    calls = []  # the dashboard's own parses (evidence id "N") and the consensus contract's ("snapshot:N")
     real = odds_api.parse_odds
-    monkeypatch.setattr(odds_api, "parse_odds", lambda *a, **k: calls.append(1) or real(*a, **k))
+    monkeypatch.setattr(odds_api, "parse_odds", lambda *a, **k: calls.append(str(k.get("evidence_id"))) or real(*a, **k))
     d._PARSED.clear()
     result = d.Context(_cfg(tmp_path)).odds_targets.value
     assert len(result.rows) == 90 and result.count("CAPTURED") == 30
-    assert 0 < len(calls) <= 2 * d.ODDS_TARGETS_SHOWN
-    assert len(result.snapshots) == len(calls)
+    mine = [c for c in calls if not c.startswith("snapshot:")]
+    assert 0 < len(mine) <= 2 * d.ODDS_TARGETS_SHOWN and len(result.snapshots) == len(mine)
+    shown_captures = sum(t.state == "CAPTURED" for t in (*result.recent, *result.upcoming))
+    assert len(calls) - len(mine) == shown_captures  # one consensus read per captured row shown, no more
     history = [t for t in result.rows if t.state == "CAPTURED" and t.transitions is None]
     assert history and all(t.books_source is None and t.freshness == d.NOT_EVALUATED for t in history)
     calls.clear()
-    d.Context(_cfg(tmp_path)).odds_targets  # the same page again: served from the bounded cache
+    d.Context(_cfg(tmp_path)).odds_targets  # the same page again: books and consensus from the bounded caches
     assert calls == [] and len(d._PARSED) <= d.ODDS_PARSE_CACHE_MAX
+    assert len(d._CONSENSUS) <= d.ODDS_CONSENSUS_CACHE_MAX
+    store.start_run("later")  # any new snapshot invalidates the consensus memo (never a stale result)
+    store.save_snapshot(run_id="later", source="kalshi", kind="markets", entity_id="x", url="u", payload={})
+    d.Context(_cfg(tmp_path)).odds_targets
+    assert len(calls) == shown_captures and all(c.startswith("snapshot:") for c in calls)
 
 
 def test_history_rows_use_the_runners_record_at_capture(tmp_path):
