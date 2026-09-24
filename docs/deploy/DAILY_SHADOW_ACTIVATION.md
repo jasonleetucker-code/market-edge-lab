@@ -147,7 +147,7 @@ enabled state. New units are installed but not enabled.
 ## 5. Activate (owner)
 
 ```bash
-sudo systemctl enable --now edgelab-shadow.timer edgelab-settlement.timer
+sudo systemctl enable --now edgelab-shadow.timer edgelab-settlement.timer edgelab-observe.timer edgelab-observe-close.timer
 systemctl list-timers 'edgelab-*'
 ```
 
@@ -279,12 +279,29 @@ sports model and no strategy.
 
   `odds_pilot.dashboard_status` reports `ACTIVE`, with `live_read_verified: true`.
 
-## 5c. Later/closing price observations: manual capture only (ADR 0030)
+## 5c. Later/closing price observations: scheduled Option A (ADR 0030)
 
-Authority: the 2026-09-24 next-build-chunk directive, Deliverable 4. **No timer is authorized.**
-Nothing here installs, enables or schedules anything. The proposed schedule, with its request and
-resource estimate, is the owner-decision blocker in ADR 0030. Until the owner decides, a target
-that no one captures becomes `MISSED`, and says so.
+Authority: the 2026-09-24 next-build-chunk directive built the manual mechanism; the owner explicitly
+approved scheduled capture at 11:24 ET on 2026-09-24 (durable record: issue #74). Option A is selected.
+The two units are installed with the rest and are enabled through §5 above:
+
+- `edgelab-observe.timer`: :05, :20, :35 and :50 each hour, local plan plus bounded capture only when due;
+- `edgelab-observe-close.timer`: 04:57:45 UTC, the dedicated KXHIGHNY close-window tick.
+
+Both are `Persistent=false`. A missed point-in-time tick is never fired late; targets become `MISSED`
+with a reason. Protected windows, the shared collector lock, request caps and the Kalshi pacer still govern.
+
+
+After enabling, verify both explicitly:
+
+```bash
+systemctl is-enabled edgelab-observe.timer edgelab-observe-close.timer
+systemctl list-timers edgelab-observe.timer edgelab-observe-close.timer
+bash /opt/market-edge-lab/app/deploy/vps/verify_production.sh | grep 'OBSERVE.*TIMER'
+```
+
+Manual `observe plan/capture/status` commands below remain valid for diagnostics and recovery; do not
+run a manual capture concurrently with the scheduled services.
 
 - **Schema.** The first install of this code migrates the evidence store to **v6**. It adds two
   tables and nothing else; the "Rollback" section covers the stamp back to v5.
