@@ -13,7 +13,7 @@ import re
 import shutil
 import sys
 import tomllib
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
 
@@ -396,6 +396,70 @@ def test_tape_uses_captured_quotes_only(demo):
     assert 'href="/market?' in tape
     empty = text(call(make_app(Config()), "/")[2])
     assert "No quotes captured yet." in empty
+
+
+def test_unreadable_evidence_db_tape_says_unavailable_never_empty(tmp_path):
+    bad = tmp_path / "edge_lab.sqlite3"
+    bad.write_bytes(b"not sqlite" * 50)  # a read error, not an empty evidence store
+    app = make_app(Config(db=bad, clock=lambda: NOW))
+    for route in ("/", "/opportunities", "/outcome-board"):
+        body = text(call(app, route)[2])
+        tape = body.split('aria-label="Quote tape"')[1].split("</div></div>")[0]
+        assert "Captured quotes unavailable (read error)." in tape, route
+        assert "No quotes captured yet." not in body, route
+    # NO_DATA (nothing configured, or no file yet) keeps the zero-quotes wording.
+    for cfg in (Config(clock=lambda: NOW), Config(db=tmp_path / "missing.sqlite3", clock=lambda: NOW)):
+        body = text(call(make_app(cfg), "/")[2])
+        assert "No quotes captured yet." in body and "Captured quotes unavailable" not in body
+
+
+def test_tape_unavailable_variant_is_distinct_from_empty():
+    p = pr.Params()
+    empty, unavailable = c.tape([], p), c.tape([], p, unavailable=True)
+    assert "No quotes captured yet." in empty and "unavailable" not in empty
+    assert "Captured quotes unavailable (read error)." in unavailable and "No quotes captured" not in unavailable
+    assert "#i-circle-x" in unavailable and 'href="/opportunities"' in unavailable
+
+
+@pytest.mark.parametrize("cluster, expected", [
+    ("weather:us-nyc-central-park:2026-09-24", "NYC Central Park high temperature · Sep 24"),
+    ("weather:us-nyc-central-park:2026-10-01", "NYC Central Park high temperature · Oct 1"),
+    # Unknown or malformed patterns stay raw: a label is never invented.
+    ("weather:us-nyc-central-park:2026-13-40", "weather:us-nyc-central-park:2026-13-40"),
+    ("weather:us-nyc-central-park:2026-09-24:extra", "weather:us-nyc-central-park:2026-09-24:extra"),
+    ("weather:us-nyc-central-park:２０２６-09-24", "weather:us-nyc-central-park:２０２６-09-24"),
+    ("weather:us-chi-midway:2026-09-24", "weather:us-chi-midway:2026-09-24"),
+    ("DEMO-NYC-HIGH", "DEMO-NYC-HIGH"),
+    ("", ""),
+    (None, ""),
+])
+def test_cluster_label_maps_known_patterns_only(cluster, expected):
+    assert pr.cluster_label(cluster) == expected
+
+
+def test_outcome_titles_are_plain_language_and_keep_the_raw_id_in_details(tmp_path):
+    from edge_lab.dashboard.demo import _decision, _fill
+    cfg, _ = early(tmp_path)
+    now = cfg.clock()
+    cluster = "weather:us-nyc-central-park:2026-09-24"
+    account = shadow.OPERATIONAL.account_id
+    dec = _decision(account, 1, now - timedelta(hours=1), "kalshi:KXHIGHNY-26SEP24-B66.5", "NO", True, "QUALIFY",
+                    "0.62", "0.56", "0.0172", "0.58", "0.04")
+    dec["outcome_cluster"] = cluster
+    ledger = ShadowLedger(cfg.ledger)
+    ledger.record_decision(account, dec)
+    ledger.record_fill(account, _fill(dec, True, "0.56", "0.0172", "0.58", now + timedelta(days=1)))
+    app = make_app(cfg)
+    label = "NYC Central Park high temperature · Sep 24"
+    outcomes = text(call(app, "/outcome-board")[2])
+    title = outcomes.split('<ul class="rows">')[1].split("<details")[0]
+    assert label in title and cluster not in title
+    why = outcomes.split("Why it matters")[1]
+    assert cluster in why  # the raw id stays in the disclosure
+    assert f'<span class="basis">{label}</span>' in outcomes  # largest-exposure metric
+    terminal = text(call(app, "/")[2])
+    matters = terminal.split('id="matters-h"')[1]
+    assert label in matters and cluster not in matters
 
 
 def test_price_change_needs_two_comparable_observations():

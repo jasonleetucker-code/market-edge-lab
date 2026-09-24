@@ -349,8 +349,18 @@ def market_board(rows: Sequence[pr.MarketRow], p: pr.Params, *, label: str = "Ma
             f'<ol class="board" aria-label="{esc(label)}">{"".join(market_row(r, p) for r in rows)}</ol></div>')
 
 
-def tape(items: Sequence[tuple[pr.MarketRow, pr.QuoteSide]], p: pr.Params, *, empty_href: str = "/opportunities") -> str:
-    """The market tape: captured quotes only, manually scrollable; never an autoplay marquee."""
+def tape(items: Sequence[tuple[pr.MarketRow, pr.QuoteSide]], p: pr.Params, *, empty_href: str = "/opportunities",
+         unavailable: bool = False) -> str:
+    """The market tape: captured quotes only, manually scrollable; never an autoplay marquee.
+
+    `unavailable` is the read-error state: the evidence could not be read, which is not the same
+    as nothing having been captured, so it never says "No quotes captured yet".
+    """
+    if unavailable:
+        return ('<div class="tape" role="region" aria-label="Quote tape"><div class="tape-in"><p class="tape-empty">'
+                f'{icon("circle-x", "ic-sm k-err")}'
+                '<span>Captured quotes unavailable (read error).</span>'
+                f'<a href="{esc(empty_href)}">Markets</a></p></div></div>')
     if not items:
         return ('<div class="tape" role="region" aria-label="Quote tape"><div class="tape-in"><p class="tape-empty">'
                 f'{icon("chart-candlestick", "ic-sm")}<span>No quotes captured yet.</span>'

@@ -35,7 +35,7 @@ def group_row(g, top) -> str:
     ]) + '<h4 class="eyebrow">Linked positions and contributions</h4>' + linked)
     bar = c.bar(g.current_exposure, top, label=f"Current exposure {pr.money(g.current_exposure)} of the largest "
                                                 f"{pr.money(top)} shown")
-    return c.row(esc(g.outcome_cluster), sub=sub, aside=c.state_text(g.status), body=bar + facts + why)
+    return c.row(esc(pr.cluster_label(g.outcome_cluster)), sub=sub, aside=c.state_text(g.status), body=bar + facts + why)
 
 
 def view(ctx: d.Context, p: pr.Params) -> cm.Page:
@@ -60,7 +60,7 @@ def view(ctx: d.Context, p: pr.Params) -> cm.Page:
             c.metric("Linked outcome groups", c.num(pr.count(len(open_groups))), "Open or partly settled", lead=True),
             c.metric("Open risk", c.money_cell(v.state.open_worst_case_risk), "Worst case, open positions"),
             c.metric("Largest exposure", c.money_cell(largest.current_exposure) if largest else
-                     c.na("no open exposure"), largest.outcome_cluster if largest else "None open"),
+                     c.na("no open exposure"), pr.cluster_label(largest.outcome_cluster) if largest else "None open"),
         ], label="Outcome exposure summary"))
         if groups:
             top = max((g.current_exposure for g in groups), default=0)

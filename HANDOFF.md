@@ -54,6 +54,9 @@ EVIDENCE:
     #45 (before: 15 failures plus a process-killing SIGTERM test). Later heads were
     re-verified per PR.
 UNRESOLVED:
+  - Terminal v1 follow-ups (tape read-error state, plain outcome labels): branch
+    ui/tape-unavailable-cluster-labels, PR open, NOT deployed. Deploy only with
+    DAILY_SHADOW_ACTIVATION.md at an owner-chosen time outside 17:40-18:35 ET.
   - Settlement lifecycle on real data: not yet observed (positions settle after Kalshi
     publishes 2026-09-24's result; the settlement timer runs 11:15 and 16:15 ET).
   - F09 residual (ADR 0021): entries after 2026-09-23T22:47:20Z are unanchored until the

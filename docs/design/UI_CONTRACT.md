@@ -155,7 +155,9 @@ books). Up to 12 items: open-position markets first, then alphabetical; one per 
 native market + side. Each item: outcome label, venue, side, captured ask, and a change only
 when two comparable observations of the same side exist. Labelled **captured**, never
 LIVE. Manual swipe; desktop arrow buttons (JS); no marquee. Clicking opens market detail.
-Zero quotes: one strip "No quotes captured yet." with a Markets link.
+Zero quotes: one strip "No quotes captured yet." with a Markets link. Evidence read error
+(`observed` is ERROR): one strip "Captured quotes unavailable (read error)." with the error icon
+and a Markets link; a read failure never uses the zero-quotes wording.
 
 ## 8. Pages (order and hierarchy are fixed)
 
@@ -271,4 +273,14 @@ overflow, targets, fonts, first-row position). Emulated WebKit is not a physical
 ## 14. Amendments
 
 A design change is a dated entry here: what changed, why, who approved it (owner or a recorded
-directive), and the screenshots that justify it. No amendments yet.
+directive), and the screenshots that justify it.
+
+- **2026-09-23 — tape read-error state; plain outcome labels.** Approved by the owner's
+  session request (Terminal v1 follow-ups). (1) §7: the tape gains an unavailable variant,
+  so an unreadable evidence database reads "Captured quotes unavailable (read error)."
+  instead of the zero-quotes wording, which had presented a read failure as an empty day.
+  (2) Outcome group titles on Outcomes and Terminal "What matters today" use
+  `presentation.cluster_label`: known cluster patterns only, raw id otherwise, raw id always
+  in "Why it matters". No token, layout or component-style change. Screenshots: the
+  `early`, `demo` and `broken` states at 390x844 and 1440x900 (`tests/browser/capture.py`),
+  reviewed in the PR.

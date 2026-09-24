@@ -52,6 +52,8 @@ def view(ctx: d.Context, p: pr.Params) -> cm.Page:
         c.blocked_state("New positions halted", "Remaining risk capacity is zero."),
     ])
     parts.append(c.section("StatusLine and Empty / Unavailable / Error / Blocked", states, sid="g-states"))
+    parts.append(c.section("Tape (empty / read error)", c.tape([], p) + c.tape([], p, unavailable=True),
+                           meta="the populated tape is in the header", sid="g-tape"))
     vocab = " ".join(c.badge(k) for k in ("VALID", "INVALID_CAPTURE", "QUALIFY", "NO_EDGE", "BOOK_STALE", "HALTED",
                                           "CONSERVATIVE_BOUND", "TESTED", "LIVE_DATA_VERIFIED", "PASS", "something-new"))
     parts.append(c.section("State vocabulary", f"<p>{vocab}</p>", meta="unknown codes are neutral", sid="g-vocab"))

@@ -68,7 +68,7 @@ Rules for all components:
 | EdgeValue | `edge_value(Assessment or None)` | Net EV per $1 contract; not a return. |
 | MarketRow / board | `market_row(MarketRow, params)`, `market_board(rows, params, label=...)` | One view model; container queries switch 9-col / 5-col / mobile composition. |
 | Market link | `market_href(row, params, side=None)` | Same-origin, URL-encoded, keeps filters. |
-| Tape | `tape([(MarketRow, QuoteSide)], params)` | Captured quotes only; empty strip otherwise. |
+| Tape | `tape([(MarketRow, QuoteSide)], params, unavailable=False)` | Captured quotes only; "No quotes captured yet." when the evidence loaded with none; `unavailable=True` (evidence read error) → "Captured quotes unavailable (read error).", never the empty wording. |
 | Facts | `facts(pairs, wide=False)` | Compact label/value grid inside rows and detail sections. |
 | PositionRow / OutcomeExposureRow | `row(title_html, sub="", aside="", body="")` | Shared row shell; pages supply facts, bars, disclosures. |
 | ActivityRow | `activity_row(kind, title, detail, when_utc, href=None, extra_html="")` | Semantic icon, time, reason, valid link. |
@@ -87,6 +87,9 @@ Rules for all components:
 - `MarketRow` — identity, domain, title/outcome, quotes, assessments, `primary`, `state`
   (qualified / watching / blocked / unsupported), `state_code`, `cash_release`.
 - `build_rows`, `filter_rows`, `sort_rows`, `tape_rows`, `page_slice` — grouping only.
+- `cluster_label(cluster)` — plain-language outcome-cluster title for known patterns only
+  (EXP-001 `weather:us-nyc-central-park:<date>` → "NYC Central Park high temperature · Sep 24");
+  any other id is returned raw, never a guessed label. The raw id stays in Details.
 
 ## Ownership
 
