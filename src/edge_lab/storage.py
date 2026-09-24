@@ -11,7 +11,7 @@ from typing import Any, Iterable
 from .http import FetchResult
 from .provenance import bytes_sha256, canonical_json, sha256_hex, shape_fingerprint
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 SOURCE_HEALTH_STATUSES = ("ok", "partial", "failed")
 
 
@@ -395,55 +395,258 @@ END;
 """
 
 
-V5_OBJECTS = frozenset(re.findall(r"CREATE (?:TABLE|INDEX|TRIGGER) IF NOT EXISTS (\w+)", _SCHEMA_V5))
+
+# Version 6: prospective later-price observations (ADR 0030). Additive only: two new tables,
+# nothing existing changes, and no trigger touches an older table.
+# - A target is one intended observation of one market at one phase and time. It is written
+#   once, with its intended time and its due window, so a miss stays visible.
+# - An observation row is one attempt's result for one side of that market (YES/NO), or one
+#   market-level row when nothing side-specific exists (FAILED, MISSED, market not open).
+#   Rows are append-only. A target whose attempt reached a final status (CAPTURED,
+#   NOT_EXECUTABLE, MISSED) takes no further attempt; FAILED may be retried until the deadline.
+# - "close" is a claim: close_label CLOSE needs a stored proof (see price_observations).
+PRICE_OBSERVATION_PHASES = (
+    "decision", "recheck", "post_decision_1h", "post_decision_6h", "pre_close", "close", "settlement_preceding",
+    "custom",
+)
+PRICE_OBSERVATION_STATUSES = ("CAPTURED", "NOT_EXECUTABLE", "FAILED", "MISSED")
+PRICE_OBSERVATION_FINAL_STATUSES = ("CAPTURED", "NOT_EXECUTABLE", "MISSED")
+
+_SCHEMA_V6 = """
+CREATE TABLE IF NOT EXISTS price_observation_targets (
+    target_id TEXT PRIMARY KEY,
+    venue TEXT NOT NULL,
+    market_id TEXT NOT NULL,
+    native_market_id TEXT NOT NULL,
+    event_id TEXT NOT NULL,
+    native_event_id TEXT,
+    phase TEXT NOT NULL CHECK (phase IN (
+        'decision', 'recheck', 'post_decision_1h', 'post_decision_6h', 'pre_close', 'close',
+        'settlement_preceding', 'custom'
+    )),
+    target_utc TEXT NOT NULL,
+    due_from_utc TEXT NOT NULL,
+    deadline_utc TEXT NOT NULL,
+    planned_at_utc TEXT NOT NULL,
+    policy_version TEXT NOT NULL,
+    origin TEXT NOT NULL,
+    decision_ref TEXT,
+    decision_as_of_utc TEXT,
+    close_time_utc TEXT,
+    close_basis TEXT NOT NULL,
+    planned_rules_sha256 TEXT,
+    detail_json TEXT NOT NULL DEFAULT '{}',
+    CHECK (due_from_utc <= target_utc AND target_utc <= deadline_utc),
+    -- A close target exists only where the venue defines a trading close.
+    CHECK (phase != 'close' OR close_time_utc IS NOT NULL)
+);
+
+CREATE INDEX IF NOT EXISTS idx_price_observation_targets_market
+ON price_observation_targets(market_id, target_utc);
+
+CREATE INDEX IF NOT EXISTS idx_price_observation_targets_due
+ON price_observation_targets(due_from_utc);
+
+CREATE TABLE IF NOT EXISTS price_observations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id TEXT NOT NULL,
+    attempt_id TEXT NOT NULL,
+    target_id TEXT,
+    phase TEXT NOT NULL CHECK (phase IN (
+        'decision', 'recheck', 'post_decision_1h', 'post_decision_6h', 'pre_close', 'close',
+        'settlement_preceding', 'custom'
+    )),
+    venue TEXT NOT NULL,
+    market_id TEXT NOT NULL,
+    native_market_id TEXT NOT NULL,
+    event_id TEXT NOT NULL,
+    side TEXT CHECK (side IN ('YES', 'NO')),
+    target_utc TEXT,
+    observed_at_utc TEXT,
+    source_timestamp_utc TEXT,
+    bid TEXT,
+    ask TEXT,
+    ask_size TEXT,
+    depth_json TEXT,
+    price_grid_json TEXT,
+    freshness TEXT NOT NULL CHECK (freshness IN ('fresh', 'stale', 'unknown')),
+    market_status TEXT,
+    close_time_utc TEXT,
+    close_label TEXT CHECK (close_label IN ('CLOSE', 'LATEST_PRE_CLOSE')),
+    close_proof_json TEXT,
+    rules_sha256 TEXT,
+    snapshot_id INTEGER,
+    source_sha256 TEXT,
+    collection_status TEXT NOT NULL CHECK (collection_status IN ('CAPTURED', 'NOT_EXECUTABLE', 'FAILED', 'MISSED')),
+    miss_reason TEXT,
+    recorded_at_utc TEXT NOT NULL,
+    policy_version TEXT NOT NULL,
+    -- A captured quote names its side, its evidence and when it was received, and explains nothing.
+    CHECK (collection_status != 'CAPTURED'
+           OR (side IS NOT NULL AND snapshot_id IS NOT NULL AND observed_at_utc IS NOT NULL AND miss_reason IS NULL)),
+    -- Anything else says why.
+    CHECK (collection_status = 'CAPTURED' OR miss_reason IS NOT NULL),
+    -- Only a captured, executable quote carries prices.
+    CHECK (collection_status = 'CAPTURED' OR (bid IS NULL AND ask IS NULL AND ask_size IS NULL AND depth_json IS NULL)),
+    -- The close label belongs to the close phase, and CLOSE is a claim that needs its proof.
+    CHECK (close_label IS NULL OR phase = 'close'),
+    CHECK (phase != 'close' OR collection_status != 'CAPTURED' OR close_label IS NOT NULL),
+    CHECK (close_label != 'CLOSE' OR (collection_status = 'CAPTURED' AND close_proof_json IS NOT NULL)),
+    FOREIGN KEY (run_id) REFERENCES collection_runs(run_id),
+    FOREIGN KEY (target_id) REFERENCES price_observation_targets(target_id),
+    FOREIGN KEY (snapshot_id) REFERENCES snapshots(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_price_observations_market
+ON price_observations(market_id, id);
+
+CREATE INDEX IF NOT EXISTS idx_price_observations_target
+ON price_observations(target_id, id);
+
+-- One row per side (or one market-level row) per attempt.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_price_observations_attempt_side
+ON price_observations(attempt_id, COALESCE(side, '-'));
+
+-- Planning is idempotent: re-planning a known target keeps the original row.
+CREATE TRIGGER IF NOT EXISTS price_observation_targets_keep_original
+BEFORE INSERT ON price_observation_targets
+WHEN EXISTS (SELECT 1 FROM price_observation_targets WHERE target_id = NEW.target_id)
+BEGIN
+    SELECT RAISE(IGNORE);
+END;
+
+CREATE TRIGGER IF NOT EXISTS price_observation_targets_no_update
+BEFORE UPDATE ON price_observation_targets
+BEGIN
+    SELECT RAISE(ABORT, 'price observation targets are immutable evidence');
+END;
+
+CREATE TRIGGER IF NOT EXISTS price_observation_targets_no_delete
+BEFORE DELETE ON price_observation_targets
+BEGIN
+    SELECT RAISE(ABORT, 'price observation targets are immutable evidence');
+END;
+
+CREATE TRIGGER IF NOT EXISTS price_observations_no_replace
+BEFORE INSERT ON price_observations
+WHEN NEW.id IS NOT NULL AND EXISTS (SELECT 1 FROM price_observations WHERE id = NEW.id)
+BEGIN
+    SELECT RAISE(ABORT, 'price observations are immutable evidence');
+END;
+
+-- A target that reached a final status in one attempt takes no other attempt.
+CREATE TRIGGER IF NOT EXISTS price_observations_final_is_final
+BEFORE INSERT ON price_observations
+WHEN NEW.target_id IS NOT NULL AND EXISTS (
+    SELECT 1 FROM price_observations
+    WHERE target_id = NEW.target_id AND attempt_id != NEW.attempt_id
+      AND collection_status IN ('CAPTURED', 'NOT_EXECUTABLE', 'MISSED'))
+BEGIN
+    SELECT RAISE(ABORT, 'price observation target already reached a final status');
+END;
+
+CREATE TRIGGER IF NOT EXISTS price_observations_no_update
+BEFORE UPDATE ON price_observations
+BEGIN
+    SELECT RAISE(ABORT, 'price observations are immutable evidence');
+END;
+
+CREATE TRIGGER IF NOT EXISTS price_observations_no_delete
+BEFORE DELETE ON price_observations
+BEGIN
+    SELECT RAISE(ABORT, 'price observations are immutable evidence');
+END;
+"""
+
+
+def _objects(script: str) -> frozenset[str]:
+    return frozenset(re.findall(r"CREATE (?:UNIQUE )?(?:TABLE|INDEX|TRIGGER) IF NOT EXISTS (\w+)", script))
+
+
+V5_OBJECTS = _objects(_SCHEMA_V5)
+V6_OBJECTS = _objects(_SCHEMA_V6)
 V4_REQUIRED_TABLES = ("collection_runs", "snapshots", "source_health", "document_blobs", "document_retrievals",
                       "forward_captures")
 
 
-def mark_schema_v4_for_rollback(db_path: str | Path) -> dict[str, Any]:
-    """Code rollback helper (runbook "Rollback"): stamp a v5 evidence store as v4 so the
-    previous (v4) code opens it.
+def _additive_steps() -> tuple[tuple[int, str], ...]:
+    """The additive migrations after v4, read at call time (so a test can stand in for older code)."""
+    return ((5, _SCHEMA_V5), (6, _SCHEMA_V6))
 
-    Nothing is deleted or rewritten. v5 only added the odds capture tables and their triggers,
-    which v4 code never reads. Before stamping it checks: user_version is 5; every v4 table
-    and snapshots column exists; every v5 table, index and trigger exists (a complete v5
-    store); and SQLite integrity_check passes.
-    Re-installing v5 code later stamps v5 again (its migration is idempotent). Refuses anything
-    that is not exactly a complete v5 store. Run it with the collector timers stopped."""
+
+# What each forward-only step added, for the rollback helper: {from_version: objects that version added}.
+_ROLLBACK_KEPT = {5: ("odds_targets_kept", "odds_capture_targets"),
+                  6: ("price_observation_targets_kept", "price_observation_targets")}
+
+
+def mark_schema_for_rollback(db_path: str | Path, *, from_version: int) -> dict[str, Any]:
+    """Code rollback helper (runbook "Rollback"): stamp a complete v`from_version` evidence
+    store as v`from_version - 1`, so the previous code opens it.
+
+    Nothing is deleted or rewritten. v5 only added the odds capture tables and v6 only the
+    price observation tables, with triggers on those tables only; the previous code never reads
+    them. Before stamping it checks: user_version is `from_version`; every v4 table and
+    snapshots column exists; every table, index and trigger of every additive step up to
+    `from_version` exists (a complete store); and SQLite integrity_check passes.
+    Re-installing the newer code later stamps it again (its migration is idempotent), and the
+    rows written meanwhile are kept. Refuses anything else. Run it with the timers stopped.
+    To go back two versions, run it twice (v6 -> v5, then v5 -> v4)."""
+    if from_version not in _ROLLBACK_KEPT:
+        raise ValueError(f"no rollback step from v{from_version}")
     path = Path(db_path)
     if path.is_symlink() or not path.is_file():
         raise ValueError(f"{path} is missing or not a regular file")
     with closing(sqlite3.connect(path, timeout=30.0)) as conn:
         conn.row_factory = sqlite3.Row
         version = int(conn.execute("PRAGMA user_version").fetchone()[0])
-        if version != 5:
-            raise ValueError(f"expected a v5 evidence store, found v{version}; nothing changed")
+        if version != from_version:
+            raise ValueError(f"expected a v{from_version} evidence store, found v{version}; nothing changed")
         names = {r["name"] for r in conn.execute("SELECT name FROM sqlite_master")}
         missing = [t for t in V4_REQUIRED_TABLES if t not in names]
         columns = {r["name"] for r in conn.execute("PRAGMA table_info(snapshots)")}
         missing += [f"snapshots.{c}" for c, _ in _SNAPSHOT_V2_COLUMNS if c not in columns]
-        missing += sorted(V5_OBJECTS - names)
+        for step, script in _additive_steps():
+            if step <= from_version:
+                missing += sorted(_objects(script) - names)
         if missing:
             raise ValueError(f"not a complete store; missing {missing}; nothing changed")
         if conn.execute("PRAGMA integrity_check").fetchone()[0] != "ok":
             raise ValueError("integrity_check failed; nothing changed")
-        conn.execute("PRAGMA user_version = 4")
+        conn.execute(f"PRAGMA user_version = {from_version - 1}")
         conn.commit()
-        return {"db": str(path), "from": 5, "to": 4,
-                "odds_targets_kept": int(conn.execute("SELECT COUNT(*) FROM odds_capture_targets").fetchone()[0])}
+        label, table = _ROLLBACK_KEPT[from_version]
+        out: dict[str, Any] = {"db": str(path), "from": from_version, "to": from_version - 1,
+                               label: int(conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0])}
+        if from_version == 6:
+            out["price_observations_kept"] = int(conn.execute("SELECT COUNT(*) FROM price_observations").fetchone()[0])
+        return out
+
+
+def mark_schema_v4_for_rollback(db_path: str | Path) -> dict[str, Any]:
+    """Stamp a complete v5 store as v4 (ADR 0029 rollback)."""
+    return mark_schema_for_rollback(db_path, from_version=5)
+
+
+def mark_schema_v5_for_rollback(db_path: str | Path) -> dict[str, Any]:
+    """Stamp a complete v6 store as v5 (ADR 0030 rollback)."""
+    return mark_schema_for_rollback(db_path, from_version=6)
 
 
 def main(argv: list[str] | None = None) -> int:
-    """`python -m edge_lab.storage mark-v4-for-rollback --db PATH` (see the rollback runbook)."""
+    """`python -m edge_lab.storage mark-v5-for-rollback --db PATH` (v6 -> v5) or
+    `mark-v4-for-rollback` (v5 -> v4); see the rollback runbook."""
     import argparse
 
     parser = argparse.ArgumentParser(prog="python -m edge_lab.storage")
     sub = parser.add_subparsers(dest="command", required=True)
-    rb = sub.add_parser("mark-v4-for-rollback", help="stamp a v5 evidence store as v4 before a code rollback")
-    rb.add_argument("--db", required=True)
+    for name, text in (("mark-v4-for-rollback", "stamp a v5 evidence store as v4 before a code rollback"),
+                       ("mark-v5-for-rollback", "stamp a v6 evidence store as v5 before a code rollback")):
+        rb = sub.add_parser(name, help=text)
+        rb.add_argument("--db", required=True)
     args = parser.parse_args(argv)
+    helper = mark_schema_v4_for_rollback if args.command == "mark-v4-for-rollback" else mark_schema_v5_for_rollback
     try:
-        print(json.dumps(mark_schema_v4_for_rollback(args.db), sort_keys=True))
+        print(json.dumps(helper(args.db), sort_keys=True))
     except ValueError as exc:
         print(json.dumps({"status": "REFUSED", "detail": str(exc)}))
         return 1
@@ -533,12 +736,14 @@ class SnapshotStore:
             conn.executescript(_SCHEMA_V2)
             conn.executescript(_SCHEMA_V3)
             conn.executescript(_SCHEMA_V4)
-            # v5's tables and triggers land in one transaction, and the version is stamped
-            # only after every object exists: a crash leaves either v4 or a complete v5. An
-            # already complete v5 store takes no write lock here.
+            # The additive steps (v5 odds targets, v6 price observations) land in one
+            # transaction, and the version is stamped only after every object exists: a crash
+            # leaves either the old version or a complete new one. An already complete store
+            # takes no write lock here.
             present = {row["name"] for row in conn.execute("SELECT name FROM sqlite_master")}
-            if version < SCHEMA_VERSION or not V5_OBJECTS <= present:
-                conn.executescript("BEGIN IMMEDIATE;\n" + _SCHEMA_V5 + "\nCOMMIT;")
+            scripts = [script for step, script in _additive_steps() if step <= SCHEMA_VERSION and script]
+            if scripts and (version < SCHEMA_VERSION or not all(_objects(s) <= present for s in scripts)):
+                conn.executescript("BEGIN IMMEDIATE;\n" + "\n".join(scripts) + "\nCOMMIT;")
             if version < SCHEMA_VERSION:
                 conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
 
@@ -636,7 +841,7 @@ class SnapshotStore:
             rows = conn.execute(
                 f"""
                 SELECT id, run_id, source, kind, entity_id, fetched_at_utc, url,
-                       payload_sha256, payload_json
+                       payload_sha256, raw_sha256, payload_json
                 FROM snapshots WHERE id IN ({",".join("?" * len(wanted))})
                 """,
                 wanted,
@@ -792,6 +997,71 @@ class SnapshotStore:
             return conn.execute(
                 "SELECT * FROM odds_capture_transitions WHERE target_id = ? ORDER BY id", (target_id,)
             ).fetchall()
+
+    # ------------------------------------------------------------ price observations (v6)
+
+    _PRICE_TARGET_COLUMNS = (
+        "target_id", "venue", "market_id", "native_market_id", "event_id", "native_event_id", "phase", "target_utc",
+        "due_from_utc", "deadline_utc", "planned_at_utc", "policy_version", "origin", "decision_ref",
+        "decision_as_of_utc", "close_time_utc", "close_basis", "planned_rules_sha256", "detail_json",
+    )
+    _PRICE_OBSERVATION_COLUMNS = (
+        "run_id", "attempt_id", "target_id", "phase", "venue", "market_id", "native_market_id", "event_id", "side",
+        "target_utc", "observed_at_utc", "source_timestamp_utc", "bid", "ask", "ask_size", "depth_json",
+        "price_grid_json", "freshness", "market_status", "close_time_utc", "close_label", "close_proof_json",
+        "rules_sha256", "snapshot_id", "source_sha256", "collection_status", "miss_reason", "recorded_at_utc",
+        "policy_version",
+    )
+
+    def plan_price_target(self, target: dict[str, Any]) -> bool:
+        """Record a newly planned price observation target. Returns False (and changes
+        nothing) when the target already exists."""
+        row = {c: target.get(c) for c in self._PRICE_TARGET_COLUMNS}
+        row["detail_json"] = canonical_json(target.get("detail") or {})
+        with closing(self._connect()) as conn, conn:
+            cursor = conn.execute(
+                f"INSERT INTO price_observation_targets({', '.join(row)}) VALUES ({', '.join('?' * len(row))})",
+                tuple(row.values()),
+            )
+            return cursor.rowcount == 1
+
+    def record_price_observations(self, rows: list[dict[str, Any]]) -> list[int]:
+        """Append one attempt's observation rows atomically (all or none)."""
+        ids = []
+        with closing(self._connect()) as conn, conn:
+            for r in rows:
+                values = {c: r.get(c) for c in self._PRICE_OBSERVATION_COLUMNS}
+                cursor = conn.execute(
+                    f"INSERT INTO price_observations({', '.join(values)}) VALUES ({', '.join('?' * len(values))})",
+                    tuple(values.values()),
+                )
+                ids.append(int(cursor.lastrowid))
+        return ids
+
+    def price_targets(self, *, market_id: str | None = None) -> list[sqlite3.Row]:
+        """Every target with its latest attempt's status (NULL when never attempted), by due time."""
+        where, params = ("WHERE t.market_id = ?", [market_id]) if market_id is not None else ("", [])
+        with closing(self._connect()) as conn, conn:
+            return conn.execute(
+                f"""
+                SELECT t.*, o.collection_status AS state, o.miss_reason AS state_reason,
+                       o.recorded_at_utc AS state_at_utc,
+                       (SELECT COUNT(DISTINCT attempt_id) FROM price_observations WHERE target_id = t.target_id)
+                           AS attempts
+                FROM price_observation_targets t
+                LEFT JOIN price_observations o ON o.id = (
+                    SELECT MAX(id) FROM price_observations WHERE target_id = t.target_id)
+                {where}
+                ORDER BY t.due_from_utc, t.market_id, t.phase
+                """,
+                params,
+            ).fetchall()
+
+    def price_observations(self, *, market_id: str | None = None) -> list[sqlite3.Row]:
+        """Observation rows, oldest first, optionally for one market."""
+        where, params = ("WHERE market_id = ?", [market_id]) if market_id is not None else ("", [])
+        with closing(self._connect()) as conn, conn:
+            return conn.execute(f"SELECT * FROM price_observations {where} ORDER BY id", params).fetchall()
 
     def latest_snapshot(self, *, source: str, kind: str, entity_id: str) -> sqlite3.Row | None:
         """The newest snapshot of one kind for one entity (payload included), or None."""

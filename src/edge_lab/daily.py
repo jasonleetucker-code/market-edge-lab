@@ -42,6 +42,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import uuid
 from contextlib import ExitStack
 from datetime import date, datetime, timedelta, timezone
@@ -56,6 +57,11 @@ from .storage import SnapshotStore
 
 RECEIPT_SCHEMA = "edge-lab-shadow-daily-receipt/1"
 RECEIPT_NAME = "shadow_daily.json"
+# Every receipt is also appended here, one JSON line per run, before the latest receipt is
+# replaced: the per-run provenance (code_version, refresh status and errors, missing days,
+# problems) survives. Never truncated or rotated by code; a receipt is a few KB, so about 3
+# runs a day add roughly 10-30 KB a day (a few MB a year).
+HISTORY_NAME = "shadow_daily_history.jsonl"
 NOTIFICATIONS_NAME = "notifications.jsonl"
 EXIT = {"HEALTHY_TRADED": 0, "HEALTHY_NO_SIGNAL": 0, "PENDING_SETTLEMENT": 0, "NO_CAPTURE": 0, "NOT_CLOSED": 0,
         "INVALID_CAPTURE": 3, "SETTLEMENT_CONFLICT": 1, "FAILED": 1, "LOCK_BUSY": 1}
@@ -215,6 +221,29 @@ def _summaries(ledger: ShadowLedger, now: datetime) -> dict[str, Any]:
     return out
 
 
+def _append_history(status_dir: Path, receipt: dict[str, Any]) -> None:
+    """Append the receipt as one line to the append-only run history (issue #50 P0-2).
+
+    One `os.write` of the whole line on an O_APPEND descriptor: nothing already written is
+    ever rewritten, and concurrent runs (for example a LOCK_BUSY run beside the one holding
+    the lock) cannot interleave inside a line. A torn last line (a crash or a full disk
+    mid-write) is detectable because every complete line is one JSON object."""
+    path = status_dir / HISTORY_NAME
+    data = (json.dumps(receipt, sort_keys=True, separators=(",", ":")) + "\n").encode("utf-8")
+    created = not path.exists()
+    fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o644)
+    try:
+        view = memoryview(data)
+        while view:
+            written = os.write(fd, view)
+            view = view[written:]
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+    if created:
+        os.chmod(path, 0o644)  # the same non-sensitive summary as the receipt (the unit's UMask is 0077)
+
+
 def _write_receipt(status_dir: Path | None, receipt: dict[str, Any]) -> None:
     if status_dir is None:
         return
@@ -226,6 +255,12 @@ def _write_receipt(status_dir: Path | None, receipt: dict[str, Any]) -> None:
     # runs with UMask 0077 so the ledger stays private, and only the receipt is opened up.
     os.chmod(tmp, 0o644)
     os.replace(tmp, target)
+    # The history is written after the latest receipt is in place, and a failure to append it
+    # never changes the receipt, the state or the exit code (it is reported on stderr only).
+    try:
+        _append_history(status_dir, receipt)
+    except OSError as exc:
+        print(f"shadow daily: receipt history not appended ({HISTORY_NAME}): {exc}", file=sys.stderr)
 
 
 def run(db: Path, ledger_path: Path, *, status_dir: Path | None = None, now: datetime | None = None,
