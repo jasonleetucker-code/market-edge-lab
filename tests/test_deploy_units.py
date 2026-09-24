@@ -262,8 +262,8 @@ def test_verify_production_reports_every_state_separately():
         assert re.search(rf"\b{name}\b", text), f"no STATE line for {name}"
     assert "STATE %s: %s" in text and "SUMMARY" in text and "One state does not imply the next" in text
     assert "NOT_READABLE_WITHOUT_PRIVILEGE" in text
-    for timer in ("pfm", "decision", "recheck", "status", "backup", "shadow", "settlement"):
-        assert re.search(rf"NAMES=\([^)]*\b{timer}\b", text)
+    for timer in ("pfm", "decision", "recheck", "status", "backup", "shadow", "settlement", "observe", "observe-close"):
+        assert re.search(rf"NAMES=\([^)]*(?<![\w-]){timer}(?![\w-])", text)
     assert "set -u" in text
 
 

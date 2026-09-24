@@ -287,10 +287,22 @@ listing 17 KB, book about 1.5 KB):**
   `TasksMax=32`, `Nice=5`, `TimeoutStartSec=6min`.
 
 **Owner decision recorded 2026-09-24 11:24 ET:** Option A is approved now, including the fixed
-04:57:45 UTC close tick for the currently observed KXHIGHNY 05:00Z close reference. If the venue moves
-the close, the planner's existing close-time checks keep the old target from being mislabeled; a future
-schedule revision can then follow evidence rather than guessing. The runbook §5c contains activation,
-verification and manual fallback commands.
+04:57:45 UTC close tick for the currently observed KXHIGHNY 05:00Z close reference.
+
+**Close-time risk (independent review of PR #76).** The close window `[close - 2 min 30 s, close - 10 s]`
+contains the 04:57:45Z tick only for closes from 04:57:55Z to 05:00:15Z. Kalshi's KXHIGHNY close_time
+was 23:59 ET wall time until August 2026 (03:59Z in summer, 04:59Z in winter; gate3 bulk fixture) and
+has been 05:00:00Z since. No winter (EST) close under the new convention has been observed yet.
+- If the venue moves close_time outside that range, the close-proof checks still prevent a false
+  CLOSE label, but the fixed tick misses the window and **every close target becomes MISSED**.
+  Nothing alerts on MISSED.
+- `observe status` therefore reports `close_tick_alignment` (ALIGNED / MISALIGNED /
+  NO_OPEN_CLOSE_TARGET) for every open close target, and `timers` (what systemd says, never
+  inferred).
+- **Re-check after the 2026-11-01 DST change.** Look at the first EST close_time and the alignment
+  state. If misaligned, move the close timer by a reviewed change; never relabel a late read.
+
+The runbook §5c contains activation, verification and manual fallback commands.
 
 ## Tradeoffs
 

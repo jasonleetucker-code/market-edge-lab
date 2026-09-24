@@ -199,7 +199,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     # --- observe: later/closing price observations (ADR 0030). Self-contained block.
     observe = subparsers.add_parser(
-        "observe", help="Later/closing price observations: plan, bounded manual capture, status (ADR 0030; no timer)."
+        "observe", help="Later/closing price observations: plan, bounded capture, status (ADR 0030 option A timers)."
     )
     observe_sub = observe.add_subparsers(dest="observe_command", required=True)
     ob_plan = observe_sub.add_parser(

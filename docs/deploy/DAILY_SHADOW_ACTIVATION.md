@@ -298,7 +298,16 @@ After enabling, verify both explicitly:
 systemctl is-enabled edgelab-observe.timer edgelab-observe-close.timer
 systemctl list-timers edgelab-observe.timer edgelab-observe-close.timer
 bash /opt/market-edge-lab/app/deploy/vps/verify_production.sh | grep 'OBSERVE.*TIMER'
+sudo runuser -u edgelab -- /opt/market-edge-lab/venv/bin/python -m edge_lab.cli observe status --db /var/lib/market-edge-lab/db/edge_lab.sqlite3
 ```
+
+In the status report, check:
+- `schedule`: the approved policy;
+- `timers`: systemd's own `enabled/active` for both timers;
+- `close_tick_alignment.state`: ALIGNED while the KXHIGHNY close is 05:00Z.
+
+MISALIGNED means the venue moved close_time, and the fixed 04:57:45Z tick will miss every close target
+(ADR 0030, close-time risk). Re-check after the 2026-11-01 DST change.
 
 Manual `observe plan/capture/status` commands below remain valid for diagnostics and recovery; do not
 run a manual capture concurrently with the scheduled services.

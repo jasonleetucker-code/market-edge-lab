@@ -976,8 +976,60 @@ def capture(store: SnapshotStore, *, clock: Clock | None = None, sleep: Sleep = 
 # --------------------------------------------------------------------------- status and history
 
 
-def status(store: SnapshotStore, *, now: datetime) -> dict[str, Any]:
-    """Read-only summary: targets by phase and state, the next due, recent misses."""
+SCHEDULE_POLICY = ("ADR0030_OPTION_A (owner-approved 2026-09-24): edgelab-observe.timer at :05/:20/:35/:50 "
+                   "America/New_York; edgelab-observe-close.timer at 04:57:45 UTC; both Persistent=false")
+OBSERVE_TIMERS = ("edgelab-observe.timer", "edgelab-observe-close.timer")
+CLOSE_TICK_UTC = dtime(4, 57, 45)  # edgelab-observe-close.timer; the unit test pins the two together
+
+
+def timer_states(run: Callable[[Sequence[str]], str] | None = None) -> dict[str, str]:
+    """`systemctl is-enabled` / `is-active` per observation timer, as reported; UNKNOWN when unavailable.
+
+    The approved policy is not evidence that the timers run: this is what systemd says now."""
+    def default(args: Sequence[str]) -> str:
+        import subprocess
+        out = subprocess.run(["systemctl", *args], capture_output=True, text=True, timeout=5)
+        return out.stdout.strip()
+
+    run = run or default
+    states: dict[str, str] = {}
+    for timer in OBSERVE_TIMERS:
+        try:
+            states[timer] = f"{run(['is-enabled', timer]) or 'unknown'}/{run(['is-active', timer]) or 'unknown'}"
+        except Exception as exc:  # no systemd here (tests, Windows, a sandbox): say so, never guess
+            states[timer] = f"UNKNOWN ({type(exc).__name__})"
+    return states
+
+
+def close_tick_alignment(targets: Sequence[Mapping[str, Any]], now: datetime) -> dict[str, Any]:
+    """Whether each open close target's due window contains the fixed close tick.
+
+    The close timer is pinned to 04:57:45 UTC for the observed 05:00:00Z KXHIGHNY close; the window
+    [close - 2 min 30 s, close - 10 s] contains the tick for closes from 04:57:55Z to 05:00:15Z. Before
+    August 2026 close_time was 23:59 ET wall time (03:59Z in summer, 04:59Z in winter). If the venue moves
+    it outside that range, every close target would silently become MISSED: this says so beforehand."""
+    aligned, misaligned = 0, []
+    for t in targets:
+        if t["phase"] != "close" or (t["state"] or "PLANNED") not in ("PLANNED", "FAILED"):
+            continue
+        due, deadline = _t(t["due_from_utc"]), _t(t["deadline_utc"])
+        if deadline is None or due is None or deadline < now:
+            continue
+        tick = datetime.combine(due.date(), CLOSE_TICK_UTC, tzinfo=timezone.utc)
+        if tick < due:
+            tick += timedelta(days=1)
+        if tick <= deadline:
+            aligned += 1
+        else:
+            misaligned.append({"target_id": t["target_id"], "close_time_utc": t["close_time_utc"],
+                               "due_from_utc": t["due_from_utc"], "deadline_utc": t["deadline_utc"]})
+    return {"close_tick_utc": CLOSE_TICK_UTC.isoformat(), "aligned": aligned, "misaligned": misaligned[:10],
+            "state": "MISALIGNED" if misaligned else ("ALIGNED" if aligned else "NO_OPEN_CLOSE_TARGET")}
+
+
+def status(store: SnapshotStore, *, now: datetime,
+           systemctl: Callable[[Sequence[str]], str] | None = None) -> dict[str, Any]:
+    """Read-only summary: targets by phase and state, the next due, recent misses, schedule health."""
     targets = store.price_targets()
     by_phase: dict[str, dict[str, int]] = {}
     upcoming, misses = [], []
@@ -997,7 +1049,8 @@ def status(store: SnapshotStore, *, now: datetime) -> dict[str, Any]:
         if r["close_label"]:
             labels[r["close_label"]] = labels.get(r["close_label"], 0) + 1
     return {"command": "observe status", "now_utc": _iso_exact(now), "policy_version": POLICY_VERSION,
-            "schedule": "ACTIVE_POLICY: ADR0030_OPTION_A (:05/:20/:35/:50 local due checks + dedicated close tick)",
+            "schedule": SCHEDULE_POLICY, "timers": timer_states(systemctl),
+            "close_tick_alignment": close_tick_alignment(targets, now),
             "targets": len(targets), "by_phase": dict(sorted(by_phase.items())), "close_labels": labels,
             "next_due": sorted(upcoming, key=lambda u: u["due_from_utc"])[:10],
             "recent_misses": sorted(misses, key=lambda m: m["at_utc"] or "")[-10:]}
@@ -1152,9 +1205,10 @@ def run_capture(db: Path, *, clock: Clock | None = None, sleep: Sleep = time.sle
         return 0, {"command": "observe capture", "state": "LOCK_BUSY", "detail": str(exc)}
 
 
-def run_status(db: Path, *, now: datetime | None = None, market_id: str | None = None) -> tuple[int, dict[str, Any]]:
+def run_status(db: Path, *, now: datetime | None = None, market_id: str | None = None,
+               systemctl: Callable[[Sequence[str]], str] | None = None) -> tuple[int, dict[str, Any]]:
     store = SnapshotStore.open_readonly(db)
-    report = status(store, now=now or _now())
+    report = status(store, now=now or _now(), systemctl=systemctl)
     if market_id:
         report["market_history"] = market_history(store, market_id)
     return 0, report

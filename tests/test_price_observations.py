@@ -264,8 +264,10 @@ def test_missed_targets_stay_visible(store, tmp_path, monkeypatch, model):
     t = _target(store, "post_decision_6h")
     assert t["state"] == "MISSED" and t["state_reason"].startswith("NOT_CAPTURED_BY_DEADLINE")
     assert "scheduled ADR0030_OPTION_A" in t["state_reason"]
-    summary = po.status(SnapshotStore.open_readonly(store.path), now=clock.now)
-    assert summary["schedule"].startswith("ACTIVE_POLICY: ADR0030_OPTION_A")
+    summary = po.status(SnapshotStore.open_readonly(store.path), now=clock.now, systemctl=lambda args: "enabled"
+                        if args[0] == "is-enabled" else "active")
+    assert summary["schedule"].startswith("ADR0030_OPTION_A (owner-approved 2026-09-24)")
+    assert summary["timers"] == {"edgelab-observe.timer": "enabled/active", "edgelab-observe-close.timer": "enabled/active"}
     assert summary["by_phase"]["post_decision_1h"] == {"MISSED": 6}
     assert summary["by_phase"]["close"] == {"PLANNED": 6}
     history = po.market_history(store, f"kalshi:{BRACKETS[0]}")
@@ -532,9 +534,11 @@ def test_cli_plan_and_status(store, tmp_path, monkeypatch, model, capsys):
                      "--lookback-days", "3650"]) == 0
     out = json.loads(capsys.readouterr().out)
     assert out["state"] == "OK" and out["ledger"] == "READ" and out["decisions"] == 6
+    monkeypatch.setattr(po, "timer_states", lambda run=None: {t: "UNKNOWN (test)" for t in po.OBSERVE_TIMERS})
     assert cli.main(["observe", "status", "--db", str(store.path), "--market", f"kalshi:{BRACKETS[0]}"]) == 0
     status = json.loads(capsys.readouterr().out)
-    assert status["schedule"].startswith("NOT_AUTHORIZED") and status["market_history"]
+    assert status["schedule"].startswith("ADR0030_OPTION_A") and status["market_history"]
+    assert set(status["timers"]) == set(po.OBSERVE_TIMERS) and "close_tick_alignment" in status
     assert cli.main(["observe", "plan", "--db", str(store.path), "--custom-venue", "kalshi"]) == 2
     assert cli.main(["observe", "status", "--db", str(tmp_path / "missing.sqlite3")]) == 1
     capsys.readouterr()
@@ -542,3 +546,36 @@ def test_cli_plan_and_status(store, tmp_path, monkeypatch, model, capsys):
     assert cli.main(["observe", "capture", "--db", str(store.path)]) == 0
     out = json.loads(capsys.readouterr().out)
     assert out["state"] == "NOTHING_DUE" and out["requests"] == 0 and len(out["missed"]) == 6  # the +1 h targets
+
+
+def test_timer_states_report_systemd_and_never_guess():
+    said = {("is-enabled", "edgelab-observe.timer"): "enabled", ("is-active", "edgelab-observe.timer"): "active",
+            ("is-enabled", "edgelab-observe-close.timer"): "disabled", ("is-active", "edgelab-observe-close.timer"): "inactive"}
+    assert po.timer_states(lambda args: said[tuple(args)]) == {
+        "edgelab-observe.timer": "enabled/active", "edgelab-observe-close.timer": "disabled/inactive"}
+
+    def no_systemd(args):
+        raise FileNotFoundError("systemctl")
+
+    assert all(v.startswith("UNKNOWN (FileNotFoundError)") for v in po.timer_states(no_systemd).values())
+
+
+def _close_target(close: datetime, state: str = "PLANNED") -> dict:
+    aim = close - po.CLOSE_AIM
+    due, deadline = po._window("close", aim, close)
+    return {"target_id": f"t-{close.isoformat()}", "phase": "close", "state": state, "close_time_utc": po._iso(close),
+            "due_from_utc": po._iso(due), "deadline_utc": po._iso(deadline)}
+
+
+def test_close_tick_alignment_flags_a_moved_close_before_targets_are_missed():
+    now = datetime(2026, 9, 24, 12, tzinfo=timezone.utc)
+    ok = po.close_tick_alignment([_close_target(datetime(2026, 9, 25, 5, tzinfo=timezone.utc))], now)
+    assert ok["state"] == "ALIGNED" and ok["aligned"] == 1 and not ok["misaligned"]
+    # 04:59Z (the old 23:59 ET convention in winter) still contains the 04:57:45Z tick; 03:59Z (the same
+    # convention in summer) and an hour-later close (06:00Z) do not.
+    assert po.close_tick_alignment([_close_target(datetime(2026, 11, 3, 4, 59, tzinfo=timezone.utc))], now)["state"] == "ALIGNED"
+    for close in (datetime(2026, 9, 26, 3, 59, tzinfo=timezone.utc), datetime(2026, 11, 3, 6, tzinfo=timezone.utc)):
+        bad = po.close_tick_alignment([_close_target(close)], now)
+        assert bad["state"] == "MISALIGNED" and bad["misaligned"][0]["close_time_utc"] == po._iso(close)
+    done = po.close_tick_alignment([_close_target(datetime(2026, 9, 25, 5, tzinfo=timezone.utc), "CAPTURED")], now)
+    assert done["state"] == "NO_OPEN_CLOSE_TARGET"
