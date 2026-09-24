@@ -591,6 +591,8 @@ def test_fabric_provider_meets_the_c1_contract(tmp_path):
     assert not disc.usable_for_decision and not cap.usable_for_decision
     assert disc.usable_for_research and not cap.usable_for_research  # a receipt of known freshness only
     assert cap.details["missed_scope"] == ps.MISSED_SCOPE_TARGETS and cap.missed_count == 0
+    fabric_mod = pytest.importorskip("edge_lab.freshness_fabric")
+    assert ps.MISSED_SCOPE_TARGETS == fabric_mod.MISSED_SCOPE_TARGETS  # one scope vocabulary
     if hasattr(fr, "usable_flags"):  # never looser than the fabric's rule
         assert (disc.usable_for_research, False) == (fr.usable_flags(disc.freshness, disc.health, disc.receipt_ts)[0],
                                                      disc.usable_for_decision)

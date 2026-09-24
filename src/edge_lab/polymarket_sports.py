@@ -1116,7 +1116,8 @@ def terminal_view(db_path: str | Path, *, now: datetime,
 
 
 MISSED_SCOPE_DISCOVERY = "none: discovery keeps no targets; a late or failed scan shows as STALE or FAILING"
-MISSED_SCOPE_TARGETS = "research book targets recorded MISSED by pm-sports capture (all stored targets)"
+# The fabric's own wording (freshness_fabric.MISSED_SCOPE_TARGETS; its tests accept only its scopes).
+MISSED_SCOPE_TARGETS = "targets recorded MISSED by the canonical scheduler (all stored targets)"
 
 
 def _discovery_health(scans: Sequence[Any]) -> str:
