@@ -41,8 +41,13 @@ def test_every_capability_is_stated_and_the_registry_is_immutable():
 def test_only_recorded_reads_are_live_data_verified():
     live = {(v.venue_id, c.value) for v in venues.VENUES.values() for c in Capability
             if v.stage(c) is ConnectivityStage.LIVE_DATA_VERIFIED}
-    assert {venue for venue, _ in live} == {"kalshi"}
+    assert {venue for venue, _ in live} == {"kalshi", "the_odds_api"}
     assert ("kalshi", "account_read") not in live and ("kalshi", "order_write") not in live
+    # The Odds API: only the two reads recorded on production (2026-09-24 activation), nothing else.
+    assert {c for venue, c in live if venue == "the_odds_api"} == {"catalog_read", "quote_read"}
+    for c in (Capability.CATALOG_READ, Capability.QUOTE_READ):
+        assert venues.THE_ODDS_API.capabilities[c].last_verified_utc
+    assert venues.THE_ODDS_API.stage(Capability.SETTLEMENT_READ) is ConnectivityStage.PLANNED  # no scores code
 
 
 def test_polymarket_us_and_international_are_distinct_and_international_is_unsupported():
