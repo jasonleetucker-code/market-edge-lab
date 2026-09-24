@@ -27,7 +27,7 @@ APP=/opt/market-edge-lab/app
 DATA=/var/lib/market-edge-lab
 STATUS=${EDGE_LAB_VERIFY_STATUS_DIR:-/var/lib/market-edge-lab-status}
 BACKUP_JOURNAL=${EDGE_LAB_VERIFY_BACKUP_JOURNAL:-}
-NAMES=(pfm decision recheck status backup shadow settlement)
+NAMES=(pfm decision recheck status backup shadow settlement observe observe-close)
 NR=NOT_READABLE_WITHOUT_PRIVILEGE
 SUMMARY=()
 
@@ -303,7 +303,7 @@ if [ "$SYSTEMD" = yes ]; then
   echo "== last result of each service"
   for n in "${NAMES[@]}"; do
     line=$(systemctl show "edgelab-$n.service" -p LoadState -p ActiveState -p Result -p ExecMainStatus -p ActiveEnterTimestamp --no-pager 2>/dev/null | tr '\n' ' ')
-    printf '    edgelab-%-11s %s\n' "$n" "${line:-UNKNOWN}"
+    printf '    edgelab-%-13s %s\n' "$n" "${line:-UNKNOWN}"
   done
   failed=$(systemctl list-units 'edgelab-*' --state=failed --no-legend --plain --no-pager 2>/dev/null | awk '{print $1}' | tr '\n' ' ')
   state UNIT_RESULTS "failed units: ${failed:-none} (per-service Result/ExecMainStatus above)"
@@ -324,6 +324,8 @@ timer_state() { # NAME unit: the timer's own state and its service's last result
 }
 timer_state SHADOW_TIMER edgelab-shadow
 timer_state SETTLEMENT_TIMER edgelab-settlement
+timer_state OBSERVE_TIMER edgelab-observe
+timer_state OBSERVE_CLOSE_TIMER edgelab-observe-close
 
 # --------------------------------------------------------------------------- status files
 if [ -r "$STATUS/latest.json" ]; then

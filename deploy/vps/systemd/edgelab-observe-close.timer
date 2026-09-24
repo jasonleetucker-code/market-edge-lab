@@ -1,0 +1,13 @@
+[Unit]
+Description=Market Edge Lab: KXHIGHNY close-window observation tick (ADR 0030)
+
+[Timer]
+# Current KXHIGHNY close reference is 05:00:00Z. The service starts at 04:57:45Z,
+# then capture waits to close - 30 s and performs the post-close confirmation.
+OnCalendar=*-*-* 04:57:45 UTC
+AccuracySec=1s
+Persistent=false
+Unit=edgelab-observe-close.service
+
+[Install]
+WantedBy=timers.target

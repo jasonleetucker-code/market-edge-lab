@@ -239,13 +239,17 @@ def test_failed_attempt_is_retried_then_missed_with_its_reason(store, tmp_path, 
               LISTING: MARKETS}
     _api(monkeypatch, clock, routes)
     code, report = po.capture(store, clock=clock, sleep=clock.sleep)
-    assert code == 1 and report["state"] == "PARTIAL" and report["by_status"] == {"CAPTURED": 10, "FAILED": 1}
+    # Retryable: the deadline is after the next scheduled tick, so the run records it and does not fail.
+    assert code == 0 and report["state"] == "PARTIAL_RETRYING" and report["by_status"] == {"CAPTURED": 10, "FAILED": 1}
+    assert report["failed_final"] == [] and len(report["failed_retrying"]) == 1
     t = _target(store, "post_decision_1h", bad)
     assert t["state"] == "FAILED" and t["state_reason"].startswith("BOOK_FAILED")
-    clock.now = CLOSED + timedelta(minutes=10)
+    clock.now = CLOSED + timedelta(minutes=20)
     api = _api(monkeypatch, clock, routes)
     code, report = po.capture(store, clock=clock, sleep=clock.sleep)
-    assert code == 1 and api.count("/orderbook") == 1  # only the failed target is retried
+    # The last chance before the deadline failed too: now the run fails (and would alert).
+    assert code == 1 and report["state"] == "PARTIAL" and api.count("/orderbook") == 1  # only the failed target
+    assert report["failed_retrying"] == [] and len(report["failed_final"]) == 1
     clock.now = CLOSED + timedelta(minutes=31)
     api = _api(monkeypatch, clock, routes)
     code, report = po.capture(store, clock=clock, sleep=clock.sleep)
@@ -263,8 +267,11 @@ def test_missed_targets_stay_visible(store, tmp_path, monkeypatch, model):
     assert len(report["missed"]) == 12
     t = _target(store, "post_decision_6h")
     assert t["state"] == "MISSED" and t["state_reason"].startswith("NOT_CAPTURED_BY_DEADLINE")
-    assert "no timer is authorized" in t["state_reason"]
-    summary = po.status(SnapshotStore.open_readonly(store.path), now=clock.now)
+    assert "(policy ADR0030_OPTION_A)" in t["state_reason"]
+    summary = po.status(SnapshotStore.open_readonly(store.path), now=clock.now, systemctl=lambda args: "enabled"
+                        if args[0] == "is-enabled" else "active")
+    assert summary["schedule"].startswith("ADR0030_OPTION_A (owner-approved 2026-09-24)")
+    assert summary["timers"] == {"edgelab-observe.timer": "enabled/active", "edgelab-observe-close.timer": "enabled/active"}
     assert summary["by_phase"]["post_decision_1h"] == {"MISSED": 6}
     assert summary["by_phase"]["close"] == {"PLANNED": 6}
     history = po.market_history(store, f"kalshi:{BRACKETS[0]}")
@@ -531,9 +538,11 @@ def test_cli_plan_and_status(store, tmp_path, monkeypatch, model, capsys):
                      "--lookback-days", "3650"]) == 0
     out = json.loads(capsys.readouterr().out)
     assert out["state"] == "OK" and out["ledger"] == "READ" and out["decisions"] == 6
+    monkeypatch.setattr(po, "timer_states", lambda run=None: {t: "UNKNOWN (test)" for t in po.OBSERVE_TIMERS})
     assert cli.main(["observe", "status", "--db", str(store.path), "--market", f"kalshi:{BRACKETS[0]}"]) == 0
     status = json.loads(capsys.readouterr().out)
-    assert status["schedule"].startswith("NOT_AUTHORIZED") and status["market_history"]
+    assert status["schedule"].startswith("ADR0030_OPTION_A") and status["market_history"]
+    assert set(status["timers"]) == set(po.OBSERVE_TIMERS) and "close_tick_alignment" in status
     assert cli.main(["observe", "plan", "--db", str(store.path), "--custom-venue", "kalshi"]) == 2
     assert cli.main(["observe", "status", "--db", str(tmp_path / "missing.sqlite3")]) == 1
     capsys.readouterr()
@@ -541,3 +550,69 @@ def test_cli_plan_and_status(store, tmp_path, monkeypatch, model, capsys):
     assert cli.main(["observe", "capture", "--db", str(store.path)]) == 0
     out = json.loads(capsys.readouterr().out)
     assert out["state"] == "NOTHING_DUE" and out["requests"] == 0 and len(out["missed"]) == 6  # the +1 h targets
+
+
+def test_timer_states_report_systemd_and_never_guess():
+    said = {("is-enabled", "edgelab-observe.timer"): "enabled", ("is-active", "edgelab-observe.timer"): "active",
+            ("is-enabled", "edgelab-observe-close.timer"): "disabled", ("is-active", "edgelab-observe-close.timer"): "inactive"}
+    assert po.timer_states(lambda args: said[tuple(args)]) == {
+        "edgelab-observe.timer": "enabled/active", "edgelab-observe-close.timer": "disabled/inactive"}
+
+    def no_systemd(args):
+        raise FileNotFoundError("systemctl")
+
+    assert all(v.startswith("UNKNOWN (FileNotFoundError)") for v in po.timer_states(no_systemd).values())
+
+
+def _close_target(close: datetime, state: str = "PLANNED") -> dict:
+    aim = close - po.CLOSE_AIM
+    due, deadline = po._window("close", aim, close)
+    return {"target_id": f"t-{close.isoformat()}", "phase": "close", "state": state, "close_time_utc": po._iso(close),
+            "due_from_utc": po._iso(due), "deadline_utc": po._iso(deadline)}
+
+
+def test_close_tick_alignment_flags_a_moved_close_before_targets_are_missed():
+    now = datetime(2026, 9, 24, 12, tzinfo=timezone.utc)
+    ok = po.close_tick_alignment([_close_target(datetime(2026, 9, 25, 5, tzinfo=timezone.utc))], now)
+    assert ok["state"] == "ALIGNED" and ok["aligned"] == 1 and not ok["misaligned"]
+    # 04:59Z (the old 23:59 ET convention in winter) still contains the 04:57:45Z tick; 03:59Z (the same
+    # convention in summer) and an hour-later close (06:00Z) do not.
+    assert po.close_tick_alignment([_close_target(datetime(2026, 11, 3, 4, 59, tzinfo=timezone.utc))], now)["state"] == "ALIGNED"
+    for close in (datetime(2026, 9, 26, 3, 59, tzinfo=timezone.utc), datetime(2026, 11, 3, 6, tzinfo=timezone.utc)):
+        bad = po.close_tick_alignment([_close_target(close)], now)
+        assert bad["state"] == "MISALIGNED" and bad["misaligned"][0]["close_time_utc"] == po._iso(close)
+    done = po.close_tick_alignment([_close_target(datetime(2026, 9, 25, 5, tzinfo=timezone.utc), "CAPTURED")], now)
+    assert done["state"] == "NO_OPEN_CLOSE_TARGET"
+
+
+def test_close_tick_alignment_allows_start_up_time_at_the_early_edge():
+    now = datetime(2026, 9, 24, 12, tzinfo=timezone.utc)
+    edge = lambda close: po.close_tick_alignment([_close_target(close)], now)["state"]
+    assert edge(datetime(2026, 9, 25, 4, 58, tzinfo=timezone.utc)) == "ALIGNED"
+    assert edge(datetime(2026, 9, 25, 4, 57, 57, tzinfo=timezone.utc)) == "MISALIGNED"  # the tick leaves < 5 s
+    assert edge(datetime(2026, 9, 25, 5, 0, 15, tzinfo=timezone.utc)) == "ALIGNED"
+    assert edge(datetime(2026, 9, 25, 5, 0, 16, tzinfo=timezone.utc)) == "MISALIGNED"
+
+
+def test_other_groups_never_run_into_a_pending_close(store, tmp_path, monkeypatch, model):
+    _planned(store, tmp_path, monkeypatch, model)
+    clock = Clock(datetime(2026, 9, 24, 4, 57, 40, tzinfo=UTC))  # pre_close and close are both due
+    monkeypatch.setattr(po, "CLOSE_GUARD", timedelta(minutes=2, seconds=30))  # no budget left before the close aim
+    api = _api(monkeypatch, clock, _closing_routes(clock))
+    code, report = po.capture(store, clock=clock, sleep=clock.sleep)
+    assert code == 0 and report["requests"] == len(api.calls) == 1 + 6 + 1  # the close group only
+    pre_close = {t["target_id"] for t in store.price_targets() if t["phase"] == "pre_close"}
+    assert pre_close and pre_close <= set(report["deferred"])
+    close_rows = [r for r in store.price_observations() if r["phase"] == "close"]
+    assert len(close_rows) == 12 and {r["close_label"] for r in close_rows} == {"CLOSE"}
+
+
+def test_a_failure_before_a_protected_window_is_final_not_retrying():
+    # 11:05 ET tick: the 11:20 tick is deferred by the 11:15 settlement window, so a target due until
+    # 11:30 has no retry left; the same target failing at 10:35 ET would still be retried at 10:50.
+    deadline = datetime(2026, 9, 24, 15, 30, tzinfo=UTC)  # 11:30 EDT
+    assert not po._retry_tick_before(deadline, datetime(2026, 9, 24, 15, 5, 40, tzinfo=UTC))
+    assert po._retry_tick_before(deadline, datetime(2026, 9, 24, 14, 35, 40, tzinfo=UTC))
+    # 17:35 ET: every tick until 18:50 is deferred by the capture window.
+    assert not po._retry_tick_before(datetime(2026, 9, 24, 22, 45, tzinfo=UTC), datetime(2026, 9, 24, 21, 35, 40, tzinfo=UTC))
+    assert po._retry_tick_before(datetime(2026, 9, 24, 23, 10, tzinfo=UTC), datetime(2026, 9, 24, 22, 50, 40, tzinfo=UTC))

@@ -147,7 +147,7 @@ enabled state. New units are installed but not enabled.
 ## 5. Activate (owner)
 
 ```bash
-sudo systemctl enable --now edgelab-shadow.timer edgelab-settlement.timer
+sudo systemctl enable --now edgelab-shadow.timer edgelab-settlement.timer edgelab-observe.timer edgelab-observe-close.timer
 systemctl list-timers 'edgelab-*'
 ```
 
@@ -279,12 +279,38 @@ sports model and no strategy.
 
   `odds_pilot.dashboard_status` reports `ACTIVE`, with `live_read_verified: true`.
 
-## 5c. Later/closing price observations: manual capture only (ADR 0030)
+## 5c. Later/closing price observations: scheduled Option A (ADR 0030)
 
-Authority: the 2026-09-24 next-build-chunk directive, Deliverable 4. **No timer is authorized.**
-Nothing here installs, enables or schedules anything. The proposed schedule, with its request and
-resource estimate, is the owner-decision blocker in ADR 0030. Until the owner decides, a target
-that no one captures becomes `MISSED`, and says so.
+Authority: the 2026-09-24 next-build-chunk directive built the manual mechanism; the owner explicitly
+approved scheduled capture at 11:24 ET on 2026-09-24 (durable record: issue #74). Option A is selected.
+The two units are installed with the rest and are enabled through §5 above:
+
+- `edgelab-observe.timer`: :05, :20, :35 and :50 each hour, local plan plus bounded capture only when due;
+- `edgelab-observe-close.timer`: 04:57:45 UTC, the dedicated KXHIGHNY close-window tick.
+
+Both are `Persistent=false`. A missed point-in-time tick is never fired late; targets become `MISSED`
+with a reason. Protected windows, the shared collector lock, request caps and the Kalshi pacer still govern.
+
+
+After enabling, verify both explicitly:
+
+```bash
+systemctl is-enabled edgelab-observe.timer edgelab-observe-close.timer
+systemctl list-timers edgelab-observe.timer edgelab-observe-close.timer
+bash /opt/market-edge-lab/app/deploy/vps/verify_production.sh | grep 'OBSERVE.*TIMER'
+sudo runuser -u edgelab -- /opt/market-edge-lab/venv/bin/python -m edge_lab.cli observe status --db /var/lib/market-edge-lab/db/edge_lab.sqlite3
+```
+
+In the status report, check:
+- `schedule`: the approved policy;
+- `timers`: systemd's own `enabled/active` for both timers;
+- `close_tick_alignment.state`: ALIGNED while the KXHIGHNY close is 05:00Z.
+
+MISALIGNED means the venue moved close_time, and the fixed 04:57:45Z tick will miss every close target
+(ADR 0030, close-time risk). Re-check after the 2026-11-01 DST change.
+
+Manual `observe plan/capture/status` commands below remain valid for diagnostics and recovery; do not
+run a manual capture concurrently with the scheduled services.
 
 - **Schema.** The first install of this code migrates the evidence store to **v6**. It adds two
   tables and nothing else; the "Rollback" section covers the stamp back to v5.
@@ -327,7 +353,7 @@ observation" (ADR 0030, close semantics). An idle `plan` or `capture` (nothing d
 
 | State | Evidence |
 |---|---|
-| Installed, timers enabled | `list-timers` shows 7 timers |
+| Installed, timers enabled | `list-timers` shows 9 core/observation timers; 10 when the separately activated Odds timer is enabled |
 | Fail-closed dry run | step 4.1 journal |
 | Real decision/recheck captured | `latest.json` has `last_closed_target_date` = D with VALID or an explicit INVALID reason |
 | Complete forecast evidence | no `pfm` reason in `last_closed_reasons` |
@@ -369,18 +395,21 @@ the ADR 0030 install makes it **v6**. The shadow ledger stays v1.
   down first, with the new code still installed, and then putting code and units back together.
 - **Rolling back one step, to the v5 code (just before ADR 0030).**
   - Step 3 is `mark-v5-for-rollback` only.
-  - ADR 0030 added no unit, so step 5 installs the previous units and removes nothing.
-  - Step 6 re-enables the timers that were enabled before, the odds timer included if it was.
-- **Rolling back to the v4 code (before ADR 0029).** Run both stamps in order, and remove the
-  odds units as written.
+  - Remove the four ADR 0030 observation unit files after restoring the v5 code; v5 does not know them.
+  - Keep the Odds API units; v5 includes ADR 0029. Re-enable whichever pre-ADR0030 timers were enabled.
+- **Rolling back to the v4 code (before ADR 0029).** Run both stamps in order, remove the
+  ADR 0030 observation units **and** the ADR 0029 odds units.
 - The old `backup.py` from before ADR 0016 also rejects the new backup unit's flags.
 
 Nothing is deleted. Run the steps as root, in order, outside 17:40-18:50 ET and not during a
 settlement run (about 11:15 and 16:15 ET):
 
-1. **Stop every timer, the odds pilot included, and check that nothing is running:**
+1. **Stop every timer, the odds pilot included, and check that nothing is running.** Name the
+   timers: `disable` does not reliably expand a glob for unit files, and step 5 deletes unit files, so
+   every timer must really be disabled first.
    ```bash
-   sudo systemctl disable --now 'edgelab-*.timer'
+   sudo systemctl disable --now edgelab-pfm.timer edgelab-decision.timer edgelab-recheck.timer edgelab-status.timer edgelab-backup.timer edgelab-shadow.timer edgelab-settlement.timer edgelab-observe.timer edgelab-observe-close.timer edgelab-odds.timer
+   systemctl is-enabled edgelab-pfm.timer edgelab-decision.timer edgelab-recheck.timer edgelab-status.timer edgelab-backup.timer edgelab-shadow.timer edgelab-settlement.timer edgelab-observe.timer edgelab-observe-close.timer edgelab-odds.timer   # expect disabled (or not-found) for every one
    systemctl list-units 'edgelab-*' --state=running --no-legend   # expect no capture job
    ```
 2. **Make a verified backup (still the new code):**
@@ -400,19 +429,26 @@ settlement run (about 11:15 and 16:15 ET):
    sudo mv /opt/market-edge-lab/app /opt/market-edge-lab/app.bad
    sudo mv /opt/market-edge-lab/app.prev /opt/market-edge-lab/app
    ```
-5. **Restore the previous units. Remove only the odds pilot's units**, which the previous code
-   cannot run:
+5. **Restore the previous units and remove units newer than the target code.** For a v5
+   rollback, remove only the ADR 0030 observation units:
    ```bash
    sudo install -o root -g root -m 0644 /opt/market-edge-lab/app/deploy/vps/systemd/edgelab-* /opt/market-edge-lab/app/deploy/vps/systemd/edgelab.slice /etc/systemd/system/
+   sudo rm -f /etc/systemd/system/edgelab-observe.service /etc/systemd/system/edgelab-observe.timer \
+     /etc/systemd/system/edgelab-observe-close.service /etc/systemd/system/edgelab-observe-close.timer
+   sudo systemctl daemon-reload
+   ```
+   **Only when the rollback target is v4** (before ADR 0029), additionally remove the Odds units:
+   ```bash
    sudo rm -f /etc/systemd/system/edgelab-odds.service /etc/systemd/system/edgelab-odds.timer
    sudo systemctl daemon-reload
    ```
    Alternatively, `sudo bash install.sh --sha <previous sha> --bundle <bundle>` from the previous
-   commit redoes steps 4-5 and the env file. It installs units only, so still remove the two
-   `edgelab-odds.*` files and run `daemon-reload`.
-6. **Re-enable the seven core timers and restart the dashboard:**
+   commit redoes steps 4-5 and the env file. Still remove any unit files newer than the target
+   code, then run `daemon-reload`.
+6. **Re-enable the timers supported by the rollback target and restart the dashboard:**
    ```bash
    sudo systemctl enable --now edgelab-pfm.timer edgelab-decision.timer edgelab-recheck.timer edgelab-status.timer edgelab-backup.timer edgelab-shadow.timer edgelab-settlement.timer
+   sudo systemctl enable --now edgelab-odds.timer   # v5 target only, and only if it was enabled before
    sudo systemctl restart edgelab-dashboard.service
    ```
 7. **Verify on the old code:**
@@ -422,11 +458,12 @@ settlement run (about 11:15 and 16:15 ET):
    systemctl is-active edgelab-dashboard.service
    ```
    Expect `VERIFIED_BACKUP_AND_RESTORE` for the evidence DB, with `schema_version` 5 (or 4 after
-   both stamps). After a v4 rollback, expect seven timers and no `edgelab-odds`.
+   both stamps). A v5 rollback has no `edgelab-observe*` units and may keep the Odds timer if it
+   was active before ADR 0030. A v4 rollback has seven core timers and neither observation nor Odds units.
    `tests/test_storage_rollback.py` shows the real v5 code (`cbfbddf`) and v4 code (`dd3ab4d`)
    opening and verifying a stamped store.
 
 Re-installing the newer code later stamps it again: the migration is idempotent, and every row
 written meanwhile is kept. The shadow
 ledger's schema did not change (v1), so the rolled-back code reads it. To stop all collection
-and keep the data: `sudo systemctl disable --now 'edgelab-*.timer'`.
+and keep the data: `sudo systemctl disable --now edgelab-pfm.timer edgelab-decision.timer edgelab-recheck.timer edgelab-status.timer edgelab-backup.timer edgelab-shadow.timer edgelab-settlement.timer edgelab-observe.timer edgelab-observe-close.timer edgelab-odds.timer` (named, not a glob).

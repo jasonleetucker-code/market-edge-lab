@@ -44,7 +44,7 @@ STATUS=/var/lib/market-edge-lab-status
 ETC=/etc/market-edge-lab
 ENV_FILE=$ETC/env
 SECRETS_FILE=$ETC/secrets.env
-UNITS=(edgelab-pfm edgelab-decision edgelab-recheck edgelab-status edgelab-backup edgelab-shadow edgelab-settlement edgelab-odds)
+UNITS=(edgelab-pfm edgelab-decision edgelab-recheck edgelab-status edgelab-backup edgelab-shadow edgelab-settlement edgelab-observe edgelab-observe-close edgelab-odds)
 # Installed and verified with the rest, but activated separately (ADR 0029): the Odds API timer
 # is enabled only after the owner installs the key and `odds plan` / `odds smoke` pass.
 SEPARATELY_ACTIVATED=edgelab-odds
@@ -174,5 +174,6 @@ Next (owner):
        systemctl list-timers 'edgelab-*'
      $SEPARATELY_ACTIVATED.timer is installed but stays disabled until the Odds API activation
      in docs/deploy/DAILY_SHADOW_ACTIVATION.md section 5b (key, odds plan, one odds smoke).
-  Stop everything at any time: sudo systemctl disable --now 'edgelab-*.timer'
+  Stop everything at any time (named timers; disable does not reliably expand a glob):
+       sudo systemctl disable --now ${CORE_TIMERS[*]/%/.timer} $SEPARATELY_ACTIVATED.timer
 EOF

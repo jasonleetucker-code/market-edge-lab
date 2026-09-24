@@ -84,6 +84,33 @@ def test_new_timers_avoid_the_capture_windows_and_use_new_york_time():
     assert _minutes_ny(_parse("edgelab-shadow.timer")[("Timer", "OnCalendar")][0]) > 18 * 60 + 35
 
 
+def test_observation_timers_match_adr0030_option_a_and_are_nonpersistent():
+    observe = _parse("edgelab-observe.timer")
+    close = _parse("edgelab-observe-close.timer")
+    assert observe[("Timer", "OnCalendar")] == ["*-*-* *:05/15:00 America/New_York"]
+    assert observe[("Timer", "Persistent")] == ["false"]
+    assert observe[("Timer", "Unit")] == ["edgelab-observe.service"]
+    assert close[("Timer", "OnCalendar")] == ["*-*-* 04:57:45 UTC"]
+    assert close[("Timer", "AccuracySec")] == ["1s"]
+    assert close[("Timer", "Persistent")] == ["false"]
+    assert close[("Timer", "Unit")] == ["edgelab-observe-close.service"]
+
+    service = _parse("edgelab-observe.service")
+    starts = service[("Service", "ExecStart")]
+    assert len(starts) == 2
+    assert "observe plan" in starts[0] and "--ledger /var/lib/market-edge-lab/ledger/shadow_ledger.sqlite3" in starts[0]
+    assert "observe capture" in starts[1]
+    assert service[("Service", "TimeoutStartSec")] == ["6min"]
+    # The code's view of the schedule is pinned to the unit files (close-tick alignment, retry horizon).
+    from edge_lab import price_observations as po
+    assert close[("Timer", "OnCalendar")] == [f"*-*-* {po.CLOSE_TICK_UTC.isoformat()} UTC"]
+    assert "/15:00 " in observe[("Timer", "OnCalendar")][0] and po.SCHEDULED_TICK_INTERVAL.total_seconds() == 15 * 60
+    close_service = _parse("edgelab-observe-close.service")
+    assert close_service[("Service", "ExecStart")] == [
+        "/opt/market-edge-lab/venv/bin/python -m edge_lab.cli observe capture --db /var/lib/market-edge-lab/db/edge_lab.sqlite3"
+    ]
+
+
 def test_shadow_bookkeeping_has_no_network_and_settlement_refresh_is_bounded():
     shadow = _parse("edgelab-shadow.service")
     assert shadow[("Service", "RestrictAddressFamilies")] == ["AF_UNIX"]
@@ -110,6 +137,17 @@ def test_install_script_knows_every_timer_and_keeps_the_ledger_private():
     assert "edgelab.slice" in INSTALL
 
 
+def test_adr0030_rollback_removes_observation_units_without_dropping_odds_on_v5():
+    runbook = (ROOT / "docs/deploy/DAILY_SHADOW_ACTIVATION.md").read_text()
+    readme = (ROOT / "deploy/vps/README.md").read_text()
+    for text in (runbook, readme):
+        assert "edgelab-observe.service" in text and "edgelab-observe-close.timer" in text
+        assert "v4" in text and "edgelab-odds.service" in text
+    v5 = runbook[runbook.index("For a v5"):runbook.index("Only when the rollback target is v4")]
+    assert "edgelab-observe.service" in v5
+    assert "edgelab-odds.service" not in v5
+
+
 def test_readme_install_window_matches_the_capture_window():
     text = (ROOT / "deploy/vps/README.md").read_text()
     ends = re.findall(r"17:40 and (?:\*\*)?18:(\d\d)", text)
@@ -126,15 +164,16 @@ def test_readme_install_window_matches_the_capture_window():
 VERIFY = ROOT / "deploy" / "vps" / "verify_production.sh"
 VERIFY_STATES = (
     "NY_TIME", "IN_CAPTURE_WINDOW", "RUNNING_UNITS", "DEPLOYED_SHA", "TIMERS", "UNIT_RESULTS", "SHADOW_TIMER",
-    "SETTLEMENT_TIMER", "LATEST_JSON", "LATEST_JSON_AGE", "COLLECTOR_HEALTH", "VALID_DAY_OBSERVED", "SHADOW_DAILY",
+    "SETTLEMENT_TIMER", "OBSERVE_TIMER", "OBSERVE_CLOSE_TIMER", "LATEST_JSON", "LATEST_JSON_AGE", "COLLECTOR_HEALTH", "VALID_DAY_OBSERVED", "SHADOW_DAILY",
     "LAST_FAILURE", "COLLECTOR_INSTALLED", "TIMERS_ENABLED", "PFM_CAPTURE_OBSERVED", "DECISION_CAPTURE_OBSERVED",
     "RECHECK_CAPTURE_OBSERVED", "DB_SIZES", "BACKUPS", "BACKUP_REPORTS_8D", "BACKUP_EVIDENCE_DB",
     "BACKUP_SHADOW_LEDGER", "RESTORE_EVIDENCE_DB", "RESTORE_SHADOW_LEDGER", "JOURNAL_WARNINGS_24H", "OOM_30D",
     "MEMORY", "DISK", "BRISKET_UNITS", "API_HEALTH", "CHASE_UPSIDE_HEALTH",
 )
 # The directive's post-deployment states (integration directive section 6), one line each.
-DIRECTIVE_STATES = ("DEPLOYED_SHA", "COLLECTOR_HEALTH", "SHADOW_TIMER", "SETTLEMENT_TIMER", "BACKUP_EVIDENCE_DB",
-                    "BACKUP_SHADOW_LEDGER", "RESTORE_EVIDENCE_DB", "RESTORE_SHADOW_LEDGER", "CHASE_UPSIDE_HEALTH")
+DIRECTIVE_STATES = ("DEPLOYED_SHA", "COLLECTOR_HEALTH", "SHADOW_TIMER", "SETTLEMENT_TIMER", "OBSERVE_TIMER",
+                    "OBSERVE_CLOSE_TIMER", "BACKUP_EVIDENCE_DB", "BACKUP_SHADOW_LEDGER", "RESTORE_EVIDENCE_DB",
+                    "RESTORE_SHADOW_LEDGER", "CHASE_UPSIDE_HEALTH")
 SYSTEMCTL_VERBS = {"show", "is-enabled", "is-active", "list-units", "list-timers", "cat"}
 CURL_LINE = "resp=$(curl -q --proto =https -sS -m 5 -w '\\n%{http_code}' https://chaseupside.com/api/health 2>&1)"
 COMMAND_START = r"(^|[|;&(`]|\bthen\b|\bdo\b|\belse\b)\s*"
@@ -227,8 +266,8 @@ def test_verify_production_reports_every_state_separately():
         assert re.search(rf"\b{name}\b", text), f"no STATE line for {name}"
     assert "STATE %s: %s" in text and "SUMMARY" in text and "One state does not imply the next" in text
     assert "NOT_READABLE_WITHOUT_PRIVILEGE" in text
-    for timer in ("pfm", "decision", "recheck", "status", "backup", "shadow", "settlement"):
-        assert re.search(rf"NAMES=\([^)]*\b{timer}\b", text)
+    for timer in ("pfm", "decision", "recheck", "status", "backup", "shadow", "settlement", "observe", "observe-close"):
+        assert re.search(rf"NAMES=\([^)]*(?<![\w-]){timer}(?![\w-])", text)
     assert "set -u" in text
 
 
@@ -989,3 +1028,17 @@ def test_the_webhook_fires_only_for_production_failures():
     # The origin is never decided from the clock: `date` only stamps the record.
     assert [line for line in text.splitlines() if "date " in line and not line.lstrip().startswith("#")] == [
         'now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"']
+
+
+def test_stop_and_rollback_name_every_timer_instead_of_a_glob():
+    """`systemctl disable` does not reliably expand a glob for unit files, and the rollback deletes unit
+    files after step 1: every stop command must name each installed timer."""
+    timers = sorted(p.name for p in UNITS.glob("*.timer"))
+    for path in (ROOT / "docs/deploy/DAILY_SHADOW_ACTIVATION.md", ROOT / "deploy/vps/README.md"):
+        lines = [line for line in path.read_text().splitlines() if "disable --now" in line]
+        assert lines, path
+        for line in lines:
+            assert "*" not in line, (path, line)
+            if "edgelab-pfm.timer" in line:  # a stop-everything line, not a single-timer example
+                assert all(t in line for t in timers), (path, line)
+    assert "'edgelab-*.timer'" not in INSTALL

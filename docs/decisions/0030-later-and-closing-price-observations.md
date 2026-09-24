@@ -1,10 +1,11 @@
-# ADR 0030: Later and closing price observations (manual capture; the schedule is an owner decision)
+# ADR 0030: Later and closing price observations (scheduled Option A)
 
-**Status:** Accepted 2026-09-24. Owner authority: `docs/owner/2026-09-24-next-build-chunk-directive.md`,
-Deliverable 4 (later/closing price capture) and Deliverable 7 (issue #50 P0 storage fixes), recorded in
-`docs/EXECUTION_PLAN.md` (2026-09-24 morning entry). **A new unattended timer is not authorized.** This ADR
-builds the schemas, CLI, capture logic, tests, runbook and manual capture, and states the exact proposed
-schedule below as the owner-decision blocker.
+**Status:** Accepted 2026-09-24; schedule approved 2026-09-24 11:24 ET. Original authority:
+`docs/owner/2026-09-24-next-build-chunk-directive.md`, Deliverable 4 (later/closing price capture)
+and Deliverable 7 (issue #50 P0 storage fixes). That directive authorized manual capture only.
+The owner subsequently approved scheduled capture in chat and issue #74 records the durable decision.
+**Option A below is selected:** two bounded, non-persistent timers in the existing `edgelab.slice`.
+This remains read-only evidence collection; it authorizes no execution, credentials or paid service.
 
 ## Problem
 
@@ -140,7 +141,7 @@ Polymarket US books go through `save_snapshot` (source `polymarket_us`, kind `bo
   - Persistent targets.
   - `decision`/`recheck` observations backfilled from the forward captures' own snapshots.
   - Every overdue open target marked `MISSED` with its reason, for example
-    `NOT_CAPTURED_BY_DEADLINE ... (manual capture only; no timer is authorized)` or
+    `NOT_CAPTURED_BY_DEADLINE ... under scheduled ADR0030_OPTION_A` or
     `PLANNED_AFTER_DEADLINE`.
 - **No network.** Idempotent. It takes the same collector lock, so it also refuses to run inside a
   protected window (below).
@@ -231,13 +232,14 @@ The #50 audit (Lane D) reclassified "venue settlement for rejected-only events" 
 settled markets remain retrievable, and the gate3 bulk fixture proves it. So the settlement refresh
 selection is **not** changed here.
 
-## The owner-decision blocker: the proposed schedule
+## Scheduled capture policy — owner approved
 
-Nothing below is enabled. No unit or timer file is added (`deploy/vps/systemd` is unchanged). Until the
-owner approves a schedule, captures run only by hand (runbook §5c), and every target no one captured
-becomes `MISSED` with the reason "manual capture only; no timer is authorized".
+The owner approved scheduled later/closing-price capture on 2026-09-24 at 11:24 ET. The implementation
+uses **Option A**, because it is the general, venue-extensible schedule already reviewed here. Both timers
+are `Persistent=false`: a missed point-in-time tick is never replayed late, and expired targets remain
+honest `MISSED` evidence.
 
-**Proposal (option A, recommended): two timers, both `Persistent=false`, in the `edgelab.slice`.**
+**Selected option A: two timers in the `edgelab.slice`.**
 
 1. `edgelab-observe.timer`: `OnCalendar=*-*-* *:05/15:00 America/New_York`, i.e. :05, :20, :35 and
    :50 each hour, running `edge-lab observe plan --ledger ... && edge-lab observe capture`.
@@ -284,9 +286,37 @@ listing 17 KB, book about 1.5 KB):**
 - **Units.** The proposed units would copy the existing caps: `MemoryMax=256M`, `CPUQuota=25%`,
   `TasksMax=32`, `Nice=5`, `TimeoutStartSec=6min`.
 
-**What the owner decides:** A, B, or neither; and whether the close timer's fixed UTC time is
-acceptable, or should wait until a winter (EST) close_time is observed. The runbook §5c has the exact
-manual commands for now.
+**Owner decision recorded 2026-09-24 11:24 ET:** Option A is approved now, including the fixed
+04:57:45 UTC close tick for the currently observed KXHIGHNY 05:00Z close reference.
+
+**Close-time risk (independent review of PR #76).** The close window `[close - 2 min 30 s, close - 10 s]`
+fits the 04:57:45Z tick, plus 5 s for start-up, only for closes from 04:58:00Z to 05:00:15Z. Kalshi's KXHIGHNY close_time
+was 23:59 ET wall time until August 2026 (03:59Z in summer, 04:59Z in winter; gate3 bulk fixture) and
+has been 05:00:00Z since. No winter (EST) close under the new convention has been observed yet.
+- If the venue moves close_time outside that range, the close-proof checks still prevent a false
+  CLOSE label, but the fixed tick misses the window and **every close target becomes MISSED**.
+  Nothing alerts on MISSED.
+- `observe status` therefore reports `close_tick_alignment` (ALIGNED / MISALIGNED /
+  NO_OPEN_CLOSE_TARGET) for every open close target, and `timers` (what systemd says, never
+  inferred).
+- **Re-check after the 2026-11-01 DST change.** Look at the first EST close_time and the alignment
+  state. If misaligned, move the close timer by a reviewed change; never relabel a late read.
+
+**Failure and alert semantics under the schedule (independent review of PR #76).**
+- A FAILED observation row is always stored as evidence.
+- A run exits non-zero, which is an `OnFailure` production alert, only when a FAILED target cannot
+  be retried by a later scheduled tick: a close target, or one with no tick left before its deadline
+  that a protected window would not defer (`SCHEDULED_TICK_INTERVAL`, pinned to the timer; e.g. a
+  failure on the 11:05 or 17:35 ET tick is final because the following ticks are deferred). Retryable failures are reported as
+  `failed_retrying` (state `PARTIAL_RETRYING`, exit 0). This stops a one-off 5xx from alerting and from
+  overwriting the single-slot `last_failure.json` 96 times a day. A failure that persists to the last
+  chance still alerts once.
+- **Close ordering.** Other groups run first but share a request deadline capped at the earliest
+  pending close aim − 20 s (`CLOSE_GUARD`). A group without that budget is deferred, not started, so a
+  slow pre-close retry cannot push the close book past close − 10 s. A group whose own deadline has
+  passed is deferred and recorded MISSED by the next run, never fetched late.
+
+The runbook §5c contains activation, verification and manual fallback commands.
 
 ## Tradeoffs
 
@@ -294,8 +324,8 @@ manual commands for now.
   the public Kalshi book allows, and the tolerance is stored in every proof.
 - **Coarse EXP-001 lifecycle.** For EXP-001, `settlement_preceding` records only that the market is
   closed and its rules hash. The book is not requested because the market is not open.
-- **Manual capture misses.** Every uncaptured target becomes `MISSED` with its reason. That is
-  intended: the gap stays visible.
+- **Missed scheduled captures.** Every uncaptured target still becomes `MISSED` with its reason.
+  Scheduling reduces preventable gaps but never fabricates a late observation.
 - **The shared collector lock.** It serializes observations with the forward captures. Refusing the
   protected windows keeps an observation from ever making a production run `LOCK_BUSY`.
 - **Health view.** The observation books use the same snapshot kinds as the forward captures, so
@@ -304,7 +334,8 @@ manual commands for now.
 
 ## Reconsider when
 
-- the owner approves a schedule (add the units then, with `tests/test_deploy_units.py` coverage);
+- production evidence shows the selected cadence is too sparse, too noisy or materially wasteful;
+- the generalized #74 Freshness Orchestrator is ready to absorb this policy without changing its evidence contract;
 - a venue publishes a book sequence number or update time (the close proof can then be exact);
 - a market family with a different close time or no scheduled close is decided on;
 - observation volume grows past a few hundred GETs a day, or storage past about 1 GB/year.

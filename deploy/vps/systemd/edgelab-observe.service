@@ -1,0 +1,38 @@
+[Unit]
+Description=Market Edge Lab: plan and capture due later-price observations (read-only)
+Documentation=file:///opt/market-edge-lab/app/docs/decisions/0030-later-and-closing-price-observations.md
+After=network-online.target
+Wants=network-online.target
+OnFailure=edgelab-alert@%n.service
+
+[Service]
+Type=oneshot
+Slice=edgelab.slice
+User=edgelab
+Group=edgelab
+EnvironmentFile=/etc/market-edge-lab/env
+WorkingDirectory=/var/lib/market-edge-lab
+# Planning is local/idempotent. Capture performs bounded public GETs only when a target is due.
+ExecStart=/opt/market-edge-lab/venv/bin/python -m edge_lab.cli observe plan --db /var/lib/market-edge-lab/db/edge_lab.sqlite3 --ledger /var/lib/market-edge-lab/ledger/shadow_ledger.sqlite3
+ExecStart=/opt/market-edge-lab/venv/bin/python -m edge_lab.cli observe capture --db /var/lib/market-edge-lab/db/edge_lab.sqlite3
+TimeoutStartSec=6min
+UMask=0077
+MemoryHigh=192M
+MemoryMax=256M
+CPUQuota=25%
+TasksMax=32
+Nice=5
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+ReadWritePaths=/var/lib/market-edge-lab /var/lib/market-edge-lab-status
