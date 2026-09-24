@@ -1,0 +1,15 @@
+[Unit]
+Description=Market Edge Lab: The Odds API NFL pilot tick every 15 minutes (game-relative captures, ADR 0029)
+
+[Timer]
+# A tick is a local check. It makes a paid odds call only when a planned capture slot is due
+# and the monthly credit proof admits it; free discovery at most every 6 h. Ticks inside the
+# 17:40-18:35 America/New_York capture window are deferred in code (no network, no writes).
+OnCalendar=*-*-* *:00/15:00
+AccuracySec=30s
+# A missed tick is not replayed late: the next tick re-plans and marks expired targets MISSED.
+Persistent=false
+Unit=edgelab-odds.service
+
+[Install]
+WantedBy=timers.target

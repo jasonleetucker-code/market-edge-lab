@@ -17,8 +17,10 @@ module does and does not do:
   ambiguous failure keeps the reservation and makes it QUOTA_UNKNOWN. It never guesses when
   the provider's month resets: counters reset only when the provider's own `used` header
   goes down.
-- **No scheduled pulls.** Nothing here runs by itself. A live pull needs the owner's key and
-  an approved activation plan (docs/EXECUTION_PLAN.md).
+- **Scheduled pulls only through the pilot runner.** Nothing here runs by itself. The one
+  authorized schedule is the game-relative NFL pilot (`edge_lab.odds_pilot`, ADR 0029): the
+  quota-free events endpoint discovers the schedule (`fetch_events`), and paid odds calls are
+  made only for planned capture slots that the monthly credit proof admits.
 
 Cost rule, from the v4 guide (https://the-odds-api.com/liveapi/guides/v4/, read 2026-09-23):
 `cost = markets x regions`; with `bookmakers`, every group of 10 bookmakers counts as one
@@ -47,6 +49,7 @@ from urllib.request import HTTPRedirectHandler, Request, build_opener
 from . import http
 from .forward import LockBusy, exclusive_lock
 from .freshness import Freshness, assess, parse_utc
+from .odds_schedule import ScheduledEvent
 from .opportunity import Event, Market, MarketStatus, Payoff
 from .redaction import redact_text, redact_url
 from .sources import CredentialKind, get_source
@@ -145,13 +148,43 @@ def estimate_cost(markets: Sequence[str], regions: Sequence[str] | None = None,
     return len(mk) * (len(rg) if rg else math.ceil(len(bk) / 10))
 
 
+def _iso_z(instant: datetime) -> str:
+    if not isinstance(instant, datetime) or instant.tzinfo is None:
+        raise ValueError("commence bounds must be timezone-aware datetimes")
+    return instant.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _scope_params(commence_from: datetime | None, commence_to: datetime | None,
+                  event_ids: Sequence[str] | None) -> list[tuple[str, str]]:
+    """Documented filters of the odds and events endpoints (v4 guide, re-read 2026-09-24):
+    `commenceTimeFrom` / `commenceTimeTo` (ISO 8601, inclusive) and `eventIds`. They narrow the
+    response; they do not change the odds endpoint's cost (markets x regions)."""
+    params: list[tuple[str, str]] = []
+    if commence_from is not None:
+        params.append(("commenceTimeFrom", _iso_z(commence_from)))
+    if commence_to is not None:
+        params.append(("commenceTimeTo", _iso_z(commence_to)))
+    if commence_from is not None and commence_to is not None and commence_to < commence_from:
+        raise ValueError("commence_to is before commence_from")
+    ids = _validate_list("event_ids", event_ids)
+    if ids:
+        params.append(("eventIds", ",".join(ids)))
+    return params
+
+
+def _validate_sport(sport: str) -> None:
+    if not isinstance(sport, str) or not _SLUG.match(sport):
+        raise ValueError(f"invalid sport key {sport!r}")
+
+
 def build_request(sport: str, markets: Sequence[str], *, key: str, regions: Sequence[str] | None = None,
-                  bookmakers: Sequence[str] | None = None, odds_format: str = "decimal") -> tuple[str, str]:
+                  bookmakers: Sequence[str] | None = None, odds_format: str = "decimal",
+                  commence_from: datetime | None = None, commence_to: datetime | None = None,
+                  event_ids: Sequence[str] | None = None) -> tuple[str, str]:
     """(url with the key, redacted url) for GET /v4/sports/{sport}/odds.
 
     Paid-only bookmakers are refused rather than silently requested."""
-    if not isinstance(sport, str) or not _SLUG.match(sport):
-        raise ValueError(f"invalid sport key {sport!r}")
+    _validate_sport(sport)
     if odds_format not in ("decimal", "american"):
         raise ValueError("odds_format must be 'decimal' or 'american'")
     if not key:
@@ -168,7 +201,20 @@ def build_request(sport: str, markets: Sequence[str], *, key: str, regions: Sequ
         params.append(("regions", ",".join(_validate_list("regions", regions))))
     params += [("markets", ",".join(_validate_list("markets", markets))), ("oddsFormat", odds_format),
                ("dateFormat", "iso")]
-    url = f"{BASE_URL}/v4/sports/{quote(sport)}/odds/?{urlencode(params, safe=',')}"
+    params += _scope_params(commence_from, commence_to, event_ids)
+    url = f"{BASE_URL}/v4/sports/{quote(sport)}/odds/?{urlencode(params, safe=',:')}"
+    return url, redact_url(url)
+
+
+def build_events_request(sport: str, *, key: str, commence_from: datetime | None = None,
+                         commence_to: datetime | None = None,
+                         event_ids: Sequence[str] | None = None) -> tuple[str, str]:
+    """GET /v4/sports/{sport}/events: documented as free of quota (no odds in the response)."""
+    _validate_sport(sport)
+    if not key:
+        raise ValueError("no key: SETUP_NEEDED")
+    params = [(KEY_PARAM, key), ("dateFormat", "iso")] + _scope_params(commence_from, commence_to, event_ids)
+    url = f"{BASE_URL}/v4/sports/{quote(sport)}/events/?{urlencode(params, safe=',:')}"
     return url, redact_url(url)
 
 
@@ -499,10 +545,70 @@ def reconcile_quota(ledger: QuotaLedger, *, opener: http.Opener | None = None,
                      redacted, payload=_decode(result, key), fetch=result, quota_after=state)
 
 
+def fetch_events(sport: str, *, ledger: QuotaLedger | None = None, opener: http.Opener | None = None,
+                 pacer: http.Pacer | None = None, commence_from: datetime | None = None,
+                 commence_to: datetime | None = None, event_ids: Sequence[str] | None = None,
+                 environ: Mapping[str, str] | None = None) -> OddsFetch:
+    """Discover a sport's schedule through the quota-free events endpoint.
+
+    No credits are reserved (the guide: the endpoint "does not count against the usage
+    quota"). Quota headers, when present and well formed, reconcile the ledger. Missing or
+    malformed headers leave the ledger untouched rather than marking it unknown: this call is
+    not a quota reading by design. Same key handling as `fetch_odds`: one GET, no retries, no
+    redirects, redacted URLs and errors. A failure raises OddsApiError."""
+    key = load_key(environ)
+    if key is None:
+        return OddsFetch(QuotaState.SETUP_NEEDED, _setup_detail(), None)
+    url, redacted = build_events_request(sport, key=key, commence_from=commence_from, commence_to=commence_to,
+                                         event_ids=event_ids)
+    result = _get(url, key, opener=opener, pacer=pacer)
+    payload = _decode(result, key)
+    after = None
+    if ledger is not None and parse_quota_headers(result.response_headers) is not None:
+        after = ledger.reconcile(result.response_headers)
+    return OddsFetch(QuotaState.READY, "events (quota-free)", redacted, payload=payload, fetch=result,
+                     quota_after=after)
+
+
+def parse_events(payload: Any, *, sport: str) -> tuple[tuple[ScheduledEvent, ...], tuple[str, ...]]:
+    """Scheduled events from an events payload. Malformed entries are skipped and reported,
+    never guessed: an event without a valid id or a zoned commence time cannot be planned."""
+    if not isinstance(payload, list):
+        return (), ("events payload is not a list",)
+    events: list[ScheduledEvent] = []
+    problems: list[str] = []
+    seen: set[str] = set()
+    for raw in payload:
+        if not isinstance(raw, Mapping):
+            problems.append("event entry is not an object")
+            continue
+        native = raw.get("id")
+        if not isinstance(native, str) or not _SLUG.match(native):
+            problems.append(f"event with invalid id {native!r} skipped")
+            continue
+        if raw.get("sport_key") not in (None, sport):
+            problems.append(f"{native}: sport_key {raw.get('sport_key')!r} is not {sport!r}; skipped")
+            continue
+        commence = parse_utc(raw.get("commence_time"))
+        if commence is None:
+            problems.append(f"{native}: commence_time {raw.get('commence_time')!r} is not a zoned timestamp")
+            continue
+        if native in seen:
+            problems.append(f"{native}: duplicate event skipped")
+            continue
+        seen.add(native)
+        home, away = raw.get("home_team"), raw.get("away_team")
+        events.append(ScheduledEvent(native, sport, commence.astimezone(timezone.utc),
+                                     home if isinstance(home, str) else None,
+                                     away if isinstance(away, str) else None))
+    return tuple(sorted(events, key=lambda e: (e.commence_utc, e.event_id))), tuple(problems)
+
+
 def fetch_odds(sport: str, markets: Sequence[str], *, ledger: QuotaLedger, regions: Sequence[str] | None = None,
                bookmakers: Sequence[str] | None = None, odds_format: str = "decimal",
                opener: http.Opener | None = None, pacer: http.Pacer | None = None,
-               environ: Mapping[str, str] | None = None) -> OddsFetch:
+               environ: Mapping[str, str] | None = None, commence_from: datetime | None = None,
+               commence_to: datetime | None = None, event_ids: Sequence[str] | None = None) -> OddsFetch:
     """Reserve, send one GET, book the provider's charge. SETUP_NEEDED and quota refusals send
     nothing. A failed call keeps its reservation and raises OddsApiError (redacted)."""
     key = load_key(environ)
@@ -510,7 +616,8 @@ def fetch_odds(sport: str, markets: Sequence[str], *, ledger: QuotaLedger, regio
         return OddsFetch(QuotaState.SETUP_NEEDED, _setup_detail(), None)
     cost = estimate_cost(markets, regions, bookmakers)
     url, redacted = build_request(sport, markets, key=key, regions=regions, bookmakers=bookmakers,
-                                  odds_format=odds_format)
+                                  odds_format=odds_format, commence_from=commence_from, commence_to=commence_to,
+                                  event_ids=event_ids)
     try:
         reservation = ledger.reserve(cost)
     except QuotaRefused as refusal:
@@ -540,13 +647,25 @@ def _decode(result: http.FetchResult, key: str) -> Any:
     raise OddsApiError(redact_text(f"invalid JSON from {result.requested_url}", (key,)), status=result.http_status)
 
 
-def save_snapshot(store: Any, *, run_id: str, sport: str, outcome: OddsFetch) -> int:
-    """Store one odds response as an immutable snapshot, with redacted provenance only."""
+def save_snapshot(store: Any, *, run_id: str, sport: str, outcome: OddsFetch, kind: str = "odds",
+                  context: Mapping[str, Any] | None = None) -> int:
+    """Store one odds (or events) response as an immutable snapshot, with redacted provenance only.
+
+    With `context` (the pilot runner's request identity: markets, regions, commence window,
+    target ids), the payload also carries that context and the response's quota headers, so the
+    stored row alone says what was asked, what came back and what it cost. The exact response
+    bytes are hashed separately (`raw_sha256`) by the store."""
     if outcome.fetch is None or outcome.redacted_url is None:
         raise ValueError("nothing was fetched")
+    if kind not in ("odds", "events"):
+        raise ValueError("kind must be 'odds' or 'events'")
     spec = get_source(SOURCE_ID)
-    return store.save_snapshot(run_id=run_id, source=spec.legacy_name, kind="odds", entity_id=sport,
-                               url=outcome.redacted_url, payload={"sport": sport, "events": outcome.payload},
+    payload: dict[str, Any] = {"sport": sport, "events": outcome.payload}
+    if context is not None:
+        payload["request"] = json.loads(redact_text(json.dumps(dict(context), sort_keys=True, default=str)))
+        payload["quota_headers"] = dict(outcome.fetch.response_headers)
+    return store.save_snapshot(run_id=run_id, source=spec.legacy_name, kind=kind, entity_id=sport,
+                               url=outcome.redacted_url, payload=payload,
                                source_id=SOURCE_ID, fetch=outcome.fetch, parser_version=PARSER_VERSION,
                                schema_version=spec.schema_version)
 

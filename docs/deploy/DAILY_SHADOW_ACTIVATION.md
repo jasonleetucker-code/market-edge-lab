@@ -145,6 +145,51 @@ sudo systemd-run --wait --pipe --quiet -p User=edgelab -p Group=edgelab -p Slice
     host names), which would break the fixed-headline rule and double every push. Leave it unset
     or on a different channel.
 
+## 5b. The Odds API NFL pilot activation (ADR 0029; directive 2026-09-24 Phase 6; once)
+
+Authority: owner correction 3 (game-relative captures, 450 credits a month at most, never above
+the provider's remaining quota). `edgelab-odds.timer` is installed by install.sh but stays
+disabled until these steps pass. Outside 17:40-18:35 America/New_York, and not while a
+settlement job runs (about 11:15 and 16:15 ET).
+
+1. **Owner only: install the key.** Create the free Starter key at the provider yourself, then:
+   ```bash
+   sudoedit /etc/market-edge-lab/secrets.env
+   # add one line:  EDGE_LAB_ODDS_API_KEY=<your key>
+   ```
+   Never paste the key into chat, git, a ticket or a log. The agent never sees it.
+2. **Agent: prove the plan (free calls only; no credits spent).**
+   ```bash
+   sudo systemd-run --wait --pipe --quiet -p User=edgelab -p Group=edgelab -p EnvironmentFile=/etc/market-edge-lab/env -p EnvironmentFile=/etc/market-edge-lab/secrets.env /opt/market-edge-lab/venv/bin/python -m edge_lab.cli odds plan --db /var/lib/market-edge-lab/db/edge_lab.sqlite3 --ledger /var/lib/market-edge-lab/db/odds_quota_ledger.json
+   ```
+   Record in the activation note: the enumerated schedule (`schedule`, `slots`), `budget.state`
+   (must be `PROVEN`), `budget.worst_case_month_credits` (must be <= 450) and the room left
+   below `budget.provider_remaining`, `budget.expected_month_credits`, and
+   `projection_next_month`. Anything other than PROVEN stops here.
+3. **Agent: one bounded live smoke read (3 credits at most).**
+   ```bash
+   sudo systemd-run --wait --pipe --quiet -p User=edgelab -p Group=edgelab -p EnvironmentFile=/etc/market-edge-lab/env -p EnvironmentFile=/etc/market-edge-lab/secrets.env /opt/market-edge-lab/venv/bin/python -m edge_lab.cli odds smoke --db /var/lib/market-edge-lab/db/edge_lab.sqlite3 --ledger /var/lib/market-edge-lab/db/odds_quota_ledger.json
+   ```
+   It refuses (exit 1, nothing sent) when the quota is unknown or insufficient. Record exactly
+   which `bookmakers` and `markets_returned` came back, `coverage` (ABSENT and
+   PAID_ONLY_NOT_ENABLED entries included), `credits_last` and `quota_after`. The smoke read's
+   evidence is the snapshot it names; it is not a capture target.
+4. **Enable the bounded schedule.**
+   ```bash
+   sudo systemctl enable --now edgelab-odds.timer
+   systemctl list-timers edgelab-odds.timer
+   journalctl -u edgelab-odds -n 5 --no-pager   # one JSON line per tick; never the key
+   ```
+   Every 15 minutes a tick checks locally whether a planned slot is due. Discovery is free and
+   runs at most every 6 h. A paid call happens only for an admitted slot, at most one per
+   tick. Ticks inside 17:40-18:35 ET report `DEFERRED_CAPTURE_WINDOW` and do nothing.
+5. **Verify.** `odds plan --offline` (same `systemd-run` line with `--offline` added, no network)
+   shows `recorded_targets` by state. MISSED targets keep their reason. Stop at any time with
+   `sudo systemctl disable --now edgelab-odds.timer`; targets and evidence stay.
+
+This is read-only sports data collection. It authorizes no sportsbook account, no bet, no
+sports model and no strategy.
+
 ## 6. Verify over the next days: each state separately
 
 | State | Evidence |
