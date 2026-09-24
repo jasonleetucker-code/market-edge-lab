@@ -164,7 +164,7 @@ def test_the_notification_file_imports_nothing_that_can_trade():
             modules |= {a.name for a in node.names}
         elif isinstance(node, ast.ImportFrom):
             modules.add("." * node.level + (node.module or ""))
-    allowed = {"__future__", "hashlib", "http.client", "ipaddress", "os", "re", "ssl", "time", "dataclasses",
+    allowed = {"__future__", "hashlib", "http.client", "ipaddress", "json", "os", "re", "ssl", "time", "dataclasses",
                "datetime", "typing", "urllib.error", "urllib.parse", "urllib.request", ".freshness", ".notifications",
                ".redaction"}
     assert modules <= allowed, modules - allowed

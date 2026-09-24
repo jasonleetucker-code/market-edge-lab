@@ -29,10 +29,20 @@ What the docs establish, and how it is mapped (see experiments/multi_venue/):
   gateway enum as a plain word, e.g. "open") and, for
   automated crypto markets, `assetPriceTerms.windowEnd`, which the docs define as the end of
   the measurement window. Everything else is None, and the starter policy fails closed.
-- **Fees.** Markets carry `feeCoefficient` and the docs publish a fee formula. No fee model
-  for this venue has been verified in this repository: `fee_schedules.schedule_for` returns
-  UNSUPPORTED, so every opportunity rejects FEE_UNSUPPORTED. The coefficient is recorded as
-  raw metadata only.
+- **Fees.** The exchange-wide taker schedule (docs.polymarket.us/fees, effective 2026-09-17) is
+  `fee_schedules.POLYMARKET_US_TAKER_V1`, a conservative upper bound whose claim basis is NONE
+  (scheduled changes and account type unverified; ADR 0027). A market is in its scope only
+  when its own `feeCoefficient` equals the schedule's theta (`fee_scope`); otherwise
+  `schedule_for` returns UNSUPPORTED. The raw coefficient is kept in `MarketMeta`.
+- **Payoff.** Settlement is $1.00 or $0.00, but a market's Settlement Description can define
+  alternative settlement (docs: contract-settlement, rule-structure, Sports FAQs). A market
+  whose rules text names a last-fair-market-price settlement gets
+  `binary_alternative_settlement`; one whose rules text states a 50-50 / $0.50 settlement gets
+  `binary_split_on_cancel`. A sports market with neither also gets
+  `binary_alternative_settlement`, because the Sports FAQs settle cancellations,
+  postponements past expiry and no-contests at the last fair market price, ties at $0.50
+  and co-winners at $1/n. Neither is ever shoehorned into `binary`: the engine and the
+  best-price comparator refuse them (PAYOFF_UNSUPPORTED). ADR 0027.
 - **Catalog completeness.** `GET /v1/markets` pages by `limit`/`offset` and returns no total
   and no cursor, and the docs publish no maximum page size. So a short page is not proof
   of the end: a scan is COMPLETE only when every page succeeded and the last page came
@@ -43,6 +53,7 @@ What the docs establish, and how it is mapped (see experiments/multi_venue/):
 from __future__ import annotations
 
 import hashlib
+import re
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 from typing import Any, Callable, Mapping, Sequence
@@ -50,6 +61,7 @@ from urllib.parse import quote, urlencode
 
 from . import http
 from .discovery import CatalogCoverage, CoverageState
+from .fee_schedules import POLYMARKET_US_EXCHANGE_SCOPE, POLYMARKET_US_TAKER_THETA
 from .opportunity import (
     DepthLadder, DepthLevel, Event, ExecutableQuote, Market, MarketStatus, MarketTiming, Payoff, PriceGrid, PriceRange,
 )
@@ -165,23 +177,85 @@ def price_grid_from_market(raw: Mapping[str, Any]) -> PriceGrid | None:
         return None
 
 
+PAYOFF_BINARY = "binary"
+PAYOFF_SPLIT_ON_CANCEL = "binary_split_on_cancel"  # the rules text states a 50-50 / $0.50 settlement
+PAYOFF_ALTERNATIVE_SETTLEMENT = "binary_alternative_settlement"  # sports: LFMP / tie / co-winner settlement
+# Split-settlement language in a rules text: "50-50", "50/50", "fifty-fifty", "$0.50", "0.50 per".
+_DASHES = "-/" + "".join(map(chr, range(0x2010, 0x2016)))  # ASCII hyphen and slash, Unicode dashes
+# "50-50", "50/50", "50 50", "fifty-fifty", "$0.50", "$0.5", "$.5", "0.50 per", "0.5 per".
+_SPLIT_LANGUAGE = re.compile(r"\b50(?:\s*[" + re.escape(_DASHES) + r"]\s*|\s+)50\b|fifty[\s-]+fifty"
+                             r"|\$\s*0?\.50?\b|\b0?\.50?\s+per\b|\b(?:50|fifty)\s+cents?\b"
+                             r"|\bhalf\s+(?:of\s+)?(?:the\s+|its\s+)?(?:payout|value|settlement|\$\s*1\b|a\s+dollar)",
+                             re.IGNORECASE)
+# A settlement at a price determined later (Sports and Weather FAQs): never a fixed payout.
+_LFMP_LANGUAGE = re.compile(r"last[\s-]+fair[\s-]+market[\s-]+price|\bLFMP\b", re.IGNORECASE)
+_SPORTS_FIELDS = ("sportsMarketType", "sportsMarketTypeV2", "gameStartTime")
+
+
+def _is_sports(raw: Mapping[str, Any]) -> bool:
+    return (str(raw.get("category") or "").strip().lower() == "sports"
+            or any(raw.get(k) not in (None, "") for k in _SPORTS_FIELDS))
+
+
+def payoff_kind(raw: Mapping[str, Any]) -> tuple[str, str]:
+    """(payoff kind, why) for a market, from its captured rules text and category.
+
+    In any market (sports or not), last-fair-market-price language in the rules text makes it
+    `binary_alternative_settlement`, and split language makes it `binary_split_on_cancel`. A
+    sports market with neither is `binary_alternative_settlement` too (Sports FAQs:
+    last-fair-market-price settlement on cancellation, $0.50 on a tie). Only a non-sports
+    market with neither stays `binary`. The text is matched, never interpreted further: an
+    ambiguous match fails closed to a non-binary kind, which the engine refuses."""
+    text = raw.get("description")
+    text = text if isinstance(text, str) else ""
+    if _LFMP_LANGUAGE.search(text):
+        return PAYOFF_ALTERNATIVE_SETTLEMENT, "rules text settles at a last fair market price in some cases"
+    if _SPLIT_LANGUAGE.search(text):
+        return PAYOFF_SPLIT_ON_CANCEL, "rules text states a 50-50 / $0.50 settlement"
+    if _is_sports(raw):
+        return PAYOFF_ALTERNATIVE_SETTLEMENT, ("sports market: cancellation, postponement past expiry and no-contest "
+                                               "settle at the last fair market price, ties at $0.50 (docs Sports FAQs)")
+    return PAYOFF_BINARY, "no alternative-settlement language found in the rules text (not parsed further)"
+
+
+def fee_scope(raw_or_meta: Mapping[str, Any] | MarketMeta) -> str | None:
+    """The fee scope for `fee_schedules.schedule_for("polymarket_us", scope)`.
+
+    The exchange-wide scope only when the market's own `feeCoefficient` equals the documented
+    taker theta. A different value gets a scope naming it (UNSUPPORTED); a missing or
+    malformed one gets None (UNSUPPORTED). It is never assumed."""
+    raw = raw_or_meta.fee_coefficient_raw if isinstance(raw_or_meta, MarketMeta) else raw_or_meta.get("feeCoefficient")
+    if raw in (None, "") or isinstance(raw, bool):
+        return None
+    try:
+        value = Decimal(str(raw))
+    except InvalidOperation:
+        return None
+    if not value.is_finite():
+        return None
+    return POLYMARKET_US_EXCHANGE_SCOPE if value == POLYMARKET_US_TAKER_THETA else f"feeCoefficient:{raw}"
+
+
 def market_from_polymarket(raw: Mapping[str, Any], *, event_id_for_market: Mapping[str, str] | None = None,
                            timing_source: str | None = None) -> tuple[Market, MarketMeta]:
     """A generic `Market` plus the raw metadata. Markets carry no event reference in the
     documented schema, so the event comes from an events listing (`event_id_for_market`,
-    keyed by slug); without one it is `unmapped:` and can never match an event."""
+    keyed by slug); without one it is `unmapped:` and can never match an event. The payoff
+    kind comes from `payoff_kind` (ADR 0027)."""
     slug = _text(raw, "slug") or f"id-{raw.get('id')}"
     long_side, short_side = _sides(raw)
     mid = market_id(slug)
     mapped = (event_id_for_market or {}).get(slug)
     question = _text(raw, "question")
     yes = long_side or question or slug
+    kind, why = payoff_kind(raw)
+    condition = f"long side '{yes}' per the market rules text (not parsed)"
     market = Market(
         venue=VENUE, market_id=mid, native_id=slug,
         event_id=mapped or f"unmapped:{VENUE}:{slug}",
         outcome=yes,
-        payoff=Payoff(kind="binary", amount=Decimal("1"),
-                      yes_condition=f"long side '{yes}' per the market rules text (not parsed)"),
+        payoff=Payoff(kind=kind, amount=Decimal("1"),
+                      yes_condition=condition if kind == PAYOFF_BINARY else f"{condition}; {why}"),
         rules_sha256=rules_sha256(raw),
         status=status_of(raw),
         rules_resolved=False,

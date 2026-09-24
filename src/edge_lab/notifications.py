@@ -5,8 +5,9 @@ starter-policy exceptions and future approval tickets all produce the same
 `NotificationEvent`. Sinks deliver the events. Today the sinks are:
 - a local JSONL outbox, readable by the operator and the dashboard;
 - a disabled SMS sink that records that no provider exists;
-- an optional ntfy push sink (`edge_lab.notify_ntfy`, ADR 0022). It is disabled by default,
-  exists only when an owner configures a topic URL, and nothing constructs it yet.
+- an optional ntfy push sink (`edge_lab.notify_ntfy`, ADR 0022). It exists only when a topic
+  URL is configured. Only the `edge-lab notify relay|test` commands construct it; the relay
+  forwards this outbox from its own networked unit, so the daily run never sends anything.
 
 The shell webhook in `deploy/vps/alert.sh` is unchanged. A paid carrier (Twilio, Telnyx,
 SNS or similar) needs a separate owner approval, and no provider code exists here.
@@ -57,6 +58,8 @@ class EventType(str, Enum):
     POSITION_EXPIRED = "POSITION_EXPIRED"
     SETTLED = "SETTLED"
     SEVEN_DAY_POLICY_EXCEPTION = "SEVEN_DAY_POLICY_EXCEPTION"
+    # An operator-initiated delivery check (`edge-lab notify test`). Never derived from a run.
+    TEST = "TEST"
 
 
 class Severity(str, Enum):
@@ -126,6 +129,28 @@ def make_event(type: EventType, severity: Severity, *, created_at: datetime | st
     return NotificationEvent(event_id=event_id, type=type, severity=severity, created_at_utc=created.isoformat(),
                              expires_at_utc=None if ttl is None else (created + ttl).isoformat(), summary=summary,
                              values=values, dedupe_key=dedupe_key, **kw)
+
+
+def event_from_dict(data: Mapping[str, Any]) -> NotificationEvent | None:
+    """Rebuild an event from its `to_dict()` form (an outbox line), or None if it is not one.
+
+    Unknown types, severities or action modes give None rather than a guess."""
+    try:
+        if data.get("schema") != SCHEMA:
+            return None
+        values = data.get("values") or {}
+        if not isinstance(values, Mapping):
+            return None
+        return NotificationEvent(
+            event_id=str(data["event_id"]), type=EventType(data["type"]), severity=Severity(data["severity"]),
+            created_at_utc=str(data["created_at_utc"]),
+            expires_at_utc=None if data.get("expires_at_utc") is None else str(data["expires_at_utc"]),
+            summary=str(data.get("summary") or ""), values={str(k): str(v) for k, v in values.items()},
+            venue_id=data.get("venue_id"), market_id=data.get("market_id"), event_ref=data.get("event_ref"),
+            action_mode=ActionMode(data.get("action_mode") or ActionMode.INFO_ONLY.value),
+            deep_link=data.get("deep_link"), dedupe_key=str(data.get("dedupe_key") or ""))
+    except (KeyError, TypeError, ValueError, AttributeError):
+        return None
 
 
 def check_event(event: NotificationEvent) -> DeliveryStatus | None:

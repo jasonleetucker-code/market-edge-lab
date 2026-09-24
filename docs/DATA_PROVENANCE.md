@@ -206,6 +206,51 @@ Provenance rules specific to these adapters:
   could not be read without a browser and are not reviewed. Until they are, data is for
   research storage only and is not redistributed.
 
+## 6c. Longitudinal learning history (issue #50; audit 2026-09-24)
+
+Principle (owner, 2026-09-24): every research-ready domain keeps enough prospective,
+point-in-time evidence to evaluate later all of the following:
+- predictions and uncertainty;
+- prices, depth and fees;
+- decisions, **rejected decisions** and risk vetoes;
+- stale or missing inputs;
+- fills and no-fills;
+- settlement and later price movement;
+- source reliability;
+- model and policy versions.
+
+Rejected opportunities are first-class data. The question to answer is "did our filters save
+us money or filter out good trades?". There is no second memory database: this reuses
+provenance snapshots, experiments, opportunity evaluations, the shadow ledger and settlement
+identity.
+
+**What is stored today (EXP-001 weather):**
+
+| Needed later | Where it lives | State |
+|---|---|---|
+| Raw inputs (forecasts, books, catalogs, rules text) | `snapshots` (immutable, hashed; §2), `forward_captures` | stored |
+| Prediction, conservative probability, model version | shadow-ledger `decision` payload (`opportunity`, `model_version`) | stored |
+| Qualified **and rejected** decisions with every reason | `decision` rows with `qualification` QUALIFY/REJECT, `reason`, `reasons`, `policy_id`, `quote_evidence_ids`, fee verification fields | stored (all 12 decisions of 2026-09-24, 10 of them rejected) |
+| Sizing, risk vetoes, starter-policy verdicts | `decision.sizing`, `decision.starter_policy`, `fill` NO_FILL reasons (RISK_VETO, STARTER_POLICY_INELIGIBLE, INSUFFICIENT_CASH) | stored |
+| Stale / missing / invalid capture days | status file and receipt (`INVALID_CAPTURE`, `invalid_days`), source health | stored |
+| Settlement of filled positions | ledger `settlement` rows with evidence and knowledge time | stored (first settlement due) |
+| Outcome of **rejected** markets | NWS CLI settlement evidence per day (Gate 2 procedure) re-derives every bracket's label | derivable; settlement refresh only fetches venue results for events with positions (gap 1) |
+| Later price movement | the +10–15 min re-check capture | partial: no price path after the re-check (gap 2) |
+| Research sizing (v2) per decision | not recorded in the ledger by design (ADR 0026) | counterfactual runner NEXT (gap 3) |
+| Sports odds history | Odds API snapshots with target times, coverage and quota (ADR 0029) | built; starts when the key is installed |
+
+**Gaps, in priority order (none needs a new store):**
+1. **Venue settlement for rejected-only events.** Label rejected brackets from the NWS CLI
+   evidence already captured (the Gate 2 procedure). Fetching venue settlement for events
+   without positions stays unscheduled unless that proves insufficient.
+2. **Closing price.** A bounded capture of the book at or near close for every evaluated market
+   would measure what rejected opportunities did later. It would be a new timer and needs its
+   own authorization; recorded, not built.
+3. **Sizing v2 counterfactuals.** A read-only replay that writes research recommendations to
+   an experiment output, never to the ledger.
+4. **A per-domain completeness check** before a domain is called research-ready: the table above
+   filled for that domain (Domain Readiness matrix, `docs/OWNER_IDEAS.md`).
+
 ## 7. Adding a source
 
 1. Choose the highest access tier available. Read the terms and write them in `license_notes`.

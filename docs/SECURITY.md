@@ -32,14 +32,27 @@ credential, and the registry cannot hold one.
 | Variable | Purpose | Status |
 |---|---|---|
 | `NWS_USER_AGENT` | NWS identification with contact info | in use (not secret, but personal) |
-| `EDGE_LAB_ODDS_API_KEY` | The Odds API free-tier key (`CredentialKind.READ_ONLY_DATA_FEED`) | registered, not installed |
-| `EDGE_LAB_NTFY_TOPIC_URL` | ntfy push topic URL (`https://ntfy.sh/<topic>`); the topic name is effectively a secret (ADR 0022) | not set; the sink is disabled; sending needs owner approval |
+| `EDGE_LAB_ODDS_API_KEY` | The Odds API free-tier key (`CredentialKind.READ_ONLY_DATA_FEED`) | owner installs it in `/etc/market-edge-lab/secrets.env` (ADR 0028); not installed yet |
+| `EDGE_LAB_NTFY_TOPIC_URL` | ntfy push topic URL (`https://ntfy.sh/<topic>`); the topic name is effectively a secret (ADR 0022) | owner-approved 2026-09-24; lives only in `/etc/market-edge-lab/secrets.env`, read only by `edgelab-notify` (ADR 0028) |
 | `EDGE_LAB_NTFY_TOKEN` | optional ntfy access token, read only by `notify_ntfy.py` | not created |
 | `EDGE_LAB_RESEARCH_<PROVIDER>_KEY` | read-only research data API keys | not created |
 | `EDGE_LAB_TRADING_<VENUE>_KEY_ID` / `_PRIVATE_KEY_PATH` | execution credentials, execution component only | not created, not authorized |
 
 Private keys are referenced by **file path** outside the repository. Their contents never
 go in environment variables.
+
+## The owner secrets file (ADR 0028)
+
+`/etc/market-edge-lab/secrets.env` (root:root 0600) is the only place on the server for
+owner-installed values. systemd reads it as root before dropping to the service user, so no
+service account, including the tailnet-reachable dashboard, can read the file. It is **not** the regenerated `env` file.
+- install.sh creates it empty once. After that it only enforces the owner and mode, and never
+  reads, copies or prints the contents.
+- Only the units that need a value load it, and each loads it optionally: `edgelab-notify`,
+  and later `edgelab-odds`.
+- Edit it as root with `sudoedit /etc/market-edge-lab/secrets.env`. Never paste its values into
+  chat, git, tickets, logs or notifications.
+- Read a value back only privately, as root, on the server.
 
 ## The Odds API key (read-only data feed)
 
@@ -50,9 +63,9 @@ Authority: directive 2026-09-23 section 10 and issue #29, recorded in
   `CredentialKind.READ_ONLY_DATA_FEED` on the `the_odds_api` source. It is not a trading,
   account or withdrawal credential, and the registry has no kind for one
   (`tests/invariants/test_no_execution_paths.py`).
-- **Who handles it.** Only the owner creates it and installs it, in the host environment as
-  `EDGE_LAB_ODDS_API_KEY`, for example in a root-readable environment file for the service
-  user. Agents never create, request, see or commit it. Never paste it into chat, git, a
+- **Who handles it.** Only the owner creates it and installs it, as `EDGE_LAB_ODDS_API_KEY`
+  in `/etc/market-edge-lab/secrets.env` (`sudoedit`; ADR 0028), which only `edgelab-odds` and
+  `edgelab-notify` load. Agents never create, request, see or commit it. Never paste it into chat, git, a
   ticket or a notification.
 - **How the code uses it.** `edge_lab.odds_api.load_key` is the only reader. A missing key is
   SETUP_NEEDED and nothing is sent. The key travels only as the documented `apiKey` query
@@ -61,7 +74,24 @@ Authority: directive 2026-09-23 section 10 and issue #29, recorded in
   exception chain. The quota ledger holds counts only.
 - **Before any live pull.** The key must be installed, **and** an owner-approved activation
   and quota plan must be recorded. Pulls stay under a protective ceiling of 450 of the 500
-  monthly credits. No scheduled pulls are authorized.
+  monthly credits.
+- **Scheduled pulls (authorized 2026-09-24, directive Phase 6 and owner correction 3; ADR
+  0029).** Exactly one schedule is authorized: `edgelab-odds.timer`, the game-relative NFL
+  pilot (h2h, spreads, totals; one region). Its bounds:
+  - discovery only through the quota-free events endpoint;
+  - paid odds calls only for planned capture slots (about T-24h, T-6h and T-60m before each
+    kickoff), at most one per tick;
+  - a monthly credit proof that keeps the worst case at or below 450 and below the provider's
+    remaining quota, and no paid call while the quota is unknown;
+  - enabled only after `odds plan` is PROVEN and one `odds smoke` read has succeeded
+    (`docs/deploy/DAILY_SHADOW_ACTIVATION.md` section 5b).
+
+  Paid plans, credit purchases, player props, more sports and extra accounts stay
+  unauthorized.
+- **Where the key can appear.** Only in the request the adapter sends. Discovery snapshots,
+  capture snapshots, target transitions, the quota ledger, tick reports and journal lines hold
+  the redacted URL (`apiKey=REDACTED`) or no URL at all. Tests scan every file they write for
+  the key.
 - **If it leaks,** follow "If a secret is committed" below. Rotating the free key at the
   provider is the owner's step.
 

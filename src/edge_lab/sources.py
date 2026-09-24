@@ -260,13 +260,16 @@ REGISTRY: dict[str, SourceSpec] = {
             legacy_name="the_odds_api",
             description=(
                 "The Odds API v4 (free tier): sportsbook odds per bookmaker, sports list and "
-                "scores. Offered odds are never executable prices. Adapter: edge_lab.odds_api "
-                "(fixtures only until the owner installs the key and approves activation)."
+                "scores. Offered odds are never executable prices. Adapter: edge_lab.odds_api; "
+                "game-relative NFL pilot runner: edge_lab.odds_pilot (ADR 0029). Still PLANNED: no "
+                "live read has been verified; the key is not installed."
             ),
             access_tier=AccessTier.OFFICIAL_API,
             base_url="https://api.the-odds-api.com",
             status=SourceStatus.PLANNED,
-            max_age={"odds": timedelta(minutes=10), "sports": timedelta(days=1)},
+            # "events" is the quota-free schedule discovery; the pilot plans from it only while
+            # it is at most a day old (edge_lab.odds_pilot.RunnerSettings.discovery_max_age).
+            max_age={"odds": timedelta(minutes=10), "sports": timedelta(days=1), "events": timedelta(days=1)},
             requires_credentials=True,
             credential_kind=CredentialKind.READ_ONLY_DATA_FEED,
             credential_env_var="EDGE_LAB_ODDS_API_KEY",
