@@ -61,7 +61,7 @@ def position_row(pos, view: d.AccountView, now) -> str:
         ("opened (UTC)", esc(pos.opened_at_utc)), ("fees", c.money_cell(pos.fees)),
         ("expected settlement (UTC)", esc(pos.expected_settlement_utc)), ("settled at (UTC)", esc(pos.settled_at_utc)),
         ("strategy", esc(pos.strategy))]))
-    return c.row(title, sub=f"{pr.venue_label(venue)} · {pos.outcome_cluster}",
+    return c.row(title, sub=f"{pr.venue_label(venue)} · {pr.cluster_label(pos.outcome_cluster)}",
                  aside=c.state_text(state_code, label=label), body=c.facts(facts, wide=True, text_cols=(0,)) + detail)
 
 

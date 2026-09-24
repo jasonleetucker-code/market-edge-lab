@@ -45,6 +45,8 @@ After: the same deep links (relabelled Terminal, Markets, Portfolio, Outcomes, R
 | Withdrawal figures and status | `risk.withdrawal_assessment` (always NOT_RECOMMENDED) |
 | Outcome groups, exposure, bounds, account impact, horizons | `outcome_board.build_board` |
 | Outcome group title (plain language) | `presentation.cluster_label` over the group's recorded `outcome_cluster` (raw id kept in "Why it matters") |
+| Portfolio position row subtitle (venue · outcome) | `presentation.venue_label` + `presentation.cluster_label` over the position's recorded `outcome_cluster` (raw id kept in "Position details" as `cluster`) |
+| Board and Markets coverage wording | `data.Context.observed` status. OK → `coverage_text`. ERROR → Terminal board meta "Captured books unavailable", Markets subtitle "Captured coverage unavailable (read error).", Markets coverage line "Captured books unavailable (read error)". NO_DATA → "No captured books", "No captured coverage yet.", "No books captured yet" |
 | Quotes on tape, board and detail (ask, size, capture time) | `data.observed_board` → `kalshi_quotes.quotes_from_orderbook` over the latest target day's decision and re-check captures |
 | Price change | difference of two captured asks of the same side (presentation; not an edge, not P&L) |
 | Model and conservative probability, price at decision, fee, all-in cost, net edge, fee status, claim basis, size, binding constraint | recorded decision payloads (Gate 5 engine at decision time) |
