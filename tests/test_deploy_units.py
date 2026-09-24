@@ -45,7 +45,9 @@ def test_every_service_is_in_the_shared_slice_with_caps_and_hardening():
     for path in UNITS.glob("*.service"):
         u = _parse(path.name)
         assert u[("Service", "Slice")] == ["edgelab.slice"], path.name
-        if path.name not in ("edgelab-alert@.service", "edgelab-dashboard.service"):
+        # The alert, the dashboard and the network-free Freshness supervisor (ADR 0031) have their
+        # own, smaller caps and write paths, checked in their own tests.
+        if path.name not in ("edgelab-alert@.service", "edgelab-dashboard.service", "edgelab-freshness.service"):
             assert u[("Service", "User")] == ["edgelab"] and u[("Service", "MemoryMax")] == ["256M"], path.name
             assert u[("Service", "ProtectSystem")] == ["strict"] and u[("Service", "NoNewPrivileges")] == ["yes"]
             if path.name == "edgelab-notify.service":  # the relay needs only the status directory
@@ -164,7 +166,7 @@ def test_readme_install_window_matches_the_capture_window():
 VERIFY = ROOT / "deploy" / "vps" / "verify_production.sh"
 VERIFY_STATES = (
     "NY_TIME", "IN_CAPTURE_WINDOW", "RUNNING_UNITS", "DEPLOYED_SHA", "TIMERS", "UNIT_RESULTS", "SHADOW_TIMER",
-    "SETTLEMENT_TIMER", "OBSERVE_TIMER", "OBSERVE_CLOSE_TIMER", "LATEST_JSON", "LATEST_JSON_AGE", "COLLECTOR_HEALTH", "VALID_DAY_OBSERVED", "SHADOW_DAILY",
+    "SETTLEMENT_TIMER", "OBSERVE_TIMER", "OBSERVE_CLOSE_TIMER", "FRESHNESS_STATUS", "LATEST_JSON", "LATEST_JSON_AGE", "COLLECTOR_HEALTH", "VALID_DAY_OBSERVED", "SHADOW_DAILY",
     "LAST_FAILURE", "COLLECTOR_INSTALLED", "TIMERS_ENABLED", "PFM_CAPTURE_OBSERVED", "DECISION_CAPTURE_OBSERVED",
     "RECHECK_CAPTURE_OBSERVED", "DB_SIZES", "BACKUPS", "BACKUP_REPORTS_8D", "BACKUP_EVIDENCE_DB",
     "BACKUP_SHADOW_LEDGER", "RESTORE_EVIDENCE_DB", "RESTORE_SHADOW_LEDGER", "JOURNAL_WARNINGS_24H", "OOM_30D",
@@ -239,7 +241,7 @@ def _verify_code_lines():
 def _embedded_python():
     text = VERIFY.read_text()
     bodies = re.findall(r"<<'PY'[^\n]*\n(.*?)\nPY\n", text, re.S)
-    assert len(bodies) == 3, "expected the latest.json, shadow_daily.json and backup-journal parsers"
+    assert len(bodies) == 4, "expected the latest.json, freshness.json, shadow_daily.json and backup-journal parsers"
     return bodies
 
 
@@ -266,7 +268,8 @@ def test_verify_production_reports_every_state_separately():
         assert re.search(rf"\b{name}\b", text), f"no STATE line for {name}"
     assert "STATE %s: %s" in text and "SUMMARY" in text and "One state does not imply the next" in text
     assert "NOT_READABLE_WITHOUT_PRIVILEGE" in text
-    for timer in ("pfm", "decision", "recheck", "status", "backup", "shadow", "settlement", "observe", "observe-close"):
+    for timer in ("pfm", "decision", "recheck", "status", "backup", "shadow", "settlement", "observe", "observe-close",
+                  "freshness"):
         assert re.search(rf"NAMES=\([^)]*(?<![\w-]){timer}(?![\w-])", text)
     assert "set -u" in text
 

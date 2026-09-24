@@ -1109,6 +1109,31 @@ class SnapshotStore:
                 (source, kind),
             ).fetchall()
 
+    def snapshots_of_kind_newest(
+        self, *, source: str, kind: str, entity_id: str | None = None, limit: int, before_id: int | None = None
+    ) -> list[sqlite3.Row]:
+        """At most `limit` snapshots of one kind (payload included), NEWEST first, optionally for one
+        entity and only with id < `before_id` (keyset paging). A bounded read: callers that scan back
+        until they find something page through history instead of loading all of it."""
+        if not isinstance(limit, int) or isinstance(limit, bool) or limit < 1:
+            raise ValueError("limit must be a positive int")
+        clauses, params = ["source = ?", "kind = ?"], [source, kind]
+        if entity_id is not None:
+            clauses.append("entity_id = ?")
+            params.append(entity_id)
+        if before_id is not None:
+            clauses.append("id < ?")
+            params.append(int(before_id))
+        with closing(self._connect()) as conn, conn:
+            return conn.execute(
+                f"""
+                SELECT id, run_id, entity_id, fetched_at_utc, source_timestamp_utc, url,
+                       payload_sha256, payload_json
+                FROM snapshots WHERE {' AND '.join(clauses)} ORDER BY id DESC LIMIT ?
+                """,
+                (*params, limit),
+            ).fetchall()
+
     def save_document(
         self,
         *,

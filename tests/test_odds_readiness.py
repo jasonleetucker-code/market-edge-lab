@@ -955,8 +955,8 @@ def test_missing_store_with_paid_history_or_unreadable_evidence_is_error(paths, 
     out = op.dashboard_status(moved, paths[1], state_path(paths), now=utc(2026, 10, 3, 17, 5))
     assert out["state"] == "ERROR" and "missing" in out["detail"] and not moved.exists()
     # A stored odds payload that cannot be read is ERROR: not a crash and not a guess.
-    real = SnapshotStore.snapshots_of_kind
-    monkeypatch.setattr(SnapshotStore, "snapshots_of_kind",
+    real = SnapshotStore.snapshots_of_kind_newest  # dashboard_status pages newest-first (ADR 0031 SF-2)
+    monkeypatch.setattr(SnapshotStore, "snapshots_of_kind_newest",
                         lambda self, **kw: [dict(r) | {"payload_json": "{not json"} for r in real(self, **kw)])
     out = status(paths, utc(2026, 10, 3, 17, 5))
     assert out["state"] == "ERROR" and "unreadable" in out["detail"]

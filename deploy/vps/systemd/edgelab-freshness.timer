@@ -1,0 +1,16 @@
+[Unit]
+Description=Market Edge Lab: Freshness Fabric supervisor every 5 minutes (ADR 0031)
+
+[Timer]
+# :01, :06, :11, ... :56. Staggered off every other edgelab tick (odds :00/:15/:30/:45, observe
+# :05/:20/:35/:50, the daily :00/:15/:30/:40/:45/:55 ticks) and clear of the 04:57:45 UTC close tick
+# (the 04:56 run falls inside the close guard, 04:55:30-05:01:00 UTC, and defers). Inside a protected
+# window or the close guard the run opens no store and carries the previous evaluation forward.
+OnCalendar=*-*-* *:01/5:00
+AccuracySec=5s
+# A missed tick is not replayed: the next one re-evaluates everything.
+Persistent=false
+Unit=edgelab-freshness.service
+
+[Install]
+WantedBy=timers.target
