@@ -334,4 +334,4 @@ Selection rule (declared before the run): maximize min over scenarios of p10 ter
 | SV2-H-cluster-kelly | +0.00021 | 1.056 | 0.935 | 0.951 | 0.900 | 0.036 | 0.00 | 0.00 | 0.00 | 0.0049 | 0.001 |
 | SV2-H-cluster-robust-rck | +0.00014 | 1.036 | 0.952 | 0.969 | 0.937 | 0.023 | 0.00 | 0.00 | 0.00 | 0.0033 | 0.001 |
 
-Provenance: Python 3.12.10; source SHA-256 (LF-normalized) `fee_schedules.py` 9b7fc01438e3, `opportunity.py` 26b1070a7865, `sizing_eval.py` e4a7b0facfc5, `sizing_v2.py` 1ff69bc692a7.
+Provenance: Python 3.12.10; source SHA-256 (LF-normalized) `fee_schedules.py` 9b7fc01438e3, `opportunity.py` 26b1070a7865, `sizing_eval.py` 63f29026bd94, `sizing_v2.py` f58be82dbce8.

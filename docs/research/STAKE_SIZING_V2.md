@@ -473,8 +473,9 @@ decision records. Its output is labelled IN-SAMPLE, not fills, and not evidence 
     and P(DD>50%) <= 0.01 in every main scenario. H-RCK has the slightly better lower tail
     under overconfidence (p10 0.898 vs 0.886; at tau 2, 0.61×). It is preferred because it
     sizes the cluster jointly.
-  - **It was chosen after seeing the results** of 188 variant runs over 18 variants. That is
-    a selection effect, so the choice is itself a hypothesis for the prospective experiment.
+  - **It was chosen after seeing the results**: 547 variant runs across runs 1-3, over 18
+    distinct variants. It was in the variant set from run 1. That is a selection effect, so
+    the choice is itself a hypothesis for the prospective experiment.
   - It is frozen in the engine as `sizing_v2.POLICY_CANDIDATE` v1.
 - **Operational use:** only through the prospective experiment in
   `experiments/sizing_v2/PROPOSED_PREREGISTRATION.md`, after EXP-001 Stage B evidence

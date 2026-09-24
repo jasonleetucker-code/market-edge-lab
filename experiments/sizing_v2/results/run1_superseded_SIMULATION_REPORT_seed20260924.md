@@ -1,3 +1,5 @@
+> **SUPERSEDED.** This is run 1 (171 variant runs): sizer-side scenarios did not share worlds (common random numbers). Current results: `SIMULATION_REPORT_seed20260924.md` (run 3). Kept because every run counts.
+
 # Stake sizing v2: simulation results (generated)
 
 **SIMULATION evidence: synthetic markets and outcomes. Not a backtest, not an edge claim, not authority to change any shadow fill.**

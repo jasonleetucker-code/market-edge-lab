@@ -1,3 +1,5 @@
+> **SUPERSEDED.** This is run 2 (188 variant runs): the joint policy H applied the Kelly fraction after the shared budget (fixed in PR #60 review). Current results: `SIMULATION_REPORT_seed20260924.md` (run 3). Kept because every run counts.
+
 # Stake sizing v2: simulation results (generated)
 
 **SIMULATION evidence: synthetic markets and outcomes. Not a backtest, not an edge claim, not authority to change any shadow fill.**

@@ -21,6 +21,11 @@ edge-lab sizing simulate --paths 200 --rounds 250 --workers 18
 
 It is deterministic for a fixed seed and Python version; about 13 minutes on 18 cores.
 
+The PR #60 re-review fixes changed only the recommendation layer: starter-verdict binding,
+market timing, held-position validation, and joint caps inside the optimizer. The simulation
+calls `solve` directly and was not affected. A full re-run after those fixes reproduced run
+3's results exactly. The committed files carry that re-run's provenance (source hashes).
+
 **Replay over EXP-001 history:** SKIPPED (`edge-lab sizing replay --exp001`). The Gate 3
 dataset has no market prices, and the Stage A test split stays protected.
 

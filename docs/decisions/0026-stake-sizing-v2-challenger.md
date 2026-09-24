@@ -67,7 +67,14 @@ Phase 3 and owner correction 2). Research and shadow only. Nothing here changes 
      - The search runs on the concave pre-rounding problem (bisection on the discrete
        derivative). A local scan then decides with the exact cent-rounded cost; small
        counts are scanned exhaustively.
-     - Joint (policy H): exhaustive search when the integer grid has at most 4,096 points.
+     - Joint (policy H): every hard cap sits inside the optimizer. Each candidate's own
+       limits (depth, cash, position cap) are its cap. The shared limits are one budget:
+       cluster, portfolio, reserve, drawdown headroom, risk budget, and the event caps
+       involved. So the joint vector the drawdown constraint was checked on is the vector
+       recommended. If a leg would still be clipped, its cap is lowered and the problem is
+       solved again, because clipping one leg of a hedge can break the constraint
+       (re-review of PR #60; tested on the reviewer's case).
+     - Joint search: exhaustive when the integer grid has at most 4,096 points.
        Above that it uses coordinate ascent under the shared cluster budget, which is a
        **heuristic**: it converges on this concave objective in the tested cases, but it is
        not proven to find the integer optimum.
@@ -91,11 +98,21 @@ Phase 3 and owner correction 2). Research and shadow only. Nothing here changes 
   output hash.
   - Money is Decimal, cent-quantized. Costs round up and limits round down.
   - Fail-closed verdicts, in precedence order:
-    - UNSUPPORTED: a non-binary payoff, a market that is not OPEN, unresolved settlement
-      rules (as `opportunity.evaluate` refuses them), or refused fees;
+    - UNSUPPORTED:
+      - a non-binary payoff;
+      - a market that is not OPEN, already past its close time, or in a non-open lifecycle
+        status;
+      - unresolved settlement rules (as `opportunity.evaluate` refuses them);
+      - refused fees;
+      - held positions that cannot be mapped to outcome states;
     - STALE_DATA: a missing, stale or malformed book, a missing model or model version, or a
       missing or stale risk state;
-    - RISK_LIMIT, CAPITAL_HORIZON, UNCERTAINTY_TOO_HIGH, ZERO_EDGE;
+    - the STARTER_MAX_7D_V1 verdict must be bound to this decision. Its policy id must match
+      and its commitment time must be at or before the decision, at most 5 minutes earlier.
+      A later verdict is lookahead (STALE_DATA), an older one is STALE_DATA, and a wrong
+      policy id is CAPITAL_HORIZON;
+    - RISK_LIMIT (including a bankroll that is not positive), CAPITAL_HORIZON,
+      UNCERTAINTY_TOO_HIGH, ZERO_EDGE;
     - then LIQUIDITY_LIMIT or RISK_LIMIT when depth, tradable cash or a cap allows no
       contract.
   - A missing input never yields SIZE. Cluster exposure that cannot be mapped to states is

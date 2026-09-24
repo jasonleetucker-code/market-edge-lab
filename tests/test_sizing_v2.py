@@ -17,11 +17,12 @@ from edge_lab import sizing_v2 as sv2
 from edge_lab.fee_schedules import (
     KALSHI_QUADRATIC_TAKER_V1, CostModel, FeeScheduleStatus, QuadraticTakerSchedule,
 )
-from edge_lab.opportunity import DepthLadder, DepthLevel, Market, MarketStatus, Payoff
+from edge_lab.opportunity import DepthLadder, DepthLevel, Market, MarketStatus, MarketTiming, Payoff
 from edge_lab.risk import RiskPolicy, assess
 from edge_lab.shadow_ledger import ShadowLedger
 from edge_lab.sizing_v2 import (
-    BoxSimplexSet, CoreCandidate, CoreProblem, ExactCostCurve, IntegerLadderCostCurve, PortfolioState,
+    BoxSimplexSet, CoreCandidate, CoreProblem, ExactCostCurve, HeldPosition, IntegerLadderCostCurve,
+    PortfolioState,
     PositionCandidate, SizingRequest, Verdict,
 )
 from edge_lab.starter_policy import StarterVerdict
@@ -630,3 +631,86 @@ def test_research_candidate_is_a_frozen_policy_in_the_engine():
     c = sv2.POLICY_CANDIDATE
     assert sizing_eval.H_RCK is c and c.policy_id == "SV2-H-cluster-robust-rck" and c.policy_version == "1"
     assert c.joint and c.robust and c.robust_constraint and c.kelly_fraction == Decimal("0.5")
+
+
+# --------------------------------------------------------------------------- re-review fixes (PR #60)
+
+
+@pytest.mark.parametrize("over,verdict,reason", [
+    ({"commitment_utc": (T + timedelta(minutes=1)).isoformat()}, "STALE_DATA", "STARTER_VERDICT_LOOKAHEAD"),
+    ({"commitment_utc": (T - timedelta(days=23)).isoformat()}, "STALE_DATA", "STARTER_VERDICT_STALE"),
+    ({"policy_id": "SOME_OTHER_POLICY"}, "CAPITAL_HORIZON", "STARTER_VERDICT_INVALID"),
+    ({"commitment_utc": "not a time"}, "CAPITAL_HORIZON", "STARTER_VERDICT_INVALID"),
+])
+def test_starter_verdict_must_be_bound_to_this_decision(over, verdict, reason):
+    r = rec(binary_request(starter=replace(starter(), **over)))
+    assert r.verdict == verdict and reason in r.explanation and r.recommended_contracts == 0
+    fresh = rec(binary_request(starter=replace(starter(), commitment_utc=(T - timedelta(minutes=4)).isoformat())))
+    assert fresh.verdict == "SIZE"
+
+
+@pytest.mark.parametrize("timing", [
+    MarketTiming(close_time_utc=(T - timedelta(minutes=1)).isoformat(), lifecycle_status="active"),
+    MarketTiming(close_time_utc=(T + timedelta(hours=3)).isoformat(), lifecycle_status="determined"),
+    MarketTiming(lifecycle_status="closed"),
+])
+def test_open_market_past_its_close_or_not_open_lifecycle_is_unsupported(timing):
+    req = binary_request()
+    m = replace(req.candidate.market, timing=timing)
+    r = rec(replace(req, candidate=replace(req.candidate, market=m)))
+    assert r.verdict == "UNSUPPORTED" and "MARKET_NOT_OPEN" in r.explanation
+    ok = replace(req.candidate.market, timing=MarketTiming(close_time_utc=(T + timedelta(hours=3)).isoformat(),
+                                                           lifecycle_status="active"))
+    assert rec(replace(req, candidate=replace(req.candidate, market=ok))).verdict == "SIZE"
+
+
+def test_joint_robust_drawdown_constraint_holds_after_caps_reviewer_case():
+    states = ("S1", "S2", "S3")
+    p = (0.131, 0.797, 0.072)
+    uset = sv2.dirichlet_box(states, p, 1000)
+    pf = portfolio(bankroll=Decimal("1000"), tradable_cash=Decimal("1000"), max_position_risk=Decimal("50"))
+    reqs = []
+    for state, price in (("S1", "0.05"), ("S2", "0.71")):
+        m = market(f"KXHIGHNY-26SEP25-{state}")
+        cand = PositionCandidate(m, "YES", (state,), ladder(m, "YES", [(price, 100000)]), "ev", "cl")
+        reqs.append(SizingRequest(AS_OF, states, cand, p, uset, "m v1", AS_OF, pf, starter()))
+    out = sv2.recommend_cluster(reqs, sv2.POLICY_CANDIDATE, fee_schedule=ZERO_FEE)
+    counts = tuple(r.recommended_contracts for r in out)
+    assert all(r.recommended_amount <= Decimal("50") for r in out)
+    curves = (IntegerLadderCostCurve([(500, 100000)], coefficient=Decimal(0)),
+              IntegerLadderCostCurve([(7100, 100000)], coefficient=Decimal(0)))
+    problem = CoreProblem(1000.0, (1000.0,) * 3, p, uset, (CoreCandidate("s1", (1, 0, 0), curves[0], 100000),
+                                                          CoreCandidate("s2", (0, 1, 0), curves[1], 100000)))
+    lam = sv2.POLICY_CANDIDATE.drawdown_lambda
+    assert sv2.drawdown_measure(problem, counts, lam, robust=True) <= 1 + 1e-12, counts
+
+
+@pytest.mark.parametrize("held", [
+    HeldPosition("kalshi:X", "NO", ("NOT_A_STATE",), 10, Decimal("5")),
+    HeldPosition("kalshi:X", "MAYBE", ("YES",), 10, Decimal("5")),
+    HeldPosition("kalshi:X", "YES", (), 10, Decimal("5")),
+    HeldPosition("kalshi:X", "YES", ("YES",), -1, Decimal("5")),
+])
+def test_unmappable_held_positions_are_unsupported_never_inflate_size(held):
+    r = rec(binary_request(held=(held,)))
+    assert r.verdict == "UNSUPPORTED" and "HELD_POSITION_UNMAPPABLE" in r.explanation and r.recommended_contracts == 0
+
+
+def test_payout_vector_refuses_unknown_sides_and_states():
+    with pytest.raises(ValueError):
+        sv2.payout_vector(("a", "b"), ("a",), "MAYBE")
+    with pytest.raises(ValueError):
+        sv2.payout_vector(("a", "b"), ("c",), "NO")
+
+
+@pytest.mark.parametrize("bankroll,cash", [(Decimal(0), Decimal(0)), (Decimal("-5"), Decimal("10"))])
+def test_non_positive_bankroll_is_risk_limit(bankroll, cash):
+    r = rec(binary_request(pf=portfolio(bankroll=bankroll, tradable_cash=cash)))
+    assert r.verdict == "RISK_LIMIT" and "BANKROLL_NOT_POSITIVE" in r.explanation
+
+
+def test_cluster_requests_must_share_correlated_clusters():
+    a = binary_request(correlated_clusters=("other",))
+    b = binary_request()
+    with pytest.raises(ValueError):
+        sv2.recommend_cluster([a, b], sv2.POLICY_H, fee_schedule=ZERO_FEE)

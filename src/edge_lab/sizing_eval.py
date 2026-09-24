@@ -626,6 +626,11 @@ def replay_records(records: Sequence[dict[str, Any]], policies: Sequence[SizingP
         priced = []
         for c in rec["candidates"]:
             native = c.get("native_id", "")
+            try:
+                payout = sv2.payout_vector(states, c.get("yes_states", ()), c.get("side", ""))
+            except ValueError:
+                out["refused"]["OUTCOME_MAPPING_UNKNOWN"] = out["refused"].get("OUTCOME_MAPPING_UNKNOWN", 0) + 1
+                continue
             schedule, _, allowance, refused = sv2.fee_basis(venue, native, rec["as_of_utc"])
             if refused:
                 key = refused.split(":", 1)[0]
@@ -638,7 +643,7 @@ def replay_records(records: Sequence[dict[str, Any]], policies: Sequence[SizingP
             if curve.problem or curve.max_contracts < 1:
                 out["refused"]["INVALID_OR_EMPTY_BOOK"] = out["refused"].get("INVALID_OR_EMPTY_BOOK", 0) + 1
                 continue
-            priced.append((native, sv2.payout_vector(states, c["yes_states"], c["side"]), curve))
+            priced.append((native, payout, curve))
         curves.append(priced)
     for policy in policies:
         wealth, trades, path = bankroll, 0, []

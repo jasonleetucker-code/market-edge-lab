@@ -4014,6 +4014,7 @@
   }
  ],
  "sim_version": "1",
+ "superseded": "SUPERSEDED: run 2 (188 variant runs): the joint policy H applied the Kelly fraction after the shared budget (fixed in PR #60 review). Current: simulation_seed20260924.json (run 3).",
  "uncertainty_selection": {
   "rule": "maximize min over scenarios of p10 terminal wealth (robust 1/2 Kelly); tie -> higher mean log growth",
   "scenarios": [

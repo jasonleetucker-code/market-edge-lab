@@ -32,9 +32,10 @@ frozen operational rule `EXP-001-fixed-1-v1`, and stays inside the operational r
    - The robust drawdown constraint E[(W'/W)^-lambda] <= 1 with alpha 0.7 and beta 0.1,
      evaluated at the worst admissible vector.
    - Hard caps from `exp001_shadow.RISK_POLICY` via `risk.assess`, plus STARTER_MAX_7D_V1.
-   - **How it was chosen: after the fact.** It was picked after seeing the simulation
-     study: 188 variant runs over 18 policy variants, in runs 2 and 3 (run 3 re-ran after
-     the fraction-before-budget fix) (`docs/research/STAKE_SIZING_V2.md` §7, §9).
+   - **How it was chosen: after the fact.** It was picked after seeing the whole simulation
+     study (`docs/research/STAKE_SIZING_V2.md` §7, §9): **547 variant runs across runs 1-3**,
+     over 18 distinct policy variants. It was in the variant set from run 1, and the choice
+     was made after runs 1-3.
      - The reason: it kept ruin at zero and P(drawdown > 50%) small in every main scenario,
        including overconfident and anti-informative models.
      - Choosing the best of 18 on the same simulated worlds is a selection effect. This

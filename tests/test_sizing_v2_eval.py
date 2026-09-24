@@ -124,3 +124,14 @@ def test_cli_sizing_commands(capsys, tmp_path):
                                                 "yes_states": ["a"], "asks": [["0.45", 10]]}]}]))
     assert cli_main(["sizing", "replay", "--input", str(rec)]) == 0
     assert "IN-SAMPLE" in capsys.readouterr().out
+
+
+def test_record_replay_refuses_unmappable_candidates():
+    record = {"as_of_utc": "2026-09-24T22:00:00+00:00", "venue": "kalshi", "states": ["a", "b"],
+              "model_probabilities": [0.7, 0.3], "outcome_state": "a",
+              "candidates": [{"native_id": "KXHIGHNY-26SEP25-B1", "side": "MAYBE", "yes_states": ["a"],
+                              "asks": [["0.50", 50]]},
+                             {"native_id": "KXHIGHNY-26SEP25-B1", "side": "NO", "yes_states": ["zzz"],
+                              "asks": [["0.50", 50]]}]}
+    out = se.replay_records([record], (sv2.POLICY_C,))
+    assert out["refused"] == {"OUTCOME_MAPPING_UNKNOWN": 2} and out["policies"][sv2.POLICY_C.policy_id]["trades"] == 0
