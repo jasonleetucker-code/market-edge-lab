@@ -404,9 +404,12 @@ the ADR 0030 install makes it **v6**. The shadow ledger stays v1.
 Nothing is deleted. Run the steps as root, in order, outside 17:40-18:50 ET and not during a
 settlement run (about 11:15 and 16:15 ET):
 
-1. **Stop every timer, the odds pilot included, and check that nothing is running:**
+1. **Stop every timer, the odds pilot included, and check that nothing is running.** Name the
+   timers: `disable` does not reliably expand a glob for unit files, and step 5 deletes unit files, so
+   every timer must really be disabled first.
    ```bash
-   sudo systemctl disable --now 'edgelab-*.timer'
+   sudo systemctl disable --now edgelab-pfm.timer edgelab-decision.timer edgelab-recheck.timer edgelab-status.timer edgelab-backup.timer edgelab-shadow.timer edgelab-settlement.timer edgelab-observe.timer edgelab-observe-close.timer edgelab-odds.timer
+   systemctl is-enabled edgelab-pfm.timer edgelab-decision.timer edgelab-recheck.timer edgelab-status.timer edgelab-backup.timer edgelab-shadow.timer edgelab-settlement.timer edgelab-observe.timer edgelab-observe-close.timer edgelab-odds.timer   # expect disabled (or not-found) for every one
    systemctl list-units 'edgelab-*' --state=running --no-legend   # expect no capture job
    ```
 2. **Make a verified backup (still the new code):**
@@ -445,6 +448,7 @@ settlement run (about 11:15 and 16:15 ET):
 6. **Re-enable the timers supported by the rollback target and restart the dashboard:**
    ```bash
    sudo systemctl enable --now edgelab-pfm.timer edgelab-decision.timer edgelab-recheck.timer edgelab-status.timer edgelab-backup.timer edgelab-shadow.timer edgelab-settlement.timer
+   sudo systemctl enable --now edgelab-odds.timer   # v5 target only, and only if it was enabled before
    sudo systemctl restart edgelab-dashboard.service
    ```
 7. **Verify on the old code:**
@@ -462,4 +466,4 @@ settlement run (about 11:15 and 16:15 ET):
 Re-installing the newer code later stamps it again: the migration is idempotent, and every row
 written meanwhile is kept. The shadow
 ledger's schema did not change (v1), so the rolled-back code reads it. To stop all collection
-and keep the data: `sudo systemctl disable --now 'edgelab-*.timer'`.
+and keep the data: `sudo systemctl disable --now edgelab-pfm.timer edgelab-decision.timer edgelab-recheck.timer edgelab-status.timer edgelab-backup.timer edgelab-shadow.timer edgelab-settlement.timer edgelab-observe.timer edgelab-observe-close.timer edgelab-odds.timer` (named, not a glob).

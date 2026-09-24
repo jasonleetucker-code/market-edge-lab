@@ -101,6 +101,10 @@ def test_observation_timers_match_adr0030_option_a_and_are_nonpersistent():
     assert "observe plan" in starts[0] and "--ledger /var/lib/market-edge-lab/ledger/shadow_ledger.sqlite3" in starts[0]
     assert "observe capture" in starts[1]
     assert service[("Service", "TimeoutStartSec")] == ["6min"]
+    # The code's view of the schedule is pinned to the unit files (close-tick alignment, retry horizon).
+    from edge_lab import price_observations as po
+    assert close[("Timer", "OnCalendar")] == [f"*-*-* {po.CLOSE_TICK_UTC.isoformat()} UTC"]
+    assert "/15:00 " in observe[("Timer", "OnCalendar")][0] and po.SCHEDULED_TICK_INTERVAL.total_seconds() == 15 * 60
     close_service = _parse("edgelab-observe-close.service")
     assert close_service[("Service", "ExecStart")] == [
         "/opt/market-edge-lab/venv/bin/python -m edge_lab.cli observe capture --db /var/lib/market-edge-lab/db/edge_lab.sqlite3"
@@ -1024,3 +1028,17 @@ def test_the_webhook_fires_only_for_production_failures():
     # The origin is never decided from the clock: `date` only stamps the record.
     assert [line for line in text.splitlines() if "date " in line and not line.lstrip().startswith("#")] == [
         'now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"']
+
+
+def test_stop_and_rollback_name_every_timer_instead_of_a_glob():
+    """`systemctl disable` does not reliably expand a glob for unit files, and the rollback deletes unit
+    files after step 1: every stop command must name each installed timer."""
+    timers = sorted(p.name for p in UNITS.glob("*.timer"))
+    for path in (ROOT / "docs/deploy/DAILY_SHADOW_ACTIVATION.md", ROOT / "deploy/vps/README.md"):
+        lines = [line for line in path.read_text().splitlines() if "disable --now" in line]
+        assert lines, path
+        for line in lines:
+            assert "*" not in line, (path, line)
+            if "edgelab-pfm.timer" in line:  # a stop-everything line, not a single-timer example
+                assert all(t in line for t in timers), (path, line)
+    assert "'edgelab-*.timer'" not in INSTALL

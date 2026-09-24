@@ -239,13 +239,17 @@ def test_failed_attempt_is_retried_then_missed_with_its_reason(store, tmp_path, 
               LISTING: MARKETS}
     _api(monkeypatch, clock, routes)
     code, report = po.capture(store, clock=clock, sleep=clock.sleep)
-    assert code == 1 and report["state"] == "PARTIAL" and report["by_status"] == {"CAPTURED": 10, "FAILED": 1}
+    # Retryable: the deadline is after the next scheduled tick, so the run records it and does not fail.
+    assert code == 0 and report["state"] == "PARTIAL_RETRYING" and report["by_status"] == {"CAPTURED": 10, "FAILED": 1}
+    assert report["failed_final"] == [] and len(report["failed_retrying"]) == 1
     t = _target(store, "post_decision_1h", bad)
     assert t["state"] == "FAILED" and t["state_reason"].startswith("BOOK_FAILED")
-    clock.now = CLOSED + timedelta(minutes=10)
+    clock.now = CLOSED + timedelta(minutes=20)
     api = _api(monkeypatch, clock, routes)
     code, report = po.capture(store, clock=clock, sleep=clock.sleep)
-    assert code == 1 and api.count("/orderbook") == 1  # only the failed target is retried
+    # The last chance before the deadline failed too: now the run fails (and would alert).
+    assert code == 1 and report["state"] == "PARTIAL" and api.count("/orderbook") == 1  # only the failed target
+    assert report["failed_retrying"] == [] and len(report["failed_final"]) == 1
     clock.now = CLOSED + timedelta(minutes=31)
     api = _api(monkeypatch, clock, routes)
     code, report = po.capture(store, clock=clock, sleep=clock.sleep)
@@ -263,7 +267,7 @@ def test_missed_targets_stay_visible(store, tmp_path, monkeypatch, model):
     assert len(report["missed"]) == 12
     t = _target(store, "post_decision_6h")
     assert t["state"] == "MISSED" and t["state_reason"].startswith("NOT_CAPTURED_BY_DEADLINE")
-    assert "scheduled ADR0030_OPTION_A" in t["state_reason"]
+    assert "(policy ADR0030_OPTION_A)" in t["state_reason"]
     summary = po.status(SnapshotStore.open_readonly(store.path), now=clock.now, systemctl=lambda args: "enabled"
                         if args[0] == "is-enabled" else "active")
     assert summary["schedule"].startswith("ADR0030_OPTION_A (owner-approved 2026-09-24)")
@@ -579,3 +583,25 @@ def test_close_tick_alignment_flags_a_moved_close_before_targets_are_missed():
         assert bad["state"] == "MISALIGNED" and bad["misaligned"][0]["close_time_utc"] == po._iso(close)
     done = po.close_tick_alignment([_close_target(datetime(2026, 9, 25, 5, tzinfo=timezone.utc), "CAPTURED")], now)
     assert done["state"] == "NO_OPEN_CLOSE_TARGET"
+
+
+def test_close_tick_alignment_allows_start_up_time_at_the_early_edge():
+    now = datetime(2026, 9, 24, 12, tzinfo=timezone.utc)
+    edge = lambda close: po.close_tick_alignment([_close_target(close)], now)["state"]
+    assert edge(datetime(2026, 9, 25, 4, 58, tzinfo=timezone.utc)) == "ALIGNED"
+    assert edge(datetime(2026, 9, 25, 4, 57, 57, tzinfo=timezone.utc)) == "MISALIGNED"  # the tick leaves < 5 s
+    assert edge(datetime(2026, 9, 25, 5, 0, 15, tzinfo=timezone.utc)) == "ALIGNED"
+    assert edge(datetime(2026, 9, 25, 5, 0, 16, tzinfo=timezone.utc)) == "MISALIGNED"
+
+
+def test_other_groups_never_run_into_a_pending_close(store, tmp_path, monkeypatch, model):
+    _planned(store, tmp_path, monkeypatch, model)
+    clock = Clock(datetime(2026, 9, 24, 4, 57, 40, tzinfo=UTC))  # pre_close and close are both due
+    monkeypatch.setattr(po, "CLOSE_GUARD", timedelta(minutes=2, seconds=30))  # no budget left before the close aim
+    api = _api(monkeypatch, clock, _closing_routes(clock))
+    code, report = po.capture(store, clock=clock, sleep=clock.sleep)
+    assert code == 0 and report["requests"] == len(api.calls) == 1 + 6 + 1  # the close group only
+    pre_close = {t["target_id"] for t in store.price_targets() if t["phase"] == "pre_close"}
+    assert pre_close and pre_close <= set(report["deferred"])
+    close_rows = [r for r in store.price_observations() if r["phase"] == "close"]
+    assert len(close_rows) == 12 and {r["close_label"] for r in close_rows} == {"CLOSE"}

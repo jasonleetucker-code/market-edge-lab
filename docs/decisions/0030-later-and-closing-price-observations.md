@@ -290,7 +290,7 @@ listing 17 KB, book about 1.5 KB):**
 04:57:45 UTC close tick for the currently observed KXHIGHNY 05:00Z close reference.
 
 **Close-time risk (independent review of PR #76).** The close window `[close - 2 min 30 s, close - 10 s]`
-contains the 04:57:45Z tick only for closes from 04:57:55Z to 05:00:15Z. Kalshi's KXHIGHNY close_time
+fits the 04:57:45Z tick, plus 5 s for start-up, only for closes from 04:58:00Z to 05:00:15Z. Kalshi's KXHIGHNY close_time
 was 23:59 ET wall time until August 2026 (03:59Z in summer, 04:59Z in winter; gate3 bulk fixture) and
 has been 05:00:00Z since. No winter (EST) close under the new convention has been observed yet.
 - If the venue moves close_time outside that range, the close-proof checks still prevent a false
@@ -301,6 +301,19 @@ has been 05:00:00Z since. No winter (EST) close under the new convention has bee
   inferred).
 - **Re-check after the 2026-11-01 DST change.** Look at the first EST close_time and the alignment
   state. If misaligned, move the close timer by a reviewed change; never relabel a late read.
+
+**Failure and alert semantics under the schedule (independent review of PR #76).**
+- A FAILED observation row is always stored as evidence.
+- A run exits non-zero, which is an `OnFailure` production alert, only when a FAILED target cannot
+  be retried by a later scheduled tick: a close target, or one whose deadline comes before the next
+  tick (`SCHEDULED_TICK_INTERVAL`, pinned to the timer). Retryable failures are reported as
+  `failed_retrying` (state `PARTIAL_RETRYING`, exit 0). This stops a one-off 5xx from alerting and from
+  overwriting the single-slot `last_failure.json` 96 times a day. A failure that persists to the last
+  chance still alerts once.
+- **Close ordering.** Other groups run first but share a request deadline capped at the earliest
+  pending close aim − 20 s (`CLOSE_GUARD`). A group without that budget is deferred, not started, so a
+  slow pre-close retry cannot push the close book past close − 10 s. A group whose own deadline has
+  passed is deferred and recorded MISSED by the next run, never fetched late.
 
 The runbook §5c contains activation, verification and manual fallback commands.
 

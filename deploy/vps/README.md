@@ -132,8 +132,11 @@ sudo journalctl -u 'edgelab-*' --since today
 To stop all collection (the data is kept):
 
 ```bash
-sudo systemctl disable --now 'edgelab-*.timer'
+sudo systemctl disable --now edgelab-pfm.timer edgelab-decision.timer edgelab-recheck.timer edgelab-status.timer edgelab-backup.timer edgelab-shadow.timer edgelab-settlement.timer edgelab-observe.timer edgelab-observe-close.timer edgelab-odds.timer
+systemctl is-enabled edgelab-pfm.timer edgelab-decision.timer edgelab-recheck.timer edgelab-status.timer edgelab-backup.timer edgelab-shadow.timer edgelab-settlement.timer edgelab-observe.timer edgelab-observe-close.timer edgelab-odds.timer   # expect disabled for every one
 ```
+
+Name the timers: `disable` does not reliably expand a glob for unit files.
 
 To roll back the code: **the evidence schema is forward-only: v5 from the ADR 0029 install, v6
 from the ADR 0030 install**, and previous code refuses a newer store. Code, units and the schema
@@ -146,7 +149,8 @@ stamp go back together, in this order. The details and expected outputs are unde
 - **Back before ADR 0029 (v4).** Run both stamps and every step below.
 
 ```bash
-sudo systemctl disable --now 'edgelab-*.timer'                        # 1. stop every timer, odds included
+sudo systemctl disable --now edgelab-pfm.timer edgelab-decision.timer edgelab-recheck.timer edgelab-status.timer edgelab-backup.timer edgelab-shadow.timer edgelab-settlement.timer edgelab-observe.timer edgelab-observe-close.timer edgelab-odds.timer   # 1. stop every timer, odds included
+systemctl is-enabled edgelab-pfm.timer edgelab-decision.timer edgelab-recheck.timer edgelab-status.timer edgelab-backup.timer edgelab-shadow.timer edgelab-settlement.timer edgelab-observe.timer edgelab-observe-close.timer edgelab-odds.timer   # 1b. expect disabled for every one before any unit file is removed
 sudo systemctl start edgelab-backup.service                           # 2. VERIFIED backup (journalctl -u edgelab-backup)
 sudo runuser -u edgelab -- /opt/market-edge-lab/venv/bin/python -m edge_lab.storage mark-v5-for-rollback --db /var/lib/market-edge-lab/db/edge_lab.sqlite3   # 3a. stamp v6 -> v5
 sudo runuser -u edgelab -- /opt/market-edge-lab/venv/bin/python -m edge_lab.storage mark-v4-for-rollback --db /var/lib/market-edge-lab/db/edge_lab.sqlite3   # 3b. stamp v5 -> v4 (only before ADR 0029)

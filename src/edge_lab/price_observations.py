@@ -92,6 +92,10 @@ MAX_TARGETS = 24  # markets per run
 MAX_REQUESTS = 40  # GETs per run, all sources together
 MAX_RUN = timedelta(minutes=4)  # hard run deadline, close waits included
 LOCK_TIMEOUT_S = 5.0
+# edgelab-observe.timer's interval (tests/test_deploy_units.py pins the two together). A FAILED target
+# whose deadline is later than the next scheduled tick is retried there, so it does not fail the run.
+SCHEDULED_TICK_INTERVAL = timedelta(minutes=15)
+CLOSE_GUARD = timedelta(seconds=20)  # other groups stop this long before a pending close group's aim
 BOOK_DEPTH = forward.BOOK_DEPTH
 MAX_LISTING_PAGES = 2
 
@@ -607,7 +611,7 @@ def expire(store: SnapshotStore, run_id: str, now: datetime) -> list[dict[str, s
             reason = f"NOT_CAPTURED_BY_DEADLINE: last attempt failed ({t['state_reason']})"
         else:
             reason = (f"NOT_CAPTURED_BY_DEADLINE: no successful capture completed in "
-                      f"[{t['due_from_utc']}, {t['deadline_utc']}] under scheduled ADR0030_OPTION_A")
+                      f"[{t['due_from_utc']}, {t['deadline_utc']}] (policy ADR0030_OPTION_A)")
             hit = protected_window_at(_t(t["due_from_utc"]), deadline)
             if hit is not None:
                 reason += f"; the due window overlaps protected window {hit[0]}"
@@ -910,7 +914,8 @@ def _check_bounds(max_targets: int, max_requests: int) -> None:
 def capture(store: SnapshotStore, *, clock: Clock | None = None, sleep: Sleep = time.sleep,
             max_targets: int = MAX_TARGETS, max_requests: int = MAX_REQUESTS) -> tuple[int, dict[str, Any]]:
     """One bounded capture run over the due targets. The caller holds the collector lock.
-    Returns (exit code, report): 1 when an attempt FAILED, else 0."""
+    Returns (exit code, report): 1 when a FAILED target cannot be retried by a later scheduled tick
+    (`failed_final`), else 0. Retryable failures are recorded and listed in `failed_retrying`."""
     clock = clock or _now
     _check_bounds(max_targets, max_requests)
     now = clock()
@@ -935,12 +940,32 @@ def capture(store: SnapshotStore, *, clock: Clock | None = None, sleep: Sleep = 
         report["deferred"] = [t["target_id"] for t in due[max_targets:]]
         due = due[:max_targets]
         req = _Requests(max_requests, now + MAX_RUN, clock, sleep)
+        by_id = {t["target_id"]: t for t in due}
+        failed_targets: dict[str, Mapping[str, Any]] = {}
         groups: dict[tuple[str, str, str, str], list[Mapping[str, Any]]] = {}
         for t in due:  # one listing read per event and phase; a close group shares one close time
             key = (t["venue"], t["native_event_id"] or t["native_market_id"], t["phase"],
                    t["target_utc"] if t["phase"] == "close" else "")
             groups.setdefault(key, []).append(t)
-        for (venue, _, _, _), targets in groups.items():
+        # Other groups run first, in target order, but never into a pending close: their requests share a
+        # deadline capped at the earliest close aim - CLOSE_GUARD, and a group without that budget left is
+        # deferred, not started. Close groups then run last with the full run budget. A group whose own
+        # deadline has passed is not fetched late: it is deferred, and the next run records it MISSED.
+        close_aims = [_t(key[3]) for key in groups if key[2] == "close"]
+        full_deadline = req.deadline
+        guard = min(close_aims) - CLOSE_GUARD if close_aims else None
+        for (venue, _, phase, _), targets in sorted(groups.items(), key=lambda kv: kv[0][2] == "close"):
+            req.deadline = full_deadline if phase == "close" or guard is None else min(full_deadline, guard)
+            if phase != "close" and clock() + forward.MIN_REQUEST_BUDGET >= req.deadline:
+                report["deferred"] += [t["target_id"] for t in targets]
+                continue
+            if phase != "close":
+                late = [t["target_id"] for t in targets if clock() > _t(t["deadline_utc"])]
+                if late:
+                    report["deferred"] += late
+                    targets = [t for t in targets if t["target_id"] not in late]
+                    if not targets:
+                        continue
             if venue == "kalshi":
                 attempts, deferred = _capture_kalshi_group(store, run_id, targets, req, clock)
             elif venue == "polymarket_us":
@@ -959,6 +984,8 @@ def capture(store: SnapshotStore, *, clock: Clock | None = None, sleep: Sleep = 
                 report["attempted"] += 1
                 for r in rows:
                     report["by_status"][r["collection_status"]] = report["by_status"].get(r["collection_status"], 0) + 1
+                    if r["collection_status"] == "FAILED":
+                        failed_targets[r["target_id"]] = by_id[r["target_id"]]
             report["deferred"] += deferred
         report["requests"] = req.used
     except BaseException:
@@ -969,8 +996,16 @@ def capture(store: SnapshotStore, *, clock: Clock | None = None, sleep: Sleep = 
     failed = report["by_status"].get("FAILED", 0)
     store.finish_run(run_id, status="partial" if failed else "succeeded",
                      error=f"{failed} FAILED observation row(s)" if failed else None)
-    report["state"] = "PARTIAL" if failed else ("CAPTURED" if report["attempted"] else "NOTHING_DUE")
-    return (1 if failed else 0), report
+    # A FAILED row stays evidence either way. The run fails (and alerts) only for a target that no later
+    # scheduled tick can retry: a close target, or one whose deadline comes before the next tick.
+    end = clock()
+    final = sorted(i for i, t in failed_targets.items()
+                   if t["phase"] == "close" or _t(t["deadline_utc"]) <= end + SCHEDULED_TICK_INTERVAL)
+    report["failed_final"] = final
+    report["failed_retrying"] = sorted(set(failed_targets) - set(final))
+    report["state"] = ("PARTIAL" if final else "PARTIAL_RETRYING") if failed else (
+        "CAPTURED" if report["attempted"] else "NOTHING_DUE")
+    return (1 if final else 0), report
 
 
 # --------------------------------------------------------------------------- status and history
@@ -979,7 +1014,8 @@ def capture(store: SnapshotStore, *, clock: Clock | None = None, sleep: Sleep = 
 SCHEDULE_POLICY = ("ADR0030_OPTION_A (owner-approved 2026-09-24): edgelab-observe.timer at :05/:20/:35/:50 "
                    "America/New_York; edgelab-observe-close.timer at 04:57:45 UTC; both Persistent=false")
 OBSERVE_TIMERS = ("edgelab-observe.timer", "edgelab-observe-close.timer")
-CLOSE_TICK_UTC = dtime(4, 57, 45)  # edgelab-observe-close.timer; the unit test pins the two together
+CLOSE_TICK_UTC = dtime(4, 57, 45)  # edgelab-observe-close.timer; tests/test_deploy_units.py pins the two
+CLOSE_TICK_START_SLACK = timedelta(seconds=5)  # interpreter start and lock before the first request
 
 
 def timer_states(run: Callable[[Sequence[str]], str] | None = None) -> dict[str, str]:
@@ -1005,7 +1041,8 @@ def close_tick_alignment(targets: Sequence[Mapping[str, Any]], now: datetime) ->
     """Whether each open close target's due window contains the fixed close tick.
 
     The close timer is pinned to 04:57:45 UTC for the observed 05:00:00Z KXHIGHNY close; the window
-    [close - 2 min 30 s, close - 10 s] contains the tick for closes from 04:57:55Z to 05:00:15Z. Before
+    [close - 2 min 30 s, close - 10 s] fits the tick plus 5 s start-up for closes from 04:58:00Z to
+    05:00:15Z. Before
     August 2026 close_time was 23:59 ET wall time (03:59Z in summer, 04:59Z in winter). If the venue moves
     it outside that range, every close target would silently become MISSED: this says so beforehand."""
     aligned, misaligned = 0, []
@@ -1018,7 +1055,7 @@ def close_tick_alignment(targets: Sequence[Mapping[str, Any]], now: datetime) ->
         tick = datetime.combine(due.date(), CLOSE_TICK_UTC, tzinfo=timezone.utc)
         if tick < due:
             tick += timedelta(days=1)
-        if tick <= deadline:
+        if tick + CLOSE_TICK_START_SLACK <= deadline:
             aligned += 1
         else:
             misaligned.append({"target_id": t["target_id"], "close_time_utc": t["close_time_utc"],

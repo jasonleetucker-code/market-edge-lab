@@ -174,5 +174,6 @@ Next (owner):
        systemctl list-timers 'edgelab-*'
      $SEPARATELY_ACTIVATED.timer is installed but stays disabled until the Odds API activation
      in docs/deploy/DAILY_SHADOW_ACTIVATION.md section 5b (key, odds plan, one odds smoke).
-  Stop everything at any time: sudo systemctl disable --now 'edgelab-*.timer'
+  Stop everything at any time (named timers; disable does not reliably expand a glob):
+       sudo systemctl disable --now ${CORE_TIMERS[*]/%/.timer} $SEPARATELY_ACTIVATED.timer
 EOF
