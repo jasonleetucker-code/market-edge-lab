@@ -73,6 +73,10 @@ from .freshness import parse_utc
 from .notifications import (NEVER_PUSHED_ORIGINS, DeliveryStatus, EventType, JsonlOutbox, Limits, NotificationEvent,
                             Origin, Severity, check_event, dispatch, event_from_dict, make_event)
 from .redaction import REDACTED, redact_text
+# The fail-closed confirmation check lives in its own sink-free module, so the read-only dashboard
+# can use it without importing this file. These names are re-exported here for compatibility.
+from .verification import (FAILURE_NAME, INVOCATION_ID, UNIT_NAME, VERIFICATION_NAME, VERIFY_DIR,  # noqa: F401
+                           verification_confirmed)
 
 ENV_TOPIC_URL = "EDGE_LAB_NTFY_TOPIC_URL"
 ENV_TOKEN = "EDGE_LAB_NTFY_TOKEN"
@@ -420,13 +424,6 @@ RELAY_NAME = "ntfy_relay.jsonl"
 # Only events this recent are relayed: a first activation, or a relay that was down, must not
 # replay days of history onto the phone. Older events stay in the outbox and the dashboard.
 RELAY_MAX_AGE = timedelta(hours=36)
-INVOCATION_ID = re.compile(r"[0-9a-f]{32}")  # a systemd InvocationID, as alert.sh records it
-UNIT_NAME = re.compile(r"edgelab-[A-Za-z0-9_@.-]{1,80}")
-# Written by alert.sh: PRODUCTION failures only, and root-confirmed fail-closed checks only.
-FAILURE_NAME = "last_failure.json"
-VERIFICATION_NAME = "last_verification.json"
-# Root-owned directory holding the fail-closed check's confirmations (verify_fail_closed.sh).
-VERIFY_DIR = "/var/lib/market-edge-lab-verify"
 
 
 def _summarize(results: list[dict[str, Any]]) -> dict[str, int]:
@@ -456,37 +453,6 @@ class _RecordingSink:
             except OSError as exc:  # the push went out; never let dispatch re-send it this run
                 self.last_error = f"relay history not written: {type(exc).__name__}"
         return status
-
-
-def _trusted(path: str, uid: int) -> bool:
-    """Owned by `uid`, not a symlink, not writable by group or others (as alert.sh checks)."""
-    try:
-        st = os.lstat(path)
-    except OSError:
-        return False
-    return not os.path.islink(path) and st.st_uid == uid and not st.st_mode & 0o022
-
-
-def verification_confirmed(record: Mapping[str, Any], *, verify_dir: str | os.PathLike[str] = VERIFY_DIR,
-                           trusted_uid: int = 0) -> bool:
-    """Whether root confirmed this failure record's exact invocation as the runbook §4.1
-    fail-closed check (deploy/vps/verify_fail_closed.sh). The status directory is writable by
-    every edgelab process, so the record's own `origin` is never trusted alone: the root-owned
-    confirmation must exist with exactly the expected content."""
-    unit, invocation = record.get("unit"), record.get("invocation_id")
-    if not (isinstance(unit, str) and UNIT_NAME.fullmatch(unit) and isinstance(invocation, str)
-            and INVOCATION_ID.fullmatch(invocation)):
-        return False
-    directory = os.fspath(verify_dir)
-    confirmation = os.path.join(directory, f"confirmed-{invocation}")
-    if not (_trusted(directory, trusted_uid) and _trusted(confirmation, trusted_uid)):
-        return False
-    expected = f'{{"unit": "{unit}", "invocation_id": "{invocation}", "status": "rejected_out_of_window"}}\n'
-    try:
-        with open(confirmation, "rb") as fh:
-            return fh.read(1024) == expected.encode("ascii")
-    except OSError:
-        return False
 
 
 def unit_failure_event(record: Mapping[str, Any], *, verify_dir: str | os.PathLike[str] = VERIFY_DIR,

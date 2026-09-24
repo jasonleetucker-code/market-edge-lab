@@ -166,8 +166,34 @@ def test_the_notification_file_imports_nothing_that_can_trade():
             modules.add("." * node.level + (node.module or ""))
     allowed = {"__future__", "hashlib", "http.client", "ipaddress", "json", "os", "re", "ssl", "time", "dataclasses",
                "datetime", "typing", "urllib.error", "urllib.parse", "urllib.request", ".freshness", ".notifications",
-               ".redaction"}
+               ".redaction", ".verification"}
     assert modules <= allowed, modules - allowed
+
+
+def test_the_verification_check_is_sink_free_and_stdlib_only():
+    """`edge_lab.verification` is read by the dashboard: it must never reach the push path."""
+    import ast
+    import subprocess
+    import sys
+
+    tree = ast.parse((SRC / "edge_lab" / "verification.py").read_text(encoding="utf-8"))
+    modules = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            modules |= {a.name for a in node.names}
+        elif isinstance(node, ast.ImportFrom):
+            modules.add("." * node.level + (node.module or ""))
+    assert modules <= {"__future__", "os", "re", "typing"}, modules
+    text = (SRC / "edge_lab" / "verification.py").read_text(encoding="utf-8")
+    for forbidden in ("notify_ntfy", "NtfySink", "sink_from_env", "urllib", "socket", "http", "dispatch"):
+        assert forbidden not in text, forbidden
+    # Importing it in a fresh interpreter loads neither the ntfy module nor any network module.
+    probe = ("import sys, edge_lab.verification as v; "
+             "bad = sorted(m for m in ('edge_lab.notify_ntfy', 'urllib.request', 'http.client', 'socket', 'ssl') "
+             "if m in sys.modules); print(','.join(bad))")
+    result = subprocess.run([sys.executable, "-c", probe], capture_output=True, text=True, timeout=60,
+                            env={**__import__("os").environ, "PYTHONPATH": str(SRC)})
+    assert result.returncode == 0 and result.stdout.strip() == "", (result.stdout, result.stderr)
 
 
 def test_the_notification_host_allowlist_is_reviewed_code():

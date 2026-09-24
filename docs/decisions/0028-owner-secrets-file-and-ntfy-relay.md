@@ -196,7 +196,8 @@ guessed from the clock or from "a deployment is happening".
 - **The relay** reads both files (`last_verification.json` sits beside `last_failure.json`).
   - A record is DEPLOYMENT_VERIFICATION only if it says so **and** root's confirmation of its
     exact unit and invocation exists and passes the same ownership, mode, symlink and content
-    checks (`notify_ntfy.verification_confirmed`). Such a record is held (`HELD_BY_ORIGIN`).
+    checks (`edge_lab.verification.verification_confirmed`, a stdlib-only module with no sink,
+    which the read-only dashboard also uses). Such a record is held (`HELD_BY_ORIGIN`).
   - Anything else is PRODUCTION and pushed: a missing, garbled or forged origin, and a claim
     without a confirmation.
   - Neither file is ever modified.
