@@ -192,6 +192,9 @@ def build_parser() -> argparse.ArgumentParser:
         o.add_argument("--offsets", default="24h,6h,60m", help="capture offsets before kickoff")
         if name == "plan":
             o.add_argument("--offline", action="store_true", help="use the stored discovery; no network at all")
+        if name == "run":
+            o.add_argument("--clear-cost-block", action="store_true",
+                           help="after reviewing a COST_ANOMALY, allow paid calls again")
     # --- end odds
 
     return parser
@@ -839,7 +842,7 @@ def _odds(args: argparse.Namespace) -> int:
         config=_replace(PilotConfig(), offsets=parse_offsets(args.offsets)),
     )
     if args.odds_command == "run":
-        code, report = odds_pilot.run_tick(args.db, args.ledger, settings)
+        code, report = odds_pilot.run_tick(args.db, args.ledger, settings, clear_cost_block=args.clear_cost_block)
     elif args.odds_command == "plan":
         code, report = odds_pilot.plan(args.db, args.ledger, settings, offline=args.offline)
     else:

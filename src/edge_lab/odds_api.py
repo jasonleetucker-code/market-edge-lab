@@ -96,6 +96,7 @@ class OddsApiError(RuntimeError):
     def __init__(self, message: str, *, status: int | None = None) -> None:
         super().__init__(message)
         self.status = status
+        self.fetch: http.FetchResult | None = None  # set only when a charged response could not be decoded
 
 
 class QuotaRefused(RuntimeError):
@@ -541,8 +542,12 @@ def reconcile_quota(ledger: QuotaLedger, *, opener: http.Opener | None = None,
     except OddsApiError as exc:
         return OddsFetch(QuotaState.QUOTA_UNKNOWN, str(exc), redacted)
     state = ledger.reconcile(result.response_headers)
+    try:
+        payload = _decode(result, key)
+    except OddsApiError:
+        payload = None  # the sports list is only a quota reading here; its body is not needed
     return OddsFetch(state, "reconciled" if state is not QuotaState.QUOTA_UNKNOWN else "headers unusable",
-                     redacted, payload=_decode(result, key), fetch=result, quota_after=state)
+                     redacted, payload=payload, fetch=result, quota_after=state)
 
 
 def fetch_events(sport: str, *, ledger: QuotaLedger | None = None, opener: http.Opener | None = None,
@@ -628,7 +633,15 @@ def fetch_odds(sport: str, markets: Sequence[str], *, ledger: QuotaLedger, regio
         ledger.mark_ambiguous(reservation, str(exc))
         raise
     after = ledger.settle(reservation, result.response_headers)
-    payload = _decode(result, key)
+    try:
+        payload = _decode(result, key)
+        undecodable = None
+    except OddsApiError as exc:
+        undecodable = exc
+    if undecodable is not None:
+        # The call was charged: hand the (redacted) raw response to the caller as evidence.
+        undecodable.fetch = result
+        raise undecodable
     return OddsFetch(QuotaState.READY, f"reserved {cost}", redacted, payload=payload, fetch=result,
                      reservation=reservation, quota_after=after)
 

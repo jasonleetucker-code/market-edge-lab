@@ -394,6 +394,57 @@ END;
 """
 
 
+V4_REQUIRED_TABLES = ("collection_runs", "snapshots", "source_health", "document_blobs", "document_retrievals",
+                      "forward_captures")
+
+
+def mark_schema_v4_for_rollback(db_path: str | Path) -> dict[str, Any]:
+    """Code rollback helper (runbook "Rollback"): stamp a v5 evidence store as v4 so the
+    previous (v4) code opens it.
+
+    Nothing is deleted or rewritten. v5 only added the odds capture tables and their triggers,
+    which v4 code never reads; every v4 table, column and trigger is checked present first.
+    Re-installing v5 code later stamps v5 again (its migration is idempotent). Refuses anything
+    that is not exactly a complete v5 store. Run it with the collector timers stopped."""
+    path = Path(db_path)
+    if path.is_symlink() or not path.is_file():
+        raise ValueError(f"{path} is missing or not a regular file")
+    with closing(sqlite3.connect(path, timeout=30.0)) as conn:
+        conn.row_factory = sqlite3.Row
+        version = int(conn.execute("PRAGMA user_version").fetchone()[0])
+        if version != 5:
+            raise ValueError(f"expected a v5 evidence store, found v{version}; nothing changed")
+        names = {r["name"] for r in conn.execute("SELECT name FROM sqlite_master")}
+        missing = [t for t in V4_REQUIRED_TABLES if t not in names]
+        columns = {r["name"] for r in conn.execute("PRAGMA table_info(snapshots)")}
+        missing += [f"snapshots.{c}" for c, _ in _SNAPSHOT_V2_COLUMNS if c not in columns]
+        if missing:
+            raise ValueError(f"not a complete store; missing {missing}; nothing changed")
+        if conn.execute("PRAGMA integrity_check").fetchone()[0] != "ok":
+            raise ValueError("integrity_check failed; nothing changed")
+        conn.execute("PRAGMA user_version = 4")
+        conn.commit()
+        return {"db": str(path), "from": 5, "to": 4,
+                "odds_targets_kept": int(conn.execute("SELECT COUNT(*) FROM odds_capture_targets").fetchone()[0])}
+
+
+def main(argv: list[str] | None = None) -> int:
+    """`python -m edge_lab.storage mark-v4-for-rollback --db PATH` (see the rollback runbook)."""
+    import argparse
+
+    parser = argparse.ArgumentParser(prog="python -m edge_lab.storage")
+    sub = parser.add_subparsers(dest="command", required=True)
+    rb = sub.add_parser("mark-v4-for-rollback", help="stamp a v5 evidence store as v4 before a code rollback")
+    rb.add_argument("--db", required=True)
+    args = parser.parse_args(argv)
+    try:
+        print(json.dumps(mark_schema_v4_for_rollback(args.db), sort_keys=True))
+    except ValueError as exc:
+        print(json.dumps({"status": "REFUSED", "detail": str(exc)}))
+        return 1
+    return 0
+
+
 class ReadOnlyStoreError(RuntimeError):
     """The evidence store cannot be opened read-only as required (missing, wrong schema)."""
 
@@ -472,13 +523,16 @@ class SnapshotStore:
                             # Another process migrated concurrently.
                             if "duplicate column" not in str(exc):
                                 raise
-                conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
             # Idempotent (IF NOT EXISTS): also installs protections added after a
             # database was first migrated.
             conn.executescript(_SCHEMA_V2)
             conn.executescript(_SCHEMA_V3)
             conn.executescript(_SCHEMA_V4)
-            conn.executescript(_SCHEMA_V5)
+            # v5's tables and triggers land in one transaction, and the version is stamped
+            # only after every object exists: a crash leaves either v4 or a complete v5.
+            conn.executescript("BEGIN IMMEDIATE;\n" + _SCHEMA_V5 + "\nCOMMIT;")
+            if version < SCHEMA_VERSION:
+                conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
 
     def schema_version(self) -> int:
         with closing(self._connect()) as conn, conn:
@@ -966,3 +1020,7 @@ class SnapshotStore:
             ).fetchall()
         return {row["kind"]: row["latest"] for row in rows}
 
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

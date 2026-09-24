@@ -9,7 +9,7 @@ import json
 import sqlite3
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from urllib.error import URLError
+from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qs, urlsplit
 
 import pytest
@@ -69,7 +69,10 @@ class Provider:
     """A scripted The Odds API: events (free), sports (free), odds (paid, 3 credits)."""
 
     def __init__(self, events=None, *, used: int = 20, remaining: int = 480, headers_on_free: bool = True,
-                 odds_error: BaseException | None = None, sports_headers: bool = True):
+                 odds_error: BaseException | None = None, sports_headers: bool = True,
+                 events_error: BaseException | None = None, charge: int | None = None,
+                 odds_raw: bytes | None = None, sports_raw: bytes = b"[]"):
+        self.events_error, self.charge, self.odds_raw, self.sports_raw = events_error, charge, odds_raw, sports_raw
         self.events = list(EVENTS if events is None else events)
         self.used, self.remaining = used, remaining
         self.headers_on_free = headers_on_free
@@ -94,19 +97,22 @@ class Provider:
         chosen = [e for e in self.events if (lo is None or e["commence_time"] >= lo)
                   and (hi is None or e["commence_time"] <= hi)]
         if parts.path.endswith("/events/"):
+            if self.events_error is not None:
+                raise self.events_error
             return HeaderResponse(json.dumps(chosen).encode(), url=url,
                                   headers=self._headers(0) if self.headers_on_free else {})
         if parts.path == "/v4/sports/":
-            return HeaderResponse(b"[]", url=url, headers=self._headers(0) if self.sports_headers else
+            return HeaderResponse(self.sports_raw, url=url, headers=self._headers(0) if self.sports_headers else
                                   {"X-Requests-Remaining": "lots"})
         assert parts.path.endswith("/odds/"), url
         if self.odds_error is not None:
             raise self.odds_error
         assert q["markets"] == "h2h,spreads,totals" and q["regions"] == "us"
-        cost = 3 if chosen else 0  # the provider does not charge an empty response
+        cost = (3 if chosen else 0) if self.charge is None else self.charge  # an empty response is free
         self.used += cost
         self.remaining -= cost
-        return HeaderResponse(json.dumps([odds_for(e) for e in chosen]).encode(), url=url, headers=self._headers(cost))
+        body = self.odds_raw if self.odds_raw is not None else json.dumps([odds_for(e) for e in chosen]).encode()
+        return HeaderResponse(body, url=url, headers=self._headers(cost))
 
 
 class Clock:
@@ -487,3 +493,123 @@ def test_odds_targets_and_transitions_are_immutable(tmp_path):
             conn.execute("INSERT INTO odds_capture_transitions(target_id, state, at_utc) VALUES ('t1', 'MISSED', 'x')")
     with pytest.raises(ValueError):
         store.record_odds_transition(target_id="t1", state="DONE", at_utc="x")
+
+
+# ------------------------------------------------------------------ review fixes: pacing, absence, anomalies
+
+def http_error(code):
+    return HTTPError("https://api.the-odds-api.com/x", code, "err", {}, None)
+
+
+def test_failing_discovery_is_paced_and_alerts_once(paths):
+    provider = Provider(events_error=URLError("down"))
+    code, report = tick(paths, provider, utc(2026, 10, 1, 12, 0))
+    assert code == 1 and report["discovery"]["state"] == "FAILED"  # a new failure alerts
+    for minutes in (15, 30, 45, 5 * 60):
+        code, report = tick(paths, provider, utc(2026, 10, 1, 12, 0) + timedelta(minutes=minutes))
+        assert code == 0 and report["discovery"]["state"] == "FAILED_WAITING"
+    assert len(provider.calls) == 1  # no retry before discovery_interval
+    code, report = tick(paths, provider, utc(2026, 10, 1, 18, 0))
+    assert len(provider.calls) == 2 and report["discovery"]["state"] == "FAILED" and code == 0  # same failure
+    provider.events_error = None
+    code, report = tick(paths, provider, utc(2026, 10, 2, 0, 0))
+    assert code == 0 and report["discovery"]["state"] == "REFRESHED"
+
+
+@pytest.mark.parametrize("status", [401, 403])
+def test_a_rejected_key_is_a_setup_state_not_an_alert_loop(paths, status):
+    provider = Provider()
+    tick(paths, provider, utc(2026, 10, 3, 5, 0))  # good discovery, targets planned
+    provider.events_error = http_error(status)
+    code, report = tick(paths, provider, utc(2026, 10, 3, 12, 0))
+    assert code == 0 and report["discovery"]["state"] == "KEY_REJECTED" and report["state"] == "KEY_REJECTED"
+    # A slot falls due while the key is rejected: nothing is paid for.
+    code, report = tick(paths, provider, utc(2026, 10, 3, 17, 0))
+    assert code == 0 and report["state"] == "KEY_REJECTED" and provider.paid() == []
+    rows = SnapshotStore(paths[0]).odds_targets(sport=SPORT)
+    assert any(r["state"] == "SETUP_NEEDED" and "KEY_REJECTED" in r["reason"] for r in rows)
+    assert sum("/events/" in c for c in provider.calls) == 2  # paced: one retry per discovery_interval at most
+
+
+def test_a_game_missing_from_a_fresh_discovery_is_never_paid_for_and_can_come_back(paths):
+    provider = Provider()
+    tick(paths, provider, utc(2026, 10, 3, 5, 0))
+    provider.events = [e for e in EVENTS if e["id"] not in ("e1", "e2", "e3")]  # the 13:00 games vanish
+    code, report = tick(paths, provider, utc(2026, 10, 3, 11, 0))
+    assert report["targets"]["event_absent"] == 9
+    code, report = tick(paths, provider, utc(2026, 10, 3, 17, 0))  # their T-24h slot is due
+    assert provider.paid() == [] and report["state"] == "IDLE"
+    rows = [r for r in SnapshotStore(paths[0]).odds_targets(sport=SPORT) if r["event_id"] in ("e1", "e2", "e3")]
+    assert rows and all(r["state"] in ("DEFERRED", "MISSED") for r in rows)
+    assert all(r["reason"].startswith("EVENT_ABSENT") for r in rows if r["state"] == "DEFERRED")
+    provider.events = EVENTS  # the games are listed again
+    tick(paths, provider, utc(2026, 10, 3, 23, 10))
+    rows = [r for r in SnapshotStore(paths[0]).odds_targets(sport=SPORT) if r["event_id"] == "e1"]
+    assert {r["offset_label"]: r["state"] for r in rows}["T-60m"] == "PLANNED"
+
+
+def test_an_empty_discovery_does_not_mark_every_game_absent(paths):
+    provider = Provider()
+    tick(paths, provider, utc(2026, 10, 3, 5, 0))
+    provider.events = []
+    code, report = tick(paths, provider, utc(2026, 10, 3, 11, 0))
+    assert report["targets"]["event_absent"] == 0
+    tick(paths, provider, utc(2026, 10, 3, 17, 0))
+    assert len(provider.paid()) == 1
+
+
+def test_a_non_json_quota_reconcile_keeps_quota_unknown_and_closes_the_run(paths):
+    provider = Provider(headers_on_free=False, sports_raw=b"<html>not json</html>", sports_headers=False)
+    tick(paths, provider, utc(2026, 10, 3, 10, 0))
+    code, report = tick(paths, provider, utc(2026, 10, 3, 17, 0))
+    assert report["state"] == "QUOTA_UNKNOWN" and provider.paid() == []
+    with sqlite3.connect(paths[0]) as conn:
+        assert conn.execute("SELECT COUNT(*) FROM collection_runs WHERE status = 'running'").fetchone()[0] == 0
+
+
+def test_reconcile_quota_tolerates_a_non_json_body(tmp_path):
+    led = oa.QuotaLedger(tmp_path / "q.json", clock=Clock(utc(2026, 10, 1)))
+    out = oa.reconcile_quota(led, opener=Provider(sports_raw=b"nope"), environ=ENV)
+    assert out.state is oa.QuotaState.READY and out.payload is None
+
+
+def test_a_charge_above_the_estimate_stops_paid_calls_until_cleared(paths):
+    provider = Provider(charge=6)
+    tick(paths, provider, utc(2026, 10, 3, 10, 0))
+    code, report = tick(paths, provider, utc(2026, 10, 3, 17, 0))
+    assert code == 1 and report["state"] == "COST_ANOMALY" and report["cost_block"]["charged"] == 6
+    code, report = tick(paths, provider, utc(2026, 10, 3, 20, 25))  # the 16:25 game's T-24h: blocked
+    assert code == 0 and report["state"] == "COST_BLOCKED" and len(provider.paid()) == 1
+    rows = SnapshotStore(paths[0]).odds_targets(sport=SPORT)
+    assert any(r["state"] == "QUOTA_EXHAUSTED" and "COST_ANOMALY" in r["reason"] for r in rows)
+    provider.charge = None
+    code, report = tick(paths, provider, utc(2026, 10, 3, 20, 30), clear_cost_block=True)
+    assert report["state"] == "CAPTURED" and len(provider.paid()) == 2 and "cost_block" not in report
+
+
+def test_an_undecodable_paid_response_is_kept_as_raw_evidence_and_not_retried(paths):
+    provider = Provider(odds_raw=b"<html>upstream error</html>")
+    tick(paths, provider, utc(2026, 10, 3, 10, 0))
+    code, report = tick(paths, provider, utc(2026, 10, 3, 17, 0))
+    assert code == 1 and report["state"] == "FAILED" and report["fired"]["raw_document_id"]
+    with sqlite3.connect(paths[0]) as conn:
+        url, doc_type = conn.execute("SELECT requested_url, doc_type FROM document_retrievals").fetchone()
+    assert doc_type == "odds_undecodable_response" and "apiKey=REDACTED" in url and FAKE not in url
+    tick(paths, provider, utc(2026, 10, 3, 17, 5))
+    assert len(provider.paid()) == 1
+
+
+def test_a_broken_proof_fails_closed_without_a_paid_call(paths, monkeypatch):
+    from edge_lab import odds_schedule
+
+    provider = Provider()
+    tick(paths, provider, utc(2026, 10, 3, 10, 0))
+
+    def broken(*args, **kwargs):
+        raise odds_schedule.BudgetInvariantError("bug")
+
+    monkeypatch.setattr(op, "budget", broken)
+    code, report = tick(paths, provider, utc(2026, 10, 3, 17, 0))
+    assert code == 1 and report["state"] == "FAILED" and provider.paid() == []
+    with sqlite3.connect(paths[0]) as conn:
+        assert conn.execute("SELECT COUNT(*) FROM collection_runs WHERE status = 'running'").fetchone()[0] == 0

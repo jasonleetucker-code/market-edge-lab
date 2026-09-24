@@ -22,7 +22,7 @@ Policy (owner correction 3, 2026-09-24):
   first) before the reservation for events not yet discovered. What does not fit is
   SKIPPED_BUDGET (known) or reported as unreservable (unknown), never spent.
 - **Unknown future weeks** (after the last discovered kickoff, up to the end of the month plus
-  the largest offset) use an explicit conservative assumption, `NFL_WORST_CASE`: at most 10
+  the largest offset) use an explicit conservative assumption, `NFL_WORST_CASE`: at most 11
   distinct kickoff groups in any 7-day week, and a per-weekday maximum for a partial week.
   Evidence for the numbers is in ADR 0029. Known slots are always counted exactly.
 - **Quota unknown means no paid call.** Without a provider reading this month the proof is
@@ -93,10 +93,11 @@ class WorstCaseAssumption:
 
 # NFL: TNF, Sun early (London/Germany 09:30), Sun 13:00, Sun 16:05/16:25 (one group after
 # coalescing), SNF, MNF (sometimes two), late-season Saturdays (up to 3), Thanksgiving (3),
-# Black Friday, Christmas. The heaviest recent weeks had 9 groups (ADR 0029); 10 leaves margin.
+# Black Friday, Christmas. The heaviest recent week had 10 groups (2024 week 17: Wed 2, Thu 1,
+# Sat 3, Sun 3, Mon 1; ADR 0029); 11 leaves margin.
 NFL_WORST_CASE = WorstCaseAssumption(
-    name="nfl_v1",
-    max_groups_per_week=10,
+    name="nfl_v2",
+    max_groups_per_week=11,
     #                       Mon Tue Wed Thu Fri Sat Sun
     max_groups_by_weekday=(2, 1, 2, 3, 1, 3, 4),
     expected_groups_per_week=6.0,
@@ -287,6 +288,10 @@ def unknown_groups(start: datetime, end: datetime, assumption: WorstCaseAssumpti
     return worst, min(expected, worst), len(dates)
 
 
+class BudgetInvariantError(RuntimeError):
+    """The proof's own invariant failed: a bug, never a reason to spend. Callers fail closed."""
+
+
 @dataclass(frozen=True)
 class QuotaReading:
     """What the quota ledger knows. `state` is the ledger's QuotaState value."""
@@ -412,9 +417,11 @@ def budget(slots: Sequence[Slot], *, now: datetime, quota: QuotaReading, cost_pe
     if headroom < 0 or quota.state == "QUOTA_EXHAUSTED":
         state = "QUOTA_EXHAUSTED"
         notes.append("no headroom under the ceiling or the provider's remaining quota")
-    # The invariant this function exists for. It holds by construction; fail loudly if not.
-    if state == "PROVEN":
-        assert worst <= config.ceiling and worst - spent <= quota.provider_remaining - quota.outstanding, (worst, spent)
+    # The invariant this function exists for. It holds by construction; fail closed if not.
+    if state == "PROVEN" and not (worst <= config.ceiling
+                                  and worst - spent <= quota.provider_remaining - quota.outstanding):
+        raise BudgetInvariantError(f"worst case {worst} breaks the ceiling {config.ceiling} or the provider "
+                                   f"remaining {quota.provider_remaining} (spent {spent})")
     return BudgetProof(state=state, spent=spent, provider_remaining=quota.provider_remaining, headroom=headroom,
                        classes=tuple(classes), admitted_slot_ids=tuple(s.slot_id for s in admitted),
                        skipped_slot_ids=tuple(s.slot_id for s in skipped), worst_case_month_credits=worst,

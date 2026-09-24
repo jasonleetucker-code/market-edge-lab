@@ -134,3 +134,10 @@ To roll back the code:
 ```bash
 sudo mv /opt/market-edge-lab/app /opt/market-edge-lab/app.bad && sudo mv /opt/market-edge-lab/app.prev /opt/market-edge-lab/app
 ```
+
+**The evidence schema is forward-only from the ADR 0029 install (v5).** Previous code refuses a
+v5 store. Before moving the code back past that install, stop the timers and back up, then stamp
+the store v4 with the still-installed new code. v5 only added tables, and nothing is deleted:
+`sudo runuser -u edgelab -- /opt/market-edge-lab/venv/bin/python -m edge_lab.storage mark-v4-for-rollback --db /var/lib/market-edge-lab/db/edge_lab.sqlite3`.
+Code and unit files go back together. The full, tested procedure is under "Rollback" in
+`docs/deploy/DAILY_SHADOW_ACTIVATION.md`.

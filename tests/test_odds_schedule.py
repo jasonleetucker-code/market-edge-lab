@@ -158,7 +158,7 @@ def _known_through_month(events):
 def test_unknown_groups_full_weeks_then_weekday_maxima():
     a = sch.NFL_WORST_CASE
     worst, expected, days = sch.unknown_groups(utc(2026, 10, 5, 12), utc(2026, 10, 11, 12), a)  # Mon..Sun
-    assert days == 7 and worst == 10 and expected == 6
+    assert days == 7 and worst == 11 and expected == 6
     worst, _, days = sch.unknown_groups(utc(2026, 10, 10, 12), utc(2026, 10, 11, 12), a)  # Sat, Sun
     assert days == 2 and worst == 3 + 4
     assert sch.unknown_groups(utc(2026, 10, 12), utc(2026, 10, 11), a) == (0, 0, 0)

@@ -161,7 +161,8 @@ def _event_coverage(snapshot: odds_api.OddsSnapshot, native_event: str, markets:
 
 def run_tick(db_path: str | Path, ledger_path: str | Path, settings: RunnerSettings = RunnerSettings(), *,
              clock: Clock = _real_clock, opener: http.Opener | None = None, pacer: http.Pacer | None = None,
-             environ: Mapping[str, str] | None = None, lock_timeout_s: float = 5.0) -> tuple[int, dict[str, Any]]:
+             environ: Mapping[str, str] | None = None, lock_timeout_s: float = 5.0,
+             clear_cost_block: bool = False) -> tuple[int, dict[str, Any]]:
     """One idempotent tick. Returns (exit code, report). The report never holds the key."""
     now = clock()
     cfg = settings.config
@@ -179,7 +180,7 @@ def run_tick(db_path: str | Path, ledger_path: str | Path, settings: RunnerSetti
     try:
         with exclusive_lock(ledger_path.with_name(ledger_path.name + ".tick.lock"), timeout_s=lock_timeout_s):
             return _tick_locked(db_path, ledger_path, settings, now, clock, opener, pacer, environ, key_present,
-                                report)
+                                report, clear_cost_block)
     except LockBusy:
         report.update(state="LOCK_BUSY", detail="another odds tick is running; this one did nothing")
         return 0, report
@@ -191,16 +192,61 @@ def _setup_text() -> str:
             "/etc/market-edge-lab/secrets.env (sudoedit; never in git or chat). Nothing was sent.")
 
 
+class PilotState:
+    """Small non-secret runner state beside the quota ledger (`<ledger>.pilot.json`): the last
+    discovery attempt and its outcome (to pace retries and alert only on a change), and a cost
+    block set when the provider charged more than the estimate. Never holds the key."""
+
+    def __init__(self, ledger_path: Path) -> None:
+        self.path = ledger_path.with_name(ledger_path.name + ".pilot.json")
+        try:
+            loaded = json.loads(self.path.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            loaded = {}
+        self.data: dict[str, Any] = loaded if isinstance(loaded, dict) else {}
+
+    def get(self, key: str) -> Any:
+        return self.data.get(key)
+
+    def set(self, **values: Any) -> None:
+        self.data.update(values)
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = self.path.with_name(f"{self.path.name}.{uuid.uuid4().hex}.tmp")
+        tmp.write_text(json.dumps(self.data, sort_keys=True, indent=1), encoding="utf-8")
+        tmp.replace(self.path)
+
+
+KEY_REJECTED_STATUSES = (401, 403)
+
+
 def _tick_locked(db_path: Path, ledger_path: Path, settings: RunnerSettings, now: datetime, clock: Clock,
                  opener: http.Opener | None, pacer: http.Pacer | None, environ: Mapping[str, str] | None,
-                 key_present: bool, report: dict[str, Any]) -> tuple[int, dict[str, Any]]:
-    cfg = settings.config
+                 key_present: bool, report: dict[str, Any], clear_cost_block: bool = False) -> tuple[int, dict[str, Any]]:
     store = SnapshotStore(db_path)
-    ledger = odds_api.QuotaLedger(ledger_path, cfg.ceiling, clock=clock)
     run = _LazyRun(store)
+    try:
+        return _tick_body(store, run, ledger_path, settings, now, clock, opener, pacer, environ, key_present, report,
+                          clear_cost_block)
+    except Exception as exc:  # never leave a collection run 'running' or print a raw error
+        run.finish(True)
+        report.update(state="FAILED", error_kind=type(exc).__name__,
+                      detail="unexpected error; the tick stopped (see the journal for the redacted traceback)")
+        return 1, report
+
+
+def _tick_body(store: SnapshotStore, run: _LazyRun, ledger_path: Path, settings: RunnerSettings, now: datetime,
+               clock: Clock, opener: http.Opener | None, pacer: http.Pacer | None, environ: Mapping[str, str] | None,
+               key_present: bool, report: dict[str, Any], clear_cost_block: bool) -> tuple[int, dict[str, Any]]:
+    cfg = settings.config
+    ledger = odds_api.QuotaLedger(ledger_path, cfg.ceiling, clock=clock)
+    pilot = PilotState(ledger_path)
     failed = False
+    alert = False  # exit 1 only for a new failure, not for every tick of a known one
     notes: list[str] = []
     stamp = iso_z(now)
+    if clear_cost_block and pilot.get("cost_block"):
+        notes.append(f"cost block cleared by the operator (was: {pilot.get('cost_block')})")
+        pilot.set(cost_block=None)
 
     def move(row: Mapping[str, Any], state: str, reason: str | None = None, **extra: Any) -> None:
         store.record_odds_transition(target_id=row["target_id"], state=state, at_utc=stamp, reason=reason, **extra)
@@ -217,9 +263,14 @@ def _tick_locked(db_path: Path, ledger_path: Path, settings: RunnerSettings, now
     refreshed: tuple[tuple[ScheduledEvent, ...], datetime, datetime] | None = None
     latest = store.latest_snapshot(source=SOURCE, kind="events", entity_id=settings.sport)
     last_at = _discovered_at(latest) if latest is not None else None
+    # Pace on the last ATTEMPT, successful or not: a failing or rejected discovery is retried
+    # at most every discovery_interval, not on every 15-minute tick.
+    attempted = parse_utc(pilot.get("last_discovery_attempt_utc"))
+    last_try = max((t for t in (last_at, attempted) if t is not None), default=None)
+    previous_outcome = pilot.get("discovery_outcome")
     if not key_present:
         discovery = {"state": "SETUP_NEEDED"}
-    elif last_at is None or now - last_at >= settings.discovery_interval:
+    elif last_try is None or now - last_try >= settings.discovery_interval:
         start, end = now, now + settings.discovery_horizon
         try:
             out = odds_api.fetch_events(settings.sport, ledger=ledger, opener=opener, pacer=pacer,
@@ -234,16 +285,30 @@ def _tick_locked(db_path: Path, ledger_path: Path, settings: RunnerSettings, now
                          "problems": list(problems)[:20], "quota_after": out.quota_after.value if out.quota_after else None}
             latest = store.latest_snapshot(source=SOURCE, kind="events", entity_id=settings.sport)
             last_at = _discovered_at(latest)
+            pilot.set(last_discovery_attempt_utc=stamp, discovery_outcome="OK", discovery_status=None)
         except (odds_api.OddsApiError, ValueError) as exc:
-            failed = True
-            discovery = {"state": "FAILED", "error_status": getattr(exc, "status", None),
-                         "error_kind": type(exc).__name__}
+            status = getattr(exc, "status", None)
+            outcome = "KEY_REJECTED" if status in KEY_REJECTED_STATUSES else "FAILED"
+            discovery = {"state": outcome, "error_status": status, "error_kind": type(exc).__name__,
+                         "next_attempt_after_utc": iso_z(now + settings.discovery_interval)}
+            pilot.set(last_discovery_attempt_utc=stamp, discovery_outcome=outcome, discovery_status=status)
+            if outcome == "FAILED":
+                failed = True
+                alert = alert or previous_outcome != "FAILED"
+    elif pilot.get("discovery_outcome") in ("FAILED", "KEY_REJECTED"):
+        discovery = {"state": f"{pilot.get('discovery_outcome')}_WAITING",
+                     "error_status": pilot.get("discovery_status"),
+                     "next_attempt_after_utc": iso_z(last_try + settings.discovery_interval)}
+    key_rejected = key_present and pilot.get("discovery_outcome") == "KEY_REJECTED"
     events: tuple[ScheduledEvent, ...] = ()
     discovery_snapshot_id = None
+    window: tuple[datetime, datetime] | None = None
     if latest is not None:
-        events, _, _ = _events_from_snapshot(latest, settings.sport)
+        events, _, request = _events_from_snapshot(latest, settings.sport)
         discovery_snapshot_id = int(latest["id"])
         discovery["last_discovery_utc"] = iso_z(last_at)
+        lo, hi = parse_utc(request.get("commence_from")), parse_utc(request.get("commence_to"))
+        window = (lo, hi) if lo is not None and hi is not None else None
     discovery_fresh = last_at is not None and now - last_at <= settings.discovery_max_age
     discovery["fresh"] = discovery_fresh
     report["discovery"] = discovery
@@ -277,7 +342,12 @@ def _tick_locked(db_path: Path, ledger_path: Path, settings: RunnerSettings, now
                 planned_new += 1
 
     # 5. Expired targets become MISSED, with the state they were stuck in as the reason.
-    missed = 0
+    #    A game missing from a fresh discovery that covered its kickoff (postponed, cancelled,
+    #    delisted) is held as DEFERRED EVENT_ABSENT and never paid for; it comes back if the
+    #    game reappears. A discovery with no events at all is not trusted for this.
+    present = {e.event_id for e in events}
+    absence_known = discovery_fresh and window is not None and bool(present)
+    missed = absent = 0
     rows = store.odds_targets(sport=settings.sport)
     open_rows = []
     for row in rows:
@@ -290,9 +360,19 @@ def _tick_locked(db_path: Path, ledger_path: Path, settings: RunnerSettings, now
                 why += f" ({row['reason']})"
             move(row, "MISSED", why)
             missed += 1
-        else:
-            open_rows.append(row)
-    report["targets"] = {"planned_new": planned_new, "superseded_now": superseded, "missed_now": missed}
+            continue
+        was_absent = row["state"] == "DEFERRED" and (row["reason"] or "").startswith("EVENT_ABSENT")
+        if absence_known and window[0] <= t.commence_utc <= window[1] and t.event_id not in present:
+            if not was_absent:
+                move(row, "DEFERRED", f"EVENT_ABSENT: not in the discovery of {discovery.get('last_discovery_utc')} "
+                                      "that covered its kickoff (postponed or cancelled?); no paid call")
+            absent += 1
+            continue
+        if was_absent and t.event_id in present:
+            move(row, "PLANNED")
+        open_rows.append(row)
+    report["targets"] = {"planned_new": planned_new, "superseded_now": superseded, "missed_now": missed,
+                         "event_absent": absent}
 
     # 6. Slots and the monthly proof.
     by_target = {r["target_id"]: r for r in open_rows}
@@ -300,9 +380,12 @@ def _tick_locked(db_path: Path, ledger_path: Path, settings: RunnerSettings, now
     horizon = max((e.commence_utc for e in events), default=None)
     quota = _quota(ledger)
     fireable = [s for s in slots if s.fireable(now, cfg)]
-    if fireable and quota.state == "QUOTA_UNKNOWN" and key_present:
-        rec = odds_api.reconcile_quota(ledger, opener=opener, pacer=pacer, environ=environ)
-        notes.append(f"quota reconcile (free): {rec.state.value}")
+    if fireable and quota.state == "QUOTA_UNKNOWN" and key_present and not key_rejected:
+        try:
+            rec = odds_api.reconcile_quota(ledger, opener=opener, pacer=pacer, environ=environ)
+            notes.append(f"quota reconcile (free): {rec.state.value}")
+        except Exception as exc:  # stays QUOTA_UNKNOWN: no paid call
+            notes.append(f"quota reconcile (free) failed: {type(exc).__name__}; quota stays unknown")
         quota = _quota(ledger)
     proof = budget(slots, now=now, quota=quota, cost_per_call=settings.cost_per_call, known_horizon=horizon,
                    config=cfg)
@@ -332,9 +415,19 @@ def _tick_locked(db_path: Path, ledger_path: Path, settings: RunnerSettings, now
                 if row["state"] != new_state:
                     move(row, new_state, reason, slot_id=slot.slot_id)
 
+        cost_block = pilot.get("cost_block")
         if not key_present:
             state = "SETUP_NEEDED"
             block("SETUP_NEEDED", "no key installed; nothing sent")
+        elif key_rejected:
+            state = "KEY_REJECTED"
+            block("SETUP_NEEDED", f"KEY_REJECTED: the provider refused the key (HTTP {pilot.get('discovery_status')}); "
+                                  "nothing sent until a discovery succeeds")
+        elif cost_block:
+            state = "COST_BLOCKED"
+            block("QUOTA_EXHAUSTED", f"COST_ANOMALY: charged {cost_block.get('charged')} > estimate "
+                                     f"{cost_block.get('estimate')}; paid calls stopped until an operator reviews "
+                                     "and runs `odds run --clear-cost-block`")
         elif not discovery_fresh:
             state = "DEFERRED"
             block("DEFERRED", f"DISCOVERY_STALE: last discovery {discovery.get('last_discovery_utc')}; no paid call")
@@ -351,17 +444,31 @@ def _tick_locked(db_path: Path, ledger_path: Path, settings: RunnerSettings, now
                                                  environ)
             report["fired"] = fired
             report["paid_calls"] = fired.get("paid_calls", 0)
+            if fired.get("error_status") in KEY_REJECTED_STATUSES:
+                pilot.set(discovery_outcome="KEY_REJECTED", discovery_status=fired["error_status"])
+            credits = fired.get("credits_last")
+            if isinstance(credits, int) and credits > settings.cost_per_call:
+                # The provider charged more than the documented formula: stop paying until reviewed.
+                pilot.set(cost_block={"at_utc": stamp, "charged": credits, "estimate": settings.cost_per_call,
+                                      "slot_id": slot.slot_id})
+                state = "COST_ANOMALY"
+                call_failed = True
             failed = failed or call_failed
+            alert = alert or call_failed
     if not key_present and state == "IDLE":
         state = "SETUP_NEEDED"
         report["detail"] = _setup_text()
+    if key_rejected and state == "IDLE":
+        state = "KEY_REJECTED"
     report["state"] = "FAILED" if failed and state in ("IDLE", "FAILED") else state
     report["targets"]["by_state"] = _counts(store.odds_targets(sport=settings.sport))
     report["next_slot"] = _next_slot(slots, now, cfg)
+    if pilot.get("cost_block"):
+        report["cost_block"] = pilot.get("cost_block")
     if notes:
         report["notes"] = notes
     run.finish(failed)
-    return (1 if failed else 0), report
+    return (1 if alert else 0), report
 
 
 def _capture(store: SnapshotStore, ledger: odds_api.QuotaLedger, run: _LazyRun, settings: RunnerSettings,
@@ -388,6 +495,11 @@ def _capture(store: SnapshotStore, ledger: odds_api.QuotaLedger, run: _LazyRun, 
     except odds_api.OddsApiError as exc:
         fired["paid_calls"] = 1  # it may have reached the provider; the reservation is kept
         reason = f"paid call failed (not retried): {exc}"
+        if exc.fetch is not None:  # charged but undecodable: keep the exact bytes as evidence
+            doc_id, digest, _ = store.save_document(run_id=run.id(), source_id=odds_api.SOURCE_ID,
+                                                    doc_type="odds_undecodable_response", fetch=exc.fetch)
+            fired["raw_document_id"] = doc_id
+            reason += f"; raw response kept as document {doc_id} (sha256 {digest})"
         finish("FAILED", reason)
         fired["error_status"] = exc.status  # the redacted reason is in the target transitions
         return "FAILED", fired, True
@@ -570,7 +682,7 @@ def smoke(db_path: str | Path, ledger_path: str | Path, settings: RunnerSettings
         report.update(state="SETUP_NEEDED", detail=_setup_text())
         return 0, report
     if in_quiet_window(now, cfg):
-        report.update(state="DEFERRED_CAPTURE_WINDOW", detail="not inside 17:40-18:35 America/New_York; retry later")
+        report.update(state="DEFERRED_CAPTURE_WINDOW", detail="inside 17:40-18:35 America/New_York: nothing sent; retry after 18:35 ET")
         return 1, report
     ledger = odds_api.QuotaLedger(ledger_path, cfg.ceiling, clock=clock)
     rec = odds_api.reconcile_quota(ledger, opener=opener, pacer=pacer, environ=environ)

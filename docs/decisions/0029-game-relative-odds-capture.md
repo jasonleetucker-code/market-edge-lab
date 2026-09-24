@@ -84,22 +84,31 @@ The proof covers the ledger's UTC month.
   class, known slots come first, earliest first. After them comes a reservation for games not
   yet discovered.
 - **Unknown games:** these are kickoffs after the last discovered one, through the end of the
-  month plus 24 hours. The assumption is at most **10 distinct kickoff groups in any 7-day
-  week**. A partial week sums per-weekday maxima (Mon 2, Tue 1, Wed 2, Thu 3, Fri 1, Sat 3,
-  Sun 4), capped at 10. That is 3 calls per group. The expected planning figure is 6 groups a
+  month plus 24 hours. The assumption (`nfl_v2`) is at most **11 distinct kickoff groups in
+  any 7-day week**. A partial week sums per-weekday maxima (Mon 2, Tue 1, Wed 2, Thu 3, Fri 1,
+  Sat 3, Sun 4), capped at 11. That is 3 calls per group. The expected planning figure is 6 groups a
   week.
 - **Invariant:** `worst case = spent + 3 + admitted known calls + reserved unknown calls`, which
-  is **<= 450 and <= spent + provider remaining**. This holds by construction, is asserted in
-  code, and is property-tested on 300 random months.
+  is **<= 450 and <= spent + provider remaining**. This holds by construction, is checked in
+  code (a breach raises `BudgetInvariantError`, the tick fails closed and makes no paid call),
+  and is property-tested on 300 random months.
 - **Does not fit:** a known slot that does not fit is SKIPPED_BUDGET, lowest priority and
   latest first. Unknown calls that cannot be reserved are reported; if those games appear,
   their slots are skipped rather than paid for.
 - **Unknown quota:** no provider reading this month means QUOTA_UNKNOWN, and no paid call is
   made. A tick first tries the free reconcile.
 
-**Where the 10 comes from.** In the heaviest recent NFL weeks, the 2024 Christmas week had
-Wed 2, Thu 1, Sat 2, Sun 3 and Mon 1 groups (9), and Thanksgiving weeks have 8 to 9. A
-London/Germany 09:30 ET Sunday or a Monday doubleheader adds one, hence 10. Known weeks are
+**Where the 11 comes from.** The heaviest recent NFL week is the 2024 Christmas week (week 17).
+It had 10 groups:
+- Wed 25 Dec: 2 (13:00, 16:30);
+- Thu 26 Dec: 1 (TNF);
+- Sat 28 Dec: 3 (13:00, 16:30, 20:15), per the 2024 NFL season article on Wikipedia, read
+  2026-09-24;
+- Sun 29 Dec: 3 (13:00, 16:05/16:25, SNF);
+- Mon 30 Dec: 1.
+
+Thanksgiving weeks have 8 to 9. One more group for a London/Germany game or a Monday
+doubleheader gives 11. (The first draft counted Saturday as 2 and used 10; that was wrong.) Known weeks are
 always counted exactly, so the assumption matters only beyond the discovery horizon (35
 days).
 
@@ -111,7 +120,7 @@ Computed with the committed planner; reproduce with `odds plan`.
 |---|---|---|---|---|
 | Typical NFL week | 6 kickoff groups (TNF, 13:00, 16:05/16:25, SNF, MNF, plus London) | 18 (15 without London) | 54 credits | - |
 | October 2026, schedule fully known | 5 weeks, 3 with a London game | 74 | **225** (222 + 3 reserve) | **222** |
-| A 31-day month, nothing discovered | 50 unknown groups per class | reserves 149 | **450** (1 T-24h call unreservable) | **261** |
+| A 31-day month, nothing discovered | 55 unknown groups per class | reserves 149 (T-60m 55, T-6h 55, T-24h 39) | **450** (16 T-24h calls unreservable, reported) | **261** |
 
 The real figures come from the live schedule: `odds plan` enumerates it and prints the proof
 before the timer is enabled (runbook section 5b).
@@ -130,8 +139,19 @@ before the timer is enabled (runbook section 5b).
   - A MISSED row states the state it was stuck in.
 - Existing tables are untouched. The migration only adds tables, so a v4 store opens and
   migrates in place.
-- DEFERRED (discovery older than 24 h) and SUPERSEDED (game moved) are the two states added to
-  the owner's list.
+- DEFERRED and SUPERSEDED are the two states added to the owner's list.
+  - DEFERRED means either DISCOVERY_STALE (the discovery is older than 24 h) or EVENT_ABSENT. A
+    game is EVENT_ABSENT when a fresh, non-empty discovery that covered its kickoff no longer
+    lists it (postponed, cancelled or delisted). It is never paid for, and it returns to
+    PLANNED if the game reappears. An empty discovery is not trusted to mark every game absent.
+  - SUPERSEDED means the game's kickoff time moved.
+- **The schema is forward-only once installed.** v4 code refuses a v5 store. v5 only added
+  tables, so a rollback first stamps the store v4 with
+  `python -m edge_lab.storage mark-v4-for-rollback --db ...`. The runbook's "Rollback" section
+  has the procedure. `tests/test_storage_rollback.py` proves the real v4 code (commit dd3ab4d)
+  then opens the store and reports a VERIFIED backup.
+- **The migration is atomic.** v5's objects are created in one transaction, and the version is
+  stamped only after they exist.
 
 ### Evidence per capture (issue #50, directive §6D)
 
@@ -158,8 +178,22 @@ before the timer is enabled (runbook section 5b).
 8. **At most one paid call**: the most important admitted due slot.
 
 A tick that runs twice in the same minute makes one call, because the second finds its
-targets CAPTURED. Exit 1 only for a failure (discovery or paid call), which triggers the
-standard alert unit.
+targets CAPTURED.
+
+**Failures and alerts.** A tick exits 1, which triggers the standard alert unit, only for a
+**new** failure; a known one repeating does not alert again. The runner's non-secret state is
+in `<ledger>.pilot.json`.
+- **A failed discovery** is retried at most every 6 h, paced on the last attempt, not the last
+  success. It alerts once, when it starts failing.
+- **HTTP 401/403** means KEY_REJECTED, a setup state. The tick exits 0 and makes no paid call
+  until a later discovery succeeds.
+- **A paid call that fails** is FAILED and never retried. If the response was charged but
+  could not be decoded, its exact bytes are kept as a `document_retrievals` row, under a
+  redacted URL.
+- **An overcharge.** If the provider charges more than the estimate (`x-requests-last` > 3),
+  the state is COST_ANOMALY. All paid calls stop, and due targets show QUOTA_EXHAUSTED with
+  reason COST_ANOMALY, until an operator reviews it and runs `odds run --clear-cost-block`.
+- **An unexpected error** closes the collection run as failed. Nothing is paid for.
 
 `odds plan` is read-only: free calls only, and it never writes the evidence store (`--offline`
 makes no calls at all). `odds smoke` makes exactly one bounded read (7 days of games) after a

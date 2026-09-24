@@ -184,7 +184,14 @@ settlement job runs (about 11:15 and 16:15 ET).
    runs at most every 6 h. A paid call happens only for an admitted slot, at most one per
    tick. Ticks inside 17:40-18:35 ET report `DEFERRED_CAPTURE_WINDOW` and do nothing.
 5. **Verify.** `odds plan --offline` (same `systemd-run` line with `--offline` added, no network)
-   shows `recorded_targets` by state. MISSED targets keep their reason. Stop at any time with
+   shows `recorded_targets` by state. MISSED targets keep their reason.
+   - `KEY_REJECTED`: the provider refused the key. Nothing is paid for, and discovery is
+     retried every 6 h. The owner fixes the key with `sudoedit`.
+   - `COST_BLOCKED`: the provider charged more than 3 credits for one call. Paid calls stay
+     stopped until an operator checks the ledger and the snapshot, then runs one tick with
+     `odds run --clear-cost-block` (same `systemd-run` line and flags).
+
+   Stop at any time with
    `sudo systemctl disable --now edgelab-odds.timer`; targets and evidence stay.
 
 This is read-only sports data collection. It authorizes no sportsbook account, no bet, no
@@ -250,7 +257,21 @@ flags (`--kind`, `--if-exists`, `--lock-file`) that older `backup.py` rejects.
    ```
    Expect `VERIFIED_BACKUP_AND_RESTORE` for the evidence DB.
 
-Neither store's schema changed (evidence v4, ledger v1), so rolled-back code reads both;
-nothing is migrated or deleted. The shadow ledger and its backups stay in place and
+**The evidence schema is forward-only from the ADR 0029 install (evidence v5; ledger still
+v1).** install.sh step 7 migrates the live evidence DB to v5, and v4 code refuses a v5 store
+("Database schema v5 is newer than this code"). That refusal would stop collectors, VERIFIED
+backups and the dashboard. v5 only **added** the odds capture tables, which v4 code ignores.
+To roll back past that install, before step 2 above (timers stopped, still on the new code),
+stamp the store back to v4. Nothing is deleted:
+```bash
+sudo systemctl disable --now 'edgelab-*.timer'   # nothing may write while the stamp changes
+sudo systemctl start edgelab-backup.service && sudo journalctl -u edgelab-backup -n 20 --no-pager  # VERIFIED first
+sudo runuser -u edgelab -- /opt/market-edge-lab/venv/bin/python -m edge_lab.storage mark-v4-for-rollback --db /var/lib/market-edge-lab/db/edge_lab.sqlite3
+```
+Expect `{"from": 5, "to": 4, ...}`. The helper refuses (exit 1, nothing changed) anything
+that is not a complete v5 store. Then do steps 2-4. Step 4 must report
+`VERIFIED_BACKUP_AND_RESTORE` on the old code; `tests/test_storage_rollback.py` proves that
+against the real v4 code. Re-installing v5 code later stamps v5 again. The shadow ledger's
+schema did not change (v1), so rolled-back code reads it; nothing is deleted. The shadow ledger and its backups stay in place and
 unused. To stop all collection (the data is kept):
 `sudo systemctl disable --now 'edgelab-*.timer'`.
