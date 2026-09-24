@@ -54,11 +54,15 @@ For split settlement (5A):
     estimate.
   - UNSUPPORTED: no fee model, so the fee is unknown and never zero.
 - **Four claims, gated in order.** Each claim is None with a reason when unsupported.
-  - Every claim needs: a supported payoff, an open market, a valid book with an offer.
+  - Every claim needs: a supported payoff, an open market, a valid book with an offer, and
+    a **fresh** book. A route that fails only on freshness is named in the claim's
+    `stale_candidates` and never ranked. A supported claim carries the winning route's
+    `freshness`.
   - **BEST OBSERVED QUOTE** needs only that.
   - **BEST GROSS COST FOR SIZE** also needs a ladder that covers the quantity.
   - **BEST VERIFIED TOTAL COST** also needs a claim-grade fee (EXACT or CONSERVATIVE_BOUND,
-    via `claim_adjusted_net`) and a fresh book.
+    via `claim_adjusted_net`). Under CONSERVATIVE_BOUND a total is an upper bound, so the
+    lowest total is the lowest *bound*, not a proven order (below).
   - **BEST ACCOUNT-FEASIBLE ROUTE** also needs:
     - a recorded account read (`venues`: account_read LIVE_DATA_VERIFIED; none today);
     - starter-policy eligibility.
@@ -70,37 +74,70 @@ For split settlement (5A):
     both sides, and the same payoff and outcome.
   - Anything else is listed in `related` and never priced against the request. A title
     never counts.
+  - REFERENCE needs every contract field of the request to match (venue, id, event, outcome,
+    payoff, rules hash, settlement identity). A capture of the same market whose rules or
+    payoff changed is RELATED. Two routes for one market id are refused (`ValueError`), so a
+    market is never compared with another capture of itself.
   - Today every Polymarket US market has `rules_resolved=False`. So in real data it is
     always RELATED to a Kalshi request, and the tests build equivalent pairs explicitly.
 - **Summary text.**
   - The summary is deterministic.
-  - It says "is cheaper than" only between routes that both carry a verified total.
-  - Otherwise it gives separate figures, for example "Kalshi … at most $X total (…)" and
-    "Polymarket US … $Y gross, fees unverified (published-schedule estimate $F, not
-    claim-grade)", or "fees unknown".
+  - It says "A is cheaper than B" only when `proven_cheaper(A, B)` holds. Both need a
+    verified total, and A's claim total (an upper bound on A's real cost) must be below
+    either:
+    - B's exact total, when B's fee is VERIFIED (EXACT); or
+    - B's gross cost, which is a lower bound on any taker's real cost.
+
+    Two overlapping bounds prove nothing. They are printed as ranges with "No proven order"
+    (for example "Kalshi between $4.00 and $4.2710"). Equal totals are "equal" only when
+    both are exact. `Claim.proven_below` lists, machine-readably, the routes the winner is
+    proven cheaper than.
+  - Without verified totals on both sides it gives separate figures, for example
+    "Kalshi … at most $X total (…)" and "Polymarket US … $Y gross, fees unverified
+    (published-schedule estimate $F, not claim-grade)", or "fees unknown".
 - **Polymarket US fees.** Evidence: `experiments/multi_venue/polymarket_us_fees_2026-09-24.md`.
   - `PolymarketUsTakerSchedule` / `POLYMARKET_US_TAKER_V1` is the published exchange-wide
     taker fee 0.0695·C·p·(1−p), effective 2026-09-17.
-  - The venue rounds each fill half to even and caps an order's total. The schedule
-    instead rounds each take **up** to the cent, and the debit too. That bounds every fill
-    split, so the allowance is 0.
+  - The venue rounds each fill's **fee** half to even and caps an order's total fee. The
+    schedule instead rounds each take's fee **up** to the cent. That bounds the fee for any
+    split into fills.
+  - The **cash debit** is a different matter. Notional rounding is undocumented, ticks are
+    $0.001, and an order can execute as several fills or orders. The schedule rounds each
+    take's debit up to the cent, which bounds a single fill only. So the record carries a
+    rounding allowance of **$0.01 per contract**, assuming whole-contract fills; fractional
+    fills are never priced. ROUNDING_FOR_ACCOUNT_TYPE stays UNVERIFIED.
   - Below $0.01 and above $0.99 (outside the documented range), the fee is bounded by its
     value at the range edge.
   - `schedule_for("polymarket_us", scope)` returns it only for `POLYMARKET_US_EXCHANGE_SCOPE`.
     `polymarket_us.fee_scope` assigns that scope only when the market's own `feeCoefficient`
-    equals 0.0695. Anything else is UNSUPPORTED.
+    equals 0.0695. Anything else is UNSUPPORTED. With `as_of` before 2026-09-17 00:00 ET it
+    is UNSUPPORTED too, because no earlier Polymarket US schedule was captured.
+  - A new component, `SETTLEMENT_AND_TRANSFER_FEES`, covers settlement, deposit and
+    withdrawal fees. A record that states it without verifying it supports no claim.
+    Records that predate it (Kalshi, 2026-09-23) do not state it and are unaffected: their
+    ledger fields and claim basis are unchanged. The Kalshi record should add it at its
+    next re-check, due 2026-10-23.
   - The dated record `POLYMARKET_US_VERIFICATION_2026_09_24`:
-    - VERIFIED: coefficient, multiplier (scope-gated), rounding, maker fees;
-    - UNVERIFIED: scheduled changes (Rulebook Rule 3.8(a): changes by posting, with no
-      forward schedule) and account type (no account; intermediaries can add vendor fees);
+    - VERIFIED: coefficient, multiplier (scope-gated), maker fees;
+    - UNVERIFIED:
+      - scheduled changes (Rulebook Rule 3.8(a): changes by posting, with no forward
+        schedule);
+      - rounding (the debit's rounding is undocumented);
+      - account type (no account; intermediaries can add vendor fees);
+      - settlement and transfer fees (not documented; Rule 3.8 lets the exchange impose
+        other fees);
     - so the claim basis is **NONE**. The schedule prices research routes, but no
-      Polymarket US total is claim-grade.
+      Polymarket US total is claim-grade. Every one of those components blocks an upgrade.
   - The schedule is not added to `FEE_SCHEDULES`. That registry is the set a shadow
     account may pin, it is Kalshi only, and the dashboard reads it.
-- **Split settlement: represent, then refuse.** `polymarket_us.payoff_kind` assigns:
-  - `binary_split_on_cancel` when the rules text states a 50-50 or $0.50 settlement;
-  - `binary_alternative_settlement` for a sports market without that language (Sports
-    FAQs: cancellation or no-contest settles at the last fair market price, a tie at $0.50,
+- **Split settlement: represent, then refuse.** `polymarket_us.payoff_kind` assigns, in
+  this order:
+  - `binary_alternative_settlement` when the rules text of any market (sports or not) names
+    a last-fair-market-price settlement ("last fair market price", "LFMP");
+  - `binary_split_on_cancel` when the rules text states a split: "50-50", "50/50", "50 50",
+    "fifty-fifty", "$0.50", "$0.5", or "0.5(0) per";
+  - `binary_alternative_settlement` for a sports market with neither (Sports FAQs:
+    cancellation or no-contest settles at the last fair market price, a tie at $0.50,
     co-winners at $1/n);
   - `binary` otherwise.
 
@@ -115,21 +152,26 @@ For split settlement (5A):
   - the existing tests pass.
 
 **Tradeoffs.**
-- The Polymarket US bound can overstate the fee by up to 1 cent per take, plus 1 cent on
-  the debit. That is acceptable for an estimate that is never claim-grade.
-- Matching split language is textual, so a false positive refuses a market that might be
-  binary. That fails closed, by design.
-- The weather last-fair-market-price fallback does not change the payoff kind. It belongs to
-  rule equivalence, which is not established. A market with such a fallback is still
-  refused comparison unless its rules are resolved against the other venue's.
+- The Polymarket US estimate can overstate the fee by up to 1 cent per take, plus 1 cent on
+  the debit, and a claim would add $0.01 per contract on top. That is acceptable for an
+  estimate that is never claim-grade today.
+- Matching split or last-fair-market-price language is textual, so a false positive refuses
+  a market that might be binary. That fails closed, by design.
+- A weather market whose own rules text carries the Weather FAQ's last-fair-market-price
+  fallback is refused as `binary_alternative_settlement`. Where the fallback appears only
+  in the FAQ, the market stays `binary`, and the fallback is a rule-equivalence dimension
+  (not established).
+- The lowest verified total can be named "best" while its order against another verified
+  route stays unproven. The claim's `proven_below` and the summary say which orders are
+  proven.
 - No route is account-feasible until an owner-approved account read exists (ADR 0019).
 - `best_price` imports two private helpers (`opportunity._freshness`,
   `discovery._series_scope`) so that it does not fork the freshness and scope rules.
 
 **Reconsider when:**
-- Polymarket US publishes a forward fee schedule or fee-change feed. Then
-  SCHEDULED_CHANGES could be verified, and a direct-account attestation could make its
-  totals CONSERVATIVE_BOUND;
+- Polymarket US publishes a forward fee schedule or fee-change feed, documents its debit
+  rounding and its settlement and transfer fees. Only with all of these, plus a
+  direct-account attestation, could its totals become CONSERVATIVE_BOUND;
 - a market's `feeCoefficient` differs from the exchange theta;
 - a generic payoff engine can price split or last-fair-market-price settlement (option A);
 - rules equivalence is established for a real cross-venue pair;

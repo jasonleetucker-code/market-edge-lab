@@ -111,7 +111,8 @@ def test_exact_debit_rejects_unknown_account_types_and_bad_input():
 
 def test_record_components_and_derived_state():
     states = {c.component: c.state for c in RECORD.components}
-    assert set(states) == set(VerificationComponent)
+    # SETTLEMENT_AND_TRANSFER_FEES (ADR 0027) postdates this record; it is added at the re-check.
+    assert set(states) == set(VerificationComponent) - {VerificationComponent.SETTLEMENT_AND_TRANSFER_FEES}
     assert states[VerificationComponent.COEFFICIENT] is ComponentState.VERIFIED
     assert states[VerificationComponent.SERIES_MULTIPLIER] is ComponentState.VERIFIED
     assert states[VerificationComponent.ROUNDING_FOR_ACCOUNT_TYPE] is ComponentState.VERIFIED
@@ -130,7 +131,8 @@ def test_an_unverified_core_component_means_no_claim():
 
 
 def test_full_verification_with_an_exact_cost_model_is_exact():
-    full = replace(RECORD, components=tuple(replace(c, state=ComponentState.VERIFIED) for c in RECORD.components))
+    full = replace(RECORD, components=tuple(replace(c, state=ComponentState.VERIFIED) for c in RECORD.components)
+                   + (replace(RECORD.components[0], component=VerificationComponent.SETTLEMENT_AND_TRANSFER_FEES),))
     assert full.full_schedule_verified and full.claim_basis(CostModel.EXACT) is ClaimBasis.EXACT
     # ...but the frozen conservative model can still only support a bound.
     assert full.claim_basis(CostModel.CONSERVATIVE_UPPER_BOUND) is ClaimBasis.CONSERVATIVE_BOUND

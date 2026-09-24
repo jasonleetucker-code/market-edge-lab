@@ -36,8 +36,9 @@ What the docs establish, and how it is mapped (see experiments/multi_venue/):
   `schedule_for` returns UNSUPPORTED. The raw coefficient is kept in `MarketMeta`.
 - **Payoff.** Settlement is $1.00 or $0.00, but a market's Settlement Description can define
   alternative settlement (docs: contract-settlement, rule-structure, Sports FAQs). A market
-  whose rules text states a 50-50 / $0.50 settlement gets the payoff kind
-  `binary_split_on_cancel`. A sports market without that language gets
+  whose rules text names a last-fair-market-price settlement gets
+  `binary_alternative_settlement`; one whose rules text states a 50-50 / $0.50 settlement gets
+  `binary_split_on_cancel`. A sports market with neither also gets
   `binary_alternative_settlement`, because the Sports FAQs settle cancellations,
   postponements past expiry and no-contests at the last fair market price, ties at $0.50
   and co-winners at $1/n. Neither is ever shoehorned into `binary`: the engine and the
@@ -181,8 +182,11 @@ PAYOFF_SPLIT_ON_CANCEL = "binary_split_on_cancel"  # the rules text states a 50-
 PAYOFF_ALTERNATIVE_SETTLEMENT = "binary_alternative_settlement"  # sports: LFMP / tie / co-winner settlement
 # Split-settlement language in a rules text: "50-50", "50/50", "fifty-fifty", "$0.50", "0.50 per".
 _DASHES = "-/" + "".join(map(chr, range(0x2010, 0x2016)))  # ASCII hyphen and slash, Unicode dashes
-_SPLIT_LANGUAGE = re.compile(r"\b50\s*[" + re.escape(_DASHES) + r"]\s*50\b|fifty[\s-]+fifty|\$\s*0?\.50\b"
-                             r"|\b0\.50\s+per\b", re.IGNORECASE)
+# "50-50", "50/50", "50 50", "fifty-fifty", "$0.50", "$0.5", "$.5", "0.50 per", "0.5 per".
+_SPLIT_LANGUAGE = re.compile(r"\b50(?:\s*[" + re.escape(_DASHES) + r"]\s*|\s+)50\b|fifty[\s-]+fifty"
+                             r"|\$\s*0?\.50?\b|\b0?\.50?\s+per\b", re.IGNORECASE)
+# A settlement at a price determined later (Sports and Weather FAQs): never a fixed payout.
+_LFMP_LANGUAGE = re.compile(r"last[\s-]+fair[\s-]+market[\s-]+price|\bLFMP\b", re.IGNORECASE)
 _SPORTS_FIELDS = ("sportsMarketType", "sportsMarketTypeV2", "gameStartTime")
 
 
@@ -194,13 +198,16 @@ def _is_sports(raw: Mapping[str, Any]) -> bool:
 def payoff_kind(raw: Mapping[str, Any]) -> tuple[str, str]:
     """(payoff kind, why) for a market, from its captured rules text and category.
 
-    Split language anywhere in the rules text makes it `binary_split_on_cancel`. A sports
-    market without it is `binary_alternative_settlement` (Sports FAQs: last-fair-market-price
-    settlement on cancellation, $0.50 on a tie). Only a non-sports market with no split
-    language stays `binary`. The text is matched, never interpreted further: an ambiguous
-    match fails closed to a non-binary kind, which the engine refuses."""
+    In any market (sports or not), last-fair-market-price language in the rules text makes it
+    `binary_alternative_settlement`, and split language makes it `binary_split_on_cancel`. A
+    sports market with neither is `binary_alternative_settlement` too (Sports FAQs:
+    last-fair-market-price settlement on cancellation, $0.50 on a tie). Only a non-sports
+    market with neither stays `binary`. The text is matched, never interpreted further: an
+    ambiguous match fails closed to a non-binary kind, which the engine refuses."""
     text = raw.get("description")
     text = text if isinstance(text, str) else ""
+    if _LFMP_LANGUAGE.search(text):
+        return PAYOFF_ALTERNATIVE_SETTLEMENT, "rules text settles at a last fair market price in some cases"
     if _SPLIT_LANGUAGE.search(text):
         return PAYOFF_SPLIT_ON_CANCEL, "rules text states a 50-50 / $0.50 settlement"
     if _is_sports(raw):

@@ -128,25 +128,77 @@ def test_unsupported_polymarket_fees_are_unknown_not_zero():
     assert "cheaper than" not in result.summary.replace("No cheaper-than claim", "")
 
 
-def test_cheaper_is_said_only_between_two_verified_totals():
-    exact = QuadraticTakerSchedule("test-exact-pm", "polymarket_us", D("0.07"), D(1), FeeScheduleStatus.VERIFIED,
-                                   "test double", "2026-09-24T00:00:00Z", cost_model=CostModel.EXACT)
-    result = run(k_route(("0.40", "20")), p_route(("0.30", "20"), fees=exact))
-    pmus = next(r for r in result.routes if r.venue == "polymarket_us")
-    assert pmus.fee_status == "VERIFIED" and pmus.claim_total_cost == pmus.total_cost
+EXACT = QuadraticTakerSchedule("test-exact-pm", "polymarket_us", D("0.07"), D(1), FeeScheduleStatus.VERIFIED,
+                               "test double", "2026-09-24T00:00:00Z", cost_model=CostModel.EXACT)
+K_LABEL = "Kalshi (kalshi:KXHIGHNY-26SEP25-B69.5)"
+P_LABEL = "Polymarket US (polymarket_us:nyc-high-69-70)"
+
+
+def test_cheaper_when_the_winners_bound_is_below_the_losers_gross_cost():
+    # 10 contracts. Polymarket US (exact) @ 0.30 = $3.15; Kalshi (a bound) @ 0.40: gross $4.00,
+    # and the real Kalshi debit is at least that, so $3.15 < $4.00 proves the order.
+    result = run(k_route(("0.40", "20")), p_route(("0.30", "20"), fees=EXACT))
+    kalshi, pmus = result.routes
+    assert pmus.fee_status == "VERIFIED" and pmus.claim_total_cost == pmus.total_cost == D("3.15")
+    assert kalshi.fee_status == "CONSERVATIVE_BOUND" and kalshi.gross_cost == D("4.00")
+    assert bp.proven_cheaper(pmus, kalshi) and not bp.proven_cheaper(kalshi, pmus)
     verified = claim(result, ClaimKind.BEST_VERIFIED_TOTAL_COST)
-    assert verified.market_id == P_MARKET.market_id and len(verified.candidates) == 2
-    assert ("On verified total cost, Polymarket US (polymarket_us:nyc-high-69-70) is cheaper than Kalshi "
-            "(kalshi:KXHIGHNY-26SEP25-B69.5).") in result.summary
+    assert verified.market_id == P_MARKET.market_id and verified.proven_below == (K_MARKET.market_id,)
+    assert f"On verified total cost, {P_LABEL} is cheaper than {K_LABEL}." in result.summary
 
 
-def test_equal_verified_totals_are_a_tie_not_cheaper():
-    exact = QuadraticTakerSchedule("test-exact-pm", "polymarket_us", D("0.07"), D(1), FeeScheduleStatus.VERIFIED,
-                                   "test double", "2026-09-24T00:00:00Z", cost_model=CostModel.EXACT)
+def test_cheaper_when_the_loser_is_exact_even_if_the_bound_exceeds_its_gross():
+    # Kalshi (a bound) 10 @ 0.40: gross $4.00, claim $4.2710. Polymarket US (exact) 10 @ 0.42:
+    # gross $4.20, exact total $4.38. $4.2710 is above $4.20 but below the exact $4.38: proven.
+    result = run(k_route(("0.40", "10")), p_route(("0.42", "10"), fees=EXACT))
+    kalshi, pmus = result.routes
+    assert kalshi.claim_total_cost == D("4.2710") and pmus.gross_cost == D("4.20") and pmus.total_cost == D("4.38")
+    assert kalshi.claim_total_cost >= pmus.gross_cost and bp.proven_cheaper(kalshi, pmus)
+    assert claim(result, ClaimKind.BEST_VERIFIED_TOTAL_COST).proven_below == (P_MARKET.market_id,)
+    assert f"On verified total cost, {K_LABEL} is cheaper than {P_LABEL}." in result.summary
+
+
+def test_overlapping_bounds_are_never_called_cheaper():
+    # Polymarket US (exact) 10 @ 0.40 = $4.17 is the lowest claim total, but Kalshi (a bound) lies
+    # between its gross $4.00 and $4.2710: it could really cost less than $4.17. No order.
+    result = run(k_route(("0.40", "10")), p_route(("0.40", "10"), fees=EXACT))
+    kalshi, pmus = result.routes
+    assert pmus.claim_total_cost == D("4.17") and kalshi.gross_cost == D("4.00")
+    assert not bp.proven_cheaper(pmus, kalshi) and not bp.proven_cheaper(kalshi, pmus)
+    verified = claim(result, ClaimKind.BEST_VERIFIED_TOTAL_COST)
+    assert verified.market_id == P_MARKET.market_id and verified.proven_below == ()
+    assert "cheaper than" not in result.summary.replace("No cheaper-than claim", "")
+    assert (f"No proven order between {P_LABEL} and {K_LABEL}: their cost bounds overlap (Polymarket US exactly "
+            "$4.17; Kalshi between $4.00 and $4.2710).") in result.summary
+
+
+def test_two_conservative_bounds_are_never_ordered(monkeypatch):
+    """Two CONSERVATIVE_BOUND routes whose ranges overlap: lower bound first, still no order."""
+    twin_market = replace(K_MARKET, market_id="kalshi:KXHIGHNY-26SEP25-B69.5-TWIN", native_id="KXHIGHNY-26SEP25-TWIN")
+    twin = Route(K_EVENT, twin_market, ladder(twin_market, ("0.41", "10")), KALSHI_FEES)
+    result = run(k_route(("0.40", "10")), twin)
+    assert [r.fee_status for r in result.routes] == ["CONSERVATIVE_BOUND"] * 2
+    assert claim(result, ClaimKind.BEST_VERIFIED_TOTAL_COST).proven_below == ()
+    assert "is cheaper than" not in result.summary and "No proven order" in result.summary
+
+
+def test_equal_exact_totals_are_equal_not_cheaper():
     twin = replace(P_MARKET, market_id="polymarket_us:twin", native_id="twin")
-    result = run(p_route(("0.30", "20"), fees=exact), p_route(("0.30", "20"), fees=exact, market=twin),
+    result = run(p_route(("0.30", "20"), fees=EXACT), p_route(("0.30", "20"), fees=EXACT, market=twin),
                  request=PositionRequest(P_EVENT, replace(P_MARKET), "YES", 10))
-    assert "ties" in result.summary and "cheaper than" not in result.summary
+    assert "have equal exact total costs" in result.summary and "cheaper than" not in result.summary
+
+
+def test_another_capture_of_the_same_market_is_never_compared_with_itself():
+    with pytest.raises(ValueError, match="one capture per market"):
+        run(k_route(("0.40", "20")), Route(K_EVENT, K_MARKET, ladder(K_MARKET, ("0.39", "20")), KALSHI_FEES))
+    # A capture of the requested market whose rules changed is not the reference: RELATED.
+    changed = replace(K_MARKET, rules_sha256="ee" * 32)
+    result = run(Route(K_EVENT, changed, ladder(changed, ("0.39", "20")), KALSHI_FEES))
+    assert result.routes == () and result.related == (K_MARKET.market_id,)
+    other_source = replace(K_EVENT, settlement_identity="nws:CLINYC:2026-09-25:other")
+    result = run(Route(other_source, K_MARKET, ladder(K_MARKET, ("0.39", "20")), KALSHI_FEES))
+    assert result.routes == () and result.related == (K_MARKET.market_id,)
 
 
 # ---------------------------------------------------------------- depth, grid, freshness
@@ -189,15 +241,25 @@ def test_missing_book_is_reported_not_priced():
     assert "no captured book" in run(Route(K_EVENT, K_MARKET, None, KALSHI_FEES)).summary
 
 
-def test_a_stale_route_is_excluded_from_the_verified_claims_only():
+def test_a_stale_route_is_never_ranked_and_is_named_separately():
     result = run(k_route(("0.40", "20"), received=STALE))
     (kalshi,) = result.routes
     assert kalshi.freshness == "stale" and "NOT_FRESH" in kalshi.exclusions
-    assert claim(result, ClaimKind.BEST_OBSERVED_QUOTE).supported
-    assert claim(result, ClaimKind.BEST_GROSS_COST_FOR_SIZE).supported
-    verified = claim(result, ClaimKind.BEST_VERIFIED_TOTAL_COST)
-    assert not verified.supported and verified.reason == "NOT_FRESH"
+    for kind in ClaimKind:
+        c = claim(result, kind)
+        assert not c.supported and c.reason == "NOT_FRESH" and c.freshness is None, kind
+    for kind in (ClaimKind.BEST_OBSERVED_QUOTE, ClaimKind.BEST_GROSS_COST_FOR_SIZE, ClaimKind.BEST_VERIFIED_TOTAL_COST):
+        assert claim(result, kind).stale_candidates == (K_MARKET.market_id,)
     assert "total not claimed; book stale" in result.summary
+    assert "Not ranked (book stale or of unknown age): kalshi:KXHIGHNY-26SEP25-B69.5." in result.summary
+
+
+def test_a_fresh_route_wins_over_a_cheaper_stale_one_and_the_claim_carries_freshness():
+    result = run(k_route(("0.40", "20")), p_route(("0.10", "20"), received=STALE))
+    for kind in (ClaimKind.BEST_OBSERVED_QUOTE, ClaimKind.BEST_GROSS_COST_FOR_SIZE):
+        c = claim(result, kind)
+        assert c.market_id == K_MARKET.market_id and c.freshness == "fresh"
+        assert c.candidates == (K_MARKET.market_id,) and c.stale_candidates == (P_MARKET.market_id,)
 
 
 def test_a_book_timestamped_after_as_of_is_unknown_and_fails_closed():
@@ -328,9 +390,17 @@ def test_cheaper_never_appears_without_verified_totals_on_both_sides():
                 kw["fees"] = rng.choice(fees_choices)
             routes.append(maker((price, size), **kw))
         result = run(*routes)
-        verified = claim(result, ClaimKind.BEST_VERIFIED_TOTAL_COST).candidates
-        if len(verified) < 2:
-            assert "is cheaper than" not in result.summary and " ties " not in result.summary
+        verified = claim(result, ClaimKind.BEST_VERIFIED_TOTAL_COST)
+        by_id = {r.market_id: r for r in result.routes}
+        if len(verified.candidates) < 2:
+            assert "is cheaper than" not in result.summary and "equal exact" not in result.summary
+        # "Cheaper" is printed exactly when an order is proven, and every proven order holds.
+        assert ("is cheaper than" in result.summary) == bool(verified.proven_below)
+        for loser in verified.proven_below:
+            winner, other = by_id[verified.market_id], by_id[loser]
+            assert bp.proven_cheaper(winner, other)
+            floor = other.claim_total_cost if other.fee_status == "VERIFIED" else other.gross_cost
+            assert winner.claim_total_cost < floor
         for r in result.routes:
             if r.claim_total_cost is None or r.freshness != "fresh":
                 assert f"{r.market_id}) at most" not in result.summary

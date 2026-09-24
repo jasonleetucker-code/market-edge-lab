@@ -7,6 +7,7 @@ effective 2026-09-17; Polymarket US Rulebook 2026-09-14 Rule 3.8). ADR 0027.
 from __future__ import annotations
 
 import random
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from decimal import ROUND_CEILING, Decimal
 
@@ -14,7 +15,7 @@ import pytest
 
 from edge_lab import fee_schedules
 from edge_lab.fee_schedules import (
-    KALSHI_QUADRATIC_TAKER_V1, POLYMARKET_US_EXCHANGE_SCOPE, POLYMARKET_US_TAKER_V1,
+    KALSHI_QUADRATIC_TAKER_V1, POLYMARKET_US_EFFECTIVE_FROM_UTC, POLYMARKET_US_EXCHANGE_SCOPE, POLYMARKET_US_TAKER_V1,
     POLYMARKET_US_VERIFICATION_2026_09_24 as RECORD, ClaimBasis, ComponentState, FeeScheduleStatus,
     UnsupportedFeeSchedule, VerificationComponent, bankers_fee, claim_adjusted_net, recheck_due,
     restated_verification, schedule_for, verification_at,
@@ -158,13 +159,44 @@ def test_record_components_match_the_evidence():
         VerificationComponent.COEFFICIENT: ComponentState.VERIFIED,
         VerificationComponent.SERIES_MULTIPLIER: ComponentState.VERIFIED,
         VerificationComponent.SCHEDULED_CHANGES: ComponentState.UNVERIFIED,
-        VerificationComponent.ROUNDING_FOR_ACCOUNT_TYPE: ComponentState.VERIFIED,
+        VerificationComponent.ROUNDING_FOR_ACCOUNT_TYPE: ComponentState.UNVERIFIED,  # debit rounding undocumented
         VerificationComponent.ACCOUNT_TYPE: ComponentState.UNVERIFIED,
         VerificationComponent.MAKER_FEES: ComponentState.VERIFIED,
+        VerificationComponent.SETTLEMENT_AND_TRANSFER_FEES: ComponentState.UNVERIFIED,  # not documented
     }
     assert RECORD.scope == (POLYMARKET_US_EXCHANGE_SCOPE,) and RECORD.schedule_id == PM.schedule_id
     assert parse_utc(RECORD.applies_from_utc) == datetime(2026, 9, 17, 4, tzinfo=UTC)  # 12 AM ET
+    assert parse_utc(RECORD.applies_from_utc) == parse_utc(POLYMARKET_US_EFFECTIVE_FROM_UTC)
     assert "polymarket_us_fees_2026-09-24.md" in PM.evidence
+    # The fee bound covers any fill split; the undocumented notional rounding needs this allowance.
+    assert RECORD.rounding_allowance_per_contract == D("0.01")
+
+
+def test_unverified_settlement_or_transfer_fees_block_any_claim_grade():
+    """Even with every other component verified and the account attested, an unverified
+    settlement/transfer-fee component keeps the claim basis at NONE."""
+    def with_states(transfer: ComponentState):
+        comps = tuple(replace(c, state=ComponentState.VERIFIED) for c in RECORD.components
+                      if c.component is not VerificationComponent.SETTLEMENT_AND_TRANSFER_FEES)
+        comps = tuple(replace(c, state=ComponentState.OWNER_ATTESTED)
+                      if c.component is VerificationComponent.ACCOUNT_TYPE else c for c in comps)
+        extra = replace(RECORD.components[-1], state=transfer)
+        return replace(RECORD, components=comps + (extra,))
+
+    assert with_states(ComponentState.UNVERIFIED).claim_basis(PM.cost_model) is ClaimBasis.NONE
+    assert with_states(ComponentState.VERIFIED).claim_basis(PM.cost_model) is ClaimBasis.CONSERVATIVE_BOUND
+    assert with_states(ComponentState.NOT_APPLICABLE).claim_basis(PM.cost_model) is ClaimBasis.CONSERVATIVE_BOUND
+
+
+def test_schedule_for_polymarket_us_is_unsupported_before_its_effective_date():
+    edge = datetime(2026, 9, 17, 4, tzinfo=UTC)
+    assert schedule_for("polymarket_us", POLYMARKET_US_EXCHANGE_SCOPE, as_of=edge) is PM
+    assert schedule_for("polymarket_us", POLYMARKET_US_EXCHANGE_SCOPE, as_of="2026-09-24T00:00:00Z") is PM
+    before = schedule_for("polymarket_us", POLYMARKET_US_EXCHANGE_SCOPE, as_of=edge - timedelta(seconds=1))
+    assert isinstance(before, UnsupportedFeeSchedule) and "before 2026-09-17" in before.reason
+    with pytest.raises(ValueError):
+        schedule_for("polymarket_us", POLYMARKET_US_EXCHANGE_SCOPE, as_of="2026-09-24T00:00:00")  # naive
+    assert schedule_for("kalshi", "KXHIGHNY", as_of=edge - timedelta(days=90)) is KALSHI_QUADRATIC_TAKER_V1
 
 
 def test_before_the_record_only_the_base_status_applies():

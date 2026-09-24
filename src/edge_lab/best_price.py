@@ -19,15 +19,18 @@ with a machine-readable reason:
 - BEST GROSS COST FOR SIZE: the lowest cost of the whole quantity before fees, from a ladder
   that covers it.
 - BEST VERIFIED TOTAL COST: the lowest total with fees, among routes whose fee evidence
-  supports a claim (claim basis EXACT or CONSERVATIVE_BOUND) and whose book is fresh.
-  Under CONSERVATIVE_BOUND the total includes the rounding allowance, so it is an upper bound.
+  supports a claim (claim basis EXACT or CONSERVATIVE_BOUND). Under CONSERVATIVE_BOUND the
+  total includes the rounding allowance, so it is an upper bound: the lowest bound, which is
+  not by itself a proven order (`proven_cheaper`, `Claim.proven_below`).
 - BEST ACCOUNT-FEASIBLE ROUTE: the above, restricted to routes with a connected account
   (`venues`: account read LIVE_DATA_VERIFIED) and capital eligible under `STARTER_MAX_7D_V1`.
 
-Markets that are not rule-equivalent to the request are listed as RELATED and never priced
-against it. Payoffs other than a binary contract paying 1 (for example Polymarket US
-`binary_split_on_cancel`) are refused, never reinterpreted. The summary never says one route
-"is cheaper" than another unless both have a verified total cost.
+Every claim ranks routes with a FRESH book only; a stale or unknown-age route that would
+otherwise pass is named in `Claim.stale_candidates`. Markets that are not rule-equivalent to
+the request are listed as RELATED and never priced against it, and a market is compared with
+at most one capture of itself. Payoffs other than a binary contract paying 1 (for example
+Polymarket US `binary_split_on_cancel`) are refused, never reinterpreted. The summary says one
+route "is cheaper" than another only when that is proven (`proven_cheaper`).
 
 Nothing here connects, authenticates or trades. `execution_authorized` is always False.
 """
@@ -102,19 +105,20 @@ class ClaimKind(str, Enum):
     BEST_ACCOUNT_FEASIBLE_ROUTE = "BEST_ACCOUNT_FEASIBLE_ROUTE"
 
 
+# Every claim ranks FRESH routes only; a route stale or of unknown freshness that passes every
+# other gate is named in the claim's `stale_candidates`, never ranked.
 _OBSERVED = frozenset({Exclusion.PAYOFF_UNSUPPORTED, Exclusion.MARKET_NOT_OPEN, Exclusion.BOOK_MISSING,
-                       Exclusion.INVALID_BOOK, Exclusion.NO_OFFER})
+                       Exclusion.INVALID_BOOK, Exclusion.NO_OFFER, Exclusion.NOT_FRESH})
 _GROSS = _OBSERVED | {Exclusion.INSUFFICIENT_DEPTH, Exclusion.DEPTH_UNKNOWN}
-_VERIFIED = _GROSS | {Exclusion.FEE_UNSUPPORTED, Exclusion.FEE_NOT_PRICED, Exclusion.FEE_UNVERIFIED,
-                      Exclusion.NOT_FRESH}
+_VERIFIED = _GROSS | {Exclusion.FEE_UNSUPPORTED, Exclusion.FEE_NOT_PRICED, Exclusion.FEE_UNVERIFIED}
 _FEASIBLE = _VERIFIED | {Exclusion.NO_ACCOUNT_CONNECTED, Exclusion.CAPITAL_RELEASE_INELIGIBLE}
 CLAIM_GATES = {ClaimKind.BEST_OBSERVED_QUOTE: _OBSERVED, ClaimKind.BEST_GROSS_COST_FOR_SIZE: _GROSS,
                ClaimKind.BEST_VERIFIED_TOTAL_COST: _VERIFIED, ClaimKind.BEST_ACCOUNT_FEASIBLE_ROUTE: _FEASIBLE}
 CLAIM_BASIS_TEXT = {
-    ClaimKind.BEST_OBSERVED_QUOTE: "top-of-book ask per contract; a quote, not a fill for the size",
-    ClaimKind.BEST_GROSS_COST_FOR_SIZE: "cost of the whole quantity from the captured ladder, fees excluded",
+    ClaimKind.BEST_OBSERVED_QUOTE: "top-of-book ask per contract from a fresh book; a quote, not a fill for the size",
+    ClaimKind.BEST_GROSS_COST_FOR_SIZE: "cost of the whole quantity from a fresh captured ladder, fees excluded",
     ClaimKind.BEST_VERIFIED_TOTAL_COST: "total with fees, claim-grade fee evidence, fresh book; an upper bound "
-                                        "under CONSERVATIVE_BOUND",
+                                        "under CONSERVATIVE_BOUND (lowest bound, not a proven order: see proven_below)",
     ClaimKind.BEST_ACCOUNT_FEASIBLE_ROUTE: "verified total on a connected account with capital eligible under "
                                            f"{starter_policy.POLICY_ID}; execution is never authorized",
 }
@@ -204,7 +208,13 @@ class Claim:
     basis: str
     reason: str | None  # machine-readable, when not supported
     detail: str
-    candidates: tuple[str, ...]  # market ids that passed this claim's gates
+    candidates: tuple[str, ...]  # market ids that passed this claim's gates (fresh routes only)
+    freshness: str | None = None  # the winning route's book freshness (always "fresh" when supported)
+    stale_candidates: tuple[str, ...] = ()  # would have passed but the book is stale or of unknown age
+    # Candidates whose real cost is PROVEN above the winner's. For quotes and gross costs these
+    # are observed values, so a strictly higher value is proven. For totals it needs
+    # `proven_cheaper`: a bound below another bound proves nothing.
+    proven_below: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -237,10 +247,19 @@ def _payoff_supported(market: Market) -> bool:
     return market.payoff.kind == "binary" and market.payoff.amount == 1
 
 
+def _contract(event: Event, market: Market) -> tuple:
+    return (market.venue, market.market_id, market.event_id, market.outcome, market.payoff, market.rules_sha256,
+            event.event_id, event.settlement_identity)
+
+
 def _equivalence(request: PositionRequest, route: Route) -> Equivalence:
     a, b = request.market, route.market
-    if (b.market_id, b.payoff, b.rules_sha256, b.event_id) == (a.market_id, a.payoff, a.rules_sha256, a.event_id):
-        return Equivalence.REFERENCE  # the same contract (a later capture may differ in status or timing)
+    if b.market_id == a.market_id:
+        # The requested market itself, only when every contract field matches (a later capture may
+        # differ in status or timing, never in rules). A capture of the same market whose rules or
+        # payoff changed is never compared with the request: it is RELATED.
+        same = _contract(route.event, b) == _contract(request.event, a)
+        return Equivalence.REFERENCE if same else Equivalence.RELATED_NOT_EQUIVALENT
     if is_equivalent(request.event, request.market, route.event, route.market):
         return Equivalence.MATCHED_EQUIVALENT
     return Equivalence.RELATED_NOT_EQUIVALENT
@@ -331,7 +350,7 @@ def assess_route(request: PositionRequest, route: Route, *, as_of: datetime,
             and fill.status is DepthStatus.FILLABLE and claim_total is None and Exclusion.FEE_NOT_PRICED not in out:
         exclude(Exclusion.FEE_NOT_PRICED, "the claim allowance is unknown")
 
-    # Freshness: stale or unknown fails closed for the verified and feasible claims.
+    # Freshness: a stale or unknown-age book is never ranked by any claim (Claim.stale_candidates).
     fresh, why = (Freshness.UNKNOWN, "no captured book") if ladder is None else _freshness(
         ladder.received_at_utc, max_age=max_book_age, as_of=at)
     if fresh is not Freshness.FRESH:
@@ -389,12 +408,39 @@ def _order(r: RouteAssessment) -> tuple:
     return (r.venue, r.market_id, r.book_evidence_id or "", r.book_received_at_utc or "")
 
 
+def proven_cheaper(a: RouteAssessment, b: RouteAssessment) -> bool:
+    """Is `a`'s real total cost PROVEN below `b`'s? Both need claim-grade totals.
+
+    `a.claim_total_cost` is an upper bound on what `a` really costs (exact when VERIFIED). What
+    `b` really costs is known exactly only when its fee is VERIFIED (EXACT); under
+    CONSERVATIVE_BOUND it lies between its gross cost (a taker never pays less than price x
+    quantity) and its claim total. So `a` is proven cheaper only when its bound is below `b`'s
+    exact total, or below `b`'s gross cost. Two overlapping bounds prove no order."""
+    if a.claim_total_cost is None or b.claim_total_cost is None:
+        return False
+    floor = b.claim_total_cost if b.fee_status == FeeStatus.VERIFIED.value else b.gross_cost
+    return floor is not None and a.claim_total_cost < floor
+
+
+def _proven_below(kind: ClaimKind, best: RouteAssessment, passing: Sequence[RouteAssessment]) -> tuple[str, ...]:
+    others = [r for r in sorted(passing, key=_order) if r is not best]
+    if kind in (ClaimKind.BEST_OBSERVED_QUOTE, ClaimKind.BEST_GROSS_COST_FOR_SIZE):
+        # Observed prices and ladder costs are exact observations, not bounds.
+        return tuple(r.market_id for r in others if _claim_value(kind, r) > _claim_value(kind, best))
+    return tuple(r.market_id for r in others if proven_cheaper(best, r))
+
+
 def _make_claim(kind: ClaimKind, routes: Sequence[RouteAssessment], request_problem: str | None) -> Claim:
     gates = CLAIM_GATES[kind]
     basis = CLAIM_BASIS_TEXT[kind]
+    fresh_gates = gates - {Exclusion.NOT_FRESH}
+    stale = tuple(r.market_id for r in sorted(routes, key=_order)
+                  if Exclusion.NOT_FRESH.value in r.exclusions and _claim_value(kind, r) is not None
+                  and not fresh_gates & {Exclusion(e) for e in r.exclusions})
 
-    def absent(reason: str, detail: str, candidates: tuple[str, ...] = ()) -> Claim:
-        return Claim(kind.value, False, None, None, None, basis, reason, detail, candidates)
+    def absent(reason: str, detail: str) -> Claim:
+        return Claim(kind.value, False, None, None, None, basis, reason, detail, (), None,
+                     stale if request_problem is None else ())
 
     if request_problem is not None:
         return absent(Exclusion.PAYOFF_UNSUPPORTED.value, request_problem)
@@ -413,7 +459,8 @@ def _make_claim(kind: ClaimKind, routes: Sequence[RouteAssessment], request_prob
     best = min(passing, key=lambda r: (_claim_value(kind, r), _order(r)))
     candidates = tuple(r.market_id for r in sorted(passing, key=_order))
     return Claim(kind.value, True, best.market_id, best.venue, _claim_value(kind, best), basis, None,
-                 f"lowest of {len(passing)} route(s) passing the {kind.value} gates", candidates)
+                 f"lowest of {len(passing)} fresh route(s) passing the {kind.value} gates", candidates,
+                 best.freshness, stale, _proven_below(kind, best, passing))
 
 
 def compare(request: PositionRequest, routes: Iterable[Route], *, as_of: datetime,
@@ -424,6 +471,13 @@ def compare(request: PositionRequest, routes: Iterable[Route], *, as_of: datetim
         raise ValueError("as_of must be timezone-aware")
     if not isinstance(max_book_age, timedelta) or max_book_age < timedelta(0):
         raise ValueError("max_book_age must be a non-negative timedelta")
+    routes = list(routes)
+    seen: set[str] = set()
+    for route in routes:
+        # One capture per market: two captures of one market must never compete with each other.
+        if route.market.market_id in seen:
+            raise ValueError(f"more than one route for {route.market.market_id}: pass exactly one capture per market")
+        seen.add(route.market.market_id)
     assessed: list[RouteAssessment] = []
     related: set[str] = set()
     for route in routes:
@@ -460,6 +514,12 @@ def _name(venue: str) -> str:
     return VENUE_NAMES.get(venue, venue)
 
 
+def _cost_range(r: RouteAssessment) -> str:
+    if r.fee_status == FeeStatus.VERIFIED.value:
+        return f"{_name(r.venue)} exactly {_usd(r.claim_total_cost)}"
+    return f"{_name(r.venue)} between {_usd(r.gross_cost)} and {_usd(r.claim_total_cost)}"
+
+
 def _route_line(r: RouteAssessment) -> str:
     name, ex = _name(r.venue), set(r.exclusions)
     where = f"{name} ({r.market_id})"
@@ -491,8 +551,9 @@ def _route_line(r: RouteAssessment) -> str:
 
 def summarize(request: PositionRequest, routes: tuple[RouteAssessment, ...], related: tuple[str, ...],
               claims: tuple[Claim, ...], at: datetime, problem: str | None) -> str:
-    """Deterministic plain text. "Cheaper" appears only between routes that both carry a
-    verified total cost; every other comparison is stated as separate figures."""
+    """Deterministic plain text. "Cheaper" appears only where `proven_cheaper` holds: both
+    routes carry a verified total, and the winner's bound is below the other's exact total or
+    below its gross cost. Overlapping bounds are stated as separate figures, with no order."""
     by_kind = {c.kind: c for c in claims}
     lines = [f"Buy {Decimal(request.quantity)} {request.side} like {request.market.market_id}, as of {at.isoformat()}."]
     if problem is not None:
@@ -500,18 +561,28 @@ def summarize(request: PositionRequest, routes: tuple[RouteAssessment, ...], rel
     lines += [_route_line(r) for r in routes]
     if not routes:
         lines.append("No equivalent route.")
+    stale = sorted({m for c in claims for m in c.stale_candidates})
+    if stale:
+        lines.append("Not ranked (book stale or of unknown age): " + ", ".join(stale) + ".")
     verified = sorted((r for r in routes if r.market_id in by_kind[ClaimKind.BEST_VERIFIED_TOTAL_COST.value].candidates),
                       key=lambda r: (r.claim_total_cost, _order(r)))
+    label = lambda r: f"{_name(r.venue)} ({r.market_id})"  # noqa: E731
     if problem is None and len(verified) >= 2:
         best, rest = verified[0], verified[1:]
-        cheaper = [r for r in rest if r.claim_total_cost > best.claim_total_cost]
-        equal = [r for r in rest if r.claim_total_cost == best.claim_total_cost]
-        if cheaper:
-            lines.append(f"On verified total cost, {_name(best.venue)} ({best.market_id}) is cheaper than "
-                         + ", ".join(f"{_name(r.venue)} ({r.market_id})" for r in cheaper) + ".")
-        if equal:
-            lines.append(f"On verified total cost, {_name(best.venue)} ({best.market_id}) ties "
-                         + ", ".join(f"{_name(r.venue)} ({r.market_id})" for r in equal) + ".")
+        proven = [r for r in rest if proven_cheaper(best, r)]
+        exact_ties = [r for r in rest if best.fee_status == r.fee_status == FeeStatus.VERIFIED.value
+                      and r.claim_total_cost == best.claim_total_cost]
+        unordered = [r for r in rest if r not in proven and r not in exact_ties]
+        if proven:
+            lines.append(f"On verified total cost, {label(best)} is cheaper than "
+                         + ", ".join(label(r) for r in proven) + ".")
+        if exact_ties:
+            lines.append(f"{label(best)} and " + ", ".join(label(r) for r in exact_ties)
+                         + " have equal exact total costs.")
+        if unordered:
+            lines.append("No proven order between " + label(best) + " and " + ", ".join(label(r) for r in unordered)
+                         + ": their cost bounds overlap (" + "; ".join(_cost_range(r) for r in [best, *unordered])
+                         + ").")
     elif problem is None and routes:
         lines.append(f"No cheaper-than claim: {len(verified)} of {len(routes)} route(s) have a verified total cost.")
     feasible = by_kind[ClaimKind.BEST_ACCOUNT_FEASIBLE_ROUTE.value]

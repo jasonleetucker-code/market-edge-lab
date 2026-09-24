@@ -51,7 +51,8 @@ record's `knowledge_time_utc`.
 | Formula | "Fee = Θ × C × p × (1 - p)" | Quadratic in price. C is contracts; p is "the trade price ($0.01 to $0.99)". | VERIFIED |
 | Taker coefficient | table: Taker Fee, Theta `0.0695` | Θ = 0.0695 for takers. | VERIFIED (COEFFICIENT) |
 | Maker | table: Maker Rebate, Theta `-0.0125`; "Maker rebate is applied at the point of trade." | Makers receive a rebate. The simulation is taker-only. | VERIFIED (MAKER_FEES) |
-| Rounding | "rounded to the nearest $0.01 using banker's rounding (round half to even)" | Per fill, to the cent, half to even. | VERIFIED |
+| Fee rounding | "rounded to the nearest $0.01 using banker's rounding (round half to even)" | The **fee**: per fill, to the cent, half to even. | documented |
+| Debit (notional) rounding | nothing found; Rulebook 10.1(c): minimum increment "$0.001 per Contract" | How price × contracts is rounded when the cash moves is not documented. | **UNVERIFIED** (ROUNDING_FOR_ACCOUNT_TYPE) |
 | Multi-fill cap | "never exceeds the banker's rounding of the cumulative exact fee" | An order's total fee is at most banker's(Σ exact fees). | VERIFIED |
 | Cap direction | "The adjustment can only reduce a fill's charge, never increase it." | Fills never cost more than their own rounded fee. | VERIFIED |
 | Cancel / expire | "Fees are only charged when a trade executes." | No fee on cancelled, expired or rejected orders. | VERIFIED |
@@ -60,19 +61,26 @@ record's `knowledge_time_utc`.
 | Per-market coefficient | source 14: `feeCoefficient` is described only as "Fee coefficient" (nullable) | The field exists per market, but its relation to the schedule is undocumented. Every captured market shows 0.0695. | gated: the schedule prices a market only when its field equals 0.0695 (`polymarket_us.fee_scope`) |
 | Scheduled changes | source 16, Rule 3.8(a): "The Company may post an updated fee schedule on its website" | Fees can change by posting, with deemed notice. No forward schedule and no fee-change feed exist, and the changelog (source 13) has no fee entries. | **UNVERIFIED** |
 | Account type | source 17: vendor fees are declared per order by partner intermediaries | A route through an intermediary can add fees. No Polymarket US account exists here. | **UNVERIFIED** |
-| Settlement fees | Sources 4 and 5 describe settlement and name no settlement fee | Absence of mention is not evidence of zero. | **UNSUPPORTED (not established)** |
+| Settlement, deposit and withdrawal fees | Sources 4 and 5 describe settlement and name no settlement fee; Rule 3.8(a) gives the exchange "sole authority to impose other fees" | Absence of mention is not evidence of zero. | **UNSUPPORTED (not established)**: the SETTLEMENT_AND_TRANSFER_FEES component, UNVERIFIED |
 
-**Result.** The taker formula, coefficient and rounding are established, so
-`POLYMARKET_US_TAKER_V1` exists. It prices research routes as a **conservative upper bound**:
+**Result.** The taker fee formula, coefficient and fee rounding are established, so
+`POLYMARKET_US_TAKER_V1` exists. It prices research routes as a **conservative estimate**:
 - each take's fee is rounded **up** to the cent;
-- the debit (price × contracts + fee) is also rounded up to the cent, because notional
-  rounding is undocumented.
+- each take's debit (price × contracts + fee) is also rounded up to the cent, because
+  notional rounding is undocumented.
 
-Ceiling ≥ banker's rounding, and a sum of ceilings ≥ the ceiling of the sum. So the bound holds
-for any split of an order into fills, and no rounding allowance is needed.
+What the bound covers:
+- **The fee.** Ceiling ≥ banker's rounding, and a sum of ceilings ≥ the ceiling of the sum.
+  So the fee bound holds for any split of an order into fills.
+- **The cash debit.** The fee bound does **not** cover it. The notional's rounding is
+  undocumented, ticks are $0.001, and an order can run as several fills or orders. The
+  per-take ceiling bounds a single fill only. So the record carries a rounding allowance
+  of **$0.01 per contract**: up to one cent per fill, with whole-contract fills. Fractional
+  fills are not covered and are never priced.
 
-Because SCHEDULED_CHANGES and ACCOUNT_TYPE are unverified, the ADR 0017 claim basis is
-**NONE**:
+Several components are unverified: SCHEDULED_CHANGES, ROUNDING_FOR_ACCOUNT_TYPE (the debit),
+ACCOUNT_TYPE and SETTLEMENT_AND_TRANSFER_FEES. So the ADR 0017 claim basis is **NONE**, and
+each of these blocks any upgrade:
 - `verification_at` reports PARTIALLY_VERIFIED, and the fee is never claimable;
 - the comparator reports the fee as UNVERIFIED (a published-schedule estimate).
 
@@ -97,20 +105,26 @@ The record lapses at `recheck_by_utc` 2026-10-24T01:39:45Z.
 | Tick | Rulebook 10.1(c): minimum increment "$0.001 per Contract unless otherwise specified" | This is consistent with `orderPriceMinTickSize`, which the adapter reads per market. |
 
 **Result (Phase 5A, option B: "represent then refuse").**
-- A market whose rules text states a 50-50 or $0.50 settlement gets the payoff kind
+- A market (sports or not) whose rules text names a last-fair-market-price settlement gets
+  `binary_alternative_settlement`.
+- A market whose rules text states a 50-50, $0.50 or $0.5 settlement gets the payoff kind
   `binary_split_on_cancel`.
-- A sports market without that language gets `binary_alternative_settlement`, per the
+- A sports market with neither gets `binary_alternative_settlement`, per the
   last-fair-market-price, tie and co-winner rules above.
 - Both keep `amount=1`, and neither is shoehorned into `binary`.
 - `opportunity.evaluate` rejects both (PAYOFF_UNSUPPORTED), and so does
   `best_price.compare`: the route is never walked or priced.
 - Kalshi markets are unchanged (`kalshi_quotes` still builds `binary`).
-- The weather last-fair-market-price fallback does not change the payoff kind. It is part of
-  the rules comparison, which is not established (`rules_resolved=False`).
+- The weather last-fair-market-price fallback is refused as above when it appears in the
+  market's own rules text. When it appears only in the FAQ, it is part of the rules
+  comparison, which is not established (`rules_resolved=False`).
 
 ## Not established (stays UNSUPPORTED or unknown)
 
 - Settlement fees, deposit and withdrawal fees, and any fee for an intermediary route.
+- The rounding of the cash debit (notional), and fee or debit rounding for fractional fills.
+- Any Polymarket US fee schedule before 2026-09-17: `schedule_for(..., as_of=)` is
+  UNSUPPORTED before that date.
 - Whether a scheduled fee change is pending.
 - What the per-market `feeCoefficient` means when it differs from 0.0695.
 - Fee rounding for fractional-contract fills.

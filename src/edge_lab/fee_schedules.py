@@ -70,6 +70,10 @@ class VerificationComponent(str, Enum):
     ROUNDING_FOR_ACCOUNT_TYPE = "ROUNDING_FOR_ACCOUNT_TYPE"
     ACCOUNT_TYPE = "ACCOUNT_TYPE"
     MAKER_FEES = "MAKER_FEES"
+    # Settlement, deposit and withdrawal fees (ADR 0027). A record that states this component
+    # and does not verify it supports no claim. Records made before it existed (the Kalshi
+    # 2026-09-23 record) do not state it; they add it at their next re-check.
+    SETTLEMENT_AND_TRANSFER_FEES = "SETTLEMENT_AND_TRANSFER_FEES"
 
 
 class ComponentState(str, Enum):
@@ -207,9 +211,14 @@ class PolymarketUsTakerSchedule:
     an order's total at the banker's rounding of its cumulative exact fee. This schedule
     instead rounds each take UP to the cent. Ceiling >= banker's rounding, and a sum of
     ceilings >= the ceiling of the sum, so whatever the split of an order into fills, the
-    venue's fee is at most this schedule's fee: no rounding allowance is needed on top.
-    The cash debit (price x contracts + fee) is also rounded up to the cent, because the
-    venue documents no rounding for the notional. A NO buy is a short sale of YES at 1 - q
+    venue's FEE is at most this schedule's fee.
+    The FEE bound does not cover the cash debit. The venue documents no rounding for the
+    notional (price x contracts, on a $0.001 tick), and an order can execute as several fills
+    or orders. This schedule rounds each take's debit up to the cent, which bounds a single
+    fill only. The verification record therefore carries a rounding allowance of $0.01 per
+    contract. It assumes each fill is a whole number of contracts, with at most one cent of
+    notional rounding each. Fractional fills are not bounded, and are never priced here
+    (`price_depth_fill`). A NO buy is a short sale of YES at 1 - q
     (margin $1, net buying power -q); p(1 - p) is symmetric, so its fee is the same.
     Outside the documented price range ($0.01 to $0.99) the fee is bounded by its value at
     that range's edge (p(1 - p) grows towards 0.5). Taker only: maker rebates and volume
@@ -311,6 +320,10 @@ class FeeVerificationRecord:
                 VerificationComponent.SCHEDULED_CHANGES, VerificationComponent.ROUNDING_FOR_ACCOUNT_TYPE)
         if not all(self.component(c).state is ComponentState.VERIFIED for c in core):
             return ClaimBasis.NONE
+        stated = {c.component: c.state for c in self.components}
+        transfer = stated.get(VerificationComponent.SETTLEMENT_AND_TRANSFER_FEES)
+        if transfer is not None and transfer not in (ComponentState.VERIFIED, ComponentState.NOT_APPLICABLE):
+            return ClaimBasis.NONE  # an unknown settlement or transfer fee could consume any edge
         if cost_model is CostModel.EXACT and self.full_schedule_verified:
             return ClaimBasis.EXACT
         # The bound is proven only for a direct member (the non-direct bound is loose, and an
@@ -427,8 +440,10 @@ _PMUS_EVIDENCE = "experiments/multi_venue/polymarket_us_fees_2026-09-24.md"
 # schedule prices research routes. SCHEDULED_CHANGES cannot be verified: Rule 3.8(a) lets the
 # exchange change fees by posting a new schedule on its website, and no forward schedule or
 # fee-change feed is published. ACCOUNT_TYPE is unverified: there is no Polymarket US account,
-# and intermediated routes can add vendor fees. So the claim basis is NONE (ADR 0017): the fee
-# is a documented estimate, never a claim-grade total.
+# and intermediated routes can add vendor fees. The fee rounding is documented, but the rounding
+# of the cash debit is not, so ROUNDING_FOR_ACCOUNT_TYPE stays unverified. Settlement, deposit
+# and withdrawal fees are not documented. So the claim basis is NONE (ADR 0017): the fee is a
+# documented estimate, never a claim-grade total.
 POLYMARKET_US_VERIFICATION_2026_09_24 = FeeVerificationRecord(
     verification_id="polymarket-us-fee-verification-2026-09-24",
     schedule_id="polymarket-us-taker-v1",
@@ -438,8 +453,10 @@ POLYMARKET_US_VERIFICATION_2026_09_24 = FeeVerificationRecord(
     applies_from_utc="2026-09-17T00:00:00-04:00",
     recheck_by_utc="2026-10-24T01:39:45Z",
     account_type="direct",
-    # The schedule rounds every take up to the cent, which already bounds any split into fills.
-    rounding_allowance_per_contract=Decimal("0"),
+    # The per-take ceiling bounds the FEE for any split into fills. The notional's rounding is
+    # undocumented, so up to one cent per fill is allowed; with whole-contract fills that is at
+    # most $0.01 per contract. Fractional fills are not covered (never priced by price_depth_fill).
+    rounding_allowance_per_contract=Decimal("0.01"),
     components=(
         ComponentEvidence(VerificationComponent.COEFFICIENT, ComponentState.VERIFIED,
                           f"{_PMUS_EVIDENCE} (docs.polymarket.us/fees.md)",
@@ -452,16 +469,22 @@ POLYMARKET_US_VERIFICATION_2026_09_24 = FeeVerificationRecord(
                           f"{_PMUS_EVIDENCE} (Rulebook 2026-09-14, Rule 3.8(a))",
                           "fees may change by posting an updated schedule on the website; no forward schedule "
                           "or fee-change feed exists to check"),
-        ComponentEvidence(VerificationComponent.ROUNDING_FOR_ACCOUNT_TYPE, ComponentState.VERIFIED,
-                          f"{_PMUS_EVIDENCE} (fees page, Fee Rules)",
-                          "per fill: banker's rounding to $0.01; an order's total never exceeds the banker's "
-                          "rounding of its cumulative exact fee. The schedule's per-take ceiling bounds both"),
+        ComponentEvidence(VerificationComponent.ROUNDING_FOR_ACCOUNT_TYPE, ComponentState.UNVERIFIED,
+                          f"{_PMUS_EVIDENCE} (fees page, Fee Rules; Rulebook 10.1(c) $0.001 tick)",
+                          "FEE rounding documented: banker's rounding to $0.01 per fill, an order's total never "
+                          "above the banker's rounding of its cumulative exact fee (the per-take ceiling bounds "
+                          "it). The cash-debit (notional) rounding is NOT documented: allowance $0.01 per "
+                          "contract, assuming whole-contract fills"),
         ComponentEvidence(VerificationComponent.ACCOUNT_TYPE, ComponentState.UNVERIFIED,
                           f"{_PMUS_EVIDENCE} (partners/funding/vendor-fees)",
                           "no Polymarket US account exists; an intermediary route can add a declared vendor fee"),
         ComponentEvidence(VerificationComponent.MAKER_FEES, ComponentState.VERIFIED,
                           f"{_PMUS_EVIDENCE} (fees page)",
                           "maker rebate theta 0.0125 per fill (credited); the simulation is taker-only"),
+        ComponentEvidence(VerificationComponent.SETTLEMENT_AND_TRANSFER_FEES, ComponentState.UNVERIFIED,
+                          f"{_PMUS_EVIDENCE} (contract-settlement, market-resolution; Rulebook 3.8)",
+                          "UNSUPPORTED: no settlement, deposit or withdrawal fee is documented, and absence of "
+                          "mention is not evidence of zero; Rule 3.8 lets the exchange impose other fees"),
     ),
 )
 
@@ -641,18 +664,29 @@ class UnsupportedFeeSchedule:
         raise ValueError(f"{self.schedule_id}: {self.reason}")
 
 
-def schedule_for(venue: str, scope: str | None = None
+POLYMARKET_US_EFFECTIVE_FROM_UTC = "2026-09-17T00:00:00-04:00"  # 12 AM ET, fees page
+
+
+def schedule_for(venue: str, scope: str | None = None, *, as_of: datetime | str | None = None
                  ) -> QuadraticTakerSchedule | PolymarketUsTakerSchedule | UnsupportedFeeSchedule:
     """The fee schedule for a venue and fee scope. Kalshi's general schedule covers only
     Kalshi series that are not on the non-standard list. Polymarket US's exchange-wide
     schedule covers only markets in `POLYMARKET_US_EXCHANGE_SCOPE` (their own `feeCoefficient`
-    equals the schedule's theta; `polymarket_us.fee_scope`). Every other venue or scope has
-    its own fees and stays unsupported until its own primary evidence is captured."""
+    equals the schedule's theta; `polymarket_us.fee_scope`) and, for a point-in-time replay
+    (`as_of`), only from its effective date: an earlier Polymarket US schedule was never
+    captured. Every other venue or scope has its own fees and stays unsupported until its
+    own primary evidence is captured. `as_of` does not change Kalshi routing."""
     if venue == "polymarket_us":
-        if scope == POLYMARKET_US_EXCHANGE_SCOPE:
-            return POLYMARKET_US_TAKER_V1
-        return UnsupportedFeeSchedule(venue, scope, "the market's fee coefficient is unknown or differs from the "
-                                                    "documented exchange-wide theta 0.0695")
+        if scope != POLYMARKET_US_EXCHANGE_SCOPE:
+            return UnsupportedFeeSchedule(venue, scope, "the market's fee coefficient is unknown or differs from the "
+                                                        "documented exchange-wide theta 0.0695")
+        at = None if as_of is None else parse_utc(as_of)
+        if as_of is not None and at is None:
+            raise ValueError("as_of must be a timezone-aware time")
+        if at is not None and at < parse_utc(POLYMARKET_US_EFFECTIVE_FROM_UTC):
+            return UnsupportedFeeSchedule(venue, scope, "before 2026-09-17 00:00 ET: no Polymarket US fee schedule "
+                                                        "for that period was captured")
+        return POLYMARKET_US_TAKER_V1
     if venue != "kalshi":
         return UnsupportedFeeSchedule(venue, scope, "no fee schedule has been verified for this venue")
     if not scope:

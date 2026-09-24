@@ -47,6 +47,9 @@ def test_every_captured_market_states_a_50_50_cancellation_and_is_split_on_cance
     "If postponed, each contract settles at $0.50.",
     "Settles at $.50 on a tie.",
     "Void markets settle at 0.50 per contract.",
+    "Void markets settle at $0.5 per contract.",
+    "Void markets settle at 0.5 per contract.",
+    "If cancelled this market resolves 50 50.",
     "resolves 50–50 if cancelled",
 ])
 def test_split_language_variants_are_recognised(text):
@@ -59,6 +62,27 @@ def test_sports_markets_without_split_language_fail_closed_to_alternative_settle
     kind, why = pm.payoff_kind(raw("If Team A wins, the market resolves to Team A.", **fields))
     assert kind == pm.PAYOFF_ALTERNATIVE_SETTLEMENT and "last fair market price" in why
     assert pm.payoff_kind(raw(None, **fields))[0] == pm.PAYOFF_ALTERNATIVE_SETTLEMENT  # no rules text
+
+
+@pytest.mark.parametrize("category", ["weather", "crypto", "politics", None])
+@pytest.mark.parametrize("text", [
+    "If no data is published within one week, the contract settles at last fair market prices.",
+    "Settles at the Last Fair Market Price at the time of the announcement.",
+    "Cancelled events settle at LFMP.",
+    "last-fair-market-price settlement applies if the source is unavailable.",
+])
+def test_last_fair_market_price_language_fails_closed_in_any_market(category, text):
+    kind, why = pm.payoff_kind(raw(text, category=category))
+    assert kind == pm.PAYOFF_ALTERNATIVE_SETTLEMENT and "last fair market price" in why
+    # Both kinds of language: still refused (the price-later settlement is the broader one).
+    assert pm.payoff_kind(raw(text + " Otherwise it resolves 50-50.", category=category))[0] \
+        == pm.PAYOFF_ALTERNATIVE_SETTLEMENT
+
+
+@pytest.mark.parametrize("text", ["Resolves Yes if BTC is above $50,000.", "Resolves Yes above 0.55.",
+                                  "The high must reach 50 degrees.", "Pays $0.55 per share only if Yes."])
+def test_ordinary_numbers_are_not_split_language(text):
+    assert pm.payoff_kind(raw(text, category="crypto"))[0] == "binary"
 
 
 def test_a_non_sports_market_without_split_language_stays_binary():
