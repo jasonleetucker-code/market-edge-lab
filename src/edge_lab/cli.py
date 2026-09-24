@@ -197,6 +197,31 @@ def build_parser() -> argparse.ArgumentParser:
                            help="after reviewing a COST_ANOMALY, allow paid calls again")
     # --- end odds
 
+    # --- observe: later/closing price observations (ADR 0030). Self-contained block.
+    observe = subparsers.add_parser(
+        "observe", help="Later/closing price observations: plan, bounded manual capture, status (ADR 0030; no timer)."
+    )
+    observe_sub = observe.add_subparsers(dest="observe_command", required=True)
+    ob_plan = observe_sub.add_parser(
+        "plan", help="Persist targets for recorded decisions (qualified and rejected) and backfill decision/recheck "
+                     "books from stored captures. No network.")
+    ob_plan.add_argument("--db", default="data/edge_lab.sqlite3")
+    ob_plan.add_argument("--ledger", help="shadow ledger whose recorded decisions are planned (opened read-only)")
+    ob_plan.add_argument("--lookback-days", type=float, default=7.0, help="plan decisions made this recently")
+    ob_plan.add_argument("--custom-venue", choices=("kalshi", "polymarket_us"), help="also plan one custom target")
+    ob_plan.add_argument("--custom-market", help="native market id (Kalshi ticker or Polymarket US slug)")
+    ob_plan.add_argument("--custom-event", help="native event id (Kalshi event ticker; default from the ticker)")
+    ob_plan.add_argument("--custom-at", help="ISO-8601 time with zone (default: now)")
+    ob_capture = observe_sub.add_parser(
+        "capture", help="One bounded, locked, idempotent capture of the due targets (refuses protected windows).")
+    ob_capture.add_argument("--db", default="data/edge_lab.sqlite3")
+    ob_capture.add_argument("--max-targets", type=int, default=24)
+    ob_capture.add_argument("--max-requests", type=int, default=40)
+    ob_status = observe_sub.add_parser("status", help="Read-only: targets by phase and state, misses, next due.")
+    ob_status.add_argument("--db", default="data/edge_lab.sqlite3")
+    ob_status.add_argument("--market", help="also print this market's history (e.g. kalshi:KXHIGHNY-26SEP24-B67.5)")
+    # --- end observe
+
     return parser
 
 
@@ -851,6 +876,38 @@ def _odds(args: argparse.Namespace) -> int:
     return code
 
 
+def _observe(args: argparse.Namespace) -> int:
+    """Later/closing price observations (ADR 0030). Prints one JSON report."""
+    from datetime import timedelta
+
+    from . import price_observations as po
+    from .freshness import parse_utc
+    from .storage import ReadOnlyStoreError
+
+    db = Path(args.db)
+    if args.observe_command == "plan":
+        custom = []
+        if args.custom_venue or args.custom_market:
+            at = parse_utc(args.custom_at) if args.custom_at else datetime.now(timezone.utc)
+            if not (args.custom_venue and args.custom_market) or at is None:
+                print("--custom-venue and --custom-market are both required; --custom-at needs a zone", file=sys.stderr)
+                return 2
+            custom.append(po.custom_target(venue=args.custom_venue, native_market_id=args.custom_market, at=at,
+                                           native_event_id=args.custom_event))
+        code, report = po.run_plan(db, Path(args.ledger) if args.ledger else None,
+                                   lookback=timedelta(days=args.lookback_days), custom=custom)
+    elif args.observe_command == "capture":
+        code, report = po.run_capture(db, max_targets=args.max_targets, max_requests=args.max_requests)
+    else:
+        try:
+            code, report = po.run_status(db, market_id=args.market)
+        except ReadOnlyStoreError as exc:
+            print(json.dumps({"command": "observe status", "state": "NO_STORE", "detail": str(exc)}))
+            return 1
+    print(json.dumps(report, sort_keys=True, indent=2, default=str))
+    return code
+
+
 def main(argv: list[str] | None = None) -> int:
     argv = sys.argv[1:] if argv is None else list(argv)
     if argv[:1] == ["dashboard"]:  # the dashboard owns its own argument parser
@@ -891,6 +948,8 @@ def main(argv: list[str] | None = None) -> int:
         return _notify(args)
     if args.command == "odds":
         return _odds(args)
+    if args.command == "observe":
+        return _observe(args)
 
     raise AssertionError(f"Unhandled command: {args.command}")
 
