@@ -94,7 +94,8 @@ def test_sized_side_shows_the_contract_figures_only_formatted(panels):
     text = plain(c.research_sizing(panels["sized"]))
     for needle in ("Challenger size (research) 3 contracts · $1.08 cost", "Verdict Sized (research)",
                    "Binding constraint POSITION_CAP", "Model probability 41.0%", "Conservative probability 38.0%",
-                   "Expected net edge / contract +5.12¢", "Entry price 34¢", "Estimated fee $0.06",
+                   "Expected net edge / contract +5.12¢", "Average entry price 34¢",
+                   "Estimated fee (incl. claim allowance) $0.06",
                    "Full-Kelly amount $4.32", "Policy amount before caps $1.44", "Bankroll basis $1,000.00",
                    "Capital horizon Within starter horizon", "cash horizon cap —"):
         assert needle in text, needle
@@ -125,8 +126,13 @@ def test_computed_zero_is_available_not_missing(panels):
 @pytest.mark.parametrize("reason", fixtures.SIZING_UNAVAILABLE)
 def test_each_unavailable_reason_is_named(panels, reason):
     html = c.research_sizing(panels[reason])
-    assert f'<span>{reason}</span>' in html and f"SYNTHETIC detail for: {reason}" in html
+    assert f'<span>{reason}</span>' in html and f"detail for: {reason}" in html
     assert "Challenger size" not in html  # no figure when the engine could not compute
+    # The refused side's comparison rows carry the engine's placeholder zeros: never shown as figures.
+    table = html[html.index("Research sizing by policy"):]
+    assert "$0.00" not in table and "0.00%" not in table and "not computed" in table
+    compare = html[html.rindex('<details class="disclosure"', 0, html.index("Research sizing by policy")):]
+    assert compare.startswith('<details class="disclosure">')  # collapsed, not open
 
 
 def test_every_directive_reason_is_covered():
@@ -223,3 +229,66 @@ def test_gallery_shows_the_sizing_states(demo):
     for needle in ("ResearchSizing (sized", "Zero: no edge after costs", "Research sizing not available",
                    "Research sizing unavailable", *fixtures.SIZING_UNAVAILABLE):
         assert needle in text, needle
+
+
+@pytest.mark.parametrize("reason", fixtures.SIZING_NO_SIDES)
+def test_nothing_to_size_is_neutral_not_blocked(panels, reason):
+    html = c.research_sizing(panels[reason])
+    assert f'<span>{reason}</span>' in html and 'class="empty k-nd"' in html and 'class="empty k-warn"' not in html
+
+
+def test_a_broken_contract_import_is_an_error_not_absent(monkeypatch, demo):
+    import importlib
+    real = importlib.import_module
+
+    def fake(name, *a, **k):
+        if name == d.RESEARCH_SIZING_MODULE:
+            raise ModuleNotFoundError("No module named 'edge_lab.sizing_eval'", name="edge_lab.sizing_eval")
+        return real(name, *a, **k)
+    monkeypatch.setattr(importlib, "import_module", fake)
+    result = d.research_sizing(d.Context(demo), "kalshi:DEMO-B71.5")
+    assert result.status == d.ERROR and "sizing_eval" in result.message
+
+
+def test_a_replay_without_the_evidence_database_is_flagged_and_never_cached(fake_contract, demo, tmp_path):
+    bad = tmp_path / "evidence.sqlite3"
+    bad.write_bytes(b"not a sqlite database")
+    cfg = dataclasses.replace(demo, db=bad)
+    first = d.research_sizing(d.Context(cfg), "kalshi:DEMO-B71.5")
+    again = d.research_sizing(d.Context(cfg), "kalshi:DEMO-B71.5")
+    assert first.status == d.OK and "Replayed without the evidence database" in first.message
+    assert again is not first and fake_contract.calls == ["kalshi:DEMO-B71.5", "kalshi:DEMO-B71.5"]
+    assert "Replayed without the evidence database" in markets.sizing_body(first)
+    assert str(tmp_path) not in first.message
+    healthy = d.research_sizing(d.Context(demo), "kalshi:DEMO-B71.5")
+    assert healthy.message == "" and healthy is not first
+
+
+def test_free_text_details_are_scrubbed_of_paths(monkeypatch, demo):
+    module = types.ModuleType(d.RESEARCH_SIZING_MODULE)
+    secret = r"C:\Users\someone\private\ledger.sqlite3"
+    module.panel_for_market = lambda *a, **k: {**fixtures.synthetic_sizing_panels()["Ledger unavailable"],
+                                               "unavailable_detail": f"OSError: cannot open {secret}"}
+    monkeypatch.setitem(sys.modules, d.RESEARCH_SIZING_MODULE, module)
+    monkeypatch.setattr(d, "_SIZING_CACHE", {})
+    result = d.research_sizing(d.Context(demo), "kalshi:DEMO-B71.5")
+    assert result.value["unavailable_detail"] == "OSError: cannot open ledger.sqlite3"
+
+
+def test_fixtures_have_the_real_contracts_shape(demo, monkeypatch):
+    real = pytest.importorskip(d.RESEARCH_SIZING_MODULE)
+    monkeypatch.setattr(d, "_SIZING_CACHE", {})
+    ctx = d.Context(demo)
+    panel = real.panel_for_market(ctx.store.value, ctx.ledger.value, "kalshi:DEMO-B71.5")
+    fixture = fixtures.synthetic_sizing_panels()["sized"]
+    assert set(fixture) == set(panel)
+    assert panel["sides"], "the demo store should yield at least one side"
+    real_side, fx_side = panel["sides"][0], fixture["sides"][0]
+    assert set(fx_side) == set(real_side)
+    assert set(fx_side["primary"]) == set(real_side["primary"])
+    assert set(fx_side["comparison"][0]) == set(real_side["comparison"][0])
+    html = markets.sizing_body(d.research_sizing(ctx, "kalshi:DEMO-B71.5"))
+    if not real_side["available"]:
+        table = html[html.index("Research sizing by policy"):]
+        assert "$0.00" not in table and "0.00%" not in table
+

@@ -617,25 +617,37 @@ def _ledger_heads(ctx: Context) -> tuple | None:
 def research_sizing(ctx: Context, market_id: str) -> Loaded:
     """Lane A's read-only research sizing panel (`sizing_counterfactual.panel_for_market`) for one
     market: OK with the panel dict (which may itself be unavailable with a named reason), NO_DATA
-    when the contract is not installed or no ledger is configured, ERROR on a read failure.
+    when the contract is not installed or no ledger is configured, ERROR on a read failure or a
+    broken contract.
 
-    The panel replays the whole ledger, so results are cached by the ledger's head hashes (a new
-    entry changes a head and misses the cache). Nothing here sizes, formats or edits the result."""
+    The panel replays the whole ledger, so results are cached by the ledger's head hashes and the
+    evidence database's read status (a new entry changes a head and misses the cache). A replay made
+    while the evidence database cannot be read is never cached and carries a caveat in `message`.
+    Nothing here sizes or edits a figure; free-text details are only scrubbed of paths."""
     import importlib
 
     try:
         module = importlib.import_module(RESEARCH_SIZING_MODULE)
-    except ImportError:
+    except ModuleNotFoundError as exc:
+        if exc.name != RESEARCH_SIZING_MODULE:  # installed, but one of its own imports is missing
+            return Loaded(ERROR, message=short_error(exc, ctx.config))
         return Loaded(NO_DATA, message="the research sizing contract (sizing_counterfactual) is not installed in "
                                        "this build")
+    except Exception as exc:  # noqa: BLE001 - a module that fails to import is broken, not absent
+        return Loaded(ERROR, message=short_error(exc, ctx.config))
     if ctx.ledger.status == ERROR:
         return Loaded(ERROR, message=ctx.ledger.message)
     if ctx.ledger.status != OK:
         return Loaded(NO_DATA, message=ctx.ledger.message or "no shadow ledger configured")
     heads = _ledger_heads(ctx)
     store = ctx.store.value if ctx.store.status == OK else None
-    key = (str(_resolved(ctx.config.ledger)), str(_resolved(ctx.config.db)), heads, market_id)
-    if heads is not None:
+    caveat = ""
+    if ctx.store.status == ERROR:
+        caveat = (f"Replayed without the evidence database, which cannot be read ({ctx.store.message}): captured "
+                  "settlements and confirmation quotes are missing from this replay.")
+    cacheable = heads is not None and ctx.store.status != ERROR
+    key = (str(_resolved(ctx.config.ledger)), str(_resolved(ctx.config.db)), ctx.store.status, heads, market_id)
+    if cacheable:
         with _SIZING_LOCK:
             hit = _SIZING_CACHE.get(key)
         if hit is not None:
@@ -646,13 +658,34 @@ def research_sizing(ctx: Context, market_id: str) -> Loaded:
         return Loaded(ERROR, message=short_error(exc, ctx.config))
     if not isinstance(panel, dict):
         return Loaded(ERROR, message="the research sizing contract returned no panel")
-    result = Loaded(OK, panel)
-    if heads is not None:
+    result = Loaded(OK, _scrubbed(panel, ctx.config), message=caveat)
+    if cacheable:
         with _SIZING_LOCK:
             if len(_SIZING_CACHE) >= _SIZING_CACHE_MAX:
                 _SIZING_CACHE.pop(next(iter(_SIZING_CACHE)))
             _SIZING_CACHE[key] = result
     return result
+
+
+def scrub_paths(text: Any, config: Config | None = None) -> Any:
+    """A free-text detail with every filesystem path reduced to its final name (as `short_error`)."""
+    if not isinstance(text, str):
+        return text
+    for p in (config.paths() if config else []):
+        for variant in {str(p), str(p.resolve())}:
+            text = text.replace(variant, p.name)
+    return _ABS_PATH.sub(lambda m: re.split(r"[\\/]", m.group(0).rstrip("\\/"))[-1], text)
+
+
+def _scrubbed(panel: dict[str, Any], config: Config) -> dict[str, Any]:
+    """A copy of the panel whose free-text `unavailable_detail`s carry no paths (engine text may quote
+    an OS error). Figures and every other field are untouched."""
+    out = dict(panel, unavailable_detail=scrub_paths(panel.get("unavailable_detail"), config))
+    sides = panel.get("sides")
+    if isinstance(sides, list):
+        out["sides"] = [dict(s, unavailable_detail=scrub_paths(s.get("unavailable_detail"), config))
+                        if isinstance(s, dict) else s for s in sides]
+    return out
 
 
 def _resolved(path: Path | None) -> Path | None:

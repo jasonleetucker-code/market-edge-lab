@@ -184,7 +184,7 @@ YES/NO tiles. Empty result: "No matches in captured data" + Clear filters.
 **Market detail `/market?venue=&id=&side=&account=`** — identity validated against stored
 records. Order: breadcrumb; labels + full question; quote summary; price history (only with ≥2
 same-side observations); our assessment (never 50% for unknown); across venues (no
-equivalence claimed without evidence); capital & timing; decision preview marked **Read-only ·
+equivalence claimed without evidence); research sizing (read-only challenger); capital & timing; decision preview marked **Read-only ·
 Trading disabled**; rules & evidence disclosure. Desktop: main column + 320px inspector.
 
 *Across venues* renders `best_price.compare` (ADR 0027) for the page's side at the recorded
@@ -330,11 +330,14 @@ directive), and the screenshots that justify it.
   decision-time freshness row: the comparator judges a book at the recorded decision time, so it
   says "at decision time" and never plain "fresh" beside the Quote section's current-time
   verdict; a single captured route reuses "No equivalent venue price verified". No token, CSS,
-  layout or navigation change. Markets rows get no comparison indicator: §8 fixes the board columns.
-  Screenshots: see the PR.
+  layout or navigation change. Markets rows get no comparison indicator: §8 fixes the board
+  columns. Screenshots: 360x800 and 1440x900 (`tests/browser/capture.py`), reviewed locally by
+  the author and described in PR #65 (not attached).
 - **2026-09-24 — Research sizing panel.** Approved by the 2026-09-24 next-build-chunk directive,
   Deliverable 2. §8 market detail gains a "Research sizing" section after "Across venues" that
   renders Lane A's `sizing_counterfactual.panel_for_market` contract (read-only, cached by the
   ledger's head hashes). New component `research_sizing` built from the existing facts, badge,
   table, disclosure and state components; new state words for the sizing-v2 verdicts. No token,
-  CSS, layout or navigation change. Risk & capital is unchanged. Screenshots: see the PR.
+  CSS, layout or navigation change. Risk & capital is unchanged. Screenshots: 360x800 and
+  1440x900 (`tests/browser/capture.py`), reviewed locally by the author and described in PR #69
+  (not attached).

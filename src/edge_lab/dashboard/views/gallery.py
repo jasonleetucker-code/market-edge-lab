@@ -87,7 +87,8 @@ def view(ctx: d.Context, p: pr.Params) -> cm.Page:
     parts.append(c.section("ResearchSizing (sized · other side unavailable)", c.research_sizing(panels["sized"]),
                            meta="shadow sizing challenger · counterfactual", sid="g-rs-sized"))
     parts.append(c.section("ResearchSizing (computed zero)", c.research_sizing(panels["zero"]), sid="g-rs-zero"))
-    reasons = "".join(c.research_sizing(panels[r]) for r in fixtures.SIZING_UNAVAILABLE)
+    reasons = "".join(c.research_sizing(panels[r]) for r in (*fixtures.SIZING_UNAVAILABLE,
+                                                               *fixtures.SIZING_NO_SIDES))
     parts.append(c.section("ResearchSizing (each unavailable reason)", reasons, sid="g-rs-unavail"))
     parts.append(c.section("ResearchSizing (not installed / read error)",
                            markets.sizing_body(d.Loaded(d.NO_DATA, message="the research sizing contract "

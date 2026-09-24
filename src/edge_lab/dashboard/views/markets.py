@@ -333,7 +333,7 @@ def comparison_body(result: d.VenueComparison, now=None) -> str:
 def sizing_body(result: d.Loaded) -> str:
     """Every state of the research sizing slot. The panel itself names any unavailable reason."""
     if result.status == d.OK:
-        return c.research_sizing(result.value)
+        return c.research_sizing(result.value, note=result.message)
     if result.status == d.ERROR:
         return c.error_state("Research sizing unavailable", f"ERROR — {result.message}. This is not a zero size.")
     why = result.message[:1].upper() + result.message[1:]

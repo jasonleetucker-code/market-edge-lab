@@ -158,6 +158,7 @@ def synthetic_comparisons() -> dict[str, bp.Comparison]:
 SIZING_LABEL = "RESEARCH SIZING - SHADOW SIZING CHALLENGER (counterfactual; not a bet recommendation)"
 SIZING_UNAVAILABLE = ("No model", "Fees unsupported", "Stale quote", "Rules unresolved",
                       "Insufficient uncertainty evidence", "Risk state unavailable", "Unsupported payoff")
+SIZING_NO_SIDES = ("No recorded decision", "Ledger unavailable")
 _POLICIES = (("A", "sizing-v2-flat-1"), ("B", "sizing-v2-fixed-pct"), ("C", "sizing-v2-kelly-full"),
              ("D", "sizing-v2-kelly-half"), ("E", "sizing-v2-kelly-quarter"), ("F", "sizing-v2-robust-kelly"),
              ("G", "sizing-v2-drawdown-kelly"), ("H", "sizing-v2-candidate"))
@@ -169,7 +170,8 @@ _SIZES.update(C=("SIZE", "LIQUIDITY", "12", "4.32", "0.00432"), D=("SIZE", "POSI
 def _comparison(h: tuple[str, str, str, str, str], *, refused: bool = False) -> list[dict]:
     sizes = {**_SIZES, "H": h}
     if refused:  # the engine refuses the same inputs under every policy
-        sizes = {letter: ("UNSUPPORTED", "MODEL_UNAVAILABLE", "0", "0", "0") for letter, _ in _POLICIES}
+        # A refused row carries placeholder zeros (as the engine's blocked rows do): never computed.
+        sizes = {letter: ("UNSUPPORTED", "MODEL_UNAVAILABLE", "0", "0", "0E-10") for letter, _ in _POLICIES}
     return [{"letter": letter, "policy_id": pid, "policy_version": "1", "verdict": sizes[letter][0],
              "binding_constraint": sizes[letter][1], "final_contracts": sizes[letter][2],
              "final_amount": sizes[letter][3], "bankroll_before": "1000.00", "fraction_of_bankroll": sizes[letter][4]}
@@ -205,6 +207,11 @@ def _side(side: str, *, verdict: str = "SIZE", contracts: str = "3", amount: str
         "secondary_constraints": ["EVENT_CAP"],
         "explanation": f"SYNTHETIC: {contracts} contracts under policy H; {binding} binds.",
         "fill_status": "FILLED" if contracts != "0" else None, "fill_reason": None}
+    if reason is not None:  # a refusal: the engine stops before the optimizer, figures are not computed
+        primary.update(verdict="UNSUPPORTED", block_reason="MODEL_UNAVAILABLE", expected_net_edge=None,
+                       entry_price=None, estimated_fee=None, unconstrained_kelly_amount=None,
+                       policy_amount_before_caps=None, final_contracts="0", final_amount="0",
+                       binding_constraint="MODEL_UNAVAILABLE", explanation=None, fill_status=None)
     return {"side": side, "decision_id": f"dec-DEMO-{side}", "decision_time": T0,
             "recorded_qualification": "QUALIFY" if reason is None else "REJECT",
             "recorded_reason": "QUALIFY" if reason is None else "MODEL_UNAVAILABLE", "model_version": "demo",
@@ -215,13 +222,17 @@ def _side(side: str, *, verdict: str = "SIZE", contracts: str = "3", amount: str
 
 
 def synthetic_sizing_panels() -> dict[str, dict]:
-    """name -> a contract-shaped panel: sized (with the other side unavailable), a computed zero,
-    and each named whole-panel unavailable reason."""
+    """name -> a contract-shaped panel: sized (with the other side refused), a computed zero, each
+    directive reason as the contract returns it (every side refused with that reason, the panel
+    unavailable), and the two reasons with no side at all (no decision, ledger unavailable)."""
     panels = {
         "sized": _panel([_side("YES"), _side("NO", reason="No model")]),
         "zero": _panel([_side("YES", verdict="ZERO_EDGE", contracts="0", amount="0", binding="ZERO_EDGE",
                               fraction="0")]),
     }
     for reason in SIZING_UNAVAILABLE:
+        side = _side("YES", reason=reason)
+        panels[reason] = _panel([side], available=False, reason=reason, detail=side["unavailable_detail"])
+    for reason in SIZING_NO_SIDES:
         panels[reason] = _panel([], available=False, reason=reason, detail=f"SYNTHETIC detail for: {reason}")
     return panels

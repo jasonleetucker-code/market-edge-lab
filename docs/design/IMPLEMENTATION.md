@@ -79,6 +79,8 @@ After: the same deep links (relabelled Terminal, Markets, Portfolio, Outcomes, R
 3a. *Research sizing*: shown only when `edge_lab.sizing_counterfactual` is installed (Lane A, PR #64);
    before that the slot says the contract is not installed. The cache key is the ledger heads, so
    evidence captured later (a confirmation quote) reaches the panel with the next ledger entry.
+   A replay made while the evidence database cannot be read is flagged on the panel and never
+   cached. Free-text details from the contract are scrubbed of filesystem paths.
 4. *Sport/league identity*: no sports market is captured; the Sports tab says so.
 5. *Delivery status beyond the outbox*: phone delivery is not recorded; Alerts says so.
 6. *Price history*: only the decision and re-check captures of the latest target day are read
