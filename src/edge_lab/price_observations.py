@@ -606,8 +606,8 @@ def expire(store: SnapshotStore, run_id: str, now: datetime) -> list[dict[str, s
         elif t["state"] == "FAILED":
             reason = f"NOT_CAPTURED_BY_DEADLINE: last attempt failed ({t['state_reason']})"
         else:
-            reason = (f"NOT_CAPTURED_BY_DEADLINE: no capture ran in [{t['due_from_utc']}, {t['deadline_utc']}] "
-                      "(manual capture only; no timer is authorized)")
+            reason = (f"NOT_CAPTURED_BY_DEADLINE: no successful capture completed in "
+                      f"[{t['due_from_utc']}, {t['deadline_utc']}] under scheduled ADR0030_OPTION_A")
             hit = protected_window_at(_t(t["due_from_utc"]), deadline)
             if hit is not None:
                 reason += f"; the due window overlaps protected window {hit[0]}"
@@ -997,7 +997,7 @@ def status(store: SnapshotStore, *, now: datetime) -> dict[str, Any]:
         if r["close_label"]:
             labels[r["close_label"]] = labels.get(r["close_label"], 0) + 1
     return {"command": "observe status", "now_utc": _iso_exact(now), "policy_version": POLICY_VERSION,
-            "schedule": "NOT_AUTHORIZED: manual capture only; the proposed schedule is an owner decision (ADR 0030)",
+            "schedule": "ACTIVE_POLICY: ADR0030_OPTION_A (:05/:20/:35/:50 local due checks + dedicated close tick)",
             "targets": len(targets), "by_phase": dict(sorted(by_phase.items())), "close_labels": labels,
             "next_due": sorted(upcoming, key=lambda u: u["due_from_utc"])[:10],
             "recent_misses": sorted(misses, key=lambda m: m["at_utc"] or "")[-10:]}
