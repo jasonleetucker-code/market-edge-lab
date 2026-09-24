@@ -160,6 +160,7 @@ sudo rm -f /etc/systemd/system/edgelab-observe.service /etc/systemd/system/edgel
 sudo systemctl daemon-reload
 # v4 ONLY (run separately): sudo rm -f /etc/systemd/system/edgelab-odds.service /etc/systemd/system/edgelab-odds.timer && sudo systemctl daemon-reload
 sudo systemctl enable --now edgelab-pfm.timer edgelab-decision.timer edgelab-recheck.timer edgelab-status.timer edgelab-backup.timer edgelab-shadow.timer edgelab-settlement.timer   # 6. core timers
+sudo systemctl enable --now edgelab-odds.timer   # 6b. v5 target only, and only if it was enabled before
 sudo systemctl restart edgelab-dashboard.service
 sudo systemctl start edgelab-backup.service                           # 7. VERIFIED on the old code
 ```

@@ -305,8 +305,9 @@ has been 05:00:00Z since. No winter (EST) close under the new convention has bee
 **Failure and alert semantics under the schedule (independent review of PR #76).**
 - A FAILED observation row is always stored as evidence.
 - A run exits non-zero, which is an `OnFailure` production alert, only when a FAILED target cannot
-  be retried by a later scheduled tick: a close target, or one whose deadline comes before the next
-  tick (`SCHEDULED_TICK_INTERVAL`, pinned to the timer). Retryable failures are reported as
+  be retried by a later scheduled tick: a close target, or one with no tick left before its deadline
+  that a protected window would not defer (`SCHEDULED_TICK_INTERVAL`, pinned to the timer; e.g. a
+  failure on the 11:05 or 17:35 ET tick is final because the following ticks are deferred). Retryable failures are reported as
   `failed_retrying` (state `PARTIAL_RETRYING`, exit 0). This stops a one-off 5xx from alerting and from
   overwriting the single-slot `last_failure.json` 96 times a day. A failure that persists to the last
   chance still alerts once.

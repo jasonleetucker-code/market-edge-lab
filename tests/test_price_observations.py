@@ -605,3 +605,14 @@ def test_other_groups_never_run_into_a_pending_close(store, tmp_path, monkeypatc
     assert pre_close and pre_close <= set(report["deferred"])
     close_rows = [r for r in store.price_observations() if r["phase"] == "close"]
     assert len(close_rows) == 12 and {r["close_label"] for r in close_rows} == {"CLOSE"}
+
+
+def test_a_failure_before_a_protected_window_is_final_not_retrying():
+    # 11:05 ET tick: the 11:20 tick is deferred by the 11:15 settlement window, so a target due until
+    # 11:30 has no retry left; the same target failing at 10:35 ET would still be retried at 10:50.
+    deadline = datetime(2026, 9, 24, 15, 30, tzinfo=UTC)  # 11:30 EDT
+    assert not po._retry_tick_before(deadline, datetime(2026, 9, 24, 15, 5, 40, tzinfo=UTC))
+    assert po._retry_tick_before(deadline, datetime(2026, 9, 24, 14, 35, 40, tzinfo=UTC))
+    # 17:35 ET: every tick until 18:50 is deferred by the capture window.
+    assert not po._retry_tick_before(datetime(2026, 9, 24, 22, 45, tzinfo=UTC), datetime(2026, 9, 24, 21, 35, 40, tzinfo=UTC))
+    assert po._retry_tick_before(datetime(2026, 9, 24, 23, 10, tzinfo=UTC), datetime(2026, 9, 24, 22, 50, 40, tzinfo=UTC))

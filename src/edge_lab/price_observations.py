@@ -906,6 +906,18 @@ def protected_refusal(now: datetime) -> dict[str, Any] | None:
                       f"({_iso(hit[1])} to {_iso(hit[2])}): no network, no writes"}
 
 
+def _retry_tick_before(deadline: datetime, after: datetime) -> bool:
+    """Whether a later scheduled tick (every SCHEDULED_TICK_INTERVAL after `after`) can still run before
+    `deadline`, i.e. one that no protected window defers. Conservative: it assumes the next tick is a
+    full interval away."""
+    tick = after + SCHEDULED_TICK_INTERVAL
+    while tick < deadline:
+        if protected_refusal(tick) is None:
+            return True
+        tick += SCHEDULED_TICK_INTERVAL
+    return False
+
+
 def _check_bounds(max_targets: int, max_requests: int) -> None:
     if not 0 < max_targets <= MAX_TARGETS or not 0 < max_requests <= MAX_REQUESTS:
         raise ValueError(f"max_targets must be in 1..{MAX_TARGETS}, max_requests in 1..{MAX_REQUESTS}")
@@ -997,10 +1009,10 @@ def capture(store: SnapshotStore, *, clock: Clock | None = None, sleep: Sleep = 
     store.finish_run(run_id, status="partial" if failed else "succeeded",
                      error=f"{failed} FAILED observation row(s)" if failed else None)
     # A FAILED row stays evidence either way. The run fails (and alerts) only for a target that no later
-    # scheduled tick can retry: a close target, or one whose deadline comes before the next tick.
+    # scheduled tick can retry: a close target, or one with no unprotected tick left before its deadline.
     end = clock()
     final = sorted(i for i, t in failed_targets.items()
-                   if t["phase"] == "close" or _t(t["deadline_utc"]) <= end + SCHEDULED_TICK_INTERVAL)
+                   if t["phase"] == "close" or not _retry_tick_before(_t(t["deadline_utc"]), end))
     report["failed_final"] = final
     report["failed_retrying"] = sorted(set(failed_targets) - set(final))
     report["state"] = ("PARTIAL" if final else "PARTIAL_RETRYING") if failed else (
