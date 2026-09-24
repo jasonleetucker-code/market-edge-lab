@@ -151,7 +151,10 @@ def main() -> int:
                             mobile = w < 768
                             ctx = browser.new_context(viewport={"width": w, "height": h}, device_scale_factor=2 if
                                                       mobile else 1, is_mobile=mobile and engine == "chromium",
-                                                      has_touch=mobile, color_scheme=args.color_scheme)
+                                                      has_touch=mobile, color_scheme=args.color_scheme,
+                                                      # the enlarged-text style tag is inline, which the
+                                                      # app's CSP (correctly) refuses; bypass it for that only
+                                                      bypass_csp=args.text_scale != 1.0)
                             foreign: list[str] = []
                             ctx.route("**/*", lambda route: route.continue_() if route.request.url.startswith(base)
                                       else (foreign.append(route.request.url), route.abort()))

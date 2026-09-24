@@ -228,7 +228,15 @@ research stage, historical result, forward valid days, next preregistered look, 
 labelled "Observations toward the next scheduled evaluation", limitations, details. Data
 sources: The Odds API pilot card (`odds_pilot.dashboard_status`: "The Odds API — SETUP NEEDED" and
 so on; active only with a stored live read that held offers, never "connected"; offered odds are
-research only, never executable), venues (Tested ≠ connected), collected sources with freshness,
+research only, never executable), then the Odds capture targets section (`data.odds_capture_targets`
+over the stored `odds_capture_targets` / `odds_capture_transitions` rows): a summary (targets, captured,
+missed, failed, open, last recorded change), the latest five targets whose intended time has passed and
+the next five as rows (event, horizon, intended time ET, actual receipt, state, credits of the one paid
+call with how many targets shared it, books returned parsed from the stored snapshot, freshness by the
+source's odds max age; an open target past its canonical deadline is "Overdue"), and every target in an
+"All targets" disclosure. States: populated, no targets, no captures yet, overdue (stale record),
+missed/failed/skipped/superseded rows, paid captures paused (the card's COST_BLOCKED, KEY_REJECTED,
+QUOTA_EXHAUSTED, QUOTA_UNKNOWN, DISCOVERY_STALE), source unavailable, read error. Venues (Tested ≠ connected), collected sources with freshness,
 fee verification, venue registry and full receipt in disclosures.
 
 **Alerts `/alerts`** — Needs attention, Standing conditions, Recent notifications, Tests,
@@ -298,7 +306,7 @@ and URL-encoded.
 
 ## 13. Evidence tooling
 
-`tests/browser/fixture_states.py` (early, demo, broken), `tests/browser/serve_fixture.py`,
+`tests/browser/fixture_states.py` (early, demo, broken, odds, odds_issues), `tests/browser/serve_fixture.py`,
 `tests/browser/capture.py` (Playwright, dev-only; blocks non-loopback requests; audits
 overflow, targets, fonts, first-row position). Emulated WebKit is not a physical iPhone.
 
@@ -359,3 +367,18 @@ directive), and the screenshots that justify it.
   `odds_status_card`. No token, CSS, layout or navigation change. Screenshots: 360x800 and
   1440x900 (`tests/browser/capture.py`), reviewed locally by the author and described in the PR
   (not attached).
+- **2026-09-24 — Odds capture targets on Data sources.** Approved by the owner directive of
+  2026-09-24 evening (Freshness Fabric v1 + sports, "Terminal v1": the Odds capture target/history
+  table; coordinator contract C4; `docs/owner/2026-09-24-freshness-fabric-sports-directive.md`).
+  §8 Research & Data gains the "Odds capture targets" section right after The Odds API card (no new
+  navigation). It is composed in `views/research.py` (`odds_targets_section` / `odds_targets_body` /
+  `target_row` / `targets_table`) from the existing section, facts, row, badge, state-text,
+  empty/blocked/error, disclosure, kv and table components; no new component, token, CSS or layout.
+  New state words: the target states (CAPTURED, CAPTURING, MISSED, SKIPPED_BUDGET, DEFERRED,
+  SUPERSEDED) and one target's freshness (TARGET_OVERDUE, TARGET_PENDING, TARGET_NO_CAPTURE); the
+  existing PLANNED, FAILED, QUOTA_* and SETUP_NEEDED words are reused; an unknown state is neutral
+  with its code. Labels were shortened after the 180 px (360 px at 200% zoom) review so a row's
+  state capsule never widens the page. Screenshots: fixture states `odds` and `odds_issues` at
+  360x800, 390x844, 430x932, 768x1024, 1440x900 and 1920x1080 (Chromium), 390x844 and 1440x900
+  (WebKit), and 180x400 / 720x450 as 200% zoom of 360 / 1440 (`tests/browser/capture.py`), reviewed
+  locally by the author and described in the PR (not attached).

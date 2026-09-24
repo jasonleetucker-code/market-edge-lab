@@ -246,6 +246,11 @@ class Context:
             return Loaded(ERROR, message=short_error(exc, self.config))
 
     @cached_property
+    def odds_targets(self) -> Loaded:
+        """The Odds API pilot's capture targets and their history (`odds_capture_targets`)."""
+        return odds_capture_targets(self)
+
+    @cached_property
     def notifications(self) -> Loaded:
         """The newest local-outbox notifications (JSON lines), newest first."""
         directory = self.config.status_dir
@@ -838,3 +843,210 @@ def venue_comparison(ctx: Context, market_id: str, side: str, quantity: Any, as_
     except Exception as exc:  # noqa: BLE001 - shown as an error state, never raised
         return VenueComparison(ERROR, short_error(exc, ctx.config), quantity=qty, as_of_utc=at.isoformat())
     return VenueComparison(OK, comparison=result, quantity=qty, as_of_utc=at.isoformat())
+
+
+# --------------------------------------------------------------------------- The Odds API capture targets (ADR 0029)
+
+ODDS_TARGETS_SHOWN = 5  # recent and next targets each, as rows; every other one is in the history table
+ODDS_TARGETS_MAX = 400  # rows in the history table (the oldest are left out beyond this)
+# Freshness of one target, beside the canonical FRESH / STALE / UNKNOWN of a captured response:
+TARGET_OVERDUE = "TARGET_OVERDUE"  # open (not final) and past its canonical deadline: no outcome recorded since
+TARGET_PENDING = "TARGET_PENDING"  # open and not yet past its deadline: nothing captured yet
+TARGET_NO_CAPTURE = "TARGET_NO_CAPTURE"  # a final state other than CAPTURED: nothing was captured
+
+
+@dataclass(frozen=True)
+class OddsTarget:
+    """One stored capture target with its current (latest) transition, exactly as recorded
+    (`SnapshotStore.odds_targets`), plus read-only facts from canonical functions:
+
+    - `due_utc` / `deadline_utc`: `odds_schedule.effective_due` / `deadline` under the runner's config;
+    - `freshness`: for CAPTURED, `freshness.assess` of the receipt time against the source's odds
+      max age (the same rule as `odds_pilot.dashboard_status`); otherwise TARGET_OVERDUE,
+      TARGET_PENDING, TARGET_NO_CAPTURE, or UNKNOWN for a state this code does not know;
+    - `books`: bookmakers that returned offers for this event in the captured snapshot, parsed by
+      `odds_api.parse_odds`. `()` is a known zero (the stored response held none for it); `None` is
+      unknown, with `books_note` saying why;
+    - `shared_targets`: how many targets recorded the same paid call (snapshot), so a call's
+      credits are never read as one charge per target.
+    Nothing here is computed from prices; no figure is invented for a missing one."""
+
+    target_id: str
+    sport: str
+    event_id: str
+    offset_label: str
+    priority: Any
+    home_team: str | None
+    away_team: str | None
+    commence_utc: str | None
+    target_utc: str | None
+    planned_at_utc: str | None
+    policy_version: str | None
+    state: str
+    state_at_utc: str | None
+    reason: str | None
+    slot_id: str | None
+    snapshot_id: int | None
+    captured_at_utc: str | None
+    credits_last: int | None
+    detail: dict[str, Any]
+    due_utc: str | None = None
+    deadline_utc: str | None = None
+    freshness: str = "UNKNOWN"
+    books: tuple[str, ...] | None = None
+    offers: int | None = None
+    books_note: str | None = None
+    shared_targets: int | None = None
+    transitions: tuple[dict[str, Any], ...] | None = None  # loaded for the rows shown, else None
+
+
+@dataclass(frozen=True)
+class OddsTargets:
+    """Every stored target (canonical order: intended time, priority, event) and the bounded
+    selection shown as rows: the latest `ODDS_TARGETS_SHOWN` whose intended time has passed
+    (newest first) and the next `ODDS_TARGETS_SHOWN` still ahead. `snapshots` keeps each captured
+    response parsed once (id -> `odds_api.OddsSnapshot`) for any later view of its offers."""
+
+    rows: tuple[OddsTarget, ...]
+    recent: tuple[OddsTarget, ...]
+    upcoming: tuple[OddsTarget, ...]
+    by_state: dict[str, int]
+    last_change_utc: str | None
+    odds_max_age: timedelta | None
+    snapshots: dict[int, Any] = field(default_factory=dict, repr=False)
+
+    def count(self, *states: str) -> int:
+        return sum(self.by_state.get(s, 0) for s in states)
+
+    @property
+    def open_count(self) -> int:
+        """Targets whose latest state is not final (storage.ODDS_TARGET_FINAL_STATES)."""
+        from ..storage import ODDS_TARGET_FINAL_STATES
+
+        return sum(n for s, n in self.by_state.items() if s not in ODDS_TARGET_FINAL_STATES)
+
+
+def _parse_capture(row: Any, fallback_format: str) -> Any:
+    """A stored odds response parsed by the canonical parser (raises on an unreadable payload)."""
+    from .. import odds_api
+
+    payload = json.loads(row["payload_json"])
+    request = payload.get("request") if isinstance(payload.get("request"), dict) else {}
+    return odds_api.parse_odds(payload.get("events"), odds_format=request.get("odds_format", fallback_format),
+                               received_at_utc=row["fetched_at_utc"], evidence_id=str(row["id"]))
+
+
+def _target_times(r: dict[str, Any], now: datetime, cfg: Any) -> tuple[str | None, str | None, bool | None]:
+    """(effective due, deadline, expired) by the canonical planner; unknown when a time is unreadable."""
+    from .. import odds_schedule
+
+    commence, intended = parse_utc(r.get("commence_time_utc")), parse_utc(r.get("target_utc"))
+    if commence is None or intended is None:
+        return None, None, None
+    try:
+        target = odds_schedule.CaptureTarget(
+            str(r["target_id"]), str(r["sport"]), str(r["event_id"]), str(r["offset_label"]), int(r["priority"]),
+            commence.astimezone(timezone.utc), intended.astimezone(timezone.utc), r.get("home_team"),
+            r.get("away_team"))
+        return (odds_schedule.iso_z(odds_schedule.effective_due(target, cfg)),
+                odds_schedule.iso_z(odds_schedule.deadline(target, cfg)), odds_schedule.is_expired(target, now, cfg))
+    except Exception:  # noqa: BLE001 - never guessed
+        return None, None, None
+
+
+def odds_capture_targets(ctx: Context) -> Loaded:
+    """Read-only view of the pilot's `odds_capture_targets` / `odds_capture_transitions` rows.
+
+    NO_DATA when no evidence database is configured or present (the source is unavailable), ERROR
+    when it cannot be read (never an empty schedule), OK otherwise, possibly with no rows. A
+    captured response that cannot be parsed marks only its own rows' books unknown."""
+    from .. import odds_api, odds_pilot
+    from ..sources import get_source
+    from ..storage import ODDS_TARGET_FINAL_STATES, ODDS_TARGET_STATES
+
+    if ctx.store.status != OK:
+        return ctx.store
+    store = ctx.store.value
+    settings = odds_pilot.RunnerSettings()
+    try:
+        stored = [dict(r) for r in store.odds_targets()]
+        captured = [r for r in stored if r.get("state") == "CAPTURED" and r.get("snapshot_id") is not None]
+        snaps = store.snapshots_by_id(int(r["snapshot_id"]) for r in captured)
+        spec = get_source(odds_api.SOURCE_ID)
+    except Exception as exc:  # noqa: BLE001 - shown as an error state, never as an empty schedule
+        return Loaded(ERROR, message=short_error(exc, ctx.config))
+    max_age = spec.max_age.get("odds")
+    parsed: dict[int, Any] = {}
+    problems: dict[int, str] = {}
+    for sid, snap in snaps.items():
+        if snap["source"] != spec.legacy_name or snap["kind"] != "odds":
+            problems[sid] = f"snapshot {sid} is not a stored odds response"
+            continue
+        try:
+            parsed[sid] = _parse_capture(snap, settings.odds_format)
+        except Exception as exc:  # noqa: BLE001 - one unreadable capture never hides the table
+            problems[sid] = f"snapshot {sid} unreadable: {short_error(exc, ctx.config)}"
+    shared: dict[int, int] = {}
+    for r in captured:
+        shared[int(r["snapshot_id"])] = shared.get(int(r["snapshot_id"]), 0) + 1
+
+    rows: list[OddsTarget] = []
+    for r in stored:
+        try:
+            detail = json.loads(r.get("detail_json") or "{}")
+        except ValueError:
+            detail = {"detail_json": "unreadable"}
+        state = str(r.get("state"))
+        due, deadline, expired = _target_times(r, ctx.now, settings.config)
+        sid = int(r["snapshot_id"]) if r.get("snapshot_id") is not None else None
+        books = offers = note = None
+        if state == "CAPTURED":
+            fresh = (assess_freshness(r.get("captured_at_utc"), max_age=max_age, now=ctx.now).value.upper()
+                     if max_age is not None else "UNKNOWN")
+            if sid is not None and sid in parsed:
+                eid = odds_api.event_id(str(r["event_id"]))
+                mine = [o for o in parsed[sid].offers if o.event_id == eid]
+                books, offers = tuple(sorted({o.bookmaker for o in mine})), len(mine)
+                if not any(e.event_id == eid for e in parsed[sid].events):
+                    note = "this event is not in the stored response"
+            elif sid is None:
+                note = "no snapshot recorded"
+            else:
+                note = problems.get(sid, f"snapshot {sid} not found in the evidence database")
+        elif state in ODDS_TARGET_FINAL_STATES:
+            fresh = TARGET_NO_CAPTURE
+        elif state in ODDS_TARGET_STATES and expired is not None:
+            fresh = TARGET_OVERDUE if expired else TARGET_PENDING
+        else:
+            fresh = "UNKNOWN"
+        rows.append(OddsTarget(
+            target_id=str(r["target_id"]), sport=str(r["sport"]), event_id=str(r["event_id"]),
+            offset_label=str(r["offset_label"]), priority=r.get("priority"), home_team=r.get("home_team"),
+            away_team=r.get("away_team"), commence_utc=r.get("commence_time_utc"), target_utc=r.get("target_utc"),
+            planned_at_utc=r.get("planned_at_utc"), policy_version=r.get("policy_version"), state=state,
+            state_at_utc=r.get("state_at_utc"), reason=scrub_paths(r.get("reason"), ctx.config),
+            slot_id=r.get("slot_id"), snapshot_id=sid, captured_at_utc=r.get("captured_at_utc"),
+            credits_last=r.get("credits_last"), detail=detail if isinstance(detail, dict) else {},
+            due_utc=due, deadline_utc=deadline, freshness=fresh, books=books, offers=offers, books_note=note,
+            shared_targets=shared.get(sid) if state == "CAPTURED" and sid is not None else None))
+
+    def when(t: OddsTarget) -> datetime | None:
+        return parse_utc(t.target_utc)
+    past = [t for t in rows if (w := when(t)) is not None and w <= ctx.now]
+    ahead = [t for t in rows if (w := when(t)) is None or w > ctx.now]  # an unreadable time is never hidden
+    shown = {t.target_id for t in (*past[-ODDS_TARGETS_SHOWN:], *ahead[:ODDS_TARGETS_SHOWN])}
+    try:
+        history = {tid: tuple(dict(x) for x in store.odds_transitions(tid)) for tid in sorted(shown)}
+    except Exception as exc:  # noqa: BLE001
+        return Loaded(ERROR, message=short_error(exc, ctx.config))
+    rows = [replace(t, transitions=history[t.target_id]) if t.target_id in history else t for t in rows]
+    by_id = {t.target_id: t for t in rows}
+    by_state: dict[str, int] = {}
+    for t in rows:
+        by_state[t.state] = by_state.get(t.state, 0) + 1
+    changes = [p for t in rows if (p := parse_utc(t.state_at_utc)) is not None]
+    return Loaded(OK, OddsTargets(
+        rows=tuple(rows), recent=tuple(by_id[t.target_id] for t in past[-ODDS_TARGETS_SHOWN:][::-1]),
+        upcoming=tuple(by_id[t.target_id] for t in ahead[:ODDS_TARGETS_SHOWN]), by_state=by_state,
+        last_change_utc=max(changes).astimezone(timezone.utc).isoformat() if changes else None,
+        odds_max_age=max_age, snapshots=parsed))

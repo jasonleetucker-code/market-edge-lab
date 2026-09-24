@@ -59,6 +59,7 @@ After: the same deep links (relabelled Terminal, Markets, Portfolio, Outcomes, R
 | Notifications | local outbox `notifications.jsonl`; origin by `notifications.origin_of` (missing = PRODUCTION, unknown = unrecognised); delivery wording by the origin push policy |
 | Unit failure / verification | `last_failure.json` (always production) and `last_verification.json` (a confirmed check when `verification.verification_confirmed`, else "root confirmation not found or expired"; never an incident) |
 | The Odds API card | `odds_pilot.dashboard_status(db, ledger, <ledger>.pilot.json, now=...)`; ledger `--odds-ledger`, default `odds_quota_ledger.json` beside `--db` |
+| Odds capture targets: event, horizon, intended time, state, reason, slot, receipt time, credits, recorded capture detail, state history | `SnapshotStore.odds_targets()` / `odds_transitions()` (read-only) via `data.odds_capture_targets`; effective due, deadline and overdue by `odds_schedule.effective_due` / `deadline` / `is_expired` under `odds_pilot.RunnerSettings().config`; books and offers per event from the captured snapshot by `odds_api.parse_odds`; a capture's freshness by `freshness.assess` against `sources` max age `odds`; "paused" from the card's `odds_pilot.dashboard_status` state |
 | Experiments, Stage A result, report names, Stage B plan looks, limitations | experiment registry + `gate4/stage_a_result.json` |
 | Venues and capabilities | `venues.VENUES` / `coverage_rows` |
 | Source health | `SnapshotStore.latest_source_health` + `sources` registry descriptions |
@@ -80,6 +81,10 @@ After: the same deep links (relabelled Terminal, Markets, Portfolio, Outcomes, R
 3a. *Research sizing*: the contract (#64) is on main. A replay made without a readable or configured
    evidence database is flagged on the panel (captured settlements and confirmation quotes are
    missing from it). Free-text details from the contract are scrubbed of filesystem paths.
+3b. *Odds capture targets*: a paid call's credits are recorded once per member target (`credits_last`); the
+   table shows them per call with the number of targets that shared it and never sums them. Whether the
+   runner's timer runs is not observable, so an open target past its deadline reads "Overdue" (stale
+   record), never "Missed" until the runner records it.
 4. *Sport/league identity*: no sports market is captured; the Sports tab says so.
 5. *Delivery status beyond the outbox*: phone delivery is not recorded; Alerts says so.
 6. *Price history*: only the decision and re-check captures of the latest target day are read

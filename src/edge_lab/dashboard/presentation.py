@@ -373,6 +373,17 @@ STATES: dict[str, StateWord] = {
     "DISCOVERY_STALE": StateWord("Discovery stale", WARN_K),
     "ACTIVE": StateWord("Active · live read verified", OK_K),
     "PENDING": StateWord("Pending: not yet known", ND_K),
+    # The Odds API capture targets (storage.ODDS_TARGET_STATES; PLANNED, FAILED, QUOTA_* and
+    # SETUP_NEEDED above keep their words) and one target's freshness (data.odds_capture_targets).
+    "CAPTURED": StateWord("Captured", OK_K),
+    "CAPTURING": StateWord("Capture in progress", INFO_K),
+    "MISSED": StateWord("Missed", ERR_K),
+    "SKIPPED_BUDGET": StateWord("Skipped · budget", WARN_K),
+    "DEFERRED": StateWord("Deferred", WARN_K),
+    "SUPERSEDED": StateWord("Superseded", ND_K),
+    "TARGET_OVERDUE": StateWord("Overdue", WARN_K),
+    "TARGET_PENDING": StateWord("Not captured yet", ND_K),
+    "TARGET_NO_CAPTURE": StateWord("Nothing captured", ND_K),
 }
 
 
@@ -1054,6 +1065,13 @@ def odds_state(status: Mapping[str, Any] | None) -> str:
     if state == "ACTIVE" and _get(status, "live_read_verified") is not True:
         return "UNVERIFIED"
     return state
+
+
+def odds_event_label(away: Any, home: Any, event_id: Any) -> str:
+    """"Away @ Home" as the provider names the teams; the event id when either is missing."""
+    if isinstance(away, str) and away and isinstance(home, str) and home:
+        return f"{away} @ {home}"
+    return f"Event {event_id}"
 
 
 def _get(mapping: Any, key: str) -> Any:
