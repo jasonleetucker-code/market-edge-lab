@@ -201,3 +201,46 @@ def test_every_connection_the_store_opens_is_closed(tmp_path, monkeypatch):
     for conn in opened:
         with pytest.raises(sqlite3.ProgrammingError):
             conn.execute("SELECT 1")  # closed connections refuse every statement
+
+
+def _v5_store(db):
+    from edge_lab import storage
+
+    with sqlite3.connect(db) as conn:
+        conn.executescript(storage._SCHEMA_V1)
+        for name, sql_type in storage._SNAPSHOT_V2_COLUMNS:
+            conn.execute(f"ALTER TABLE snapshots ADD COLUMN {name} {sql_type}")
+        conn.executescript(storage._SCHEMA_V2 + storage._SCHEMA_V3 + storage._SCHEMA_V4 + storage._SCHEMA_V5)
+        conn.execute("INSERT INTO collection_runs VALUES ('old', 't0', 't1', 'succeeded', NULL)")
+        conn.execute("INSERT INTO snapshots(run_id, source, kind, entity_id, fetched_at_utc, url, payload_sha256,"
+                     " payload_json) VALUES ('old', 'kalshi', 'series', 'S', 't0', 'u', 'h', '{}')")
+        conn.execute("PRAGMA user_version = 5")
+
+
+def test_v5_store_migrates_to_v6_additively(tmp_path):
+    from edge_lab import storage
+
+    db = tmp_path / "v5.sqlite3"
+    _v5_store(db)
+    store = SnapshotStore(db)
+    assert store.schema_version() == 6 and [r["run_id"] for r in store.recent_snapshots()] == ["old"]
+    with sqlite3.connect(db) as conn:
+        names = {r[0] for r in conn.execute("SELECT name FROM sqlite_master")}
+    assert storage.V6_OBJECTS <= names and storage.V5_OBJECTS <= names
+    assert store.price_targets() == [] and store.price_observations() == []
+
+
+def test_a_failed_v6_migration_leaves_a_clean_v5_store(tmp_path, monkeypatch):
+    from edge_lab import storage
+
+    db = tmp_path / "v5.sqlite3"
+    _v5_store(db)
+    monkeypatch.setattr(storage, "_SCHEMA_V6", storage._SCHEMA_V6 + "\nCREATE TABLE broken (;\n")
+    with pytest.raises(sqlite3.OperationalError):
+        SnapshotStore(db)
+    with sqlite3.connect(db) as conn:
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 5
+        names = {r[0] for r in conn.execute("SELECT name FROM sqlite_master")}
+    assert not (storage.V6_OBJECTS & names)  # all or nothing
+    monkeypatch.undo()
+    assert SnapshotStore(db).schema_version() == 6  # the next open migrates cleanly
