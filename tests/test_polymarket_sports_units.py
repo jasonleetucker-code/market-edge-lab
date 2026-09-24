@@ -62,6 +62,11 @@ def test_timers_are_nonpersistent_staggered_and_pinned_to_the_code():
     hours = [int(h) for h in m.group(1).split(",")]
     assert len(hours) == 4 and all((b - a) == 6 for a, b in zip(hours, hours[1:]))  # every 6 h
     assert ps.DISCOVERY_INTERVAL == timedelta(hours=6)
+    # Discovery never shares a minute with a capture tick (both take the pilot lock; LOCK_BUSY would
+    # skip a scan for 6 h) nor with the odds, observe or freshness ticks.
+    minute = int(m.group(2))
+    capture_minutes = {10, 25, 40, 55}
+    assert minute not in capture_minutes | {0, 15, 30, 45} | {5, 20, 35, 50} | set(range(1, 60, 5))
     # No discovery tick can start inside a protected window (a Wednesday in EDT and one in EST).
     for day in (datetime(2026, 9, 23, tzinfo=timezone.utc), datetime(2026, 12, 2, tzinfo=timezone.utc)):
         offset = timedelta(hours=4 if day.month == 9 else 5)

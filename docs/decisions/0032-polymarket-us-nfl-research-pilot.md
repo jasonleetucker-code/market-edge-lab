@@ -257,3 +257,11 @@ Two traps:
   reports them.
 - **Also updated:** `docs/decisions/README.md` (index) and `docs/DATA_PROVENANCE.md` (source
   rows and the v7 tables).
+
+
+**Host-wide request rate (coordinator note, 2026-09-24).** `MAX_REQUESTS_PER_MINUTE = 100` is
+enforced per pilot run. It is not a host-wide limiter. The ADR 0030 observe reads of Polymarket US
+use their own pacer and run budget. Across the host the worst case in one minute is about 60 (the
+pilot's 1 s pacer) + 40 (observe's run budget) = 100, so the attested 100/min condition holds by
+this arithmetic, not by a shared limiter. A shared per-host limiter belongs in the Freshness Fabric
+(#74) when a second collector of the same host is added.

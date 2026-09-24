@@ -4,9 +4,10 @@ Description=Market Edge Lab: Polymarket US NFL discovery every 6 hours (ADR 0032
 [Timer]
 # Installed with the other units but separately activated (install.sh SEPARATELY_ACTIVATED): the
 # installer never enables it. Runbook section 5e enables it under the owner's recorded risk decision.
-# 02:40, 08:40, 14:40 and 20:40 America/New_York: staggered off the odds (:00/:15), observe
-# (:05/:20) and pm-sports capture (:10/:25) ticks, and outside every protected window.
-OnCalendar=*-*-* 02,08,14,20:40:00 America/New_York
+# 02:47, 08:47, 14:47 and 20:47 America/New_York: clear of the odds (:00/:15/:30/:45), observe
+# (:05/:20/:35/:50), freshness (:01/:06/.../:46/:51/:56) and pm-sports capture (:10/:25/:40/:55)
+# ticks, so discovery never waits on the capture run's lock; outside every protected window.
+OnCalendar=*-*-* 02,08,14,20:47:00 America/New_York
 AccuracySec=1min
 # A missed run is not replayed late; the next run is at most 6 h away.
 Persistent=false
