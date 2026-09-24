@@ -672,8 +672,8 @@ def venue_comparison(ctx: Context, market_id: str, side: str, quantity: Any, as_
     board = ctx.observed.value
     market = next((m for m in board.markets if m.market_id == market_id), None)
     if market is None and board.total_markets > len(board.markets):
-        return VenueComparison(NO_DATA, f"this market is beyond the {len(board.markets)} captured markets the "
-                                        "dashboard reads", quantity=qty, as_of_utc=at.isoformat())
+        return VenueComparison(NO_DATA, f"this market is not among the {len(board.markets)} captured markets the "
+                                        "dashboard reads (the capture holds more; it may be beyond that cap)", quantity=qty, as_of_utc=at.isoformat())
     if market is None or market.raw is None:
         return VenueComparison(NO_DATA, "the decision capture holds no market listing for this market",
                                quantity=qty, as_of_utc=at.isoformat())

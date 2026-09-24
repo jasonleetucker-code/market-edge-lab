@@ -193,9 +193,9 @@ quote, best gross cost for size, best verified total cost, best account-feasible
 shown side by side, each with its own figure or its reason for absence; there is never one
 "best" verdict. Routes ranked by at least one claim come first, routes ranked by none
 separately; each shows quote, gross cost, fees (verified, partial, an unverified estimate or
-unavailable), verified total or — (never for a stale book), depth, tradable-cash release, rules status and claim status. Stale routes are named
-as not ranked. Related markets are listed as **RELATED MARKET — NOT ECONOMICALLY EQUIVALENT**,
-unpriced and unranked. States: populated, single captured route, all stale, refused payoff,
+unavailable), verified total or — (never for a stale book), depth, tradable-cash release,
+rules status and claim status. Stale routes are named as not ranked. Related markets are
+listed as **RELATED MARKET — NOT ECONOMICALLY EQUIVALENT**, unpriced and unranked. States: populated, single captured route, all stale, refused payoff,
 not evaluated (no decision, no size, or an earlier target day), no captured book, read error.
 
 **Portfolio `/positions`** — account, metric strip with basis labels; Open / Settling /

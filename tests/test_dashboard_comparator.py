@@ -172,7 +172,8 @@ def test_claim_value_text_formats_without_computing():
     # An exact fee whose claim figure carries the record's allowance is never shown as the bare debit.
     padded = dataclasses.replace(exact, total_cost=Decimal("4.23"))
     assert pr.claim_value_text(make("BEST_VERIFIED_TOTAL_COST", "4.331"), padded) == "$4.331 incl. claim allowance"
-    assert pr.claim_value_text(make("BEST_ACCOUNT_FEASIBLE_ROUTE", "4.331"), padded) ==         "$4.331 incl. claim allowance"
+    assert pr.claim_value_text(make("BEST_ACCOUNT_FEASIBLE_ROUTE", "4.331"), padded) == (
+        "$4.331 incl. claim allowance")
     absent = bp.Claim("BEST_VERIFIED_TOTAL_COST", False, None, None, None, "", "FEE_UNVERIFIED", "", ())
     assert pr.claim_value_text(absent, route) is None
 
@@ -279,7 +280,7 @@ def test_a_market_beyond_the_board_cap_says_so(demo, monkeypatch):
     ctx = d.Context(demo)
     monkeypatch.setattr(ctx.observed.value, "total_markets", len(ctx.observed.value.markets) + 5)
     result = d.venue_comparison(ctx, "kalshi:NOT-SHOWN", "YES", 1, "2026-09-23T15:00:00+00:00")
-    assert result.status == d.NO_DATA and "beyond the" in result.message
+    assert result.status == d.NO_DATA and "may be beyond that cap" in result.message
 
 
 def test_a_stale_routes_total_is_not_claimed(cmps):
