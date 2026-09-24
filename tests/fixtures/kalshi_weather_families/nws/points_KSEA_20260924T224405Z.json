@@ -1,0 +1,112 @@
+{
+    "@context": [
+        "https://geojson.org/geojson-ld/geojson-context.jsonld",
+        {
+            "@version": "1.1",
+            "wx": "https://api.weather.gov/ontology#",
+            "s": "https://schema.org/",
+            "geo": "http://www.opengis.net/ont/geosparql#",
+            "unit": "http://codes.wmo.int/common/unit/",
+            "@vocab": "https://api.weather.gov/ontology#",
+            "geometry": {
+                "@id": "s:GeoCoordinates",
+                "@type": "geo:wktLiteral"
+            },
+            "city": "s:addressLocality",
+            "state": "s:addressRegion",
+            "distance": {
+                "@id": "s:Distance",
+                "@type": "s:QuantitativeValue"
+            },
+            "bearing": {
+                "@type": "s:QuantitativeValue"
+            },
+            "value": {
+                "@id": "s:value"
+            },
+            "unitCode": {
+                "@id": "s:unitCode",
+                "@type": "@id"
+            },
+            "forecastOffice": {
+                "@type": "@id"
+            },
+            "forecastGridData": {
+                "@type": "@id"
+            },
+            "publicZone": {
+                "@type": "@id"
+            },
+            "county": {
+                "@type": "@id"
+            }
+        }
+    ],
+    "id": "https://api.weather.gov/points/47.4447,-122.3144",
+    "type": "Feature",
+    "geometry": {
+        "type": "Point",
+        "coordinates": [
+            -122.3144,
+            47.4447
+        ]
+    },
+    "properties": {
+        "@id": "https://api.weather.gov/points/47.4447,-122.3144",
+        "@type": "wx:Point",
+        "cwa": "SEW",
+        "type": "land",
+        "forecastOffice": "https://api.weather.gov/offices/SEW",
+        "gridId": "SEW",
+        "gridX": 124,
+        "gridY": 60,
+        "forecast": "https://api.weather.gov/gridpoints/SEW/124,60/forecast",
+        "forecastHourly": "https://api.weather.gov/gridpoints/SEW/124,60/forecast/hourly",
+        "forecastGridData": "https://api.weather.gov/gridpoints/SEW/124,60",
+        "observationStations": "https://api.weather.gov/gridpoints/SEW/124,60/stations",
+        "relativeLocation": {
+            "type": "Feature",
+            "geometry": {
+                "type": "Point",
+                "coordinates": [
+                    -122.298287,
+                    47.4434029
+                ]
+            },
+            "properties": {
+                "city": "SeaTac",
+                "state": "WA",
+                "distance": {
+                    "unitCode": "wmoUnit:m",
+                    "value": 0
+                },
+                "bearing": {
+                    "unitCode": "wmoUnit:degree_(angle)",
+                    "value": 0
+                }
+            }
+        },
+        "forecastZone": "https://api.weather.gov/zones/forecast/WAZ316",
+        "county": "https://api.weather.gov/zones/county/WAC033",
+        "fireWeatherZone": "https://api.weather.gov/zones/fire/WAZ654",
+        "timeZone": "America/Los_Angeles",
+        "radarStation": "KATX",
+        "astronomicalData": {
+            "sunrise": "2026-09-23T06:57:53-07:00",
+            "sunset": "2026-09-23T19:05:06-07:00",
+            "transit": "2026-09-23T13:01:29-07:00",
+            "civilTwilightBegin": "2026-09-23T06:27:21-07:00",
+            "civilTwilightEnd": "2026-09-23T19:35:37-07:00",
+            "nauticalTwilightBegin": "2026-09-23T05:51:22-07:00",
+            "nauticalTwilightEnd": "2026-09-23T20:11:37-07:00",
+            "astronomicalTwilightBegin": "2026-09-23T05:14:19-07:00",
+            "astronomicalTwilightEnd": "2026-09-23T20:48:39-07:00"
+        },
+        "nwr": {
+            "transmitter": "KHB60",
+            "sameCode": "053033",
+            "areaBroadcast": "https://api.weather.gov/radio/KHB60/broadcast",
+            "pointBroadcast": "https://api.weather.gov/points/47.4447,-122.3144/radio"
+        }
+    }
+}
