@@ -6,4 +6,3 @@ The expiry is a UTC date no more than 7 days out. An expired row is not a live c
 
 | Claim | Agent | Branch | Paths | Expires |
 |---|---|---|---|---|
-| Final PR #76 validation and handoff | ChatGPT | owner/observe-schedule-2026-09-24 | PR #76 files only; docs/WORK_CLAIMS.md | 2026-10-01 |
