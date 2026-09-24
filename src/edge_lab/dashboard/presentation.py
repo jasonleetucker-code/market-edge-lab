@@ -108,6 +108,15 @@ def pp(value: Any) -> str | None:
     return f"{sign}<0.1 pp" if tiny else f"{sign}{abs(t):.1f} pp"
 
 
+def pp_size(value: Any) -> str | None:
+    """An unsigned probability spread (a range or a deviation) in percentage points: 2.1 pp."""
+    d = dec(value)
+    if d is None:
+        return None
+    t, tiny = _toward_zero(abs(d) * 100, 1)
+    return "<0.1 pp" if tiny else f"{t:.1f} pp"
+
+
 def count(value: Any) -> str | None:
     if value is None or isinstance(value, bool):
         return None
@@ -384,6 +393,10 @@ STATES: dict[str, StateWord] = {
     "TARGET_OVERDUE": StateWord("Overdue", WARN_K),
     "TARGET_PENDING": StateWord("Not captured yet", ND_K),
     "TARGET_NO_CAPTURE": StateWord("Nothing captured", ND_K),
+    # Sportsbook consensus proposition status (odds_consensus.ConsensusStatus); research only, never green.
+    "CONSENSUS_SUPPORTED": StateWord("Consensus computed", INFO_K),
+    "CONSENSUS_INSUFFICIENT_BOOKS": StateWord("Insufficient books", WARN_K),
+    "CONSENSUS_UNSUPPORTED": StateWord("Unsupported", WARN_K),
 }
 
 
@@ -1065,6 +1078,21 @@ def odds_state(status: Mapping[str, Any] | None) -> str:
     if state == "ACTIVE" and _get(status, "live_read_verified") is not True:
         return "UNVERIFIED"
     return state
+
+
+ODDS_MARKET_LABELS = {"h2h": "Moneyline", "spreads": "Spread", "totals": "Total"}
+
+
+def odds_market_label(key: Any) -> str:
+    """A provider market key in plain words, the key kept: "Moneyline (h2h)"; unknown keys raw."""
+    word = ODDS_MARKET_LABELS.get(str(key))
+    return f"{word} ({key})" if word else str(key)
+
+
+def freshness_code(value: Any) -> str:
+    """A `freshness.Freshness` (or its text) as the state-vocabulary code: FRESH / STALE / UNKNOWN."""
+    text = getattr(value, "value", value)
+    return str(text).upper() if text is not None else "UNKNOWN"
 
 
 SPORT_LABELS = {"americanfootball_nfl": "NFL"}  # provider sport keys with a plain name; others stay raw

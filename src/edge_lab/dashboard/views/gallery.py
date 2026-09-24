@@ -116,6 +116,17 @@ def view(ctx: d.Context, p: pr.Params) -> cm.Page:
     parts.append(c.section("Odds capture targets (empty / source unavailable / read error)",
                            "".join(research.odds_targets_body(targets[k], ok, tnow)
                                    for k in ("empty", "unavailable", "error")), sid="g-odds-t-states"))
+    consensus = fixtures.synthetic_consensus()
+    for key, title in (("populated", "populated · stale, unknown, insufficient and unsupported books"),
+                       ("fresh", "every book fresh at receipt"),
+                       ("fallback", "this capture unusable · an earlier one shown · newer unusable listed")):
+        loaded, sid = consensus[key]
+        parts.append(c.section(f"Consensus at a capture ({title})", research.consensus_body(loaded, sid),
+                               meta=research.CONSENSUS_LABEL, sid=f"g-cons-{key}"))
+    parts.append(c.section("Consensus at a capture (failed closed / none / missing capture / not installed / read error)",
+                           "".join(research.consensus_body(*consensus[k])
+                                   for k in ("failed_closed", "none", "missing", "unavailable", "error")),
+                           sid="g-cons-states"))
     origin_rows = [
         cm.failure_alert(d.FailureRecord(d.FAILURE_FILE, fixtures.synthetic_failure_record("edgelab-decision.service"),
                                          "PRODUCTION", False)),
