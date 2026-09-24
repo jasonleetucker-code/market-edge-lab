@@ -20,6 +20,8 @@ is Europe/Berlin.
 | `edgelab-backup` | 04:40 UTC | verified SQLite backups of the evidence DB **and** the shadow ledger (`backups/`, `backups/ledger/`; no automatic deletion) |
 | `edgelab-settlement` | 11:15, 16:15 | bounded settlement refresh for due pending events, then shadow bookkeeping (ADR 0016) |
 | `edgelab-shadow` | 18:40 | daily shadow bookkeeping from stored evidence, no network; writes `shadow_daily.json` |
+| `edgelab-observe` | :05, :20, :35, :50 each hour | plans later/closing-price targets locally, then makes bounded public GETs only when a target is due; protected windows defer safely (ADR 0030) |
+| `edgelab-observe-close` | 04:57:45 UTC | dedicated KXHIGHNY close-window capture tick; waits to the proof window and confirms post-close (ADR 0030) |
 | `edgelab-odds` | every 15 min (ticks in 17:40-18:35 deferred in code) | The Odds API NFL pilot: free discovery, and at most one paid odds call when a planned T-24h / T-6h / T-60m slot is due (ADR 0029). Installed, **not enabled** by install.sh; enabled only by `docs/deploy/DAILY_SHADOW_ACTIVATION.md` section 5b |
 
 All edgelab units run inside `edgelab.slice` (MemoryMax 384M, CPUQuota 25% combined), as
@@ -56,7 +58,7 @@ units: `docs/deploy/DAILY_SHADOW_ACTIVATION.md`.
 | `/var/lib/market-edge-lab-status` | `edgelab:edgelab` 0755 | `latest.json`, `last_failure.json` (production failures only), `last_verification.json` (the §4.1 fail-closed check), `notifications.jsonl`, `ntfy_relay.jsonl` (non-sensitive) |
 | `/var/lib/market-edge-lab-verify` | `root:root` 0755 | the fail-closed check's `armed-*` marker and `confirmed-<InvocationID>` files; created by `verify_fail_closed.sh`, never writable by `edgelab` (ADR 0028) |
 | `/etc/market-edge-lab/env` | `root:edgelab` 0640 | `NWS_USER_AGENT`, `EDGE_LAB_CODE_VERSION`, optional `EDGE_LAB_ALERT_URL` (regenerated on every install) |
-| `/etc/market-edge-lab/secrets.env` | `root:root` 0600 | owner-installed secrets (ntfy topic, Odds API key); created empty once, never read by install; systemd loads it for `edgelab-notify` only (ADR 0028) |
+| `/etc/market-edge-lab/secrets.env` | `root:root` 0600 | owner-installed secrets (ntfy topic, Odds API key); created empty once, never read by install; systemd loads it only into the units that need those secrets (`edgelab-notify`, `edgelab-odds`) |
 
 Other accounts, including the Chase Upside user `dynasty`, can read only the status
 directory. `install.sh` checks this and refuses to finish otherwise.
@@ -99,7 +101,7 @@ Nothing is enabled by install. Do not install, update or restart between 17:40 a
 4. **Activate (owner):**
 
    ```bash
-   sudo systemctl enable --now edgelab-pfm.timer edgelab-decision.timer edgelab-recheck.timer edgelab-status.timer edgelab-backup.timer
+   sudo systemctl enable --now edgelab-pfm.timer edgelab-decision.timer edgelab-recheck.timer edgelab-status.timer edgelab-backup.timer edgelab-shadow.timer edgelab-settlement.timer edgelab-observe.timer edgelab-observe-close.timer
    ```
 
 ## Check
