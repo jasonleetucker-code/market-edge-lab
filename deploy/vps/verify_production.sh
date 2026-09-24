@@ -324,6 +324,8 @@ timer_state() { # NAME unit: the timer's own state and its service's last result
 }
 timer_state SHADOW_TIMER edgelab-shadow
 timer_state SETTLEMENT_TIMER edgelab-settlement
+timer_state OBSERVE_TIMER edgelab-observe
+timer_state OBSERVE_CLOSE_TIMER edgelab-observe-close
 
 # --------------------------------------------------------------------------- status files
 if [ -r "$STATUS/latest.json" ]; then
