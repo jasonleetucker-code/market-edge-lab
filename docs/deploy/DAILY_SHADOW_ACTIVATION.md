@@ -9,7 +9,9 @@ Scope: the 2026-09-23 daily-shadow directive (ADR 0016). It covers:
 
 **Rules**
 - Deploy only a reviewed, merged `main` SHA.
-- Never install or restart between **17:40 and 18:35 America/New_York**, or while any
+- Never install or restart between **17:40 and 18:50 America/New_York** (owner directive
+  2026-09-24: the capture window plus margin), around the 11:15 and 16:15 ET settlement runs,
+  or while any
   `edgelab-*` unit is running (`systemctl list-units 'edgelab-*' --state=running`).
   **Exception:** `edgelab-dashboard.service` (ADR 0024) runs continuously and is exempt from
   this check. It is read-only (`ProtectSystem=strict`, no `ReadWritePaths`, SQLite `mode=ro`)
@@ -41,11 +43,18 @@ each, and reports NOT_READABLE_WITHOUT_PRIVILEGE where it cannot see without sud
 From a checkout at the merged SHA:
 
 ```bash
-git bundle create market-edge-lab.bundle <SHA>
+git branch -f release/<SHA> <SHA>   # a local branch head: see the note below
+git bundle create market-edge-lab.bundle release/<SHA>
+git branch -D release/<SHA>
 git show <SHA>:deploy/vps/install.sh > install.sh
 git show <SHA>:deploy/vps/preflight.sh > preflight.sh
 git show <SHA>:deploy/vps/verify_production.sh > verify_production.sh
 ```
+
+The bundle must carry a local branch head (`refs/heads/...`). A bundle of a remote-tracking
+ref such as `origin/main` clones as an empty repository, and `install.sh` stops at step 3
+with `reference is not a tree` before touching the installed code (seen 2026-09-24).
+`git bundle list-heads market-edge-lab.bundle` must show `refs/heads/release/<SHA>`.
 
 Copy all four to `~dynasty/edgelab-release/` on the VPS, then run
 `bash ~/edgelab-release/preflight.sh`. The cloud agent session of 2026-09-23 has no SSH
@@ -235,6 +244,40 @@ settlement job runs (about 11:15 and 16:15 ET).
 
 This is read-only sports data collection. It authorizes no sportsbook account, no bet, no
 sports model and no strategy.
+
+**Activation record (2026-09-24, production SHA 2e3e172).**
+- **Key and budget.** The owner installed the key privately; no agent saw it. `odds plan`
+  (13:38Z) returned `PROVEN`:
+  - 2026-09: worst case 45, expected 42 credits;
+  - 2026-10 projection: worst case 450 (ceiling 450), expected 270;
+  - provider remaining 500, spent 0, nothing outstanding;
+  - 32 NFL events discovered through the free events endpoint.
+- **The one smoke read** (started 13:38:53Z; evidence DB snapshot 22, received 13:38:54Z) was
+  `CAPTURED`:
+  - 1 paid call, `credits_last` 3; quota 500 → 497 remaining;
+  - 16 events and 856 offers; markets h2h, spreads and totals;
+  - 9 books returned: betmgm, betonlineag, betrivers, betus, bovada, draftkings, fanduel,
+    lowvig, mybookieag. fanatics and williamhill_us came back `PAID_ONLY_NOT_ENABLED`.
+- **The first attempt** (13:18Z, SHA 2d04c51) crashed on the CLI's string paths before any
+  request, spending 0 credits. PR #71 fixed it.
+- **Redaction** was checked by literal-occurrence counts. The check received the secrets
+  through `EnvironmentFile=` and printed only integers. It found 0 occurrences of the key or the
+  ntfy topic in:
+  - the whole journal since 2026-09-22;
+  - every status and verify file, the quota ledger and pilot state;
+  - every text cell of the evidence DB;
+  - the dashboard pages.
+
+  The stored odds URLs carry `apiKey=REDACTED`.
+- **Timer.** `edgelab-odds.timer` was enabled at 13:40Z. It ticks every 15 minutes. The first
+  paid slot is Thu 2026-09-24 14:15 ET (T-6h, ATL @ GB).
+- **First tick** (13:45Z) was `IDLE` with 0 paid calls:
+  - discovery refreshed 32 events through the free endpoint (`x-requests-last` 0; snapshot 23,
+    the first stored discovery);
+  - 95 targets are PLANNED;
+  - budget PROVEN: worst case 48 including the 3 spent.
+
+  `odds_pilot.dashboard_status` reports `ACTIVE`, with `live_read_verified: true`.
 
 ## 5c. Later/closing price observations: manual capture only (ADR 0030)
 

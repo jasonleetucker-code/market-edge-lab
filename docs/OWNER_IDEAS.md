@@ -42,11 +42,12 @@ column lists which issues each primitive serves.
 | Rules / settlement equivalence | `src/edge_lab/opportunity.py` | BUILT (`Event.settlement_identity`, `Market.rules_resolved`); cross-venue classification in `discovery.py` (title match is never equivalence); no equivalence proven across venues yet | #30 #9 |
 | Shadow / live ledger boundary | `src/edge_lab/shadow_ledger.py` | BUILT (shadow only; no live ledger). Head checkpoints: `ledger_anchor.py`; the first independent checkpoint is stored off-host and in Git and verified (F09 closed for the anchored history, 2026-09-23) | #6 #3 #32 |
 | Risk engine | `src/edge_lab/risk.py` | BUILT (limits, capital release, withdrawal contract) | #6 #3 |
-| Stake sizing (research challenger) | `src/edge_lab/sizing_v2.py` (evaluation in sizing_eval.py) | BUILT 2026-09-24, research only (ADR 0026): robust log-growth optimizer over the payoff's admissible uncertainty set, reusing risk, starter policy, depth and fees. `sizing.py` remains the frozen operational path; v2 influences fills only after its own experiment passes | #6 #3 #32 |
-| Best-price-for-size comparator | `src/edge_lab/best_price.py` | BUILT 2026-09-24 (ADR 0027): one comparator over the shared depth, grid, fee, equivalence, freshness and venue primitives; honest claim ladder; cross-venue "cheaper" only on proven order | #30 #9 |
-| Sports odds capture scheduling | `src/edge_lab/odds_schedule.py` (runner odds_pilot.py; adapter odds_api.py) | BUILT 2026-09-24 (ADR 0029): game-relative T-24h/T-6h/T-60m targets, persisted with intended times, worst-case budget proof under 450 credits; activation waits on the owner's key | #29 #5 #9 #50 |
+| Stake sizing (research challenger) | `src/edge_lab/sizing_v2.py` (evaluation in sizing_eval.py) | BUILT 2026-09-24, research only (ADR 0026): robust log-growth optimizer over the payoff's admissible uncertainty set, reusing risk, starter policy, depth and fees. The counterfactual runner `sizing_counterfactual.py` (PR #64) replays every recorded decision through policies A-H into a derived artifact, and Terminal v1 shows it read-only as RESEARCH SIZING (PR #69). `sizing.py` remains the frozen operational path; v2 influences fills only after its own experiment passes | #6 #3 #32 |
+| Best-price-for-size comparator | `src/edge_lab/best_price.py` | BUILT 2026-09-24 (ADR 0027): one comparator over the shared depth, grid, fee, equivalence, freshness and venue primitives; honest claim ladder; cross-venue "cheaper" only on proven order. Shown in the market detail "Across venues" slot (PR #65), with no arithmetic in the UI | #30 #9 |
+| Sports odds capture scheduling | `src/edge_lab/odds_schedule.py` (runner odds_pilot.py; adapter odds_api.py) | BUILT 2026-09-24 (ADR 0029): game-relative T-24h/T-6h/T-60m targets, persisted with intended times, worst-case budget proof under 450 credits. ACTIVE on production since 2026-09-24 13:40Z (budget PROVEN, one smoke read CAPTURED, redaction verified; runbook §5b activation record) | #29 #5 #9 #50 |
+| Later / closing price observations | `src/edge_lab/price_observations.py` | BUILT 2026-09-24 (ADR 0030, PR #68): phases from decision to close, append-only, "close" only within a stated tolerance of the trading close, otherwise "latest pre-close observation". Manual capture only; a scheduled capture is an owner decision | #50 #30 #9 #29 |
 | Capital-eligibility policies | `src/edge_lab/starter_policy.py` | BUILT (`STARTER_MAX_7D_V1`, ADR 0018); enforced prospectively in the operational shadow account | #32 #6 |
-| Notification system | `src/edge_lab/notifications.py` | BUILT (contract, local outbox, SMS sink disabled; ADR 0020). ntfy push sink `notify_ntfy.py` ACTIVATED 2026-09-24 through the `edgelab-notify` relay unit (ADR 0022 amendment, ADR 0028); owner secrets live only in `/etc/market-edge-lab/secrets.env` (root:root 0600) | #33 #3 #32 |
+| Notification system | `src/edge_lab/notifications.py` | BUILT (contract, local outbox, SMS sink disabled; ADR 0020). ntfy push sink `notify_ntfy.py` ACTIVATED 2026-09-24 through the `edgelab-notify` relay unit (ADR 0022 amendment, ADR 0028); owner secrets live only in `/etc/market-edge-lab/secrets.env` (root:root 0600). Every event carries an origin (PRODUCTION / TEST / DEPLOYMENT_VERIFICATION / MANUAL_DIAGNOSTIC / REPLAY / DEMO; PR #66); only PRODUCTION failures are pushed, and a deployment check is held (`HELD_BY_ORIGIN`) | #33 #3 #32 |
 | Execution-ticket contract | `src/edge_lab/execution_ticket.py` | BUILT (data contract plus an ordered pre-submit control chain, PR #43; `EXECUTION_NOT_AUTHORIZED` always fails) | #32 #33 #30 |
 | Operator views | `src/edge_lab/dashboard/` | BUILT (read-only; on chaseupside reachable only on the owner's tailnet via Tailscale Serve, ADR 0024) | #3 #6 #10 |
 | Design system (Market Edge Terminal v1) | `docs/design/UI_CONTRACT.md` | BUILT (implemented in dashboard presentation.py, components.py, html.py and static/tokens.css; shell, tokens, fonts, components, honest states, gallery; ADR 0025, issue #47). Every user-visible feature reuses it per docs/design/FEATURE_INTEGRATION.md | #47 #3 #6 #9 #10 #29 #30 #32 #33 |
@@ -70,7 +71,7 @@ column lists which issues each primitive serves.
 | #27 | Action PRO permission and comparative sports-data subscription value | **LATER / BLOCKED** (no purchase authorized) | Paid source; needs the #7 ROI gate and a sports experiment that would use it. |
 | #50 | Longitudinal learning dataset across every domain, including rejected opportunities | **NOW as a permanent data-design rule; NEXT for a generalized cross-domain learning/reporting layer** | Existing provenance, opportunity/rejection, experiment and shadow-ledger primitives already preserve much of the required history. Every new domain should preserve point-in-time observations, model/version context, decisions and rejections, later outcomes and failures before it is called research-ready. No automatic retraining or self-modifying decision policy is authorized. |
 
-## Roadmap (re-run 2026-09-24, Brisket-health and next-phase directive)
+## Roadmap (re-run 2026-09-24 after the next-build-chunk directive and the Odds / ntfy activation)
 
 This ordering authorizes nothing; `docs/EXECUTION_PLAN.md` does. Re-prioritizing never
 authorizes implementation. The owner's domain sequence (directive, "Domain expansion") is
@@ -96,27 +97,29 @@ recorded below and in the Domain Readiness matrix. Gate 7 is unchanged and **not
    Polymarket US fees by 2026-10-24T01:39Z.
 5. **#50 learning-history completeness** applies from the first prospective observation of
    every domain. See the audit in `docs/DATA_PROVENANCE.md`.
-6. **#29 Odds API pilot activation.** The code is merged (ADR 0029). The owner installs the
-   free key, then the agent runs `odds plan` (budget proof), one `odds smoke`, and enables
-   `edgelab-odds.timer`.
-7. **#33 ntfy.** Activated 2026-09-24. One test send was SUBMITTED. Phone delivery is not
-   verified until the owner subscribes.
+6. **#29 Odds API pilot: live.** Activated 2026-09-24 13:40Z. Snapshots accrue under the
+   game-relative policy, within 450 credits a month and never above the provider's remaining
+   quota. Watch the first paid slots (14:15 and 19:15 ET on 2026-09-24): CAPTURED or MISSED
+   with a reason, 3 credits each. Nothing about this authorizes a sports model or a bet.
+7. **#33 ntfy.** The topic was rotated by the owner on 2026-09-24 after exposure. One TEST was
+   SUBMITTED to the new topic. Phone delivery is OWNER_CONFIRMATION_PENDING.
 
 **NEXT** (ready once the named prerequisite lands)
-8. **Sizing v2 counterfactual runner** (#6). It replays each real shadow decision through
-   `sizing_v2` read-only, as the `PROPOSED_PREREGISTRATION` needs. Then comes the read-only
-   RESEARCH SIZING panel in Terminal v1 (FEATURE_INTEGRATION; after #53/#54 settle).
-   Operational fills change only after a separately recorded sizing experiment passes.
-9. **Comparator UI** (#30). Fill the market detail "Across venues" slot from
-   `best_price.compare`, with its honest claim ladder.
+8. **Sizing v2 evidence** (#6). The counterfactual runner and the read-only RESEARCH SIZING
+   panel are built. What remains is evidence: settled decisions under `STARTER_MAX_7D_V1`
+   (every decision before 2026-09-24T00:00Z is CAPITAL_HORIZON), an evidence-based n_eff, and
+   the preregistered sizing experiment. Operational fills change only after it passes.
+9. **Later/closing price schedule** (ADR 0030). The capture code is built and manual. The
+   proposed timer, with its request and resource estimate, is an owner decision. Order-book
+   depth after the re-check is lost until it runs (a #50 P0 gap).
 10. **Sports prospective data** (domain 2). Odds snapshots accrue under the game-relative
     policy. Add Polymarket US sports catalog reads, which are related-only until rules are
     resolved. The split-cancel and alternative-settlement payoffs stay refused until the
     generic payoff engine supports them.
 11. **#30 cross-venue weather comparison** (Kalshi vs a Polymarket US weather market). It
     waits on resolved Polymarket rules and fees that reach claim grade.
-12. **Dashboard panels for odds capture targets** (CAPTURED / MISSED / SKIPPED_BUDGET). ADR
-    0029 is backend-only today.
+12. **Odds capture targets in Terminal v1** (CAPTURED / MISSED / SKIPPED_BUDGET). The
+    status card and the alerts-by-origin view are live (PR #70); a per-target table follows.
 
 **LATER** (wanted; not on the 2026-10-22 path)
 13. Sports baseline / preregistered models (domain 3; #5, #9), each as its own preregistered
@@ -132,8 +135,8 @@ recorded below and in the Domain Readiness matrix. Gate 7 is unchanged and **not
     `public-league-warmup` should accept 503.
 
 **BLOCKED** (named blocker)
-- Odds API live data: the owner's free key (one `sudoedit` step).
-- Phone delivery of pushes: the owner subscribes to the private topic.
+- Phone delivery of pushes: the owner confirms that the TEST push reached the phone.
+- A scheduled later/closing price capture: owner decision (ADR 0030).
 - SMS: provider choice and approval. Novig live API: developer credentials.
 - Polymarket US claim-grade totals: settlement/transfer fees, debit rounding, account type and
   scheduled changes are all unverified.
@@ -160,7 +163,18 @@ Deliberately no numerical score: no weights have been validated. States:
 | 9 Politics / government | P | P | P | N rare | P | P | N (long horizons) | U | P | P | P | P | Not started |
 | 10 Long-tail discovery | U | U | U | U | U | U | U | U | U | U | U | U | Discovery only |
 
-**Why priorities moved (2026-09-24).**
+**Why priorities moved (2026-09-24, second re-run).**
+- **All seven next-build-chunk deliverables are built, merged and deployed** (production
+  6497af3). The counterfactual runner, the sizing panel, the
+  comparator UI, manual price observations, the notification origin and the coverage audit
+  moved out of NEXT.
+- **The Odds API is no longer blocked.** The key is installed, the budget is PROVEN, and the
+  timer runs. Sports data collection is now prospective.
+- **What remains is evidence and owner decisions,** not code: settlements under the starter
+  policy, the price-capture schedule, and phone confirmation.
+- The 2026-10-22 date is unchanged.
+
+**Why priorities moved (2026-09-24, first re-run).**
 - **Build work is done.** The comparator, Polymarket US fee evidence, split-cancel refusal,
   sizing v2 (research), the Odds API pilot code and ntfy activation all moved from NEXT/BLOCKED
   to built.
@@ -187,6 +201,14 @@ Related owner records that are not ideas:
   its own branch and file claim. It does not touch Gate 3 files.
 
 ## Review log
+
+- **2026-09-24 (morning): next-build-chunk directive and activation re-plan.**
+  - New primitive: later/closing price observations (ADR 0030).
+  - Extended owners, with no fork: sizing v2 (counterfactual runner and panel), the comparator
+    (UI), notifications (origin), and odds scheduling (live activation).
+  - #29 moved from BLOCKED to NOW (live). #33 phone delivery is OWNER_CONFIRMATION_PENDING.
+  - The price-capture schedule is BLOCKED on an owner decision.
+  - No gate change. EXP-001 is frozen. The 2026-10-22 date is unchanged.
 
 - **2026-09-24: Brisket-health and next-phase directive re-plan.** New primitives: sizing v2 (research), best-price comparator, odds capture scheduling. #6, #29, #30 and #33 were reclassified. The domain sequence and the Domain Readiness matrix (states only) were added. F09 stays manual, and root SSH is a separate security task. No new idea required a new primitive: every lane extended an existing owner.
 
