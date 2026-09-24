@@ -23,6 +23,8 @@ One tick (`run_tick`, the `edgelab-odds` timer every 15 minutes):
 from __future__ import annotations
 
 import json
+import sys
+import traceback
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
@@ -195,15 +197,33 @@ def _setup_text() -> str:
 class PilotState:
     """Small non-secret runner state beside the quota ledger (`<ledger>.pilot.json`): the last
     discovery attempt and its outcome (to pace retries and alert only on a change), and a cost
-    block set when the provider charged more than the estimate. Never holds the key."""
+    block that stops paid calls. Never holds the key.
 
-    def __init__(self, ledger_path: Path) -> None:
+    Fails closed: an unreadable file, or a missing one although the quota ledger already shows
+    paid calls (the file is always written before the first paid call), becomes a cost block
+    that only `odds run --clear-cost-block` lifts. Deleting the file never lifts a block."""
+
+    def __init__(self, ledger_path: Path, *, paid_history: bool = False, now_utc: str | None = None) -> None:
         self.path = ledger_path.with_name(ledger_path.name + ".pilot.json")
+        self.status = "OK"
         try:
             loaded = json.loads(self.path.read_text(encoding="utf-8"))
+            if not isinstance(loaded, dict):
+                raise ValueError("not an object")
         except FileNotFoundError:
-            loaded = {}
-        self.data: dict[str, Any] = loaded if isinstance(loaded, dict) else {}
+            loaded, self.status = {}, "MISSING"
+        except (ValueError, UnicodeDecodeError):
+            loaded, self.status = {}, "CORRUPT"
+        self.data: dict[str, Any] = loaded
+        if self.status == "CORRUPT" or (self.status == "MISSING" and paid_history):
+            self.data["cost_block"] = {"at_utc": now_utc, "reason": f"PILOT_STATE_{self.status}: the runner state "
+                                       f"file {self.path.name} was {self.status.lower()} although paid calls exist"}
+
+    @staticmethod
+    def paid_history(ledger: Any) -> bool:
+        snap = ledger.snapshot()
+        return int(snap.get("used_local") or 0) > 0 or bool(snap.get("reservations")) or any(
+            e.get("event") in ("reserved", "settled", "call_ambiguous") for e in snap.get("events") or [])
 
     def get(self, key: str) -> Any:
         return self.data.get(key)
@@ -219,6 +239,12 @@ class PilotState:
 KEY_REJECTED_STATUSES = (401, 403)
 
 
+def _block_text(block: Mapping[str, Any]) -> str:
+    if block.get("reason") == "COST_ANOMALY":
+        return f"COST_ANOMALY: charged {block.get('charged')} > estimate {block.get('estimate')}"
+    return str(block.get("reason") or "cost block")
+
+
 def _tick_locked(db_path: Path, ledger_path: Path, settings: RunnerSettings, now: datetime, clock: Clock,
                  opener: http.Opener | None, pacer: http.Pacer | None, environ: Mapping[str, str] | None,
                  key_present: bool, report: dict[str, Any], clear_cost_block: bool = False) -> tuple[int, dict[str, Any]]:
@@ -228,6 +254,8 @@ def _tick_locked(db_path: Path, ledger_path: Path, settings: RunnerSettings, now
         return _tick_body(store, run, ledger_path, settings, now, clock, opener, pacer, environ, key_present, report,
                           clear_cost_block)
     except Exception as exc:  # never leave a collection run 'running' or print a raw error
+        key = odds_api.load_key(environ)
+        print(odds_api.redact_text(traceback.format_exc(), (key,) if key else ()), file=sys.stderr)
         run.finish(True)
         report.update(state="FAILED", error_kind=type(exc).__name__,
                       detail="unexpected error; the tick stopped (see the journal for the redacted traceback)")
@@ -239,7 +267,7 @@ def _tick_body(store: SnapshotStore, run: _LazyRun, ledger_path: Path, settings:
                key_present: bool, report: dict[str, Any], clear_cost_block: bool) -> tuple[int, dict[str, Any]]:
     cfg = settings.config
     ledger = odds_api.QuotaLedger(ledger_path, cfg.ceiling, clock=clock)
-    pilot = PilotState(ledger_path)
+    pilot = PilotState(ledger_path, paid_history=PilotState.paid_history(ledger), now_utc=iso_z(now))
     failed = False
     alert = False  # exit 1 only for a new failure, not for every tick of a known one
     notes: list[str] = []
@@ -270,6 +298,10 @@ def _tick_body(store: SnapshotStore, run: _LazyRun, ledger_path: Path, settings:
     previous_outcome = pilot.get("discovery_outcome")
     if not key_present:
         discovery = {"state": "SETUP_NEEDED"}
+        if previous_outcome is not None and previous_outcome != "SETUP_NEEDED":
+            # The pilot was active and the key is gone: alert once, on this transition only.
+            pilot.set(discovery_outcome="SETUP_NEEDED", discovery_status=None)
+            alert = True
     elif last_try is None or now - last_try >= settings.discovery_interval:
         start, end = now, now + settings.discovery_horizon
         try:
@@ -294,7 +326,7 @@ def _tick_body(store: SnapshotStore, run: _LazyRun, ledger_path: Path, settings:
             pilot.set(last_discovery_attempt_utc=stamp, discovery_outcome=outcome, discovery_status=status)
             if outcome == "FAILED":
                 failed = True
-                alert = alert or previous_outcome != "FAILED"
+            alert = alert or previous_outcome != outcome  # once per new failure or rejection
     elif pilot.get("discovery_outcome") in ("FAILED", "KEY_REJECTED"):
         discovery = {"state": f"{pilot.get('discovery_outcome')}_WAITING",
                      "error_status": pilot.get("discovery_status"),
@@ -362,14 +394,19 @@ def _tick_body(store: SnapshotStore, run: _LazyRun, ledger_path: Path, settings:
             missed += 1
             continue
         was_absent = row["state"] == "DEFERRED" and (row["reason"] or "").startswith("EVENT_ABSENT")
+        if was_absent:
+            # Only a fresh, non-empty discovery that lists the game again reopens it.
+            if discovery_fresh and present and t.event_id in present:
+                move(row, "PLANNED")
+                open_rows.append(row)
+            else:
+                absent += 1
+            continue
         if absence_known and window[0] <= t.commence_utc <= window[1] and t.event_id not in present:
-            if not was_absent:
-                move(row, "DEFERRED", f"EVENT_ABSENT: not in the discovery of {discovery.get('last_discovery_utc')} "
-                                      "that covered its kickoff (postponed or cancelled?); no paid call")
+            move(row, "DEFERRED", f"EVENT_ABSENT: not in the discovery of {discovery.get('last_discovery_utc')} "
+                                  "that covered its kickoff (postponed or cancelled?); no paid call")
             absent += 1
             continue
-        if was_absent and t.event_id in present:
-            move(row, "PLANNED")
         open_rows.append(row)
     report["targets"] = {"planned_new": planned_new, "superseded_now": superseded, "missed_now": missed,
                          "event_absent": absent}
@@ -425,9 +462,8 @@ def _tick_body(store: SnapshotStore, run: _LazyRun, ledger_path: Path, settings:
                                   "nothing sent until a discovery succeeds")
         elif cost_block:
             state = "COST_BLOCKED"
-            block("QUOTA_EXHAUSTED", f"COST_ANOMALY: charged {cost_block.get('charged')} > estimate "
-                                     f"{cost_block.get('estimate')}; paid calls stopped until an operator reviews "
-                                     "and runs `odds run --clear-cost-block`")
+            block("QUOTA_EXHAUSTED", f"COST_BLOCKED: {_block_text(cost_block)}; paid calls stopped until an "
+                                     "operator reviews and runs `odds run --clear-cost-block`")
         elif not discovery_fresh:
             state = "DEFERRED"
             block("DEFERRED", f"DISCOVERY_STALE: last discovery {discovery.get('last_discovery_utc')}; no paid call")
@@ -446,10 +482,13 @@ def _tick_body(store: SnapshotStore, run: _LazyRun, ledger_path: Path, settings:
             report["paid_calls"] = fired.get("paid_calls", 0)
             if fired.get("error_status") in KEY_REJECTED_STATUSES:
                 pilot.set(discovery_outcome="KEY_REJECTED", discovery_status=fired["error_status"])
+            elif fired.get("paid_calls"):
+                pilot.set(last_paid_call_utc=stamp)
             credits = fired.get("credits_last")
             if isinstance(credits, int) and credits > settings.cost_per_call:
                 # The provider charged more than the documented formula: stop paying until reviewed.
-                pilot.set(cost_block={"at_utc": stamp, "charged": credits, "estimate": settings.cost_per_call,
+                pilot.set(cost_block={"at_utc": stamp, "reason": "COST_ANOMALY", "charged": credits,
+                                      "estimate": settings.cost_per_call,
                                       "slot_id": slot.slot_id})
                 state = "COST_ANOMALY"
                 call_failed = True
@@ -617,8 +656,11 @@ def plan(db_path: str | Path, ledger_path: str | Path, settings: RunnerSettings 
         report["discovery"] = {"source": "live (quota-free events endpoint)", "events": len(events),
                                "problems": list(problems)[:20]}
         if ledger.state() is odds_api.QuotaState.QUOTA_UNKNOWN:
-            rec = odds_api.reconcile_quota(ledger, opener=opener, pacer=pacer, environ=environ)
-            report["discovery"]["quota_reconcile"] = rec.state.value
+            try:
+                rec = odds_api.reconcile_quota(ledger, opener=opener, pacer=pacer, environ=environ)
+                report["discovery"]["quota_reconcile"] = rec.state.value
+            except Exception as exc:
+                report["discovery"]["quota_reconcile"] = f"FAILED ({type(exc).__name__})"
         quota = _quota(ledger)
 
     targets = [t for t in plan_targets(events, cfg.offsets) if deadline(t, cfg) > now]
@@ -653,6 +695,22 @@ def plan(db_path: str | Path, ledger_path: str | Path, settings: RunnerSettings 
         "assumption_note": "a fresh month: 0 used and the free allowance remaining; the first reconcile decides"}
     report["state"] = proof.state
     report["verdict"] = _verdict(proof)
+    # The runner's own blocks outrank the arithmetic: never a go-ahead while one is active.
+    pilot = PilotState(ledger_path, paid_history=ledger_path.exists() and PilotState.paid_history(ledger),
+                       now_utc=iso_z(now))
+    report["runner_state"] = {"file": pilot.status, "discovery_outcome": pilot.get("discovery_outcome"),
+                              "cost_block": pilot.get("cost_block")}
+    blocked = None
+    if pilot.get("cost_block"):
+        blocked = ("COST_BLOCKED", _block_text(pilot.get("cost_block")) + "; an operator reviews, then runs "
+                   "`odds run --clear-cost-block`")
+    elif pilot.get("discovery_outcome") == "KEY_REJECTED" and offline:
+        blocked = ("KEY_REJECTED", "the provider refused the key at the last discovery; the owner fixes it "
+                   "(sudoedit), then an online `odds plan` confirms")
+    if blocked is not None:
+        report["state"], reason = blocked
+        report["verdict"] = f"NOT A GO-AHEAD ({blocked[0]}): {reason}. Budget arithmetic: {report['verdict']}"
+        return 1, report
     return 0, report
 
 
@@ -685,7 +743,16 @@ def smoke(db_path: str | Path, ledger_path: str | Path, settings: RunnerSettings
         report.update(state="DEFERRED_CAPTURE_WINDOW", detail="inside 17:40-18:35 America/New_York: nothing sent; retry after 18:35 ET")
         return 1, report
     ledger = odds_api.QuotaLedger(ledger_path, cfg.ceiling, clock=clock)
-    rec = odds_api.reconcile_quota(ledger, opener=opener, pacer=pacer, environ=environ)
+    pilot = PilotState(ledger_path, paid_history=PilotState.paid_history(ledger), now_utc=iso_z(now))
+    if pilot.get("cost_block"):
+        report.update(state="COST_BLOCKED", detail=_block_text(pilot.get("cost_block")))
+        return 1, report
+    pilot.set(smoke_started_utc=iso_z(now))  # exists before any paid call, so its loss fails closed
+    try:
+        rec = odds_api.reconcile_quota(ledger, opener=opener, pacer=pacer, environ=environ)
+    except Exception as exc:
+        report.update(state="QUOTA_UNKNOWN", detail=f"free reconcile failed ({type(exc).__name__}); nothing sent")
+        return 1, report
     before = ledger.snapshot().get("last_headers") or {}
     report["quota_before"] = {k: before.get(k) for k in ("remaining", "used")} if before else None
     if rec.state is not odds_api.QuotaState.READY:
@@ -714,6 +781,11 @@ def smoke(db_path: str | Path, ledger_path: str | Path, settings: RunnerSettings
     parsed = odds_api.parse_odds(out.payload, odds_format=settings.odds_format,
                                  received_at_utc=out.fetch.received_at_utc, evidence_id=str(sid))
     headers = odds_api.parse_quota_headers(out.fetch.response_headers)
+    pilot.set(last_paid_call_utc=iso_z(now))
+    if headers is not None and headers.last is not None and headers.last > settings.cost_per_call:
+        pilot.set(cost_block={"at_utc": iso_z(now), "reason": "COST_ANOMALY", "charged": headers.last,
+                              "estimate": settings.cost_per_call, "slot_id": "smoke"})
+        report["cost_block"] = pilot.get("cost_block")
     # Counts, books and markets only: no URL, no error text, nothing that could carry the key.
     report.update(state="CAPTURED", snapshot_id=sid, received_at_utc=out.fetch.received_at_utc,
                   credits_last=headers.last if headers else None,

@@ -100,3 +100,16 @@ def test_the_real_v4_code_opens_and_backs_up_a_stamped_store(tmp_path):
     report = json.loads(result.stdout)
     assert report["status"] == "VERIFIED_BACKUP_AND_RESTORE", result.stdout + result.stderr
     assert report["schema_version"] == 4 and report["row_counts"]["odds_capture_targets"] == 1
+
+
+def test_the_helper_refuses_an_incomplete_v5_store(tmp_path, capsys):
+    db = _v5_store_with_rows(tmp_path)
+    with sqlite3.connect(db) as conn:
+        conn.execute("DROP TRIGGER odds_capture_transitions_final_is_final")
+    assert storage.main(["mark-v4-for-rollback", "--db", str(db)]) == 1
+    out = json.loads(capsys.readouterr().out)
+    assert out["status"] == "REFUSED" and "odds_capture_transitions_final_is_final" in out["detail"]
+    with sqlite3.connect(db) as conn:
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 5
+    SnapshotStore(db)  # the v5 write path re-creates the missing trigger
+    assert storage.main(["mark-v4-for-rollback", "--db", str(db)]) == 0

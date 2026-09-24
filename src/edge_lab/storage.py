@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 from contextlib import closing
 from datetime import datetime, timezone
@@ -394,6 +395,7 @@ END;
 """
 
 
+V5_OBJECTS = frozenset(re.findall(r"CREATE (?:TABLE|INDEX|TRIGGER) IF NOT EXISTS (\w+)", _SCHEMA_V5))
 V4_REQUIRED_TABLES = ("collection_runs", "snapshots", "source_health", "document_blobs", "document_retrievals",
                       "forward_captures")
 
@@ -403,7 +405,9 @@ def mark_schema_v4_for_rollback(db_path: str | Path) -> dict[str, Any]:
     previous (v4) code opens it.
 
     Nothing is deleted or rewritten. v5 only added the odds capture tables and their triggers,
-    which v4 code never reads; every v4 table, column and trigger is checked present first.
+    which v4 code never reads. Before stamping it checks: user_version is 5; every v4 table
+    and snapshots column exists; every v5 table, index and trigger exists (a complete v5
+    store); and SQLite integrity_check passes.
     Re-installing v5 code later stamps v5 again (its migration is idempotent). Refuses anything
     that is not exactly a complete v5 store. Run it with the collector timers stopped."""
     path = Path(db_path)
@@ -418,6 +422,7 @@ def mark_schema_v4_for_rollback(db_path: str | Path) -> dict[str, Any]:
         missing = [t for t in V4_REQUIRED_TABLES if t not in names]
         columns = {r["name"] for r in conn.execute("PRAGMA table_info(snapshots)")}
         missing += [f"snapshots.{c}" for c, _ in _SNAPSHOT_V2_COLUMNS if c not in columns]
+        missing += sorted(V5_OBJECTS - names)
         if missing:
             raise ValueError(f"not a complete store; missing {missing}; nothing changed")
         if conn.execute("PRAGMA integrity_check").fetchone()[0] != "ok":
@@ -529,8 +534,11 @@ class SnapshotStore:
             conn.executescript(_SCHEMA_V3)
             conn.executescript(_SCHEMA_V4)
             # v5's tables and triggers land in one transaction, and the version is stamped
-            # only after every object exists: a crash leaves either v4 or a complete v5.
-            conn.executescript("BEGIN IMMEDIATE;\n" + _SCHEMA_V5 + "\nCOMMIT;")
+            # only after every object exists: a crash leaves either v4 or a complete v5. An
+            # already complete v5 store takes no write lock here.
+            present = {row["name"] for row in conn.execute("SELECT name FROM sqlite_master")}
+            if version < SCHEMA_VERSION or not V5_OBJECTS <= present:
+                conn.executescript("BEGIN IMMEDIATE;\n" + _SCHEMA_V5 + "\nCOMMIT;")
             if version < SCHEMA_VERSION:
                 conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
 

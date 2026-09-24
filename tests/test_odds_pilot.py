@@ -522,7 +522,9 @@ def test_a_rejected_key_is_a_setup_state_not_an_alert_loop(paths, status):
     tick(paths, provider, utc(2026, 10, 3, 5, 0))  # good discovery, targets planned
     provider.events_error = http_error(status)
     code, report = tick(paths, provider, utc(2026, 10, 3, 12, 0))
-    assert code == 0 and report["discovery"]["state"] == "KEY_REJECTED" and report["state"] == "KEY_REJECTED"
+    assert code == 1 and report["discovery"]["state"] == "KEY_REJECTED" and report["state"] == "KEY_REJECTED"
+    code, report = tick(paths, provider, utc(2026, 10, 3, 12, 15))  # persists: no second alert
+    assert code == 0 and report["state"] == "KEY_REJECTED"
     # A slot falls due while the key is rejected: nothing is paid for.
     code, report = tick(paths, provider, utc(2026, 10, 3, 17, 0))
     assert code == 0 and report["state"] == "KEY_REJECTED" and provider.paid() == []
@@ -613,3 +615,95 @@ def test_a_broken_proof_fails_closed_without_a_paid_call(paths, monkeypatch):
     assert code == 1 and report["state"] == "FAILED" and provider.paid() == []
     with sqlite3.connect(paths[0]) as conn:
         assert conn.execute("SELECT COUNT(*) FROM collection_runs WHERE status = 'running'").fetchone()[0] == 0
+
+
+# ------------------------------------------------------------------ re-review: alerts once, plan blocks, fail closed
+
+def test_a_vanished_key_after_activation_alerts_once(paths):
+    provider = Provider()
+    tick(paths, provider, utc(2026, 10, 3, 5, 0))  # active: a discovery succeeded
+    code, report = tick(paths, provider, utc(2026, 10, 3, 5, 15), env={})
+    assert code == 1 and report["state"] == "SETUP_NEEDED"  # the transition alerts
+    code, report = tick(paths, provider, utc(2026, 10, 3, 5, 30), env={})
+    assert code == 0 and report["state"] == "SETUP_NEEDED"  # while it persists: no alert
+    code, report = tick(paths, provider, utc(2026, 10, 3, 17, 0), env={})
+    assert code == 0 and provider.paid() == []
+
+
+def test_setup_needed_before_activation_never_alerts(paths):
+    SnapshotStore(paths[0])  # the shared evidence DB exists long before the pilot is activated
+    for minute in (0, 15):
+        code, report = tick(paths, Provider(), utc(2026, 10, 3, 5, minute), env={})
+        assert code == 0 and report["state"] == "SETUP_NEEDED"
+
+
+def test_plan_is_not_a_go_ahead_while_a_cost_block_is_active(paths):
+    provider = Provider(charge=6)
+    tick(paths, provider, utc(2026, 10, 3, 10, 0))
+    tick(paths, provider, utc(2026, 10, 3, 17, 0))  # overcharge -> cost block
+    code, report = op.plan(paths[0], paths[1], op.RunnerSettings(), offline=True, clock=Clock(utc(2026, 10, 3, 17, 5)))
+    assert code == 1 and report["state"] == "COST_BLOCKED" and report["verdict"].startswith("NOT A GO-AHEAD")
+    assert report["runner_state"]["cost_block"]["charged"] == 6
+    code, report = op.plan(paths[0], paths[1], op.RunnerSettings(), clock=Clock(utc(2026, 10, 3, 17, 5)),
+                           opener=Provider(), environ=ENV)
+    assert code == 1 and report["state"] == "COST_BLOCKED"
+
+
+def test_plan_offline_surfaces_a_rejected_key(paths):
+    provider = Provider()
+    tick(paths, provider, utc(2026, 10, 3, 5, 0))
+    provider.events_error = http_error(401)
+    tick(paths, provider, utc(2026, 10, 3, 12, 0))
+    code, report = op.plan(paths[0], paths[1], op.RunnerSettings(), offline=True, clock=Clock(utc(2026, 10, 3, 12, 5)))
+    assert code == 1 and report["state"] == "KEY_REJECTED" and "PROVEN" not in report["verdict"].split(":")[0]
+
+
+def test_an_absent_game_is_not_reopened_by_an_empty_discovery(paths):
+    provider = Provider()
+    tick(paths, provider, utc(2026, 10, 3, 5, 0))
+    provider.events = [e for e in EVENTS if e["id"] not in ("e1", "e2", "e3")]
+    tick(paths, provider, utc(2026, 10, 3, 11, 0))  # e1-e3 become EVENT_ABSENT
+    provider.events = []  # the next discovery is empty: not evidence that anything is back
+    code, report = tick(paths, provider, utc(2026, 10, 3, 17, 0))  # also the T-24h slot's due time
+    assert provider.paid() == [] and report["targets"]["event_absent"] >= 3
+    rows = [r for r in SnapshotStore(paths[0]).odds_targets(sport=SPORT) if r["event_id"] in ("e1", "e2", "e3")]
+    assert not any(r["state"] in ("PLANNED", "CAPTURING", "CAPTURED") for r in rows)
+
+
+@pytest.mark.parametrize("damage", ["corrupt", "missing"])
+def test_a_damaged_runner_state_file_fails_closed(paths, damage):
+    provider = Provider()
+    tick(paths, provider, utc(2026, 10, 3, 10, 0))
+    tick(paths, provider, utc(2026, 10, 3, 17, 0))  # one paid call: history exists
+    state_file = paths[1].with_name(paths[1].name + ".pilot.json")
+    if damage == "corrupt":
+        state_file.write_text("{not json", encoding="utf-8")
+    else:
+        state_file.unlink()
+    code, report = tick(paths, provider, utc(2026, 10, 3, 20, 25))  # the 16:25 game's T-24h is due
+    assert report["state"] == "COST_BLOCKED" and len(provider.paid()) == 1
+    assert "PILOT_STATE" in report["cost_block"]["reason"]
+    tick(paths, provider, utc(2026, 10, 3, 20, 30), clear_cost_block=True)
+    assert len(provider.paid()) == 2
+
+
+def test_smoke_writes_the_runner_state_so_the_first_tick_is_not_blocked(paths):
+    provider = Provider()
+    code, _ = op.smoke(paths[0], paths[1], op.RunnerSettings(), clock=Clock(utc(2026, 10, 3, 5)), opener=provider,
+                       environ=ENV)
+    assert code == 0 and paths[1].with_name(paths[1].name + ".pilot.json").exists()
+    code, report = tick(paths, provider, utc(2026, 10, 3, 5, 15))
+    assert "cost_block" not in report and report["state"] != "COST_BLOCKED"
+
+
+def test_the_traceback_of_an_unexpected_error_is_logged_redacted(paths, monkeypatch, capsys):
+    provider = Provider()
+    tick(paths, provider, utc(2026, 10, 3, 10, 0))
+
+    def boom(*args, **kwargs):
+        raise RuntimeError(f"boom apiKey={FAKE}")
+
+    monkeypatch.setattr(op, "coalesce", boom)
+    code, report = tick(paths, provider, utc(2026, 10, 3, 10, 15))
+    err = capsys.readouterr().err
+    assert code == 1 and "Traceback" in err and "RuntimeError" in err and FAKE not in err

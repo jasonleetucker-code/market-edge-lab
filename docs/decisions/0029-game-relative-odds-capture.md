@@ -151,7 +151,9 @@ before the timer is enabled (runbook section 5b).
   has the procedure. `tests/test_storage_rollback.py` proves the real v4 code (commit dd3ab4d)
   then opens the store and reports a VERIFIED backup.
 - **The migration is atomic.** v5's objects are created in one transaction, and the version is
-  stamped only after they exist.
+  stamped only after they exist. An already complete v5 store takes no write lock at open.
+- **The rollback helper checks completeness.** It refuses a store that lacks any v5 table,
+  index or trigger, or any v4 table or column, or that fails `integrity_check`.
 
 ### Evidence per capture (issue #50, directive §6D)
 
@@ -185,15 +187,27 @@ targets CAPTURED.
 in `<ledger>.pilot.json`.
 - **A failed discovery** is retried at most every 6 h, paced on the last attempt, not the last
   success. It alerts once, when it starts failing.
-- **HTTP 401/403** means KEY_REJECTED, a setup state. The tick exits 0 and makes no paid call
-  until a later discovery succeeds.
+- **HTTP 401/403** means KEY_REJECTED, a setup state. It alerts once, on the tick where it
+  starts. After that the tick exits 0 and makes no paid call until a later discovery succeeds.
+- **A missing key after activation** (the pilot had run and then the key disappeared) is
+  SETUP_NEEDED. It alerts once, on the transition. Before activation, SETUP_NEEDED never
+  alerts.
 - **A paid call that fails** is FAILED and never retried. If the response was charged but
   could not be decoded, its exact bytes are kept as a `document_retrievals` row, under a
   redacted URL.
 - **An overcharge.** If the provider charges more than the estimate (`x-requests-last` > 3),
   the state is COST_ANOMALY. All paid calls stop, and due targets show QUOTA_EXHAUSTED with
   reason COST_ANOMALY, until an operator reviews it and runs `odds run --clear-cost-block`.
-- **An unexpected error** closes the collection run as failed. Nothing is paid for.
+- **An unexpected error** closes the collection run as failed and logs a redacted traceback to
+  the journal. Nothing is paid for.
+- **A damaged state file fails closed.** If the state file is unreadable, or missing although
+  the quota ledger shows paid calls, it becomes a cost block. `odds smoke` writes the file
+  before its paid read, so the first tick after a smoke read is not blocked.
+- **No go-ahead while blocked.** `odds plan` reads the runner state. While a cost block is
+  active, or offline while the key is rejected, it reports COST_BLOCKED or KEY_REJECTED, exits
+  1, and never gives PROVEN as a go-ahead.
+- **Absent games stay closed.** An EVENT_ABSENT target reopens only when a fresh, non-empty
+  discovery lists the game again. It never goes straight from DEFERRED to a capture.
 
 `odds plan` is read-only: free calls only, and it never writes the evidence store (`--offline`
 makes no calls at all). `odds smoke` makes exactly one bounded read (7 days of games) after a
