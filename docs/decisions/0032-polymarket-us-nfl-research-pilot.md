@@ -136,7 +136,12 @@ Two traps:
     own timer runs is observed, never scheduled). The acquisition style is the `underlying_mode`:
     POLL for discovery, EVENT_RELATIVE for the captures.
   - The objectives are the registered `max_age` values (one owner per fact).
-  - The terms gate shows as PAUSED, and `usable_for_decision` is always false.
+  - The terms gate shows as PAUSED.
+  - `usable_for_research` comes from `freshness.usable_flags`. `usable_for_decision` is always
+    false: research evidence is never decision-grade, which is stricter than the rule and allowed.
+  - Only successful acquisitions are receipts: a discovery scan read to its empty page, or a
+    CAPTURED book. A partial scan is an attempt; its markets are still planned.
+  - `missed_count` counts targets recorded MISSED, with the fabric's own `missed_scope` wording.
   - The Fabric types are imported on call, so this module does not depend on them at import time.
 - **Terminal (Lane D).**
   - `polymarket_sports.terminal_view(db_path, now=...)` (schema `pm-sports-status/1`, read-only,
@@ -224,7 +229,7 @@ Two traps:
   plus `polymarket_sports` in that module's `from . import ...` line.
   - The name is `polymarket_us_nfl_pilot`: Lane A's own test registers a demo provider named
     `polymarket_us_nfl`.
-  - Verified locally on a trial merge with `origin/feat/freshness-fabric` (`cea98c8`): Lane A's
+  - Verified locally on a trial merge with `origin/feat/freshness-fabric` (`4df9b68`, which has the tightened `usable_flags` contract): Lane A's
     fabric tests and this lane's tests pass.
 - **Runbook, HANDOFF and verify_production (coordinator):**
   - a v7 → v6 rollback step, `mark-v6-for-rollback`, before the existing v6 → v5 one;
