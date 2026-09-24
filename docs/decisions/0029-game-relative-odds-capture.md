@@ -243,3 +243,60 @@ a separate change.
 - another sport, player props, more regions or a paid tier is proposed (each needs owner
   approval and its own proof);
 - the provider changes its cost rules, which is why the guide is re-read and hashed.
+
+## Addendum 2026-09-24 (b): readiness review without a key
+
+Authority: `docs/owner/2026-09-24-next-build-chunk-directive.md`, Deliverable 6.
+
+**The numbers above are unchanged.** `tests/test_odds_readiness.py` now simulates whole months
+through the real runner (`run_tick`) against a scripted provider with the provider's cost rules:
+- `/events` and `/sports` are free;
+- an `/odds` call costs 3 credits, or 0 when the response is empty;
+- the counter resets at the start of the UTC month.
+
+The schedule is a realistic 2026 season shape, NOT the published schedule. It includes:
+- TNF, a Friday opener abroad and a Monday doubleheader;
+- three London Sundays, plus Germany and Madrid;
+- Thanksgiving and Black Friday;
+- Saturday tripleheaders;
+- Christmas Friday after a Christmas Eve TNF, a week of 11 kickoff groups.
+
+Results, with the full free allowance at the start of each month:
+
+| Month | Games | Targets | Paid calls | Credits | Highest worst-case proof | Missed / skipped |
+|---|---|---|---|---|---|---|
+| Sep 2026 (from week 1) | 51 | 153 | 53 | 159 | 162 | 0 |
+| Oct 2026 | 68 | 217 | 74 | 222 | 225 | 0 |
+| Nov 2026 | 83 | 238 | 84 | 252 | 255 | 0 |
+| Dec 2026 | 74 | 222 | 90 | 270 | 273 | 0 |
+
+October reproduces the table above: 74 calls, and a worst case of 225 against 222 expected.
+
+A second scenario starts on 1 Dec with 380 credits already counted by the provider. Over 1–20
+Dec the runner spent 51 credits (17 calls), below the 67 allowed (450 − 380 − 3). Every T-60m
+target was captured. T-6h and T-24h were SKIPPED_BUDGET and then MISSED, with that reason.
+
+Changes in the same review:
+
+1. **Out-of-order quota readings.** Two concurrent calls can return their headers out of
+   order. A reading whose `x-requests-used` is lower than the previous one was taken as a
+   provider reset, which gave back credits already spent (found by a 12-thread test).
+   - A drop no larger than the calls in flight is now recorded as `stale_reading_ignored`.
+   - Only a larger drop counts as a reset (`QuotaLedger._apply_headers`).
+2. **Failed collections are evidence.** Every discovery, capture and smoke call writes a
+   `source_health` row (`source_id = the_odds_api`), with the error redacted. A failed
+   discovery or a rejected key no longer lives only in `*.pilot.json`.
+3. **Planning cost.** A tick writes only targets it does not already know. Before this change,
+   every 15-minute tick asked the store once per known target.
+4. **Identity and research values** (`odds_api`):
+   - `observation_identity` / `link_series` link repeated observations only when every field
+     matches: provider event id, sport, league, home, away, start, book, market, side and line.
+   - `implied_probability` (margin included), `devig_by_market` (one book) and
+     `consensus_by_market` (median across at least 2 books of one exact proposition) are
+     separate, labelled and never executable.
+5. **Dashboard contract** (`odds_pilot.dashboard_status`) for the Terminal. It is read-only: no
+   lock, no write, no network and no key.
+   - States: ERROR, COST_BLOCKED, KEY_REJECTED, SETUP_NEEDED, QUOTA_EXHAUSTED, QUOTA_UNKNOWN,
+     DISCOVERY_FAILED, DISCOVERY_STALE and ACTIVE.
+   - It stays SETUP_NEEDED until a paid odds response has been stored. A successful free
+     discovery is not enough.
