@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from decimal import Decimal
 
+from ...freshness import parse_utc
 from .. import components as c
 from .. import data as d
 from .. import fixtures
@@ -102,6 +103,19 @@ def view(ctx: d.Context, p: pr.Params) -> cm.Page:
                            + research.odds_body(d.Loaded(d.ERROR, message="RuntimeError: SYNTHETIC")),
                            meta="setup needed · active (verified) · degraded · cost blocked · error · unverified claim · "
                                 "not configured · read error", sid="g-odds", flush=True))
+    targets = fixtures.synthetic_odds_targets()
+    tnow = parse_utc(fixtures.ODDS_TARGETS_NOW)
+    ok = d.Loaded(d.OK, odds["ACTIVE"])
+    blocked = d.Loaded(d.OK, {**odds["ACTIVE"], "state": "QUOTA_EXHAUSTED",
+                              "detail": "SYNTHETIC: 450 credits spent or reserved; ceiling 450"})
+    parts.append(c.section("Odds capture targets (populated)", research.odds_targets_body(targets["populated"], ok, tnow),
+                           meta="overdue · captured · known zero books · unreadable capture · missed · failed · "
+                                "budget-skipped · superseded · deferred · unknown state", sid="g-odds-t"))
+    parts.append(c.section("Odds capture targets (no captures yet · quota blocked)",
+                           research.odds_targets_body(targets["no_captures"], blocked, tnow), sid="g-odds-t-blocked"))
+    parts.append(c.section("Odds capture targets (empty / source unavailable / read error)",
+                           "".join(research.odds_targets_body(targets[k], ok, tnow)
+                                   for k in ("empty", "unavailable", "error")), sid="g-odds-t-states"))
     origin_rows = [
         cm.failure_alert(d.FailureRecord(d.FAILURE_FILE, fixtures.synthetic_failure_record("edgelab-decision.service"),
                                          "PRODUCTION", False)),

@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import re
+from typing import Any
 
 from ... import sources, venues
+from ...freshness import parse_utc
 from .. import components as c
 from .. import data as d
 from .. import presentation as pr
@@ -116,6 +118,212 @@ def odds_section(ctx: d.Context) -> str:
                      meta="Offered odds · research only · not executable", sid="odds-h", flush=True)
 
 
+# --------------------------------------------------------------------------- Odds capture targets (ADR 0029)
+
+# dashboard_status states in which the runner makes no paid capture (each state's own detail says why).
+# SETUP_NEEDED is left out: before the first live read it does not stop captures, and telling it apart
+# from a removed key would re-derive odds_pilot policy here (a canonical "paused" flag belongs there).
+ODDS_PAUSED = ("COST_BLOCKED", "KEY_REJECTED", "QUOTA_EXHAUSTED", "QUOTA_UNKNOWN", "DISCOVERY_STALE")
+TARGETS_NOTE = ("Offered odds are research data, never executable prices. Credits are the provider's reported cost "
+                "of the paid call (x-requests-last); one call can serve several targets, so credits are never added "
+                "up per target here. A capture is historical evidence, not current odds: its freshness is judged at "
+                "receipt (the offers' last update against the source's odds max age). Books in the full list are "
+                "the runner's record at capture; the rows above parse the stored response.")
+
+
+def _sub(text: str | None) -> str:
+    return f'<span class="cell-sub">{esc(text)}</span>' if text else ""
+
+
+def _minutes(delta: Any) -> str | None:
+    return f"{int(delta.total_seconds() // 60)} min" if delta is not None else None
+
+
+def target_credits(t: d.OddsTarget) -> str:
+    if t.credits_last is None:
+        return c.na({"CAPTURED": "not recorded for this capture",
+                     "FAILED": "not recorded (a failed call may still have been charged; see the reason)"}
+                    .get(t.state, "no paid call recorded for this target"))
+    return c.num(pr.count(t.credits_last), reason="not recorded") + _sub(_shared(t, "one paid call"))
+
+
+def _shared(t: d.OddsTarget, alone: str | None) -> str | None:
+    if t.shared_targets and t.shared_targets > 1:
+        return f"one paid call shared by {t.shared_targets} targets"
+    return alone
+
+
+def target_books(t: d.OddsTarget) -> str:
+    if t.state != "CAPTURED":
+        return c.na("nothing captured for this target")
+    if t.books is None:
+        return c.na(t.books_note or "unknown")
+    return c.num(pr.count(len(t.books))) + _sub(" · ".join(x for x in (
+        f"{pr.count(t.offers)} offers" if t.offers is not None else None,
+        "recorded at capture" if t.books_source == d.BOOKS_RECORDED else None, t.books_note) if x))
+
+
+def _at_receipt(t: d.OddsTarget) -> str:
+    """A captured row's freshness at receipt, in the existing state words ("Fresh at receipt")."""
+    if t.freshness == d.NOT_EVALUATED:
+        return c.na("freshness at receipt is evaluated for the rows shown above")
+    return c.state_text(t.freshness, label=f"{pr.state_word(t.freshness).label} at receipt")
+
+
+def target_freshness(t: d.OddsTarget, now: Any, max_age: Any) -> str:
+    if t.state == "CAPTURED":
+        age = pr.age_text(t.captured_at_utc, now)
+        limit = _minutes(max_age)
+        head = (c.na("freshness at receipt not evaluated") if t.freshness == d.NOT_EVALUATED else
+                c.badge(t.freshness, label=f"{pr.state_word(t.freshness).label} at receipt"))
+        return head + _sub(" · ".join(x for x in (
+            f"received {age}" if age else None, "historical, not current",
+            f"odds max age {limit}" if limit else None) if x))
+    if t.freshness == d.TARGET_PENDING:
+        due = pr.age_text(t.due_utc, now)
+        return c.state_text(t.freshness) + _sub(f"due {due}" if due else None)
+    if t.freshness == d.TARGET_OVERDUE:
+        return c.badge(t.freshness) + _sub(f"no outcome recorded since the deadline, {pr.datetime_et(t.deadline_utc)}"
+                                         if t.deadline_utc else "no outcome recorded")
+    if t.freshness == d.TARGET_NO_CAPTURE:
+        return c.state_text(t.freshness)
+    return c.badge("UNKNOWN", label="Unknown")
+
+
+def _receipt(t: d.OddsTarget) -> str:
+    reason = {"CAPTURED": "receipt time not recorded", "MISSED": "missed: nothing received",
+              "FAILED": "failed: nothing stored", "SUPERSEDED": "superseded before capture"}.get(t.state, "not captured")
+    deviation = t.detail.get("deviation_minutes") if t.state == "CAPTURED" else None
+    return c.txt(pr.datetime_et(t.captured_at_utc), reason=reason) + _sub(
+        f"{deviation} min from intended (recorded)" if isinstance(deviation, (int, float)) else None)
+
+
+def _intended(t: d.OddsTarget) -> str:
+    moved = (t.due_utc is not None and parse_utc(t.due_utc) != parse_utc(t.target_utc))
+    return c.txt(pr.datetime_et(t.target_utc), reason="not recorded") + _sub(
+        f"due {pr.time_et(t.due_utc)} (outside the capture quiet window)" if moved else None)
+
+
+def _transitions(t: d.OddsTarget) -> str:
+    if t.transitions is None:
+        return ""
+    return c.table(["state", "at", "reason", "slot", "snapshot", "credits"],
+                   [[c.badge_code(x.get("state")), esc(pr.datetime_et(x.get("at_utc")) or x.get("at_utc")),
+                     esc(d.scrub_paths(x.get("reason"))), c.code(x.get("slot_id")), c.code(x.get("snapshot_id")),
+                     esc(x.get("credits_last"))] for x in t.transitions], wrap=(2,), caption="State history")
+
+
+def target_row(t: d.OddsTarget, now: Any, max_age: Any = None) -> str:
+    """One capture target: event, horizon, intended time, receipt, state, credits, books, freshness."""
+    facts = [("Intended (ET)", _intended(t)), ("Actual receipt", _receipt(t)), ("Credits", target_credits(t)),
+             ("Books returned", target_books(t)), ("Freshness", target_freshness(t, now, max_age))]
+    if t.reason:
+        facts.append(("Reason", esc(t.reason)))
+    detail = c.disclosure("Target details and history", c.kv([
+        ("target id", c.code(t.target_id)), ("event id", c.code(t.event_id)), ("sport", c.code(t.sport)),
+        ("horizon · priority", esc(f"{t.offset_label} · {t.priority}")),
+        ("kickoff (UTC)", c.code(t.commence_utc)), ("intended (UTC)", c.code(t.target_utc)),
+        ("effective due (UTC)", c.code(t.due_utc)), ("deadline (UTC)", c.code(t.deadline_utc)),
+        ("planned at (UTC)", c.code(t.planned_at_utc)), ("policy", c.code(t.policy_version)),
+        ("state", c.badge_code(t.state)), ("state recorded at (UTC)", c.code(t.state_at_utc)),
+        ("slot", c.code(t.slot_id)), ("snapshot", c.code(t.snapshot_id)),
+        ("received (UTC)", c.code(t.captured_at_utc)), ("credits (x-requests-last)", c.code(t.credits_last)),
+        ("books in the stored response", c.ul(t.books, empty="none") if t.books is not None
+         else c.na(t.books_note or "not captured")),
+        ("recorded at capture", esc(c._json_text(t.detail)) if t.detail else c.na("nothing recorded")),
+    ]) + _transitions(t))
+    sub = f"{t.offset_label} · kickoff {pr.datetime_et(t.commence_utc) or 'not recorded'}"
+    return c.row(esc(pr.odds_event_label(t.away_team, t.home_team, t.event_id)), sub=sub, aside=c.badge(t.state),
+                 body=c.facts(facts, wide=True, text_cols=(0, 1, 4, 5)) + detail)
+
+
+def targets_table(targets: d.OddsTargets) -> str:
+    rows = targets.rows[-d.ODDS_TARGETS_MAX:]
+    left_out = len(targets.rows) - len(rows)
+    table = c.table(
+        ["event", "horizon", "intended (ET)", "actual receipt (ET)", "state", "credits", "books", "freshness"],
+        [[esc(pr.odds_event_label(t.away_team, t.home_team, t.event_id)), esc(t.offset_label),
+          esc(pr.datetime_et(t.target_utc)), c.txt(pr.datetime_et(t.captured_at_utc), reason="not captured"),
+          c.state_text(t.state),
+          c.num(pr.count(t.credits_last), reason="not recorded") + _sub(_shared(t, None)),
+          c.num(pr.count(len(t.books)) if t.books is not None else None, reason=t.books_note or "not captured")
+          + _sub("may be incomplete" if t.books is not None and t.books_note else None),
+          _at_receipt(t) if t.state == "CAPTURED" else c.state_text(t.freshness)] for t in rows], wrap=(0,), right=(5, 6), caption="Odds capture targets")
+    more = (f'<p class="note">{esc(pr.count(left_out))} older targets are not listed here; every target stays in '
+            "the evidence database.</p>" if left_out > 0 else "")
+    return table + more
+
+
+def _paused(status: d.Loaded) -> str:
+    if status.status != d.OK:
+        return ""  # the card above shows the unreadable status; the targets below are still read
+    state = pr.odds_state(status.value)
+    if state not in ODDS_PAUSED:
+        return ""
+    detail = str((status.value or {}).get("detail") or "").rstrip(".")
+    return c.blocked_state(f"Paid captures paused — {pr.state_word(state).label}",
+                           (f"{detail[:1].upper()}{detail[1:]}. " if detail else "")
+                           + "Open targets are not captured while this holds.")
+
+
+def odds_targets_body(result: d.Loaded, status: d.Loaded, now: Any) -> str:
+    """Every state of the capture-target table: source unavailable, read error, no targets, no
+    captures yet, captures paused (quota or cost), overdue (stale records), missed, populated."""
+    if result.status == d.ERROR:
+        return c.error_state("Capture targets unavailable (read error)",
+                             f"ERROR — {result.message}. This is not an empty schedule.")
+    if result.status != d.OK:
+        msg = result.message or "the evidence database is not available"
+        return c.unavailable("Capture targets unavailable", f"Source unavailable — {msg}.")
+    data: d.OddsTargets = result.value
+    out = [_paused(status)]
+    if not data.rows:
+        out.append(c.empty_state("No capture targets planned yet", "Targets are planned from the quota-free schedule "
+                                 "discovery, at fixed horizons before each kickoff. None is stored yet."))
+        return "".join(out)
+    labels = " · ".join(f"{pr.state_word(s).label} {pr.count(n)}" for s, n in sorted(
+        data.by_state.items(), key=lambda kv: (-kv[1], kv[0])))
+    out.append(c.facts([
+        ("Targets", c.num(pr.count(len(data.rows)))),
+        ("Captured", c.num(pr.count(data.count("CAPTURED")))),
+        ("Missed", c.num(pr.count(data.count("MISSED")))),
+        ("Failed", c.num(pr.count(data.count("FAILED")))),
+        ("Open", c.num(pr.count(data.open_count))),
+        ("Last recorded change", c.txt(pr.datetime_et(data.last_change_utc), reason="not recorded")
+         + _sub(pr.age_text(data.last_change_utc, now))),
+    ], wide=True, text_cols=(5,)) + f'<p class="meta">By state: {esc(labels)}</p>')
+    if data.count("CAPTURED") == 0:
+        first = next((t for t in data.rows if t.freshness == d.TARGET_PENDING), None)
+        out.append(c.empty_state("No captures yet", f"{pr.count(len(data.rows))} targets are stored and none has been "
+                                 "captured.", times=(f"Next target due {pr.datetime_et(first.due_utc)}"
+                                                     if first is not None and first.due_utc else None)))
+    overdue = sum(1 for t in data.rows if t.freshness == d.TARGET_OVERDUE)
+    if overdue:
+        out.append(c.empty_state(
+            f"{pr.count(overdue)} open target{'' if overdue == 1 else 's'} past the deadline",
+            "No outcome has been recorded since the deadline passed, so this record is stale. The runner records "
+            "an expired target as Missed on its next run, or as Failed if a capture was left in progress. Whether "
+            "its timer runs is not observable here.", kind="warn"))
+    for title, group, none in (("Recent · intended time passed", data.recent, "No target's intended time has passed."),
+                               ("Next", data.upcoming, "No target is ahead.")):
+        out.append(f'<h3 class="eyebrow">{esc(title)}</h3>' + (
+            '<ul class="rows">' + "".join(target_row(t, now, data.odds_max_age) for t in group) + "</ul>"
+            if group else f'<p class="meta">{esc(none)}</p>'))
+    out.append(c.disclosure(f"All targets ({pr.count(len(data.rows))})", targets_table(data), boxed=True))
+    out.append(f'<p class="note">{esc(TARGETS_NOTE)}</p>')
+    return "".join(x for x in out if x)
+
+
+def odds_targets_section(ctx: d.Context) -> str:
+    from ...odds_pilot import RunnerSettings
+
+    settings = RunnerSettings()
+    horizons = " / ".join(o.label for o in sorted(settings.config.offsets, key=lambda o: -o.before))
+    return c.section("Odds capture targets", odds_targets_body(ctx.odds_targets, ctx.odds_status, ctx.now),
+                     meta=f"{pr.sport_label(settings.sport)} · {horizons} before kickoff · research only",
+                     sid="odds-t-h")
+
+
 def sources_tab(ctx: d.Context) -> str:
     out = []
     rows = []
@@ -141,6 +349,7 @@ def sources_tab(ctx: d.Context) -> str:
                            "not a scheduled feed. Daily files are not real-time books. Public market reads do not "
                            "imply account or order access.</p></div>", sid="ven-h", flush=True))
     out.append(odds_section(ctx))
+    out.append(odds_targets_section(ctx))
     health = ctx.source_health
     missing = cm.loaded_state("Collected sources", health)
     if missing:
