@@ -113,7 +113,7 @@ def test_production_shape_95_targets_one_captured_with_nine_books(production):
     assert len(targets.rows) == 95 and targets.by_state == {"CAPTURED": 1, "PLANNED": 94}
     (cap,) = [t for t in targets.rows if t.state == "CAPTURED"]
     assert cap.offset_label == "T-6h" and cap.credits_last == 3 and len(cap.books) == 9 and cap.offers == 54
-    assert cap.freshness == "STALE"  # a capture hours old is never shown as current
+    assert cap.freshness == "FRESH"  # judged at receipt: the offers were a minute old when received
     assert cap.shared_targets == 1 and cap.transitions is not None
     assert len(targets.recent) <= d.ODDS_TARGETS_SHOWN and len(targets.upcoming) == d.ODDS_TARGETS_SHOWN
     status, body = get(production)
@@ -122,7 +122,7 @@ def test_production_shape_95_targets_one_captured_with_nine_books(production):
     for needle in ("Odds capture targets", "T-24h / T-6h / T-60m before kickoff", "Targets 95", "Captured 1",
                    "Missed 0", "Atlanta Falcons @ Green Bay Packers", "T-6h · kickoff Sep 24, 8:15 PM EDT",
                    "Intended (ET) Sep 24, 2:15 PM EDT", "Actual receipt Sep 24, 2:15 PM EDT", "Credits 3 one paid call",
-                   "Books returned 9 54 offers", "Freshness Stale", "odds max age 10 min", "All targets (95)",
+                   "Books returned 9 54 offers", "Freshness Fresh at receipt", "historical, not current", "odds max age 10 min", "All targets (95)",
                    "never executable prices"):
         assert needle in text, needle
     assert "Paid captures paused" not in text and "No captures yet" not in text
@@ -218,6 +218,7 @@ def test_an_open_target_past_its_deadline_is_stale_never_pending(tmp_path):
     assert by["T-60m"].freshness == d.TARGET_OVERDUE and by["T-60m"].state == "PLANNED"
     text = plain(_body(tmp_path, later))
     assert "open targets past the deadline" in text or "open target past the deadline" in text
+    assert "as Failed if a capture was left in progress" in text  # review SF-3
     assert "Overdue no outcome recorded since the deadline" in text and "not observable here" in text
     early = d.Context(_cfg(tmp_path, targets["T-60m"].target_utc + timedelta(minutes=29))).odds_targets.value
     assert {t.offset_label: t.freshness for t in early.rows}["T-60m"] == d.TARGET_PENDING
@@ -274,10 +275,11 @@ def test_the_real_quota_exhausted_fixture_blocks_and_marks_the_overdue_target():
 # --------------------------------------------------------------------------- books, credits, freshness
 
 
-def _odds(native: str, books: list[str]) -> dict:
+def _odds(native: str, books: list[str], updated: str | None = None) -> dict:
     return {"id": native, "sport_key": SPORT, "commence_time": iso_z(KICKOFF), "home_team": "H", "away_team": "A",
-            "bookmakers": [{"key": b, "markets": [{"key": "h2h", "outcomes": [{"name": "H", "price": -150},
-                                                                               {"name": "A", "price": 130}]}]}
+            "bookmakers": [{"key": b, **({"last_update": updated} if updated else {}),
+                            "markets": [{"key": "h2h", "outcomes": [{"name": "H", "price": -150},
+                                                                     {"name": "A", "price": 130}]}]}
                            for b in books]}
 
 
@@ -294,6 +296,7 @@ def test_books_come_from_the_snapshot_and_a_known_zero_is_not_unknown(tmp_path):
     html = _body(tmp_path)
     text = plain(html)
     assert "one paid call shared by 2 targets" in text
+    assert plain(research.targets_table(d.Context(_cfg(tmp_path)).odds_targets.value)).count("shared by 2") == 2
     assert "Books returned 0 0 offers · this event is not in the stored response" in text
     assert "Credits 6" not in text  # one call's credits are never added up per target
 
@@ -310,16 +313,88 @@ def test_an_unreadable_or_foreign_snapshot_leaves_books_unknown(tmp_path):
     assert d.Context(_cfg(tmp_path)).odds_targets.status == d.OK  # one bad capture never hides the table
 
 
-def test_a_fresh_capture_reads_fresh_and_turns_stale_by_the_source_rule(tmp_path):
+def test_a_capture_is_judged_fresh_or_stale_at_receipt_never_as_current(tmp_path):
+    store = _store(tmp_path)
+    one, two, three = (_plan(store, _event(f"evt{i}")) for i in (1, 2, 3))
+    limit = odds_api.get_source(odds_api.SOURCE_ID).max_age["odds"]
+    received = datetime(2026, 9, 24, 18, 15, 43, tzinfo=timezone.utc)
+    _capture(store, [one["T-6h"]], [_odds("evt1", ["draftkings"], "2026-09-24T18:15:00Z")])  # 41 s old at receipt
+    _capture(store, [two["T-6h"]], [_odds("evt2", ["draftkings"], iso_z(received - limit - timedelta(minutes=1)))],
+             at="2026-09-24T18:15:43Z")
+    _capture(store, [three["T-6h"]], [_odds("evt3", ["draftkings"])], at="2026-09-24T18:15:42Z")  # no last_update
+    later = NOW + timedelta(hours=1)  # hours after receipt a capture is still "fresh at receipt", never current
+    rows = {t.event_id: t for t in d.Context(_cfg(tmp_path, later)).odds_targets.value.rows if t.state == "CAPTURED"}
+    assert {k: v.freshness for k, v in rows.items()} == {"evt1": "FRESH", "evt2": "STALE", "evt3": "UNKNOWN"}
+    text = plain(_body(tmp_path, later))
+    for needle in ("Fresh at receipt", "Stale at receipt", "Unknown at receipt", "historical, not current"):
+        assert needle in text, needle
+
+
+def test_parsing_is_bounded_to_the_rows_shown_and_memoized(tmp_path, monkeypatch):
+    """Review SF-1: never parse every stored capture on a page load."""
+    store = _store(tmp_path)
+    for i in range(30):  # 30 past games, each T-60m captured by its own paid call
+        t = _plan(store, _event(f"old{i}", kickoff=datetime(2026, 9, 10, 17, tzinfo=timezone.utc)
+                                + timedelta(hours=i)))
+        _capture(store, [t["T-60m"]], [_odds(f"old{i}", ["draftkings", "fanduel"])],
+                 at=iso_z(t["T-60m"].target_utc + timedelta(seconds=30)))
+        for gone in ("T-24h", "T-6h"):
+            store.record_odds_transition(target_id=t[gone].target_id, state="MISSED", at_utc="2026-09-11T00:00:00Z",
+                                         reason="expired while PLANNED")
+    calls = []
+    real = odds_api.parse_odds
+    monkeypatch.setattr(odds_api, "parse_odds", lambda *a, **k: calls.append(1) or real(*a, **k))
+    d._PARSED.clear()
+    result = d.Context(_cfg(tmp_path)).odds_targets.value
+    assert len(result.rows) == 90 and result.count("CAPTURED") == 30
+    assert 0 < len(calls) <= 2 * d.ODDS_TARGETS_SHOWN
+    assert len(result.snapshots) == len(calls)
+    history = [t for t in result.rows if t.state == "CAPTURED" and t.transitions is None]
+    assert history and all(t.books_source is None and t.freshness == d.NOT_EVALUATED for t in history)
+    calls.clear()
+    d.Context(_cfg(tmp_path)).odds_targets  # the same page again: served from the bounded cache
+    assert calls == [] and len(d._PARSED) <= d.ODDS_PARSE_CACHE_MAX
+
+
+def test_history_rows_use_the_runners_record_at_capture(tmp_path):
+    store = _store(tmp_path)
+    one = _plan(store, _event("evt1", kickoff=datetime(2026, 9, 10, 17, tzinfo=timezone.utc)))
+    sid = _capture(store, [], [_odds("evt1", ["draftkings"])], at="2026-09-10T11:00:20Z")
+    store.record_odds_transition(target_id=one["T-6h"].target_id, state="CAPTURED", at_utc="2026-09-10T11:00:20Z",
+                                 snapshot_id=sid, captured_at_utc="2026-09-10T11:00:20Z", credits_last=3,
+                                 detail={"bookmakers": ["draftkings", "fanduel"], "offers": 4, "parse_problems": 2})
+    for i in range(12):  # push the capture out of the rows shown
+        _plan(store, _event(f"late{i}", kickoff=datetime(2026, 9, 23, 17, tzinfo=timezone.utc) + timedelta(hours=i)))
+    targets = d.Context(_cfg(tmp_path)).odds_targets.value
+    (row,) = [t for t in targets.rows if t.target_id == one["T-6h"].target_id]
+    assert row not in targets.recent and row.books == ("draftkings", "fanduel") and row.offers == 4
+    assert row.books_source == d.BOOKS_RECORDED and "2 parse problems" in row.books_note
+    assert "2 may be incomplete" in plain(research.targets_table(targets))
+
+
+def test_parse_problems_are_a_caveat_never_a_confident_count(tmp_path):
+    """Review SF-2: a response with skipped or malformed bookmakers carries a caveat."""
     store = _store(tmp_path)
     t = _plan(store, _event())
-    _capture(store, [t["T-6h"]], [_odds("evt1", ["draftkings"])], at="2026-09-24T20:55:00Z")
-    fresh = d.Context(_cfg(tmp_path)).odds_targets.value
-    assert [x.freshness for x in fresh.rows if x.state == "CAPTURED"] == ["FRESH"]
-    limit = odds_api.get_source(odds_api.SOURCE_ID).max_age["odds"]
-    stale = d.Context(_cfg(tmp_path, datetime(2026, 9, 24, 20, 55, tzinfo=timezone.utc) + limit
-                           + timedelta(seconds=1))).odds_targets.value
-    assert [x.freshness for x in stale.rows if x.state == "CAPTURED"] == ["STALE"]
+    event = _odds("evt1", ["draftkings", "fanduel"])
+    event["bookmakers"].append({"markets": []})  # a bookmaker without a key: skipped by the parser
+    _capture(store, [t["T-6h"]], [event])
+    (row,) = [x for x in d.Context(_cfg(tmp_path)).odds_targets.value.rows if x.state == "CAPTURED"]
+    assert row.books == ("draftkings", "fanduel") and "1 parse problem" in row.books_note
+    assert "the count may be incomplete" in plain(_body(tmp_path))
+
+
+def test_other_sports_targets_are_not_mixed_in(tmp_path):
+    store = _store(tmp_path)
+    _plan(store, _event())
+    for t in plan_targets([ScheduledEvent("nba1", "basketball_nba", KICKOFF, "X", "Y")], DEFAULT_OFFSETS):
+        store.plan_odds_target(target_id=t.target_id, sport="basketball_nba", event_id=t.event_id,
+                               offset_label=t.offset_label, priority=t.priority,
+                               commence_time_utc=iso_z(t.commence_utc), target_utc=iso_z(t.target_utc),
+                               planned_at_utc="2026-09-24T12:00:00Z", policy_version="game_relative_v1")
+    targets = d.Context(_cfg(tmp_path)).odds_targets.value
+    assert len(targets.rows) == 3 and {t.sport for t in targets.rows} == {SPORT}
+    assert "NFL · T-24h / T-6h / T-60m before kickoff" in plain(get(_cfg(tmp_path))[1])
 
 
 def test_an_unknown_state_is_shown_neutral_with_its_code():

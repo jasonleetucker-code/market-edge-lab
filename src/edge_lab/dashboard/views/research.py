@@ -121,10 +121,14 @@ def odds_section(ctx: d.Context) -> str:
 # --------------------------------------------------------------------------- Odds capture targets (ADR 0029)
 
 # dashboard_status states in which the runner makes no paid capture (each state's own detail says why).
+# SETUP_NEEDED is left out: before the first live read it does not stop captures, and telling it apart
+# from a removed key would re-derive odds_pilot policy here (a canonical "paused" flag belongs there).
 ODDS_PAUSED = ("COST_BLOCKED", "KEY_REJECTED", "QUOTA_EXHAUSTED", "QUOTA_UNKNOWN", "DISCOVERY_STALE")
 TARGETS_NOTE = ("Offered odds are research data, never executable prices. Credits are the provider's reported cost "
                 "of the paid call (x-requests-last); one call can serve several targets, so credits are never added "
-                "up per target here. A freshness verdict is the source's odds max age applied to the receipt time.")
+                "up per target here. A capture is historical evidence, not current odds: its freshness is judged at "
+                "receipt (the offers' last update against the source's odds max age). Books in the full list are "
+                "the runner's record at capture; the rows above parse the stored response.")
 
 
 def _sub(text: str | None) -> str:
@@ -140,9 +144,13 @@ def target_credits(t: d.OddsTarget) -> str:
         return c.na({"CAPTURED": "not recorded for this capture",
                      "FAILED": "not recorded (a failed call may still have been charged; see the reason)"}
                     .get(t.state, "no paid call recorded for this target"))
-    shared = (f"one paid call shared by {t.shared_targets} targets" if t.shared_targets and t.shared_targets > 1
-              else "one paid call")
-    return c.num(pr.count(t.credits_last), reason="not recorded") + _sub(shared)
+    return c.num(pr.count(t.credits_last), reason="not recorded") + _sub(_shared(t, "one paid call"))
+
+
+def _shared(t: d.OddsTarget, alone: str | None) -> str | None:
+    if t.shared_targets and t.shared_targets > 1:
+        return f"one paid call shared by {t.shared_targets} targets"
+    return alone
 
 
 def target_books(t: d.OddsTarget) -> str:
@@ -151,15 +159,26 @@ def target_books(t: d.OddsTarget) -> str:
     if t.books is None:
         return c.na(t.books_note or "unknown")
     return c.num(pr.count(len(t.books))) + _sub(" · ".join(x for x in (
-        f"{pr.count(t.offers)} offers" if t.offers is not None else None, t.books_note) if x))
+        f"{pr.count(t.offers)} offers" if t.offers is not None else None,
+        "recorded at capture" if t.books_source == d.BOOKS_RECORDED else None, t.books_note) if x))
+
+
+def _at_receipt(t: d.OddsTarget) -> str:
+    """A captured row's freshness at receipt, in the existing state words ("Fresh at receipt")."""
+    if t.freshness == d.NOT_EVALUATED:
+        return c.na("freshness at receipt is evaluated for the rows shown above")
+    return c.state_text(t.freshness, label=f"{pr.state_word(t.freshness).label} at receipt")
 
 
 def target_freshness(t: d.OddsTarget, now: Any, max_age: Any) -> str:
     if t.state == "CAPTURED":
         age = pr.age_text(t.captured_at_utc, now)
         limit = _minutes(max_age)
-        return c.badge(t.freshness) + _sub(" · ".join(x for x in (
-            f"received {age}" if age else None, f"odds max age {limit}" if limit else None) if x))
+        head = (c.na("freshness at receipt not evaluated") if t.freshness == d.NOT_EVALUATED else
+                c.badge(t.freshness, label=f"{pr.state_word(t.freshness).label} at receipt"))
+        return head + _sub(" · ".join(x for x in (
+            f"received {age}" if age else None, "historical, not current",
+            f"odds max age {limit}" if limit else None) if x))
     if t.freshness == d.TARGET_PENDING:
         due = pr.age_text(t.due_utc, now)
         return c.state_text(t.freshness) + _sub(f"due {due}" if due else None)
@@ -225,9 +244,11 @@ def targets_table(targets: d.OddsTargets) -> str:
         ["event", "horizon", "intended (ET)", "actual receipt (ET)", "state", "credits", "books", "freshness"],
         [[esc(pr.odds_event_label(t.away_team, t.home_team, t.event_id)), esc(t.offset_label),
           esc(pr.datetime_et(t.target_utc)), c.txt(pr.datetime_et(t.captured_at_utc), reason="not captured"),
-          c.state_text(t.state), c.num(pr.count(t.credits_last), reason="not recorded"),
-          c.num(pr.count(len(t.books)) if t.books is not None else None, reason=t.books_note or "not captured"),
-          c.state_text(t.freshness)] for t in rows], wrap=(0,), right=(5, 6), caption="Odds capture targets")
+          c.state_text(t.state),
+          c.num(pr.count(t.credits_last), reason="not recorded") + _sub(_shared(t, None)),
+          c.num(pr.count(len(t.books)) if t.books is not None else None, reason=t.books_note or "not captured")
+          + _sub("may be incomplete" if t.books is not None and t.books_note else None),
+          _at_receipt(t) if t.state == "CAPTURED" else c.state_text(t.freshness)] for t in rows], wrap=(0,), right=(5, 6), caption="Odds capture targets")
     more = (f'<p class="note">{esc(pr.count(left_out))} older targets are not listed here; every target stays in '
             "the evidence database.</p>" if left_out > 0 else "")
     return table + more
@@ -280,8 +301,9 @@ def odds_targets_body(result: d.Loaded, status: d.Loaded, now: Any) -> str:
     if overdue:
         out.append(c.empty_state(
             f"{pr.count(overdue)} open target{'' if overdue == 1 else 's'} past the deadline",
-            "No outcome has been recorded since the deadline passed, so this record is stale: the runner marks an "
-            "expired target Missed on its next run. Whether its timer runs is not observable here.", kind="warn"))
+            "No outcome has been recorded since the deadline passed, so this record is stale. The runner records "
+            "an expired target as Missed on its next run, or as Failed if a capture was left in progress. Whether "
+            "its timer runs is not observable here.", kind="warn"))
     for title, group, none in (("Recent · intended time passed", data.recent, "No target's intended time has passed."),
                                ("Next", data.upcoming, "No target is ahead.")):
         out.append(f'<h3 class="eyebrow">{esc(title)}</h3>' + (
@@ -295,9 +317,11 @@ def odds_targets_body(result: d.Loaded, status: d.Loaded, now: Any) -> str:
 def odds_targets_section(ctx: d.Context) -> str:
     from ...odds_pilot import RunnerSettings
 
-    horizons = " / ".join(o.label for o in sorted(RunnerSettings().config.offsets, key=lambda o: -o.before))
+    settings = RunnerSettings()
+    horizons = " / ".join(o.label for o in sorted(settings.config.offsets, key=lambda o: -o.before))
     return c.section("Odds capture targets", odds_targets_body(ctx.odds_targets, ctx.odds_status, ctx.now),
-                     meta=f"NFL · {horizons} before kickoff · research only", sid="odds-t-h")
+                     meta=f"{pr.sport_label(settings.sport)} · {horizons} before kickoff · research only",
+                     sid="odds-t-h")
 
 
 def sources_tab(ctx: d.Context) -> str:

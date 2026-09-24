@@ -232,9 +232,11 @@ research only, never executable), then the Odds capture targets section (`data.o
 over the stored `odds_capture_targets` / `odds_capture_transitions` rows): a summary (targets, captured,
 missed, failed, open, last recorded change), the latest five targets whose intended time has passed and
 the next five as rows (event, horizon, intended time ET, actual receipt, state, credits of the one paid
-call with how many targets shared it, books returned parsed from the stored snapshot, freshness by the
-source's odds max age; an open target past its canonical deadline is "Overdue"), and every target in an
-"All targets" disclosure. States: populated, no targets, no captures yet, overdue (stale record),
+call with how many targets shared it, books returned parsed from the stored snapshot with a caveat
+when the response had parse problems, a capture's freshness judged at receipt ("Fresh at receipt",
+historical, never current); an open target past its canonical deadline is "Overdue"), and every target
+in an "All targets" disclosure, whose books are the runner's record at capture (only the rows shown
+parse a stored response; parsed captures are memoized, bounded). States: populated, no targets, no captures yet, overdue (stale record),
 missed/failed/skipped/superseded rows, paid captures paused (the card's COST_BLOCKED, KEY_REJECTED,
 QUOTA_EXHAUSTED, QUOTA_UNKNOWN, DISCOVERY_STALE), source unavailable, read error. Venues (Tested ≠ connected), collected sources with freshness,
 fee verification, venue registry and full receipt in disclosures.
@@ -377,7 +379,9 @@ directive), and the screenshots that justify it.
   New state words: the target states (CAPTURED, CAPTURING, MISSED, SKIPPED_BUDGET, DEFERRED,
   SUPERSEDED) and one target's freshness (TARGET_OVERDUE, TARGET_PENDING, TARGET_NO_CAPTURE); the
   existing PLANNED, FAILED, QUOTA_* and SETUP_NEEDED words are reused; an unknown state is neutral
-  with its code. Labels were shortened after the 180 px (360 px at 200% zoom) review so a row's
+  with its code. After the independent review of #80: only the captures behind the rows shown are
+  parsed (memoized, bounded), history rows use the runner's recorded books, parse problems are a
+  caveat, a capture's freshness is judged at receipt, and the pilot's sport filters the rows. Labels were shortened after the 180 px (360 px at 200% zoom) review so a row's
   state capsule never widens the page. Screenshots: fixture states `odds` and `odds_issues` at
   360x800, 390x844, 430x932, 768x1024, 1440x900 and 1920x1080 (Chromium), 390x844 and 1440x900
   (WebKit), and 180x400 / 720x450 as 200% zoom of 360 / 1440 (`tests/browser/capture.py`), reviewed

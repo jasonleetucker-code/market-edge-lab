@@ -1067,6 +1067,13 @@ def odds_state(status: Mapping[str, Any] | None) -> str:
     return state
 
 
+SPORT_LABELS = {"americanfootball_nfl": "NFL"}  # provider sport keys with a plain name; others stay raw
+
+
+def sport_label(sport: Any) -> str:
+    return SPORT_LABELS.get(str(sport), str(sport))
+
+
 def odds_event_label(away: Any, home: Any, event_id: Any) -> str:
     """"Away @ Home" as the provider names the teams; the event id when either is missing."""
     if isinstance(away, str) and away and isinstance(home, str) and home:
