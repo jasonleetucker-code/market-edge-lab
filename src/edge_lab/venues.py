@@ -205,15 +205,18 @@ THE_ODDS_API = VenueSpec(
     liquidity_pool_id="none (republishes sportsbook prices)",
     capabilities=_caps(
         catalog_read=CapabilityState(ConnectivityStage.LIVE_DATA_VERIFIED, True,
-                                     "free events endpoint: 32 NFL events discovered on production (odds plan, "
-                                     "runbook 5b activation record, 2026-09-24)", "2026-09-24T13:38:30Z"),
+                                     "free events endpoint: 32 NFL events, production evidence DB snapshot 23 "
+                                     "(first odds tick; docs/deploy/DAILY_SHADOW_ACTIVATION.md 5b activation "
+                                     "record)", "2026-09-24T13:45:11Z"),
         quote_read=CapabilityState(ConnectivityStage.LIVE_DATA_VERIFIED, True,
-                                   "one smoke read on production: snapshot 22, 16 events, 856 offers from 9 books "
-                                   "(runbook 5b activation record); offered odds per bookmaker, never executable "
-                                   "and not fillable here", "2026-09-24T13:38:54Z"),
+                                   "one smoke read: production evidence DB snapshot 22, 16 events, 856 offers from "
+                                   "9 books (docs/deploy/DAILY_SHADOW_ACTIVATION.md 5b activation record); offered "
+                                   "odds per bookmaker, never executable and not fillable here",
+                                   "2026-09-24T13:38:54Z"),
         depth_read=CapabilityState(_U, None, "no depth or size is published"),
         history_read=CapabilityState(_U, None, "historical odds are not in the free tier"),
-        settlement_read=CapabilityState(_N, True, "scores endpoint (free-tier key)"),
+        settlement_read=CapabilityState(_P, True, "scores endpoint (free-tier key); not implemented in "
+                                        "edge_lab.odds_api"),
         account_read=CapabilityState(_U, None, "not a trading venue"),
         order_write=CapabilityState(_U, None, "not a trading venue"),
     ),

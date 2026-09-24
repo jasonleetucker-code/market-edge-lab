@@ -47,6 +47,7 @@ def test_only_recorded_reads_are_live_data_verified():
     assert {c for venue, c in live if venue == "the_odds_api"} == {"catalog_read", "quote_read"}
     for c in (Capability.CATALOG_READ, Capability.QUOTE_READ):
         assert venues.THE_ODDS_API.capabilities[c].last_verified_utc
+    assert venues.THE_ODDS_API.stage(Capability.SETTLEMENT_READ) is ConnectivityStage.PLANNED  # no scores code
 
 
 def test_polymarket_us_and_international_are_distinct_and_international_is_unsupported():
