@@ -326,6 +326,23 @@ STATES: dict[str, StateWord] = {
     "UNAVAILABLE": StateWord("Unavailable", ND_K),
     "EXPIRED": StateWord("Expired", ND_K),
     "MALFORMED": StateWord("Malformed", ERR_K),
+    # across venues (best_price comparator, ADR 0027): equivalence, depth and route exclusions
+    "REFERENCE": StateWord("This market (reference)", INFO_K),
+    "MATCHED_EQUIVALENT": StateWord("Rules equivalent", OK_K),
+    "RELATED_NOT_EQUIVALENT": StateWord("RELATED MARKET — NOT ECONOMICALLY EQUIVALENT", WARN_K),
+    "FILLABLE": StateWord("Fillable for the size", OK_K),
+    "INSUFFICIENT_DEPTH": StateWord("Insufficient depth", WARN_K),
+    "DEPTH_UNKNOWN": StateWord("Depth unknown (truncated book)", WARN_K),
+    "INVALID_BOOK": StateWord("Invalid book", ERR_K),
+    "NO_OFFER": StateWord("Nothing offered", WARN_K),
+    "MARKET_NOT_OPEN": StateWord("Market not open", ND_K),
+    "FEE_NOT_PRICED": StateWord("Fee not priced", WARN_K),
+    "NOT_FRESH": StateWord("Stale quote — not ranked", WARN_K),
+    "NO_ACCOUNT_CONNECTED": StateWord("No account connected", WARN_K),
+    "CAPITAL_RELEASE_INELIGIBLE": StateWord("Outside starter horizon", WARN_K),
+    "NO_EQUIVALENT_ROUTE": StateWord("No equivalent route", ND_K),
+    "NO_ELIGIBLE_ROUTE": StateWord("No eligible route", ND_K),
+    "ALL_GATES_PASSED": StateWord("Passes every claim gate", OK_K),
 }
 
 
@@ -917,3 +934,55 @@ def page_slice(items: list, page: int, size: int = PAGE_SIZE) -> tuple[list, int
     pages = max(1, -(-len(items) // size))
     page = min(max(1, page), pages)
     return items[(page - 1) * size: page * size], pages
+
+
+# --------------------------------------------------------------------------- across venues (best_price, ADR 0027)
+
+# The comparator's four claims, always shown separately and in this order; never merged into one
+# "best" verdict. (label, what the figure is)
+CLAIM_LABELS: dict[str, tuple[str, str]] = {
+    "BEST_OBSERVED_QUOTE": (
+        "Best observed quote",
+        "Lowest top-of-book ask per contract from a fresh captured book. A quote, not a fill for the size."),
+    "BEST_GROSS_COST_FOR_SIZE": (
+        "Best gross cost for size",
+        "Lowest cost of the whole evaluated size from a fresh captured ladder, before fees."),
+    "BEST_VERIFIED_TOTAL_COST": (
+        "Best verified total cost",
+        "Lowest total with fees, only where the fee evidence supports a claim. Under a conservative bound the "
+        "figure is an upper bound: the lowest bound, not a proven order."),
+    "BEST_ACCOUNT_FEASIBLE_ROUTE": (
+        "Best account-feasible route",
+        "The verified total, only on a connected account with capital eligible under the starter rule. Execution "
+        "is never authorized."),
+}
+CLAIM_ORDER = tuple(CLAIM_LABELS)
+TOTAL_CLAIMS = ("BEST_VERIFIED_TOTAL_COST", "BEST_ACCOUNT_FEASIBLE_ROUTE")
+
+
+def claim_value_text(claim: Any, route: Any) -> str | None:
+    """The claim's own figure: a quote is cents per contract, the others dollars for the whole size.
+    A total under a conservative fee bound reads "at most"."""
+    if claim is None or not claim.supported or claim.value is None:
+        return None
+    if claim.kind == "BEST_OBSERVED_QUOTE":
+        return cents(claim.value)
+    text = money(claim.value)
+    if claim.kind in TOTAL_CLAIMS and route is not None and route.fee_status == "CONSERVATIVE_BOUND":
+        return f"at most {text}"
+    return text
+
+
+FEE_STATUS_NOTES = {
+    "VERIFIED": "Verified (exact)",
+    "CONSERVATIVE_BOUND": "Partly verified · conservative bound",
+    "UNVERIFIED": "Unverified estimate — not claim-grade",
+    "UNSUPPORTED": "Unavailable: no fee model",
+}
+ROUTE_FRESHNESS = {"fresh": ("FRESH", "Fresh book"), "stale": ("NOT_FRESH", "Stale quote — not ranked"),
+                   "unknown": ("UNKNOWN", "Book age unknown — not ranked")}
+
+
+def route_freshness(value: Any) -> tuple[str, str]:
+    """(state code, label) for a route's book freshness; anything not fresh is never ranked."""
+    return ROUTE_FRESHNESS.get(str(value).lower(), ("UNKNOWN", "Book age unknown — not ranked"))

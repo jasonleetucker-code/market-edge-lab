@@ -479,3 +479,157 @@ def history_chart(points: Sequence[tuple[str, Any]], *, label: str, unit: str = 
            f'<line class="grid-l" x1="{pad_l}" y1="{h - pad_b}" x2="{w - pad_r}" y2="{h - pad_b}"></line>'
            f'<polyline class="series" points="{path}"></polyline>{marks}{axis}</svg>')
     return svg + disclosure("Observations as a table", tbl)
+
+
+# --------------------------------------------------------------------------- across venues (best_price, ADR 0027)
+
+
+def _plural(n: int, word: str) -> str:
+    return f"{n} {word}{'' if n == 1 else 's'}"
+
+
+def comparison_claims(cmp: Any) -> str:
+    """The comparator's four claims side by side, each with its own figure or its reason for
+    absence. There is never a single "best" verdict: the four answer different questions."""
+    routes = {r.market_id: r for r in cmp.routes}
+    pairs = []
+    for kind in pr.CLAIM_ORDER:
+        claim = cmp.claim(kind)
+        label, _ = pr.CLAIM_LABELS[kind]
+        if claim.supported:
+            route = routes.get(claim.market_id)
+            size = pr.quantity(cmp.quantity)
+            unit = ("per contract" if kind == "BEST_OBSERVED_QUOTE"
+                    else f"for {size} contract{'' if size == '1' else 's'}")
+            n = len(claim.candidates)
+            value = (num(pr.claim_value_text(claim, route)) + f'<span class="cell-sub">{esc(unit)} · '
+                     f'{esc(pr.venue_label(claim.venue))} · lowest of {esc(_plural(n, "fresh route"))}</span>')
+            if kind in pr.TOTAL_CLAIMS:
+                # A bound below another bound proves no order (best_price.proven_cheaper).
+                open_ = [m for m in claim.candidates if m != claim.market_id and m not in claim.proven_below]
+                if open_:
+                    value += (f'<span class="cell-sub">No proven order against: {esc(", ".join(open_))} '
+                              "(cost bounds overlap)</span>")
+        else:
+            value = badge(claim.reason) + '<span class="cell-sub">Not claimed</span>'
+        if claim.stale_candidates:
+            value += (f'<span class="cell-sub">Not ranked (stale or unknown-age book): '
+                      f'{esc(", ".join(claim.stale_candidates))}</span>')
+        pairs.append((label, value))
+    return facts(pairs, text_cols=range(4))
+
+
+def _fee_cell(r: Any) -> str:
+    note = pr.FEE_STATUS_NOTES.get(r.fee_status, str(r.fee_status))
+    if "FEE_NOT_PRICED" in r.exclusions and r.fee is None:
+        note = "Fee not priced"
+    value = money_cell(r.fee, reason="fee unknown: " + note.lower())
+    return value + f'<span class="cell-sub">{esc(note)}</span>'
+
+
+def _total_cell(r: Any) -> str:
+    if r.claim_total_cost is None:
+        return na("no verified total: the fee evidence does not support a claim") + \
+            '<span class="cell-sub">Not verified</span>'
+    if r.fee_status != "VERIFIED":
+        sub = "At most (conservative bound)"
+    elif r.claim_total_cost == r.total_cost:
+        sub = "Exact"
+    else:  # the claim figure carries the record's allowance; the exact debit is the schedule's total
+        sub = f"Exact debit {pr.money(r.total_cost)} plus the claim allowance"
+    return money_cell(r.claim_total_cost) + f'<span class="cell-sub">{esc(sub)}</span>'
+
+
+def _depth_cell(r: Any) -> str:
+    if r.liquidity is None:
+        return na("not assessed: the payoff is not supported") + '<span class="cell-sub">Not assessed</span>'
+    offered = pr.quantity(r.available)
+    sub = (f"{offered} of {pr.quantity(r.quantity)} offered" if offered is not None else "Nothing captured") + \
+        f" · {_plural(r.levels_taken, 'level')}"
+    return badge(r.liquidity) + f'<span class="cell-sub">{esc(sub)}</span>'
+
+
+def _release_cell(r: Any) -> str:
+    when = pr.date_et(r.capital_release_eta_utc)
+    sub = "Within starter horizon" if r.capital_release_eligible else "Outside starter horizon or unknown"
+    return txt(when, reason="tradable-cash release unknown") + f'<span class="cell-sub">{esc(sub)}</span>'
+
+
+def comparison_route(r: Any) -> str:
+    """One venue route: its own quote, gross cost, fees, verified total, depth, cash release and
+    rules status. Figures are the comparator's; a missing one stays unavailable, never zero."""
+    code_, label = pr.route_freshness(r.freshness)
+    status = (badge("ALL_GATES_PASSED") if not r.exclusions
+              else "".join(badge(e) for e in r.exclusions[:3])
+              + (f'<span class="cell-sub">and {esc(len(r.exclusions) - 3)} more in details</span>'
+                 if len(r.exclusions) > 3 else ""))
+    quote = (num(pr.cents(r.observed_ask), reason="no ask captured")
+             + (f'<span class="cell-sub">{esc(pr.quantity(r.observed_ask_size))} at the top</span>'
+                if r.observed_ask_size is not None else ""))
+    gross = money_cell(r.gross_cost, reason="no gross cost: the ladder does not cover the size") + \
+        (f'<span class="cell-sub">average {esc(pr.cents(r.average_price))}</span>' if r.average_price is not None
+         else "")
+    body = facts([
+        ("Quote (ask)", quote), ("Gross cost for size", gross), ("Fees", _fee_cell(r)),
+        ("Verified total", _total_cell(r)), ("Depth", _depth_cell(r)), ("Tradable cash", _release_cell(r)),
+        ("Rules", badge(r.equivalence)), ("Claim status", status),
+    ], wide=True, text_cols=(4, 5, 6, 7))
+    detail = disclosure("Route details", kv([
+        ("market id", code(r.market_id)), ("payoff", esc(r.payoff_kind)), ("market status", esc(r.market_status)),
+        ("book evidence", code(r.book_evidence_id)), ("book received (UTC)", esc(r.book_received_at_utc)),
+        ("exact gross cost", esc(r.gross_cost)), ("worst price taken", esc(r.worst_price)),
+        ("fee schedule", code(r.fee_schedule_id)), ("claim basis", badge_code(r.claim_basis)),
+        ("exact fee", esc(r.fee)), ("estimated total (schedule)", esc(r.total_cost)),
+        ("claim total (allowance included)", esc(r.claim_total_cost)), ("fee detail", esc(r.fee_detail)),
+        ("account read", badge_code(r.account_read_stage)),
+        ("tradable-cash ETA (UTC)", esc(r.capital_release_eta_utc)),
+        ("starter reasons", ul(r.capital_release_reasons)), ("exclusions (gate order)", ul(r.details)),
+        ("execution authorized", esc("no")),
+    ]))
+    title = f"{esc(pr.venue_label(r.venue))} {code(r.market_id)}"
+    return row(title, sub=f"{pr.state_word(r.equivalence).label} · {label}",
+               aside=state_text(code_, label=label), body=body + detail)
+
+
+def venue_comparison(cmp: Any) -> str:
+    """VenueComparison: the canonical `best_price.Comparison` for one market, side and evaluated
+    size. Four separate claims, one row per equivalent route, related markets listed unranked,
+    stale routes named as not ranked. Read-only; the comparator never authorizes execution."""
+    parts = []
+    # The comparator refuses a request whose own payoff it cannot price: every claim then carries it.
+    if all(not c_.supported and c_.reason == "PAYOFF_UNSUPPORTED" for c_ in cmp.claims):
+        parts.append(blocked_state("Comparison refused: payoff not supported",
+                                   "Only binary contracts paying $1 are compared. This payoff is never reinterpreted "
+                                   "as a YES/NO contract."))
+    parts.append(comparison_claims(cmp))
+    stale = sorted({m for c_ in cmp.claims for m in c_.stale_candidates})
+    if stale:
+        parts.append(f'<p class="note">{icon("triangle-alert", "ic-sm k-warn")} Not ranked because the book is stale '
+                     f'or of unknown age: {esc(", ".join(stale))}.</p>')
+    if len(cmp.routes) <= 1 and not cmp.related:
+        only = pr.venue_label(cmp.routes[0].venue) if cmp.routes else "No venue"
+        parts.append(f'<p class="note">Only {esc(only)} is captured for this market. No other venue\'s book is '
+                     "stored, so nothing is ranked across venues; the claims cover this one route.</p>")
+    # Eligible comparisons first, excluded or unproven ones separately (a grouping, not a ranking).
+    ranked = {m for c_ in cmp.claims for m in c_.candidates}
+    groups = (("Routes ranked by at least one claim", [r for r in cmp.routes if r.market_id in ranked]),
+              ("Routes not ranked by any claim", [r for r in cmp.routes if r.market_id not in ranked]))
+    for heading, routes in groups:
+        if routes:
+            parts.append(f'<h3 class="eyebrow">{esc(heading)}</h3><ul class="rows">'
+                         + "".join(comparison_route(r) for r in routes) + "</ul>")
+    if cmp.related:
+        items = "".join(f'<li class="row"><div class="row-main"><p class="row-title">{code(m)}</p>'
+                        f'<p class="row-sub">Listed only; never priced against this market</p></div>'
+                        f'<div class="row-aside">{state_text("RELATED_NOT_EQUIVALENT")}</div></li>'
+                        for m in cmp.related)
+        parts.append(f'<h3 class="eyebrow">Related markets · unranked</h3><ul class="rows">{items}</ul>')
+    parts.append(disclosure("What each claim means", kv(
+        [(pr.CLAIM_LABELS[k][0], esc(pr.CLAIM_LABELS[k][1] + " " + cmp.claim(k).detail)) for k in pr.CLAIM_ORDER])))
+    parts.append(disclosure("Comparator summary (exact)", ul(cmp.summary.splitlines()) + kv([
+        ("comparator version", esc(cmp.comparator_version)), ("as of (UTC)", esc(cmp.as_of_utc)),
+        ("requested market", code(cmp.request_market_id)), ("side", esc(cmp.side)),
+        ("evaluated size", esc(cmp.quantity)), ("max book age (s)", esc(cmp.max_book_age_seconds)),
+        ("execution authorized", esc("no")),
+    ])))
+    return "".join(parts)

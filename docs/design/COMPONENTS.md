@@ -74,7 +74,8 @@ Rules for all components:
 | ActivityRow | `activity_row(kind, title, detail, when_utc, href=None, extra_html="")` | Semantic icon, time, reason, valid link. |
 | PipelineTimeline | `timeline([(kind, title, detail, when_text)])` | Scheduled/observed steps. |
 | HistoryChart | `history_chart([(utc, value)], label=...)` | ≥2 persisted points or an explanatory empty state; accessible table always. |
-| VenueComparison | `views/markets.venues_section(row)` | Today: "No equivalent venue price verified". A real comparison must separate lowest observed quote, best verified total cost and best account-feasible route (UI_CONTRACT §8). |
+| VenueComparison | `venue_comparison(comparison)` | A `best_price.Comparison` (ADR 0027): `comparison_claims` (the four claims side by side, each its own figure or reason; never one "best"), then `comparison_route` rows grouped as ranked by at least one claim / ranked by none, related markets "RELATED MARKET — NOT ECONOMICALLY EQUIVALENT" unranked, stale routes named, a refused payoff as a blocked state; claim meanings and the comparator summary in disclosures. No input or order control. |
+| Across venues slot | `views/markets.venues_section(ctx, row, side)`, `views/markets.comparison_body(result)` | Runs `data.venue_comparison` at the recorded decision's time and evaluated size; states: not evaluated (no decision / no size / earlier target day), no captured book, read error (UI_CONTRACT §8). |
 | MarketDetail | `views/markets.detail(ctx, params)` | Section order fixed; read-only ticket preview. |
 
 ## View models (presentation.py)
