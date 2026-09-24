@@ -263,8 +263,9 @@ def test_missed_targets_stay_visible(store, tmp_path, monkeypatch, model):
     assert len(report["missed"]) == 12
     t = _target(store, "post_decision_6h")
     assert t["state"] == "MISSED" and t["state_reason"].startswith("NOT_CAPTURED_BY_DEADLINE")
-    assert "no timer is authorized" in t["state_reason"]
+    assert "scheduled ADR0030_OPTION_A" in t["state_reason"]
     summary = po.status(SnapshotStore.open_readonly(store.path), now=clock.now)
+    assert summary["schedule"].startswith("ACTIVE_POLICY: ADR0030_OPTION_A")
     assert summary["by_phase"]["post_decision_1h"] == {"MISSED": 6}
     assert summary["by_phase"]["close"] == {"PLANNED": 6}
     history = po.market_history(store, f"kalshi:{BRACKETS[0]}")
