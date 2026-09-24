@@ -136,10 +136,9 @@ def activity(ctx: d.Context) -> str:
         day = pr.date_label(s.get("last_closed_target_date")) or "unknown day"
         events.append((word.kind, f"Collector report: target {day} {word.label.lower()}", "latest.json",
                        s.get("generated_at_utc"), None))
-    if ctx.last_failure.status == d.OK:
-        f = ctx.last_failure.value
-        events.append(("err", f"Unit failed: {f.get('unit') or 'unit not recorded'}", "last_failure.json",
-                       f.get("failed_at_utc"), "/alerts"))
+    for f in ctx.failure_records:
+        a = cm.failure_alert(f)
+        events.append((a.kind, a.title, f.source, a.when_utc, "/alerts"))
     events.sort(key=lambda e: str(e[3] or ""), reverse=True)
     if not events:
         body = c.empty_state("No activity recorded yet", "Collector reports, pipeline runs and notifications appear "
@@ -201,13 +200,18 @@ def system(ctx: d.Context) -> str:
             ("valid days", esc(v.get("valid_days"))), ("first valid day", esc(v.get("first_valid_day"))),
             ("invalid days", c.ul(cm.as_list(v.get("invalid_days")))),
         ]) + '<p class="note">Re-derived by forward.summary from stored evidence at page render.</p>')
-    if ctx.last_failure.status == d.OK:
-        f = ctx.last_failure.value
-        parts.append('<h3 class="eyebrow">Last unit failure (last_failure.json)</h3>' + c.kv([
-            ("unit", esc(f.get("unit"))), ("failed at", esc(f.get("failed_at_utc"))),
-            ("age", esc(pr.age_text(f.get("failed_at_utc"), ctx.now)))]))
-    elif ctx.last_failure.status == d.ERROR:
-        parts.append(c.error_state("Last unit failure (last_failure.json)", ctx.last_failure.message))
+    for f in ctx.failure_records:
+        heading = ("Last production unit failure" if f.source == d.FAILURE_FILE
+                   else "Last deployment verification record")
+        if f.error is not None:
+            parts.append(c.error_state(f"{heading} ({f.source})", f.error))
+            continue
+        shown = "Verification check (root-confirmed)" if f.verification else "Production incident"
+        parts.append(f'<h3 class="eyebrow">{esc(heading)} ({esc(f.source)})</h3>' + c.kv([
+            ("shown as", esc(shown)), ("origin recorded", c.code(f.record.get("origin") or "none (production)")),
+            ("unit", esc(f.record.get("unit"))), ("failed at", esc(f.record.get("failed_at_utc"))),
+            ("invocation", c.code(f.record.get("invocation_id"))),
+            ("age", esc(pr.age_text(f.record.get("failed_at_utc"), ctx.now)))]))
     parts.append(receipt_detail(ctx))
     for view in ctx.accounts:
         parts.append(account_detail(view))

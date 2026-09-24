@@ -351,6 +351,26 @@ STATES: dict[str, StateWord] = {
     "RISK_LIMIT": StateWord("Limited by risk caps", WARN_K),
     "STALE_DATA": StateWord("Stale data", WARN_K),
     "CAPITAL_HORIZON": StateWord("Outside capital horizon", WARN_K),
+    # notification origin (notifications.Origin, ADR 0020) and delivery by origin
+    "ORIGIN_PRODUCTION": StateWord("Production", ERR_K),
+    "ORIGIN_TEST": StateWord("Test", ND_K),
+    "ORIGIN_DEPLOYMENT_VERIFICATION": StateWord("Verification check", ND_K),
+    "ORIGIN_MANUAL_DIAGNOSTIC": StateWord("Manual diagnostic", ND_K),
+    "ORIGIN_REPLAY": StateWord("Replay", ND_K),
+    "ORIGIN_DEMO": StateWord("Demo", ND_K),
+    "ORIGIN_UNKNOWN": StateWord("Origin unrecognised", WARN_K),
+    "HELD_BY_ORIGIN": StateWord("Stored, not pushed (origin)", ND_K),
+    # The Odds API pilot (odds_pilot.dashboard_status, most blocking first). Never "connected"
+    # before a stored live read that held offers.
+    "COST_BLOCKED": StateWord("Cost blocked", ERR_K),
+    "KEY_REJECTED": StateWord("Key rejected", ERR_K),
+    "SETUP_NEEDED": StateWord("Setup needed", WARN_K),
+    "DEGRADED": StateWord("Degraded", WARN_K),
+    "QUOTA_EXHAUSTED": StateWord("Quota exhausted", WARN_K),
+    "QUOTA_UNKNOWN": StateWord("Quota unknown", WARN_K),
+    "DISCOVERY_FAILED": StateWord("Discovery failed", WARN_K),
+    "DISCOVERY_STALE": StateWord("Discovery stale", WARN_K),
+    "ACTIVE": StateWord("Active · live read verified", OK_K),
     "PENDING": StateWord("Pending: not yet known", ND_K),
 }
 
@@ -1010,3 +1030,27 @@ def policy_label(row: Mapping[str, Any] | None) -> str:
 def route_freshness(value: Any) -> tuple[str, str]:
     """(state code, label) for a route's book freshness at the comparison's as-of time."""
     return ROUTE_FRESHNESS.get(str(value).lower(), ("UNKNOWN", "Book age unknown — not ranked"))
+
+
+# --------------------------------------------------------------------------- notification origin (ADR 0020)
+
+ORIGIN_ORDER = ("PRODUCTION", "TEST", "DEPLOYMENT_VERIFICATION", "MANUAL_DIAGNOSTIC", "REPLAY", "DEMO")
+
+
+def origin_code(origin: Any) -> str:
+    """The state-vocabulary code for a notification origin; an unrecognised value is ORIGIN_UNKNOWN."""
+    return f"ORIGIN_{origin}" if origin in ORIGIN_ORDER else "ORIGIN_UNKNOWN"
+
+
+def odds_state(status: Mapping[str, Any] | None) -> str:
+    """The Odds API card state. ACTIVE is shown only with a verified live read; a status that
+    claims ACTIVE without one is shown as UNVERIFIED, never as connected."""
+    state = str(_get(status, "state") or "UNKNOWN")
+    if state == "ACTIVE" and _get(status, "live_read_verified") is not True:
+        return "UNVERIFIED"
+    return state
+
+
+def _get(mapping: Any, key: str) -> Any:
+    return mapping.get(key) if isinstance(mapping, Mapping) else None
+

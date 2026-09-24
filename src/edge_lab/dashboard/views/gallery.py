@@ -9,6 +9,7 @@ from .. import data as d
 from .. import fixtures
 from .. import presentation as pr
 from ..html import esc
+from . import alerts, research
 from . import common as cm
 from . import markets
 
@@ -95,6 +96,25 @@ def view(ctx: d.Context, p: pr.Params) -> cm.Page:
                                                         "(sizing_counterfactual) is not installed in this build"))
                            + markets.sizing_body(d.Loaded(d.ERROR, message="LedgerError: chain broken at entry 12")),
                            sid="g-rs-states"))
+    odds = fixtures.synthetic_odds_statuses()
+    parts.append(c.section("OddsSourceStatus", "".join(c.odds_status_card(odds[k]) for k in odds)
+                           + research.odds_body(d.Loaded(d.NO_DATA, message="no evidence database configured (--db)"))
+                           + research.odds_body(d.Loaded(d.ERROR, message="RuntimeError: SYNTHETIC")),
+                           meta="setup needed · active (verified) · degraded · cost blocked · error · unverified claim · "
+                                "not configured · read error", sid="g-odds", flush=True))
+    origin_rows = [
+        cm.failure_alert(d.FailureRecord(d.FAILURE_FILE, fixtures.synthetic_failure_record("edgelab-decision.service"),
+                                         "PRODUCTION", False)),
+        cm.failure_alert(d.FailureRecord(d.VERIFICATION_FILE, fixtures.synthetic_failure_record(
+            "edgelab-shadow.service", "DEPLOYMENT_VERIFICATION"), "DEPLOYMENT_VERIFICATION", True)),
+        cm.failure_alert(d.FailureRecord(d.VERIFICATION_FILE, fixtures.synthetic_failure_record(
+            "edgelab-shadow.service", "DEPLOYMENT_VERIFICATION"), "DEPLOYMENT_VERIFICATION", False)),
+    ] + [cm.Alert("checks", "nd", f"SYNTHETIC: {o.replace('_', ' ').lower()} event", None, fixtures.T1, "Source failure",
+                  None, cm._delivery(o), "SOURCE_FAILURE", {"origin": o}, o)
+         for o in ("TEST", "MANUAL_DIAGNOSTIC", "REPLAY", "DEMO")]
+    parts.append(c.section("Alert origins", '<ul class="rows">' + "".join(alerts._row(a) for a in origin_rows)
+                           + "</ul>", meta="production incident · confirmed verification · unconfirmed claim · "
+                                           "test · manual diagnostic · replay · demo", sid="g-origins", flush=True))
     parts.append(c.disclosure("EvidenceDisclosure", c.kv([("code", c.code("INVALID_CAPTURE")),
                                                           ("exact value", esc("0.05120000"))]), boxed=True))
     return cm.Page("Component gallery", "", "".join(parts))

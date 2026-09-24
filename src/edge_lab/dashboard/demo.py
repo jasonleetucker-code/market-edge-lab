@@ -180,10 +180,11 @@ def _demo_notifications(status: Path, now: datetime) -> dict:
         notifications.make_event(notifications.EventType.SEVEN_DAY_POLICY_EXCEPTION, notifications.Severity.CRITICAL,
                                  created_at=now - timedelta(minutes=30), summary="DEMO: capital past its expected release",
                                  dedupe_key="demo-exception", deep_link="http://127.0.0.1:8765/risk",
-                                 action_mode=notifications.ActionMode.OPEN_MARKET_EDGE),
+                                 action_mode=notifications.ActionMode.OPEN_MARKET_EDGE,
+                                 origin=notifications.Origin.DEMO),
         notifications.make_event(notifications.EventType.SOURCE_FAILURE, notifications.Severity.WARNING,
                                  created_at=now - timedelta(hours=2), summary="DEMO: nws_pfm_okx HTTP 503",
-                                 dedupe_key="demo-source"),
+                                 dedupe_key="demo-source", origin=notifications.Origin.DEMO),
     ]
     outbox = notifications.JsonlOutbox(status / d.NOTIFICATIONS_FILE)
     results = notifications.dispatch(events, [outbox, notifications.DisabledSmsSink()], now=now)

@@ -238,3 +238,45 @@ def synthetic_sizing_panels() -> dict[str, dict]:
     for reason in SIZING_NO_SIDES:
         panels[reason] = _panel([], available=False, reason=reason, detail=f"SYNTHETIC detail for: {reason}")
     return panels
+
+
+# --------------------------------------------------------------------------- The Odds API pilot and alert origins
+# SYNTHETIC `odds_pilot.dashboard_status` results and failure records, in the contracts' shapes.
+
+ODDS_LABEL = "OFFERED ODDS - RESEARCH ONLY, NOT EXECUTABLE"
+
+
+def synthetic_odds_statuses() -> dict[str, dict]:
+    """state -> a status dict: setup needed, active with a verified live read, degraded, cost
+    blocked and error; plus an ACTIVE claim without a verified read (shown as unverified)."""
+    def status(state: str, *, verified: bool = False, detail: str = "") -> dict:
+        return {"schema": "SYNTHETIC", "state": state, "detail": detail or f"SYNTHETIC: {state}", "label": ODDS_LABEL,
+                "executable": False, "live_read_verified": verified, "timer": "NOT_OBSERVABLE_HERE",
+                "latest_successful_capture": {"received_at_utc": T0, "offers": 214, "freshness": "stale"}
+                if verified else None,
+                "quota": {"state": "OK" if verified else "QUOTA_UNKNOWN", "used_local": 36 if verified else 0,
+                          "ceiling": 450, "provider_remaining": "414" if verified else None,
+                          "detail": "SYNTHETIC quota"},
+                "markets_observed": ["h2h", "spreads", "totals"] if verified else [],
+                "bookmakers_observed": ["SYNTHETIC-book"] if verified else [],
+                "discovery": {"last_success_utc": T0, "fresh": True} if verified else None,
+                "targets": None, "next_capture": {"due_utc": T1, "offset": "T-60m", "event_id": "DEMO-NFL-EVENT"}
+                if verified else None, "cost_block": None, "pilot_state_file": "OK" if verified else "MISSING",
+                "problems": []}
+    return {
+        "SETUP_NEEDED": status("SETUP_NEEDED", detail="SYNTHETIC: the owner installs the free read-only key "
+                                                     "privately (sudoedit); nothing was sent."),
+        "ACTIVE": status("ACTIVE", verified=True),
+        "DEGRADED": status("DEGRADED", verified=True, detail="SYNTHETIC: the latest paid capture attempt failed"),
+        "COST_BLOCKED": status("COST_BLOCKED"),
+        "ERROR": status("ERROR", detail="SYNTHETIC: quota ledger unreadable: JSONDecodeError"),
+        "ACTIVE_UNVERIFIED": status("ACTIVE"),
+    }
+
+
+def synthetic_failure_record(unit: str, origin: str | None = None) -> dict:
+    record = {"unit": unit, "failed_at_utc": T0, "invocation_id": "0123456789abcdef0123456789abcdef"}
+    if origin is not None:
+        record["origin"] = origin
+    return record
+
