@@ -344,7 +344,7 @@ observation" (ADR 0030, close semantics). An idle `plan` or `capture` (nothing d
 
 | State | Evidence |
 |---|---|
-| Installed, timers enabled | `list-timers` shows 7 timers |
+| Installed, timers enabled | `list-timers` shows 9 core/observation timers; 10 when the separately activated Odds timer is enabled |
 | Fail-closed dry run | step 4.1 journal |
 | Real decision/recheck captured | `latest.json` has `last_closed_target_date` = D with VALID or an explicit INVALID reason |
 | Complete forecast evidence | no `pfm` reason in `last_closed_reasons` |
@@ -386,10 +386,10 @@ the ADR 0030 install makes it **v6**. The shadow ledger stays v1.
   down first, with the new code still installed, and then putting code and units back together.
 - **Rolling back one step, to the v5 code (just before ADR 0030).**
   - Step 3 is `mark-v5-for-rollback` only.
-  - ADR 0030 added no unit, so step 5 installs the previous units and removes nothing.
-  - Step 6 re-enables the timers that were enabled before, the odds timer included if it was.
-- **Rolling back to the v4 code (before ADR 0029).** Run both stamps in order, and remove the
-  odds units as written.
+  - Remove the four ADR 0030 observation unit files after restoring the v5 code; v5 does not know them.
+  - Keep the Odds API units; v5 includes ADR 0029. Re-enable whichever pre-ADR0030 timers were enabled.
+- **Rolling back to the v4 code (before ADR 0029).** Run both stamps in order, remove the
+  ADR 0030 observation units **and** the ADR 0029 odds units.
 - The old `backup.py` from before ADR 0016 also rejects the new backup unit's flags.
 
 Nothing is deleted. Run the steps as root, in order, outside 17:40-18:50 ET and not during a
@@ -417,17 +417,19 @@ settlement run (about 11:15 and 16:15 ET):
    sudo mv /opt/market-edge-lab/app /opt/market-edge-lab/app.bad
    sudo mv /opt/market-edge-lab/app.prev /opt/market-edge-lab/app
    ```
-5. **Restore the previous units. Remove only the odds pilot's units**, which the previous code
-   cannot run:
+5. **Restore the previous units and remove units newer than the target code:**
    ```bash
    sudo install -o root -g root -m 0644 /opt/market-edge-lab/app/deploy/vps/systemd/edgelab-* /opt/market-edge-lab/app/deploy/vps/systemd/edgelab.slice /etc/systemd/system/
+   sudo rm -f /etc/systemd/system/edgelab-observe.service /etc/systemd/system/edgelab-observe.timer \
+     /etc/systemd/system/edgelab-observe-close.service /etc/systemd/system/edgelab-observe-close.timer
+   # Only when rolling farther back to v4 (before ADR 0029):
    sudo rm -f /etc/systemd/system/edgelab-odds.service /etc/systemd/system/edgelab-odds.timer
    sudo systemctl daemon-reload
    ```
    Alternatively, `sudo bash install.sh --sha <previous sha> --bundle <bundle>` from the previous
-   commit redoes steps 4-5 and the env file. It installs units only, so still remove the two
-   `edgelab-odds.*` files and run `daemon-reload`.
-6. **Re-enable the seven core timers and restart the dashboard:**
+   commit redoes steps 4-5 and the env file. Still remove any unit files newer than the target
+   code, then run `daemon-reload`.
+6. **Re-enable the timers supported by the rollback target and restart the dashboard:**
    ```bash
    sudo systemctl enable --now edgelab-pfm.timer edgelab-decision.timer edgelab-recheck.timer edgelab-status.timer edgelab-backup.timer edgelab-shadow.timer edgelab-settlement.timer
    sudo systemctl restart edgelab-dashboard.service
@@ -439,7 +441,8 @@ settlement run (about 11:15 and 16:15 ET):
    systemctl is-active edgelab-dashboard.service
    ```
    Expect `VERIFIED_BACKUP_AND_RESTORE` for the evidence DB, with `schema_version` 5 (or 4 after
-   both stamps). After a v4 rollback, expect seven timers and no `edgelab-odds`.
+   both stamps). A v5 rollback has no `edgelab-observe*` units and may keep the Odds timer if it
+   was active before ADR 0030. A v4 rollback has seven core timers and neither observation nor Odds units.
    `tests/test_storage_rollback.py` shows the real v5 code (`cbfbddf`) and v4 code (`dd3ab4d`)
    opening and verifying a stamped store.
 
