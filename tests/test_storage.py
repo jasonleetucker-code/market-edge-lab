@@ -5,7 +5,7 @@ import sqlite3
 
 import pytest
 
-from edge_lab.storage import SnapshotStore
+from edge_lab.storage import SCHEMA_VERSION, SnapshotStore
 
 
 def test_snapshot_store_preserves_raw_payload(tmp_path):
@@ -89,11 +89,11 @@ def test_milestone_1_database_migrates_in_place(tmp_path):
 
     store = SnapshotStore(db)
 
-    assert store.schema_version() == 5
+    assert store.schema_version() == SCHEMA_VERSION
     rows = list(store.recent_snapshots(limit=10))
     assert len(rows) == 1 and rows[0]["run_id"] == "old"
     # Reopening an already-migrated database is a no-op.
-    assert SnapshotStore(db).schema_version() == 5
+    assert SnapshotStore(db).schema_version() == SCHEMA_VERSION
 
 
 def test_database_from_newer_code_is_refused(tmp_path):

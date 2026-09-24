@@ -56,6 +56,11 @@ from .storage import SnapshotStore
 
 RECEIPT_SCHEMA = "edge-lab-shadow-daily-receipt/1"
 RECEIPT_NAME = "shadow_daily.json"
+# Every receipt is also appended here, one JSON line per run, before the latest receipt is
+# replaced: the per-run provenance (code_version, refresh status and errors, missing days,
+# problems) survives. Never truncated or rotated by code; a receipt is a few KB, so about 3
+# runs a day add roughly 10-30 KB a day (a few MB a year).
+HISTORY_NAME = "shadow_daily_history.jsonl"
 NOTIFICATIONS_NAME = "notifications.jsonl"
 EXIT = {"HEALTHY_TRADED": 0, "HEALTHY_NO_SIGNAL": 0, "PENDING_SETTLEMENT": 0, "NO_CAPTURE": 0, "NOT_CLOSED": 0,
         "INVALID_CAPTURE": 3, "SETTLEMENT_CONFLICT": 1, "FAILED": 1, "LOCK_BUSY": 1}
@@ -215,10 +220,26 @@ def _summaries(ledger: ShadowLedger, now: datetime) -> dict[str, Any]:
     return out
 
 
+def _append_history(status_dir: Path, receipt: dict[str, Any]) -> None:
+    """Append the receipt as one line to the append-only run history (issue #50 P0-2).
+
+    Opened in append mode only: nothing already written is ever rewritten. A torn last line
+    (a crash mid-write) is detectable because every complete line is one JSON object."""
+    path = status_dir / HISTORY_NAME
+    created = not path.exists()
+    with open(path, "a", encoding="utf-8") as handle:
+        handle.write(json.dumps(receipt, sort_keys=True, separators=(",", ":")) + "\n")
+        handle.flush()
+        os.fsync(handle.fileno())
+    if created:
+        os.chmod(path, 0o644)  # the same non-sensitive summary as the receipt
+
+
 def _write_receipt(status_dir: Path | None, receipt: dict[str, Any]) -> None:
     if status_dir is None:
         return
     status_dir.mkdir(parents=True, exist_ok=True)
+    _append_history(status_dir, receipt)
     target = status_dir / RECEIPT_NAME
     tmp = target.with_suffix(".tmp")
     tmp.write_text(json.dumps(receipt, indent=2, sort_keys=True) + "\n", encoding="utf-8")

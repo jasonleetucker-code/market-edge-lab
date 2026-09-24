@@ -197,6 +197,49 @@ settlement job runs (about 11:15 and 16:15 ET).
 This is read-only sports data collection. It authorizes no sportsbook account, no bet, no
 sports model and no strategy.
 
+## 5c. Later/closing price observations: manual capture only (ADR 0030)
+
+Authority: the 2026-09-24 next-build-chunk directive, Deliverable 4. **No timer is authorized.**
+Nothing here installs, enables or schedules anything. The proposed schedule, with its request and
+resource estimate, is the owner-decision blocker in ADR 0030. Until the owner decides, a target
+that no one captures becomes `MISSED`, and says so.
+
+- **Schema.** The first install of this code migrates the evidence store to **v6**. It adds two
+  tables and nothing else; the "Rollback" section covers the stamp back to v5.
+- **Protected windows.** All three commands are read-only public GETs (capture) or local (plan,
+  status). `plan` and `capture` refuse to run, with no network and no writes, when they could
+  overlap:
+  - 17:40-18:50 ET;
+  - 11:13-11:30 ET;
+  - 16:13-16:30 ET.
+
+  They take the collector lock with a 5 s timeout, and `LOCK_BUSY` means nothing was done.
+
+Run as `edgelab`, like every other unit (`systemd-run` keeps the slice and its limits):
+
+```bash
+# Plan targets for every recorded decision (qualified and rejected) and backfill decision/recheck. No network.
+sudo systemd-run --wait --pipe --quiet -p User=edgelab -p Group=edgelab -p Slice=edgelab.slice /opt/market-edge-lab/venv/bin/python -m edge_lab.cli observe plan --db /var/lib/market-edge-lab/db/edge_lab.sqlite3 --ledger /var/lib/market-edge-lab/ledger/shadow_ledger.sqlite3
+# One bounded capture of whatever is due now (at most 40 GETs, 24 markets, 4 minutes).
+sudo systemd-run --wait --pipe --quiet -p User=edgelab -p Group=edgelab -p Slice=edgelab.slice /opt/market-edge-lab/venv/bin/python -m edge_lab.cli observe capture --db /var/lib/market-edge-lab/db/edge_lab.sqlite3
+# Read-only: targets by phase and state, the next due, recent misses (add --market kalshi:<ticker> for one path).
+sudo runuser -u edgelab -- /opt/market-edge-lab/venv/bin/python -m edge_lab.cli observe status --db /var/lib/market-edge-lab/db/edge_lab.sqlite3
+```
+
+When to run a capture for EXP-001 day D (the decision is 18:00 ET on D-1). `observe status`
+lists each target's due window:
+
+| phase | run `observe capture` at | GETs |
+|---|---|---|
+| post_decision_1h | 19:05 ET on D-1 | 7 |
+| post_decision_6h | 00:05 ET on D | 7 |
+| pre_close | 04:47 UTC on D+1 (close_time 05:00Z - 15 min) | 7 |
+| close | 04:57:45 UTC on D+1: it waits to 04:59:30, then confirms at 05:00:05 | 8 |
+| settlement_preceding | 18:35 UTC on D+1 (expected resolution 19:00Z - 30 min) | 1 |
+
+A close observation is labelled `CLOSE` only with its stored proof. Anything else is "latest
+pre-close observation" (ADR 0030, close semantics).
+
 ## 6. Verify over the next days: each state separately
 
 | State | Evidence |
@@ -233,15 +276,21 @@ read is UNKNOWN.
 
 ## Rollback
 
-**The evidence schema is forward-only from the ADR 0029 install.** At that install the
-evidence store becomes v5; the shadow ledger stays v1.
-- **Why it matters.** install.sh step 7 migrates the live evidence DB to v5. v4 code refuses a
-  v5 store ("Database schema v5 is newer than this code"), which would stop the collectors,
+**The evidence schema is forward-only.** The ADR 0029 install made the evidence store v5, and
+the ADR 0030 install makes it **v6**. The shadow ledger stays v1.
+- **Why it matters.** install.sh step 7 migrates the live evidence DB. Older code refuses a newer
+  store ("Database schema v6 is newer than this code"), which would stop the collectors,
   VERIFIED backups and the dashboard.
-- **Why a stamp is enough.** v5 only **added** the odds capture tables, which v4 code ignores.
-  Rolling back therefore means stamping the store v4 first, with the new code still installed,
-  and then putting code and units back together. The old `backup.py` also rejects the new
-  backup unit's flags.
+- **Why a stamp is enough.** v5 only **added** the odds capture tables, and v6 only the price
+  observation tables. Older code ignores both. Rolling back therefore means stamping the store
+  down first, with the new code still installed, and then putting code and units back together.
+- **Rolling back one step, to the v5 code (just before ADR 0030).**
+  - Step 3 is `mark-v5-for-rollback` only.
+  - ADR 0030 added no unit, so step 5 installs the previous units and removes nothing.
+  - Step 6 re-enables the timers that were enabled before, the odds timer included if it was.
+- **Rolling back to the v4 code (before ADR 0029).** Run both stamps in order, and remove the
+  odds units as written.
+- The old `backup.py` from before ADR 0016 also rejects the new backup unit's flags.
 
 Nothing is deleted. Run the steps as root, in order, outside 17:40-18:50 ET and not during a
 settlement run (about 11:15 and 16:15 ET):
@@ -256,12 +305,13 @@ settlement run (about 11:15 and 16:15 ET):
    sudo systemctl start edgelab-backup.service && sudo journalctl -u edgelab-backup -n 20 --no-pager
    ```
    Expect `VERIFIED_BACKUP_AND_RESTORE` for both stores. Stop here if either is missing.
-3. **Stamp the evidence store v4 (still the new code):**
+3. **Stamp the evidence store down (still the new code):**
    ```bash
-   sudo runuser -u edgelab -- /opt/market-edge-lab/venv/bin/python -m edge_lab.storage mark-v4-for-rollback --db /var/lib/market-edge-lab/db/edge_lab.sqlite3
+   sudo runuser -u edgelab -- /opt/market-edge-lab/venv/bin/python -m edge_lab.storage mark-v5-for-rollback --db /var/lib/market-edge-lab/db/edge_lab.sqlite3   # v6 -> v5
+   sudo runuser -u edgelab -- /opt/market-edge-lab/venv/bin/python -m edge_lab.storage mark-v4-for-rollback --db /var/lib/market-edge-lab/db/edge_lab.sqlite3   # v5 -> v4: only when going back before ADR 0029
    ```
-   Expect `{"from": 5, "to": 4, ...}`. The helper refuses (exit 1, nothing changed) anything
-   that is not a complete, intact v5 store.
+   Expect `{"from": 6, "to": 5, ...}`, then `{"from": 5, "to": 4, ...}`. Each refuses (exit 1,
+   nothing changed) anything that is not a complete, intact store of its version.
 4. **Restore the previous code:**
    ```bash
    sudo mv /opt/market-edge-lab/app /opt/market-edge-lab/app.bad
@@ -288,10 +338,12 @@ settlement run (about 11:15 and 16:15 ET):
    systemctl list-timers 'edgelab-*'
    systemctl is-active edgelab-dashboard.service
    ```
-   Expect `VERIFIED_BACKUP_AND_RESTORE` for the evidence DB (`schema_version` 4). Expect seven
-   timers and no `edgelab-odds`. `tests/test_storage_rollback.py` shows the real v4 code opening
-   and verifying a stamped store.
+   Expect `VERIFIED_BACKUP_AND_RESTORE` for the evidence DB, with `schema_version` 5 (or 4 after
+   both stamps). After a v4 rollback, expect seven timers and no `edgelab-odds`.
+   `tests/test_storage_rollback.py` shows the real v5 code (`cbfbddf`) and v4 code (`dd3ab4d`)
+   opening and verifying a stamped store.
 
-Re-installing the v5 code later stamps v5 again: the migration is idempotent. The shadow
+Re-installing the newer code later stamps it again: the migration is idempotent, and every row
+written meanwhile is kept. The shadow
 ledger's schema did not change (v1), so the rolled-back code reads it. To stop all collection
 and keep the data: `sudo systemctl disable --now 'edgelab-*.timer'`.
