@@ -145,6 +145,58 @@ sudo systemd-run --wait --pipe --quiet -p User=edgelab -p Group=edgelab -p Slice
     host names), which would break the fixed-headline rule and double every push. Leave it unset
     or on a different channel.
 
+## 5b. The Odds API NFL pilot activation (ADR 0029; directive 2026-09-24 Phase 6; once)
+
+Authority: owner correction 3 (game-relative captures, 450 credits a month at most, never above
+the provider's remaining quota). `edgelab-odds.timer` is installed by install.sh but stays
+disabled until these steps pass. Outside 17:40-18:35 America/New_York, and not while a
+settlement job runs (about 11:15 and 16:15 ET).
+
+1. **Owner only: install the key.** Create the free Starter key at the provider yourself, then:
+   ```bash
+   sudoedit /etc/market-edge-lab/secrets.env
+   # add one line:  EDGE_LAB_ODDS_API_KEY=<your key>
+   ```
+   Never paste the key into chat, git, a ticket or a log. The agent never sees it.
+2. **Agent: prove the plan (free calls only; no credits spent).**
+   ```bash
+   sudo systemd-run --wait --pipe --quiet -p User=edgelab -p Group=edgelab -p Slice=edgelab.slice -p EnvironmentFile=/etc/market-edge-lab/env -p EnvironmentFile=/etc/market-edge-lab/secrets.env /opt/market-edge-lab/venv/bin/python -m edge_lab.cli odds plan --db /var/lib/market-edge-lab/db/edge_lab.sqlite3 --ledger /var/lib/market-edge-lab/db/odds_quota_ledger.json
+   ```
+   Record in the activation note: the enumerated schedule (`schedule`, `slots`), `budget.state`
+   (must be `PROVEN`), `budget.worst_case_month_credits` (must be <= 450) and the room left
+   below `budget.provider_remaining`, `budget.expected_month_credits`, and
+   `projection_next_month`. Anything other than PROVEN stops here.
+3. **Agent: one bounded live smoke read (3 credits at most).**
+   ```bash
+   sudo systemd-run --wait --pipe --quiet -p User=edgelab -p Group=edgelab -p Slice=edgelab.slice -p EnvironmentFile=/etc/market-edge-lab/env -p EnvironmentFile=/etc/market-edge-lab/secrets.env /opt/market-edge-lab/venv/bin/python -m edge_lab.cli odds smoke --db /var/lib/market-edge-lab/db/edge_lab.sqlite3 --ledger /var/lib/market-edge-lab/db/odds_quota_ledger.json
+   ```
+   It refuses (exit 1, nothing sent) when the quota is unknown or insufficient. Record exactly
+   which `bookmakers` and `markets_returned` came back, `coverage` (ABSENT and
+   PAID_ONLY_NOT_ENABLED entries included), `credits_last` and `quota_after`. The smoke read's
+   evidence is the snapshot it names; it is not a capture target.
+4. **Enable the bounded schedule.**
+   ```bash
+   sudo systemctl enable --now edgelab-odds.timer
+   systemctl list-timers edgelab-odds.timer
+   journalctl -u edgelab-odds -n 5 --no-pager   # one JSON line per tick; never the key
+   ```
+   Every 15 minutes a tick checks locally whether a planned slot is due. Discovery is free and
+   runs at most every 6 h. A paid call happens only for an admitted slot, at most one per
+   tick. Ticks inside 17:40-18:35 ET report `DEFERRED_CAPTURE_WINDOW` and do nothing.
+5. **Verify.** `odds plan --offline` (same `systemd-run` line with `--offline` added, no network)
+   shows `recorded_targets` by state. MISSED targets keep their reason.
+   - `KEY_REJECTED`: the provider refused the key. Nothing is paid for, and discovery is
+     retried every 6 h. The owner fixes the key with `sudoedit`.
+   - `COST_BLOCKED`: the provider charged more than 3 credits for one call. Paid calls stay
+     stopped until an operator checks the ledger and the snapshot, then runs one tick with
+     `odds run --clear-cost-block` (same `systemd-run` line and flags).
+
+   Stop at any time with
+   `sudo systemctl disable --now edgelab-odds.timer`; targets and evidence stay.
+
+This is read-only sports data collection. It authorizes no sportsbook account, no bet, no
+sports model and no strategy.
+
 ## 6. Verify over the next days: each state separately
 
 | State | Evidence |
@@ -181,31 +233,65 @@ read is UNKNOWN.
 
 ## Rollback
 
-Code and unit files must go back **together**: the new `edgelab-backup.service` passes
-flags (`--kind`, `--if-exists`, `--lock-file`) that older `backup.py` rejects.
+**The evidence schema is forward-only from the ADR 0029 install.** At that install the
+evidence store becomes v5; the shadow ledger stays v1.
+- **Why it matters.** install.sh step 7 migrates the live evidence DB to v5. v4 code refuses a
+  v5 store ("Database schema v5 is newer than this code"), which would stop the collectors,
+  VERIFIED backups and the dashboard.
+- **Why a stamp is enough.** v5 only **added** the odds capture tables, which v4 code ignores.
+  Rolling back therefore means stamping the store v4 first, with the new code still installed,
+  and then putting code and units back together. The old `backup.py` also rejects the new
+  backup unit's flags.
 
-1. Stop the new units:
+Nothing is deleted. Run the steps as root, in order, outside 17:40-18:50 ET and not during a
+settlement run (about 11:15 and 16:15 ET):
+
+1. **Stop every timer, the odds pilot included, and check that nothing is running:**
    ```bash
-   sudo systemctl disable --now edgelab-shadow.timer edgelab-settlement.timer
+   sudo systemctl disable --now 'edgelab-*.timer'
+   systemctl list-units 'edgelab-*' --state=running --no-legend   # expect no capture job
    ```
-2. Restore the previous code:
+2. **Make a verified backup (still the new code):**
+   ```bash
+   sudo systemctl start edgelab-backup.service && sudo journalctl -u edgelab-backup -n 20 --no-pager
+   ```
+   Expect `VERIFIED_BACKUP_AND_RESTORE` for both stores. Stop here if either is missing.
+3. **Stamp the evidence store v4 (still the new code):**
+   ```bash
+   sudo runuser -u edgelab -- /opt/market-edge-lab/venv/bin/python -m edge_lab.storage mark-v4-for-rollback --db /var/lib/market-edge-lab/db/edge_lab.sqlite3
+   ```
+   Expect `{"from": 5, "to": 4, ...}`. The helper refuses (exit 1, nothing changed) anything
+   that is not a complete, intact v5 store.
+4. **Restore the previous code:**
    ```bash
    sudo mv /opt/market-edge-lab/app /opt/market-edge-lab/app.bad
    sudo mv /opt/market-edge-lab/app.prev /opt/market-edge-lab/app
    ```
-3. Restore the previous unit files and remove the new ones:
+5. **Restore the previous units. Remove only the odds pilot's units**, which the previous code
+   cannot run:
    ```bash
-   sudo install -o root -g root -m 0644 /opt/market-edge-lab/app/deploy/vps/systemd/edgelab-* /etc/systemd/system/
-   sudo rm -f /etc/systemd/system/edgelab-shadow.* /etc/systemd/system/edgelab-settlement.* /etc/systemd/system/edgelab.slice
+   sudo install -o root -g root -m 0644 /opt/market-edge-lab/app/deploy/vps/systemd/edgelab-* /opt/market-edge-lab/app/deploy/vps/systemd/edgelab.slice /etc/systemd/system/
+   sudo rm -f /etc/systemd/system/edgelab-odds.service /etc/systemd/system/edgelab-odds.timer
    sudo systemctl daemon-reload
    ```
-4. Verify the backup path works on the old code:
+   Alternatively, `sudo bash install.sh --sha <previous sha> --bundle <bundle>` from the previous
+   commit redoes steps 4-5 and the env file. It installs units only, so still remove the two
+   `edgelab-odds.*` files and run `daemon-reload`.
+6. **Re-enable the seven core timers and restart the dashboard:**
+   ```bash
+   sudo systemctl enable --now edgelab-pfm.timer edgelab-decision.timer edgelab-recheck.timer edgelab-status.timer edgelab-backup.timer edgelab-shadow.timer edgelab-settlement.timer
+   sudo systemctl restart edgelab-dashboard.service
+   ```
+7. **Verify on the old code:**
    ```bash
    sudo systemctl start edgelab-backup.service && sudo journalctl -u edgelab-backup -n 20 --no-pager
+   systemctl list-timers 'edgelab-*'
+   systemctl is-active edgelab-dashboard.service
    ```
-   Expect `VERIFIED_BACKUP_AND_RESTORE` for the evidence DB.
+   Expect `VERIFIED_BACKUP_AND_RESTORE` for the evidence DB (`schema_version` 4). Expect seven
+   timers and no `edgelab-odds`. `tests/test_storage_rollback.py` shows the real v4 code opening
+   and verifying a stamped store.
 
-Neither store's schema changed (evidence v4, ledger v1), so rolled-back code reads both;
-nothing is migrated or deleted. The shadow ledger and its backups stay in place and
-unused. To stop all collection (the data is kept):
-`sudo systemctl disable --now 'edgelab-*.timer'`.
+Re-installing the v5 code later stamps v5 again: the migration is idempotent. The shadow
+ledger's schema did not change (v1), so the rolled-back code reads it. To stop all collection
+and keep the data: `sudo systemctl disable --now 'edgelab-*.timer'`.

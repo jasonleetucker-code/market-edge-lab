@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 from contextlib import closing
 from datetime import datetime, timezone
@@ -10,7 +11,7 @@ from typing import Any, Iterable
 from .http import FetchResult
 from .provenance import bytes_sha256, canonical_json, sha256_hex, shape_fingerprint
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 SOURCE_HEALTH_STATUSES = ("ok", "partial", "failed")
 
 
@@ -288,6 +289,167 @@ END;
 """
 
 
+# Version 5: The Odds API pilot's game-relative capture targets (ADR 0029). Additive only:
+# two new tables, nothing existing changes. A target is written once, when first planned, with
+# its intended capture time. Its life is an append-only list of state transitions; the current
+# state is the latest one. A final state (CAPTURED, MISSED, FAILED, SUPERSEDED) cannot be
+# followed by another, so a missed capture stays visible and is never silently replaced.
+ODDS_TARGET_STATES = (
+    "PLANNED", "CAPTURING", "CAPTURED", "MISSED", "SKIPPED_BUDGET", "QUOTA_UNKNOWN", "QUOTA_EXHAUSTED",
+    "SETUP_NEEDED", "DEFERRED", "FAILED", "SUPERSEDED",
+)
+ODDS_TARGET_FINAL_STATES = ("CAPTURED", "MISSED", "FAILED", "SUPERSEDED")
+
+_SCHEMA_V5 = """
+CREATE TABLE IF NOT EXISTS odds_capture_targets (
+    target_id TEXT PRIMARY KEY,
+    sport TEXT NOT NULL,
+    event_id TEXT NOT NULL,
+    offset_label TEXT NOT NULL,
+    priority INTEGER NOT NULL,
+    commence_time_utc TEXT NOT NULL,
+    target_utc TEXT NOT NULL,
+    planned_at_utc TEXT NOT NULL,
+    policy_version TEXT NOT NULL,
+    home_team TEXT,
+    away_team TEXT,
+    discovery_snapshot_id INTEGER,
+    FOREIGN KEY (discovery_snapshot_id) REFERENCES snapshots(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_odds_capture_targets_time
+ON odds_capture_targets(sport, target_utc);
+
+CREATE TABLE IF NOT EXISTS odds_capture_transitions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    target_id TEXT NOT NULL,
+    state TEXT NOT NULL CHECK (state IN (
+        'PLANNED', 'CAPTURING', 'CAPTURED', 'MISSED', 'SKIPPED_BUDGET', 'QUOTA_UNKNOWN',
+        'QUOTA_EXHAUSTED', 'SETUP_NEEDED', 'DEFERRED', 'FAILED', 'SUPERSEDED'
+    )),
+    at_utc TEXT NOT NULL,
+    reason TEXT,
+    slot_id TEXT,
+    snapshot_id INTEGER,
+    captured_at_utc TEXT,
+    credits_last INTEGER,
+    detail_json TEXT NOT NULL DEFAULT '{}',
+    -- A capture names its evidence and when it was received.
+    CHECK (state != 'CAPTURED' OR (snapshot_id IS NOT NULL AND captured_at_utc IS NOT NULL)),
+    -- Anything that is not plain progress explains itself.
+    CHECK (state IN ('PLANNED', 'CAPTURING', 'CAPTURED') OR reason IS NOT NULL),
+    FOREIGN KEY (target_id) REFERENCES odds_capture_targets(target_id),
+    FOREIGN KEY (snapshot_id) REFERENCES snapshots(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_odds_capture_transitions_target
+ON odds_capture_transitions(target_id, id);
+
+-- Planning is idempotent: re-planning a known target keeps the original row (and its
+-- planned_at_utc), even through INSERT OR REPLACE.
+CREATE TRIGGER IF NOT EXISTS odds_capture_targets_keep_original
+BEFORE INSERT ON odds_capture_targets
+WHEN EXISTS (SELECT 1 FROM odds_capture_targets WHERE target_id = NEW.target_id)
+BEGIN
+    SELECT RAISE(IGNORE);
+END;
+
+CREATE TRIGGER IF NOT EXISTS odds_capture_targets_no_update
+BEFORE UPDATE ON odds_capture_targets
+BEGIN
+    SELECT RAISE(ABORT, 'odds capture targets are immutable evidence');
+END;
+
+CREATE TRIGGER IF NOT EXISTS odds_capture_targets_no_delete
+BEFORE DELETE ON odds_capture_targets
+BEGIN
+    SELECT RAISE(ABORT, 'odds capture targets are immutable evidence');
+END;
+
+CREATE TRIGGER IF NOT EXISTS odds_capture_transitions_no_replace
+BEFORE INSERT ON odds_capture_transitions
+WHEN NEW.id IS NOT NULL AND EXISTS (SELECT 1 FROM odds_capture_transitions WHERE id = NEW.id)
+BEGIN
+    SELECT RAISE(ABORT, 'odds capture transitions are immutable evidence');
+END;
+
+CREATE TRIGGER IF NOT EXISTS odds_capture_transitions_final_is_final
+BEFORE INSERT ON odds_capture_transitions
+WHEN (SELECT state FROM odds_capture_transitions WHERE target_id = NEW.target_id ORDER BY id DESC LIMIT 1)
+     IN ('CAPTURED', 'MISSED', 'FAILED', 'SUPERSEDED')
+BEGIN
+    SELECT RAISE(ABORT, 'odds capture target already reached a final state');
+END;
+
+CREATE TRIGGER IF NOT EXISTS odds_capture_transitions_no_update
+BEFORE UPDATE ON odds_capture_transitions
+BEGIN
+    SELECT RAISE(ABORT, 'odds capture transitions are immutable evidence');
+END;
+
+CREATE TRIGGER IF NOT EXISTS odds_capture_transitions_no_delete
+BEFORE DELETE ON odds_capture_transitions
+BEGIN
+    SELECT RAISE(ABORT, 'odds capture transitions are immutable evidence');
+END;
+"""
+
+
+V5_OBJECTS = frozenset(re.findall(r"CREATE (?:TABLE|INDEX|TRIGGER) IF NOT EXISTS (\w+)", _SCHEMA_V5))
+V4_REQUIRED_TABLES = ("collection_runs", "snapshots", "source_health", "document_blobs", "document_retrievals",
+                      "forward_captures")
+
+
+def mark_schema_v4_for_rollback(db_path: str | Path) -> dict[str, Any]:
+    """Code rollback helper (runbook "Rollback"): stamp a v5 evidence store as v4 so the
+    previous (v4) code opens it.
+
+    Nothing is deleted or rewritten. v5 only added the odds capture tables and their triggers,
+    which v4 code never reads. Before stamping it checks: user_version is 5; every v4 table
+    and snapshots column exists; every v5 table, index and trigger exists (a complete v5
+    store); and SQLite integrity_check passes.
+    Re-installing v5 code later stamps v5 again (its migration is idempotent). Refuses anything
+    that is not exactly a complete v5 store. Run it with the collector timers stopped."""
+    path = Path(db_path)
+    if path.is_symlink() or not path.is_file():
+        raise ValueError(f"{path} is missing or not a regular file")
+    with closing(sqlite3.connect(path, timeout=30.0)) as conn:
+        conn.row_factory = sqlite3.Row
+        version = int(conn.execute("PRAGMA user_version").fetchone()[0])
+        if version != 5:
+            raise ValueError(f"expected a v5 evidence store, found v{version}; nothing changed")
+        names = {r["name"] for r in conn.execute("SELECT name FROM sqlite_master")}
+        missing = [t for t in V4_REQUIRED_TABLES if t not in names]
+        columns = {r["name"] for r in conn.execute("PRAGMA table_info(snapshots)")}
+        missing += [f"snapshots.{c}" for c, _ in _SNAPSHOT_V2_COLUMNS if c not in columns]
+        missing += sorted(V5_OBJECTS - names)
+        if missing:
+            raise ValueError(f"not a complete store; missing {missing}; nothing changed")
+        if conn.execute("PRAGMA integrity_check").fetchone()[0] != "ok":
+            raise ValueError("integrity_check failed; nothing changed")
+        conn.execute("PRAGMA user_version = 4")
+        conn.commit()
+        return {"db": str(path), "from": 5, "to": 4,
+                "odds_targets_kept": int(conn.execute("SELECT COUNT(*) FROM odds_capture_targets").fetchone()[0])}
+
+
+def main(argv: list[str] | None = None) -> int:
+    """`python -m edge_lab.storage mark-v4-for-rollback --db PATH` (see the rollback runbook)."""
+    import argparse
+
+    parser = argparse.ArgumentParser(prog="python -m edge_lab.storage")
+    sub = parser.add_subparsers(dest="command", required=True)
+    rb = sub.add_parser("mark-v4-for-rollback", help="stamp a v5 evidence store as v4 before a code rollback")
+    rb.add_argument("--db", required=True)
+    args = parser.parse_args(argv)
+    try:
+        print(json.dumps(mark_schema_v4_for_rollback(args.db), sort_keys=True))
+    except ValueError as exc:
+        print(json.dumps({"status": "REFUSED", "detail": str(exc)}))
+        return 1
+    return 0
+
+
 class ReadOnlyStoreError(RuntimeError):
     """The evidence store cannot be opened read-only as required (missing, wrong schema)."""
 
@@ -366,12 +528,19 @@ class SnapshotStore:
                             # Another process migrated concurrently.
                             if "duplicate column" not in str(exc):
                                 raise
-                conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
             # Idempotent (IF NOT EXISTS): also installs protections added after a
             # database was first migrated.
             conn.executescript(_SCHEMA_V2)
             conn.executescript(_SCHEMA_V3)
             conn.executescript(_SCHEMA_V4)
+            # v5's tables and triggers land in one transaction, and the version is stamped
+            # only after every object exists: a crash leaves either v4 or a complete v5. An
+            # already complete v5 store takes no write lock here.
+            present = {row["name"] for row in conn.execute("SELECT name FROM sqlite_master")}
+            if version < SCHEMA_VERSION or not V5_OBJECTS <= present:
+                conn.executescript("BEGIN IMMEDIATE;\n" + _SCHEMA_V5 + "\nCOMMIT;")
+            if version < SCHEMA_VERSION:
+                conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
 
     def schema_version(self) -> int:
         with closing(self._connect()) as conn, conn:
@@ -530,6 +699,111 @@ class SnapshotStore:
                 f"SELECT * FROM forward_captures WHERE {' AND '.join(clauses)} ORDER BY id",
                 params,
             ).fetchall()
+
+    # ------------------------------------------------------------ odds capture targets (v5)
+
+    def plan_odds_target(
+        self,
+        *,
+        target_id: str,
+        sport: str,
+        event_id: str,
+        offset_label: str,
+        priority: int,
+        commence_time_utc: str,
+        target_utc: str,
+        planned_at_utc: str,
+        policy_version: str,
+        home_team: str | None = None,
+        away_team: str | None = None,
+        discovery_snapshot_id: int | None = None,
+    ) -> bool:
+        """Record a newly planned target and its PLANNED transition, atomically. Returns False
+        (and changes nothing) when the target already exists."""
+        with closing(self._connect()) as conn, conn:
+            cursor = conn.execute(
+                """
+                INSERT INTO odds_capture_targets(
+                    target_id, sport, event_id, offset_label, priority, commence_time_utc,
+                    target_utc, planned_at_utc, policy_version, home_team, away_team,
+                    discovery_snapshot_id
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (target_id, sport, event_id, offset_label, priority, commence_time_utc, target_utc,
+                 planned_at_utc, policy_version, home_team, away_team, discovery_snapshot_id),
+            )
+            if cursor.rowcount != 1:
+                return False
+            conn.execute(
+                "INSERT INTO odds_capture_transitions(target_id, state, at_utc) VALUES (?, 'PLANNED', ?)",
+                (target_id, planned_at_utc),
+            )
+            return True
+
+    def record_odds_transition(
+        self,
+        *,
+        target_id: str,
+        state: str,
+        at_utc: str,
+        reason: str | None = None,
+        slot_id: str | None = None,
+        snapshot_id: int | None = None,
+        captured_at_utc: str | None = None,
+        credits_last: int | None = None,
+        detail: dict[str, Any] | None = None,
+    ) -> int:
+        if state not in ODDS_TARGET_STATES:
+            raise ValueError(f"Unsupported odds target state: {state}")
+        with closing(self._connect()) as conn, conn:
+            cursor = conn.execute(
+                """
+                INSERT INTO odds_capture_transitions(
+                    target_id, state, at_utc, reason, slot_id, snapshot_id, captured_at_utc,
+                    credits_last, detail_json
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (target_id, state, at_utc, reason, slot_id, snapshot_id, captured_at_utc, credits_last,
+                 canonical_json(detail or {})),
+            )
+            return int(cursor.lastrowid)
+
+    def odds_targets(self, *, sport: str | None = None) -> list[sqlite3.Row]:
+        """Every target with its current (latest) state, by intended capture time."""
+        where, params = ("WHERE t.sport = ?", [sport]) if sport is not None else ("", [])
+        with closing(self._connect()) as conn, conn:
+            return conn.execute(
+                f"""
+                SELECT t.*, x.state, x.at_utc AS state_at_utc, x.reason, x.slot_id, x.snapshot_id,
+                       x.captured_at_utc, x.credits_last, x.detail_json
+                FROM odds_capture_targets t
+                JOIN odds_capture_transitions x ON x.id = (
+                    SELECT MAX(id) FROM odds_capture_transitions WHERE target_id = t.target_id)
+                {where}
+                ORDER BY t.target_utc, t.priority, t.event_id
+                """,
+                params,
+            ).fetchall()
+
+    def odds_transitions(self, target_id: str) -> list[sqlite3.Row]:
+        with closing(self._connect()) as conn, conn:
+            return conn.execute(
+                "SELECT * FROM odds_capture_transitions WHERE target_id = ? ORDER BY id", (target_id,)
+            ).fetchall()
+
+    def latest_snapshot(self, *, source: str, kind: str, entity_id: str) -> sqlite3.Row | None:
+        """The newest snapshot of one kind for one entity (payload included), or None."""
+        with closing(self._connect()) as conn, conn:
+            return conn.execute(
+                """
+                SELECT id, run_id, entity_id, fetched_at_utc, url, payload_sha256, raw_sha256, payload_json
+                FROM snapshots WHERE source = ? AND kind = ? AND entity_id = ?
+                ORDER BY id DESC LIMIT 1
+                """,
+                (source, kind, entity_id),
+            ).fetchone()
 
     def recent_snapshots(self, *, limit: int = 20) -> Iterable[sqlite3.Row]:
         with closing(self._connect()) as conn, conn:
@@ -754,3 +1028,7 @@ class SnapshotStore:
             ).fetchall()
         return {row["kind"]: row["latest"] for row in rows}
 
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

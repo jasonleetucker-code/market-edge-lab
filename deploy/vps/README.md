@@ -20,6 +20,7 @@ is Europe/Berlin.
 | `edgelab-backup` | 04:40 UTC | verified SQLite backups of the evidence DB **and** the shadow ledger (`backups/`, `backups/ledger/`; no automatic deletion) |
 | `edgelab-settlement` | 11:15, 16:15 | bounded settlement refresh for due pending events, then shadow bookkeeping (ADR 0016) |
 | `edgelab-shadow` | 18:40 | daily shadow bookkeeping from stored evidence, no network; writes `shadow_daily.json` |
+| `edgelab-odds` | every 15 min (ticks in 17:40-18:35 deferred in code) | The Odds API NFL pilot: free discovery, and at most one paid odds call when a planned T-24h / T-6h / T-60m slot is due (ADR 0029). Installed, **not enabled** by install.sh; enabled only by `docs/deploy/DAILY_SHADOW_ACTIVATION.md` section 5b |
 
 All edgelab units run inside `edgelab.slice` (MemoryMax 384M, CPUQuota 25% combined), as
 well as their per-run caps. Activation, verification and rollback for the daily shadow
@@ -128,8 +129,19 @@ To stop all collection (the data is kept):
 sudo systemctl disable --now 'edgelab-*.timer'
 ```
 
-To roll back the code:
+To roll back the code: **the evidence schema is forward-only from the ADR 0029 install (v5)**,
+and previous code refuses a v5 store. Code, units and the schema stamp go back together, in this
+order. The details and expected outputs are under "Rollback" in
+`docs/deploy/DAILY_SHADOW_ACTIVATION.md`.
 
 ```bash
-sudo mv /opt/market-edge-lab/app /opt/market-edge-lab/app.bad && sudo mv /opt/market-edge-lab/app.prev /opt/market-edge-lab/app
+sudo systemctl disable --now 'edgelab-*.timer'                        # 1. stop every timer, odds included
+sudo systemctl start edgelab-backup.service                           # 2. VERIFIED backup (journalctl -u edgelab-backup)
+sudo runuser -u edgelab -- /opt/market-edge-lab/venv/bin/python -m edge_lab.storage mark-v4-for-rollback --db /var/lib/market-edge-lab/db/edge_lab.sqlite3   # 3. stamp v4
+sudo mv /opt/market-edge-lab/app /opt/market-edge-lab/app.bad && sudo mv /opt/market-edge-lab/app.prev /opt/market-edge-lab/app   # 4. code
+sudo install -o root -g root -m 0644 /opt/market-edge-lab/app/deploy/vps/systemd/edgelab-* /opt/market-edge-lab/app/deploy/vps/systemd/edgelab.slice /etc/systemd/system/   # 5. units
+sudo rm -f /etc/systemd/system/edgelab-odds.service /etc/systemd/system/edgelab-odds.timer && sudo systemctl daemon-reload
+sudo systemctl enable --now edgelab-pfm.timer edgelab-decision.timer edgelab-recheck.timer edgelab-status.timer edgelab-backup.timer edgelab-shadow.timer edgelab-settlement.timer   # 6. core timers
+sudo systemctl restart edgelab-dashboard.service
+sudo systemctl start edgelab-backup.service                           # 7. VERIFIED on the old code
 ```

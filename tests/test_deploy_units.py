@@ -536,3 +536,47 @@ def test_topic_writer_treats_an_empty_value_as_unset(tmp_path):
     uid, gid = (os.getuid(), os.getgid()) if hasattr(os, "getuid") else (0, 0)
     assert mod.write_topic(str(path), uid=uid, gid=gid) == "written"
     assert len(_topic(path.read_text())) == 1
+
+
+# --------------------------------------------------------------------------- The Odds API pilot (ADR 0029)
+
+def test_odds_unit_is_a_bounded_networked_tick_that_loads_only_the_optional_secrets():
+    u = _parse("edgelab-odds.service")
+    assert u[("Service", "User")] == ["edgelab"] and u[("Service", "Slice")] == ["edgelab.slice"]
+    assert u[("Service", "EnvironmentFile")] == ["/etc/market-edge-lab/env", "-/etc/market-edge-lab/secrets.env"]
+    assert u[("Service", "RestrictAddressFamilies")] == ["AF_INET AF_INET6 AF_UNIX"]
+    assert u[("Unit", "OnFailure")] == ["edgelab-alert@%n.service"]
+    assert u[("Service", "MemoryMax")] == ["256M"] and u[("Service", "TimeoutStartSec")] == ["3min"]
+    assert u[("Service", "ReadWritePaths")] == ["/var/lib/market-edge-lab /var/lib/market-edge-lab-status"]
+    (exec_start,) = u[("Service", "ExecStart")]
+    args = exec_start.split()
+    assert args[:5] == ["/opt/market-edge-lab/venv/bin/python", "-m", "edge_lab.cli", "odds", "run"]
+    assert args[args.index("--sport") + 1] == "americanfootball_nfl"
+    assert args[args.index("--markets") + 1] == "h2h,spreads,totals" and args[args.index("--regions") + 1] == "us"
+    assert args[args.index("--ledger") + 1].startswith("/var/lib/market-edge-lab/")
+    assert "smoke" not in args and "plan" not in args
+
+
+def test_odds_timer_ticks_every_15_minutes_without_catch_up_and_is_not_enabled_by_install():
+    t = _parse("edgelab-odds.timer")
+    assert t[("Timer", "OnCalendar")] == ["*-*-* *:00/15:00"]
+    assert t[("Timer", "Persistent")] == ["false"] and t[("Timer", "Unit")] == ["edgelab-odds.service"]
+    units = re.search(r"UNITS=\(([^)]*)\)", INSTALL).group(1).split()
+    assert "edgelab-odds" in units
+    # The printed activation line enables the core timers only; the odds timer has its own runbook step.
+    assert "enable --now ${CORE_TIMERS[*]/%/.timer}" in INSTALL and "enable --now ${UNITS" not in INSTALL
+    assert "SEPARATELY_ACTIVATED=edgelab-odds" in INSTALL
+    assert "systemctl enable" not in INSTALL.split("cat <<EOF")[0], "install.sh must not enable timers itself"
+
+
+def test_odds_ticks_inside_the_capture_window_are_deferred_in_code():
+    """The timer fires every 15 minutes, so the 17:40-18:35 ET window is enforced by the code."""
+    from datetime import datetime, timezone
+
+    from edge_lab.odds_schedule import in_quiet_window
+
+    def et(month, day, h, m, offset):  # offset: hours behind UTC
+        return datetime(2026, month, day, h + offset, m, tzinfo=timezone.utc)
+
+    assert in_quiet_window(et(10, 4, 17, 45, 4)) and in_quiet_window(et(12, 6, 18, 30, 5))
+    assert not in_quiet_window(et(10, 4, 17, 30, 4)) and not in_quiet_window(et(12, 6, 18, 45, 5))

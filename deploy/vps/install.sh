@@ -40,7 +40,12 @@ STATUS=/var/lib/market-edge-lab-status
 ETC=/etc/market-edge-lab
 ENV_FILE=$ETC/env
 SECRETS_FILE=$ETC/secrets.env
-UNITS=(edgelab-pfm edgelab-decision edgelab-recheck edgelab-status edgelab-backup edgelab-shadow edgelab-settlement)
+UNITS=(edgelab-pfm edgelab-decision edgelab-recheck edgelab-status edgelab-backup edgelab-shadow edgelab-settlement edgelab-odds)
+# Installed and verified with the rest, but activated separately (ADR 0029): the Odds API timer
+# is enabled only after the owner installs the key and `odds plan` / `odds smoke` pass.
+SEPARATELY_ACTIVATED=edgelab-odds
+CORE_TIMERS=()
+for u in "${UNITS[@]}"; do [ "$u" = "$SEPARATELY_ACTIVATED" ] || CORE_TIMERS+=("$u"); done
 # The unprivileged account that must NOT read private data (the Chase Upside app user).
 OTHER_USER=${EDGELAB_OTHER_USER:-dynasty}
 
@@ -72,7 +77,7 @@ echo "== 4/7 venv (stdlib only)"
 [ -x "$APP_ROOT/venv/bin/python" ] || python3 -m venv --without-pip "$APP_ROOT/venv"
 SITE=$("$APP_ROOT/venv/bin/python" -c 'import sysconfig; print(sysconfig.get_paths()["purelib"])')
 echo "$APP_ROOT/app/src" > "$SITE/market_edge_lab.pth"
-"$APP_ROOT/venv/bin/python" -c 'import edge_lab.forward, edge_lab.backup' || die "edge_lab does not import"
+"$APP_ROOT/venv/bin/python" -c 'import edge_lab.forward, edge_lab.backup, edge_lab.odds_pilot' || die "edge_lab does not import"
 
 echo "== 5/7 environment file"
 existing() { [ -f "$ENV_FILE" ] && sed -n "s/^$1=//p" "$ENV_FILE" | tail -1 || true; }
@@ -160,7 +165,9 @@ Next (owner):
      Expect "status": "rejected_out_of_window" and a failed unit (that is correct). Then:
        sudo systemctl reset-failed 'edgelab-*'
   2. Activate the schedule:
-       sudo systemctl enable --now ${UNITS[*]/%/.timer}
+       sudo systemctl enable --now ${CORE_TIMERS[*]/%/.timer}
        systemctl list-timers 'edgelab-*'
+     $SEPARATELY_ACTIVATED.timer is installed but stays disabled until the Odds API activation
+     in docs/deploy/DAILY_SHADOW_ACTIVATION.md section 5b (key, odds plan, one odds smoke).
   Stop everything at any time: sudo systemctl disable --now 'edgelab-*.timer'
 EOF
