@@ -6,7 +6,16 @@ to run.
   §35–§39, §46, §51, §53, §54, §64 and §67, Deliverable 2.
 - **Implementation start.** It begins only after the current mission's lanes are merged and
   deployed (the directive's coordinator re-plan).
-- **Owner approvals.** Every scheduled job still needs its own explicit approval
+- **Activation conditions.** `docs/EXECUTION_PLAN.md` (2026-09-24, #86) authorizes bounded
+  public collectors as "gated, one source at a time". Before activation this design must have:
+  - an entry in the portfolio;
+  - a terms and access review;
+  - a worst-case budget with the combined footprint recomputed;
+  - a `sources.py` registration and a Freshness Fabric provider;
+  - an incremental rollout;
+  - independent review, and green CI on the exact head.
+
+  The backup-retention decision (§8.4) and any new timer remain owner decisions
   (`AI_INSTRUCTIONS.md`, "Authority").
 - **Live evidence.** `experiments/multi_city_weather/verification_2026-09-24.md` holds 40
   bounded public GETs. Their exact bytes are in `tests/fixtures/kalshi_weather_families/`.
@@ -636,6 +645,7 @@ design and is reported to the coordinator.
 0. **Preconditions.**
    - The current lanes are merged and deployed; Freshness Fabric is deployed.
    - Backup retention is decided.
+   - The EXECUTION_PLAN gate conditions are met (see the Status block).
    - The owner has approved the new schedule (`edgelab-weather.timer`, the catalog-origin
      targets on `edgelab-observe.timer`).
 1. **Fixture.** PR 1 and PR 3–5 tests run on committed fixtures only.
