@@ -11,7 +11,7 @@ import pytest
 from edge_lab.fee_schedules import KALSHI_QUADRATIC_TAKER_V1 as FEES
 from edge_lab.outcome_board import WORST_CASE_METHOD, build_board
 from edge_lab.risk import HORIZONS, RiskPolicy, assess, equity_curve, withdrawal_assessment
-from edge_lab.shadow_ledger import ShadowLedger
+from edge_lab.shadow_ledger import ShadowLedger, knowledge_time
 
 UTC = timezone.utc
 T0 = datetime(2026, 9, 23, 22, 0, tzinfo=UTC)
@@ -43,7 +43,10 @@ def open_position(lg, n, *, qty=1, price="0.40", side="YES", event="ev1", cluste
 
 
 def settle(lg, n, outcome, at):
-    lg.record_settlement(ACC, fill_id=f"f{n}", outcome=outcome, evidence={}, settled_at_utc=at.isoformat())
+    # Evidence available at `at`, so the settlement's knowledge time is modeled, not the wall
+    # clock: without it the ledger falls back to the later of `at` and the append time.
+    lg.record_settlement(ACC, fill_id=f"f{n}", outcome=outcome, evidence={"evidence_available_utc": at.isoformat()},
+                         settled_at_utc=at.isoformat())
 
 
 # --------------------------------------------------------------------------- risk report
@@ -231,6 +234,14 @@ def test_overdue_positions_are_locked_not_releasing(ledger):
     buckets = {b.horizon: b for b in r.capital_release}
     assert buckets["locked"].positions == 1 and buckets["within_1_hour"].positions == 0
     assert build_board(ledger.state(ACC), T0)[0].horizon == "overdue"
+
+
+def test_settle_helper_knowledge_time_is_modeled_not_the_wall_clock(ledger):
+    # Guard for the fixture: fixed-T0 tests must not depend on when the suite runs.
+    open_position(ledger, 1)
+    settle(ledger, 1, "YES", T0 + timedelta(hours=1))
+    row = next(r for r in ledger.entries(ACC) if r["kind"] == "settlement")
+    assert knowledge_time(row) == T0 + timedelta(hours=1)
 
 
 def test_as_of_before_ledger_activity_is_refused(ledger, tmp_path, capsys):
