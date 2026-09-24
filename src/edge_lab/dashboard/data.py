@@ -914,6 +914,7 @@ class OddsTarget:
     books_source: str | None = None
     shared_targets: int | None = None
     transitions: tuple[dict[str, Any], ...] | None = None  # loaded for the rows shown, else None
+    consensus: "Loaded | None" = None  # CAPTURED rows shown: `odds_consensus_at_capture`, else None
 
 
 @dataclass(frozen=True)
@@ -1104,6 +1105,7 @@ def odds_capture_targets(ctx: Context) -> Loaded:
         t = replace(t, transitions=history[t.target_id])
         if t.state != "CAPTURED":
             return t
+        t = replace(t, consensus=odds_consensus_at_capture(ctx, t.event_id, t.captured_at_utc))
         if t.snapshot_id in parsed:
             return _parsed_books(t, parsed[t.snapshot_id], t.captured_at_utc)
         why = ("no snapshot recorded" if t.snapshot_id is None else
@@ -1123,6 +1125,78 @@ def odds_capture_targets(ctx: Context) -> Loaded:
         odds_max_age=max_age, sport=settings.sport, snapshots=parsed))
 
 
+# --------------------------------------------------------------------------- sportsbook consensus (odds_consensus, ADR 0033)
+
+ODDS_CONSENSUS_MODULE = "edge_lab.odds_consensus"
+ODDS_CONSENSUS_CACHE_MAX = 64
+# Results by (database, event, as_of, newest stored odds snapshot id received at or before as_of): a
+# point-in-time read uses only odds snapshots received by as_of, and ids only grow, so any row that
+# could change the result changes the key; other sources' writes (every few minutes) never do.
+_CONSENSUS: "OrderedDict[tuple, Any]" = OrderedDict()
+
+
+def _odds_receipts(ctx: Context) -> list[tuple[datetime, int]]:
+    """(receipt instant, id) of every stored odds snapshot with a readable receipt time, read once per
+    request without loading any payload. The evidence store has no public metadata-only read, so this
+    uses the store's own read-only connection (`mode=ro`, `query_only`), as `odds_consensus` does."""
+    from contextlib import closing
+
+    from ..odds_consensus import KIND, SOURCE
+
+    cached = ctx.__dict__.get("_odds_receipts")
+    if cached is None:
+        with closing(ctx.store.value._connect()) as conn:
+            rows = conn.execute("SELECT id, fetched_at_utc FROM snapshots WHERE source = ? AND kind = ?",
+                                (SOURCE, KIND)).fetchall()
+        cached = ctx.__dict__["_odds_receipts"] = [(p, int(r[0])) for r in rows if (p := parse_utc(r[1])) is not None]
+    return cached
+
+
+def _newest_odds_by(ctx: Context, at: datetime) -> int | None:
+    return max((sid for received, sid in _odds_receipts(ctx) if received <= at), default=None)
+
+
+def odds_consensus_at_capture(ctx: Context, event_id: str, received_utc: Any) -> Loaded:
+    """Lane C's research benchmark for one event as of one capture's receipt time:
+    `odds_consensus.consensus_for_event(store, event_id, as_of=receipt)` (the latest usable stored
+    observation of the event known then; newer unusable ones listed). OK carries the
+    `SnapshotConsensus` or None (nothing holding the event was known by then); NO_DATA when the
+    evidence database or the contract is unavailable, or the receipt time is unknown; ERROR on a read
+    failure. Called only for the captured rows a page shows (each call parses one event of one
+    snapshot, plus newer unusable ones), and memoized until an odds snapshot received by `as_of` is
+    added. Nothing here computes a probability."""
+    import importlib
+
+    if ctx.store.status != OK:
+        return ctx.store
+    as_of = parse_utc(received_utc)
+    if as_of is None:
+        return Loaded(NO_DATA, message="the capture's receipt time is not recorded, so no point-in-time consensus "
+                                       "can be read")
+    try:
+        module = importlib.import_module(ODDS_CONSENSUS_MODULE)
+    except ModuleNotFoundError as exc:
+        if exc.name != ODDS_CONSENSUS_MODULE:
+            return Loaded(ERROR, message=short_error(exc, ctx.config))
+        return Loaded(NO_DATA, message="the consensus research benchmark (odds_consensus) is not installed in this "
+                                       "build")
+    except Exception as exc:  # noqa: BLE001 - a module that fails to import is broken, not absent
+        return Loaded(ERROR, message=short_error(exc, ctx.config))
+    store, at = ctx.store.value, as_of.astimezone(timezone.utc)
+    try:
+        key = (str(store.path), str(event_id), at.isoformat(), _newest_odds_by(ctx, at))
+        if key in _CONSENSUS:
+            _CONSENSUS.move_to_end(key)
+            return Loaded(OK, _CONSENSUS[key])
+        result = module.consensus_for_event(store, str(event_id), at)
+    except Exception as exc:  # noqa: BLE001 - shown as an error state on this row only
+        return Loaded(ERROR, message=short_error(exc, ctx.config))
+    _CONSENSUS[key] = result
+    while len(_CONSENSUS) > ODDS_CONSENSUS_CACHE_MAX:
+        _CONSENSUS.popitem(last=False)
+    return Loaded(OK, result)
+
+
 # --------------------------------------------------------------------------- Freshness Fabric (freshness_fabric, ADR 0031)
 
 
@@ -1137,9 +1211,27 @@ class FreshnessReport:
     max_age: timedelta
 
 
-def freshness_report(ctx: Context) -> Loaded:
+def report_from_doc(doc: dict[str, Any], now: datetime) -> FreshnessReport:
+    """A report and its own age: `freshness.assess(generated_at_utc, SUPERVISOR_MAX_AGE, now)`."""
     from .. import freshness_fabric as ff
 
+    generated = doc.get("generated_at_utc") if isinstance(doc.get("generated_at_utc"), str) else None
+    fresh = assess_freshness(generated, max_age=ff.SUPERVISOR_MAX_AGE, now=now).value.upper()
+    return FreshnessReport(doc, fresh, ff.SUPERVISOR_MAX_AGE)
+
+
+def freshness_report(ctx: Context) -> Loaded:
+    """The supervisor's artifact, read with the writer's own size bound (a larger file is not its)."""
+    from .. import freshness_fabric as ff
+
+    directory = ctx.config.status_dir
+    try:
+        path = directory / FRESHNESS_FILE if directory is not None else None
+        if path is not None and path.is_file() and path.stat().st_size > ff.MAX_ARTIFACT_BYTES:
+            return Loaded(ERROR, message=f"{FRESHNESS_FILE} is larger than the supervisor's {ff.MAX_ARTIFACT_BYTES}-byte "
+                                         "bound, so it is not its report")
+    except OSError as exc:
+        return Loaded(ERROR, message=f"{FRESHNESS_FILE} cannot be read: {short_error(exc, ctx.config)}")
     loaded = ctx._status_file(FRESHNESS_FILE)
     if loaded.status == NO_DATA:
         if ctx.config.status_dir is None:
@@ -1153,7 +1245,5 @@ def freshness_report(ctx: Context) -> Loaded:
         return Loaded(ERROR, message=f"{FRESHNESS_FILE} has schema {str(doc.get('schema'))[:60]!r}, not {ff.SCHEMA}")
     if not isinstance(doc.get("sources"), list) or not isinstance(doc.get("supervisor"), dict):
         return Loaded(ERROR, message=f"{FRESHNESS_FILE} lacks its sources or supervisor section")
-    generated = doc.get("generated_at_utc") if isinstance(doc.get("generated_at_utc"), str) else None
-    fresh = assess_freshness(generated, max_age=ff.SUPERVISOR_MAX_AGE, now=ctx.now).value.upper()
-    return Loaded(OK, FreshnessReport(doc, fresh, ff.SUPERVISOR_MAX_AGE))
+    return Loaded(OK, report_from_doc(doc, ctx.now))
 

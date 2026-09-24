@@ -116,10 +116,90 @@ def _odds_event(native: str, home: str, away: str, commence: datetime) -> dict:
             "bookmakers": books}
 
 
+def _mixed_event(native: str, home: str, away: str, commence: datetime, received: datetime) -> dict:
+    """An event whose books disagree on freshness and completeness: two books stale at receipt, a
+    book with a lone alternate spread (one book: no consensus) and a one-sided total (unsupported)."""
+    def outcome(name: str, price: int, point: float | None = None) -> dict:
+        return {"name": name, "price": price, **({"point": point} if point is not None else {})}
+
+    def stamp(minutes: int) -> str:
+        return (received - timedelta(minutes=minutes)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    books = [{"key": b, "last_update": stamp(25 if i < 2 else 2), "markets": [
+        {"key": "h2h", "outcomes": [outcome(home, -130 - 3 * i), outcome(away, 110 + 3 * i)]},
+        {"key": "spreads", "outcomes": [outcome(home, -108, -2.5), outcome(away, -112, 2.5)]},
+        {"key": "totals", "outcomes": [outcome("Over", -110, 44.5), outcome("Under", -110, 44.5)]}]}
+        for i, b in enumerate(_BOOKS[:5])]
+    books.append({"key": "betus", "last_update": stamp(3), "markets": [
+        {"key": "spreads", "outcomes": [outcome(home, -105, -4.5), outcome(away, -115, 4.5)]},
+        {"key": "totals", "outcomes": [outcome("Over", -105, 44.5)]}]})
+    return {"id": native, "sport_key": "americanfootball_nfl", "sport_title": "NFL",
+            "commence_time": commence.strftime("%Y-%m-%dT%H:%M:%SZ"), "home_team": home, "away_team": away,
+            "bookmakers": books}
+
+
+def _history_with_issues(store: SnapshotStore, sport: str) -> None:
+    """Last week, before the capture of the current game (so the card is not DEGRADED): a Sunday game
+    with two missed targets and a failed call; a Monday game whose T-6h capture is usable (stale and
+    unsupported books) and whose T-60m response did not include it (the consensus falls back)."""
+    from edge_lab.odds_schedule import DEFAULT_OFFSETS, ScheduledEvent, iso_z, plan_targets
+
+    def plan(event: ScheduledEvent) -> dict:
+        out = {}
+        for t in plan_targets([event], DEFAULT_OFFSETS):
+            store.plan_odds_target(target_id=t.target_id, sport=sport, event_id=t.event_id,
+                                   offset_label=t.offset_label, priority=t.priority,
+                                   commence_time_utc=iso_z(t.commence_utc), target_utc=iso_z(t.target_utc),
+                                   planned_at_utc="2026-09-18T12:00:00Z", policy_version="game_relative_v1",
+                                   home_team=t.home_team, away_team=t.away_team)
+            out[t.offset_label] = t
+        return out
+    sun = plan(ScheduledEvent("fx901evt", sport, datetime(2026, 9, 20, 17, 0, tzinfo=timezone.utc),
+                              home_team="San Francisco 49ers", away_team="Los Angeles Rams"))
+    for label in ("T-24h", "T-60m"):
+        store.record_odds_transition(target_id=sun[label].target_id, state="MISSED",
+                                     at_utc=iso_z(sun[label].target_utc + timedelta(minutes=31)),
+                                     reason="expired while PLANNED")
+    fail = sun["T-6h"]
+    store.record_odds_transition(target_id=fail.target_id, state="CAPTURING", at_utc=iso_z(fail.target_utc),
+                                 slot_id=f"{sport}:{iso_z(fail.target_utc)}")
+    store.record_odds_transition(target_id=fail.target_id, state="FAILED", at_utc=iso_z(fail.target_utc),
+                                 slot_id=f"{sport}:{iso_z(fail.target_utc)}",
+                                 reason="paid call failed (not retried): HTTP 500 from the provider")
+    mnf_event = ScheduledEvent("fx900evt", sport, datetime(2026, 9, 22, 0, 15, tzinfo=timezone.utc),
+                               home_team="Seattle Seahawks", away_team="Arizona Cardinals")
+    mnf = plan(mnf_event)
+    store.record_odds_transition(target_id=mnf["T-24h"].target_id, state="MISSED",
+                                 at_utc=iso_z(mnf["T-24h"].target_utc + timedelta(minutes=31)),
+                                 reason="expired while PLANNED")
+    for label, present in (("T-6h", True), ("T-60m", False)):
+        t = mnf[label]
+        received, slot = t.target_utc + timedelta(seconds=20), f"{sport}:{iso_z(t.target_utc)}"
+        events = [_mixed_event("fx900evt", mnf_event.home_team, mnf_event.away_team, mnf_event.commence_utc,
+                               received)] if present else []
+        store.start_run(f"odds-{label}")
+        sid = store.save_snapshot(run_id=f"odds-{label}", source="the_odds_api", kind="odds", entity_id=sport,
+                                  url="https://api.the-odds-api.com/v4/sports/americanfootball_nfl/odds?apiKey=REDACTED",
+                                  payload={"sport": sport, "events": events,
+                                           "request": {"purpose": "capture", "odds_format": "american",
+                                                       "slot_id": slot, "targets": [
+                                                           {"target_id": t.target_id, "event_id": "fx900evt",
+                                                            "offset": label, "target_utc": iso_z(t.target_utc)}]}},
+                                  fetched_at_utc=iso_z(received), source_id="the_odds_api")
+        store.finish_run(f"odds-{label}", status="succeeded")
+        store.record_odds_transition(target_id=t.target_id, state="CAPTURING", at_utc=iso_z(received), slot_id=slot)
+        store.record_odds_transition(target_id=t.target_id, state="CAPTURED", at_utc=iso_z(received), slot_id=slot,
+                                     snapshot_id=sid, captured_at_utc=iso_z(received), credits_last=3,
+                                     detail={"event_present": present, "offset": label, "parse_problems": 0,
+                                             "bookmakers": sorted(b["key"] for e in events for b in e["bookmakers"]),
+                                             "offers": sum(len(m["outcomes"]) for e in events
+                                                           for b in e["bookmakers"] for m in b["markets"])})
+
+
 def odds_pilot(root: Path | None = None, *, issues: bool = False) -> tuple[Config, Path]:
     """The pilot's evidence as the runner writes it (targets, transitions, a captured odds response, a
-    discovery snapshot, the quota ledger and runner state). `issues` adds a missed, a failed, a
-    budget-skipped and an overdue target and an exhausted quota."""
+    discovery snapshot, the quota ledger and runner state). `issues` adds last week's missed, failed
+    and captured targets (one capture usable with stale and unsupported books, one whose response
+    lacked the game), a superseded, a budget-skipped and an overdue target and an exhausted quota."""
     from edge_lab import odds_api
     from edge_lab.odds_schedule import DEFAULT_OFFSETS, ScheduledEvent, iso_z, plan_targets
 
@@ -148,6 +228,8 @@ def odds_pilot(root: Path | None = None, *, issues: bool = False) -> tuple[Confi
                                target_utc=iso_z(t.target_utc), planned_at_utc=planned_at,
                                policy_version="game_relative_v1", home_team=t.home_team, away_team=t.away_team,
                                discovery_snapshot_id=disc)
+    if issues:
+        _history_with_issues(store, sport)
     six = next(t for t in targets if t.event_id == first.event_id and t.offset_label == "T-6h")
     received = six.target_utc + timedelta(seconds=41)
     store.start_run("odds-capture")
@@ -177,27 +259,8 @@ def odds_pilot(root: Path | None = None, *, issues: bool = False) -> tuple[Confi
     ledger = odds_api.QuotaLedger(ledger_path, clock=lambda: ODDS_NOW)
     if issues:
         ledger.reconcile({"x-requests-remaining": "0", "x-requests-used": "500", "x-requests-last": "0"})
-        # Last Monday's game: two targets missed and one failed call, all before the capture above
-        # (so the card is not DEGRADED); a game whose kickoff moved (superseded); a budget-skipped
-        # target; and the T-60m above left open past its deadline (a runner that stopped).
-        mnf = ScheduledEvent("fx900evt", sport, datetime(2026, 9, 22, 0, 15, tzinfo=timezone.utc),
-                             home_team="Seattle Seahawks", away_team="Arizona Cardinals")
-        for t in plan_targets([mnf], DEFAULT_OFFSETS):
-            store.plan_odds_target(target_id=t.target_id, sport=sport, event_id=t.event_id,
-                                   offset_label=t.offset_label, priority=t.priority,
-                                   commence_time_utc=iso_z(t.commence_utc), target_utc=iso_z(t.target_utc),
-                                   planned_at_utc="2026-09-20T12:00:00Z", policy_version="game_relative_v1",
-                                   home_team=t.home_team, away_team=t.away_team)
-            at = iso_z(t.target_utc + timedelta(minutes=31))
-            if t.offset_label == "T-6h":
-                store.record_odds_transition(target_id=t.target_id, state="CAPTURING", at_utc=iso_z(t.target_utc),
-                                             slot_id=f"{sport}:{iso_z(t.target_utc)}")
-                store.record_odds_transition(target_id=t.target_id, state="FAILED", at_utc=iso_z(t.target_utc),
-                                             slot_id=f"{sport}:{iso_z(t.target_utc)}",
-                                             reason="paid call failed (not retried): HTTP 500 from the provider")
-            else:
-                store.record_odds_transition(target_id=t.target_id, state="MISSED", at_utc=at,
-                                             reason="expired while PLANNED")
+        # A game whose kickoff moved (superseded), a budget-skipped target, and the T-60m above left
+        # open past its deadline (a runner that stopped).
         moved = next(t for t in targets if t.event_id == events[5].event_id and t.offset_label == "T-24h")
         store.record_odds_transition(target_id=moved.target_id, state="SUPERSEDED",
                                      at_utc=iso_z(ODDS_NOW - timedelta(hours=1)),

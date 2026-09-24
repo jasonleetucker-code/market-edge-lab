@@ -348,46 +348,140 @@ def synthetic_odds_targets() -> dict[str, Any]:
     }
 
 
-# SYNTHETIC Freshness Fabric reports: the real supervisor (`freshness_fabric.build_status` /
-# `deferred_status`) over an empty context (every source UNKNOWN, nothing configured), with one
-# SYNTHETIC source edited to show a fresh receipt, a missed run and a disagreement.
+# SYNTHETIC sportsbook consensus: SYNTHETIC stored rows run through the real contract
+# (`odds_consensus.build_snapshot_consensus`), so every figure the gallery shows is its own output.
+CONSENSUS_RECEIVED = "2026-09-24T18:15:41Z"
+
+
+def _book(key: str, updated: str | None, markets: list) -> dict:
+    return {"key": key, **({"last_update": updated} if updated else {}), "markets": markets}
+
+
+def _consensus_event(*, mixed: bool) -> dict:
+    home, away = "SYNTHETIC Home", "SYNTHETIC Away"
+
+    def o(name: str, price: int, point: float | None = None) -> dict:
+        return {"name": name, "price": price, **({"point": point} if point is not None else {})}
+
+    def core(i: int) -> list:
+        return [{"key": "h2h", "outcomes": [o(home, -150 - 4 * i), o(away, 128 + 4 * i)]},
+                {"key": "spreads", "outcomes": [o(home, -110, -3.5), o(away, -110, 3.5)]},
+                {"key": "totals", "outcomes": [o("Over", -108 - i, 47.5), o("Under", -112 + i, 47.5)]}]
+    fresh = "2026-09-24T18:14:30Z"
+    books = [_book(f"SYNTHETIC-book-{c}", fresh, core(i)) for i, c in enumerate("abc")]
+    if mixed:
+        books += [_book("SYNTHETIC-book-stale", "2026-09-24T17:40:00Z", core(3)),
+                  _book("SYNTHETIC-book-no-time", None, core(4)),
+                  _book("SYNTHETIC-book-alt", fresh, [
+                      {"key": "spreads", "outcomes": [o(home, -104, -4.5), o(away, -116, 4.5)]},
+                      {"key": "totals", "outcomes": [o("Over", -105, 44.5)]},
+                      {"key": "h2h", "outcomes": [o(home, 180), o(away, 200), o("Draw", 900)]}])]
+    return {"id": "DEMO-NFL-1", "sport_key": "SYNTHETIC_nfl", "sport_title": "SYNTHETIC", "home_team": home,
+            "away_team": away, "commence_time": "2026-09-25T00:15:00Z", "bookmakers": books}
+
+
+def _consensus_row(sid: int, events: list, *, bad_hash: bool = False) -> dict:
+    from ..provenance import canonical_json, sha256_hex
+
+    text = canonical_json({"sport": "SYNTHETIC_nfl", "events": events,
+                           "request": {"purpose": "capture", "odds_format": "american", "slot_id": "SYNTHETIC-slot"}})
+    return {"id": sid, "fetched_at_utc": CONSENSUS_RECEIVED, "url": "synthetic://odds",
+            "payload_sha256": "0" * 64 if bad_hash else sha256_hex(text), "payload_json": text}
+
+
+def synthetic_consensus() -> dict[str, Any]:
+    """name -> (a `data.Loaded` of `odds_consensus.consensus_for_event`'s result, the capture's snapshot id):
+    populated with stale, unknown, insufficient and unsupported books; all fresh; this capture
+    unusable with an earlier one shown; failed closed; none; not installed; read error. Point-in-time
+    fields are those of a read at the capture's own receipt time (receipt age zero, so
+    `freshness_as_of` equals the books' worst freshness at receipt)."""
+    from .. import odds_consensus as oc
+    from . import data as d
+
+    def at_receipt(result: Any, **extra: Any) -> Any:
+        return replace(result, as_of_utc=result.received_at_utc, freshness_as_of=result.freshness_at_receipt, **extra)
+    mixed = at_receipt(oc.build_snapshot_consensus(_consensus_row(901, [_consensus_event(mixed=True)])))
+    fresh = at_receipt(oc.build_snapshot_consensus(_consensus_row(902, [_consensus_event(mixed=False)])))
+    gap = oc.UnusableCapture(903, "2026-09-24T23:15:20Z", ("EVENT_ABSENT: snapshot 903 mentions event DEMO-NFL-1 "
+                                                           "but its response does not include it",))
+    broken = at_receipt(oc.build_snapshot_consensus(_consensus_row(904, [_consensus_event(mixed=False)],
+                                                                   bad_hash=True)))
+    return {
+        "populated": (d.Loaded(d.OK, mixed), 901),
+        "fresh": (d.Loaded(d.OK, fresh), 902),
+        "fallback": (d.Loaded(d.OK, replace(fresh, newer_unusable=(gap,))), 903),
+        "failed_closed": (d.Loaded(d.OK, broken), 904),
+        "none": (d.Loaded(d.OK, None), None),
+        "missing": (d.Loaded(d.OK, None), 905),
+        "unavailable": (d.Loaded(d.NO_DATA, message="the consensus research benchmark (odds_consensus) is not "
+                                                    "installed in this build"), 906),
+        "error": (d.Loaded(d.ERROR, message="OperationalError: database disk image is malformed"), 907),
+    }
+
+
+# SYNTHETIC Freshness Fabric reports, all built by the real supervisor (`freshness_fabric.build_status`
+# / `deferred_status`): the registered providers over an empty context (every source UNKNOWN, nothing
+# configured) plus ONE SYNTHETIC provider through the real contract types, so its fresh receipt, miss
+# and disagreement are counted by the fabric's own summary.
 FRESHNESS_NOW = "2026-09-24T21:00:00+00:00"
 
 
+def _synthetic_provider() -> Any:
+    from ..freshness import (AcquisitionMode, FabricProvider, Freshness, ScheduleState, SourceFreshness, SourceHealth,
+                             SourcePolicy)
+
+    policy = SourcePolicy(
+        source_id="synthetic.demo_source", domain="SYNTHETIC", mode=AcquisitionMode.EXTERNAL_SCHEDULE,
+        description="SYNTHETIC source for the gallery: a fresh receipt, one missed run and one disagreement",
+        policy_version="SYNTHETIC", schedule_owner="SYNTHETIC demo timer every 5 min",
+        underlying_mode=AcquisitionMode.POLL, max_useful_age=timedelta(minutes=10))
+
+    def provide(ctx: Any, now: Any) -> list:
+        receipt = now - timedelta(minutes=5)
+        return [SourceFreshness(
+            policy=policy, as_of=now, freshness=Freshness.FRESH, schedule_state=ScheduleState.MISSED,
+            health=SourceHealth.OK, why_due="SYNTHETIC: the 20:50 run was missed; the next is due at 21:05",
+            next_due=now + timedelta(minutes=5), last_attempt=receipt, last_success_receipt=receipt,
+            receipt_ts=receipt, missed_count=1, recent_misses=("SYNTHETIC: 2026-09-24T20:50:00Z",),
+            usable_for_research=True, usable_for_decision=True,
+            disagreements=("SYNTHETIC: the timer tick falls outside the window the gate accepts",),
+            details={"missed_scope": "SYNTHETIC: the latest tick only"})]
+    return FabricProvider("synthetic_demo", (policy,), provide)
+
+
 def synthetic_freshness() -> dict[str, Any]:
-    """name -> a `data.Loaded` of `data.freshness_report`: populated, stale report, partial,
-    deferred with nothing carried, deferred carried, not written, read error."""
+    """name -> a `data.Loaded` of `data.freshness_report`: populated, stale report, partial, deferred
+    carried, deferred with nothing carried, not written, read error."""
+    import tempfile
     from datetime import datetime, timezone
+    from pathlib import Path
 
     from .. import freshness_fabric as ff
     from ..freshness import FabricContext
     from . import data as d
 
     now = datetime(2026, 9, 24, 21, 0, tzinfo=timezone.utc)
-    doc = ff.build_status(FabricContext(), now)
-    doc["sources"] = [dict(x) for x in doc["sources"]]
-    first = doc["sources"][0]
-    first.update(freshness="FRESH", health="OK", schedule_state="MISSED", missed_count=1,
-                 receipt_ts_utc="2026-09-24T20:55:00Z", last_success_receipt_utc="2026-09-24T20:55:00Z", data_age_s=300.0,
-                 usable_for_research=True, usable_for_decision=True,
-                 recent_misses=["SYNTHETIC: 2026-09-23 decision capture"],
-                 disagreements=["SYNTHETIC: the timer tick falls outside the window the gate accepts"])
-    partial = {**doc, "supervisor": {**doc["supervisor"], "state": "PARTIAL",
-                                     "problems": ["SYNTHETIC provider: RuntimeError: boom"]}}
-    window = ("kalshi_close_tick", datetime(2026, 9, 25, 4, 55, 30, tzinfo=timezone.utc),
-              datetime(2026, 9, 25, 5, 1, tzinfo=timezone.utc))
-    empty_deferred = ff.deferred_status(FabricContext(), window[1], window)
-    carried = {**doc, "generated_at_utc": "2026-09-25T04:58:00Z", "sources_evaluated_at_utc": "2026-09-25T04:54:00Z",
-               "supervisor": {**empty_deferred["supervisor"], "problems": []},
-               "sources": [{**x, "carried_from_utc": "2026-09-25T04:54:00Z", "usable_for_decision": False}
-                           for x in doc["sources"]]}
-    max_age = ff.SUPERVISOR_MAX_AGE
+    registry = (*ff.REGISTRY, _synthetic_provider())
+    doc = ff.build_status(FabricContext(), now, registry)
+    old = ff.build_status(FabricContext(), now - timedelta(hours=2), registry)  # generated two hours ago
+
+    def boom(ctx: Any, at: Any) -> list:
+        raise RuntimeError("SYNTHETIC provider failure")
+    broken = (*ff.REGISTRY[:-1], ff.FabricProvider(ff.REGISTRY[-1].name, ff.REGISTRY[-1].policies, boom))
+    partial = ff.build_status(FabricContext(), now, broken)
+    guard = ff.close_guard_at(datetime(2026, 9, 25, 4, 58, tzinfo=timezone.utc))
+    at_guard = guard[1] + timedelta(minutes=2)
+    empty_deferred = ff.deferred_status(FabricContext(), at_guard, guard, registry)
+    with tempfile.TemporaryDirectory(prefix="edge-ui-fabric-") as tmp:  # the supervisor's own carry path
+        ctx = FabricContext(status_dir=Path(tmp))
+        ff.write_status(ff.render(ff.build_status(ctx, guard[1] - timedelta(minutes=4), registry)), Path(tmp))
+        carried = ff.deferred_status(ctx, at_guard, guard, registry)
     return {
-        "populated": d.Loaded(d.OK, d.FreshnessReport(doc, "FRESH", max_age)),
-        "stale": d.Loaded(d.OK, d.FreshnessReport(doc, "STALE", max_age)),
-        "partial": d.Loaded(d.OK, d.FreshnessReport(partial, "FRESH", max_age)),
-        "deferred_empty": d.Loaded(d.OK, d.FreshnessReport(empty_deferred, "FRESH", max_age)),
-        "deferred_carried": d.Loaded(d.OK, d.FreshnessReport(carried, "FRESH", max_age)),
+        "populated": d.Loaded(d.OK, d.report_from_doc(doc, now)),
+        "stale": d.Loaded(d.OK, d.report_from_doc(old, now)),
+        "partial": d.Loaded(d.OK, d.report_from_doc(partial, now)),
+        "deferred_carried": d.Loaded(d.OK, d.report_from_doc(carried, at_guard)),
+        "deferred_empty": d.Loaded(d.OK, d.report_from_doc(empty_deferred, at_guard)),
         "missing": d.Loaded(d.NO_DATA, message="The Freshness Fabric supervisor (edgelab-freshness.timer) has not "
                                                "written freshness.json to the status directory yet"),
         "error": d.Loaded(d.ERROR, message="freshness.json has schema 'something-else/9', not freshness-fabric-status/1"),
