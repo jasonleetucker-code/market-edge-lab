@@ -257,6 +257,57 @@ be written here when they are made.
     (`.github/pull_request_template.md`) asks for each item. Tests detect violations; reviewed
     screenshots are still required.
 
+- **2026-09-24, Brisket health repair and next-phase build directive.** Recorded in
+  `docs/owner/2026-09-24-brisket-health-and-next-phase-directive.md` (the owner's four
+  corrections verbatim). Gate 7 is unchanged and **not passed**.
+  - **Authorized (shadow/research only):**
+    - **Stake sizing v2.** A challenger research engine, counterfactual replay, a simulation
+      study and a research report. Later, a read-only dashboard recommendation labelled
+      RESEARCH SIZING. The operational shadow account keeps `EXP-001-fixed-1-v1`, and the
+      frozen research account and preregistration are untouched. v2 may influence shadow
+      fills only after a separately recorded sizing experiment passes its own acceptance
+      criteria.
+    - **Multi-venue comparison.** One best-price-for-size comparator over the shared depth,
+      grid, fee, equivalence and venue primitives, using only the honest claim labels in the
+      directive.
+    - **Polymarket US evidence.** Rules and fee evidence taken from official Polymarket US
+      documentation only. A split (50-50) cancellation payoff is represented and refused,
+      never treated as binary.
+    - **The Odds API free tier.** An NFL pilot covering h2h, spreads and totals for one
+      region.
+      - The owner installs the read-only key in the server secrets file; agents never
+        create, request, see or commit it.
+      - One bounded smoke read after the key exists. Then one scheduled unit
+        (`edgelab-odds.timer`) running a game-relative capture policy: about T-24 h, T-6 h
+        and T-60 min per event, discovered through the quota-free events endpoint.
+      - Hard ceiling of 450 credits per month, or the provider's remaining quota if lower.
+      - Before enabling: the schedule is enumerated, worst-case and expected credits are
+        computed, and every snapshot's target time is persisted.
+      - Excluded: player props, paid tiers, betting accounts and execution.
+    - **ntfy.** The first real ntfy push is approved.
+      - The existing sink is wired into the existing dispatch layer.
+      - A high-entropy private topic on the free hosted `ntfy.sh` is kept only in the server
+        secrets file, never in Git or logs.
+      - One non-sensitive test send. Only SUBMITTED is recorded; phone delivery is not
+        claimed without direct evidence.
+      - Headlines stay fixed and minimal.
+    - **F09.** Manual checkpoints, roughly weekly and after a notable ledger event (the first
+      settlement, a settlement conflict, a significant ledger or risk-schema migration, or
+      before and after a recovery that affects ledger durability). **No F09 timer.**
+    - **Roadmap.** A Domain Readiness matrix, with states only and no numerical score. The
+      domain sequence: weather, then sports data, sports models, macro, crypto, energy,
+      business/tech, culture, politics, long tail.
+  - **Not authorized:** real-money trades, deposits, withdrawals, trading credentials, Gate 8+,
+    live execution, paid APIs or services, SMS, public exposure or Funnel, disabling Tailscale,
+    SSH key / sshd / sudo / root-login changes (root SSH hardening is a separate future
+    security task), OS upgrades or reboots, broad macro/crypto implementation, retuning EXP-001
+    or changing its sizing, criteria or history.
+  - **Operations:**
+    - No Market Edge install or restart from 17:40 to 18:50 America/New_York, nor while a
+      settlement job runs (around 11:15 and 16:15 ET).
+    - Before any install, check that no `edgelab-*` capture job is running.
+    - Deploy only merged code, through `docs/deploy/DAILY_SHADOW_ACTIVATION.md`.
+
 ## Standing merge rule: docs-only and test-only PRs
 
 Owner rule of 2026-09-22 (verbatim source: `docs/owner/2026-09-22-overnight-build-directive.md`).
@@ -341,7 +392,8 @@ A PR that fails any of these needs the usual authority: a directive grant or the
   - The execution-ticket pre-submit control chain (data only; `EXECUTION_NOT_AUTHORIZED`
     always fails).
   - The ntfy sink (ADR 0022). It is disabled unless configured, is not wired into any run
-    or timer, and **sends nothing without separate owner approval**.
+    or timer, and **sends nothing without separate owner approval**. The owner gave that
+    approval on 2026-09-24: wiring plus one test send (see the 2026-09-24 entry above).
   - Windows portability.
 
 ## Explicitly not authorized
