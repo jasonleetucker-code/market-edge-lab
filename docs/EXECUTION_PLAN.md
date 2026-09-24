@@ -408,6 +408,42 @@ be written here when they are made.
     - per-domain schedulers or evidence databases;
     - extending 2026-10-22 automatically.
 
+- **2026-09-24 (night), #88 Public Markets Edge.** Owner directive in chat, reconciled into
+  `docs/OWNER_IDEAS.md` as a first-class domain.
+  - **Authorized now (research only):**
+    - source and licensing research for equities, ETFs, options and futures; for each source:
+      real-time vs delayed, venue vs consolidated, history, auth, cost, limits, retention, storage
+      and redistribution rights, research-grade vs execution-grade;
+    - SEC EDGAR and official-source ingestion planning;
+    - paper/sandbox broker evaluation, **with no signup**;
+    - architecture work so the shared primitives can represent public-market instruments.
+  - **Keyless collectors** (e.g. EDGAR filing events for a bounded universe) fall under the #86
+    gated rule: one source at a time, with terms review, budget, fabric provider, review and CI.
+  - **Owner-only:** creating any account or key (including a paper-only broker account), after the
+    security ADR for broker keys.
+  - **Not authorized:**
+    - paid market data (SIP, OPRA, CME real-time or historical, Cboe DataShop);
+    - brokerage signup, funding, margin, short selling, derivatives permissions;
+    - order-write credentials, paper or live orders (Gate 8+);
+    - automated quote-page scraping.
+
+  Every intraday experiment needs a rationale, trigger, windows, point-in-time features, costs,
+  spread, slippage, latency, session rules, effective sample size, out-of-sample validation and
+  prospective shadow criteria.
+- **2026-09-24 (night), Polymarket US NFL pilot: owner risk decision.**
+  - **The decision.** The owner decided ("its my risk decision. just do it") to run the PR #84
+    pilot despite Polymarket US Terms §4–§5. The Terms review verdict stays "not cleared by the
+    Terms themselves".
+  - **An unverified permission text** (no sender, date or headers) is recorded as
+    OWNER_ATTESTED_EXPRESS_PERMISSION — UNVERIFIED. It is not the basis for activation. Its stated
+    conditions are honoured anyway: at most 100 requests per minute, attribution to Polymarket US,
+    no redistribution.
+  - **Authorized once PR #84 passes review and CI:** the pilot's discovery and capture timers,
+    within ADR 0032's caps. Scope: public keyless gateway, NFL moneylines, RELATED_NOT_EQUIVALENT
+    only.
+  - **Not authorized:** trading, account credentials, orders, money movement, paid services,
+    Polymarket International.
+
 ## Standing merge rule: docs-only and test-only PRs
 
 Owner rule of 2026-09-22 (verbatim source: `docs/owner/2026-09-22-overnight-build-directive.md`).
