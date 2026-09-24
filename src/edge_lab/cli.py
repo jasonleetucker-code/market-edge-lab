@@ -197,6 +197,18 @@ def build_parser() -> argparse.ArgumentParser:
                            help="after reviewing a COST_ANOMALY, allow paid calls again")
     # --- end odds
 
+    # --- consensus / readiness (ADR 0033). Self-contained block. Listed here for --help only:
+    # main() hands `odds consensus` and `readiness report` to their modules' own parsers.
+    odds_sub.add_parser("consensus", add_help=False,
+                        help="Read-only, no network: sportsbook consensus RESEARCH BENCHMARK (NOT EXECUTABLE) "
+                             "from stored snapshots.")
+    readiness = subparsers.add_parser(
+        "readiness", help="Read-only, no network: per-domain research-readiness / learning-history report."
+    )
+    readiness.add_subparsers(dest="readiness_command", required=True).add_parser(
+        "report", add_help=False, help="YES / PARTIAL / NOT_YET / UNKNOWN per prerequisite, from the real stores.")
+    # --- end consensus / readiness
+
     # --- observe: later/closing price observations (ADR 0030). Self-contained block.
     observe = subparsers.add_parser(
         "observe", help="Later/closing price observations: plan, bounded capture, status (ADR 0030 option A timers)."
@@ -924,6 +936,16 @@ def main(argv: list[str] | None = None) -> int:
 
         return pm_sports_main(argv[1:])
     # --- end pm-sports
+    # --- consensus / readiness (ADR 0033): read-only, network-free; each module owns its parser.
+    if argv[:2] == ["odds", "consensus"]:
+        from .odds_consensus import main as consensus_main
+
+        return consensus_main(argv[2:])
+    if argv[:2] == ["readiness", "report"]:
+        from .research_readiness import main as readiness_main
+
+        return readiness_main(argv[2:])
+    # --- end consensus / readiness
     if argv[:1] == ["sizing"]:  # stake sizing v2 research tools own their parser (ADR 0026)
         from .sizing_eval import main as sizing_main
 
