@@ -411,7 +411,8 @@ def synthetic_consensus() -> dict[str, Any]:
         "fresh": (d.Loaded(d.OK, fresh), 902),
         "fallback": (d.Loaded(d.OK, replace(fresh, newer_unusable=(gap,))), 903),
         "failed_closed": (d.Loaded(d.OK, broken), 904),
-        "none": (d.Loaded(d.OK, None), 905),
+        "none": (d.Loaded(d.OK, None), None),
+        "missing": (d.Loaded(d.OK, None), 905),
         "unavailable": (d.Loaded(d.NO_DATA, message="the consensus research benchmark (odds_consensus) is not "
                                                     "installed in this build"), 906),
         "error": (d.Loaded(d.ERROR, message="OperationalError: database disk image is malformed"), 907),

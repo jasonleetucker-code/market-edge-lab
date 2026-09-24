@@ -123,9 +123,10 @@ def view(ctx: d.Context, p: pr.Params) -> cm.Page:
         loaded, sid = consensus[key]
         parts.append(c.section(f"Consensus at a capture ({title})", research.consensus_body(loaded, sid),
                                meta=research.CONSENSUS_LABEL, sid=f"g-cons-{key}"))
-    parts.append(c.section("Consensus at a capture (failed closed / none / not installed / read error)",
+    parts.append(c.section("Consensus at a capture (failed closed / none / missing capture / not installed / read error)",
                            "".join(research.consensus_body(*consensus[k])
-                                   for k in ("failed_closed", "none", "unavailable", "error")), sid="g-cons-states"))
+                                   for k in ("failed_closed", "none", "missing", "unavailable", "error")),
+                           sid="g-cons-states"))
     origin_rows = [
         cm.failure_alert(d.FailureRecord(d.FAILURE_FILE, fixtures.synthetic_failure_record("edgelab-decision.service"),
                                          "PRODUCTION", False)),

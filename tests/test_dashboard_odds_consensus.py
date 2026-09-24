@@ -98,7 +98,7 @@ def test_production_shape_shows_the_contracts_consensus_at_the_capture(productio
                    "Freshness at this capture Fresh (worst of books)", "Books quoting this event 9",
                    "Consensus version odds-consensus-v1", "Moneyline (h2h) · Atlanta Falcons / Green Bay Packers",
                    "Spread (spreads) · Atlanta Falcons +3.5 / Green Bay Packers -3.5",
-                   "Total (totals) · Over 47.5 / Under 47.5", "9 of 9", "range_and_unscaled_mad_v1",
+                   "Total (totals) · Over 47.5 / Under 47.5", "9 contributing 9 quoting this market (any line)", "range_and_unscaled_mad_v1",
                    "Offered prices as received (18)", "not probabilities and not executable"):
         assert needle in text, needle
     # Every consensus figure shown is the contract's value, only formatted.
@@ -143,6 +143,7 @@ def test_the_display_uses_freshness_as_of_not_the_receipt_age_alone():
     ("fallback", ("1 newer capture of this event unusable", "This capture is not used")),
     ("failed_closed", ("No usable consensus at this capture", "PAYLOAD_HASH_MISMATCH")),
     ("none", ("No consensus for this capture",)),
+    ("missing", ("No consensus found for this capture", "records snapshot 905", "inconsistent")),
     ("unavailable", ("Consensus unavailable", "not installed")),
     ("error", ("Consensus unavailable (read error)", "This is not an empty benchmark")),
 ])
@@ -237,3 +238,27 @@ def test_gallery_shows_the_consensus_states():
             assert needle in text, needle
     finally:
         shutil.rmtree(root, ignore_errors=True)
+
+
+def test_the_memo_key_is_the_newest_odds_snapshot_known_by_the_capture(production, monkeypatch):
+    """Review SF-1: other sources' writes never invalidate; an odds snapshot received by as_of does."""
+    from edge_lab.storage import SnapshotStore
+
+    calls = []
+    real = odds_consensus.consensus_for_event
+    monkeypatch.setattr(odds_consensus, "consensus_for_event",
+                        lambda store, event_id, as_of: calls.append(as_of) or real(store, event_id, as_of))
+    d.Context(production).odds_targets
+    assert len(calls) == 1
+    store = SnapshotStore(production.db)
+    store.start_run("other-sources")
+    store.save_snapshot(run_id="other-sources", source="kalshi", kind="orderbook", entity_id="X", url="u", payload={})
+    store.save_snapshot(run_id="other-sources", source="the_odds_api", kind="odds", entity_id="americanfootball_nfl",
+                        url="u", payload={"events": []}, fetched_at_utc="2026-09-24T20:00:00Z")  # after the capture
+    d.Context(production).odds_targets
+    assert len(calls) == 1  # neither a Kalshi write nor a later odds receipt can change this capture's result
+    store.save_snapshot(run_id="other-sources", source="the_odds_api", kind="odds", entity_id="americanfootball_nfl",
+                        url="u", payload={"events": []}, fetched_at_utc="2026-09-24T18:00:00Z")  # known by then
+    d.Context(production).odds_targets
+    assert len(calls) == 2
+

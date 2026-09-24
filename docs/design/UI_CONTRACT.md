@@ -242,8 +242,8 @@ QUOTA_EXHAUSTED, QUOTA_UNKNOWN, DISCOVERY_STALE), source unavailable, read error
 row shown carries a "Consensus at this capture · RESEARCH BENCHMARK — NOT EXECUTABLE" disclosure: Lane
 C's `odds_consensus.consensus_for_event(store, event, as_of=the capture's receipt time)`, per exact
 proposition (moneyline, each spread line, each total line): the consensus probability per outcome
-(median of the books' de-vigged probabilities), range and MAD (method named), contributing vs quoting
-book count, freshness (`freshness_as_of`, worst of books) and earliest/latest contributing update;
+(median of the books' de-vigged probabilities), range and MAD (method named), contributing books vs books
+quoting the market at any line, freshness (`freshness_as_of`, worst of books) and earliest/latest contributing update;
 offered prices as received and each book's de-vig in a separate nested disclosure and separate
 tables, never in the consensus table; unsupported groups with their reason codes. States: populated,
 insufficient books, unsupported, stale/unknown freshness, this capture unusable with an earlier one
@@ -405,7 +405,7 @@ directive), and the screenshots that justify it.
   components; no new component, token or CSS. New presentation helpers only: `pp_size` (an unsigned
   probability spread in pp), `odds_market_label`, `freshness_code`. Offered prices and consensus
   probabilities never share a table; a book's margin is shown in signed pp. The contract is read only
-  for the captured rows shown, at each capture's receipt time, memoized until any snapshot is added.
+  for the captured rows shown, at each capture's receipt time, memoized until an odds snapshot received by that time is added.
   Screenshots: fixture states `odds` and `odds_issues` (a capture with stale, unsupported and
   single-book lines; a later capture whose response lacked the game) and `/gallery` at 360x800 and
   1440x900, 720x450 and 180x400 as 200% zoom (`tests/browser/capture.py`), reviewed locally by the

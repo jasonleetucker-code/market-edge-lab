@@ -254,11 +254,13 @@ def _proposition(p: Any) -> str:
         ("Consensus probability", c.num(pr.percent(o.consensus_probability), reason="no consensus: fewer than two books")),
         ("Range · MAD", c.num(" · ".join(x or "—" for x in (pr.pp_size(o.range), pr.pp_size(o.mad)))
                               if o.range is not None or o.mad is not None else None, reason="not computed")),
-        ("Books (contributing of quoting)", c.num(f"{pr.count(o.book_count)} of {pr.count(p.market_bookmaker_count)}")),
+        ("Books", c.num(f"{pr.count(o.book_count)} contributing")
+         + _sub(f"{pr.count(p.market_bookmaker_count)} quoting this market (any line)")),
     ], wide=True, text_cols=(0,)) for o in p.consensus)
     consensus = f'<div role="group" aria-label="{esc("Consensus probability, " + title)}">{consensus}</div>'
     head = c.facts([
-        ("Status", c.state_text(status)),
+        ("Status", c.state_text(f"CONSENSUS_{status}", label=pr.state_word(f"CONSENSUS_{status}").label
+                                if f"CONSENSUS_{status}" in pr.STATES else None)),
         ("Freshness at receipt", c.badge(pr.freshness_code(p.freshness_at_receipt),
                                          label=f"{pr.state_word(pr.freshness_code(p.freshness_at_receipt)).label} "
                                                "(worst of books)")),
@@ -299,6 +301,11 @@ def consensus_body(result: d.Loaded | None, capture_snapshot_id: Any = None) -> 
         return c.unavailable("Consensus unavailable", result.message[:1].upper() + result.message[1:] + ".")
     r = result.value
     if r is None:
+        if capture_snapshot_id is not None:  # the row names a stored capture, yet none is found: never calm
+            return c.empty_state("No consensus found for this capture", f"This target records snapshot "
+                                 f"{capture_snapshot_id}, but no stored odds response holding this event was found by "
+                                 "its receipt time. The stored evidence is inconsistent; check the capture.",
+                                 kind="warn")
         return c.empty_state("No consensus for this capture", "No stored odds response holding this event had been "
                                                              "received by this capture's time.")
     out = [f'<p class="eyebrow">{esc(r.label)}</p>']

@@ -394,8 +394,9 @@ STATES: dict[str, StateWord] = {
     "TARGET_PENDING": StateWord("Not captured yet", ND_K),
     "TARGET_NO_CAPTURE": StateWord("Nothing captured", ND_K),
     # Sportsbook consensus proposition status (odds_consensus.ConsensusStatus); research only, never green.
-    "SUPPORTED": StateWord("Consensus computed", INFO_K),
-    "INSUFFICIENT_BOOKS": StateWord("Insufficient books", WARN_K),
+    "CONSENSUS_SUPPORTED": StateWord("Consensus computed", INFO_K),
+    "CONSENSUS_INSUFFICIENT_BOOKS": StateWord("Insufficient books", WARN_K),
+    "CONSENSUS_UNSUPPORTED": StateWord("Unsupported", WARN_K),
 }
 
 

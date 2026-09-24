@@ -357,10 +357,10 @@ def test_parsing_is_bounded_to_the_rows_shown_and_memoized(tmp_path, monkeypatch
     d.Context(_cfg(tmp_path)).odds_targets  # the same page again: books and consensus from the bounded caches
     assert calls == [] and len(d._PARSED) <= d.ODDS_PARSE_CACHE_MAX
     assert len(d._CONSENSUS) <= d.ODDS_CONSENSUS_CACHE_MAX
-    store.start_run("later")  # any new snapshot invalidates the consensus memo (never a stale result)
+    store.start_run("later")  # another source's write leaves the consensus memo valid (review SF-1)
     store.save_snapshot(run_id="later", source="kalshi", kind="markets", entity_id="x", url="u", payload={})
     d.Context(_cfg(tmp_path)).odds_targets
-    assert len(calls) == shown_captures and all(c.startswith("snapshot:") for c in calls)
+    assert calls == [] and shown_captures > 0
 
 
 def test_history_rows_use_the_runners_record_at_capture(tmp_path):

@@ -1121,9 +1121,31 @@ def odds_capture_targets(ctx: Context) -> Loaded:
 
 ODDS_CONSENSUS_MODULE = "edge_lab.odds_consensus"
 ODDS_CONSENSUS_CACHE_MAX = 64
-# Results by (database, event, as_of, newest stored snapshot id): a point-in-time read changes only
-# when a snapshot is added, and any addition changes the newest id, so an entry is never stale.
+# Results by (database, event, as_of, newest stored odds snapshot id received at or before as_of): a
+# point-in-time read uses only odds snapshots received by as_of, and ids only grow, so any row that
+# could change the result changes the key; other sources' writes (every few minutes) never do.
 _CONSENSUS: "OrderedDict[tuple, Any]" = OrderedDict()
+
+
+def _odds_receipts(ctx: Context) -> list[tuple[datetime, int]]:
+    """(receipt instant, id) of every stored odds snapshot with a readable receipt time, read once per
+    request without loading any payload. The evidence store has no public metadata-only read, so this
+    uses the store's own read-only connection (`mode=ro`, `query_only`), as `odds_consensus` does."""
+    from contextlib import closing
+
+    from ..odds_consensus import KIND, SOURCE
+
+    cached = ctx.__dict__.get("_odds_receipts")
+    if cached is None:
+        with closing(ctx.store.value._connect()) as conn:
+            rows = conn.execute("SELECT id, fetched_at_utc FROM snapshots WHERE source = ? AND kind = ?",
+                                (SOURCE, KIND)).fetchall()
+        cached = ctx.__dict__["_odds_receipts"] = [(p, int(r[0])) for r in rows if (p := parse_utc(r[1])) is not None]
+    return cached
+
+
+def _newest_odds_by(ctx: Context, at: datetime) -> int | None:
+    return max((sid for received, sid in _odds_receipts(ctx) if received <= at), default=None)
 
 
 def odds_consensus_at_capture(ctx: Context, event_id: str, received_utc: Any) -> Loaded:
@@ -1133,8 +1155,8 @@ def odds_consensus_at_capture(ctx: Context, event_id: str, received_utc: Any) ->
     `SnapshotConsensus` or None (nothing holding the event was known by then); NO_DATA when the
     evidence database or the contract is unavailable, or the receipt time is unknown; ERROR on a read
     failure. Called only for the captured rows a page shows (each call parses one event of one
-    snapshot, plus newer unusable ones), and memoized until any snapshot is added. Nothing here
-    computes a probability."""
+    snapshot, plus newer unusable ones), and memoized until an odds snapshot received by `as_of` is
+    added. Nothing here computes a probability."""
     import importlib
 
     if ctx.store.status != OK:
@@ -1154,8 +1176,7 @@ def odds_consensus_at_capture(ctx: Context, event_id: str, received_utc: Any) ->
         return Loaded(ERROR, message=short_error(exc, ctx.config))
     store, at = ctx.store.value, as_of.astimezone(timezone.utc)
     try:
-        newest = next(iter(store.recent_snapshots(limit=1)), None)
-        key = (str(store.path), str(event_id), at.isoformat(), None if newest is None else int(newest["id"]))
+        key = (str(store.path), str(event_id), at.isoformat(), _newest_odds_by(ctx, at))
         if key in _CONSENSUS:
             _CONSENSUS.move_to_end(key)
             return Loaded(OK, _CONSENSUS[key])
