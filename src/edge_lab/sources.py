@@ -285,6 +285,38 @@ REGISTRY: dict[str, SourceSpec] = {
             ),
         ),
         SourceSpec(
+            # Health-only identity for the pilot's quota-free schedule discovery (issue #50; PR
+            # #67 review). The discovery snapshots themselves are stored under the_odds_api
+            # (legacy name "the_odds_api", kind "events"); this id exists so source_health for a
+            # free discovery is never read as health of the paid odds feed.
+            source_id="the_odds_api_discovery",
+            legacy_name="the_odds_api_discovery",
+            description=(
+                "The Odds API v4 quota-free schedule discovery (GET /v4/sports/{sport}/events) "
+                "for the game-relative NFL pilot (edge_lab.odds_pilot, ADR 0029). Proves the key "
+                "reaches the provider, never that odds arrive; odds-feed health is the_odds_api. "
+                "Still PLANNED: no live read has been verified; the key is not installed."
+            ),
+            access_tier=AccessTier.OFFICIAL_API,
+            base_url="https://api.the-odds-api.com",
+            status=SourceStatus.PLANNED,
+            # The runner refreshes discovery every 6 h on a 15-minute timer; older than that
+            # means a refresh was missed. (Planning itself tolerates a discovery up to 24 h old.)
+            max_age={"events": timedelta(hours=6, minutes=30)},
+            requires_credentials=True,
+            credential_kind=CredentialKind.READ_ONLY_DATA_FEED,
+            credential_env_var="EDGE_LAB_ODDS_API_KEY",  # the same single key as the_odds_api
+            credential_transport="query_param",
+            owner_approval_ref="docs/owner/2026-09-23-integration-production-directive.md",
+            license_notes=(
+                "Same provider, key and terms as the_odds_api. The v4 guide documents the events "
+                "endpoint as not counting against the usage quota (re-read 2026-09-24; "
+                "experiments/multi_venue/odds_api_credit_rules_2026-09-24.md). It still needs the "
+                "key, so it is paced politely (at most every 6 h). The key travels only as the "
+                "apiKey query parameter and is redacted everywhere."
+            ),
+        ),
+        SourceSpec(
             source_id="novig_public_data",
             legacy_name="novig_data",
             description=(
