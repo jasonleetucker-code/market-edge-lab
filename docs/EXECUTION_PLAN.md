@@ -373,6 +373,41 @@ be written here when they are made.
     - public dashboard exposure, Brisket changes;
     - ntfy work (out of scope for this mission).
 
+- **2026-09-24 (evening, later), cross-domain prospective evidence directive (#86).** Recorded in
+  `docs/owner/2026-09-24-cross-domain-prospective-evidence-directive.md`.
+  - **Authorized now (planning, research, and non-production code/docs):**
+    - the cross-domain acquisition portfolio;
+    - source-readiness classification;
+    - the combined resource budget;
+    - the Multi-City Weather v1 design, including bounded read-only public verification GETs of
+      market families, rules and stations (small counts, paced, documented).
+  - **Authorized, gated, one source at a time:** bounded, read-only prospective collectors from
+    free, legitimately accessible public sources, keyless first (§64, §65, §67, §82). Each must:
+    - be in the portfolio with a market-relevance statement, an outcome/label plan, a completeness
+      definition and a storage policy;
+    - pass a terms/access review;
+    - have a worst-case resource budget, with the combined VPS footprint recomputed;
+    - register in `sources.py` and run as a #74 Freshness Fabric provider (no new generic
+      scheduler);
+    - follow the point-in-time contract (PROSPECTIVE_CAPTURE separate from HISTORICAL_BACKFILL;
+      MISSED never backfilled);
+    - roll out incrementally (fixture → sample → bounded smoke → low-frequency collection →
+      several clean runs) with independent review and exact-head CI green before merge and deploy.
+
+    The first such collector is Multi-City Weather v1, and it starts only after the Freshness Fabric
+    + sports mission's lanes are merged and deployed.
+  - **Owner action required (never done by agents):** free-key sources (READY_FOR_OWNER_KEY). Agents
+    create no accounts and never handle keys.
+  - **Not authorized:**
+    - paid or licensed data;
+    - trading, execution, Gate 8+, risk-limit changes;
+    - EXP-001 changes or new operational models or strategies;
+    - broad web, social or news scraping;
+    - unnecessary donor PII;
+    - storing unbounded crypto ticks;
+    - per-domain schedulers or evidence databases;
+    - extending 2026-10-22 automatically.
+
 ## Standing merge rule: docs-only and test-only PRs
 
 Owner rule of 2026-09-22 (verbatim source: `docs/owner/2026-09-22-overnight-build-directive.md`).
