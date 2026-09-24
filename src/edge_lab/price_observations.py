@@ -54,6 +54,7 @@ from __future__ import annotations
 import json
 import time
 import uuid
+from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import date, datetime, time as dtime, timedelta, timezone
 from decimal import Decimal
@@ -132,6 +133,15 @@ Sleep = Callable[[float], None]
 
 def _now() -> datetime:
     return datetime.now(UTC)
+
+
+# The clock that stamps `recorded_at_utc`: the run's injected clock (plan's `now`, capture's clock).
+_RECORD_CLOCK: ContextVar[Callable[[], datetime]] = ContextVar("price_observation_record_clock", default=_now)
+
+
+def _attempt_id(run_id: str, target_id: str) -> str:
+    """Unique per attempt: the rows of one attempt share it; no two attempts collide."""
+    return f"{run_id}:{target_id}:{uuid.uuid4().hex[:12]}"
 
 
 def _iso(value: datetime) -> str:
@@ -415,7 +425,7 @@ def _base_row(run_id: str, attempt_id: str, target: Mapping[str, Any], *, status
     row = {"run_id": run_id, "attempt_id": attempt_id, "target_id": target["target_id"], "phase": target["phase"],
            "venue": target["venue"], "market_id": target["market_id"], "native_market_id": target["native_market_id"],
            "event_id": target["event_id"], "side": side, "target_utc": target["target_utc"],
-           "collection_status": status, "miss_reason": reason, "recorded_at_utc": _iso_exact(_now()),
+           "collection_status": status, "miss_reason": reason, "recorded_at_utc": _iso_exact(_RECORD_CLOCK.get()()),
            "policy_version": POLICY_VERSION, "freshness": Freshness.UNKNOWN.value}
     row.update(extra)
     return row
@@ -458,24 +468,26 @@ def side_rows(run_id: str, attempt_id: str, target: Mapping[str, Any], *, quotes
 # --------------------------------------------------------------------------- backfill (EXP-001)
 
 
-def _backfill_exp001(store: SnapshotStore, run_id: str, record: DecisionRecord, now: datetime,
-                     states: Mapping[str, str | None]) -> dict[str, int]:
-    """decision and recheck observations from the forward captures' own snapshots (no request)."""
-    counts = {"planned": 0, "rows": 0}
+def _backfill_items(store: SnapshotStore, record: DecisionRecord, now: datetime
+                    ) -> list[tuple[dict[str, Any], Callable[[str], list[dict[str, Any]]]]]:
+    """decision and recheck targets with row builders from the forward captures' own snapshots.
+    Reads only; nothing is requested or written here."""
     if record.venue != "kalshi" or record.target_date is None or record.decision_capture_id is None:
-        return counts
+        return []
     target_day = record.target_date
     captures = {int(r["id"]): r for r in store.forward_captures(target_date=target_day.isoformat())}
     decision = captures.get(record.decision_capture_id)
     if decision is None:
-        return counts
+        return []
     native = record.native_market_id
     books = json.loads(decision["links_json"]).get("books") or {}
     w = forward.windows(target_day)
-    # Point in time: the decision-time market record, never a close time learned later.
+    # Point in time: the decision-time market record, never a close time learned later. The
+    # re-check capture reads books only, so its rows carry no market fields at all (missing
+    # stays missing); its target detail says where the market record is.
     at_decision = _iso(record.close_time_at_decision_utc) if record.close_time_at_decision_utc else None
-    common = dict(price_grid_json=_grid_json(record.price_grid), market_status=record.market_status,
-                  close_time_utc=at_decision, rules_sha256=record.rules_sha256)
+    decision_fields = dict(price_grid_json=_grid_json(record.price_grid), market_status=record.market_status,
+                           close_time_utc=at_decision, rules_sha256=record.rules_sha256)
 
     def tgt(phase: str, t: datetime, due: datetime, deadline: datetime, detail: dict[str, Any]) -> dict[str, Any]:
         return {"target_id": target_id(record.market_id, phase, t), "venue": "kalshi", "market_id": record.market_id,
@@ -486,8 +498,9 @@ def _backfill_exp001(store: SnapshotStore, run_id: str, record: DecisionRecord, 
                 "close_time_utc": at_decision, "close_basis": CLOSE_SEMANTICS["kalshi"].basis,
                 "planned_rules_sha256": record.rules_sha256, "detail": detail}
 
-    def book_rows(target: dict[str, Any], info: Mapping[str, Any] | None, capture_row) -> list[dict[str, Any]]:
-        attempt = f"{run_id}:{target['target_id']}"
+    def book_rows(run_id: str, target: dict[str, Any], info: Mapping[str, Any] | None, capture_row,
+                  common: dict[str, Any]) -> list[dict[str, Any]]:
+        attempt = _attempt_id(run_id, target["target_id"])
         snap = store.snapshots_by_id([int(info["snapshot_id"])]).get(int(info["snapshot_id"])) if info else None
         if snap is None or snap["entity_id"] != native or snap["kind"] != "orderbook" \
                 or snap["run_id"] != capture_row["run_id"]:
@@ -504,33 +517,46 @@ def _backfill_exp001(store: SnapshotStore, run_id: str, record: DecisionRecord, 
                          snapshot_id=int(snap["id"]), source_sha256=snap["raw_sha256"] or snap["payload_sha256"],
                          common=common, depth_limit=BOOK_DEPTH)
 
-    work: list[tuple[dict[str, Any], Callable[[], list[dict[str, Any]]]]] = []
+    items: list[tuple[dict[str, Any], Callable[[str], list[dict[str, Any]]]]] = []
     dec_target = tgt("decision", w["decision"], w["decision_window_start"], w["decision"],
                      {"forward_capture_id": int(decision["id"])})
-    work.append((dec_target, lambda: book_rows(dec_target, books.get(native), decision)))
+    items.append((dec_target, lambda run_id: book_rows(run_id, dec_target, books.get(native), decision,
+                                                       decision_fields)))
     info = books.get(native)
     book_at = _t(info["fetched_at_utc"]) if info else None
     if book_at is not None:
         rechecks = [r for r in captures.values() if r["phase"] == "recheck" and r["status"] == "complete"
                     and r["decision_capture_id"] == decision["id"]]
         low, high = book_at + forward.RECHECK_MIN, book_at + forward.RECHECK_MAX
-        rc_target = tgt("recheck", low, low, high, {"decision_book_received_utc": _iso_exact(book_at)})
+        rc_target = tgt("recheck", low, low, high, {
+            "decision_book_received_utc": _iso_exact(book_at),
+            "market_fields": f"not re-read at the re-check; the market record is in decision capture {decision['id']}"})
         if rechecks:
             rc = rechecks[-1]
             rc_target["detail"]["forward_capture_id"] = int(rc["id"])
-            work.append((rc_target, lambda: book_rows(rc_target, (json.loads(rc["links_json"]).get("books") or {})
-                                                      .get(native), rc)))
+            items.append((rc_target, lambda run_id: book_rows(
+                run_id, rc_target, (json.loads(rc["links_json"]).get("books") or {}).get(native), rc, {})))
         elif now > high + forward.DECISION_WINDOW:
-            work.append((rc_target, lambda: [_base_row(
-                run_id, f"{run_id}:{rc_target['target_id']}", rc_target, status="MISSED",
-                reason="NO_COMPLETE_RECHECK_CAPTURE for this decision capture", **common)]))
-    for target, rows_fn in work:
-        if store.plan_price_target({**target, "planned_at_utc": _iso_exact(now)}):
+            items.append((rc_target, lambda run_id: [_base_row(
+                run_id, _attempt_id(run_id, rc_target["target_id"]), rc_target, status="MISSED",
+                reason="NO_COMPLETE_RECHECK_CAPTURE for this decision capture")]))
+    return items
+
+
+def _backfill_exp001(store: SnapshotStore, run_id: str, record: DecisionRecord, now: datetime,
+                     states: dict[str, str | None]) -> dict[str, int]:
+    """Write the backfill: plan its targets and record rows for those not yet final. `states`
+    is updated in place, so a target shared by two decisions is recorded once."""
+    counts = {"planned": 0, "rows": 0}
+    for target, rows_fn in _backfill_items(store, record, now):
+        if target["target_id"] not in states and store.plan_price_target({**target, "planned_at_utc": _iso_exact(now)}):
             counts["planned"] += 1
+            states[target["target_id"]] = None
         if states.get(target["target_id"]) in (None, "FAILED"):
-            rows = rows_fn()
+            rows = rows_fn(run_id)
             store.record_price_observations(rows)
             counts["rows"] += len(rows)
+            states[target["target_id"]] = rows[-1]["collection_status"]
     return counts
 
 
@@ -539,6 +565,31 @@ def _backfill_exp001(store: SnapshotStore, run_id: str, record: DecisionRecord, 
 
 def _target_states(store: SnapshotStore) -> dict[str, str | None]:
     return {r["target_id"]: r["state"] for r in store.price_targets()}
+
+
+def capture_work(store: SnapshotStore, now: datetime) -> dict[str, int]:
+    """Read only: how many open targets are overdue (to be marked MISSED) and how many are due now."""
+    work = {"overdue": 0, "due": 0}
+    for t in store.price_targets():
+        if t["state"] not in (None, "FAILED") or t["phase"] in BACKFILL_PHASES:
+            continue
+        if now > _t(t["deadline_utc"]):
+            work["overdue"] += 1
+        elif _t(t["due_from_utc"]) <= now:
+            work["due"] += 1
+    return work
+
+
+def plan_work(store: SnapshotStore, decisions: Sequence[DecisionRecord], now: datetime,
+              custom: Sequence[dict[str, Any]] = ()) -> int:
+    """Read only: how many writes a plan would make now (new targets, backfill rows, misses).
+    Zero means an idle plan, which writes nothing, not even a collection run."""
+    states = _target_states(store)
+    n = sum(1 for c in custom if c["target_id"] not in states)
+    for record in decisions:
+        n += sum(1 for t in targets_for(record)[0] if t["target_id"] not in states)
+        n += sum(1 for t, _ in _backfill_items(store, record, now) if states.get(t["target_id"]) in (None, "FAILED"))
+    return n + capture_work(store, now)["overdue"]
 
 
 def expire(store: SnapshotStore, run_id: str, now: datetime) -> list[dict[str, str]]:
@@ -560,7 +611,7 @@ def expire(store: SnapshotStore, run_id: str, now: datetime) -> list[dict[str, s
             hit = protected_window_at(_t(t["due_from_utc"]), deadline)
             if hit is not None:
                 reason += f"; the due window overlaps protected window {hit[0]}"
-        store.record_price_observations([_base_row(run_id, f"{run_id}:{t['target_id']}", t, status="MISSED",
+        store.record_price_observations([_base_row(run_id, _attempt_id(run_id, t['target_id']), t, status="MISSED",
                                                     reason=reason)])
         missed.append({"target_id": t["target_id"], "reason": reason})
     return missed
@@ -572,32 +623,44 @@ def expire(store: SnapshotStore, run_id: str, now: datetime) -> list[dict[str, s
 def plan(store: SnapshotStore, *, decisions: Sequence[DecisionRecord], now: datetime,
          custom: Sequence[dict[str, Any]] = ()) -> dict[str, Any]:
     """Persist targets for every decision (and custom request), backfill decision/recheck from
-    stored captures, and mark overdue targets MISSED. No network. Idempotent."""
+    stored captures, and mark overdue targets MISSED. No network. Idempotent: an idle plan
+    (nothing new, nothing overdue) writes nothing, not even a collection run."""
+    report: dict[str, Any] = {"command": "observe plan", "now_utc": _iso_exact(now), "policy_version": POLICY_VERSION,
+                              "decisions": len(decisions), "targets_planned": 0, "targets_known": 0,
+                              "backfill_rows": 0, "not_planned": [], "missed": []}
+    if plan_work(store, decisions, now, custom) == 0:
+        report["state"] = "NOTHING_TO_DO"
+        return report
     run_id = f"observe-plan-{uuid.uuid4()}"
+    report["run_id"] = run_id
+    token = _RECORD_CLOCK.set(lambda: now)
     store.start_run(run_id)
-    report: dict[str, Any] = {"command": "observe plan", "now_utc": _iso_exact(now), "run_id": run_id,
-                              "policy_version": POLICY_VERSION, "decisions": len(decisions), "targets_planned": 0,
-                              "targets_known": 0, "backfill_rows": 0, "not_planned": [], "missed": []}
     try:
         states = _target_states(store)
         for record in decisions:
             targets, skipped = targets_for(record)
             report["not_planned"] += [{"market_id": record.market_id, **s} for s in skipped]
             for target in targets:
-                if store.plan_price_target({**target, "planned_at_utc": _iso_exact(now)}):
+                if target["target_id"] not in states and store.plan_price_target(
+                        {**target, "planned_at_utc": _iso_exact(now)}):
                     report["targets_planned"] += 1
+                    states[target["target_id"]] = None
                 else:
                     report["targets_known"] += 1
             backfill = _backfill_exp001(store, run_id, record, now, states)
             report["targets_planned"] += backfill["planned"]
             report["backfill_rows"] += backfill["rows"]
         for target in custom:
-            report["targets_planned" if store.plan_price_target({**target, "planned_at_utc": _iso_exact(now)})
-                   else "targets_known"] += 1
+            new = target["target_id"] not in states and store.plan_price_target(
+                {**target, "planned_at_utc": _iso_exact(now)})
+            report["targets_planned" if new else "targets_known"] += 1
+            states.setdefault(target["target_id"], None)
         report["missed"] = expire(store, run_id, now)
     except BaseException:
         store.finish_run(run_id, status="failed", error="observe plan aborted")
         raise
+    finally:
+        _RECORD_CLOCK.reset(token)
     store.finish_run(run_id, status="succeeded")
     report["state"] = "OK"
     return report
@@ -718,7 +781,7 @@ def _capture_kalshi_group(store: SnapshotStore, run_id: str, targets: list[Mappi
 
     def fail_all(reason: str, todo: Iterable[Mapping[str, Any]]) -> None:
         for t in todo:
-            attempts.append([_base_row(run_id, f"{run_id}:{t['target_id']}", t, status="FAILED", reason=reason)])
+            attempts.append([_base_row(run_id, _attempt_id(run_id, t['target_id']), t, status="FAILED", reason=reason)])
 
     try:
         listing_id, listing_at, markets = _kalshi_listing(store, run_id, event, req)
@@ -730,7 +793,7 @@ def _capture_kalshi_group(store: SnapshotStore, run_id: str, targets: list[Mappi
     pending: list[tuple[Mapping[str, Any], dict[str, Any], list[dict[str, Any]], datetime | None]] = []
     deferred: list[str] = []
     for t in targets:
-        attempt, native = f"{run_id}:{t['target_id']}", t["native_market_id"]
+        attempt, native = _attempt_id(run_id, t['target_id']), t["native_market_id"]
         raw = markets.get(native)
         if raw is None:
             attempts.append([_base_row(run_id, attempt, t, status="FAILED",
@@ -803,7 +866,7 @@ def _capture_kalshi_group(store: SnapshotStore, run_id: str, targets: list[Mappi
 
 
 def _capture_polymarket(store: SnapshotStore, run_id: str, t: Mapping[str, Any], req: _Requests) -> list[dict[str, Any]]:
-    slug, attempt = t["native_market_id"], f"{run_id}:{t['target_id']}"
+    slug, attempt = t["native_market_id"], _attempt_id(run_id, t['target_id'])
     url = polymarket_us.book_url(slug)
     try:
         payload, result = req.get(url, pacer=POLYMARKET_PACER, headers={"User-Agent": polymarket_us.USER_AGENT})
@@ -856,7 +919,11 @@ def capture(store: SnapshotStore, *, clock: Clock | None = None, sleep: Sleep = 
         return 0, refusal
     report: dict[str, Any] = {"command": "observe capture", "now_utc": _iso_exact(now), "policy_version": POLICY_VERSION,
                               "requests": 0, "attempted": 0, "by_status": {}, "deferred": [], "missed": []}
+    if capture_work(store, now) == {"overdue": 0, "due": 0}:
+        report["state"] = "NOTHING_DUE"  # an idle run writes nothing, not even a collection run
+        return 0, report
     run_id = f"observe-capture-{uuid.uuid4()}"
+    token = _RECORD_CLOCK.set(clock)
     store.start_run(run_id)
     report["run_id"] = run_id
     try:
@@ -884,7 +951,7 @@ def capture(store: SnapshotStore, *, clock: Clock | None = None, sleep: Sleep = 
                         continue
                     attempts.append(_capture_polymarket(store, run_id, t, req))
             else:
-                attempts = [[_base_row(run_id, f"{run_id}:{t['target_id']}", t, status="FAILED",
+                attempts = [[_base_row(run_id, _attempt_id(run_id, t['target_id']), t, status="FAILED",
                                        reason=f"UNSUPPORTED_VENUE: {venue}")] for t in targets]
                 deferred = []
             for rows in attempts:
@@ -897,6 +964,8 @@ def capture(store: SnapshotStore, *, clock: Clock | None = None, sleep: Sleep = 
     except BaseException:
         store.finish_run(run_id, status="failed", error="observe capture aborted before completion")
         raise
+    finally:
+        _RECORD_CLOCK.reset(token)
     failed = report["by_status"].get("FAILED", 0)
     store.finish_run(run_id, status="partial" if failed else "succeeded",
                      error=f"{failed} FAILED observation row(s)" if failed else None)
@@ -934,7 +1003,8 @@ def status(store: SnapshotStore, *, now: datetime) -> dict[str, Any]:
             "recent_misses": sorted(misses, key=lambda m: m["at_utc"] or "")[-10:]}
 
 
-_LABELS = {"CLOSE": "close", "LATEST_PRE_CLOSE": "latest pre-close observation"}
+_LABELS = {"CLOSE": f"close (within {int(CLOSE_PROOF_TOLERANCE.total_seconds())} s of trading close)",
+           "LATEST_PRE_CLOSE": "latest pre-close observation"}
 
 
 def market_history(store: SnapshotStore, market_id: str) -> list[dict[str, Any]]:
@@ -945,12 +1015,13 @@ def market_history(store: SnapshotStore, market_id: str) -> list[dict[str, Any]]
     Keys: observation_id, target_id, phase, label, side, venue, market_id, native_market_id,
     event_id, target_utc, observed_at_utc, deviation_s, source_timestamp_utc, bid, ask, ask_size,
     depth ({asks: [[price, size]], truncated, depth_limit} or None), price_grid, freshness,
-    market_status, close_time_utc, close_label, close_proof, rules_sha256, snapshot_id,
+    market_status, close_time_utc, close_label, close_proof, close_tolerance_s, rules_sha256, snapshot_id,
     source_sha256, collection_status (CAPTURED, NOT_EXECUTABLE, FAILED, MISSED, or PLANNED for a
     target not attempted yet), miss_reason, executable, is_latest_pre_close_observation.
 
-    `label` is the phase, except for the close phase: "close" only for a proven CLOSE, else
-    "latest pre-close observation". `is_latest_pre_close_observation` marks, per side, the last
+    `label` is the phase, except for the close phase: "close (within 60 s of trading close)" for a
+    proven CLOSE (never a bare "close": the public book has no sequence number, so the close is
+    proven only to within `close_tolerance_s`), else "latest pre-close observation". `is_latest_pre_close_observation` marks, per side, the last
     CAPTURED quote received before the market's latest known close_time (None when no close
     time is known). Never a midpoint, a last price, or an order."""
     out: list[dict[str, Any]] = []
@@ -971,6 +1042,8 @@ def market_history(store: SnapshotStore, market_id: str) -> list[dict[str, Any]]
             "freshness": r["freshness"], "market_status": r["market_status"], "close_time_utc": r["close_time_utc"],
             "close_label": r["close_label"],
             "close_proof": json.loads(r["close_proof_json"]) if r["close_proof_json"] else None,
+            "close_tolerance_s": (json.loads(r["close_proof_json"]).get("tolerance_s")
+                                  if r["close_label"] == "CLOSE" else None),
             "rules_sha256": r["rules_sha256"], "snapshot_id": r["snapshot_id"], "source_sha256": r["source_sha256"],
             "collection_status": r["collection_status"], "miss_reason": r["miss_reason"],
             "executable": r["collection_status"] == "CAPTURED", "is_latest_pre_close_observation": None,
@@ -984,7 +1057,7 @@ def market_history(store: SnapshotStore, market_id: str) -> list[dict[str, Any]]
                     "observed_at_utc": None, "deviation_s": None, "source_timestamp_utc": None, "bid": None,
                     "ask": None, "ask_size": None, "depth": None, "price_grid": None, "freshness": "unknown",
                     "market_status": None, "close_time_utc": t["close_time_utc"], "close_label": None,
-                    "close_proof": None, "rules_sha256": None, "snapshot_id": None, "source_sha256": None,
+                    "close_proof": None, "close_tolerance_s": None, "rules_sha256": None, "snapshot_id": None, "source_sha256": None,
                     "collection_status": "PLANNED", "miss_reason": None, "executable": False,
                     "is_latest_pre_close_observation": None})
     closes = [(_t(h["observed_at_utc"]) or _t(h["target_utc"]), _t(h["close_time_utc"])) for h in out
@@ -1009,8 +1082,20 @@ def _lock_path(db: Path) -> Path:
     return db.with_name(db.name + ".forward.lock")  # shared with forward captures: one Kalshi pacer per host
 
 
+def _readonly_or_none(db: Path) -> SnapshotStore | None:
+    """A read-only view for the idle check; None when the store needs the write path (older schema)."""
+    from .storage import ReadOnlyStoreError
+
+    try:
+        return SnapshotStore.open_readonly(db)
+    except ReadOnlyStoreError:
+        return None
+
+
 def run_plan(db: Path, ledger_path: Path | None, *, now: datetime | None = None,
              lookback: timedelta = DECISION_LOOKBACK, custom: Sequence[dict[str, Any]] = ()) -> tuple[int, dict[str, Any]]:
+    """`observe plan`: refuses protected windows; requires an existing evidence store (it never
+    creates one at an arbitrary path); an idle plan is the lock plus a read-only open only."""
     from .shadow_ledger import ShadowLedger
 
     now = now or _now()
@@ -1018,18 +1103,25 @@ def run_plan(db: Path, ledger_path: Path | None, *, now: datetime | None = None,
     if hit is not None:  # plan takes the same collector lock: never inside a protected window
         return 0, {"command": "observe plan", "now_utc": _iso_exact(now), "state": "DEFERRED_PROTECTED_WINDOW",
                    "detail": f"inside or next to {hit[0]}: nothing done"}
-    decisions: list[DecisionRecord] = []
+    if not db.is_file():
+        return 0, {"command": "observe plan", "state": "NO_STORE", "detail": f"{db} does not exist; nothing created"}
+    ledger = None
     ledger_state = "NOT_GIVEN"
+    if ledger_path is not None:
+        if ledger_path.is_file():
+            ledger, ledger_state = ShadowLedger.open_readonly(ledger_path), "READ"
+        else:
+            ledger_state = "MISSING"
     try:
         with exclusive_lock(_lock_path(db), timeout_s=LOCK_TIMEOUT_S):
+            ro = _readonly_or_none(db)
+            if ro is not None:
+                decisions = decisions_from_ledger(ledger, ro, since=now - lookback) if ledger else []
+                if plan_work(ro, decisions, now, custom) == 0:
+                    return 0, {"command": "observe plan", "now_utc": _iso_exact(now), "state": "NOTHING_TO_DO",
+                               "ledger": ledger_state, "decisions": len(decisions)}
             store = SnapshotStore(db)
-            if ledger_path is not None:
-                if ledger_path.is_file():
-                    decisions = decisions_from_ledger(ShadowLedger.open_readonly(ledger_path), store,
-                                                      since=now - lookback)
-                    ledger_state = "READ"
-                else:
-                    ledger_state = "MISSING"
+            decisions = decisions_from_ledger(ledger, store, since=now - lookback) if ledger else []
             report = plan(store, decisions=decisions, now=now, custom=custom)
     except LockBusy as exc:
         return 0, {"command": "observe plan", "state": "LOCK_BUSY", "detail": str(exc)}
@@ -1039,6 +1131,8 @@ def run_plan(db: Path, ledger_path: Path | None, *, now: datetime | None = None,
 
 def run_capture(db: Path, *, clock: Clock | None = None, sleep: Sleep = time.sleep, max_targets: int = MAX_TARGETS,
                 max_requests: int = MAX_REQUESTS) -> tuple[int, dict[str, Any]]:
+    """`observe capture`: refuses protected windows before anything is opened; an idle run is the
+    lock plus a read-only open only."""
     clock = clock or _now
     _check_bounds(max_targets, max_requests)
     refusal = protected_refusal(clock())
@@ -1048,6 +1142,10 @@ def run_capture(db: Path, *, clock: Clock | None = None, sleep: Sleep = time.sle
         return 0, {"command": "observe capture", "state": "NO_STORE", "detail": f"{db} does not exist"}
     try:
         with exclusive_lock(_lock_path(db), timeout_s=LOCK_TIMEOUT_S):
+            ro = _readonly_or_none(db)
+            if ro is not None and capture_work(ro, clock()) == {"overdue": 0, "due": 0}:
+                return 0, {"command": "observe capture", "now_utc": _iso_exact(clock()), "state": "NOTHING_DUE",
+                           "requests": 0, "attempted": 0, "by_status": {}, "deferred": [], "missed": []}
             return capture(SnapshotStore(db), clock=clock, sleep=sleep, max_targets=max_targets,
                            max_requests=max_requests)
     except LockBusy as exc:

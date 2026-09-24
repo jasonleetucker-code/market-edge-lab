@@ -31,7 +31,8 @@ PM_SLUG = "will-team-a-win"
 HISTORY_KEYS = {
     "observation_id", "target_id", "phase", "label", "side", "venue", "market_id", "native_market_id", "event_id",
     "target_utc", "observed_at_utc", "deviation_s", "source_timestamp_utc", "bid", "ask", "ask_size", "depth",
-    "price_grid", "freshness", "market_status", "close_time_utc", "close_label", "close_proof", "rules_sha256",
+    "price_grid", "freshness", "market_status", "close_time_utc", "close_label", "close_proof", "close_tolerance_s",
+    "rules_sha256",
     "snapshot_id", "source_sha256", "collection_status", "miss_reason", "executable",
     "is_latest_pre_close_observation",
 }
@@ -78,6 +79,14 @@ def _target(store, phase, native=BRACKETS[0]):
     return next(r for r in store.price_targets(market_id=f"kalshi:{native}") if r["phase"] == phase)
 
 
+def _runs(store) -> int:
+    with sqlite3.connect(store.path) as conn:
+        return conn.execute("SELECT COUNT(*) FROM collection_runs").fetchone()[0]
+
+
+PROVEN_CLOSE = "close (within 60 s of trading close)"
+
+
 # --------------------------------------------------------------------------- planning
 
 
@@ -107,10 +116,36 @@ def test_every_recorded_decision_qualified_or_rejected_is_planned(store, tmp_pat
 def test_plan_is_idempotent_and_makes_no_request(store, tmp_path, monkeypatch, model):
     decisions, _ = _planned(store, tmp_path, monkeypatch, model)
     monkeypatch.setattr(po, "fetch_json_result", _no_network)
-    rows = len(store.price_observations())
+    rows, runs = len(store.price_observations()), _runs(store)
+    assert po.plan_work(store, decisions, CLOSED + timedelta(minutes=5)) == 0
     again = po.plan(store, decisions=decisions, now=CLOSED + timedelta(minutes=5))
-    assert again["targets_planned"] == 0 and again["targets_known"] == 6 * 5 and again["backfill_rows"] == 0
-    assert len(store.price_observations()) == rows
+    assert again["state"] == "NOTHING_TO_DO" and again["targets_planned"] == 0
+    assert len(store.price_observations()) == rows and _runs(store) == runs  # an idle plan writes nothing
+
+
+def test_two_decisions_on_one_market_share_their_targets(store, tmp_path, monkeypatch, model):
+    from dataclasses import replace
+
+    ledger = _ledger(store, tmp_path, monkeypatch, model)
+    decisions = po.decisions_from_ledger(ledger, store)
+    later = replace(decisions[0], decision_as_of_utc=decisions[0].decision_as_of_utc + timedelta(minutes=1),
+                    decision_ref="another-decision")
+    report = po.plan(store, decisions=[decisions[0], later], now=CLOSED)  # no attempt-id collision
+    rows = [r for r in store.price_observations(market_id=decisions[0].market_id) if r["phase"] == "decision"]
+    assert len(rows) == 2 and report["targets_known"] >= 3  # backfilled once; shared targets planned once
+    targets = [t for t in store.price_targets(market_id=decisions[0].market_id) if t["phase"] == "post_decision_1h"]
+    assert len(targets) == 2  # each decision time has its own +1 h target
+
+
+def test_recheck_rows_carry_no_market_fields_they_did_not_read(store, tmp_path, monkeypatch, model):
+    _planned(store, tmp_path, monkeypatch, model)
+    rows = [r for r in store.price_observations() if r["phase"] == "recheck"]
+    assert rows and all(r["market_status"] is None and r["close_time_utc"] is None and r["rules_sha256"] is None
+                        for r in rows)
+    detail = json.loads(_target(store, "recheck")["detail_json"])
+    assert detail["market_fields"].startswith("not re-read at the re-check")
+    decision = [r for r in store.price_observations() if r["phase"] == "decision"]
+    assert all(r["market_status"] == "active" and r["close_time_utc"] == "2026-09-24T05:00:00+00:00" for r in decision)
 
 
 def test_backfill_reuses_the_forward_snapshots(store, tmp_path, monkeypatch, model):
@@ -171,13 +206,16 @@ def test_capture_is_bounded_idempotent_and_appends(store, tmp_path, monkeypatch,
     assert report["by_status"] == {"CAPTURED": 12}
     rows = [r for r in store.price_observations() if r["phase"] == "post_decision_1h"]
     assert len(rows) == 12 and all(r["freshness"] == "fresh" and r["snapshot_id"] for r in rows)
+    assert all(r["recorded_at_utc"].startswith("2026-09-22T23:00") for r in rows)  # the injected clock
     assert all(r["rules_sha256"] and r["close_time_utc"] == "2026-09-24T05:00:00Z" for r in rows)
     assert all(json.loads(r["price_grid_json"])["ranges"] for r in rows)
     # A second tick in the same window sends nothing and writes no observation.
-    n = len(store.price_observations())
+    n, runs = len(store.price_observations()), _runs(store)
     code, again = po.capture(store, clock=clock, sleep=clock.sleep)
     assert (code, again["state"], again["requests"]) == (0, "NOTHING_DUE", 0) and len(api.calls) == 7
-    assert len(store.price_observations()) == n
+    assert len(store.price_observations()) == n and _runs(store) == runs  # idle: not even a collection run
+    code, again = po.run_capture(store.path, clock=clock, sleep=clock.sleep)
+    assert (code, again["state"]) == (0, "NOTHING_DUE") and _runs(store) == runs
 
 
 def test_request_budget_defers_the_rest_without_losing_them(store, tmp_path, monkeypatch, model):
@@ -255,14 +293,16 @@ def test_close_is_labelled_close_only_with_proof(store, tmp_path, monkeypatch, m
     code, report = po.capture(store, clock=clock, sleep=clock.sleep)
     assert code == 0 and report["requests"] == len(api.calls) == (1 + 6) + (1 + 6 + 1) <= po.MAX_REQUESTS
     close_rows = [r for r in store.price_observations() if r["phase"] == "close"]
-    assert len(close_rows) == 12 and {r["close_label"] for r in close_rows} == {"CLOSE"}
+    assert len(close_rows) == 12 and {r["close_label"] for r in close_rows} == {"CLOSE"}  # the stored enum
     proof = json.loads(close_rows[0]["close_proof_json"])
     assert proof["confirm_status"] == "closed" and proof["close_time_utc"] == "2026-09-24T05:00:00+00:00"
     received = datetime.fromisoformat(close_rows[0]["observed_at_utc"])
     assert CLOSE - po.CLOSE_PROOF_TOLERANCE <= received < CLOSE
     assert all(r["close_label"] is None for r in store.price_observations() if r["phase"] == "pre_close")
     history = po.market_history(store, f"kalshi:{BRACKETS[0]}")
-    assert {h["label"] for h in history if h["phase"] == "close"} == {"close"}
+    closes = [h for h in history if h["phase"] == "close"]
+    assert {h["label"] for h in closes} == {PROVEN_CLOSE} and {h["close_tolerance_s"] for h in closes} == {60}
+    assert all(h["label"] != "close" for h in history)  # never a bare "close"
     latest = [h for h in history if h["is_latest_pre_close_observation"]]
     assert {h["phase"] for h in latest} == {"close"} and {h["side"] for h in latest} == {"YES", "NO"}
 
@@ -281,6 +321,7 @@ def test_an_unproven_close_is_the_latest_pre_close_observation(store, tmp_path, 
     assert any(why in reason for reason in json.loads(rows[0]["close_proof_json"])["not_close_because"])
     history = po.market_history(store, rows[0]["market_id"])
     assert {h["label"] for h in history if h["phase"] == "close"} == {"latest pre-close observation"}
+    assert {h["close_tolerance_s"] for h in history if h["phase"] == "close"} == {None}
 
 
 def test_slow_close_books_are_labelled_by_when_they_arrived(store, tmp_path, monkeypatch, model):
@@ -366,8 +407,12 @@ def test_capture_never_runs_inside_a_protected_window(store, monkeypatch, when):
 def test_plan_never_runs_inside_a_protected_window(store):
     code, report = po.run_plan(store.path, None, now=datetime(2026, 9, 22, 22, 0, tzinfo=UTC))
     assert (code, report["state"]) == (0, "DEFERRED_PROTECTED_WINDOW")
+    runs = _runs(store)
     code, report = po.run_plan(store.path, None, now=CLOSED)
-    assert (code, report["state"], report["ledger"]) == (0, "OK", "NOT_GIVEN")
+    assert (code, report["state"], report["ledger"]) == (0, "NOTHING_TO_DO", "NOT_GIVEN") and _runs(store) == runs
+    missing = store.path.parent / "elsewhere" / "new.sqlite3"
+    code, report = po.run_plan(missing, None, now=CLOSED)
+    assert report["state"] == "NO_STORE" and not missing.exists() and not missing.parent.exists()
 
 
 def test_capture_outside_the_windows_proceeds(store):

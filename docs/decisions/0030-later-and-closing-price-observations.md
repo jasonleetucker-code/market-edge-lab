@@ -34,7 +34,7 @@ close a market early or extend it, and a public book carries no sequence number.
 | phase | intended time | how |
 |---|---|---|
 | `decision` | decision time (EXP-001: 18:00 ET on D-1) | backfilled from the forward decision capture's own book snapshot (no request) |
-| `recheck` | the re-check window (decision book + 10-15 min) | backfilled from the forward re-check capture |
+| `recheck` | the re-check window (decision book + 10-15 min) | backfilled from the forward re-check capture; that capture reads books only, so its rows carry no market status, close time or rules hash (the target detail names the decision capture that holds the market record) |
 | `post_decision_1h` | decision + 1 h | captured |
 | `post_decision_6h` | decision + 6 h | captured |
 | `pre_close` | trading close - 15 min (or a documented reference time) | captured |
@@ -58,6 +58,12 @@ just before the window when the end is too close to the close. The move is recor
 A close-phase observation is labelled **`CLOSE`** only when the source proves it is the last executable
 quote before the defined trading close, up to a stated tolerance. Otherwise it is labelled
 **`LATEST_PRE_CLOSE`** ("latest pre-close observation") and stores the conditions that failed.
+
+**Definition (coordinator decision, 2026-09-24).** The public Kalshi book has no sequence number or
+update time, so "the close" here means **the last executable quote observed within 60 s before the
+source-confirmed trading close**. The stored enum stays `CLOSE`, and every proof stores the
+tolerance. The human label is always "close (within 60 s of trading close)", never a bare "close",
+and `market_history` exposes `close_tolerance_s`.
 
 - **Kalshi** (`kalshi_close_time_v1`). The trading close is the market's `close_time`. Markets may close
   early (`can_close_early`), so the time is re-read at capture. `CLOSE` requires all of:
@@ -138,6 +144,11 @@ Polymarket US books go through `save_snapshot` (source `polymarket_us`, kind `bo
     `PLANNED_AFTER_DEADLINE`.
 - **No network.** Idempotent. It takes the same collector lock, so it also refuses to run inside a
   protected window (below).
+- **Idle writes nothing.** When nothing is new and nothing is overdue, it stops after the lock and a
+  read-only open. It writes no collection run and no row.
+- **Existing store only.** It never creates or migrates a store at an arbitrary path (`NO_STORE`).
+- **Shared targets.** Two decisions on one market share their targets, which are planned once.
+  Every attempt id is unique.
 
 ### Capture (`edge-lab observe capture`)
 
@@ -177,11 +188,12 @@ One bounded, locked, idempotent run:
     `native_market_id`, `event_id`;
   - times: `target_utc`, `observed_at_utc`, `deviation_s`, `source_timestamp_utc`;
   - prices: `bid`, `ask`, `ask_size` (decimal strings), `depth`, `price_grid`;
-  - state: `freshness`, `market_status`, `close_time_utc`, `close_label`, `close_proof`;
+  - state: `freshness`, `market_status`, `close_time_utc`, `close_label`, `close_proof`, `close_tolerance_s`
+    (60 for a proven `CLOSE`, else None);
   - evidence: `rules_sha256`, `snapshot_id`, `source_sha256`;
   - outcome: `collection_status`, `miss_reason`, `executable`, `is_latest_pre_close_observation`.
-- **`label`.** The phase, except for the close phase: "close" only for a proven `CLOSE`, else
-  "latest pre-close observation".
+- **`label`.** The phase, except for the close phase: "close (within 60 s of trading close)" for a
+  proven `CLOSE` (never a bare "close"), else "latest pre-close observation".
 - **Prohibitions.** Never a midpoint, a last price or an order. The UI does no arithmetic on it.
 
 This change is backend-only. Terminal v1 shows nothing new until Lane B builds a panel under
@@ -234,8 +246,8 @@ becomes `MISSED` with the reason "manual capture only; no timer is authorized".
    - It covers every non-close phase of any venue: +1 h, +6 h, pre-close, settlement-preceding and
      custom.
 2. `edgelab-observe-close.timer`: `OnCalendar=*-*-* 04:57:45 UTC`, running `edge-lab observe capture`.
-   - It lands inside the KXHIGHNY close window. The fixture shows close_time `05:00:00Z` (11:59 PM
-     local standard time); the capture waits to close - 30 s, then confirms after the close.
+   - It lands inside the KXHIGHNY close window. The committed fixture shows close_time `05:00:00Z`,
+     which is 00:00 EST or 01:00 EDT. The capture waits to close - 30 s, then confirms after the close.
    - It acts only when a close target is due. A market family with another close time needs its own
      entry, or a finer tick.
 
@@ -265,8 +277,8 @@ listing 17 KB, book about 1.5 KB):**
   roughly 4/s public limit). A run makes at most 40 GETs, each with 2 bounded retries, over at most
   24 markets.
 - **Time.** At most 4 minutes; the close run holds the collector lock for about 2.5 minutes.
-- **Idle ticks** (option A, about 91 a day) make no request. Each is about 1 s of CPU and a SQLite
-  open.
+- **Idle ticks** (option A, about 91 a day) make no request and no write. Each takes the file lock
+  and a read-only SQLite open, then exits: no collection run, no row, well under 1 s of CPU.
 - **Retries.** A failed target is retried by at most 2-3 ticks inside its due window. The worst case
   for one bad day is about 3x the daily figure.
 - **Units.** The proposed units would copy the existing caps: `MemoryMax=256M`, `CPUQuota=25%`,

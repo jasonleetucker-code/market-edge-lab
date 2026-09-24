@@ -237,8 +237,9 @@ lists each target's due window:
 | close | 04:57:45 UTC on D+1: it waits to 04:59:30, then confirms at 05:00:05 | 8 |
 | settlement_preceding | 18:35 UTC on D+1 (expected resolution 19:00Z - 30 min) | 1 |
 
-A close observation is labelled `CLOSE` only with its stored proof. Anything else is "latest
-pre-close observation" (ADR 0030, close semantics).
+A close observation is labelled `CLOSE` only with its stored proof. It displays as "close (within 60 s
+of trading close)", because the public book has no sequence number. Anything else is "latest pre-close
+observation" (ADR 0030, close semantics). An idle `plan` or `capture` (nothing due) writes nothing.
 
 ## 6. Verify over the next days: each state separately
 
