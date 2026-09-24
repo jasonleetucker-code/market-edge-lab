@@ -857,6 +857,10 @@ def main(argv: list[str] | None = None) -> int:
         from .dashboard import main as dashboard_main
 
         return dashboard_main(argv[1:])
+    if argv[:2] == ["sizing", "counterfactual"]:  # read-only counterfactual replay (research only)
+        from .sizing_counterfactual import main as counterfactual_main
+
+        return counterfactual_main(argv[2:])
     if argv[:1] == ["sizing"]:  # stake sizing v2 research tools own their parser (ADR 0026)
         from .sizing_eval import main as sizing_main
 
