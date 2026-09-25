@@ -181,6 +181,25 @@ def build_parser() -> argparse.ArgumentParser:
     ev_status.add_argument("--end", required=True, help="outcome window end (UTC ISO)")
     ev_status.add_argument("--root", default="experiments")
 
+    research = subparsers.add_parser("research", help="Research-family tools (EE v1). Local, read-only, no network.")
+    research_sub = research.add_subparsers(dest="research_command", required=True)
+    scan = research_sub.add_parser(
+        "payoff-scan", help="EXP-003: evaluate stored same-venue partition book sets (read-only; market side only)."
+    )
+    scan.add_argument("--db", required=True, help="evidence store path (opened read-only)")
+    scan.add_argument("--series", default="KXHIGHNY")
+    scan.add_argument("--sizes", required=True, help="basket sizes, comma separated, e.g. 1,10,100")
+    scan.add_argument("--max-quote-age-seconds", type=int, required=True,
+                      help="stated explicitly per run: the protocol value is UNKNOWN until preregistration")
+    scan.add_argument("--max-leg-skew-seconds", type=int, required=True,
+                      help="stated explicitly per run: the protocol value is UNKNOWN until preregistration")
+    scan.add_argument("--root", default="experiments")
+    scan.add_argument("--out", help="write the full report (every evaluation) as JSON here")
+    sports = research_sub.add_parser(
+        "sports-evidence", help="EXP-002 paired sports evidence (edge_lab.sports_evidence, PR C); args pass through."
+    )
+    sports.add_argument("args", nargs=argparse.REMAINDER)
+
     notify = subparsers.add_parser(
         "notify", help="ntfy push (ADR 0022): relay the local outbox, or send one test event."
     )
@@ -859,6 +878,43 @@ def _experiments(args: argparse.Namespace) -> int:
     return 1 if failed else 0
 
 
+def _research(args: argparse.Namespace) -> int:
+    """Research-family tools. Nothing here touches the network, a ledger or an account."""
+    if args.research_command == "sports-evidence":
+        try:
+            from . import sports_evidence
+        except ImportError:
+            print("edge_lab.sports_evidence is not installed in this checkout (EE v1 PR C)", file=sys.stderr)
+            return 2
+        return int(sports_evidence.main(list(args.args)) or 0)
+    from datetime import timedelta
+    from decimal import Decimal, InvalidOperation
+
+    from . import payoff_constraints
+
+    try:
+        sizes = [Decimal(s) for s in args.sizes.split(",") if s.strip()]
+    except InvalidOperation:
+        print("--sizes must be comma-separated numbers", file=sys.stderr)
+        return 2
+    if not sizes or any(s <= 0 for s in sizes) or args.max_quote_age_seconds <= 0 or args.max_leg_skew_seconds < 0:
+        print("sizes and the quote age must be positive; the leg skew must not be negative", file=sys.stderr)
+        return 2
+    prohibited = list(payoff_constraints.PROHIBITED_MARKET_FIELDS)
+    matches = [p for p in experiments.discover(Path(args.root)) if p.parent.name.startswith("EXP-003-")]
+    if len(matches) == 1:
+        prohibited += list(experiments.prohibited_fields(experiments.load(matches[0])))
+    report = payoff_constraints.scan_kalshi_store(
+        args.db, series=args.series, sizes=sizes, max_quote_age=timedelta(seconds=args.max_quote_age_seconds),
+        max_leg_skew=timedelta(seconds=args.max_leg_skew_seconds), prohibited_fields=prohibited)
+    if args.out:
+        Path(args.out).write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8",
+                                  newline="\n")
+    summary = {k: v for k, v in report.items() if k != "evaluations"}
+    print(json.dumps(summary, indent=2, sort_keys=True))
+    return 0
+
+
 def _evidence(args: argparse.Namespace) -> int:
     """Evidence-consumption commands (research_evidence). Local files only; no network."""
     from . import research_evidence as rev
@@ -1026,6 +1082,8 @@ def main(argv: list[str] | None = None) -> int:
         if args.settlement_command == "collect":
             return _settlement_collect(args)
         return _settlement_audit(args)
+    if args.command == "research":
+        return _research(args)
     if args.command == "experiments":
         return _experiments(args)
     if args.command == "notify":

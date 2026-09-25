@@ -29,3 +29,23 @@ not captured arbitrage. No fills exist in this experiment.
 
 - 2026-09-25: DRAFT registered (EE v1 PR A). No data viewed for this experiment. The evaluator
   and the run over stored KXHIGHNY books follow in PR B.
+- 2026-09-25 03:38Z (EE v1 PR B): first development scan
+  (`results/payoff_scan_laptop_store_2026-09-22.json`; evidence-use event
+  `eu-9b69e8c362897580e5561fd87d0098b4`).
+  - **Input.** The only evidence store in this session: the laptop's
+    `data/edge_lab.sqlite3`, read-only. It holds 2 KXHIGHNY events (26SEP22, 26SEP23) with 6
+    brackets each, books captured on 2026-09-22 about 22:38Z. The production VPS store, with daily
+    decision and recheck books, was **not** read from this session. The same command runs
+    read-only there.
+  - **Windows.** Quote age 300 s and leg skew 60 s, stated for this run only. The protocol values
+    are UNKNOWN.
+  - **Result:** 2 sets, both relationship INCOMPLETE. VOID, REFUND and CANCELLATION are not
+    excluded by captured evidence.
+    - 26SEP23 at size 1: the top-of-book asks sum to 1.06 per basket, an observed inconsistency of
+      -0.06 before fees. The worst state is the discretionary fair-price fallback, which pays 0.
+      The claim is NO_SURPLUS_EVEN_BEFORE_FEES.
+    - 26SEP23 at sizes 10 and 100: NOT_EVALUATED. The walk crosses fractional-size levels, and no
+      fractional-fill fee rule is modelled.
+    - 26SEP22: NOT_EVALUATED at every size. One bracket (B67.5) had no ask at all.
+  - **Reading.** No surplus: a valid, expected result. It is not a verdict on the family (2 event
+    days, one capture each).

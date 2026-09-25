@@ -1,0 +1,698 @@
+{
+  "actual_result": "NONE: no actual fills exist (no orders are placed or simulated against a venue)",
+  "claim_counts_by_size_row": {
+    "NOT_EVALUATED": 5,
+    "NO_SURPLUS_EVEN_BEFORE_FEES": 1
+  },
+  "evaluations": [
+    {
+      "actual_result": "NONE: no actual fills exist (no orders are placed or simulated against a venue)",
+      "as_of_utc": "2026-09-22T22:38:33.774196+00:00",
+      "assumptions": [],
+      "evaluation_sha256": "e0ebf1b8c7a36565b4b305177ff3cd14cb503c35a69cf5d518b7ca3d02ef2084",
+      "kind": "PARTITION",
+      "leg_skew_seconds": "3.002048",
+      "observed_quote_inconsistency": null,
+      "observed_quote_inconsistency_note": "a leg has no ask",
+      "quote_reasons": [],
+      "quote_validity": "VALID",
+      "relationship": "INCOMPLETE",
+      "relationship_reasons": [
+        "state kind VOID is neither enumerated nor excluded with evidence",
+        "state kind REFUND is neither enumerated nor excluded with evidence",
+        "state kind CANCELLATION is neither enumerated nor excluded with evidence"
+      ],
+      "set_id": "KXHIGHNY-26SEP22@2026-09-22T22:38:33.774196+00:00",
+      "simulated_execution": "NOT_MODELLED: no leg-timing or fill-probability model; legs are never assumed atomic",
+      "sizes": [
+        {
+          "acquisition_cost": null,
+          "acquisition_gross": null,
+          "basket_quantity": "1",
+          "capital_lockup": null,
+          "claim": "NOT_EVALUATED",
+          "claim_adjusted_surplus": null,
+          "claim_reasons": [
+            "kalshi:KXHIGHNY-26SEP22-B67.5/YES: INSUFFICIENT_DEPTH (complete capture offers 0 < 1)"
+          ],
+          "evaluated": false,
+          "fees": null,
+          "leg_fills": [
+            {
+              "available": "1",
+              "detail": "1 level(s)",
+              "fee": "0.000693",
+              "gross_cost": "0.0100",
+              "limit_price": "0.0100",
+              "market_id": "kalshi:KXHIGHNY-26SEP22-B63.5",
+              "requested": "1",
+              "side": "YES",
+              "status": "FILLABLE",
+              "total_cost": "0.02"
+            },
+            {
+              "available": "1",
+              "detail": "1 level(s)",
+              "fee": "0.000693",
+              "gross_cost": "0.0100",
+              "limit_price": "0.0100",
+              "market_id": "kalshi:KXHIGHNY-26SEP22-B65.5",
+              "requested": "1",
+              "side": "YES",
+              "status": "FILLABLE",
+              "total_cost": "0.02"
+            },
+            {
+              "available": "0",
+              "detail": "complete capture offers 0 < 1",
+              "fee": null,
+              "gross_cost": null,
+              "limit_price": null,
+              "market_id": "kalshi:KXHIGHNY-26SEP22-B67.5",
+              "requested": "1",
+              "side": "YES",
+              "status": "INSUFFICIENT_DEPTH",
+              "total_cost": null
+            },
+            {
+              "available": "1",
+              "detail": "1 level(s)",
+              "fee": "0.000693",
+              "gross_cost": "0.0100",
+              "limit_price": "0.0100",
+              "market_id": "kalshi:KXHIGHNY-26SEP22-B69.5",
+              "requested": "1",
+              "side": "YES",
+              "status": "FILLABLE",
+              "total_cost": "0.02"
+            },
+            {
+              "available": "1",
+              "detail": "1 level(s)",
+              "fee": "0.000693",
+              "gross_cost": "0.0100",
+              "limit_price": "0.0100",
+              "market_id": "kalshi:KXHIGHNY-26SEP22-T63",
+              "requested": "1",
+              "side": "YES",
+              "status": "FILLABLE",
+              "total_cost": "0.02"
+            },
+            {
+              "available": "1",
+              "detail": "1 level(s)",
+              "fee": "0.000693",
+              "gross_cost": "0.0100",
+              "limit_price": "0.0100",
+              "market_id": "kalshi:KXHIGHNY-26SEP22-T70",
+              "requested": "1",
+              "side": "YES",
+              "status": "FILLABLE",
+              "total_cost": "0.02"
+            }
+          ],
+          "limiting_leg": "kalshi:KXHIGHNY-26SEP22-B67.5/YES",
+          "lockup_until_expected_utc": "2026-09-23T19:00:00Z",
+          "lockup_until_latest_utc": "2026-09-29T14:00:00Z",
+          "min_full_fill_payout": null,
+          "orphan_exposure": {},
+          "states_evaluated": [],
+          "states_skipped": [],
+          "upper_bound_if_unknown_settlement_costs_zero": null,
+          "worst_state": null,
+          "worst_state_surplus": null,
+          "worst_state_surplus_before_fees": null
+        },
+        {
+          "acquisition_cost": null,
+          "acquisition_gross": null,
+          "basket_quantity": "10",
+          "capital_lockup": null,
+          "claim": "NOT_EVALUATED",
+          "claim_adjusted_surplus": null,
+          "claim_reasons": [
+            "kalshi:KXHIGHNY-26SEP22-B67.5/YES: INSUFFICIENT_DEPTH (complete capture offers 0 < 10)"
+          ],
+          "evaluated": false,
+          "fees": null,
+          "leg_fills": [
+            {
+              "available": "10",
+              "detail": "1 level(s)",
+              "fee": "0.006930",
+              "gross_cost": "0.1000",
+              "limit_price": "0.0100",
+              "market_id": "kalshi:KXHIGHNY-26SEP22-B63.5",
+              "requested": "10",
+              "side": "YES",
+              "status": "FILLABLE",
+              "total_cost": "0.11"
+            },
+            {
+              "available": "10",
+              "detail": "1 level(s)",
+              "fee": "0.006930",
+              "gross_cost": "0.1000",
+              "limit_price": "0.0100",
+              "market_id": "kalshi:KXHIGHNY-26SEP22-B65.5",
+              "requested": "10",
+              "side": "YES",
+              "status": "FILLABLE",
+              "total_cost": "0.11"
+            },
+            {
+              "available": "0",
+              "detail": "complete capture offers 0 < 10",
+              "fee": null,
+              "gross_cost": null,
+              "limit_price": null,
+              "market_id": "kalshi:KXHIGHNY-26SEP22-B67.5",
+              "requested": "10",
+              "side": "YES",
+              "status": "INSUFFICIENT_DEPTH",
+              "total_cost": null
+            },
+            {
+              "available": "10",
+              "detail": "1 level(s)",
+              "fee": "0.006930",
+              "gross_cost": "0.1000",
+              "limit_price": "0.0100",
+              "market_id": "kalshi:KXHIGHNY-26SEP22-B69.5",
+              "requested": "10",
+              "side": "YES",
+              "status": "FILLABLE",
+              "total_cost": "0.11"
+            },
+            {
+              "available": "10",
+              "detail": "1 level(s)",
+              "fee": "0.006930",
+              "gross_cost": "0.1000",
+              "limit_price": "0.0100",
+              "market_id": "kalshi:KXHIGHNY-26SEP22-T63",
+              "requested": "10",
+              "side": "YES",
+              "status": "FILLABLE",
+              "total_cost": "0.11"
+            },
+            {
+              "available": "10",
+              "detail": "1 level(s)",
+              "fee": "0.006930",
+              "gross_cost": "0.1000",
+              "limit_price": "0.0100",
+              "market_id": "kalshi:KXHIGHNY-26SEP22-T70",
+              "requested": "10",
+              "side": "YES",
+              "status": "FILLABLE",
+              "total_cost": "0.11"
+            }
+          ],
+          "limiting_leg": "kalshi:KXHIGHNY-26SEP22-B67.5/YES",
+          "lockup_until_expected_utc": "2026-09-23T19:00:00Z",
+          "lockup_until_latest_utc": "2026-09-29T14:00:00Z",
+          "min_full_fill_payout": null,
+          "orphan_exposure": {},
+          "states_evaluated": [],
+          "states_skipped": [],
+          "upper_bound_if_unknown_settlement_costs_zero": null,
+          "worst_state": null,
+          "worst_state_surplus": null,
+          "worst_state_surplus_before_fees": null
+        },
+        {
+          "acquisition_cost": null,
+          "acquisition_gross": null,
+          "basket_quantity": "100",
+          "capital_lockup": null,
+          "claim": "NOT_EVALUATED",
+          "claim_adjusted_surplus": null,
+          "claim_reasons": [
+            "kalshi:KXHIGHNY-26SEP22-B67.5/YES: INSUFFICIENT_DEPTH (complete capture offers 0 < 100)"
+          ],
+          "evaluated": false,
+          "fees": null,
+          "leg_fills": [
+            {
+              "available": "100",
+              "detail": "1 level(s)",
+              "fee": "0.069300",
+              "gross_cost": "1.0000",
+              "limit_price": "0.0100",
+              "market_id": "kalshi:KXHIGHNY-26SEP22-B63.5",
+              "requested": "100",
+              "side": "YES",
+              "status": "FILLABLE",
+              "total_cost": "1.07"
+            },
+            {
+              "available": "100",
+              "detail": "1 level(s)",
+              "fee": "0.069300",
+              "gross_cost": "1.0000",
+              "limit_price": "0.0100",
+              "market_id": "kalshi:KXHIGHNY-26SEP22-B65.5",
+              "requested": "100",
+              "side": "YES",
+              "status": "FILLABLE",
+              "total_cost": "1.07"
+            },
+            {
+              "available": "0",
+              "detail": "complete capture offers 0 < 100",
+              "fee": null,
+              "gross_cost": null,
+              "limit_price": null,
+              "market_id": "kalshi:KXHIGHNY-26SEP22-B67.5",
+              "requested": "100",
+              "side": "YES",
+              "status": "INSUFFICIENT_DEPTH",
+              "total_cost": null
+            },
+            {
+              "available": "100",
+              "detail": "1 level(s)",
+              "fee": "0.069300",
+              "gross_cost": "1.0000",
+              "limit_price": "0.0100",
+              "market_id": "kalshi:KXHIGHNY-26SEP22-B69.5",
+              "requested": "100",
+              "side": "YES",
+              "status": "FILLABLE",
+              "total_cost": "1.07"
+            },
+            {
+              "available": "100",
+              "detail": "1 level(s)",
+              "fee": "0.069300",
+              "gross_cost": "1.0000",
+              "limit_price": "0.0100",
+              "market_id": "kalshi:KXHIGHNY-26SEP22-T63",
+              "requested": "100",
+              "side": "YES",
+              "status": "FILLABLE",
+              "total_cost": "1.07"
+            },
+            {
+              "available": "100",
+              "detail": "1 level(s)",
+              "fee": "0.069300",
+              "gross_cost": "1.0000",
+              "limit_price": "0.0100",
+              "market_id": "kalshi:KXHIGHNY-26SEP22-T70",
+              "requested": "100",
+              "side": "YES",
+              "status": "FILLABLE",
+              "total_cost": "1.07"
+            }
+          ],
+          "limiting_leg": "kalshi:KXHIGHNY-26SEP22-B67.5/YES",
+          "lockup_until_expected_utc": "2026-09-23T19:00:00Z",
+          "lockup_until_latest_utc": "2026-09-29T14:00:00Z",
+          "min_full_fill_payout": null,
+          "orphan_exposure": {},
+          "states_evaluated": [],
+          "states_skipped": [],
+          "upper_bound_if_unknown_settlement_costs_zero": null,
+          "worst_state": null,
+          "worst_state_surplus": null,
+          "worst_state_surplus_before_fees": null
+        }
+      ],
+      "version": "payoff-constraints-v1"
+    },
+    {
+      "actual_result": "NONE: no actual fills exist (no orders are placed or simulated against a venue)",
+      "as_of_utc": "2026-09-22T22:38:29.590184+00:00",
+      "assumptions": [],
+      "evaluation_sha256": "91ee517aad1c65f41769bbb6cad7d73b7ddfa142e5cc2971f397a2ee5bf04b90",
+      "kind": "PARTITION",
+      "leg_skew_seconds": "3.003634",
+      "observed_quote_inconsistency": "-0.0600",
+      "observed_quote_inconsistency_note": "OBSERVED QUOTE INCONSISTENCY: worst NORMAL-state payout minus the sum of top-of-book asks per basket unit; pre-fee, top of book only, abnormal states ignored. Not a surplus.",
+      "quote_reasons": [],
+      "quote_validity": "VALID",
+      "relationship": "INCOMPLETE",
+      "relationship_reasons": [
+        "state kind VOID is neither enumerated nor excluded with evidence",
+        "state kind REFUND is neither enumerated nor excluded with evidence",
+        "state kind CANCELLATION is neither enumerated nor excluded with evidence"
+      ],
+      "set_id": "KXHIGHNY-26SEP23@2026-09-22T22:38:29.590184+00:00",
+      "simulated_execution": "NOT_MODELLED: no leg-timing or fill-probability model; legs are never assumed atomic",
+      "sizes": [
+        {
+          "acquisition_cost": "1.14",
+          "acquisition_gross": "1.0600",
+          "basket_quantity": "1",
+          "capital_lockup": "1.14",
+          "claim": "NO_SURPLUS_EVEN_BEFORE_FEES",
+          "claim_adjusted_surplus": null,
+          "claim_reasons": [
+            "settlement cost UNKNOWN",
+            "the worst state pays no more than the gross purchase price"
+          ],
+          "evaluated": true,
+          "fees": "0.0800",
+          "leg_fills": [
+            {
+              "available": "1",
+              "detail": "1 level(s)",
+              "fee": "0.015708",
+              "gross_cost": "0.3400",
+              "limit_price": "0.3400",
+              "market_id": "kalshi:KXHIGHNY-26SEP23-B65.5",
+              "requested": "1",
+              "side": "YES",
+              "status": "FILLABLE",
+              "total_cost": "0.36"
+            },
+            {
+              "available": "1",
+              "detail": "1 level(s)",
+              "fee": "0.017437",
+              "gross_cost": "0.4700",
+              "limit_price": "0.4700",
+              "market_id": "kalshi:KXHIGHNY-26SEP23-B67.5",
+              "requested": "1",
+              "side": "YES",
+              "status": "FILLABLE",
+              "total_cost": "0.49"
+            },
+            {
+              "available": "1",
+              "detail": "1 level(s)",
+              "fee": "0.008428",
+              "gross_cost": "0.1400",
+              "limit_price": "0.1400",
+              "market_id": "kalshi:KXHIGHNY-26SEP23-B69.5",
+              "requested": "1",
+              "side": "YES",
+              "status": "FILLABLE",
+              "total_cost": "0.15"
+            },
+            {
+              "available": "1",
+              "detail": "1 level(s)",
+              "fee": "0.002037",
+              "gross_cost": "0.0300",
+              "limit_price": "0.0300",
+              "market_id": "kalshi:KXHIGHNY-26SEP23-B71.5",
+              "requested": "1",
+              "side": "YES",
+              "status": "FILLABLE",
+              "total_cost": "0.04"
+            },
+            {
+              "available": "1",
+              "detail": "1 level(s)",
+              "fee": "0.003948",
+              "gross_cost": "0.0600",
+              "limit_price": "0.0600",
+              "market_id": "kalshi:KXHIGHNY-26SEP23-T65",
+              "requested": "1",
+              "side": "YES",
+              "status": "FILLABLE",
+              "total_cost": "0.07"
+            },
+            {
+              "available": "1",
+              "detail": "1 level(s)",
+              "fee": "0.001372",
+              "gross_cost": "0.0200",
+              "limit_price": "0.0200",
+              "market_id": "kalshi:KXHIGHNY-26SEP23-T72",
+              "requested": "1",
+              "side": "YES",
+              "status": "FILLABLE",
+              "total_cost": "0.03"
+            }
+          ],
+          "limiting_leg": "kalshi:KXHIGHNY-26SEP23-B67.5/YES",
+          "lockup_until_expected_utc": "2026-09-24T19:00:00Z",
+          "lockup_until_latest_utc": "2026-09-30T14:00:00Z",
+          "min_full_fill_payout": "0",
+          "orphan_exposure": {
+            "kalshi:KXHIGHNY-26SEP23-B65.5/YES": "-0.36",
+            "kalshi:KXHIGHNY-26SEP23-B67.5/YES": "-0.49",
+            "kalshi:KXHIGHNY-26SEP23-B69.5/YES": "-0.15",
+            "kalshi:KXHIGHNY-26SEP23-B71.5/YES": "-0.04",
+            "kalshi:KXHIGHNY-26SEP23-T65/YES": "-0.07",
+            "kalshi:KXHIGHNY-26SEP23-T72/YES": "-0.03"
+          },
+          "states_evaluated": [
+            "v64",
+            "v65",
+            "v66",
+            "v67",
+            "v68",
+            "v69",
+            "v70",
+            "v71",
+            "v72",
+            "v73",
+            "fallback_fair_price"
+          ],
+          "states_skipped": [],
+          "upper_bound_if_unknown_settlement_costs_zero": "-1.14",
+          "worst_state": "fallback_fair_price",
+          "worst_state_surplus": null,
+          "worst_state_surplus_before_fees": "-1.0600"
+        },
+        {
+          "acquisition_cost": null,
+          "acquisition_gross": null,
+          "basket_quantity": "10",
+          "capital_lockup": null,
+          "claim": "NOT_EVALUATED",
+          "claim_adjusted_surplus": null,
+          "claim_reasons": [
+            "kalshi:KXHIGHNY-26SEP23-T65/YES: FILLABLE (a take is a fractional number of contracts; no fee rule for it is modelled)"
+          ],
+          "evaluated": false,
+          "fees": null,
+          "leg_fills": [
+            {
+              "available": "10",
+              "detail": "2 level(s)",
+              "fee": "0.157297",
+              "gross_cost": "3.410000",
+              "limit_price": "0.3500",
+              "market_id": "kalshi:KXHIGHNY-26SEP23-B65.5",
+              "requested": "10",
+              "side": "YES",
+              "status": "FILLABLE",
+              "total_cost": "3.58"
+            },
+            {
+              "available": "10",
+              "detail": "1 level(s)",
+              "fee": "0.174370",
+              "gross_cost": "4.7000",
+              "limit_price": "0.4700",
+              "market_id": "kalshi:KXHIGHNY-26SEP23-B67.5",
+              "requested": "10",
+              "side": "YES",
+              "status": "FILLABLE",
+              "total_cost": "4.88"
+            },
+            {
+              "available": "10",
+              "detail": "1 level(s)",
+              "fee": "0.084280",
+              "gross_cost": "1.4000",
+              "limit_price": "0.1400",
+              "market_id": "kalshi:KXHIGHNY-26SEP23-B69.5",
+              "requested": "10",
+              "side": "YES",
+              "status": "FILLABLE",
+              "total_cost": "1.49"
+            },
+            {
+              "available": "10",
+              "detail": "1 level(s)",
+              "fee": "0.020370",
+              "gross_cost": "0.3000",
+              "limit_price": "0.0300",
+              "market_id": "kalshi:KXHIGHNY-26SEP23-B71.5",
+              "requested": "10",
+              "side": "YES",
+              "status": "FILLABLE",
+              "total_cost": "0.33"
+            },
+            {
+              "available": "10",
+              "detail": "a take is a fractional number of contracts; no fee rule for it is modelled",
+              "fee": null,
+              "gross_cost": "0.636000",
+              "limit_price": "0.0700",
+              "market_id": "kalshi:KXHIGHNY-26SEP23-T65",
+              "requested": "10",
+              "side": "YES",
+              "status": "FILLABLE",
+              "total_cost": null
+            },
+            {
+              "available": "10",
+              "detail": "1 level(s)",
+              "fee": "0.013720",
+              "gross_cost": "0.2000",
+              "limit_price": "0.0200",
+              "market_id": "kalshi:KXHIGHNY-26SEP23-T72",
+              "requested": "10",
+              "side": "YES",
+              "status": "FILLABLE",
+              "total_cost": "0.22"
+            }
+          ],
+          "limiting_leg": "kalshi:KXHIGHNY-26SEP23-B67.5/YES",
+          "lockup_until_expected_utc": "2026-09-24T19:00:00Z",
+          "lockup_until_latest_utc": "2026-09-30T14:00:00Z",
+          "min_full_fill_payout": null,
+          "orphan_exposure": {},
+          "states_evaluated": [],
+          "states_skipped": [],
+          "upper_bound_if_unknown_settlement_costs_zero": null,
+          "worst_state": null,
+          "worst_state_surplus": null,
+          "worst_state_surplus_before_fees": null
+        },
+        {
+          "acquisition_cost": null,
+          "acquisition_gross": null,
+          "basket_quantity": "100",
+          "capital_lockup": null,
+          "claim": "NOT_EVALUATED",
+          "claim_adjusted_surplus": null,
+          "claim_reasons": [
+            "kalshi:KXHIGHNY-26SEP23-B65.5/YES: FILLABLE (a take is a fractional number of contracts; no fee rule for it is modelled)",
+            "kalshi:KXHIGHNY-26SEP23-B69.5/YES: FILLABLE (a take is a fractional number of contracts; no fee rule for it is modelled)",
+            "kalshi:KXHIGHNY-26SEP23-B71.5/YES: FILLABLE (a take is a fractional number of contracts; no fee rule for it is modelled)",
+            "kalshi:KXHIGHNY-26SEP23-T65/YES: FILLABLE (a take is a fractional number of contracts; no fee rule for it is modelled)"
+          ],
+          "evaluated": false,
+          "fees": null,
+          "leg_fills": [
+            {
+              "available": "100",
+              "detail": "a take is a fractional number of contracts; no fee rule for it is modelled",
+              "fee": null,
+              "gross_cost": "35.871000",
+              "limit_price": "0.3700",
+              "market_id": "kalshi:KXHIGHNY-26SEP23-B65.5",
+              "requested": "100",
+              "side": "YES",
+              "status": "FILLABLE",
+              "total_cost": null
+            },
+            {
+              "available": "100",
+              "detail": "2 level(s)",
+              "fee": "1.743980",
+              "gross_cost": "47.080000",
+              "limit_price": "0.4800",
+              "market_id": "kalshi:KXHIGHNY-26SEP23-B67.5",
+              "requested": "100",
+              "side": "YES",
+              "status": "FILLABLE",
+              "total_cost": "48.83"
+            },
+            {
+              "available": "100",
+              "detail": "a take is a fractional number of contracts; no fee rule for it is modelled",
+              "fee": null,
+              "gross_cost": "14.630300",
+              "limit_price": "0.1500",
+              "market_id": "kalshi:KXHIGHNY-26SEP23-B69.5",
+              "requested": "100",
+              "side": "YES",
+              "status": "FILLABLE",
+              "total_cost": null
+            },
+            {
+              "available": "100",
+              "detail": "a take is a fractional number of contracts; no fee rule for it is modelled",
+              "fee": null,
+              "gross_cost": "3.201500",
+              "limit_price": "0.0400",
+              "market_id": "kalshi:KXHIGHNY-26SEP23-B71.5",
+              "requested": "100",
+              "side": "YES",
+              "status": "FILLABLE",
+              "total_cost": null
+            },
+            {
+              "available": "100",
+              "detail": "a take is a fractional number of contracts; no fee rule for it is modelled",
+              "fee": null,
+              "gross_cost": "6.936000",
+              "limit_price": "0.0700",
+              "market_id": "kalshi:KXHIGHNY-26SEP23-T65",
+              "requested": "100",
+              "side": "YES",
+              "status": "FILLABLE",
+              "total_cost": null
+            },
+            {
+              "available": "100",
+              "detail": "1 level(s)",
+              "fee": "0.137200",
+              "gross_cost": "2.0000",
+              "limit_price": "0.0200",
+              "market_id": "kalshi:KXHIGHNY-26SEP23-T72",
+              "requested": "100",
+              "side": "YES",
+              "status": "FILLABLE",
+              "total_cost": "2.14"
+            }
+          ],
+          "limiting_leg": "kalshi:KXHIGHNY-26SEP23-B67.5/YES",
+          "lockup_until_expected_utc": "2026-09-24T19:00:00Z",
+          "lockup_until_latest_utc": "2026-09-30T14:00:00Z",
+          "min_full_fill_payout": null,
+          "orphan_exposure": {},
+          "states_evaluated": [],
+          "states_skipped": [],
+          "upper_bound_if_unknown_settlement_costs_zero": null,
+          "worst_state": null,
+          "worst_state_surplus": null,
+          "worst_state_surplus_before_fees": null
+        }
+      ],
+      "version": "payoff-constraints-v1"
+    }
+  ],
+  "events": 2,
+  "input_snapshot_sha256": "8df9573118f6914af612c2dd463b6844b36d0bc535e245e454fb38be8fb8b911",
+  "max_leg_skew_seconds": 60.0,
+  "max_quote_age_seconds": 300.0,
+  "observed_quote_inconsistency_max": "-0.0600",
+  "observed_quote_inconsistency_min": "-0.0600",
+  "prohibited_fields_never_read": [
+    "expiration_value",
+    "last_price_dollars",
+    "previous_price_dollars",
+    "result",
+    "settlement_ts",
+    "settlement_value",
+    "settlement_value_dollars"
+  ],
+  "quote_validity_counts": {
+    "VALID": 2
+  },
+  "relationship_counts": {
+    "INCOMPLETE": 2
+  },
+  "report_sha256": "446cb6644e2091decec83ddffbd32aacdf3ea3c2eb9f2e6e62c71bc22b41b3a4",
+  "series": "KXHIGHNY",
+  "sets_evaluated": 2,
+  "sets_skipped": [],
+  "simulated_execution": "NOT_MODELLED: no leg-timing or fill-probability model; legs are never assumed atomic",
+  "sizes": [
+    "1",
+    "10",
+    "100"
+  ],
+  "version": "payoff-constraints-v1"
+}
