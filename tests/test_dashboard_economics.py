@@ -89,12 +89,13 @@ def test_populated_section_sits_in_the_research_tab_after_the_experiments(state)
                    "Hidden · holdout protection", "episodes not evaluable", "Conditional mapping · not equivalent",
                    "YES pays $0.50 on a tie", "Not defensible", "FEE_UNSUPPORTED", "signals and fills not evaluated",
                    "Settle and freeze EXP-002", "Draft",
-                   "Economic evidence · B", "Same-venue payoff consistency", "Not yet available",
-                   "No payoff proof, conditional surplus or captured result is shown",
+                   "Economic evidence · B", "Laptop store · not production evidence", "Not production evidence",
+                   "PAYOFF RESEARCH — NOT A CAPTURED RESULT",
                    "Size ladder over the latest paired book", "Fee unsupported", "Insufficient evidence", "Protocol-eligible", "Protocol attrition (EXP-002)",
                    "Visible depth is an instantaneous ceiling, not capacity"):
         assert needle in text, needle
-    lower = text.replace(plain(research.EV_NOTE), "").lower()  # the note negates these words on purpose
+    # the notes negate these words on purpose
+    lower = text.replace(plain(research.EV_NOTE), "").replace(plain(research.PAYOFF_NOTE), "").lower()
     for word in FORBIDDEN:
         assert word not in lower, word
     assert "k-ok" not in section(body)  # nothing green in this section
@@ -154,30 +155,27 @@ def test_stale_unsupported_unknown_error_and_malformed(tmp_path):
     assert "malformed view" in plain(broken) or "Family A" in plain(broken)
 
 
-def test_family_b_view_is_rendered_when_the_evaluator_is_installed(tmp_path, monkeypatch):
-    fake = types.ModuleType(d.PAYOFF_EVIDENCE_MODULE)
-    fake.terminal_view = lambda db, now: {"state": "PARTIAL", "as_of_utc": "2026-09-27T21:00:00Z",
-                                          "label": "SYNTHETIC evaluator view", "detail": "SYNTHETIC detail"}
-    monkeypatch.setitem(sys.modules, d.PAYOFF_EVIDENCE_MODULE, fake)
-    path, now = sf.fixture_store(tmp_path)
-    cfg = Config(db=path, clock=lambda: now)
-    ctx = d.Context(cfg)
-    assert ctx.economic_b.status == d.OK
-    text = plain(research.economics_body(ctx.economic_a, ctx.economic_b, now))
-    assert "SYNTHETIC evaluator view" in text and "is not arbitrage captured" in text
-
-
-def test_loaders_report_absence_honestly(tmp_path):
+def test_loaders_report_absence_honestly(tmp_path, monkeypatch):
+    """Family A without a store; Family B at every step before a result can be shown: evaluator absent,
+    registry absent, EXP-003 absent, no result file, and a result that does not verify."""
     ctx = d.Context(Config(db=None))
     assert ctx.economic_a.status == d.NO_DATA and "no evidence database configured" in ctx.economic_a.message
-    # Coordinator-granted claim exception (EE v1 #102): either honest absence message is accepted, PR B absent
-    # or installed without a Terminal view; the state is never OK or populated. Writer 2 rewrites this in the
-    # Section B follow-up.
     assert ctx.economic_b.status == d.NO_DATA and ctx.economic_b.value is None
-    assert "PR B" in ctx.economic_b.message or "installed without a Terminal view" in ctx.economic_b.message
+    assert "no experiment registry configured" in ctx.economic_b.message
     missing = d.Context(Config(db=tmp_path / "missing.sqlite3"))
     assert missing.economic_a.status == d.NO_DATA and "not readable" in missing.economic_a.message
     assert str(tmp_path) not in missing.economic_a.message  # no path leaks
+    empty_registry = tmp_path / "experiments"
+    empty_registry.mkdir()
+    no_exp = d.Context(Config(experiments_root=empty_registry)).economic_b
+    assert no_exp.status == d.NO_DATA and "EXP-003 is not in the experiment registry" in no_exp.message
+    no_file = d.Context(Config(experiments_root=sf.payoff_registry(tmp_path / "r1", results=False))).economic_b
+    assert no_file.status == d.OK and no_file.value["state"] == "EMPTY"
+    tampered = d.Context(Config(experiments_root=sf.payoff_registry(tmp_path / "r2", tamper=True))).economic_b
+    assert tampered.status == d.ERROR and "does not verify" in tampered.message
+    monkeypatch.setitem(sys.modules, d.PAYOFF_EVIDENCE_MODULE, None)  # the evaluator is not installed
+    absent = d.Context(Config(experiments_root=sf.payoff_registry(tmp_path / "r3"))).economic_b
+    assert absent.status == d.NO_DATA and "PR B" in absent.message
 
 
 def test_gallery_renders_every_state():

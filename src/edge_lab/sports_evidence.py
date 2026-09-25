@@ -71,8 +71,7 @@ import os
 import re
 import sys
 import uuid
-from collections import OrderedDict
-from contextlib import closing
+from collections import OrderedDict, deque
 from dataclasses import dataclass, field, fields, is_dataclass
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
@@ -397,12 +396,33 @@ def tie_adjusted_interval(p: Decimal | None, tie_payout: Decimal | None, tie_bou
 # --------------------------------------------------------------------------- store reads (metadata first)
 
 
-def _meta_rows(store: Any, sql: str, params: Sequence[Any]) -> list[Any]:
-    """Metadata-only reads over the store's own read-only connection (`open_readonly`: mode=ro,
-    query_only), as `odds_consensus._index` does: the store has no public metadata read and storage.py is
-    another writer's file (a shared-contract request is recorded in the PR)."""
-    with closing(store._connect()) as conn:
-        return conn.execute(sql, list(params)).fetchall()
+META_PAGE = 10_000  # metadata rows per page (SnapshotStore.snapshot_metadata keyset paging)
+_KALSHI_KINDS = ("orderbook", *LISTING_KINDS)
+
+
+def _is_nfl_entity(kind: str, entity: str) -> bool:
+    """A KXNFLGAME row: books are per market ("KXNFLGAME-..."); listings per series ("KXNFLGAME") or event.
+    An exact prefix, never a look-alike series such as "KXNFLGAMEX"."""
+    return entity.startswith(f"{KALSHI_SERIES}-") or (kind != "orderbook" and entity == KALSHI_SERIES)
+
+
+def _nfl_metadata(store: Any, *, after_id: int | None = None, keep: int | None = None) -> tuple[list[Any], bool]:
+    """KXNFLGAME snapshot metadata (no payloads) through the store's public, bounded read
+    (`SnapshotStore.snapshot_metadata`, exact prefix, keyset pages). Keeps the newest `keep` rows; returns
+    (rows oldest first, truncated)."""
+    rows: deque[Any] = deque(maxlen=keep)
+    seen = 0
+    cursor = after_id
+    while True:
+        page = store.snapshot_metadata(source=KALSHI, kinds=_KALSHI_KINDS, entity_prefix=KALSHI_SERIES,
+                                       limit=META_PAGE, after_id=cursor)
+        for r in page:
+            if _is_nfl_entity(str(r["kind"]), str(r["entity_id"])):
+                rows.append(r)
+                seen += 1
+        if len(page) < META_PAGE:
+            return list(rows), keep is not None and seen > keep
+        cursor = int(page[-1]["id"])
 
 
 @dataclass
@@ -512,21 +532,16 @@ def _markets_in(payload: Any) -> tuple[list[tuple[Mapping[str, Any], tuple[str, 
 def kalshi_catalog(store: Any, as_of: datetime, payloads: _Payloads) -> KalshiCatalog:
     """Every stored KXNFLGAME listing and book received by `as_of`: metadata by SQL, listings parsed
     (bounded), books left unparsed until the join selects one."""
-    kinds = ",".join("?" * len(LISTING_KINDS))
-    meta = _meta_rows(store, f"""
-        SELECT id, kind, entity_id, fetched_at_utc, url, payload_sha256 FROM snapshots
-        WHERE source = ? AND ((kind = 'orderbook' AND entity_id LIKE ?) OR (kind IN ({kinds}) AND entity_id LIKE ?))
-        ORDER BY id DESC LIMIT ?""", [KALSHI, f"{KALSHI_SERIES}-%", *LISTING_KINDS, f"{KALSHI_SERIES}%",
-                                      MAX_KALSHI_META + 1])
+    meta, meta_truncated = _nfl_metadata(store, keep=MAX_KALSHI_META)
     listings: dict[str, list[KalshiMarketObs]] = {}
     books: dict[str, list[tuple[datetime, int, str, str]]] = {}
     problems: list[str] = []
-    if len(meta) > MAX_KALSHI_META:
+    if meta_truncated:
         problems.append(f"KALSHI_META_TRUNCATED: only the newest {MAX_KALSHI_META} KXNFLGAME rows were read")
-    known = [(received, r) for r in meta[:MAX_KALSHI_META] if (received := parse_utc(r["fetched_at_utc"])) is not None
+    known = [(received, r) for r in meta if (received := parse_utc(r["fetched_at_utc"])) is not None
              and received <= as_of]  # rows received after as_of are neither used nor counted
     known.sort(key=lambda x: (x[0], int(x[1]["id"])))
-    truncated = len(known) > MAX_KALSHI_ROWS or len(meta) > MAX_KALSHI_META
+    truncated = len(known) > MAX_KALSHI_ROWS or meta_truncated
     if len(known) > MAX_KALSHI_ROWS:
         problems.append(f"KALSHI_ROWS_TRUNCATED: only the newest {MAX_KALSHI_ROWS} of {len(known)} KXNFLGAME rows "
                         "received by as_of were read")
@@ -1571,19 +1586,42 @@ def _registry_key(root: Path | None) -> tuple:
         return ("unreadable",)
 
 
+_MARKERS: dict[str, tuple[int | None, int | None]] = {}  # db path -> newest NFL odds / KXNFLGAME snapshot id seen
+
+
+def _newest_id(store: Any, *, source: str, kinds: Sequence[str], prefix: str | None, after: int | None,
+               nfl: bool = False) -> int | None:
+    """The newest matching snapshot id, paging only rows after the last marker (usually none)."""
+    newest, cursor = after, after
+    while True:
+        page = store.snapshot_metadata(source=source, kinds=kinds, entity_prefix=prefix, limit=META_PAGE,
+                                       after_id=cursor)
+        for r in page:
+            if not nfl or _is_nfl_entity(str(r["kind"]), str(r["entity_id"])):
+                newest = int(r["id"])
+        if len(page) < META_PAGE:
+            return newest
+        cursor = int(page[-1]["id"])
+
+
 def _view_key(store: Any, now: datetime, root: Path | None) -> tuple:
     """Everything a report depends on grows monotonically: a new NFL odds snapshot, KXNFLGAME listing or book,
     odds transition or Polymarket observation changes its max id; newly due targets change the due count; a
-    protocol edit changes its file time. Writes by other collectors (KXHIGHNY, NWS, ...) never invalidate it."""
-    odds = _meta_rows(store, "SELECT MAX(id) FROM snapshots WHERE source = ? AND kind = ?",
-                      [ODDS_SOURCE, odds_consensus.KIND])[0][0]
-    kalshi = _meta_rows(store, "SELECT MAX(id) FROM snapshots WHERE source = ? AND entity_id LIKE ?",
-                        [KALSHI, f"{KALSHI_SERIES}%"])[0][0]
-    trans = _meta_rows(store, "SELECT MAX(id) FROM odds_capture_transitions", [])[0][0]
-    pm = _meta_rows(store, "SELECT MAX(id) FROM pm_sports_observations", [])[0][0]
+    protocol edit changes its file time. Writes by other collectors (KXHIGHNY, NWS, ...) never invalidate it.
+    Only the store's public reads (`snapshot_metadata`, `max_row_id`) are used."""
+    path = str(store.path)
+    odds_seen, kalshi_seen = _MARKERS.get(path, (None, None))
+    top = store.max_row_id("snapshots")
+    if top is None or any(m is not None and m > top for m in (odds_seen, kalshi_seen)):
+        odds_seen = kalshi_seen = None  # a replaced or restored store: re-read from the start
+    odds = _newest_id(store, source=ODDS_SOURCE, kinds=(odds_consensus.KIND,), prefix=None, after=odds_seen)
+    kalshi = _newest_id(store, source=KALSHI, kinds=_KALSHI_KINDS, prefix=KALSHI_SERIES, after=kalshi_seen, nfl=True)
+    _MARKERS[path] = (odds, kalshi)
+    trans = store.max_row_id("odds_capture_transitions")
+    pm = store.max_row_id("pm_sports_observations")
     due = sum(1 for r in store.odds_targets(sport=SPORT)
               if deadline(_capture_target(dict(r)), PILOT_CONFIG) <= now)
-    return (str(store.path), odds, kalshi, trans, pm, due, _registry_key(root))
+    return (path, odds, kalshi, trans, pm, due, _registry_key(root))
 
 
 def _family_state(report: Mapping[str, Any], now: datetime) -> str:

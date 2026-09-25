@@ -757,6 +757,29 @@ def test_terminal_cache_ignores_writes_by_other_collectors(tmp_path):
     assert len(se._VIEW_CACHE) == 1  # a KXHIGHNY book does not rebuild the NFL report
 
 
+def test_reads_only_through_the_stores_public_metadata_api(tmp_path):
+    src = Path(se.__file__).read_text(encoding="utf-8")
+    assert "_connect(" not in src and "LIKE" not in src  # snapshot_metadata (exact prefix) and max_row_id only
+    path, now = sf.fixture_store(tmp_path)
+    store = SnapshotStore(path)
+    store.start_run("SYNTHETIC-lookalike")
+    store.save_snapshot(run_id="SYNTHETIC-lookalike", source="kalshi", kind="orderbook",
+                        entity_id="KXNFLGAMEX-26SEP27KCMIA-KC", url="u?depth=100", payload={"orderbook_fp": {}},
+                        fetched_at_utc=iso_z(now - timedelta(hours=1)))
+    ro = SnapshotStore.open_readonly(path)
+    catalog = se.kalshi_catalog(ro, now, se._Payloads(ro))
+    assert catalog.books and all(t.startswith("KXNFLGAME-") for t in catalog.books)  # never a look-alike series
+
+
+def test_view_key_markers_reset_for_a_replaced_store(tmp_path):
+    path, now = sf.fixture_store(tmp_path)
+    key = str(SnapshotStore.open_readonly(path).path)
+    se._VIEW_CACHE.clear()
+    se._MARKERS[key] = (10**9, 10**9)  # ids beyond this store's: a replaced or restored store
+    assert se.terminal_view(path, now=now)["state"] == "OK"
+    assert se._MARKERS[key][0] is not None and se._MARKERS[key][0] < 10**9
+
+
 def test_module_makes_no_network_import_at_runtime():
     src = Path(se.__file__).read_text(encoding="utf-8")
     for banned in ("import urllib.request", "from .http", "import http", "fetch_json", "requests"):

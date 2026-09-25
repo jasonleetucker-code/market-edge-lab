@@ -1367,22 +1367,89 @@ def economic_evidence_a(ctx: Context) -> Loaded:
     return Loaded(OK, view["family_a"])
 
 
+PAYOFF_EXPERIMENT = "EXP-003"
+PAYOFF_RESULT_GLOB = "payoff_scan_*.json"
+PAYOFF_RESULT_MAX_BYTES = 8_000_000  # one result file (the committed laptop scan is ~40 KB)
+PAYOFF_RESULT_MAX_FILES = 64
+PAYOFF_STALE_AFTER = timedelta(days=8)  # coordinator decision (EE v1 Section B)
+
+
+def _result_as_of(obj: Any) -> datetime | None:
+    """The newest evaluation as-of in a result file (untrusted input: None when absent or malformed)."""
+    report = obj.get("report") if isinstance(obj, dict) else None
+    evaluations = report.get("evaluations") if isinstance(report, dict) else None
+    times = [parse_utc(e.get("as_of_utc")) for e in evaluations or [] if isinstance(e, dict)]
+    known = [t for t in times if t is not None]
+    return max(known) if known else None
+
+
 def economic_evidence_b(ctx: Context) -> Loaded:
-    """Family B (same-venue payoff consistency): the evaluator's own `terminal_view(db, now=...)` once PR B
-    installs it; until then NO_DATA saying so. No payoff figure is ever made up here."""
+    """Family B (same-venue payoff consistency, EXP-003): the newest result file in the experiment's
+    `results/` directory (resolved through the registry), by evaluation as-of, checked only with
+    `payoff_constraints.verify_result_provenance` against the experiment's own `evidence_use.jsonl`. Nothing
+    is evaluated per request and nothing is written: the producing CLI run logged its own evidence-use event,
+    and this display is a registered known unlogged consumer (research_evidence.KNOWN_UNLOGGED_CONSUMERS).
+
+    OK carries {"state": POPULATED | STALE | BLOCKED | EMPTY, ...}; NO_DATA when the evaluator or the registry
+    is unavailable; ERROR when the newest result cannot be read or does not verify (never an older fallback)."""
     module, missing = _optional_module(PAYOFF_EVIDENCE_MODULE, "the same-venue payoff evaluator (payoff_constraints, "
                                                                "PR B) is not in this build", ctx)
     if missing is not None:
         return missing
-    fn = getattr(module, "terminal_view", None)
-    if not callable(fn):
-        return Loaded(NO_DATA, message="the payoff evaluator is installed without a Terminal view")
-    if ctx.config.db is None:
-        return Loaded(NO_DATA, message="no evidence database configured (--db)")
+    root = ctx.config.experiments_root
+    if root is None or not root.is_dir():
+        return Loaded(NO_DATA, message="no experiment registry configured (--experiments-root), so the EXP-003 "
+                                       "result files cannot be found")
     try:
-        view = fn(ctx.config.db, now=ctx.now)
-    except Exception as exc:  # noqa: BLE001
+        exp = next((e for e in (registry.load(p) for p in registry.discover(root)) if e.id == PAYOFF_EXPERIMENT), None)
+    except Exception as exc:  # noqa: BLE001 - an unreadable registry is an error, not an empty result
         return Loaded(ERROR, message=short_error(exc, ctx.config))
-    if not isinstance(view, dict):
-        return Loaded(ERROR, message="the payoff evaluator's view is not a mapping")
-    return Loaded(OK, view)
+    if exp is None:
+        return Loaded(NO_DATA, message=f"{PAYOFF_EXPERIMENT} is not in the experiment registry")
+    base: dict[str, Any] = {"experiment_id": exp.id, "experiment_status": exp.status}
+    try:
+        protocol = registry.load_protocol(exp) or {}
+    except Exception as exc:  # noqa: BLE001
+        return Loaded(ERROR, message=f"{exp.id} protocol unreadable: {short_error(exc, ctx.config)}")
+    base["slot_status"] = protocol.get("slot_status")
+    log = exp.path.parent / "evidence_use.jsonl"
+    files = sorted((exp.path.parent / "results").glob(PAYOFF_RESULT_GLOB)) if (exp.path.parent / "results").is_dir() \
+        else []
+    base["files_seen"] = len(files)
+    if len(files) > PAYOFF_RESULT_MAX_FILES:
+        return Loaded(ERROR, message=f"{len(files)} result files exceed the Terminal's bound of "
+                                     f"{PAYOFF_RESULT_MAX_FILES}; archive older results")
+    candidates: list[tuple[datetime, str, Any]] = []
+    unreadable: list[str] = []
+    for path in files:
+        try:
+            if path.stat().st_size > PAYOFF_RESULT_MAX_BYTES:
+                unreadable.append(f"{path.name}: larger than {PAYOFF_RESULT_MAX_BYTES} bytes")
+                continue
+            obj = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, ValueError) as exc:
+            unreadable.append(f"{path.name}: {short_error(exc, ctx.config)}")
+            continue
+        as_of = _result_as_of(obj)
+        if as_of is None:
+            unreadable.append(f"{path.name}: no evaluation as-of")
+            continue
+        candidates.append((as_of, path.name, obj))
+    base["unreadable"] = unreadable
+    if str(base["slot_status"] or "").upper() != "ACTIVE":
+        return Loaded(OK, {**base, "state": "BLOCKED",
+                           "detail": f"{exp.id} slot is {base['slot_status'] or 'not recorded'}, not ACTIVE: its "
+                                     "results are not shown"})
+    if not candidates:
+        if unreadable:
+            return Loaded(ERROR, message="no EXP-003 result file could be read: " + "; ".join(unreadable)[:300])
+        return Loaded(OK, {**base, "state": "EMPTY",
+                           "detail": "no payoff-scan result file is recorded for EXP-003 yet"})
+    as_of, name, obj = max(candidates, key=lambda c: (c[0], c[1]))
+    ok, reasons = module.verify_result_provenance(obj, log)
+    if not ok:
+        return Loaded(ERROR, message=f"the newest result ({name}) does not verify: " + "; ".join(reasons)[:400])
+    state = "STALE" if ctx.now - as_of > PAYOFF_STALE_AFTER else "POPULATED"
+    return Loaded(OK, {**base, "state": state, "file": name, "as_of_utc": as_of.isoformat().replace("+00:00", "Z"),
+                       "stale_after_days": PAYOFF_STALE_AFTER.days, "result": obj,
+                       "verification": "verify_result_provenance: passed"})

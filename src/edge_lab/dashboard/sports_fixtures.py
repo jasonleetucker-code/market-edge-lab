@@ -244,3 +244,98 @@ def synthetic_economic_views() -> dict[str, Any]:
         "error": (d.Loaded(d.ERROR, message="OperationalError: database disk image is malformed"), b_missing),
     })
     return _VIEWS
+
+
+# --------------------------------------------------------------------------- Family B (EXP-003 result files)
+
+REPO_EXPERIMENTS = Path(__file__).resolve().parents[3] / "experiments"
+PAYOFF_NOW = datetime(2026, 9, 25, 12, 0, tzinfo=UTC)  # three days after the committed laptop scan's books
+
+
+def payoff_registry(root: Path | None = None, *, production: bool = False, positive: bool = False,
+                    slot_status: str | None = None, results: bool = True, tamper: bool = False) -> Path:
+    """A throwaway experiment registry holding a copy of the repository's EXP-003 (protocol, evidence-use log
+    and the committed laptop scan). `production` adds a newer SYNTHETIC production-labelled result, logged in
+    the copy's own log exactly as the payoff-scan CLI logs one; `positive` gives it one conditional full-fill
+    surplus row; `slot_status` rewrites the protocol's slot; `results=False` removes every result file;
+    `tamper` edits the newest result after it was hashed. The repository's files are never written."""
+    import copy
+    import json
+    import shutil
+
+    from .. import payoff_constraints as pc
+    from .. import research_evidence as rev
+    from ..provenance import canonical_json, sha256_hex
+
+    root = root or Path(tempfile.mkdtemp(prefix="edge-payoff-registry-"))
+    src = next(REPO_EXPERIMENTS.glob("EXP-003-*"))
+    exp = root / src.name
+    shutil.copytree(src, exp)
+    if slot_status is not None:
+        proto = exp / "protocol.toml"
+        proto.write_text(proto.read_text(encoding="utf-8").replace('slot_status = "ACTIVE"',
+                                                                   f'slot_status = "{slot_status}"'),
+                         encoding="utf-8", newline="\n")
+    results_dir = exp / "results"
+    if not results:
+        shutil.rmtree(results_dir)
+        return root
+    newest = next(results_dir.glob("payoff_scan_*.json"))
+    if production:
+        base = json.loads(newest.read_text(encoding="utf-8"))
+        report = copy.deepcopy(base["report"])
+        report.pop("report_sha256", None)
+        for i, e in enumerate(report["evaluations"]):
+            e["set_id"] = f"SYNTHETIC-{e['set_id']}"
+            e["as_of_utc"] = f"2026-09-24T22:3{i}:00+00:00"
+        if positive:
+            row = report["evaluations"][-1]["sizes"][0]
+            row.update(claim="CONDITIONAL_FULL_FILL_SURPLUS", claim_adjusted_surplus="0.0300",
+                       worst_state_surplus="0.0400", claim_reasons=["SYNTHETIC: proven partition, costed"])
+            report["claim_counts_by_size_row"] = {"CONDITIONAL_FULL_FILL_SURPLUS": 1, "NOT_EVALUATED": 5}
+        report["report_sha256"] = sha256_hex(canonical_json(report))
+        window = report["event_window"]
+        use = rev.EvidenceUse(
+            experiment_id="EXP-003", family="B", dataset_id="kalshi:KXHIGHNY-books", dataset_version="SYNTHETIC",
+            dataset_sha256=report["input_snapshot_sha256"], role=rev.DatasetRole.DEVELOPMENT,
+            window=rev.InformationWindow("kalshi:KXHIGHNY", f"{window[0]}T00:00:00Z", f"{window[1]}T23:59:59Z"),
+            actor="SYNTHETIC fixture", tool="dashboard.sports_fixtures.payoff_registry",
+            action_time_utc="2026-09-25T00:00:00Z", action=rev.Action.FEATURE_INSPECTION, code_version="SYNTHETIC",
+            model_version=None, prompt_version=None, viewed_features=True, viewed_labels=False, viewed_results=True,
+            influenced_tuning=False, note=f"SYNTHETIC fixture. report_sha256={report['report_sha256']}")
+        rev.record_use(exp / "evidence_use.jsonl", use)
+        envelope = pc.result_envelope(report, generated_at_utc="2026-09-25T00:00:00+00:00", source_store="production",
+                                      code_version="SYNTHETIC", evidence_use_event_id=use.event_id)
+        newest = results_dir / "payoff_scan_SYNTHETIC_production_2026-09-24.json"
+        newest.write_text(json.dumps(envelope, indent=2, sort_keys=True) + "\n", encoding="utf-8", newline="\n")
+    if tamper:
+        obj = json.loads(newest.read_text(encoding="utf-8"))
+        obj["report"]["evaluations"][0]["relationship"] = "PROVEN"
+        newest.write_text(json.dumps(obj, indent=2, sort_keys=True) + "\n", encoding="utf-8", newline="\n")
+    return root
+
+
+_PAYOFF_VIEWS: dict[str, Any] = {}
+
+
+def synthetic_payoff_views() -> dict[str, Any]:
+    """name -> Family B `data.Loaded` for the gallery, each through the real loader over a copied registry."""
+    from . import data as d
+    from .data import Config, Context
+
+    if _PAYOFF_VIEWS:
+        return _PAYOFF_VIEWS
+
+    def load(root: Path, now: datetime = PAYOFF_NOW) -> Any:
+        return Context(Config(experiments_root=root, clock=lambda: now)).economic_b
+    _PAYOFF_VIEWS.update({
+        "laptop": load(payoff_registry()),
+        "production": load(payoff_registry(production=True, positive=True)),
+        "stale": load(payoff_registry(), PAYOFF_NOW + timedelta(days=10)),
+        "empty": load(payoff_registry(results=False)),
+        "blocked": load(payoff_registry(slot_status="QUEUED")),
+        "error": load(payoff_registry(tamper=True)),
+        "unavailable": d.Loaded(d.NO_DATA, message="no experiment registry configured (--experiments-root), so the "
+                                                   "EXP-003 result files cannot be found"),
+    })
+    return _PAYOFF_VIEWS

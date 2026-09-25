@@ -165,6 +165,15 @@ def view(ctx: d.Context, p: pr.Params) -> cm.Page:
                            "".join(research.economics_body(*ev[k], enow)
                                    for k in ("stale", "unsupported", "empty", "unknown", "error")),
                            sid="g-ev-states"))
+    pv = sports_fixtures.synthetic_payoff_views()
+    pnow = sports_fixtures.PAYOFF_NOW
+    parts.append(c.section("Economic evidence · B (SYNTHETIC production result with one conditional surplus)",
+                           research.family_b_body(pv["production"], pnow), sid="g-evb-production"))
+    parts.append(c.section("Economic evidence · B (the committed laptop result: not production evidence)",
+                           research.family_b_body(pv["laptop"], pnow), sid="g-evb-laptop"))
+    parts.append(c.section("Economic evidence · B (stale / empty / blocked / error / unavailable)",
+                           "".join(research.family_b_body(pv[k], pnow)
+                                   for k in ("stale", "empty", "blocked", "error", "unavailable")), sid="g-evb-states"))
     origin_rows = [
         cm.failure_alert(d.FailureRecord(d.FAILURE_FILE, fixtures.synthetic_failure_record("edgelab-decision.service"),
                                          "PRODUCTION", False)),
