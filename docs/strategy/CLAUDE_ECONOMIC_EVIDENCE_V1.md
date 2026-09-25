@@ -2,6 +2,39 @@
 
 Work exclusively in `jasonleetucker-code/market-edge-lab` (Market / Market Edge Lab). Do not work in Calculator, Brisket or any other repository. This is an implementation handoff, not another brainstorming assignment.
 
+> **Post-audit update and review corrections (coordinator, 2026-09-25, main `db44858` after #97;
+> independent review of #98).** These points supersede anything in this document's audit snapshot:
+> 1. **Claims and HANDOFF are current.** #97 released every earlier lane claim and refreshed
+>    `HANDOFF.md` (production `f5bfa6e`, verified 2026-09-25 01:57Z, re-verified 02:13Z by this
+>    session). Any instruction here to reconcile or obtain release of the A–F claims, or saying
+>    HANDOFF is stale, no longer applies. Economic Evidence v1 claims are in `docs/WORK_CLAIMS.md`
+>    (#99).
+> 2. **Authority.** This document and its handoff authorize nothing. The EV1 runtime and UI work
+>    (PR B, PR C) starts only after `docs/EXECUTION_PLAN.md` records the owner's scope. The owner's
+>    Economic Evidence v1 directive of 2026-09-25 supplies that scope; PR A records it, and an agent
+>    records a grant, never creates one. Family A is research on stored evidence. It is not the
+>    "sports model or sports strategy" the 2026-09-23 exclusion names: no winner model and no
+>    operational sports strategy.
+> 3. **The sentinel rule (section 11) is prospective.** It applies to *new* collectors. Collectors
+>    already authorized in EXECUTION_PLAN (Odds API, Polymarket US pilot, ADR 0030 observations,
+>    Freshness supervisor) continue under that authority until an explicit review.
+> 4. **Supersession takes effect only on canonical reconciliation.** That covers the automatic
+>    twelve-city rollout and the OWNER_IDEAS equity-quote rule. Until PR A updates the canonical
+>    docs, EXECUTION_PLAN/OWNER_IDEAS ordering governs.
+> 5. **Outcome-dependent costs go inside the minimum** (strategy document, section 7 Family B; and section 6 here: per-state payouts include state-dependent costs and refunds).
+> 6. **External venue facts are UNVERIFIED until captured as fixtures** (read 2026-09-24). They cover
+>    the Kalshi 0.01 fractional quantities; Novig one-cent contracts, non-idempotent placement and
+>    201 = queued; and the Novig QA public book.
+> 7. **Methods.**
+>    - The episode definition (start threshold, end/merge gap, minimum size) is frozen in the
+>      protocol before outcomes are viewed.
+>    - Evidence-use events dedupe only identical event ids; every distinct view of a holdout is
+>      recorded.
+>    - A holdout is identified by its outcome/event window as well as its dataset hash.
+>    - Family B must not access EXP-001 forecasts, outcomes or ledger. It clusters by event day.
+>    - Family A clusters by game, and also by NFL week or slate.
+>    - Any timer needs explicit EXECUTION_PLAN authority and owner approval.
+
 ## Mission and reason
 
 Market Edge is a private, Python-based research/data/shadow platform for identifying and eventually trading genuine after-cost edges. It already contains an immutable SQLite evidence store, protected NYC weather research, sports odds/consensus, venue/rules/depth/fees primitives, a shadow ledger, risk controls, Freshness supervision and a mobile Terminal.
@@ -142,7 +175,7 @@ Inputs: contracts and rule proofs, finite settlement states, native payout matri
 
 Initially support nonnegative long legs only. Buying complement shares is different from assuming short selling is supported. Refuse unavailable selling/collateral economics.
 
-For each supported size compute all-in acquisition cost, per-state payout, minimum full-fill payout, worst-state surplus, limiting depth/leg and capital lockup. Include refunds, ties, cancellation and fallback outcomes in the proof or return incomplete/unsupported. A missing state must never make the result look risk-free.
+For each supported size compute all-in acquisition cost, per-state payout net of state-dependent settlement costs and refunds, minimum full-fill payout, worst-state surplus, limiting depth/leg and capital lockup. Include refunds, ties, cancellation and fallback outcomes in the proof or return incomplete/unsupported. A missing state must never make the result look risk-free.
 
 Keep distinct: semantic proof, observed quote inconsistency, conditional full-fill surplus, simulated achievable result and actual captured profit. There are no actual fills in this batch. Same-venue legs are not presumed atomic. Report orphan-leg exposure and do not suppress it because the complete basket would settle favorably.
 

@@ -6,6 +6,39 @@ Owner directive: #96. Date: 2026-09-24 America/New_York.
 
 **Audit baseline:** `f5bfa6e11337861c5999c6ddf03a94c67d54716f` on `main`, the merge of #95. Its parent is `3990ee708ddf8a0b9ba514f0d107a9167f907796` (#94). Re-read current main before implementation. The companion handoff is [CLAUDE_ECONOMIC_EVIDENCE_V1.md](CLAUDE_ECONOMIC_EVIDENCE_V1.md).
 
+> **Post-audit update and review corrections (coordinator, 2026-09-25, main `db44858` after #97;
+> independent review of #98).** These points supersede anything in this document's audit snapshot:
+> 1. **Claims and HANDOFF are current.** #97 released every earlier lane claim and refreshed
+>    `HANDOFF.md` (production `f5bfa6e`, verified 2026-09-25 01:57Z, re-verified 02:13Z by this
+>    session). Any instruction here to reconcile or obtain release of the A–F claims, or saying
+>    HANDOFF is stale, no longer applies. Economic Evidence v1 claims are in `docs/WORK_CLAIMS.md`
+>    (#99).
+> 2. **Authority.** This document and its handoff authorize nothing. The EV1 runtime and UI work
+>    (PR B, PR C) starts only after `docs/EXECUTION_PLAN.md` records the owner's scope. The owner's
+>    Economic Evidence v1 directive of 2026-09-25 supplies that scope; PR A records it, and an agent
+>    records a grant, never creates one. Family A is research on stored evidence. It is not the
+>    "sports model or sports strategy" the 2026-09-23 exclusion names: no winner model and no
+>    operational sports strategy.
+> 3. **The sentinel rule (section 11) is prospective.** It applies to *new* collectors. Collectors
+>    already authorized in EXECUTION_PLAN (Odds API, Polymarket US pilot, ADR 0030 observations,
+>    Freshness supervisor) continue under that authority until an explicit review.
+> 4. **Supersession takes effect only on canonical reconciliation.** That covers the automatic
+>    twelve-city rollout and the OWNER_IDEAS equity-quote rule. Until PR A updates the canonical
+>    docs, EXECUTION_PLAN/OWNER_IDEAS ordering governs.
+> 5. **Outcome-dependent costs go inside the minimum** (section 7 Family B, corrected below).
+> 6. **External venue facts are UNVERIFIED until captured as fixtures** (read 2026-09-24). They cover
+>    the Kalshi 0.01 fractional quantities; Novig one-cent contracts, non-idempotent placement and
+>    201 = queued; and the Novig QA public book.
+> 7. **Methods.**
+>    - The episode definition (start threshold, end/merge gap, minimum size) is frozen in the
+>      protocol before outcomes are viewed.
+>    - Evidence-use events dedupe only identical event ids; every distinct view of a holdout is
+>      recorded.
+>    - A holdout is identified by its outcome/event window as well as its dataset hash.
+>    - Family B must not access EXP-001 forecasts, outcomes or ledger. It clusters by event day.
+>    - Family A clusters by game, and also by NFL week or slate.
+>    - Any timer needs explicit EXECUTION_PLAN authority and owner approval.
+
 ## 1. Decision and authority
 
 Market Edge remains a long-term cross-market research and trading project. Its immediate job is no longer to implement every potentially useful market, collector, model or dashboard. Its immediate job is to test a small number of explicit mechanisms, establish after-cost executable economics, measure capacity and reject weak ideas.
@@ -122,7 +155,7 @@ Outputs: universe/coverage census, mapping evidence, attrition waterfall, paired
 
 Start with a small allowlisted set of complements, exhaustive partitions and nested thresholds using stored Kalshi evidence where semantics are complete. Build a payout matrix: rows are contracts, columns are all admissible settlement states, cells are exact native-currency payouts. Include void/refund/corrected/disputed/fallback cases or declare the proof incomplete.
 
-For nonnegative long positions q, compute conditional full-fill worst-state surplus as `min_s(sum_i(q_i * payout_i(s))) - sum_i(acquisition_cost_i(q_i)) - other_applicable_costs`. Fees enter once, with rounding at the correct scope. Use actual ask ladders and depth caps; sale legs require an explicit proven short/sell/collateral model and are out of v1 scope.
+For nonnegative long positions q, compute conditional full-fill worst-state surplus as `min_s( sum_i(q_i * payout_i(s)) - sum_i(settlement_cost_i(s, q_i)) + refund_i(s, q_i) ) - sum_i(acquisition_cost_i(q_i)) - state_independent_costs`. Costs or refunds that depend on the settlement state (settlement/transfer fees, fee reversals on void, price- and fill-dependent refunds) belong inside the per-state term before the minimum. Only state-independent costs stay outside it. Fees enter once, with rounding at the correct scope. Use actual ask ladders and depth caps; sale legs require an explicit proven short/sell/collateral model and are out of v1 scope.
 
 Validate exact settlement identity, units, rule versions, currency, clocks and overlap of quote-validity intervals. A label match is not a proof. Unknown fees or rules prevent a claim. A raw quote imbalance, a proof, an executable-looking full-fill bound and realized profit are separate outputs.
 
@@ -322,7 +355,7 @@ Every new family has a declared question, cash/time budget, evaluation window an
 
 Define statistical futility and error control before evaluating results. Insufficient evidence is not no edge. Conversely, indefinite extensions are not free: identify the specific missing observation and marginal cost/value of another window. A recurring structural failure across several independent well-designed families can justify domain deferral. Retain failed/abandoned records.
 
-A collector without an active experiment may continue only as a bounded explicitly approved sentinel/archive with documented prospective value and review date. Do not halt EXP-001 or another authorized time-critical source casually.
+A *new* collector without an active experiment may start only as a bounded, explicitly approved sentinel/archive with documented prospective value and a review date. Existing EXECUTION_PLAN-authorized collectors continue until an explicit review. Do not halt EXP-001 or another authorized time-critical source casually.
 
 ## 12. Roadmap and exact canonical-document integration
 
