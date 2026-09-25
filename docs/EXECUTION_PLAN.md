@@ -444,6 +444,42 @@ be written here when they are made.
   - **Not authorized:** trading, account credentials, orders, money movement, paid services,
     Polymarket International.
 
+- **2026-09-25, MISSION: ECONOMIC EVIDENCE V1 (#96).** Recorded in substance in
+  `docs/owner/2026-09-25-economic-evidence-v1-directive.md`. Strategy record and handoff:
+  `docs/strategy/2026-09-24-evidence-to-economics-reset.md` and
+  `docs/strategy/CLAUDE_ECONOMIC_EVIDENCE_V1.md`. Those two documents authorize nothing by
+  themselves; this entry records the owner's scope for them.
+  - **Authorized (this bounded batch only):**
+    - two DRAFT research protocols, one per new family (not PREREGISTERED);
+    - evidence consumption and attrition records;
+    - an economic screen, including the size ladder and capacity sensitivity;
+    - semantic conformance metadata (units, rules, fees, probability meaning, clocks, finality,
+      rights);
+    - a pure same-venue payoff evaluator;
+    - stored-evidence sports pairing, a data-gap report, economics/capacity, and a compact view
+      in the existing Terminal;
+    - an execution-package ADR, **design only** (no transport);
+    - canonical integration of #96;
+    - review, merge and deployment of reviewed code under
+      `docs/deploy/DAILY_SHADOW_ACTIVATION.md` (preflight PASS, protected windows).
+  - **Research families.** Protected EXP-001 is unchanged. At most two new active hypothesis
+    families:
+    - **A:** narrow sportsbook information versus executable event-market pricing;
+    - **B:** same-venue mathematical payoff relationships.
+
+    Family A is stored-evidence research. It is **not** the excluded "sports model or sports
+    strategy" of the 2026-09-23 directive: no winner model, no operational sports strategy.
+  - **Not authorized:** live orders; authenticated paper orders; account signup; credential
+    installation or readback; deposits or withdrawals; margin; paid data or services; outside
+    investor capital; new timers or new production network scope; backup deletion; public
+    dashboard exposure; any research or execution gate advance; changes to EXP-001 or
+    `STARTER_MAX_7D_V1` semantics. `EXECUTION_NOT_AUTHORIZED` stays enforced.
+  - **Unchanged.** Gate 7 is not passed. Collectors already authorized above (Odds API,
+    Polymarket US pilot, ADR 0030 observations, the Freshness supervisor) continue under their
+    existing authority until an explicit review. The 450-credit Odds cap is unchanged. The
+    automatic twelve-city Multi-City Weather rollout is no longer the next build
+    (`docs/OWNER_IDEAS.md`, roadmap re-run 2026-09-25); its design (#90) is kept.
+
 ## Standing merge rule: docs-only and test-only PRs
 
 Owner rule of 2026-09-22 (verbatim source: `docs/owner/2026-09-22-overnight-build-directive.md`).
