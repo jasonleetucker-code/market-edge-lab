@@ -687,7 +687,7 @@ class _Requests:
     sleep: Sleep
     used: int = 0
 
-    def get(self, url: str, *, pacer: Pacer, headers: dict[str, str] | None = None):
+    def get(self, url: str, *, pacer: Pacer, headers: dict[str, str] | None = None, retries: int = 2):
         if self.used >= self.limit:
             raise RequestBudgetExhausted(f"request budget of {self.limit} used")
         remaining = self.deadline - self.clock()
@@ -701,7 +701,8 @@ class _Requests:
 
         self.used += 1
         timeout = min(forward.REQUEST_TIMEOUT_S, max(remaining.total_seconds() - 1.0, 1.0))
-        return fetch_json_result(url, headers=headers, timeout=timeout, retries=2, pacer=pacer, sleep=bounded_sleep)
+        return fetch_json_result(url, headers=headers, timeout=timeout, retries=retries, pacer=pacer,
+                                 sleep=bounded_sleep)
 
     def wait_until(self, instant: datetime) -> bool:
         """Sleep until `instant` if the run deadline allows it."""
@@ -717,14 +718,16 @@ class _Requests:
 _FETCH_ERRORS = (HttpFetchError, DeadlineExceeded, ValueError)
 
 
-def _kalshi_listing(store: SnapshotStore, run_id: str, event: str, req: _Requests):
+def _kalshi_listing(store: SnapshotStore, run_id: str, event: str, req: _Requests, *, retries: int = 2,
+                    max_pages: int = MAX_LISTING_PAGES, require_exhausted: bool = True):
     """Every market of one Kalshi event (bounded pages), each page stored as a snapshot.
-    Returns (last snapshot id, last receipt, {ticker: raw market})."""
+    Returns (last snapshot id, last receipt, {ticker: raw market}). With `require_exhausted` false,
+    the markets of the pages read are returned even if a cursor remains (the NFL listing: 1 page)."""
     markets: dict[str, dict[str, Any]] = {}
     cursor, snapshot_id, received = None, None, None
-    for page in range(1, MAX_LISTING_PAGES + 1):
+    for page in range(1, max_pages + 1):
         url = forward._url("/markets", event_ticker=event, limit=1000, cursor=cursor)
-        payload, result = req.get(url, pacer=KALSHI_PACER)
+        payload, result = req.get(url, pacer=KALSHI_PACER, retries=retries)
         snapshot_id = forward._save(store, run_id=run_id, spec=KALSHI_SOURCE, kind="markets", entity_id=event,
                                     url=url, payload=payload, fetch=result)
         received = _t(result.received_at_utc)
@@ -733,9 +736,9 @@ def _kalshi_listing(store: SnapshotStore, run_id: str, event: str, req: _Request
             raise ValueError(f"markets page {page} for {event} has no markets list")
         markets.update({m["ticker"]: m for m in rows if isinstance(m, dict) and isinstance(m.get("ticker"), str)})
         cursor = payload.get("cursor") or None
-        if cursor is None:
+        if cursor is None or (page == max_pages and not require_exhausted):
             return snapshot_id, received, markets
-    raise ValueError(f"market listing for {event} still paginating after {MAX_LISTING_PAGES} pages")
+    raise ValueError(f"market listing for {event} still paginating after {max_pages} pages")
 
 
 def _close_proof(target: Mapping[str, Any], pre: Mapping[str, Any], received: datetime,
@@ -782,13 +785,21 @@ def _capture_kalshi_group(store: SnapshotStore, run_id: str, targets: list[Mappi
     attempts: list[list[dict[str, Any]]] = []
     if phase == "close" and not req.wait_until(_t(targets[0]["target_utc"])):
         return [], [t["target_id"] for t in targets]
+    nfl = all(is_nfl_target(t) for t in targets)
+    if nfl and _nfl_role(targets[0]) == NFL_ROLE_SETTLEMENT:
+        return _capture_nfl_settlement_read(store, run_id, targets, req)
+    # NFL pairing (owner approval 2026-09-25): one listing page and no in-run retry per GET; the one
+    # allowed retry is the next scheduled tick (NFL_MAX_ATTEMPTS), so a game-horizon costs at most 6 GETs.
+    retries = 0 if nfl else 2
 
     def fail_all(reason: str, todo: Iterable[Mapping[str, Any]]) -> None:
         for t in todo:
             attempts.append([_base_row(run_id, _attempt_id(run_id, t['target_id']), t, status="FAILED", reason=reason)])
 
     try:
-        listing_id, listing_at, markets = _kalshi_listing(store, run_id, event, req)
+        listing_id, listing_at, markets = _kalshi_listing(
+            store, run_id, event, req, retries=retries, max_pages=1 if nfl else MAX_LISTING_PAGES,
+            require_exhausted=not nfl)
     except RequestBudgetExhausted:
         return [], [t["target_id"] for t in targets]
     except _FETCH_ERRORS as exc:
@@ -827,9 +838,13 @@ def _capture_kalshi_group(store: SnapshotStore, run_id: str, targets: list[Mappi
             continue
         url = forward._url(f"/markets/{native}/orderbook", depth=BOOK_DEPTH)
         try:
-            payload, result = req.get(url, pacer=KALSHI_PACER)
+            payload, result = req.get(url, pacer=KALSHI_PACER, retries=retries)
         except RequestBudgetExhausted:
-            deferred.append(t["target_id"])
+            if nfl:  # the listing was already sent in this run: it counts as this game-horizon's attempt
+                attempts.append([_base_row(run_id, attempt, t, status="FAILED", **common,
+                                           reason="BOOK_DEFERRED_AFTER_LISTING: the run's request budget was used")])
+            else:
+                deferred.append(t["target_id"])
             continue
         except _FETCH_ERRORS as exc:
             attempts.append([_base_row(run_id, attempt, t, status="FAILED",
@@ -924,11 +939,19 @@ def _check_bounds(max_targets: int, max_requests: int) -> None:
 
 
 def capture(store: SnapshotStore, *, clock: Clock | None = None, sleep: Sleep = time.sleep,
-            max_targets: int = MAX_TARGETS, max_requests: int = MAX_REQUESTS) -> tuple[int, dict[str, Any]]:
+            max_targets: int = MAX_TARGETS, max_requests: int = MAX_REQUESTS,
+            nfl_enabled: bool | None = None) -> tuple[int, dict[str, Any]]:
     """One bounded capture run over the due targets. The caller holds the collector lock.
     Returns (exit code, report): 1 when a FAILED target cannot be retried by a later scheduled tick
-    (`failed_final`), else 0. Retryable failures are recorded and listed in `failed_retrying`."""
+    (`failed_final`), else 0. Retryable failures are recorded and listed in `failed_retrying`.
+
+    NFL pairing targets (`NFL_ORIGIN`) never take priority over an ADR 0030 observation: they are ordered
+    after every other target, and a run with a due close target attempts no NFL target at all. They are
+    attempted only while the switch is on (`nfl_enabled`, default from the environment; off records them
+    MISSED as NFL_CAPTURE_DISABLED), by at most `NFL_MAX_ATTEMPTS` runs per game-horizon (1 for a settled
+    read), and their failures never fail the run: they are recorded FAILED and listed in `nfl_failed`."""
     clock = clock or _now
+    nfl_on = nfl_capture_enabled() if nfl_enabled is None else nfl_enabled
     _check_bounds(max_targets, max_requests)
     now = clock()
     refusal = protected_refusal(now)
@@ -948,7 +971,21 @@ def capture(store: SnapshotStore, *, clock: Clock | None = None, sleep: Sleep = 
         due = [t for t in store.price_targets() if t["state"] in (None, "FAILED")
                and _t(t["due_from_utc"]) <= now <= _t(t["deadline_utc"])
                and t["phase"] not in BACKFILL_PHASES]
-        due.sort(key=lambda t: (t["target_utc"], t["market_id"]))
+        nfl_due = [t for t in due if is_nfl_target(t)]
+        if nfl_due:
+            held = _nfl_holds(store, nfl_due, nfl_on)
+            for t in nfl_due:  # recorded now, with the actual cause; never attempted
+                if t["target_id"] in held:
+                    store.record_price_observations([_base_row(run_id, _attempt_id(run_id, t["target_id"]), t,
+                                                               status="MISSED", reason=held[t["target_id"]])])
+            if held:
+                report["nfl_held"] = dict(sorted(held.items()))
+            due = [t for t in due if t["target_id"] not in held]
+            if any(t["phase"] == "close" and not is_nfl_target(t) for t in due):
+                # EXP-001 close observations keep the whole run: NFL targets wait for the next tick.
+                report["nfl_deferred_for_close"] = sorted(t["target_id"] for t in due if is_nfl_target(t))
+                due = [t for t in due if not is_nfl_target(t)]
+        due.sort(key=lambda t: (is_nfl_target(t), t["target_utc"], t["market_id"]))
         report["deferred"] = [t["target_id"] for t in due[max_targets:]]
         due = due[:max_targets]
         req = _Requests(max_requests, now + MAX_RUN, clock, sleep)
@@ -966,7 +1003,8 @@ def capture(store: SnapshotStore, *, clock: Clock | None = None, sleep: Sleep = 
         close_aims = [_t(key[3]) for key in groups if key[2] == "close"]
         full_deadline = req.deadline
         guard = min(close_aims) - CLOSE_GUARD if close_aims else None
-        for (venue, _, phase, _), targets in sorted(groups.items(), key=lambda kv: kv[0][2] == "close"):
+        for (venue, _, phase, _), targets in sorted(groups.items(),
+                                                    key=lambda kv: (is_nfl_target(kv[1][0]), kv[0][2] == "close")):
             req.deadline = full_deadline if phase == "close" or guard is None else min(full_deadline, guard)
             if phase != "close" and clock() + forward.MIN_REQUEST_BUDGET >= req.deadline:
                 report["deferred"] += [t["target_id"] for t in targets]
@@ -1011,10 +1049,15 @@ def capture(store: SnapshotStore, *, clock: Clock | None = None, sleep: Sleep = 
     # A FAILED row stays evidence either way. The run fails (and alerts) only for a target that no later
     # scheduled tick can retry: a close target, or one with no unprotected tick left before its deadline.
     end = clock()
-    final = sorted(i for i, t in failed_targets.items()
-                   if t["phase"] == "close" or not _retry_tick_before(_t(t["deadline_utc"]), end))
+    # A failed NFL target never fails the run (no page: the owner has not agreed to NFL alerts). It is
+    # recorded FAILED (the run is partial), listed in `nfl_failed`, retried once if allowed, then MISSED.
+    quiet = sorted(i for i, t in failed_targets.items() if is_nfl_target(t))
+    if quiet:
+        report["nfl_failed"] = quiet
+    final = sorted(i for i, t in failed_targets.items() if i not in quiet and (
+                   t["phase"] == "close" or not _retry_tick_before(_t(t["deadline_utc"]), end)))
     report["failed_final"] = final
-    report["failed_retrying"] = sorted(set(failed_targets) - set(final))
+    report["failed_retrying"] = sorted(set(failed_targets) - set(final) - set(quiet))
     report["state"] = ("PARTIAL" if final else "PARTIAL_RETRYING") if failed else (
         "CAPTURED" if report["attempted"] else "NOTHING_DUE")
     return (1 if final else 0), report
@@ -1177,6 +1220,377 @@ def market_history(store: SnapshotStore, market_id: str) -> list[dict[str, Any]]
     return out
 
 
+# --------------------------------------------------------------------------- Kalshi NFL pairing (EXP-002)
+#
+# Owner approval 2026-09-25 ("Approve Kalshi NFL capture"; docs/EXECUTION_PLAN.md, bounded by
+# docs/research/SPORTS_PAIRED_EVIDENCE_GAPS.md section 6, review 2026-10-22). Scope and hard bounds:
+# - KXNFLGAME only: both team markets of each game the Odds API pilot captured, at its T-24h / T-6h /
+#   T-60m captures. The pairing is reactive: a Kalshi target is planned only after the Odds capture it
+#   pairs with was CAPTURED, at that capture's receipt time, so the book always follows the odds it is
+#   compared with (point in time) and no book is fetched for a horizon the Odds pilot skipped.
+# - Per game-horizon: 1 listing + 2 book GETs, no in-run retry, at most one retry at the next tick
+#   (NFL_MAX_ATTEMPTS): at most 6 GETs. Per ET game day: at most one settled-markets read, never retried.
+# - Per NFL week (Tuesday-start, America/New_York, by capture time): at most 48 game-horizons and 7
+#   settled-markets reads: at most 288 + 7 GETs. The existing per-run caps (24 markets, 40 GETs), the
+#   protected windows, the shared Kalshi pacer and the collector lock apply unchanged.
+# - Zero Odds API calls: the Odds targets are read from the evidence store only.
+# - On by default: the owner approved the capture, so the reviewed, deployed code is the activation
+#   record. `NFL_SWITCH=off` in /etc/market-edge-lab/env (install.sh keeps it across installs) is the
+#   kill switch: nothing new is planned and pending NFL targets are not attempted (they expire MISSED).
+#   Any value other than on/off fails closed (off). No new unit, timer or schema.
+# Pair skew: the book is fetched at the first edgelab-observe tick (:05/:20/:35/:50) after the Odds
+# capture (edgelab-odds ticks :00/:15/:30/:45), so it follows the odds by about 5 min, or about 20 min
+# after a protected-window refusal, a busy lock or a retry. EXP-002 discloses the skew; pairs beyond its
+# limit stay in the denominators (option (a)). Same-run capture (option (b)) is a separate follow-up.
+
+NFL_PLAN_VERSION = "kalshi-nfl-pairing-v1"
+NFL_ORIGIN = "kalshi_nfl_pairing_v1"
+NFL_SWITCH = "EDGE_LAB_KALSHI_NFL_CAPTURE"
+NFL_SERIES = "KXNFLGAME"
+NFL_SPORT = "americanfootball_nfl"
+NFL_ROLE_BOOK = "book"
+NFL_ROLE_SETTLEMENT = "settlement_read"
+NFL_PLAN_WINDOW = timedelta(minutes=25)  # an Odds capture older than this is never paired late
+NFL_TARGET_WINDOW = timedelta(minutes=29)  # target..deadline: at most two 15-minute ticks fit
+NFL_MIN_LEAD = timedelta(minutes=5)  # a pregame book is received at least this long before kickoff
+NFL_MAX_ATTEMPTS = 2  # the first attempt plus one retry at the next tick
+NFL_GETS_PER_ATTEMPT = 3  # 1 listing page + 2 books
+NFL_WORST_GETS_PER_GAME_HORIZON = NFL_MAX_ATTEMPTS * NFL_GETS_PER_ATTEMPT  # 6
+NFL_WEEKLY_GAME_HORIZONS = 48  # 16 games x 3 horizons: 288 GETs
+NFL_WEEKLY_SETTLEMENT_READS = 7
+NFL_WEEKLY_GET_CAP = NFL_WEEKLY_GAME_HORIZONS * NFL_WORST_GETS_PER_GAME_HORIZON + NFL_WEEKLY_SETTLEMENT_READS
+# The settled-markets read: after the game day's last expected expiration (the recorded KXNFLGAME listing
+# has expected_expiration_time = kickoff + 6 h), at an observe tick, in a window only that tick fits.
+NFL_SETTLEMENT_AFTER_KICKOFF = timedelta(hours=6, minutes=30)
+NFL_SETTLEMENT_WINDOW = timedelta(minutes=9)
+NFL_SETTLEMENT_PLAN_LEAD = timedelta(minutes=30)
+NFL_SETTLEMENT_PAGE_LIMIT = 100  # a game day has at most 13 games (26 markets); one page, never a second
+NFL_MAX_REPORT_ITEMS = 50
+NFL_HORIZONS = ("T-24h", "T-6h", "T-60m")  # the approved horizons, exactly; any other Odds offset is not paired
+_OBSERVE_TICK_MINUTE = 5  # edgelab-observe.timer: *:05/15 America/New_York (whole-hour offset: same UTC minutes)
+
+assert NFL_WEEKLY_GET_CAP == 288 + 7 and NFL_SWITCH == "EDGE_LAB_KALSHI_NFL_CAPTURE"
+
+
+def nfl_switch_value(environ: Mapping[str, str] | None = None) -> str:
+    """ON, OFF or INVALID. The owner approved the capture, so the reviewed, deployed code is the activation
+    record: unset (or "on") means ON. "off" is the kill switch. Any other value fails closed (INVALID = off)."""
+    import os
+
+    # A literal name (tests/invariants/test_no_execution_paths.py scans every environment read).
+    value = environ.get(NFL_SWITCH) if environ is not None else os.environ.get("EDGE_LAB_KALSHI_NFL_CAPTURE")
+    # Exactly the values install.sh accepts and keeps: on or off, lowercase, nothing else.
+    return "ON" if value in (None, "", "on") else "OFF" if value == "off" else "INVALID"
+
+
+def nfl_capture_enabled(environ: Mapping[str, str] | None = None) -> bool:
+    return nfl_switch_value(environ) == "ON"
+
+
+def nfl_disabled_report(environ: Mapping[str, str] | None = None) -> dict[str, Any]:
+    state = nfl_switch_value(environ)
+    return {"state": state if state != "ON" else "OFF", "switch": NFL_SWITCH, "version": NFL_PLAN_VERSION,
+            "detail": f"{NFL_SWITCH}={'off' if state == 'OFF' else 'an invalid value (only on or off)'}: no Kalshi "
+                      "NFL target planned, pending ones are not attempted"}
+
+
+def _keys(t: Any) -> set[str]:
+    return set(t.keys())
+
+
+def _detail(t: Any) -> dict[str, Any]:
+    keys = _keys(t)
+    if "detail" in keys and isinstance(t["detail"], dict):
+        return t["detail"]
+    raw = t["detail_json"] if "detail_json" in keys else None
+    try:
+        value = json.loads(raw) if raw else {}
+    except ValueError:
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
+def is_nfl_target(t: Any) -> bool:
+    """A target planned by the NFL pairing planner (never a manual or ADR 0030 target)."""
+    return "origin" in _keys(t) and t["origin"] == NFL_ORIGIN
+
+
+def _nfl_role(t: Any) -> str | None:
+    return _detail(t).get("nfl_role")
+
+
+def _nfl_attempt_limit(t: Any) -> int:
+    return 1 if _nfl_role(t) == NFL_ROLE_SETTLEMENT else NFL_MAX_ATTEMPTS
+
+
+def _nfl_holds(store: SnapshotStore, nfl_due: Sequence[Any], nfl_on: bool) -> dict[str, str]:
+    """{target id: reason} for the due NFL targets that must not be attempted in this run.
+
+    The GET bound is enforced per game-horizon (both team markets at one Odds receipt, or one settled read),
+    not per target: a run that sent any GET for the group left a non-MISSED row for every target it touched
+    (a book deferred after its listing is recorded FAILED too). Each such run costs at most 3 GETs (1 for a
+    settled read), so at most `_nfl_attempt_limit` runs keep a game-horizon within 6 (1), whichever run it
+    was: a scheduled tick, the close tick or a manual capture."""
+    if not nfl_on:
+        return {t["target_id"]: f"NFL_CAPTURE_DISABLED: {NFL_SWITCH} is off (or invalid): not attempted" for t in nfl_due}
+    group_of = lambda t: (t["native_event_id"], t["target_utc"])  # noqa: E731
+    groups = {group_of(t) for t in nfl_due}
+    ids: dict[tuple[str, str], set[str]] = {}
+    markets: dict[tuple[str, str], set[str]] = {}
+    for t in store.price_targets():
+        if is_nfl_target(t) and group_of(t) in groups:
+            ids.setdefault(group_of(t), set()).add(t["target_id"])
+            markets.setdefault(group_of(t), set()).add(t["market_id"])
+    runs: dict[tuple[str, str], set[str]] = {g: set() for g in groups}
+    for g in groups:
+        for market in sorted(markets.get(g, ())):
+            for r in store.price_observations(market_id=market):
+                if r["target_id"] in ids[g] and r["collection_status"] != "MISSED":
+                    runs[g].add(r["run_id"])
+    return {t["target_id"]: f"NFL_ATTEMPT_LIMIT: {len(runs[group_of(t)])} run(s) already sent GETs for this "
+                            f"game-horizon (limit {_nfl_attempt_limit(t)})"
+            for t in nfl_due if len(runs[group_of(t)]) >= _nfl_attempt_limit(t)}
+
+
+_MONTH_CODES = ("JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC")
+
+
+def nfl_event_ticker(away_abbr: str, home_abbr: str, day: date) -> str:
+    """KXNFLGAME-<YY><MON><DD><AWAY><HOME>, the date being the game's originally scheduled New York date."""
+    ticker = f"{NFL_SERIES}-{day:%y}{_MONTH_CODES[day.month - 1]}{day.day:02d}{away_abbr}{home_abbr}"
+    if not ticker.startswith(f"{NFL_SERIES}-"):  # pragma: no cover - a hard scope guard
+        raise ValueError(f"not a {NFL_SERIES} ticker: {ticker}")
+    return ticker
+
+
+def next_observe_tick(instant: datetime) -> datetime:
+    """The first edgelab-observe tick at or after `instant` that no protected window refuses."""
+    tick = instant.astimezone(UTC).replace(second=0, microsecond=0)
+    if tick < instant:
+        tick += timedelta(minutes=1)
+    while tick.minute % 15 != _OBSERVE_TICK_MINUTE:
+        tick += timedelta(minutes=1)
+    while protected_refusal(tick) is not None:
+        tick += SCHEDULED_TICK_INTERVAL
+    return tick
+
+
+def _nfl_mapping(store: SnapshotStore, event: str, expected: Mapping[str, str], now: datetime) -> tuple[str, str]:
+    """(LISTED | DERIVED | NOT_LISTED | AMBIGUOUS, why) from the newest listing of `event` received at or
+    before `now` (point in time: a later listing is never used, also in a dry run for a past `now`).
+    With no listing received yet, the derived tickers are planned and the capture's own listing GET (inside
+    the game-horizon's budget) verifies them; a received listing that lacks them stops further planning."""
+    known = [m for m in store.snapshot_metadata(source=KALSHI_SOURCE.legacy_name, kinds=("markets",),
+                                                entity_prefix=event, limit=1000)
+             if m["entity_id"] == event and (_t(m["fetched_at_utc"]) or now + timedelta(seconds=1)) <= now]
+    if not known:
+        return "DERIVED", "no listing received yet: the capture's listing GET verifies the derived tickers"
+    newest = int(known[-1]["id"])
+    row = store.snapshots_by_id([newest])[newest]
+    try:
+        payload = json.loads(row["payload_json"])
+    except ValueError:
+        return "AMBIGUOUS", f"stored listing {row['id']} is not JSON"
+    markets = {m["ticker"]: m for m in (payload.get("markets") or []) if isinstance(m, dict)
+               and isinstance(m.get("ticker"), str)} if isinstance(payload, dict) else {}
+    missing = sorted(set(expected) - set(markets))
+    if missing:
+        return "NOT_LISTED", f"stored listing {row['id']} ({row['fetched_at_utc']}) of {event} lacks {missing}"
+    differ = sorted(tk for tk, label in expected.items() if markets[tk].get("yes_sub_title") not in (None, label))
+    if differ:
+        return "AMBIGUOUS", f"stored listing {row['id']}: yes_sub_title differs from the team table for {differ}"
+    return "LISTED", f"stored listing {row['id']} ({row['fetched_at_utc']}) lists both team markets"
+
+
+def plan_nfl_targets(store: SnapshotStore, now: datetime) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """The Kalshi NFL pairing targets to plan now, and a report. Read-only and network-free: it reads
+    the Odds pilot's stored targets and stored Kalshi listings, writes nothing and makes no request.
+    Idempotent: a target already planned is never returned again (its id is fixed by the Odds capture)."""
+    from .sports_evidence import NFL_TEAMS, et_date, week_cluster
+
+    report: dict[str, Any] = {"state": "ON", "switch": NFL_SWITCH, "version": NFL_PLAN_VERSION,
+                              "series": NFL_SERIES, "odds_api_calls": 0, "planned": [], "not_planned": []}
+
+    def skip(ref: str, reason: str) -> None:
+        if len(report["not_planned"]) < NFL_MAX_REPORT_ITEMS:
+            report["not_planned"].append({"ref": ref, "reason": reason})
+
+    try:
+        odds = store.odds_targets(sport=NFL_SPORT)
+    except Exception as exc:  # an older store without the Odds tables: nothing to pair, say so
+        report["state"] = "NO_ODDS_TARGETS"
+        report["detail"] = f"{type(exc).__name__}: {exc}"
+        return [], report
+    existing = [t for t in store.price_targets() if is_nfl_target(t)]
+    known = {t["target_id"] for t in existing}
+    horizons: dict[str, set[tuple[str, str]]] = {}
+    reads: dict[str, set[str]] = {}
+    book_days: set[str] = set()
+    for t in existing:
+        d, week = _detail(t), week_cluster(_t(t["target_utc"]))
+        if d.get("nfl_role") == NFL_ROLE_SETTLEMENT:
+            reads.setdefault(week, set()).add(str(d.get("game_date")))
+        else:
+            horizons.setdefault(week, set()).add((str(t["native_event_id"]), str(t["target_utc"])))
+            if d.get("game_date"):
+                book_days.add(str(d["game_date"]))
+    first_kickoff: dict[str, datetime] = {}
+    kickoff: dict[str, datetime] = {}
+    for r in odds:
+        c = _t(r["commence_time_utc"])
+        planned = _t(r["planned_at_utc"])
+        if c is None or planned is None or planned > now:  # point in time: only targets known by now
+            continue
+        first_kickoff[r["event_id"]] = min(first_kickoff.get(r["event_id"], c), c)
+        if r["state"] != "SUPERSEDED":
+            kickoff[r["event_id"]] = c
+    new: list[dict[str, Any]] = []
+    captured = sorted((r for r in odds if r["state"] == "CAPTURED" and _t(r["captured_at_utc"]) is not None),
+                      key=lambda r: (r["captured_at_utc"], r["target_id"]))
+    for r in captured:
+        at = _t(r["captured_at_utc"]).replace(microsecond=0)
+        if not now - NFL_PLAN_WINDOW <= at <= now:
+            continue  # older captures are never paired late; later ones do not exist yet
+        if r["offset_label"] not in NFL_HORIZONS:
+            skip(r["target_id"], f"HORIZON_NOT_APPROVED: {r['offset_label']!r} (approved: {', '.join(NFL_HORIZONS)})")
+            continue
+        commence = _t(r["commence_time_utc"])
+        deadline = min(at + NFL_TARGET_WINDOW, commence - NFL_MIN_LEAD)
+        if deadline <= now:
+            skip(r["target_id"], f"TOO_LATE: the pregame book deadline {_iso(deadline)} has passed")
+            continue
+        home, away = r["home_team"], r["away_team"]
+        if home not in NFL_TEAMS or away not in NFL_TEAMS:
+            skip(r["target_id"], f"UNMAPPED_TEAM: {away!r} at {home!r} not in the NFL team table")
+            continue
+        original = first_kickoff.get(r["event_id"], commence)
+        event = nfl_event_ticker(NFL_TEAMS[away][0], NFL_TEAMS[home][0], et_date(original))
+        expected = {f"{event}-{NFL_TEAMS[team][0]}": NFL_TEAMS[team][1] for team in (away, home)}
+        mapping, why = _nfl_mapping(store, event, expected, now)
+        if mapping not in ("LISTED", "DERIVED"):
+            skip(r["target_id"], f"{mapping}: {why}")
+            continue
+        week, key = week_cluster(at), (event, _iso(at))
+        planned_week = horizons.setdefault(week, set())
+        if key not in planned_week and len(planned_week) >= NFL_WEEKLY_GAME_HORIZONS:
+            skip(r["target_id"], f"WEEKLY_BUDGET: {NFL_WEEKLY_GAME_HORIZONS} game-horizons already planned in {week}")
+            continue
+        game_date = et_date(commence).isoformat()
+        for ticker in expected:
+            target = custom_target(venue="kalshi", native_market_id=ticker, at=at, native_event_id=event)
+            target.update(origin=NFL_ORIGIN, deadline_utc=_iso(deadline), detail={
+                "nfl_role": NFL_ROLE_BOOK, "version": NFL_PLAN_VERSION, "odds_target_id": r["target_id"],
+                "odds_offset": r["offset_label"], "odds_captured_at_utc": r["captured_at_utc"],
+                "odds_event_id": r["event_id"], "commence_utc": _iso(commence), "game_date": game_date,
+                "mapping": mapping, "mapping_detail": why,
+                "pairing": "reactive: planned after the Odds capture, at its receipt time (option (a))"})
+            if target["target_id"] in known:
+                continue
+            known.add(target["target_id"])
+            new.append(target)
+            report["planned"].append({"target_id": target["target_id"], "odds_target_id": r["target_id"],
+                                      "mapping": mapping})
+        planned_week.add(key)
+        book_days.add(game_date)
+    # One settled-markets read per ET game day with NFL books, after the day's last expected expiration.
+    for game_date in sorted(book_days):
+        day_kickoffs = [c for c in kickoff.values() if et_date(c).isoformat() == game_date]
+        if not day_kickoffs or any(game_date in days for days in reads.values()):
+            continue
+        tick = next_observe_tick(max(day_kickoffs) + NFL_SETTLEMENT_AFTER_KICKOFF)
+        if not tick - NFL_SETTLEMENT_PLAN_LEAD <= now <= tick:
+            if now > tick:
+                skip(f"settlement:{game_date}", f"SETTLEMENT_WINDOW_PASSED: its tick {_iso(tick)} is over")
+            continue
+        week = week_cluster(tick)
+        if len(reads.setdefault(week, set())) >= NFL_WEEKLY_SETTLEMENT_READS:
+            skip(f"settlement:{game_date}", f"WEEKLY_BUDGET: {NFL_WEEKLY_SETTLEMENT_READS} reads already in {week}")
+            continue
+        start = _from_et(datetime.combine(date.fromisoformat(game_date), dtime(0, 0)))
+        market_id = f"kalshi:{NFL_SERIES}"
+        target = {"target_id": target_id(market_id, "custom", tick), "venue": "kalshi", "market_id": market_id,
+                  "native_market_id": NFL_SERIES, "event_id": f"kalshi:{NFL_SERIES}:settled:{game_date}",
+                  "native_event_id": NFL_SERIES, "phase": "custom", "target_utc": _iso(tick),
+                  "due_from_utc": _iso(tick - EARLY), "deadline_utc": _iso(tick + NFL_SETTLEMENT_WINDOW),
+                  "policy_version": POLICY_VERSION, "origin": NFL_ORIGIN, "decision_ref": None,
+                  "decision_as_of_utc": None, "close_time_utc": None, "close_basis": CLOSE_SEMANTICS["kalshi"].basis,
+                  "planned_rules_sha256": None,
+                  "detail": {"nfl_role": NFL_ROLE_SETTLEMENT, "version": NFL_PLAN_VERSION, "game_date": game_date,
+                             "min_settled_utc": _iso(start), "max_settled_utc": _iso(tick),
+                             "last_kickoff_utc": _iso(max(day_kickoffs))}}
+        if target["target_id"] not in known:
+            known.add(target["target_id"])
+            new.append(target)
+            reads[week].add(game_date)
+            report["planned"].append({"target_id": target["target_id"], "game_date": game_date,
+                                      "role": NFL_ROLE_SETTLEMENT})
+    week = week_cluster(now)  # the current NFL week's budget, counting what this plan adds
+    n_h, n_r = len(horizons.get(week, ())), len(reads.get(week, ()))
+    report["budget"] = {
+        "week": week, "game_horizons": n_h, "game_horizon_cap": NFL_WEEKLY_GAME_HORIZONS,
+        "settlement_reads": n_r, "settlement_read_cap": NFL_WEEKLY_SETTLEMENT_READS,
+        "worst_case_gets": n_h * NFL_WORST_GETS_PER_GAME_HORIZON + n_r, "weekly_get_cap": NFL_WEEKLY_GET_CAP,
+        "worst_gets_per_game_horizon": NFL_WORST_GETS_PER_GAME_HORIZON,
+        "expected_gets": n_h * NFL_GETS_PER_ATTEMPT + n_r}
+    report["planned"] = report["planned"][:NFL_MAX_REPORT_ITEMS]
+    return new, report
+
+
+def _capture_nfl_settlement_read(store: SnapshotStore, run_id: str, targets: list[Mapping[str, Any]],
+                                 req: _Requests) -> tuple[list[list[dict[str, Any]]], list[str]]:
+    """One settled-markets page per game day: listing only, never a book, never a second page, no retry.
+    The row is NOT_EXECUTABLE (it carries no quote) and names the stored snapshot."""
+    attempts: list[list[dict[str, Any]]] = []
+    deferred: list[str] = []
+    for t in targets:
+        d, attempt = _detail(t), _attempt_id(run_id, t["target_id"])
+        lo, hi = _t(d.get("min_settled_utc")), _t(d.get("max_settled_utc"))
+        if lo is None or hi is None:
+            attempts.append([_base_row(run_id, attempt, t, status="FAILED",
+                                       reason="SETTLEMENT_READ_FAILED: the target has no settled-time window")])
+            continue
+        # GET /markets filters, per https://docs.kalshi.com/api-reference/market/get-markets (read 2026-09-25):
+        # min_settled_ts / max_settled_ts ("Filter items that settled after/before this Unix timestamp") are the
+        # timestamp filters compatible with status=settled; min/max_close_ts are not (closed or empty status only).
+        url = forward._url("/markets", series_ticker=NFL_SERIES, status="settled", min_settled_ts=int(lo.timestamp()),
+                           max_settled_ts=int(hi.timestamp()), limit=NFL_SETTLEMENT_PAGE_LIMIT)
+        try:
+            payload, result = req.get(url, pacer=KALSHI_PACER, retries=0)
+        except RequestBudgetExhausted:
+            deferred.append(t["target_id"])
+            continue
+        except _FETCH_ERRORS as exc:
+            attempts.append([_base_row(run_id, attempt, t, status="FAILED",
+                                       reason=f"SETTLEMENT_READ_FAILED: {type(exc).__name__}: {exc}")])
+            continue
+        snap = forward._save(store, run_id=run_id, spec=KALSHI_SOURCE, kind="settled_markets", entity_id=NFL_SERIES,
+                             url=url, payload=payload, fetch=result)
+        received = _t(result.received_at_utc)
+        rows = payload.get("markets")
+        common = dict(snapshot_id=snap, observed_at_utc=_iso_exact(received) if received else None,
+                      source_sha256=bytes_sha256(result.body), freshness=_freshness(received, t))
+        if not isinstance(rows, list):
+            attempts.append([_base_row(run_id, attempt, t, status="FAILED",
+                                       reason="SETTLEMENT_READ_FAILED: the payload has no markets list", **common)])
+            continue
+        n = sum(1 for m in rows if isinstance(m, dict))
+        more = "; a further page exists and was not fetched (one GET per game day)" if payload.get("cursor") else ""
+        attempts.append([_base_row(run_id, attempt, t, status="NOT_EXECUTABLE", **common,
+                                   reason=f"SETTLEMENT_METADATA_READ: {n} {NFL_SERIES} market(s) settled "
+                                          f"{d.get('min_settled_utc')}..{d.get('max_settled_utc')}; listing only, no book{more}")])
+    return attempts, deferred
+
+
+def nfl_dry_run(db: Path, *, now: datetime | None = None) -> dict[str, Any]:
+    """What `observe plan` would plan for the NFL pairing now, from a read-only open of the store.
+    Writes nothing and sends nothing, whatever the switch says (`switch_state` reports it)."""
+    now = now or _now()
+    store = SnapshotStore.open_readonly(db)
+    targets, report = plan_nfl_targets(store, now)
+    return {"command": "nfl dry-run", "now_utc": _iso_exact(now), "writes": 0, "requests": 0,
+            "switch_state": nfl_switch_value(), "would_plan": targets, **report}
+
+
 # --------------------------------------------------------------------------- CLI runners
 
 
@@ -1195,12 +1609,20 @@ def _readonly_or_none(db: Path) -> SnapshotStore | None:
 
 
 def run_plan(db: Path, ledger_path: Path | None, *, now: datetime | None = None,
-             lookback: timedelta = DECISION_LOOKBACK, custom: Sequence[dict[str, Any]] = ()) -> tuple[int, dict[str, Any]]:
+             lookback: timedelta = DECISION_LOOKBACK, custom: Sequence[dict[str, Any]] = (),
+             environ: Mapping[str, str] | None = None) -> tuple[int, dict[str, Any]]:
     """`observe plan`: refuses protected windows; requires an existing evidence store (it never
-    creates one at an arbitrary path); an idle plan is the lock plus a read-only open only."""
+    creates one at an arbitrary path); an idle plan is the lock plus a read-only open only.
+
+    With the NFL switch on (`NFL_SWITCH`), it also plans the Kalshi NFL pairing targets
+    (`plan_nfl_targets`); with it off, it plans none and says so in `report["nfl"]`."""
     from .shadow_ledger import ShadowLedger
 
     now = now or _now()
+    nfl_on = nfl_capture_enabled(environ)
+
+    def nfl(store: SnapshotStore) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+        return plan_nfl_targets(store, now) if nfl_on else ([], nfl_disabled_report(environ))
     hit = protected_window_at(now, now + timedelta(minutes=1))
     if hit is not None:  # plan takes the same collector lock: never inside a protected window
         return 0, {"command": "observe plan", "now_utc": _iso_exact(now), "state": "DEFERRED_PROTECTED_WINDOW",
@@ -1219,23 +1641,27 @@ def run_plan(db: Path, ledger_path: Path | None, *, now: datetime | None = None,
             ro = _readonly_or_none(db)
             if ro is not None:
                 decisions = decisions_from_ledger(ledger, ro, since=now - lookback) if ledger else []
-                if plan_work(ro, decisions, now, custom) == 0:
+                nfl_custom, nfl_report = nfl(ro)
+                if plan_work(ro, decisions, now, [*custom, *nfl_custom]) == 0:
                     return 0, {"command": "observe plan", "now_utc": _iso_exact(now), "state": "NOTHING_TO_DO",
-                               "ledger": ledger_state, "decisions": len(decisions)}
+                               "ledger": ledger_state, "decisions": len(decisions), "nfl": nfl_report}
             store = SnapshotStore(db)
             decisions = decisions_from_ledger(ledger, store, since=now - lookback) if ledger else []
-            report = plan(store, decisions=decisions, now=now, custom=custom)
+            nfl_custom, nfl_report = nfl(store)
+            report = plan(store, decisions=decisions, now=now, custom=[*custom, *nfl_custom])
     except LockBusy as exc:
         return 0, {"command": "observe plan", "state": "LOCK_BUSY", "detail": str(exc)}
     report["ledger"] = ledger_state
+    report["nfl"] = nfl_report
     return 0, report
 
 
 def run_capture(db: Path, *, clock: Clock | None = None, sleep: Sleep = time.sleep, max_targets: int = MAX_TARGETS,
-                max_requests: int = MAX_REQUESTS) -> tuple[int, dict[str, Any]]:
+                max_requests: int = MAX_REQUESTS, environ: Mapping[str, str] | None = None) -> tuple[int, dict[str, Any]]:
     """`observe capture`: refuses protected windows before anything is opened; an idle run is the
-    lock plus a read-only open only."""
+    lock plus a read-only open only. NFL pairing targets are attempted only while `NFL_SWITCH` is on."""
     clock = clock or _now
+    nfl_on = nfl_capture_enabled(environ)
     _check_bounds(max_targets, max_requests)
     refusal = protected_refusal(clock())
     if refusal is not None:  # before the lock: nothing is even opened inside a protected window
@@ -1249,7 +1675,7 @@ def run_capture(db: Path, *, clock: Clock | None = None, sleep: Sleep = time.sle
                 return 0, {"command": "observe capture", "now_utc": _iso_exact(clock()), "state": "NOTHING_DUE",
                            "requests": 0, "attempted": 0, "by_status": {}, "deferred": [], "missed": []}
             return capture(SnapshotStore(db), clock=clock, sleep=sleep, max_targets=max_targets,
-                           max_requests=max_requests)
+                           max_requests=max_requests, nfl_enabled=nfl_on)
     except LockBusy as exc:
         return 0, {"command": "observe capture", "state": "LOCK_BUSY", "detail": str(exc)}
 
@@ -1266,8 +1692,30 @@ def run_status(db: Path, *, now: datetime | None = None, market_id: str | None =
 __all__ = [
     "CLOSE_SEMANTICS", "DecisionRecord", "PROTECTED_WINDOWS_ET", "capture", "custom_target", "decisions_from_ledger",
     "expire", "market_history", "plan", "protected_window_at", "run_capture", "run_plan", "run_status", "status",
-    "targets_for",
+    "targets_for", "NFL_SWITCH", "nfl_capture_enabled", "nfl_dry_run", "plan_nfl_targets",
 ]
 
 assert set(POST_DECISION_OFFSETS) | {"decision", "recheck", "pre_close", "close", "settlement_preceding", "custom"} \
     == set(PRICE_OBSERVATION_PHASES)
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    """`python -m edge_lab.price_observations nfl-dry-run --db PATH [--now ISO]`: read-only preview of the
+    NFL pairing plan (no writes, no requests). The live path is `edge_lab.cli observe plan` with the switch on."""
+    import argparse
+
+    parser = argparse.ArgumentParser(description=main.__doc__)
+    sub = parser.add_subparsers(dest="command", required=True)
+    dry = sub.add_parser("nfl-dry-run")
+    dry.add_argument("--db", type=Path, required=True)
+    dry.add_argument("--now", help="ISO-8601 time with zone (default: now)")
+    args = parser.parse_args(argv)
+    now = _t(args.now) if args.now else None
+    if args.now and now is None:
+        parser.error("--now needs a zone")
+    print(json.dumps(nfl_dry_run(args.db, now=now), indent=2, sort_keys=True, default=str))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

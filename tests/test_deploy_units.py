@@ -1051,3 +1051,47 @@ def test_stop_and_rollback_name_every_timer_instead_of_a_glob():
             if "edgelab-pfm.timer" in line:  # a stop-everything line, not a single-timer example
                 assert all(t in line for t in timers), (path, line)
     assert "'edgelab-*.timer'" not in INSTALL
+
+
+# --------------------------------------------------------------------------- the Kalshi NFL kill switch
+
+
+def _env_section() -> str:
+    """install.sh step 5 (the environment file), from the `existing` helper to the file's write."""
+    start = INSTALL.index("existing() {")
+    end = INSTALL.index('} > "$tmp"') + len('} > "$tmp"')
+    return INSTALL[start:end]
+
+
+def _run_env_section(tmp_path, previous: str | None):
+    bash = shutil.which("bash")
+    if bash is None:
+        pytest.skip("bash is not available")
+    env_file = tmp_path / "env"
+    if previous is not None:
+        env_file.write_text(previous, encoding="utf-8", newline="\n")
+    script = tmp_path / "step5.sh"
+    script.write_text("set -euo pipefail\n"
+                      'die() { echo "INSTALL FAILED: $*" >&2; exit 1; }\n'
+                      f'ENV_FILE="{env_file.as_posix()}"; ETC="{tmp_path.as_posix()}"; SHA=abc123; UA=""; ALERT_URL=""\n'
+                      + _env_section() + '\ncat "$tmp"\n', encoding="utf-8", newline="\n")
+    return subprocess.run([bash, str(script)], capture_output=True, text=True, timeout=60)
+
+
+@pytest.mark.parametrize("value", ["on", "off"])
+def test_install_keeps_the_nfl_kill_switch_across_installs(tmp_path, value):
+    """A pause (off) must survive every later deploy: install.sh regenerates the env file."""
+    result = _run_env_section(tmp_path, f"NWS_USER_AGENT=ua (x@y.z)\nEDGE_LAB_KALSHI_NFL_CAPTURE={value}\n")
+    assert result.returncode == 0, result.stderr
+    assert f"EDGE_LAB_KALSHI_NFL_CAPTURE={value}" in result.stdout.splitlines()
+
+
+def test_install_writes_no_nfl_switch_when_none_was_set(tmp_path):
+    result = _run_env_section(tmp_path, "NWS_USER_AGENT=ua (x@y.z)\n")
+    assert result.returncode == 0, result.stderr
+    assert "EDGE_LAB_KALSHI_NFL_CAPTURE" not in result.stdout  # the code default (on) applies
+
+
+def test_install_refuses_an_invalid_nfl_switch_value(tmp_path):
+    result = _run_env_section(tmp_path, "NWS_USER_AGENT=ua (x@y.z)\nEDGE_LAB_KALSHI_NFL_CAPTURE=maybe\n")
+    assert result.returncode != 0 and "must be on or off" in result.stderr
