@@ -30,14 +30,21 @@ not captured arbitrage. No fills exist in this experiment.
 - 2026-09-25: DRAFT registered (EE v1 PR A). No data viewed for this experiment. The evaluator
   and the run over stored KXHIGHNY books follow in PR B.
 - 2026-09-25 03:38Z (EE v1 PR B): first development scan
-  (`results/payoff_scan_laptop_store_2026-09-22.json`). Two evidence-use events are logged:
+  (`results/payoff_scan_laptop_store_2026-09-22.json`). Every look at this data is logged, and
+  there are four:
   - `eu-92904c0f26bf2ab0ad278b774bbc4ac0`: the 03:38Z look, recorded by hand with `record-use`,
     because the scan did not log itself yet. The entry itself says so.
-  - `eu-1252b03466882d648c95b9345eec0ce6`: the re-run that produced the committed report, logged
-    by the scan CLI before output. Its event window is 2026-09-22..2026-09-23.
+  - `eu-1252b03466882d648c95b9345eec0ce6` (04:55Z) and `eu-c903acfb44e9b10a3950237db62cc074`
+    (05:16Z): CLI-logged re-runs during the #102 review fixes. The code version they record is the
+    branch HEAD *before* those fixes were committed, so the code that actually ran had uncommitted
+    changes. The CLI now marks that case as `+uncommitted-code-changes`.
+  - `eu-2cec29434e848288ac12fb8ba6a11981` (05:17Z): the run that produced the committed result
+    file, at the committed code `a4a9635`.
 
-  The re-run followed the #102 review fixes, which added verified enumeration, refund and cost
-  checks, and fail-closed logging. It gave the same result.
+  All four use the same books and event window (2026-09-22..2026-09-23) and give the same result.
+  The result file carries its provenance: laptop store, store identity (schema v3, max snapshot
+  id 36), code version, event window and evidence-use event id. It is checked by
+  `payoff_constraints.verify_result_file`.
   - **Input.** The only evidence store in this session: the laptop's
     `data/edge_lab.sqlite3`, read-only. It holds 2 KXHIGHNY events (26SEP22, 26SEP23) with 6
     brackets each, books captured on 2026-09-22 about 22:38Z. The production VPS store, with daily
