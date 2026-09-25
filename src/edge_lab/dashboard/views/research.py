@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from decimal import Decimal, InvalidOperation
 import re
 from typing import Any
 
@@ -1233,8 +1234,214 @@ def _ev_family_a(v: dict, now: Any) -> str:
     return "".join(out)
 
 
-def family_b_body(result: d.Loaded) -> str:
-    """Family B: "not yet available" until PR B installs the evaluator and its view; then its view as given."""
+PAYOFF_LABEL = "PAYOFF RESEARCH — NOT A CAPTURED RESULT"
+PAYOFF_NOTE = ("A proof is about contract payoffs; a claim is about stored books at one size. Nothing here was "
+               "executed: legs are never assumed atomic and no fill is simulated. A conditional full-fill surplus is "
+               "not captured arbitrage, and no other claim ever shows a positive figure.")
+PAYOFF_LEGACY_NOTE = ("Set construction: legacy (every anchor). This scan built a set at every book receipt, so its "
+                      "INVALID set counts include mid-round anchor artifacts; they are not comparable with per-round "
+                      "results.")
+PAYOFF_LEGACY_HASH_NOTE = ("Dataset hash: legacy definition (books of evaluated sets only). This file's input snapshot "
+                           "hash is not comparable with a current-definition hash for the same store and window.")
+PAYOFF_ROWS_SHOWN = 4  # newest evaluated sets shown as rows; every set is in the disclosure table
+POSITIVE_CLAIM = "CONDITIONAL_FULL_FILL_SURPLUS"  # payoff_constraints.Claim: the only claim with a positive figure
+
+
+def _source_badge(source: Any) -> str:
+    return _pm_badge("EV_SOURCE", str(source).upper() if isinstance(source, str) else source)
+
+
+def _payoff_settlement(size: dict) -> str:
+    """Settlement costs from the evaluator's structured fields only (never its reason text):
+    - a state it skipped (`states_skipped`) could not be valued because a refund rule is UNKNOWN;
+    - an evaluated size with no `worst_state_surplus` and no skipped state has an UNKNOWN settlement cost;
+    - otherwise every state was costed."""
+    if not size.get("evaluated"):
+        return c.na("not evaluated at this size")
+    skipped = [str(s) for s in size.get("states_skipped") or []]
+    if skipped:
+        return c.state_text("EV_SETTLE_REFUND_UNKNOWN", kind=pr.WARN_K) + _sub(
+            f"state(s) {', '.join(skipped)} not valued")
+    if size.get("worst_state_surplus") is None:
+        return c.state_text("EV_SETTLE_UNKNOWN", kind=pr.WARN_K)
+    return c.txt("Costed by the evaluator")
+
+
+def _settlement_fact(evaluated: list, refund_unknown: int, settle_unknown: int) -> str:
+    """The section's settlement-cost fact, from the same structured fields as `_payoff_settlement`."""
+    if not evaluated:
+        return c.na("no size was evaluated, so no settlement cost was assessed")
+    parts = []
+    if settle_unknown:
+        parts.append(c.state_text("EV_SETTLE_UNKNOWN", label="Unknown", kind=pr.WARN_K)
+                     + _sub(f"{pr.count(settle_unknown)} evaluated size(s): settlement cost not yet verified, "
+                            "so surpluses after all costs cannot be stated"))
+    if refund_unknown:
+        parts.append(c.state_text("EV_SETTLE_REFUND_UNKNOWN", kind=pr.WARN_K)
+                     + _sub(f"{pr.count(refund_unknown)} evaluated size(s): a state could not be valued"))
+    return "".join(parts) or c.txt("Costed by the evaluator where evaluated")
+
+
+def _payoff_surplus(size: dict) -> str:
+    """A figure only for the evaluator's own positive claim (its claim-adjusted surplus); every other claim
+    reads its claim, not a number."""
+    if size.get("claim") == POSITIVE_CLAIM:
+        return c.num(pr.money(size.get("claim_adjusted_surplus")),
+                     reason="the evaluator stated no claim-adjusted figure") + _sub(
+            "conditional on every leg filling · not captured arbitrage")
+    return c.na("no positive claim: the evaluator made none at this size")
+
+
+def _orphan_amount(value: Any) -> str:
+    """A leg that fills alone, as an unsigned exposure: the worst-state loss, or none. A gain is never shown."""
+    try:
+        amount = Decimal(str(value))
+    except (InvalidOperation, ValueError, TypeError):
+        return "unknown"
+    if not amount.is_finite():
+        return "unknown"
+    return f"{pr.money(-amount)} worst-state loss" if amount < 0 else "no worst-state loss"
+
+
+def _payoff_orphans(size: dict) -> str:
+    orphans = size.get("orphan_exposure") if isinstance(size.get("orphan_exposure"), dict) else {}
+    if not orphans:
+        return c.na("no leg evaluated alone at this size")
+    return c.ul([f"{leg}: {_orphan_amount(v) if v is not None else 'unknown'}" for leg, v in sorted(orphans.items())])
+
+
+def _payoff_set(e: dict) -> str:
+    sizes = [s for s in e.get("sizes") or [] if isinstance(s, dict)]
+    rows = [[c.num(pr.quantity(s.get("basket_quantity"))), _pm_state("EV_CLAIM", s.get("claim")),
+             esc("; ".join(str(r) for r in s.get("claim_reasons") or []) or "—"),
+             c.num(pr.money(s.get("acquisition_cost")), reason="not priced at this size"),
+             _payoff_settlement(s), _payoff_surplus(s)] for s in sizes]
+    table = c.table(["basket", "claim", "reasons (NOT_EVALUATED included)", "all-in acquisition cost",
+                     "settlement costs", "surplus"], rows, wrap=(1, 2, 4, 5), right=(0, 3),
+                    caption=f"Claims per size for {e.get('set_id')}") if sizes else c.empty_state(
+        "No size evaluated for this set", "The evaluator made no claim at any size: quotes "
+        + str(e.get("quote_validity") or "not recorded").lower() + " ("
+        + ("; ".join(str(r) for r in e.get("quote_reasons") or []) or "no reason recorded") + ").", kind="nd")
+    orphans = c.table(["basket", "orphan-leg exposure (a leg that fills alone: its worst-state loss after its cost)"],
+                      [[c.num(pr.quantity(s.get("basket_quantity"))), _payoff_orphans(s)] for s in sizes],
+                      wrap=(1,), right=(0,), caption=f"Orphan-leg exposure for {e.get('set_id')}")
+    head = c.facts([
+        ("Proof", _pm_badge("EV_PROOF", e.get("relationship"))
+         + _sub((e.get("relationship_reasons") or [None])[0])),
+        ("As of", c.txt(pr.datetime_et(e.get("as_of_utc")), reason="not recorded")),
+        ("Quotes", _pm_badge("EV_QUOTES", e.get("quote_validity"))
+         + _sub((e.get("quote_reasons") or [None])[0])),
+        ("Kind", c.txt(str(e.get("kind") or "").replace("_", " ").lower() or None, reason="not recorded")),
+    ], wide=True, text_cols=(0, 1, 2, 3))
+    # A heading, not a row: a row's aside column would narrow the claims table on phones.
+    return (f'<h4 class="eyebrow">{esc(str(e.get("set_id") or "set"))}</h4>' + head + table
+            + c.disclosure("Orphan-leg exposure", orphans)
+            + c.disclosure("Proof reasons and assumptions", c.ul(
+                [str(r) for r in (e.get("relationship_reasons") or []) + (e.get("assumptions") or [])],
+                empty="none recorded")))
+
+
+def _payoff_method(v: dict[str, Any], key: str) -> str:
+    """A method value read by payoff_constraints' helper, or unavailable with the helper's problem."""
+    value = v.get(key)
+    if not value:
+        return c.na(str(v.get(f"{key}_problem") or "not recorded"))
+    return c.code(value) + (" (legacy)" if v.get(f"{key}_legacy") else "")
+
+
+def _payoff_view(v: dict, now: Any) -> str:
+    state = str(v.get("state") or "UNKNOWN")
+    out = [f'<p class="eyebrow">{esc(PAYOFF_LABEL)}</p>']
+    if state == "BLOCKED":
+        return "".join(out) + c.blocked_state("EXP-003 results not shown", str(v.get("detail") or "blocked"))
+    if state == "EMPTY":
+        return "".join(out) + c.empty_state("No EXP-003 result recorded yet", str(v.get("detail") or "")
+                                            + ". A result appears after a logged payoff-scan run adds a file.")
+    result = v.get("result") if isinstance(v.get("result"), dict) else {}
+    report = result.get("report") if isinstance(result.get("report"), dict) else {}
+    prov = result.get("provenance") if isinstance(result.get("provenance"), dict) else {}
+    source = prov.get("source_store")
+    evaluations = sorted([e for e in report.get("evaluations") or [] if isinstance(e, dict)],
+                         key=lambda e: str(e.get("as_of_utc")), reverse=True)
+    sizes = [s for e in evaluations for s in e.get("sizes") or [] if isinstance(s, dict)]
+    positive = sum(1 for s in sizes if s.get("claim") == POSITIVE_CLAIM)
+    evaluated = [s for s in sizes if s.get("evaluated")]
+    refund_unknown = sum(1 for s in evaluated if s.get("states_skipped"))
+    settle_unknown = sum(1 for s in evaluated if not s.get("states_skipped") and s.get("worst_state_surplus") is None)
+    out.append(f'<p class="meta">{_source_badge(source)} {_pm_badge("EV_BSTATE", state)} '
+               f'{esc(report.get("series") or "")} · file {esc(v.get("file"))}</p>')
+    if source != "production":
+        out.append(c.empty_state("Not production evidence", f"This result was computed from a {source or 'unnamed'} "
+                                 "store, not the production evidence store. It shows how the evaluator behaves; it "
+                                 "is not evidence about production books.", kind="warn"))
+    if state == "STALE":
+        out.append(c.empty_state("Result is stale", f"The newest evaluation is older than {v.get('stale_after_days')} "
+                                 "days. Nothing here is current.", kind="warn"))
+    if v.get("set_construction_legacy"):
+        out.append(f'<p class="note">{esc(PAYOFF_LEGACY_NOTE)}</p>')
+    if v.get("input_hash_definition_legacy"):
+        out.append(f'<p class="note">{esc(PAYOFF_LEGACY_HASH_NOTE)}</p>')
+    counts = report.get("relationship_counts") if isinstance(report.get("relationship_counts"), dict) else {}
+    claims = report.get("claim_counts_by_size_row") if isinstance(report.get("claim_counts_by_size_row"), dict) else {}
+    out.append(c.facts([
+        ("Source", _source_badge(source) + _sub(f"generated {pr.datetime_et(prov.get('generated_at_utc')) or '—'}")),
+        ("As of", c.txt(pr.datetime_et(v.get("as_of_utc")), reason="not recorded")
+         + _sub(f"event window {' to '.join(str(x) for x in prov.get('event_window') or []) or '—'}")),
+        ("Sets", c.num(pr.count(report.get("sets_evaluated")), reason="not recorded")
+         + _sub(f"{pr.count(len(report.get('sets_skipped') or []))} skipped · {pr.count(report.get('events'))} events")),
+        ("Proof completeness", c.txt(" · ".join(f"{k.lower()} {pr.count(n)}" for k, n in sorted(counts.items()))
+                                     or None, reason="no set evaluated")),
+        ("Claims (set × size)", c.txt(" · ".join(f"{k.replace('_', ' ').lower()} {pr.count(n)}"
+                                                 for k, n in sorted(claims.items())) or None, reason="none")),
+        ("Settlement costs", _settlement_fact(evaluated, refund_unknown, settle_unknown)),
+        ("Positive claims", c.num(pr.count(positive)) + _sub("conditional full-fill surplus only · never captured")),
+        ("Execution", c.txt("None") + _sub(str(report.get("actual_result") or "no fills"))),
+    ], wide=True, text_cols=(0, 1, 3, 4, 5, 7)))
+    shown = evaluations[:PAYOFF_ROWS_SHOWN]
+    out.append("".join(_payoff_set(e) for e in shown) if shown else
+               c.empty_state("No set evaluated", "The scan found no complete, time-overlapping book set.", kind="nd"))
+    if evaluations:
+        out.append(c.disclosure(f"All evaluated sets ({pr.count(len(evaluations))})", c.table(
+            ["set", "as of", "proof", "quotes", "claims by size"],
+            [[esc(e.get("set_id")), esc(pr.datetime_et(e.get("as_of_utc")) or "—"), _pm_state("EV_PROOF", e.get("relationship")),
+              _pm_state("EV_QUOTES", e.get("quote_validity")),
+              esc(" · ".join(f"{s.get('basket_quantity')}: {str(s.get('claim')).replace('_', ' ').lower()}"
+                             for s in e.get("sizes") or [] if isinstance(s, dict)))] for e in evaluations],
+            wrap=(0, 4), caption="Every evaluated set in the result file")))
+    skipped = [s for s in report.get("sets_skipped") or [] if isinstance(s, dict)]
+    if skipped:
+        out.append(c.disclosure(f"Skipped sets ({pr.count(len(skipped))})", c.table(
+            ["event", "as of", "reason"], [[esc(s.get("event")), esc(s.get("as_of")), esc(s.get("reason"))]
+                                           for s in skipped], wrap=(2,), caption="Sets the scan skipped")))
+    identity = prov.get("store_identity") if isinstance(prov.get("store_identity"), dict) else {}
+    out.append(c.disclosure("Provenance and verification", c.kv([
+        ("file", c.code(v.get("file"))), ("verification", esc(v.get("verification"))),
+        ("store-provenance sidecar", c.code(v.get("sidecar")) if v.get("sidecar") else c.na("no sidecar beside "
+                                                                                             "this result")),
+        ("set construction", _payoff_method(v, "set_construction")),
+        ("input hash definition", _payoff_method(v, "input_hash_definition")),
+        ("source store", _source_badge(source)),
+        ("store identity", esc(", ".join(f"{k} {val}" for k, val in sorted(identity.items())) or "—")),
+        ("code version", c.code(prov.get("code_version"))), ("generated", esc(prov.get("generated_at_utc"))),
+        ("event window", esc(" to ".join(str(x) for x in prov.get("event_window") or []))),
+        ("evidence-use event", c.code(prov.get("evidence_use_event_id"))),
+        ("scan parameters", esc(f"sizes {', '.join(str(s) for s in report.get('sizes') or [])} · max quote age "
+                                f"{report.get('max_quote_age_seconds')} s · max leg skew "
+                                f"{report.get('max_leg_skew_seconds')} s (stated per run; protocol values UNKNOWN)")),
+        ("settled fields never read", c.ul(report.get("prohibited_fields_never_read") or [], empty="not declared")),
+        ("simulated execution", esc(report.get("simulated_execution"))),
+        ("report sha256", c.code(report.get("report_sha256"))), ("envelope sha256", c.code(result.get("envelope_sha256"))),
+        ("page views", esc("read-only: this display writes no evidence-use event (a registered known unlogged "
+                           "consumer); the producing run logged its own")),
+        ("other files", c.ul(v.get("unreadable") or [], empty="none unreadable")),
+    ])))
+    out.append(f'<p class="note">{esc(PAYOFF_NOTE)}</p>')
+    return "".join(out)
+
+
+def family_b_body(result: d.Loaded, now: Any = None) -> str:
+    """Family B in every state: populated, stale, empty, blocked, error (unreadable / unverified), unknown
+    (evaluator or registry unavailable), malformed. Every figure is the result file's own, only formatted."""
     if result.status == d.ERROR:
         return c.error_state("Family B unavailable (read error)", f"ERROR — {result.message}. This is not an empty "
                                                                   "result.")
@@ -1242,16 +1449,11 @@ def family_b_body(result: d.Loaded) -> str:
         return (f'<p class="meta">{c.badge("EV_STATE_NOT_AVAILABLE")} Same-venue payoff consistency · Kalshi '
                 "complements, partitions and nested thresholds · no EXP-001 data</p>"
                 + c.unavailable("Not yet available", result.message[:1].upper() + result.message[1:] + ". No payoff "
-                                "proof, conditional surplus or captured result is shown.")
-                + c.facts([("Next action", c.txt("The payoff evaluator and its view (PR B, Writer 1)"))], text_cols=(0,)))
-    v = result.value
-    state = str(v.get("state") or "UNKNOWN")
-    word = pr.prefixed_word("EV_STATE", state)
-    return (f'<p class="eyebrow">{esc(v.get("label") or "RESEARCH — NOT A CAPTURED RESULT")}</p>'
-            + c.facts([("State", c.badge(f"EV_STATE_{state}", label=word.label, kind=word.kind)),
-                       ("As of", c.txt(pr.datetime_et(v.get("as_of_utc")), reason="not recorded")),
-                       ("Detail", c.txt(v.get("detail"), reason="none"))], wide=True, text_cols=(0, 1, 2))
-            + '<p class="note">A conditional full-fill surplus is not arbitrage captured; there are no fills here.</p>')
+                                "proof, conditional surplus or captured result is shown."))
+    try:
+        return _payoff_view(result.value, now)
+    except Exception as exc:  # noqa: BLE001 - a malformed result is an error here, never a failed page
+        return c.error_state("Family B unavailable (malformed result)", f"ERROR — {d.short_error(exc)}.")
 
 
 def family_a_body(result: d.Loaded, now: Any) -> str:
@@ -1273,7 +1475,7 @@ def family_a_body(result: d.Loaded, now: Any) -> str:
 def economics_body(a: d.Loaded, b: d.Loaded, now: Any) -> str:
     """Both families in one body (the gallery); the page uses one section per family (`economics_section`)."""
     return (f'<p class="note">{esc(EV_NOTE)}</p><h3 class="eyebrow">Family A</h3>' + family_a_body(a, now)
-            + '<h3 class="eyebrow">Family B</h3>' + family_b_body(b))
+            + '<h3 class="eyebrow">Family B</h3>' + family_b_body(b, now))
 
 
 def economics_section(ctx: d.Context) -> str:
@@ -1281,7 +1483,7 @@ def economics_section(ctx: d.Context) -> str:
     return (c.section("Economic evidence · A", f'<p class="note">{esc(EV_NOTE)}</p>'
                       + family_a_body(ctx.economic_a, ctx.now),
                       meta="Sportsbook consensus vs Kalshi NFL · research only · no edge claimed", sid="ev-h")
-            + c.section("Economic evidence · B", family_b_body(ctx.economic_b),
+            + c.section("Economic evidence · B", family_b_body(ctx.economic_b, ctx.now),
                         meta="Same-venue payoff consistency · research only", sid="ev-b-h"))
 
 

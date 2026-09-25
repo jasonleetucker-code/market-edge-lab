@@ -236,11 +236,25 @@ first reason), protocol-eligible opportunities (research_evidence attrition), th
 (research_economics), next action and blocker; in disclosures the join diagnostics, missing evidence (the
 report's gaps), protocol attrition (None reads unavailable, never 0), the screen's reasons, the size ladder
 of the latest paired book (depth status, all-in cost or its absence, fee state) with the fill modes, costs
-and inputs with their evidence class, and provenance. Family B shows "Not yet available" until the payoff
-evaluator installs a Terminal view, then that view's state, as-of and detail. Never profit for missing
-outcomes, never "arbitrage", never a funded or approved-bankroll state, no edge score, nothing green.
-States: populated, partial, stale, empty, unsupported, unknown (not configured or not readable), error,
-malformed; Family B not available, error, installed. Data
+and inputs with their evidence class, and provenance. Family B renders the newest EXP-003 payoff-scan result
+file (`experiments/EXP-003-*/results/payoff_scan_*.json`, by evaluation as-of, found through the registry),
+checked only with `payoff_constraints.verify_result_provenance` against EXP-003's own evidence-use log; nothing
+is evaluated per request and a page view writes nothing (a registered known unlogged consumer). It shows the
+label "PAYOFF RESEARCH — NOT A CAPTURED RESULT", the result's source store prominently (a laptop or fixture
+result reads "not production evidence"), as-of and event window, proof completeness per set
+(PROVEN / INCOMPLETE / UNSUPPORTED with reasons), claims per size with their reasons (NOT_EVALUATED included),
+settlement costs from the evaluator's structured fields ("Settlement cost unknown", or "Refund unknown" for a
+state it could not value; never parsed from reason text), orphan-leg exposure as an unsigned worst-state loss
+(never a signed or positive figure), execution none,
+and provenance and verification in a disclosure. A figure appears in the surplus column only for the
+evaluator's CONDITIONAL_FULL_FILL_SURPLUS claim ("conditional on every leg filling · not captured
+arbitrage"); every other claim shows its claim, never a number. Never profit for missing outcomes, never
+"arbitrage" as a result, never a funded or approved-bankroll state, no edge score, nothing green. States:
+populated, partial, stale, empty, unsupported, unknown (not configured or not readable), error, malformed;
+Family B populated, stale (newest evaluation older than 8 days), empty (no result file), blocked (EXP-003 slot
+not ACTIVE), error (unreadable, over the file or byte bound, not verified, or an evaluation as-of later than now or than
+the file's generation time: never a silent fallback to an older file and never POPULATED forever; a link is
+never followed), not available (evaluator or registry absent), malformed. Data
 sources: first the Source freshness section (the Freshness Fabric supervisor's `freshness.json`,
 schema `freshness-fabric-status/1`, read as written: what is fresh, what is due next and why; the sources needing attention
 (missed, blocked, failing or degraded, disagreeing) as rows and every source by domain in a disclosure; every
@@ -498,4 +512,26 @@ directive), and the screenshots that justify it.
   1440x900, 720x450 and 180x400 (zoom-equivalent), and 360x800 and 1440x900 with 200% root text, details
   closed and open; `/gallery` at the same sizes (Chromium emulation, not a physical phone), reviewed locally
   by the author and described in the PR (not attached).
-
+- **2026-09-25 — Economic evidence · B from the EXP-003 result file.** Approved by the coordinator's Section B
+  plan under the owner's Economic Evidence v1 directive (2026-09-25; `docs/EXECUTION_PLAN.md`), after PR B (#102)
+  merged. §8 Research & Data: "Economic evidence · B" renders the newest verified EXP-003 payoff-scan result
+  instead of "Not yet available". Composed in `views/research.py` (`family_b_body`, `_payoff_view`, `_payoff_set`)
+  from the existing facts, badge, state-text, row, table, list, kv, disclosure and empty/blocked/error/unavailable
+  components; no new component, token, CSS or navigation. New namespaced state words (EV_BSTATE_*, EV_SOURCE_*,
+  EV_PROOF_*, EV_QUOTES_*, EV_CLAIM_*, EV_SETTLE_*, EV_STATE_BLOCKED), none green; the one positive claim reads
+  "Conditional full-fill surplus · not captured". Page views write no evidence-use event: the producing CLI run
+  logs its own, and the display is registered in `research_evidence.KNOWN_UNLOGGED_CONSUMERS`. A
+  `<result>.source.json` sidecar is store-provenance metadata: it is skipped as a result and named in the
+  provenance disclosure. A set with no size evaluated says why (its quote validity and reasons). The set-construction
+  method and the input-hash definition are in the provenance, read only through `payoff_constraints.set_construction_of`
+  and `input_hash_definition_of` (#105). A helper that is absent or raises leaves the value unavailable with its
+  reason; it is never guessed. A legacy set construction carries a note that its INVALID set counts include mid-round
+  anchor artifacts and are not comparable with per-round results. A legacy hash definition carries a note that its
+  dataset hash is not comparable with a current-definition hash. After the #104 review: settlement costs are read
+  from `states_skipped` and `worst_state_surplus` only (new word EV_SETTLE_REFUND_UNKNOWN); orphan exposure is
+  unsigned; the surplus column shows only the claim-adjusted figure; a future as-of is an error; the verifier's
+  reasons are path-scrubbed. Screenshots:
+  fixture states `payoff_production` (the committed production result of #103), `payoff` (a SYNTHETIC production
+  result with one conditional surplus) and `payoff_laptop` (the committed laptop result, not production evidence)
+  at 360x800 and 1440x900, closed and with every disclosure open, and at 200% root text (Chromium emulation, not a
+  physical phone), reviewed locally by the author and described in the PR (not attached).

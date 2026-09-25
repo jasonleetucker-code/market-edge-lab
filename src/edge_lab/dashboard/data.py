@@ -741,10 +741,15 @@ def scrub_paths(text: Any, config: Config | None = None) -> Any:
     """A free-text detail with every filesystem path reduced to its final name (as `short_error`)."""
     if not isinstance(text, str):
         return text
+
+    def last(m: re.Match) -> str:
+        return re.split(r"[\\/]", m.group(0).rstrip("\\/"))[-1]
     for p in (config.paths() if config else []):
-        for variant in {str(p), str(p.resolve())}:
-            text = text.replace(variant, p.name)
-    return _ABS_PATH.sub(lambda m: re.split(r"[\\/]", m.group(0).rstrip("\\/"))[-1], text)
+        for variant in sorted({str(p), str(p.resolve())}, key=len, reverse=True):
+            # A configured path, and any path beneath it, reduces to its own final name (a file under the
+            # experiments root reads as that file's name, never as the root's name glued to it).
+            text = re.sub(re.escape(variant) + r"(?![^\s\\/:'\"])(?:[\\/][^\s\\/:'\"]+)*[\\/]?", last, text)
+    return _ABS_PATH.sub(last, text)
 
 
 def _scrubbed(panel: dict[str, Any], config: Config) -> dict[str, Any]:
@@ -1367,22 +1372,174 @@ def economic_evidence_a(ctx: Context) -> Loaded:
     return Loaded(OK, view["family_a"])
 
 
+PAYOFF_EXPERIMENT = "EXP-003"
+PAYOFF_RESULT_GLOB = "payoff_scan_*.json"
+PAYOFF_SIDECAR_SUFFIX = ".source.json"  # metadata beside a result (how the scanned store was obtained): skipped
+PAYOFF_RESULT_MAX_BYTES = 8_000_000  # one result file (the committed laptop scan is ~40 KB)
+PAYOFF_RESULT_MAX_FILES = 64
+PAYOFF_STALE_AFTER = timedelta(days=8)  # coordinator decision (EE v1 Section B)
+PAYOFF_RESULT_MAX_TOTAL_BYTES = 32_000_000  # every result file together (read at most once per (size, mtime))
+PAYOFF_CLOCK_TOLERANCE = timedelta(minutes=5)  # an evaluation as-of later than now by more than this is an error
+# resolved path -> ((size, mtime_ns), parsed result or why it is unreadable). Shared and read-only: a page
+# view never mutates a result. Cleared when it outgrows twice the file bound.
+_PAYOFF_READS: dict[str, tuple[tuple[int, int], Any]] = {}
+
+
+# (helper, legacy constant) in payoff_constraints: how the scan built its sets and what its dataset hash covers
+PAYOFF_METHOD_HELPERS = {"set_construction": ("set_construction_of", "LEGACY_SET_CONSTRUCTION"),
+                         "input_hash_definition": ("input_hash_definition_of", "LEGACY_INPUT_HASH_DEFINITION")}
+
+
+def payoff_methods(module: Any, obj: Any) -> dict[str, Any]:
+    """The result's set construction and input-hash definition, read only through payoff_constraints'
+    helpers (`set_construction_of`, `input_hash_definition_of`); legacy files get the helpers' legacy
+    values. A helper that is absent, raises or returns nothing leaves the value unknown (None) with its
+    reason: it is never guessed here."""
+    out: dict[str, Any] = {}
+    for key, (helper_name, legacy_name) in PAYOFF_METHOD_HELPERS.items():
+        helper = getattr(module, helper_name, None)
+        value, problem = None, None
+        if not callable(helper):
+            problem = f"payoff_constraints.{helper_name} is not in this build"
+        else:
+            try:
+                got = helper(obj)
+            except Exception as exc:  # odd input must not fail the page
+                problem = f"{helper_name} could not read this file ({type(exc).__name__})"
+            else:
+                if isinstance(got, str) and got:
+                    value = got
+                else:
+                    problem = f"{helper_name} returned no value"
+        legacy = getattr(module, legacy_name, None)
+        out[key] = value
+        out[f"{key}_problem"] = problem
+        out[f"{key}_legacy"] = value is not None and value == legacy
+    return out
+
+
+@dataclass(frozen=True)
+class _Unreadable:
+    reason: str
+
+
+def _result_as_of(obj: Any) -> datetime | None:
+    """The newest evaluation as-of in a result file (untrusted input: None when absent or malformed)."""
+    report = obj.get("report") if isinstance(obj, dict) else None
+    evaluations = report.get("evaluations") if isinstance(report, dict) else None
+    times = [parse_utc(e.get("as_of_utc")) for e in evaluations or [] if isinstance(e, dict)]
+    known = [t for t in times if t is not None]
+    return max(known) if known else None
+
+
 def economic_evidence_b(ctx: Context) -> Loaded:
-    """Family B (same-venue payoff consistency): the evaluator's own `terminal_view(db, now=...)` once PR B
-    installs it; until then NO_DATA saying so. No payoff figure is ever made up here."""
+    """Family B (same-venue payoff consistency, EXP-003): the newest result file in the experiment's
+    `results/` directory (resolved through the registry), by evaluation as-of, checked only with
+    `payoff_constraints.verify_result_provenance` against the experiment's own `evidence_use.jsonl`. Nothing
+    is evaluated per request and nothing is written: the producing CLI run logged its own evidence-use event,
+    and this display is a registered known unlogged consumer (research_evidence.KNOWN_UNLOGGED_CONSUMERS).
+
+    OK carries {"state": POPULATED | STALE | BLOCKED | EMPTY, ...}; NO_DATA when the evaluator or the registry
+    is unavailable; ERROR when the newest result cannot be read or does not verify (never an older fallback)."""
     module, missing = _optional_module(PAYOFF_EVIDENCE_MODULE, "the same-venue payoff evaluator (payoff_constraints, "
                                                                "PR B) is not in this build", ctx)
     if missing is not None:
         return missing
-    fn = getattr(module, "terminal_view", None)
-    if not callable(fn):
-        return Loaded(NO_DATA, message="the payoff evaluator is installed without a Terminal view")
-    if ctx.config.db is None:
-        return Loaded(NO_DATA, message="no evidence database configured (--db)")
+    root = ctx.config.experiments_root
+    if root is None or not root.is_dir():
+        return Loaded(NO_DATA, message="no experiment registry configured (--experiments-root), so the EXP-003 "
+                                       "result files cannot be found")
     try:
-        view = fn(ctx.config.db, now=ctx.now)
-    except Exception as exc:  # noqa: BLE001
+        exp = next((e for e in (registry.load(p) for p in registry.discover(root)) if e.id == PAYOFF_EXPERIMENT), None)
+    except Exception as exc:  # noqa: BLE001 - an unreadable registry is an error, not an empty result
         return Loaded(ERROR, message=short_error(exc, ctx.config))
-    if not isinstance(view, dict):
-        return Loaded(ERROR, message="the payoff evaluator's view is not a mapping")
-    return Loaded(OK, view)
+    if exp is None:
+        return Loaded(NO_DATA, message=f"{PAYOFF_EXPERIMENT} is not in the experiment registry")
+    base: dict[str, Any] = {"experiment_id": exp.id, "experiment_status": exp.status}
+    try:
+        protocol = registry.load_protocol(exp) or {}
+    except Exception as exc:  # noqa: BLE001
+        return Loaded(ERROR, message=f"{exp.id} protocol unreadable: {short_error(exc, ctx.config)}")
+    base["slot_status"] = protocol.get("slot_status")
+    if str(base["slot_status"] or "").upper() != "ACTIVE":  # decided before any result file is read
+        return Loaded(OK, {**base, "state": "BLOCKED",
+                           "detail": f"{exp.id} slot is {base['slot_status'] or 'not recorded'}, not ACTIVE: its "
+                                     "results are not shown"})
+    log = exp.path.parent / "evidence_use.jsonl"
+    results_dir = exp.path.parent / "results"
+    listed = sorted(results_dir.glob(PAYOFF_RESULT_GLOB)) if results_dir.is_dir() else []
+    # `<result>.source.json` sidecars are provenance metadata beside a result, never a result envelope.
+    files = [f for f in listed if not f.name.endswith(PAYOFF_SIDECAR_SUFFIX)]
+    base["files_seen"] = len(files)
+    base["sidecars"] = sorted(f.name for f in listed if f.name.endswith(PAYOFF_SIDECAR_SUFFIX))
+    if len(files) > PAYOFF_RESULT_MAX_FILES:
+        return Loaded(ERROR, message=f"{len(files)} result files exceed the Terminal's bound of "
+                                     f"{PAYOFF_RESULT_MAX_FILES}; archive older results")
+    candidates: list[tuple[datetime, str, Any]] = []
+    unreadable: list[str] = []
+    stats = []
+    try:
+        inside = results_dir.resolve()
+        for path in files:
+            # A link, or anything resolving outside results/, is never followed: results are plain files.
+            if path.is_symlink() or not path.resolve().is_relative_to(inside) or not path.is_file():
+                unreadable.append(f"{path.name}: not a plain file inside results/ (not read)")
+                continue
+            stats.append((path, path.stat()))
+    except OSError as exc:
+        return Loaded(ERROR, message=f"{exp.id} results unreadable: {short_error(exc, ctx.config)}")
+    total = sum(st.st_size for _, st in stats)
+    if total > PAYOFF_RESULT_MAX_TOTAL_BYTES:
+        return Loaded(ERROR, message=f"result files total {total} bytes, over the Terminal's bound of "
+                                     f"{PAYOFF_RESULT_MAX_TOTAL_BYTES}; archive older results")
+    if len(_PAYOFF_READS) > 2 * PAYOFF_RESULT_MAX_FILES:
+        _PAYOFF_READS.clear()
+    for path, st in stats:
+        key, stamp = str(path.resolve()), (st.st_size, st.st_mtime_ns)
+        cached = _PAYOFF_READS.get(key)
+        if cached is not None and cached[0] == stamp:
+            obj = cached[1]
+        else:
+            if st.st_size > PAYOFF_RESULT_MAX_BYTES:
+                obj = _Unreadable(f"larger than {PAYOFF_RESULT_MAX_BYTES} bytes")
+            else:
+                try:
+                    obj = json.loads(path.read_text(encoding="utf-8"))
+                except (OSError, UnicodeDecodeError, ValueError) as exc:
+                    obj = _Unreadable(short_error(exc, ctx.config))
+            _PAYOFF_READS[key] = (stamp, obj)
+        if isinstance(obj, _Unreadable):
+            unreadable.append(f"{path.name}: {obj.reason}")
+            continue
+        as_of = _result_as_of(obj)
+        if as_of is None:
+            unreadable.append(f"{path.name}: no evaluation as-of")
+            continue
+        candidates.append((as_of, path.name, obj))
+    base["unreadable"] = unreadable
+    if not candidates:
+        if unreadable:
+            return Loaded(ERROR, message="no EXP-003 result file could be read: " + "; ".join(unreadable)[:300])
+        return Loaded(OK, {**base, "state": "EMPTY",
+                           "detail": "no payoff-scan result file is recorded for EXP-003 yet"})
+    as_of, name, obj = max(candidates, key=lambda c: (c[0], c[1]))
+    ok, reasons = module.verify_result_provenance(obj, log)
+    if not ok:  # the checker's reasons can quote the log's absolute path
+        return Loaded(ERROR, message=scrub_paths(f"the newest result ({name}) does not verify: "
+                                                 + "; ".join(str(r) for r in reasons), ctx.config)[:400])
+    # An as-of in the future would never go stale: it is an error, never POPULATED.
+    prov = obj.get("provenance") if isinstance(obj.get("provenance"), dict) else {}
+    generated = parse_utc(prov.get("generated_at_utc"))
+    if as_of > ctx.now + PAYOFF_CLOCK_TOLERANCE:
+        return Loaded(ERROR, message=f"the newest result ({name}) has an evaluation as-of "
+                                     f"{as_of.isoformat()}, later than now; it cannot be shown")
+    if generated is not None and as_of > generated:
+        return Loaded(ERROR, message=f"the newest result ({name}) has an evaluation as-of {as_of.isoformat()}, "
+                                     f"later than its generation time {generated.isoformat()}")
+    state = "STALE" if ctx.now - as_of > PAYOFF_STALE_AFTER else "POPULATED"
+    sidecar = name[: -len(".json")] + PAYOFF_SIDECAR_SUFFIX
+    base["sidecar"] = sidecar if sidecar in base["sidecars"] else None
+    base.update(payoff_methods(module, obj))
+    return Loaded(OK, {**base, "state": state, "file": name, "as_of_utc": as_of.isoformat().replace("+00:00", "Z"),
+                       "stale_after_days": PAYOFF_STALE_AFTER.days, "result": obj,
+                       "verification": "verify_result_provenance: passed"})

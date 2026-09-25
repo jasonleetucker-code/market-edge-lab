@@ -12,6 +12,9 @@ and status-file shapes, and returns a dashboard Config with a fixed clock:
   exhausted quota;
 - economics / economics_issues: SYNTHETIC NFL Odds captures and Kalshi KXNFLGAME books (Economic
   Evidence v1 Family A), complete or with a missed capture and skewed, missing and crossed books;
+- payoff / payoff_production / payoff_laptop: Family B over a copied EXP-003 registry: a newer SYNTHETIC
+  production result (one conditional surplus), the committed production result, or only the committed laptop
+  result (not production evidence);
 - freshness / freshness_deferred: the Freshness Fabric artifact over the odds fixture, current or
   carried through the Kalshi close-tick guard.
 """
@@ -20,6 +23,7 @@ from __future__ import annotations
 
 import json
 import tempfile
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -414,8 +418,40 @@ def economics_issues() -> tuple[Config, Path]:
     return economics(issues=True)
 
 
+def payoff() -> tuple[Config, Path]:
+    """Family B: a copy of the repository's EXP-003 registry plus a newer SYNTHETIC production-labelled result
+    (one conditional full-fill surplus row), logged in the copy's own evidence-use log; the odds store."""
+    from edge_lab.dashboard import sports_fixtures
+
+    cfg, root = odds_pilot()
+    registry = sports_fixtures.payoff_registry(root / "experiments", production=True, positive=True)
+    now = sports_fixtures.PAYOFF_NOW
+    return replace(cfg, experiments_root=registry, clock=lambda: now), root
+
+
+def payoff_laptop() -> tuple[Config, Path]:
+    """Family B with only the committed laptop result (not production evidence)."""
+    from edge_lab.dashboard import sports_fixtures
+
+    cfg, root = odds_pilot()
+    registry = sports_fixtures.payoff_registry(root / "experiments", keep="payoff_scan_laptop_*")
+    now = sports_fixtures.PAYOFF_NOW
+    return replace(cfg, experiments_root=registry, clock=lambda: now), root
+
+
+def payoff_production() -> tuple[Config, Path]:
+    """Family B as production shows it after #103: the committed production result (and its sidecar)."""
+    from edge_lab.dashboard import sports_fixtures
+
+    cfg, root = odds_pilot()
+    registry = sports_fixtures.payoff_registry(root / "experiments")
+    now = sports_fixtures.PAYOFF_NOW
+    return replace(cfg, experiments_root=registry, clock=lambda: now), root
+
+
 
 BUILDERS = {"early": early, "demo": demo, "broken": broken, "odds": odds_pilot, "odds_issues": odds_issues,
             "freshness": freshness, "freshness_deferred": freshness_deferred,
             "polymarket": polymarket, "polymarket_issues": polymarket_issues,
-            "economics": economics, "economics_issues": economics_issues}
+            "economics": economics, "economics_issues": economics_issues,
+            "payoff": payoff, "payoff_laptop": payoff_laptop, "payoff_production": payoff_production}
