@@ -260,6 +260,16 @@ class Context:
         return pm_sports_view(self)
 
     @cached_property
+    def economic_a(self) -> Loaded:
+        """Economic Evidence v1, Family A: `sports_evidence.terminal_view` (`economic_evidence_a`)."""
+        return economic_evidence_a(self)
+
+    @cached_property
+    def economic_b(self) -> Loaded:
+        """Economic Evidence v1, Family B: the same-venue payoff evaluator's view, when installed."""
+        return economic_evidence_b(self)
+
+    @cached_property
     def odds_targets(self) -> Loaded:
         """The Odds API pilot's capture targets and their history (`odds_capture_targets`)."""
         return odds_capture_targets(self)
@@ -1311,3 +1321,68 @@ def pm_market_history(ctx: Context, slugs: Any) -> Loaded:
             if t.get("state") in ("PLANNED", "FAILED") and deadline is not None and deadline < ctx.now:
                 t["display_state"] = "OVERDUE"
     return Loaded(OK, out)
+
+
+# --------------------------------------------------------------------------- Economic Evidence v1 (two research families)
+
+SPORTS_EVIDENCE_MODULE = "edge_lab.sports_evidence"
+PAYOFF_EVIDENCE_MODULE = "edge_lab.payoff_constraints"  # Writer 1's PR B evaluator (absent until it lands)
+
+
+def _optional_module(name: str, absent: str, ctx: Context) -> tuple[Any, Loaded | None]:
+    import importlib
+
+    try:
+        return importlib.import_module(name), None
+    except ModuleNotFoundError as exc:
+        if exc.name != name:
+            return None, Loaded(ERROR, message=short_error(exc, ctx.config))
+        return None, Loaded(NO_DATA, message=absent)
+    except Exception as exc:  # noqa: BLE001 - a module that fails to import is broken, not absent
+        return None, Loaded(ERROR, message=short_error(exc, ctx.config))
+
+
+def economic_evidence_a(ctx: Context) -> Loaded:
+    """Family A (sportsbook consensus vs Kalshi NFL moneyline): `sports_evidence.terminal_view(db, now=...)`,
+    read-only, network-free, memoized by the contract until the evidence or the due set changes. OK carries
+    the family view as returned; NO_DATA when no evidence database is configured or readable; ERROR when the
+    view reports a failure. Free text is scrubbed of paths; nothing is recomputed here."""
+    if ctx.config.db is None:
+        return Loaded(NO_DATA, message="no evidence database configured (--db)")
+    module, missing = _optional_module(SPORTS_EVIDENCE_MODULE, "the paired-evidence report (sports_evidence) is not "
+                                                               "installed in this build", ctx)
+    if missing is not None:
+        return missing
+    try:
+        view = module.terminal_view(ctx.config.db, now=ctx.now)
+    except Exception as exc:  # noqa: BLE001 - the contract never raises; anything else is shown
+        return Loaded(ERROR, message=short_error(exc, ctx.config))
+    if not isinstance(view, dict):
+        return Loaded(ERROR, message="the paired-evidence view is not a mapping")
+    detail = scrub_paths(str(view.get("detail") or ""), ctx.config)
+    if view.get("state") == "NO_STORE":
+        return Loaded(NO_DATA, message=f"evidence database not readable here ({detail or 'missing'})")
+    if view.get("state") != "OK" or not isinstance(view.get("family_a"), dict):
+        return Loaded(ERROR, message=detail or "the paired-evidence view could not be read")
+    return Loaded(OK, view["family_a"])
+
+
+def economic_evidence_b(ctx: Context) -> Loaded:
+    """Family B (same-venue payoff consistency): the evaluator's own `terminal_view(db, now=...)` once PR B
+    installs it; until then NO_DATA saying so. No payoff figure is ever made up here."""
+    module, missing = _optional_module(PAYOFF_EVIDENCE_MODULE, "the same-venue payoff evaluator (payoff_constraints, "
+                                                               "PR B) is not in this build", ctx)
+    if missing is not None:
+        return missing
+    fn = getattr(module, "terminal_view", None)
+    if not callable(fn):
+        return Loaded(NO_DATA, message="the payoff evaluator is installed without a Terminal view")
+    if ctx.config.db is None:
+        return Loaded(NO_DATA, message="no evidence database configured (--db)")
+    try:
+        view = fn(ctx.config.db, now=ctx.now)
+    except Exception as exc:  # noqa: BLE001
+        return Loaded(ERROR, message=short_error(exc, ctx.config))
+    if not isinstance(view, dict):
+        return Loaded(ERROR, message="the payoff evaluator's view is not a mapping")
+    return Loaded(OK, view)

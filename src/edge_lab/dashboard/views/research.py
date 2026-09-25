@@ -40,7 +40,7 @@ def research_tab(ctx: d.Context) -> str:
                                  "manifests). Source health, fees-in-receipt and the receipt are synthetic."))
     missing = cm.loaded_state("Experiment registry", exps)
     if missing:
-        return "".join(out) + c.section("Experiments", missing, sid="ex-h")
+        return "".join(out) + c.section("Experiments", missing, sid="ex-h") + economics_section(ctx)
     valid_days = None
     if ctx.collector_status.status == d.OK:
         valid_days = ctx.collector_status.value.get("valid_days")
@@ -92,7 +92,8 @@ def research_tab(ctx: d.Context) -> str:
                        [[esc(e["id"]), esc(e["title"]), c.code(e["status"]),
                          esc("VALID MANIFEST") if not e["problems"] else esc("; ".join(e["problems"]))]
                         for e in exps.value], wrap=(1, 3), caption="Experiment registry")
-    return "".join(out) + "".join(cards) + c.disclosure("Experiment registry (all manifests)", registry, boxed=True)
+    return ("".join(out) + "".join(cards) + economics_section(ctx)
+            + c.disclosure("Experiment registry (all manifests)", registry, boxed=True))
 
 
 def _requirement(stage: str, cap: str, authorized: bool) -> str:
@@ -1027,6 +1028,219 @@ def pm_related_section(ctx: d.Context) -> str:
         histories = loaded.value if loaded.status == d.OK else None
     return c.section("Polymarket US related markets", pm_related_body(result, ctx.now, ids, histories),
                      meta="NFL moneyline · research only · never ranked", sid="pm-h")
+
+
+# --------------------------------------------------------------------------- Economic evidence (Economic Evidence v1)
+
+EV_LABEL = "PAIRED RESEARCH EVIDENCE — NOT AN EDGE CLAIM"  # sports_evidence.LABEL (tested equal)
+EV_NOTE = ("Two research families at most, read-only. Nothing here is an edge, a captured result, a funded account or "
+           "a recommendation. Missing evidence is listed as missing and never counted as zero; a paired observation is "
+           "not an episode, and visible depth is not capacity.")
+EV_STATE_TEXT = {
+    "PARTIAL": ("Evidence incomplete", "Some due horizons have no paired evidence. What is missing is listed under "
+                                       "Missing evidence; nothing is filled from a later book."),
+    "STALE": ("Evidence is stale", "No new evidence has arrived for longer than an NFL week while horizons fell due. "
+                                   "Nothing here is current."),
+    "EMPTY": ("No NFL capture targets yet", "The Odds API pilot has planned no due horizon, so there is nothing to "
+                                            "pair yet."),
+    "UNSUPPORTED": ("Kalshi payoff unsupported", "The mapped Kalshi markets are not $1 binary contracts, so no "
+                                                 "comparison is made."),
+}
+
+
+def _ev(v: Any, *keys: str) -> Any:
+    for k in keys:
+        v = v.get(k) if isinstance(v, dict) else None
+    return v
+
+
+def _ev_count(v: Any, *keys: str) -> str | None:
+    return pr.count(_ev(v, *keys))
+
+
+def _ev_fill(cell: Any) -> str:
+    """One fill-assumption cell: its status word, then the gross cost (fees excluded) or what the book offers."""
+    if not isinstance(cell, dict):
+        return c.na("not computed")
+    gross = pr.money(cell.get("gross_cost"))
+    return (_pm_state("EV_FILL", cell.get("status"))
+            + _sub(f"gross {gross} · fees excluded" if gross else f"offers {pr.quantity(cell.get('available')) or '—'}"))
+
+
+def _ev_capacity(cap: Any) -> str:
+    latest = _ev(cap, "latest")
+    assumptions = [f"{_ev(a, 'kind')} ({_ev(a, 'id')}, {_ev(a, 'basis')}): {_ev(a, 'text')}"
+                   for a in (_ev(cap, "fill_assumptions") or []) if isinstance(a, dict)]
+    head = (f'<p class="meta">{esc(_ev_count(cap, "sides_with_book") or "0")} paired side(s) with a book · '
+            f'{esc(_ev_count(cap, "truncated") or "0")} truncated capture(s)</p>')
+    if not isinstance(latest, dict):
+        body = c.empty_state("Capacity not measured", "No paired Kalshi book exists, so no size ladder can be walked. "
+                                                      "Visible depth would still not be capacity.")
+    else:
+        lock = _ev(latest, "lockup_hours")
+        meta = (f"Latest paired book: {_ev(latest, 'ticker')} · {_ev(latest, 'horizon')} · decision "
+                f"{pr.datetime_et(_ev(latest, 'decision_utc')) or 'time not recorded'} · depth "
+                f"{'truncated' if _ev(latest, 'depth_truncated') else 'complete as requested'} · lockup to expected "
+                f"expiration {_ev(lock, 'expected') if _ev(lock, 'expected') is not None else '—'} h (latest "
+                f"{_ev(lock, 'latest') if _ev(lock, 'latest') is not None else '—'} h)")
+        rows = [[c.num(pr.quantity(_ev(r, "size"))), _ev_fill(_ev(r, "less_conservative")),
+                 _ev_fill(_ev(r, "conservative")),
+                 c.state_text("EV_GAP_UNSUPPORTED", label="Fee unsupported") if _ev(r, "less_conservative", "fee_status")
+                 == "FEE_UNSUPPORTED" else c.txt(pr.money(_ev(r, "less_conservative", "fee")), reason="not priced")]
+                for r in (_ev(latest, "ladder") or []) if isinstance(r, dict)]
+        body = (f'<p class="meta">{esc(meta)}</p>'
+                + c.table(["contracts", "all captured depth (less conservative)", "top level only (conservative)",
+                           "fee"], rows, wrap=(1, 2, 3), right=(0,), caption="Size ladder over the latest paired book"))
+    return head + body + c.ul(assumptions, empty="no fill assumption recorded") + (
+        '<p class="note">Visible depth is an instantaneous ceiling, not capacity; a small fill is never extrapolated '
+        "across a bankroll. All-in cost is unknown while fees are unsupported.</p>")
+
+
+def _ev_family_a(v: dict, now: Any) -> str:
+    state = str(v.get("state") or "UNKNOWN")
+    word = pr.prefixed_word("EV_STATE", state)
+    den = v.get("denominators") if isinstance(v.get("denominators"), dict) else {}
+    outcomes = v.get("outcomes") if isinstance(v.get("outcomes"), dict) else {}
+    rel = v.get("relation") if isinstance(v.get("relation"), dict) else {}
+    tier = rel.get("tier") or "NONE"
+    protocol = v.get("protocol") if isinstance(v.get("protocol"), dict) else {}
+    edge = v.get("edge_at_size") if isinstance(v.get("edge_at_size"), dict) else {}
+    window = v.get("window") if isinstance(v.get("window"), dict) else {}
+    waterfall = [w for w in (v.get("waterfall") or []) if isinstance(w, dict)]
+    gaps = [g for g in (v.get("gaps") or []) if isinstance(g, dict)]
+    top = max(waterfall, key=lambda w: (w.get("excluded") or 0), default=None)
+    out = [f'<p class="eyebrow">{esc(v.get("label") or EV_LABEL)}</p>',
+           f'<p class="meta">{c.badge(f"EV_STATE_{state}", label=word.label, kind=word.kind)} '
+           f'{esc(v.get("title") or "Sportsbook consensus vs Kalshi NFL moneyline")} · NFL pregame moneyline · stored '
+           'evidence only · no winner model</p>']
+    if state in EV_STATE_TEXT:
+        title, text = EV_STATE_TEXT[state]
+        out.append(c.blocked_state(title, text) if state == "UNSUPPORTED" else
+                   c.empty_state(title, text, kind="nd" if state == "EMPTY" else "warn"))
+    first, last = window.get("first_receipt_utc"), window.get("last_receipt_utc")
+    out.append(c.facts([
+        ("Protocol", _pm_badge("EV_PROTOCOL", protocol.get("state")) + _sub(protocol.get("experiment_id")
+                                                                           or protocol.get("detail"))),
+        ("As of", c.txt(pr.datetime_et(v.get("as_of_utc")), reason="not recorded")
+         + _sub(f"evidence received {pr.datetime_et(first)} to {pr.datetime_et(last)}" if first and last
+                else "no evidence received")),
+        ("Due horizons", c.num(pr.count(den.get("targets_due")), reason="not recorded")
+         + _sub(f"{_ev_count(den, 'events_due') or '—'} games · {_ev_count(den, 'weeks_due') or '—'} NFL weeks · "
+                f"{_ev_count(den, 'targets_not_yet_due') or '—'} not yet due · "
+                f"{_ev_count(den, 'targets_superseded') or '—'} superseded")),
+        ("Paired", c.num(f"{pr.count(v.get('paired_targets')) or '0'} of {pr.count(den.get('targets_due')) or '—'}")
+         + _sub(f"{pr.count(v.get('partial_targets')) or '0'} partial · {pr.count(v.get('paired_games')) or '0'} games · "
+                f"{pr.count(v.get('paired_weeks')) or '0'} weeks")),
+        ("Largest exclusion", (_pm_state("EV_KIND", top.get("kind"), label=str(top.get("stage")).replace("_", " ")
+                                         .capitalize())
+                               + _sub(f"{pr.count(top.get('excluded'))} of {pr.count(top.get('of'))} · {top.get('text')}"))
+         if top and top.get("excluded") else c.txt("none", reason="no exclusion")),
+        ("Final-evaluable", c.num(pr.count(v.get("final_evaluable_targets")), reason="not recorded")
+         + _sub(" · ".join(f"{k.replace('OUTCOME_', '').lower()} {pr.count(n)}" for k, n in outcomes.items() if n)
+                or "no paired horizon, so no label attached")),
+        ("Probability / relation", _pm_badge("EV_REL", tier)
+         + _sub("consensus: conditional on a decided game (book tie rules unverified) · Kalshi YES pays $0.50 on a "
+                "tie")),
+        ("Edge at a size", _pm_badge("EV_EDGE", edge.get("state"))
+         + _sub((edge.get("reasons") or ["no reason recorded"])[0] if isinstance(edge.get("reasons"), list) else None)),
+        ("Signal and fills", c.txt("Not evaluated", reason="no signal rule")
+         + _sub("no signal or episode rule is registered: not zero")),
+        ("Next action", c.txt(v.get("next_action"), reason="none recorded") + _sub(
+            f"blocker: {v['blocker']}" if v.get("blocker") else None)),
+    ], wide=True, text_cols=tuple(range(10))))
+    out.append(c.disclosure(f"Attrition over {pr.count(den.get('targets_due')) or '—'} due horizons", c.table(
+        ["stage", "excluded", "remaining", "kind", "meaning"],
+        [[esc(str(w.get("stage")).replace("_", " ").capitalize()), c.num(pr.count(w.get("excluded"))),
+          c.num(pr.count(w.get("remaining_after"))), _pm_state("EV_KIND", w.get("kind")),
+          esc(w.get("text"))] for w in waterfall], wrap=(0, 4), right=(1, 2),
+        caption="Attrition waterfall: one primary reason per due horizon, every raw reason kept in the report")
+        + f'<p class="meta">Denominators: {esc(_ev_count(den, "targets_planned") or "—")} planned horizons, '
+          f'{esc(_ev_count(den, "events") or "—")} games, {esc(_ev_count(den, "kalshi_markets_mapped") or "0")} Kalshi '
+          f'markets mapped, {esc(_ev_count(den, "odds_snapshots_used") or "0")} odds snapshots and '
+          f'{esc(_ev_count(den, "kalshi_books_used") or "0")} Kalshi books used.</p>'))
+    out.append(c.disclosure(f"Missing evidence ({pr.count(len(gaps))})", c.table(
+        ["id", "stream", "state", "why", "smallest fix"],
+        [[c.code(g.get("id")), esc(g.get("stream")), _pm_state("EV_GAP", g.get("state")), esc(g.get("why")),
+          esc(g.get("smallest_fix"))] for g in gaps], wrap=(1, 3, 4), empty="no gap recorded",
+        caption="Data gaps: exact missing streams and the smallest justified fix")))
+    out.append(c.disclosure("Capacity and fill assumptions", _ev_capacity(v.get("capacity"))))
+    inputs = [i for i in (v.get("inputs") or []) if isinstance(i, dict)]
+    costs = [f for f in (v.get("fixed_costs") or []) if isinstance(f, dict)]
+    out.append(c.disclosure("Costs and inputs", c.table(
+        ["item", "cash / month", "basis", "detail"],
+        [[esc(f.get("item")), c.num(pr.money(f.get("cash_per_month")), reason="unknown"),
+          _pm_state("EV_BASIS", f.get("basis")), esc(f.get("detail"))] for f in costs], wrap=(0, 3),
+        caption="Fixed costs, shown apart from any per-trade figure") + c.table(
+        ["input", "value", "basis", "detail"],
+        [[esc(i.get("name")), c.txt(", ".join(i["value"]) if isinstance(i.get("value"), list) else
+                                    (str(i["value"]) if i.get("value") is not None else None), reason="not supplied"),
+          _pm_state("EV_BASIS", i.get("basis")), esc(i.get("detail"))] for i in inputs], wrap=(0, 1, 3),
+        caption="Economic inputs with their evidence class")))
+    prov = v.get("provenance") if isinstance(v.get("provenance"), dict) else {}
+    econ = v.get("economics_contract") if isinstance(v.get("economics_contract"), dict) else {}
+    out.append(c.disclosure("Provenance, relation and sampling", c.kv([
+        ("sportsbook source", esc(prov.get("odds"))),
+        ("Kalshi rules (sha256)", c.ul(prov.get("kalshi_rules") or [], empty="no rules captured")),
+        ("fees", esc(prov.get("fee"))),
+        ("join", esc(prov.get("join"))),
+        ("relation reasons", c.ul(rel.get("reasons") or [], empty="none")),
+        ("sampling", esc(_ev(v, "sampling", "resolution"))),
+        ("economics contract", c.code(econ.get("state")) + _sub(econ.get("detail"))),
+        ("report sha256", c.code(v.get("report_sha256"))),
+    ])))
+    return "".join(out)
+
+
+def family_b_body(result: d.Loaded) -> str:
+    """Family B: "not yet available" until PR B installs the evaluator and its view; then its view as given."""
+    if result.status == d.ERROR:
+        return c.error_state("Family B unavailable (read error)", f"ERROR — {result.message}. This is not an empty "
+                                                                  "result.")
+    if result.status != d.OK:
+        return (f'<p class="meta">{c.badge("EV_STATE_NOT_AVAILABLE")} Same-venue payoff consistency · Kalshi '
+                "complements, partitions and nested thresholds · no EXP-001 data</p>"
+                + c.unavailable("Not yet available", result.message[:1].upper() + result.message[1:] + ". No payoff "
+                                "proof, conditional surplus or captured result is shown.")
+                + c.facts([("Next action", c.txt("The payoff evaluator and its view (PR B, Writer 1)"))], text_cols=(0,)))
+    v = result.value
+    state = str(v.get("state") or "UNKNOWN")
+    word = pr.prefixed_word("EV_STATE", state)
+    return (f'<p class="eyebrow">{esc(v.get("label") or "RESEARCH — NOT A CAPTURED RESULT")}</p>'
+            + c.facts([("State", c.badge(f"EV_STATE_{state}", label=word.label, kind=word.kind)),
+                       ("As of", c.txt(pr.datetime_et(v.get("as_of_utc")), reason="not recorded")),
+                       ("Detail", c.txt(v.get("detail"), reason="none"))], wide=True, text_cols=(0, 1, 2))
+            + '<p class="note">A conditional full-fill surplus is not arbitrage captured; there are no fills here.</p>')
+
+
+def family_a_body(result: d.Loaded, now: Any) -> str:
+    """Family A in every state: populated, partial, stale, empty, unsupported, unknown (not configured or not
+    readable), error, malformed."""
+    if result.status == d.ERROR:
+        return c.error_state("Family A unavailable (read error)", f"ERROR — {result.message}. This is not an empty "
+                                                                  "result.")
+    if result.status != d.OK:
+        return (f'<p class="meta">{c.badge("EV_STATE_UNKNOWN")} Family A</p>'
+                + c.unavailable("Family A evidence unknown", result.message[:1].upper() + result.message[1:]
+                                + ". Nothing is known here, which is not the same as nothing recorded."))
+    try:
+        return _ev_family_a(result.value, now)
+    except Exception as exc:  # noqa: BLE001 - a malformed view is an error here, never a failed page
+        return c.error_state("Family A unavailable (malformed view)", f"ERROR — {d.short_error(exc)}.")
+
+
+def economics_body(a: d.Loaded, b: d.Loaded, now: Any) -> str:
+    """Both families in one body (the gallery); the page uses one section per family (`economics_section`)."""
+    return (f'<p class="note">{esc(EV_NOTE)}</p><h3 class="eyebrow">Family A</h3>' + family_a_body(a, now)
+            + '<h3 class="eyebrow">Family B</h3>' + family_b_body(b))
+
+
+def economics_section(ctx: d.Context) -> str:
+    """Research tab, after the experiments: one section per research family (no new navigation)."""
+    return (c.section("Economic evidence · A", f'<p class="note">{esc(EV_NOTE)}</p>'
+                      + family_a_body(ctx.economic_a, ctx.now),
+                      meta="Sportsbook consensus vs Kalshi NFL · research only · no edge claimed", sid="ev-h")
+            + c.section("Economic evidence · B", family_b_body(ctx.economic_b),
+                        meta="Same-venue payoff consistency · research only", sid="ev-b-h"))
 
 
 def sources_tab(ctx: d.Context) -> str:

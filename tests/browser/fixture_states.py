@@ -397,7 +397,23 @@ def polymarket_issues() -> tuple[Config, Path]:
     return polymarket(issues=True)
 
 
+def economics(root: Path | None = None, *, issues: bool = False) -> tuple[Config, Path]:
+    """Economic Evidence v1, Family A: a SYNTHETIC store of NFL Odds captures and Kalshi KXNFLGAME books
+    (`edge_lab.dashboard.sports_fixtures`, real store shapes; real team names, synthetic prices), viewed on
+    Sunday 2026-09-27 17:00 ET. `issues` adds a missed capture, a skewed, a missing and a crossed book."""
+    from edge_lab.dashboard import sports_fixtures
+
+    root = root or Path(tempfile.mkdtemp(prefix="edge-ui-economics-"))
+    path, now = sports_fixtures.fixture_store(root, issues=issues)
+    return Config(db=path, experiments_root=REPO / "experiments", clock=lambda: now), root
+
+
+def economics_issues() -> tuple[Config, Path]:
+    return economics(issues=True)
+
+
 
 BUILDERS = {"early": early, "demo": demo, "broken": broken, "odds": odds_pilot, "odds_issues": odds_issues,
             "freshness": freshness, "freshness_deferred": freshness_deferred,
-            "polymarket": polymarket, "polymarket_issues": polymarket_issues}
+            "polymarket": polymarket, "polymarket_issues": polymarket_issues,
+            "economics": economics, "economics_issues": economics_issues}

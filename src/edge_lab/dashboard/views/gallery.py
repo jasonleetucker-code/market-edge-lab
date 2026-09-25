@@ -151,6 +151,20 @@ def view(ctx: d.Context, p: pr.Params) -> cm.Page:
     parts.append(c.section("Polymarket US related markets (no scan / stale / gate blocked / error / unavailable)",
                            "".join(research.pm_related_body(pm[k][0], pnow, ("DEMO-NFL-1",), pm[k][1])
                                    for k in ("no_scan", "stale", "blocked", "error", "unavailable")), sid="g-pm-states"))
+    from .. import sports_fixtures
+
+    ev = sports_fixtures.synthetic_economic_views()
+    enow = sports_fixtures.NOW
+    for key, title in (("populated", "populated · SYNTHETIC books"), ("partial", "partial · skew, missing and crossed "
+                                                                                "books · a missed capture")):
+        parts.append(c.section(f"Economic evidence ({title})", research.economics_body(*ev[key], enow),
+                               sid=f"g-ev-{key}"))
+    parts.append(c.section("Economic evidence (Odds only: no Kalshi evidence, as in production today)",
+                           research.economics_body(*ev["gap"], enow), sid="g-ev-gap"))
+    parts.append(c.section("Economic evidence (stale / unsupported / empty / unknown / error)",
+                           "".join(research.economics_body(*ev[k], enow)
+                                   for k in ("stale", "unsupported", "empty", "unknown", "error")),
+                           sid="g-ev-states"))
     origin_rows = [
         cm.failure_alert(d.FailureRecord(d.FAILURE_FILE, fixtures.synthetic_failure_record("edgelab-decision.service"),
                                          "PRODUCTION", False)),
