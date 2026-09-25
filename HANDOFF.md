@@ -3,14 +3,17 @@
 This is the live state of the repository. Each session overwrites it; it is not a history
 (git log is the history). Format: `AI_INSTRUCTIONS.md` → Handoff format.
 
-_Last updated: 2026-09-25 ~04:15 America/New_York (VPS clock) by the laptop Claude coordinator
+_Last updated: 2026-09-25 ~16:25 America/New_York (VPS clock) by the laptop Claude coordinator
 session. It covered the owner's Economic Evidence v1 directive (docs/owner/2026-09-25-economic-
-evidence-v1-directive.md; strategy reset #96)._
+evidence-v1-directive.md; strategy reset #96), the first real settlement, the F09 checkpoint and
+#107._
 
 ```
 STATUS: DONE for the build scope. Every Economic Evidence v1 PR is merged, DEPLOYED and
-  PRODUCTION_VERIFIED (production efe86e3). Pending, time-based:
-  - the first real settlement (2026-09-25 11:15 ET, or 16:15) and the manual F09 checkpoint;
+  PRODUCTION_VERIFIED; #107 is merged and DEPLOYED with deploy checks passing (production
+  dee5805), and its same-run settlement is not yet observed in production. The first real settlement is recorded and verified,
+  and the manual F09 checkpoint is taken. Pending, time-based:
+  - the 26SEP25 positions (due once Kalshi finalizes that event);
   - the first Polymarket US research capture (2026-09-26 16:53Z).
   No edge is claimed. Both new research families are DRAFT and cannot be preregistered without
   owner inputs (BLOCKERS 1).
@@ -18,7 +21,8 @@ ACCEPTANCE: the Economic Evidence v1 directive, sections 6-20: W0 operating veri
   (protocols, evidence consumption, attrition, economic screen, #96 canonical integration); PR B
   (semantic conformance, pure same-venue payoff evaluator, execution-package design); PR C (NFL
   paired evidence, gaps, capacity, Terminal); review, tests and exact-head CI before merge;
-  deploy only reviewed merged code. Not authorized and not done: orders of any kind, credentials,
+  deploy only reviewed merged code. Also: #107, and verification of the first real settlement
+  plus the F09 checkpoint. Not authorized and not done: orders of any kind, credentials,
   paid data, new timers, backup deletion, public exposure, any gate advance.
 EVIDENCE:
   - W0 (PRODUCTION_VERIFIED 2026-09-25 02:13Z, before any EV1 change):
@@ -87,10 +91,35 @@ EVIDENCE:
   - Terminal on production (efe86e3): Section A "No paired evidence yet"; Section B shows the
     production result, "Production store", both legacy notes, Settlement costs Unknown, Positive
     claims 0; no absolute path on the page.
+  - First real settlement (PRODUCTION_VERIFIED, 2026-09-25 16:15 ET run):
+    - The 11:15 ET run fetched the finalized KXHIGHNY-26SEP24 markets (snapshot 85, received
+      15:15:09Z) but settled nothing: its evidence cutoff was the run start, 15:15:04Z. Fixed by
+      #107 (below). The 16:15 run settled 4 positions from snapshot 85.
+    - Event KXHIGHNY-26SEP24: expiration value 66.00; B66.5 YES, the other 5 brackets NO; Kalshi
+      result and the frozen resolver ("between rule applied to 66.00") agree (all 6 brackets read
+      from snapshot 85 in the evidence DB).
+    - Per account (research and operational alike): B66.5 NO, 1 contract, cost 0.58 incl. 0.02
+      fee -> payout 0, net -0.58; B70.5 YES, 1 contract, cost 0.09 incl. 0.01 fee -> payout 0,
+      net -0.09. Equity 1000.00 -> 999.33 (operational) and 100000.00 -> 99999.33 (research);
+      committed capital 0.90 -> 0.23 (the two open 26SEP25 positions). Fees
+      CONSERVATIVE_BOUND, schedule kalshi-quadratic-taker-v1, PARTIALLY_VERIFIED.
+    - Ledger 64 entries (4 settlements); no duplicate settlement per (account, fill); both
+      accounts replay (hash chain, knowledge-time order, equity = bankroll + realized P&L).
+  - F09 checkpoint 2026-09-25T201836Z (docs/engineering/ledger_checkpoints/, and the laptop's
+    market-edge-anchors/2026-09-25/; exported over SSH, never written on the VPS): heads research
+    seq 62 e7a0ae88..., operational seq 64 59912807.... The ledger backup edge-backup-lqgw4n2c
+    (sha 1c907975... = manifest), verified from a clean checkout at dee5805: VERIFIED against the
+    new checkpoint, EXTENDED against 2026-09-23T224720Z and 2026-09-23T173009Z.
+  - #107 (dee5805): a settlement run counts the evidence its own refresh received (bounded by
+    now + deadline + 60 s, the refresh's own run id only; the catch-up hold unchanged).
+    Independent review READY; its findings were fixed at 3414dd8 and re-reviewed READY; 9ee25a5
+    (the reviewer's one-line NIT) was merged with exact-head CI green. DEPLOYED 2026-09-25 20:16Z
+    (16:16 ET, after the 16:15 run): preflight PASS, backups verified before and after,
+    fail-closed PASS, no failed units, 13 timers, COLLECTOR_HEALTH VALID, ledger restore
+    VERIFIED (64 entries), Chase Upside HEALTHY.
 UNRESOLVED:
-  - The first real settlement (11:15 ET, or 16:15): verify event, outcome, source, payout, fees,
-    P&L, cash release, equity for both accounts, duplicates and the hash chain; then the manual
-    F09 checkpoint.
+  - The 26SEP25 positions (2 per account): verify their settlement the same way when due; the
+    first settlement under #107 should happen in the run that fetches the evidence.
   - The first Polymarket US research capture (T-24h, 2026-09-26 16:53Z): verify per runbook §5e.
   - Family A has no paired evidence until Kalshi KXNFLGAME listings and books are captured (G1);
     that needs an owner approval (BLOCKERS 2). About 15 regular-season weeks remain.
@@ -110,9 +139,8 @@ BLOCKERS (owner-only):
      timer): approve or decline in docs/EXECUTION_PLAN.md with a review date.
   3. The backup retention/deletion policy.
   4. The ntfy phone subscription.
-NEXT ACTION: after the 2026-09-25 11:15 ET settlement run, verify the first real settlement and
-  take the manual F09 checkpoint. Then the owner sets BLOCKERS 1-2 so the families can be
-  preregistered and Family A can collect paired evidence.
+NEXT ACTION: the owner sets BLOCKERS 1-2 so the families can be preregistered and Family A can
+  collect paired evidence. Operationally: verify the 26SEP25 settlement (same-run under #107).
 ```
 
 ## Daily operation (what runs by itself)
@@ -159,7 +187,8 @@ remains MANUAL EMERGENCY FALLBACK ONLY.
 - **Engineering:** the suite is merged. F01–F08 and F10–F14 are FIXED. F09 is CLOSED for the
   anchored history, with the residual accepted in ADR 0021.
 - **Production evidence:** deployed and verified; the first valid day and the first real
-  shadow bookkeeping are recorded; settlement not yet observed.
+  shadow bookkeeping are recorded; the first real settlement is recorded and verified
+  (2026-09-25, KXHIGHNY-26SEP24), with an F09 checkpoint.
 - **Research evidence:** 2 valid Stage B days (2026-09-24, 2026-09-25; `verify_production.sh`
   COLLECTOR_HEALTH, 2026-09-25 01:57Z, as recorded above). The EXP-001 180/365-valid-day looks
   are far off, and nothing here is evidence of an edge.
@@ -235,4 +264,4 @@ NEXT ACTION: the owner opens the tailnet URL on the iPhone and reviews Terminal,
 ```
 
 - Every user-visible change now follows docs/design/UI_CONTRACT.md (AI_INSTRUCTIONS.md, section User interface). New features use docs/design/FEATURE_INTEGRATION.md, and the PR template asks for the UI evidence.
-- Rollback: /opt/market-edge-lab/app.prev holds the previous release (5e8b07f as of the efe86e3 deploy, 2026-09-25 08:02Z; install.sh keeps exactly one), per DAILY_SHADOW_ACTIVATION.md → Rollback. The previous bundles are also kept under ~dynasty/edgelab-release/prev-<sha>/. No store or schema changed in EV1.
+- Rollback: /opt/market-edge-lab/app.prev holds the previous release (efe86e3 as of the dee5805 deploy, 2026-09-25 20:16Z, confirmed on the VPS; install.sh keeps exactly one), per DAILY_SHADOW_ACTIVATION.md → Rollback. The previous bundles are also kept under ~dynasty/edgelab-release/prev-<sha>/. No store or schema changed in EV1 or #107.
