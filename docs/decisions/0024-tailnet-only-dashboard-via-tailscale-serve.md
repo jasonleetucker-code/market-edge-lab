@@ -63,7 +63,9 @@ Until now it ran only on a laptop, over copied files.
 This ADR lists "the dashboard gains any write path" as a reason to reconsider. It now has one:
 - `/var/lib/market-edge-lab/db` is writable, the directory only, so SQLite can create the evidence
   DB's WAL side files when no writer holds them.
-- `ReadOnlyPaths=` keeps the database file and the odds quota ledger read-only at kernel level.
+- `ReadOnlyPaths=` keeps the database file read-only at kernel level. The odds quota ledger is not
+  pinned: it is replaced by atomic rename, and a long-running process would keep reading a stale
+  inode.
 
 Reconsidered, the tailnet-only exposure is unchanged (loopback bind, Tailscale Serve, no Funnel),
 and the added capability is bounded to files in `db/` other than the two pinned ones. The decision

@@ -28,12 +28,13 @@ Nice=10
 # query_only. The evidence DB runs in WAL mode, and a reader must create -wal/-shm when no writer
 # holds them (ADR 0016); without that, every read fails "unable to open database file" once the last
 # collector connection has closed (production 2026-09-24). So the db directory is writable, but the
-# database file and the odds quota ledger inside it are re-pinned read-only by the kernel (the more
-# specific path wins). The shadow ledger uses a rollback journal and needs no write access.
-# A restore that replaces edge_lab.sqlite3 by rename needs a dashboard restart (bind-mounted inode).
-# Loopback traffic only, enforced by the kernel.
+# database file is re-pinned read-only by the kernel (the more specific path wins). The odds quota
+# ledger is NOT pinned here: the odds runner replaces it by atomic rename, and this long-running
+# process would keep reading the bind-mounted old inode. The shadow ledger uses a rollback journal
+# and needs no write access. A restore that replaces edge_lab.sqlite3 by rename needs a dashboard
+# restart (bind-mounted inode). Loopback traffic only, enforced by the kernel.
 ReadWritePaths=/var/lib/market-edge-lab/db
-ReadOnlyPaths=-/var/lib/market-edge-lab/db/edge_lab.sqlite3 -/var/lib/market-edge-lab/db/odds_quota_ledger.json
+ReadOnlyPaths=-/var/lib/market-edge-lab/db/edge_lab.sqlite3
 NoNewPrivileges=yes
 PrivateTmp=yes
 PrivateDevices=yes

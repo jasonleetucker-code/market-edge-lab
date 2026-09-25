@@ -66,7 +66,9 @@ def test_dashboard_is_read_only_loopback_only_and_tailnet_host_pinned():
     # The db directory is writable only for SQLite's WAL side files (ADR 0016); the database file and
     # the odds quota ledger are re-pinned read-only by the kernel; never the data root or the ledger dir.
     assert u[("Service", "ReadWritePaths")] == ["/var/lib/market-edge-lab/db"]
-    assert u[("Service", "ReadOnlyPaths")] == ["-/var/lib/market-edge-lab/db/edge_lab.sqlite3 -/var/lib/market-edge-lab/db/odds_quota_ledger.json"]
+    # Only the DB file is pinned: the odds quota ledger is replaced by atomic rename, and this long-running
+    # process would keep reading a bind-mounted stale inode (the oneshot supervisor may pin both).
+    assert u[("Service", "ReadOnlyPaths")] == ["-/var/lib/market-edge-lab/db/edge_lab.sqlite3"]
     assert u[("Service", "IPAddressDeny")] == ["any"] and u[("Service", "IPAddressAllow")] == ["localhost"]
     assert u[("Service", "RestrictAddressFamilies")] == ["AF_INET AF_UNIX"]
     assert u[("Service", "MemoryMax")] == ["128M"]
