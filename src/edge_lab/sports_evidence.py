@@ -113,6 +113,7 @@ PILOT_CONFIG = PilotConfig()  # the runner's defaults (odds_pilot.RunnerSettings
 # Bounds: a whole NFL season is about 285 games x 3 horizons.
 MAX_TARGETS = 1500
 MAX_KALSHI_ROWS = 50_000
+MAX_KALSHI_META = 200_000  # metadata rows read (newest first) before filtering by as_of
 MAX_LISTING_PARSES = 600
 PARSE_CACHE = 8
 STALE_AFTER = timedelta(days=8)  # no new evidence for longer than an NFL week while targets fell due
@@ -515,15 +516,18 @@ def kalshi_catalog(store: Any, as_of: datetime, payloads: _Payloads) -> KalshiCa
     meta = _meta_rows(store, f"""
         SELECT id, kind, entity_id, fetched_at_utc, url, payload_sha256 FROM snapshots
         WHERE source = ? AND ((kind = 'orderbook' AND entity_id LIKE ?) OR (kind IN ({kinds}) AND entity_id LIKE ?))
-        ORDER BY id""", [KALSHI, f"{KALSHI_SERIES}-%", *LISTING_KINDS, f"{KALSHI_SERIES}%"])
-    known = [(received, r) for r in meta if (received := parse_utc(r["fetched_at_utc"])) is not None
-             and received <= as_of]  # rows received after as_of are neither used nor counted
-    known.sort(key=lambda x: (x[0], int(x[1]["id"])))
-    truncated = len(known) > MAX_KALSHI_ROWS
+        ORDER BY id DESC LIMIT ?""", [KALSHI, f"{KALSHI_SERIES}-%", *LISTING_KINDS, f"{KALSHI_SERIES}%",
+                                      MAX_KALSHI_META + 1])
     listings: dict[str, list[KalshiMarketObs]] = {}
     books: dict[str, list[tuple[datetime, int, str, str]]] = {}
     problems: list[str] = []
-    if truncated:
+    if len(meta) > MAX_KALSHI_META:
+        problems.append(f"KALSHI_META_TRUNCATED: only the newest {MAX_KALSHI_META} KXNFLGAME rows were read")
+    known = [(received, r) for r in meta[:MAX_KALSHI_META] if (received := parse_utc(r["fetched_at_utc"])) is not None
+             and received <= as_of]  # rows received after as_of are neither used nor counted
+    known.sort(key=lambda x: (x[0], int(x[1]["id"])))
+    truncated = len(known) > MAX_KALSHI_ROWS or len(meta) > MAX_KALSHI_META
+    if len(known) > MAX_KALSHI_ROWS:
         problems.append(f"KALSHI_ROWS_TRUNCATED: only the newest {MAX_KALSHI_ROWS} of {len(known)} KXNFLGAME rows "
                         "received by as_of were read")
     listing_rows = []
@@ -1014,6 +1018,8 @@ def _row(r: Mapping[str, Any], catalog: KalshiCatalog, payloads: _Payloads, cons
             side = kalshi_side(team, obs.ticker, (t.home_team, t.away_team, t.commence_utc), catalog, payloads,
                                odds["_received"], effective_due(t, PILOT_CONFIG) - PILOT_CONFIG.early_tolerance,
                                cutoff, as_of, policy)
+            if not results and "markout_label_ref" in side:
+                side["markout_label_ref"] = OUTCOMES_HIDDEN  # a later price is a label too (EXP-002 labels)
             p = (odds.get("probabilities") or {}).get(team)
             side["consensus_probability"] = p
             tie = _dec((side.get("rules") or {}).get("tie_payout"))
@@ -1108,7 +1114,7 @@ def _attrition(rows: list[dict[str, Any]], results: bool = False) -> dict[str, A
 
 
 def _gaps(catalog: KalshiCatalog, attrition: Mapping[str, Any], rows: list[dict[str, Any]], policy: JoinPolicy,
-          protocol: Mapping[str, Any]) -> list[dict[str, Any]]:
+          protocol: Mapping[str, Any], results: bool = False) -> list[dict[str, Any]]:
     due = [r for r in rows if r["status"] not in (SUPERSEDED, NOT_YET_DUE)]
     by_h: dict[str, int] = {}
     for r in due:
@@ -1134,9 +1140,14 @@ def _gaps(catalog: KalshiCatalog, attrition: Mapping[str, Any], rows: list[dict[
             "some due horizons have no mapped market or book by their cutoff",
             "complete the custom observation targets for the missing horizons (never back-filled)",
             stored=catalog.book_snapshots, due_targets_without_book=sum(by_h.values()), by_horizon=dict(sorted(by_h.items())))
-    settled = sum(1 for obs in catalog.listings.values() for o in obs
-                  if str(o.fields.get("status") or "").lower() in ("settled", "finalized", "determined"))
-    if settled == 0:
+    if not results:
+        # Whether any resolution is stored would itself hint at outcomes: always the same neutral entry.
+        gap("G3", "Kalshi KXNFLGAME resolutions (outcome labels)", "WITHHELD",
+            "outcome labels are withheld (holdout protection); whether resolutions are stored is shown only by a "
+            "logged --with-results run",
+            "one settled-markets listing read per game day after expected expiration (existing settlement path)")
+    elif not any(str(o.fields.get("status") or "").lower() in ("settled", "finalized", "determined")
+                 for obs in catalog.listings.values() for o in obs):
         gap("G3", "Kalshi KXNFLGAME resolutions (outcome labels)", "MISSING",
             "no settled / determined KXNFLGAME listing is stored, so no outcome label exists",
             "one settled-markets listing read per game day after expected expiration (existing settlement path)",
@@ -1259,7 +1270,9 @@ def _row_reasons(row: Mapping[str, Any]) -> list[str]:
             out.append("PARTIAL_EVIDENCE")
         elif stage == Stage.ODDS_NOT_FRESH.value:
             out.append("STALE")
-        elif stage == Stage.KALSHI_NOT_MAPPED.value:
+        elif stage == Stage.KALSHI_NOT_MAPPED.value and (row.get("kalshi") or {}).get("state") != "MAPPED":
+            # Row-level only when the game itself did not map. A side that failed to map at its own decision time
+            # (NOT_MAPPED_AT_DECISION) is that side's reason (_side_reasons), never a reason for the other side.
             out.append("RULES_UNRESOLVED" if row["kalshi"].get("state") == "AMBIGUOUS" else "MISSING_SOURCE")
     return out
 
@@ -1518,7 +1531,7 @@ def build_report(store: Any, *, as_of: datetime, policy: JoinPolicy = JoinPolicy
     protocol = protocol_status(experiments_root)
     receipts = sorted([x for r in rows for x in (r["odds"].get("received_utc"),) if x]
                       + [s.get("book_received_utc") for r in rows for s in r["sides"].values() if s.get("book_received_utc")])
-    gaps = _gaps(catalog, join, rows, policy, protocol)
+    gaps = _gaps(catalog, join, rows, policy, protocol, results)
     body = {
         "schema": SCHEMA, "label": LABEL, "family": FAMILY_ID, "title": FAMILY_TITLE,
         "join_version": JOIN_VERSION, "mapping_version": MAPPING_VERSION, "rules_parser_version": RULES_PARSER_VERSION,
@@ -1728,6 +1741,12 @@ def record_results_view(report: Mapping[str, Any], *, log: Path, actor: str, cod
         candidate = registry.load(path)
         if candidate.id == experiment_id:
             exp = candidate
+    if exp is None:
+        raise rev.EvidenceError(f"{experiment_id} is not in the experiment registry, so its evidence log is unknown")
+    own = (exp.path.parent / rev.LOG_NAME).resolve()
+    if Path(log).resolve() != own:
+        raise rev.EvidenceError(f"the view must be recorded in {experiment_id}'s own log ({own.parent.name}/"
+                                f"{rev.LOG_NAME}), not in {Path(log).name}")
     use = rev.EvidenceUse(
         experiment_id=experiment_id, family=FAMILY_ID, dataset_id="sports_evidence:nfl_paired_report",
         dataset_version=JOIN_VERSION, dataset_sha256=report["output_sha256"], role=rev.DatasetRole.UNASSIGNED,
@@ -1737,9 +1756,8 @@ def record_results_view(report: Mapping[str, Any], *, log: Path, actor: str, cod
         code_version=code_version, model_version=None, prompt_version=None, viewed_features=True,
         viewed_labels=True, viewed_results=True, influenced_tuning=None,
         note=f"paired-evidence report as of {report['as_of_utc']}; outcome states and results shown")
-    return rev.record_use(log, use,
-                          prohibited_prefixes=registry.prohibited_inputs(exp) if exp is not None else (),
-                          prohibited_label_scopes=registry.prohibited_label_scopes(exp) if exp is not None else ())
+    return rev.record_use(own, use, prohibited_prefixes=registry.prohibited_inputs(exp),
+                          prohibited_label_scopes=registry.prohibited_label_scopes(exp))
 
 
 def main(argv: list[str] | None = None) -> int:

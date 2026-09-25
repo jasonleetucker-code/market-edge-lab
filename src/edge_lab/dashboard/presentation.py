@@ -469,6 +469,7 @@ STATES: dict[str, StateWord] = {
     "EV_GAP_UNKNOWN": StateWord("Unknown input", WARN_K),
     "EV_GAP_UNVERIFIED": StateWord("Unverified", WARN_K),
     "EV_GAP_NOT_REGISTERED": StateWord("Not registered", WARN_K),
+    "EV_GAP_WITHHELD": StateWord("Labels withheld", ND_K),
     "EV_FILL_FILLABLE": StateWord("Within captured depth", ND_K),
     "EV_FILL_INSUFFICIENT_DEPTH": StateWord("Beyond complete depth", WARN_K),
     "EV_FILL_DEPTH_UNKNOWN": StateWord("Depth unknown · truncated", WARN_K),

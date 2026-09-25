@@ -108,7 +108,7 @@ def test_populated_section_sits_in_the_research_tab_after_the_experiments(state)
 def test_partial_section_names_what_is_missing(state):
     text = plain(section(page(state)))
     for needle in ("Partial evidence", "Evidence incomplete", "5 of 9", "Odds not captured",
-                   "Kalshi book missing", "Pair skew exceeded", "Kalshi book unusable", "Missing evidence (6)",
+                   "Kalshi book missing", "Pair skew exceeded", "Kalshi book unusable", "Missing evidence (7)", "Labels withheld",
                    "Kalshi KXNFLGAME order books at the Odds horizons", "Partial"):
         assert needle in text, needle
 

@@ -25,6 +25,7 @@ from edge_lab.storage import SnapshotStore
 
 UTC = timezone.utc
 FIX = Path(__file__).parent / "fixtures" / "sports_evidence"
+REPO = Path(__file__).resolve().parents[1]
 EVENTS = FIX / "kalshi_events_KXNFLGAME_open_2026-09-25T022444Z.json"
 SERIES = FIX / "kalshi_series_KXNFLGAME_2026-09-25T022448Z.json"
 LISTED_AT = datetime(2026, 9, 25, 2, 24, 44, tzinfo=UTC)
@@ -594,38 +595,90 @@ def test_outcome_labels_are_hidden_by_default_everywhere(populated):
     assert view["outcome_labels"].startswith("HIDDEN") and "OUTCOME_FINAL" not in json.dumps(view)
 
 
-def _log(tmp_path) -> Path:
-    from edge_lab import research_evidence as rev
-    return rev.init_log(tmp_path / "evidence_use.jsonl", experiment_id="EXP-002", started_at_utc="2026-09-25T00:00:00Z",
-                        covered_scopes=["sports:nfl:moneyline"])
+def _registry_copy(tmp_path) -> tuple[Path, Path]:
+    """A registry holding a copy of EXP-002 (its protocol, manifest and evidence log)."""
+    import shutil
+    src = next((REPO / "experiments").glob("EXP-002-*"))
+    root = tmp_path / "experiments"
+    shutil.copytree(src, root / src.name)
+    return root, root / src.name / "evidence_use.jsonl"
 
 
-def test_with_results_refuses_without_a_log_and_records_before_printing(tmp_path, populated):
+def test_with_results_records_in_the_experiments_own_log_before_printing(tmp_path, populated):
     from edge_lab import research_evidence as rev
     path, now = populated
+    root, own = _registry_copy(tmp_path)
+    base = ["report", "--db", str(path), "--as-of", iso_z(now), "--experiments", str(root)]
     buf = io.StringIO()
     with redirect_stdout(buf):
-        assert se.main(["report", "--db", str(path), "--as-of", iso_z(now), "--with-results"]) == 2
-    out = json.loads(buf.getvalue())
-    assert out["state"] == "REFUSED" and "OUTCOME_FINAL" not in buf.getvalue()
-    log = _log(tmp_path)
+        assert se.main(base + ["--with-results"]) == 2  # no log, actor or code version: refused
+    assert json.loads(buf.getvalue())["state"] == "REFUSED" and "OUTCOME_FINAL" not in buf.getvalue()
+    before = len(rev.read_log(own).uses)
     buf = io.StringIO()
     with redirect_stdout(buf):
-        assert se.main(["report", "--db", str(path), "--as-of", iso_z(now), "--with-results", "--summary",
-                        "--evidence-log", str(log), "--actor", "test", "--code-version", "abc123"]) == 0
+        assert se.main(base + ["--with-results", "--summary", "--evidence-log", str(own), "--actor", "test",
+                               "--code-version", "abc123"]) == 0
     out = json.loads(buf.getvalue())
     assert out["evidence_use"] == "APPENDED" and out["join"]["outcomes"]["OUTCOME_FINAL"] == 3
-    uses = rev.read_log(log).uses
-    assert len(uses) == 1 and uses[0].action is rev.Action.LABEL_RESULT_INSPECTION
-    assert uses[0].viewed_labels is True and uses[0].window.scope == "sports:nfl:moneyline"
-    assert uses[0].dataset_sha256 == out["output_sha256"]
-    # a log that belongs to another experiment refuses, and nothing is shown
-    other = rev.init_log(tmp_path / "other.jsonl", experiment_id="EXP-003", started_at_utc="2026-09-25T00:00:00Z")
+    uses = rev.read_log(own).uses
+    assert len(uses) == before + 1 and uses[-1].action is rev.Action.LABEL_RESULT_INSPECTION
+    assert uses[-1].viewed_labels is True and uses[-1].window.scope == "sports:nfl:moneyline"
+    assert uses[-1].dataset_sha256 == out["output_sha256"]
+    # any other log (even a valid EXP-002 log elsewhere) is refused, and nothing is shown
+    stray = rev.init_log(tmp_path / "evidence_use.jsonl", experiment_id="EXP-002",
+                         started_at_utc="2026-09-25T00:00:00Z", covered_scopes=["sports:nfl:moneyline"])
     buf = io.StringIO()
     with redirect_stdout(buf):
-        assert se.main(["report", "--db", str(path), "--as-of", iso_z(now), "--with-results", "--evidence-log",
-                        str(other), "--actor", "test", "--code-version", "abc123"]) == 2
-    assert json.loads(buf.getvalue())["state"] == "REFUSED" and "OUTCOME_FINAL" not in buf.getvalue()
+        assert se.main(base + ["--with-results", "--evidence-log", str(stray), "--actor", "test",
+                               "--code-version", "abc123"]) == 2
+    refused = json.loads(buf.getvalue())
+    assert refused["state"] == "REFUSED" and "own log" in refused["detail"] and "OUTCOME_FINAL" not in buf.getvalue()
+    assert rev.read_log(stray).uses == ()
+
+
+def test_a_side_unmapped_at_its_decision_does_not_exclude_the_paired_side(tmp_path):
+    """Review repro: side A's book precedes the listing (NOT_MAPPED_AT_DECISION), side B's book follows it
+    (paired). With the conditional mapping accepted, the horizon's opportunities are 2 with 1 survivor."""
+    path, now = sf.fixture_store(tmp_path, kalshi=False)
+    store = SnapshotStore(path)
+    store.start_run("SYNTHETIC-repro")
+    g = sf.GAMES[1]
+    target = next(dict(r) for r in store.odds_targets(sport=se.SPORT)
+                  if r["event_id"] == "fxsyn002" and r["offset_label"] == "T-6h")
+    odds_at = datetime.fromisoformat(target["captured_at_utc"].replace("Z", "+00:00"))
+    for team, offset in ((g.away, -60), (g.home, 60)):
+        ticker = f"{sf.event_ticker(g)}-{se.NFL_TEAMS[team][0]}"
+        store.save_snapshot(run_id="SYNTHETIC-repro", source="kalshi", kind="orderbook", entity_id=ticker,
+                            url=f"{sf.KALSHI_API}/markets/{ticker}/orderbook?depth=100", payload=sf._book(Decimal("0.5")),
+                            fetched_at_utc=iso_z(odds_at + timedelta(seconds=offset)), source_id="kalshi_public")
+    store.save_snapshot(run_id="SYNTHETIC-repro", source="kalshi", kind="markets", entity_id=sf.event_ticker(g),
+                        url=f"{sf.KALSHI_API}/markets?event_ticker={sf.event_ticker(g)}",
+                        payload={"markets": [sf._market(g, g.home), sf._market(g, g.away)], "cursor": ""},
+                        fetched_at_utc=iso_z(odds_at + timedelta(seconds=30)), source_id="kalshi_public")
+    policy = se.JoinPolicy(conditional_mapping_accepted=True)
+    ro = SnapshotStore.open_readonly(path)
+    rep = se.build_report(ro, as_of=now, policy=policy)
+    row = rows_by(rep)[("fxsyn002", "T-6h")]
+    assert row["status"] == "PARTIAL_PAIR" and row["all_stages"] == ["KALSHI_NOT_MAPPED"]
+    assert row["sides"]["Kansas City Chiefs"]["stage"] == "KALSHI_NOT_MAPPED"
+    assert row["sides"]["Miami Dolphins"]["stage"] is None
+    assert se._row_reasons(row) == []  # the game mapped: no row-level exclusion
+    catalog = se.kalshi_catalog(ro, now, se._Payloads(ro))
+    att = se.protocol_attrition([row], as_of=now, policy=policy, catalog=catalog)
+    opp = next(w for w in att["waterfalls"] if w["level"] == "OPPORTUNITY")
+    assert opp["start"] == 2 and opp["survivors"] == 1
+
+
+def test_hidden_mode_withholds_g3_and_markout_labels(populated):
+    path, now = populated
+    hidden = se.build_report(SnapshotStore.open_readonly(path), as_of=now)
+    g3 = next(g for g in hidden["gaps"] if g["id"] == "G3")
+    assert g3["state"] == "WITHHELD" and "stored" not in g3
+    sides = [s for r in hidden["rows"] for s in r["sides"].values() if s.get("stage") is None]
+    assert sides and all(s["markout_label_ref"] == se.OUTCOMES_HIDDEN for s in sides)
+    shown = report(path, now)
+    assert not any(g["id"] == "G3" for g in shown["gaps"])  # a resolution is stored (G1 settled)
+    assert any(isinstance(s.get("markout_label_ref"), dict) for r in shown["rows"] for s in r["sides"].values())
 
 
 def test_as_of_in_the_future_is_clamped_to_now(tmp_path, capsys):
