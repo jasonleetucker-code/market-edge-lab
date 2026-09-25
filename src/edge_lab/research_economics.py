@@ -66,6 +66,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 
+from .experiments import RESERVED_TEST_EXPERIMENT_IDS as _RESERVED_TEST_IDS
 from .freshness import parse_utc
 from .opportunity import DepthLadder, DepthStatus, FeeSchedule, PriceGrid, price_depth_fill, walk_ladder
 from .provenance import canonical_json, sha256_hex
@@ -76,7 +77,7 @@ PROTOCOL_MINIMUMS = ("min_episodes_for_scenario", "min_independent_clusters")
 # The only experiment ids whose screen minimums may come from the caller (unit tests). Every
 # other id, whatever its spelling, takes them from the repository protocol, and an id without
 # settled protocol values gets UNKNOWN, never the caller's numbers.
-SCREEN_TEST_EXPERIMENT_IDS = frozenset({"EXP-900"})
+SCREEN_TEST_EXPERIMENT_IDS = _RESERVED_TEST_IDS  # reserved in the registry (experiments.validate)
 
 
 def normalize_experiment_id(experiment_id: str) -> str:

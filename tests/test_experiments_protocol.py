@@ -167,7 +167,8 @@ def _settled(text):
     import re
 
     pattern = r'"[^"\n]*(UNKNOWN|UNVERIFIED|TBD|MISSING_OWNER_INPUT|MISSING_POWER_ANALYSIS|to be frozen|to be chosen)[^"\n]*"'
-    return re.sub(pattern, '"settled concrete value"', text)
+    text = re.sub(pattern, '"settled concrete value"', text)
+    return re.sub(r'(min_episodes_for_scenario|min_independent_clusters) = "settled concrete value"', r"\1 = 12", text)
 
 
 def _decided(text):
@@ -245,3 +246,20 @@ def test_open_decisions_block_preregistration(tmp_path):
     assert [p for p in _problems(emptied) if "baseline" not in p] == []
     draft = _copy(tmp_path, name="EXP-002-draft")
     assert _problems(draft) == []  # a DRAFT may list open decisions
+
+
+
+def test_preregistered_count_minimums_are_whole_numbers_of_at_least_two(tmp_path):
+    for value, ok in (("0", False), ("1", False), ("2.5", False), ("2", True), ("30", True)):
+        target = _copy(tmp_path, name=f"EXP-002-min{value.replace('.', '_')}", edit_manifest=_settled_manifest,
+                       edit_protocol=lambda s, v=value: re.sub(
+                           r'min_independent_clusters = \S+', f"min_independent_clusters = {v}",
+                           _decided(s)))
+        problems = [p for p in _problems(target) if "baseline" not in p]
+        assert (not any("min_independent_clusters must be a whole number" in p for p in problems)) == ok, (value, problems)
+
+
+def test_the_screen_test_ids_are_reserved(tmp_path):
+    target = _copy(tmp_path, name="EXP-900-real", edit_manifest=lambda s: s.replace('id = "EXP-002"', 'id = "EXP-900"'),
+                   edit_protocol=lambda s: s.replace('experiment_id = "EXP-002"', 'experiment_id = "EXP-900"'))
+    assert any("reserved for unit tests" in p for p in _problems(target))

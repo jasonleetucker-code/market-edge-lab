@@ -96,6 +96,8 @@ def validate(exp: Experiment) -> list[str]:
 
     if exp.id and not ID_PATTERN.match(exp.id):
         problems.append(f"id '{exp.id}' must look like EXP-001")
+    if exp.id.strip().upper() in RESERVED_TEST_EXPERIMENT_IDS:
+        problems.append(f"id '{exp.id}' is reserved for unit tests of the economic screen")
     if exp.id and not exp.path.parent.name.startswith(exp.id + "-"):
         problems.append(f"directory '{exp.path.parent.name}' must start with '{exp.id}-'")
     if exp.status and exp.status not in STATUSES:
@@ -377,6 +379,11 @@ PROTOCOL_NAME = "protocol.toml"
 PROTOCOL_VERSION = "research-protocol-v1"
 LEGACY_EXPERIMENTS = frozenset({"EXP-001"})  # predate the sidecar; the only experiments allowed without one
 OWNER_EXCEPTION_DIR = "docs/owner/"
+# Ids reserved for unit tests of the economic screen (research_economics.SCREEN_TEST_EXPERIMENT_IDS):
+# no real experiment may be registered under one.
+RESERVED_TEST_EXPERIMENT_IDS = frozenset({"EXP-900"})
+# [economics] minimums that must be whole numbers >= 2 once preregistered (0 or 1 would mean "no minimum").
+PROTOCOL_COUNT_MINIMUMS = ("min_episodes_for_scenario", "min_independent_clusters")
 MAX_ACTIVE_FAMILIES = 2
 SLOT_STATES = ("ACTIVE", "QUEUED", "ENDED")
 PROTOCOL_TOP = ("protocol_version", "experiment_id", "family", "family_title", "slot_status", "authority",
@@ -534,6 +541,18 @@ def protocol_problems(exp: Experiment) -> list[str]:
         except ValueError:
             problems.append(f"{PROTOCOL_NAME} [budget] review_date must be YYYY-MM-DD or \"UNKNOWN: <why>\"")
     if exp.status in LOCKED:
+        economics = protocol.get("economics") if isinstance(protocol.get("economics"), dict) else {}
+        for key in PROTOCOL_COUNT_MINIMUMS:
+            raw = economics.get(key)
+            if raw is None or _unsettled(raw):
+                continue  # reported as unsettled below
+            try:
+                count = int(str(raw).strip()) if not isinstance(raw, bool) else None
+            except ValueError:
+                count = None
+            if count is None or count < 2 or str(count) != str(raw).strip():
+                problems.append(f"{exp.status} experiment: [economics] {key} must be a whole number >= 2, "
+                                f"not {raw!r}")
         for table in PROTOCOL_TABLES:
             if table == PROTOCOL_KNOWLEDGE_TABLE:
                 continue
