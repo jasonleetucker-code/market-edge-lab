@@ -111,14 +111,17 @@ operational live-readiness gate goes first. Research criteria are never weakened
    - **Deleting old backups is an owner decision.**
 5. **#74 Freshness Fabric v1, live** (DEPLOYED 2026-09-24, c6e0dd9).
    - Watch the supervisor, disagreements and missed targets.
-   - Terminal "Source freshness" view: PR #91 (in review fixes).
+   - Terminal "Source freshness" view is live (#91). Read-only units may create SQLite WAL side
+     files (#95), so the supervisor no longer goes blind when no writer holds the DB.
    - Migrating an existing schedule into the fabric needs parity evidence and owner approval, one
      source at a time.
 6. **Sports prospective data (domain 2) and #9 consensus.**
    - The Odds API pilot is live: 3 captures on 2026-09-24, 491 credits remaining.
    - The consensus benchmark and the target table are live in Terminal.
-   - Polymarket US NFL pilot (#84): activated by the **owner's risk decision** (2026-09-24),
-     pending review, merge and deploy. Captures are RELATED_NOT_EQUIVALENT only.
+   - Polymarket US NFL pilot (#84): **ACTIVE** since 2026-09-24 20:40 ET under the **owner's risk
+     decision** (not a grant). The first discovery was FILTER_COMPLETE: 33 games, 32
+     RELATED_NOT_EQUIVALENT. The first capture is due 2026-09-26. Terminal shows related markets
+     (#94).
 7. **Later/closing observations (ADR 0030).**
    - Live: the first scheduled +1 h captures (12 rows) at 19:05 ET on 2026-09-24.
    - Verify the close capture (04:57:45Z tick).
