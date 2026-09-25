@@ -37,6 +37,7 @@ NOTIFICATIONS_SHOWN = 50
 FAILURE_FILE = "last_failure.json"  # production unit failures only (alert.sh; verification.FAILURE_NAME)
 VERIFICATION_FILE = "last_verification.json"  # install-time checks (runbook §4.1; verification.VERIFICATION_NAME)
 ODDS_LEDGER_FILE = "odds_quota_ledger.json"  # the Odds API quota ledger, beside the evidence database
+FRESHNESS_FILE = "freshness.json"  # the Freshness Fabric supervisor's artifact (freshness_fabric.ARTIFACT_NAME)
 RECEIPT_SCHEMA = "edge-lab-shadow-daily-receipt/1"
 
 OPERATIONAL_ACCOUNT_ID = exp001_shadow.ACCOUNT_ID
@@ -245,6 +246,13 @@ class Context:
             return Loaded(OK, odds_pilot.dashboard_status(self.config.db, ledger, state, now=self.now))
         except Exception as exc:  # noqa: BLE001 - shown as an error state, never raised
             return Loaded(ERROR, message=short_error(exc, self.config))
+
+    @cached_property
+    def freshness_status(self) -> Loaded:
+        """The Freshness Fabric supervisor's current-state artifact (`freshness.json`, schema
+        `freshness-fabric-status/1`), read as written: OK with a `FreshnessReport`, NO_DATA when not
+        configured or not written yet, ERROR when unreadable or of another schema."""
+        return freshness_report(self)
 
     @cached_property
     def pm_sports(self) -> Loaded:
@@ -1194,6 +1202,57 @@ def odds_consensus_at_capture(ctx: Context, event_id: str, received_utc: Any) ->
     return Loaded(OK, result)
 
 
+# --------------------------------------------------------------------------- Freshness Fabric (freshness_fabric, ADR 0031)
+
+
+@dataclass(frozen=True)
+class FreshnessReport:
+    """The supervisor's artifact as written, plus how old the artifact itself is: `report_freshness`
+    is `freshness.assess(generated_at_utc, max_age=freshness_fabric.SUPERVISOR_MAX_AGE, now)`. Every
+    source figure stays the artifact's own (as of its generation); nothing is re-derived here."""
+
+    doc: dict[str, Any]
+    report_freshness: str  # FRESH | STALE | UNKNOWN
+    max_age: timedelta
+
+
+def report_from_doc(doc: dict[str, Any], now: datetime) -> FreshnessReport:
+    """A report and its own age: `freshness.assess(generated_at_utc, SUPERVISOR_MAX_AGE, now)`."""
+    from .. import freshness_fabric as ff
+
+    generated = doc.get("generated_at_utc") if isinstance(doc.get("generated_at_utc"), str) else None
+    fresh = assess_freshness(generated, max_age=ff.SUPERVISOR_MAX_AGE, now=now).value.upper()
+    return FreshnessReport(doc, fresh, ff.SUPERVISOR_MAX_AGE)
+
+
+def freshness_report(ctx: Context) -> Loaded:
+    """The supervisor's artifact, read with the writer's own size bound (a larger file is not its)."""
+    from .. import freshness_fabric as ff
+
+    directory = ctx.config.status_dir
+    try:
+        path = directory / FRESHNESS_FILE if directory is not None else None
+        if path is not None and path.is_file() and path.stat().st_size > ff.MAX_ARTIFACT_BYTES:
+            return Loaded(ERROR, message=f"{FRESHNESS_FILE} is larger than the supervisor's {ff.MAX_ARTIFACT_BYTES}-byte "
+                                         "bound, so it is not its report")
+    except OSError as exc:
+        return Loaded(ERROR, message=f"{FRESHNESS_FILE} cannot be read: {short_error(exc, ctx.config)}")
+    loaded = ctx._status_file(FRESHNESS_FILE)
+    if loaded.status == NO_DATA:
+        if ctx.config.status_dir is None:
+            return loaded
+        return Loaded(NO_DATA, message=f"The Freshness Fabric supervisor (edgelab-freshness.timer) has not written "
+                                       f"{FRESHNESS_FILE} to the status directory yet")
+    if loaded.status != OK:
+        return loaded
+    doc = loaded.value
+    if doc.get("schema") != ff.SCHEMA:
+        return Loaded(ERROR, message=f"{FRESHNESS_FILE} has schema {str(doc.get('schema'))[:60]!r}, not {ff.SCHEMA}")
+    if not isinstance(doc.get("sources"), list) or not isinstance(doc.get("supervisor"), dict):
+        return Loaded(ERROR, message=f"{FRESHNESS_FILE} lacks its sources or supervisor section")
+    return Loaded(OK, report_from_doc(doc, ctx.now))
+
+
 # --------------------------------------------------------------------------- Polymarket US NFL pilot (polymarket_sports, ADR 0032)
 
 PM_SPORTS_MODULE = "edge_lab.polymarket_sports"
@@ -1241,6 +1300,14 @@ def pm_market_history(ctx: Context, slugs: Any) -> Loaded:
     if ctx.store.status != OK:
         return ctx.store
     try:
-        return Loaded(OK, {s: polymarket_sports.market_history(ctx.store.value, s) for s in slugs})
+        out = {s: [dict(t) for t in polymarket_sports.market_history(ctx.store.value, s)] for s in slugs}
     except Exception as exc:  # noqa: BLE001
         return Loaded(ERROR, message=short_error(exc, ctx.config))
+    # The pilot's own rule (`polymarket_sports.status`): an open (planned or failed) target past its
+    # deadline is OVERDUE, never still "planned". Kept as `display_state`; `state` stays as recorded.
+    for targets in out.values():
+        for t in targets:
+            deadline = parse_utc(t.get("deadline_utc"))
+            if t.get("state") in ("PLANNED", "FAILED") and deadline is not None and deadline < ctx.now:
+                t["display_state"] = "OVERDUE"
+    return Loaded(OK, out)

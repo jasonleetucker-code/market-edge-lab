@@ -98,7 +98,7 @@ def test_production_shape_shows_the_contracts_consensus_at_the_capture(productio
                    "Freshness at this capture Fresh (worst of books)", "Books quoting this event 9",
                    "Consensus version odds-consensus-v1", "Moneyline (h2h) · Atlanta Falcons / Green Bay Packers",
                    "Spread (spreads) · Atlanta Falcons +3.5 / Green Bay Packers -3.5",
-                   "Total (totals) · Over 47.5 / Under 47.5", "Books 9 contributing · 9 quoting this market (any line)", "range_and_unscaled_mad_v1",
+                   "Total (totals) · Over 47.5 / Under 47.5", "Books 9 contributing 9 quoting this market (any line)", "range_and_unscaled_mad_v1",
                    "Offered prices as received (18)", "not probabilities and not executable"):
         assert needle in text, needle
     # Every consensus figure shown is the contract's value, only formatted.

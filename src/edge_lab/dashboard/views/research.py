@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 from typing import Any
 
@@ -254,8 +255,8 @@ def _proposition(p: Any) -> str:
         ("Consensus probability", c.num(pr.percent(o.consensus_probability), reason="no consensus: fewer than two books")),
         ("Range · MAD", c.num(" · ".join(x or "—" for x in (pr.pp_size(o.range), pr.pp_size(o.mad)))
                               if o.range is not None or o.mad is not None else None, reason="not computed")),
-        ("Books", c.num(pr.count(o.book_count))
-         + _sub(f"contributing · {pr.count(p.market_bookmaker_count)} quoting this market (any line)")),
+        ("Books", c.num(pr.count(o.book_count)) + " <span>contributing</span>"
+         + _sub(f"{pr.count(p.market_bookmaker_count)} quoting this market (any line)")),
     ], wide=True, text_cols=(0,)) for o in p.consensus)
     consensus = f'<div role="group" aria-label="{esc("Consensus probability, " + title)}">{consensus}</div>'
     head = c.facts([
@@ -472,6 +473,265 @@ def odds_targets_section(ctx: d.Context) -> str:
                      sid="odds-t-h")
 
 
+# --------------------------------------------------------------------------- Freshness Fabric (ADR 0031)
+
+FRESHNESS_NOTE = ("The fabric observes; it runs, triggers and reschedules nothing. A source in external-schedule mode "
+                  "is run by its own timer (named on each row) and only supervised here. Every verdict is the "
+                  "supervisor's at its evaluation time, never recomputed here: data fresh then may be older now. "
+                  "Research use needs a receipt of known freshness; decision use needs fresh data and healthy "
+                  "acquisition, and never rests on a stale or undated report.")
+
+
+def _scrub(text: str) -> str:
+    """Free text without filesystem paths, by the fabric's own rule (`freshness_fabric.scrub`: time zones
+    such as America/New_York and windows such as 17:40-18:35 stay intact)."""
+    from ...freshness_fabric import strip_paths
+
+    return strip_paths(text)  # never shortened: the details disclosure shows everything
+
+
+def _texts(value: Any) -> list[str]:
+    """A JSON list of free texts as a list (a bare string is one item, never its characters), scrubbed."""
+    if isinstance(value, str):
+        value = [value]
+    if not isinstance(value, (list, tuple)):
+        return []
+    return [_scrub(x if isinstance(x, str) else json.dumps(x, default=str)) for x in value]
+
+
+def _text(value: Any) -> str | None:
+    """An identifier or recorded time as written (a string only; anything else is unknown)."""
+    return value if isinstance(value, str) and value else None
+
+
+def _items(summary: Any, key: str) -> list | None:
+    value = summary.get(key) if isinstance(summary, dict) else None
+    return value if isinstance(value, list) else None
+
+
+def _count_of(summary: Any, key: str) -> str:
+    items = _items(summary, key)
+    return c.num(pr.count(len(items)) if items is not None else None, reason="not recorded in the report")
+
+
+def _trusted_badge(code: Any, word: pr.StateWord, trusted: bool, suffix: str = "") -> str:
+    """A state capsule; under a report that is not fresh, a positive verdict is shown neutral, never green."""
+    kind = word.kind if trusted or word.kind != pr.OK_K else pr.ND_K
+    return c.badge(code, label=word.label + suffix, kind=kind)
+
+
+def _usable(src: Any, trusted: bool, report_word: str) -> str:
+    research, decision = src.get("usable_for_research") is True, src.get("usable_for_decision") is True
+    if not trusted:
+        return c.state_text("UNKNOWN", label=f"Not decision-grade: report {report_word}", kind=pr.WARN_K)
+    if decision:
+        return c.state_text("FRESH", label="Research and decision, at evaluation")
+    if research:
+        return c.state_text("STALE", label="Research only")
+    return c.state_text("UNKNOWN", label="Not usable")
+
+
+ATTENTION_SCHEDULE = ("MISSED", "PAUSED", "BUDGET_BLOCKED", "QUOTA_BLOCKED", "LOCK_BUSY")
+ATTENTION_HEALTH = ("FAILING", "DEGRADED")
+
+
+def needs_attention(src: Any) -> bool:
+    """A source the owner should look at first, by the artifact's own states (a filter, not a verdict)."""
+    return (src.get("schedule_state") in ATTENTION_SCHEDULE or src.get("health") in ATTENTION_HEALTH
+            or bool(_texts(src.get("disagreements"))))
+
+
+def fabric_source_row(src: Any, policy: Any, now: Any, *, trusted: bool = True, report_word: str = "stale",
+                      judged_at: Any = None) -> str:
+    """One supervised source: freshness and usability at evaluation, schedule state, health, next due,
+    why; the policy and every recorded time in a disclosure. Values are the artifact's, only formatted.
+    `trusted` is False when the report itself is stale or undated: nothing then reads as current."""
+    src = src if isinstance(src, dict) else {}
+    policy = policy if isinstance(policy, dict) else {}
+    carried = _text(src.get("carried_from_utc"))
+    at = _text(judged_at) or (_text(src.get("as_of_utc")))
+    at_text = f"at evaluation, {pr.datetime_et(at)}" if pr.datetime_et(at) else "at evaluation"
+    age = pr.duration_text(src.get("data_age_s"))
+    objective = pr.duration_text(src.get("max_useful_age_s"))
+    fresh_code = pr.freshness_code(src.get("freshness"))
+    facts = [
+        ("Freshness", _trusted_badge(fresh_code, pr.state_word(fresh_code), trusted) + _sub(" · ".join(x for x in (
+            at_text, f"data {age} old then" if age else "no receipt recorded",
+            f"objective {objective}" if objective else "no objective") if x))),
+        ("Schedule", _trusted_badge(src.get("schedule_state"), pr.prefixed_word("SCHEDULE", src.get("schedule_state")),
+                                    trusted) + _sub(f"as of {pr.datetime_et(carried)}" if carried else None)),
+        ("Health", _trusted_badge(src.get("health"), pr.prefixed_word("HEALTH", src.get("health")), trusted)),
+        ("Next due", c.txt(pr.datetime_et(src.get("next_due_utc")), reason="nothing planned or not known")),
+        ("Last successful receipt", c.txt(pr.datetime_et(src.get("last_success_receipt_utc")),
+                                          reason="no successful receipt recorded")),
+        ("Usable for", _usable(src, trusted, report_word) + _sub(at_text if trusted else None)),
+        ("Why", esc(_scrub(_text(src.get("why_due")) or "not stated"))),
+    ]
+    misses = src.get("missed_count")
+    disagreements = _texts(src.get("disagreements"))
+    details = src.get("details") if isinstance(src.get("details"), dict) else {}
+    if isinstance(misses, int) and not isinstance(misses, bool) and misses > 0:
+        facts.append(("Missed", c.num(pr.count(misses), cls="neg") + _sub(_text(details.get("missed_scope")))))
+    if disagreements:
+        facts.append(("Disagreements", c.state_text("WARNING", label=f"{pr.count(len(disagreements))} with the canonical "
+                                                                      "scheduler")))
+    detail = c.disclosure("Source details and policy", c.kv([
+        ("source id", c.code(_text(src.get("source_id")))),
+        ("description", esc(_text(policy.get("description")) or "not recorded")),
+        ("acquisition mode", esc(pr.mode_label(src.get("mode"))) + " " + c.code(_text(src.get("mode")))),
+        ("underlying mode", c.code(_text(src.get("underlying_mode")))),
+        ("run by (schedule owner)", esc(_text(src.get("schedule_owner")) or "not recorded")),
+        ("policy version", c.code(_text(src.get("policy_version")))),
+        ("objective (max useful age)", c.txt(pr.duration_text(src.get("max_useful_age_s")), reason="no objective")),
+        ("slowest safe cadence", c.txt(pr.duration_text(policy.get("min_safe_cadence_s")), reason="not defined")),
+        ("fastest useful cadence", c.txt(pr.duration_text(policy.get("max_useful_cadence_s")), reason="not defined")),
+        ("pacing", esc(_text(policy.get("pacing")) or "not stated")),
+        ("budget or quota", esc(_text(policy.get("budget")) or "not stated")),
+        ("protected windows", c.ul(_texts(policy.get("protected_windows")), empty="none")),
+        ("retry", esc(_text(policy.get("retry")) or "not stated")),
+        ("intended at", c.code(_text(src.get("intended_at_utc")))), ("next due", c.code(_text(src.get("next_due_utc")))),
+        ("last attempt", c.code(_text(src.get("last_attempt_utc")))), ("receipt", c.code(_text(src.get("receipt_ts_utc")))),
+        ("upstream timestamp", c.code(_text(src.get("upstream_ts_utc")))),
+        ("upstream age at evaluation", c.txt(pr.duration_text(src.get("upstream_age_s")), reason="not recorded")),
+        ("evaluated at", c.code(_text(src.get("as_of_utc")))), ("carried from", c.code(carried)),
+        ("recent misses", c.ul(_texts(src.get("recent_misses")), empty="none")),
+        ("disagreements", c.ul(disagreements, empty="none")), ("notes", c.ul(_texts(src.get("notes")), empty="none")),
+        ("details", esc(_scrub(c._json_text(details))) if details else c.na("none recorded")),
+    ]))
+    sub = f"{_text(src.get('domain')) or 'domain not recorded'} · {pr.mode_label(src.get('mode'))}"
+    if src.get("mode") == "EXTERNAL_SCHEDULE":
+        sub += f" · run by {_text(src.get('schedule_owner')) or 'an owner not recorded'}"
+    return c.row(esc(_text(src.get("source_id")) or "unnamed source"), sub=sub,
+                 aside=_trusted_badge(fresh_code, pr.state_word(fresh_code), trusted),
+                 body=c.facts(facts, wide=True, text_cols=(0, 1, 2, 3, 4, 5, 6)) + detail)
+
+
+def supervisor_state(doc: Any, report: d.FreshnessReport, now: Any) -> str:
+    """The report-level states: stale or undated report, deferred (carried or not), partial or unknown."""
+    sup = doc.get("supervisor") if isinstance(doc.get("supervisor"), dict) else {}
+    out = []
+    generated = _text(doc.get("generated_at_utc"))
+    if report.report_freshness != "FRESH":
+        ago = pr.age_text(generated, now)
+        out.append(c.empty_state(
+            "Freshness report is stale" if report.report_freshness == "STALE" else "Freshness report time unknown",
+            f"Generated {pr.datetime_et(generated) or 'at an unreadable time'}" + (f" ({ago})" if ago else "")
+            + f"; the supervisor runs every 5 minutes and a report older than "
+            f"{pr.duration_text(report.max_age.total_seconds())} is stale. Every source below is as of that time, not "
+            "now, and none is decision-grade.", kind="warn"))
+    state = sup.get("state")
+    if state == "DEFERRED_PROTECTED_WINDOW":
+        deferred = sup.get("deferred") if isinstance(sup.get("deferred"), dict) else {}
+        evaluated = _text(doc.get("sources_evaluated_at_utc"))
+        window = (f"{pr.window_label(deferred.get('window'))} ({pr.datetime_et(deferred.get('from_utc')) or '?'} to "
+                  f"{pr.time_et(deferred.get('to_utc')) or '?'})")
+        text = (f"Inside the {window} the supervisor opens no store. Sources are carried from the "
+                f"{pr.datetime_et(evaluated)} evaluation and re-judged at {pr.datetime_et(generated)} from their receipt "
+                "times; schedule states are as of that evaluation; none is decision-grade."
+                if pr.datetime_et(evaluated) else f"Inside the {window} the supervisor opens no store, and no recent "
+                                                  "evaluation could be carried: every source is unknown until the "
+                                                  "window closes.")
+        out.append(c.empty_state("Supervisor deferred: protected window", text, kind="warn"))
+    elif state is None:
+        out.append(c.empty_state("Supervisor state not recorded", "The report does not say how the supervisor ran; "
+                                 "its sources are shown as recorded.", kind="nd"))
+    elif state != "OK":
+        out.append(c.empty_state(pr.prefixed_word("SUPERVISOR", state).label,
+                                 "; ".join(_texts(sup.get("problems"))) or "a provider reported a problem", kind="warn"))
+    return "".join(out)
+
+
+def _freshness_view(report: d.FreshnessReport, now: Any) -> str:
+    doc = report.doc
+    sources = [s for s in doc.get("sources") or [] if isinstance(s, dict)]
+    policies = {p["source_id"]: p for p in doc.get("policies") or []
+                if isinstance(p, dict) and isinstance(p.get("source_id"), str)}
+    summary = doc.get("summary") if isinstance(doc.get("summary"), dict) else {}
+    sup = doc.get("supervisor") if isinstance(doc.get("supervisor"), dict) else {}
+    out = [supervisor_state(doc, report, now)]
+    if not sources:
+        out.append(c.empty_state("No sources in the report", "The supervisor's report lists no source."))
+        return "".join(out)
+    trusted = report.report_freshness == "FRESH"
+    report_word = "stale" if report.report_freshness == "STALE" else "time unknown"
+    generated = _text(doc.get("generated_at_utc"))
+    fresh_ids = _items(summary, "fresh")
+    total = summary.get("sources") if isinstance(summary.get("sources"), int) else None
+    external = sum(1 for s in sources if s.get("mode") == "EXTERNAL_SCHEDULE")
+    out.append(c.facts([
+        ("Report generated", c.txt(pr.datetime_et(generated), reason="not recorded") + _sub(pr.age_text(generated, now))),
+        ("Sources evaluated", c.txt(pr.datetime_et(doc.get("sources_evaluated_at_utc")), reason="nothing evaluated")),
+        ("Fresh at evaluation", c.num(f"{pr.count(len(fresh_ids))} of {pr.count(total)}"
+                                      if fresh_ids is not None and total is not None else None,
+                                      reason="not recorded in the report")),
+        ("Due now", _count_of(summary, "due_now")), ("Missed", _count_of(summary, "missed")),
+        ("Blocked", _count_of(summary, "blocked")), ("Schedule unknown", _count_of(summary, "unknown")),
+    ], wide=True, text_cols=(0, 1)))
+    if total is not None and total != len(sources):
+        out.append(f'<p class="meta">The report counts {esc(pr.count(total))} sources and lists '
+                   f"{esc(pr.count(len(sources)))}.</p>")
+    out.append(f'<p class="meta">{esc(pr.count(external))} of {esc(pr.count(len(sources)))} sources listed are external '
+               f"schedules the fabric only supervises · network: {esc(_text(sup.get('network')) or 'not recorded')} · "
+               f"controls schedules: {'no' if sup.get('controls_schedules') is False else 'not recorded'}</p>")
+    upcoming = [n for n in _items(summary, "next_due") or [] if isinstance(n, dict)]
+    if upcoming:
+        out.append('<h3 class="eyebrow">Due next (at evaluation)</h3>' + c.ul(
+            f"{pr.datetime_et(n.get('next_due_utc')) or 'time not recorded'} · {_text(n.get('source_id')) or '—'}: "
+            f"{_scrub(_text(n.get('why')) or '—')}" for n in upcoming))
+
+    def rows(items: list) -> str:
+        return '<ul class="rows">' + "".join(fabric_source_row(
+            s, policies.get(s.get("source_id")) if isinstance(s.get("source_id"), str) else None, now,
+            trusted=trusted, report_word=report_word,
+            judged_at=generated if s.get("carried_from_utc") else None) for s in items) + "</ul>"
+    attention = [s for s in sources if needs_attention(s)]
+    out.append('<h3 class="eyebrow">Needs attention</h3>' + (
+        rows(attention) if attention else '<p class="meta">No source is missed, blocked, failing, degraded or '
+                                          "disagreeing with its scheduler.</p>"))
+    domains: dict[str, list] = {}
+    for s in sources:
+        domains.setdefault(_text(s.get("domain")) or "other", []).append(s)
+    every = "".join(f'<h4 class="eyebrow">{esc(domain)}</h4>' + rows(items) for domain, items in domains.items())
+    out.append(c.disclosure(f"Every source by domain ({pr.count(len(sources))})", every, boxed=True))
+    word = pr.prefixed_word("SUPERVISOR", sup.get("state"))
+    word = word if trusted or word.kind != pr.OK_K else pr.StateWord(word.label, pr.ND_K)
+    out.append(c.disclosure("Supervisor details", c.kv([
+        ("schema", c.code(_text(doc.get("schema")))), ("fabric version", c.code(_text(doc.get("fabric_version")))),
+        ("supervisor state", c.state_text(sup.get("state"), label=word.label, kind=word.kind) + " "
+         + c.code(_text(sup.get("state")))), ("code version", c.code(_text(sup.get("code_version")))),
+        ("providers", c.ul(f"{x.get('provider')}: {x.get('state')}" for x in _items(sup, "providers") or []
+                           if isinstance(x, dict))),
+        ("problems", c.ul(_texts(sup.get("problems")), empty="none")),
+        ("disagreements (all sources)", c.num(pr.count(summary.get("disagreements")), reason="not recorded")),
+        ("generated at (UTC)", c.code(generated)),
+        ("sources evaluated at (UTC)", c.code(_text(doc.get("sources_evaluated_at_utc")))),
+    ])))
+    out.append(f'<p class="note">{esc(FRESHNESS_NOTE)}</p>')
+    return "".join(x for x in out if x)
+
+
+def freshness_body(result: d.Loaded, now: Any) -> str:
+    """Every state of the freshness view: populated, stale or undated report (nothing reads as current),
+    deferred (carried or not), partial or unrecorded supervisor state, no sources, not written yet /
+    not configured (source unavailable), read error, foreign schema or a malformed report."""
+    if result.status == d.ERROR:
+        return c.error_state("Source freshness unavailable (read error)",
+                             f"ERROR — {result.message}. This is not a healthy or empty report.")
+    if result.status != d.OK:
+        msg = result.message or "the status directory is not configured"
+        return c.unavailable("Source freshness unavailable", msg[:1].upper() + msg[1:] + ".")
+    try:
+        return _freshness_view(result.value, now)
+    except Exception as exc:  # noqa: BLE001 - a malformed report is an error here, never a failed page
+        return c.error_state("Source freshness unavailable (malformed report)",
+                             f"ERROR — {d.short_error(exc)}. This is not a healthy or empty report.")
+
+
+def freshness_section(ctx: d.Context) -> str:
+    return c.section("Source freshness", freshness_body(ctx.freshness_status, ctx.now),
+                     meta="What is fresh, what is due next, and why · Freshness Fabric", sid="fresh-h")
+
+
 # --------------------------------------------------------------------------- Polymarket US related markets (ADR 0032)
 
 PM_LABEL = "RELATED MARKET — NOT ECONOMICALLY EQUIVALENT"  # polymarket_sports.LABEL (tested equal)
@@ -480,22 +740,26 @@ PM_NOTE = ("A related Polymarket US market shares the league, both teams and the
            "ranked, never compared as cheaper and never executable. A research book capture is evidence of one "
            "moment, not a price to act on. A listing that is partial, stale or not yet read says nothing about "
            "whether a market exists.")
-PM_UNCHECKED = ("NO_SCAN", "FAILED")  # no usable scan: nothing has been looked for
+PM_RESEARCH = "research book captures · not an executable price claim"
+# Only a filtered listing read in full may say "no related market in the listing read"; every other
+# catalog state (partial, stale, failed, none, or one this code does not know) says less.
+PM_LISTED = "FILTER_COMPLETE"
+PM_PARTIAL = ("PARTIAL_CATALOG", "STALE")
+PM_NOT_LOADED = object()  # a market's capture history was not read for this page (never "none planned")
+PM_COVERAGE = {"PARTIAL": "a filtered listing (never the full catalog)", "COMPLETE": "complete",
+               "FAILED": "failed"}
 
 
 def _pm(v: Any, key: str) -> Any:
     return v.get(key) if isinstance(v, dict) else None
 
 
+def _pm_list(v: Any) -> list:
+    return [x for x in v if isinstance(x, dict)] if isinstance(v, list) else []
+
+
 def _pm_word(prefix: str, code: Any) -> pr.StateWord:
-    """The PM_* state word for a code; a code the family does not know is neutral with its own text."""
-    known = pr.STATES.get(f"{prefix}_{code}")
-    if known is not None:
-        return known
-    if code is None:
-        return pr.StateWord("Not recorded", pr.ND_K)
-    text = str(code)
-    return pr.StateWord(text.replace("_", " ").capitalize() if text.isupper() else text, pr.ND_K)
+    return pr.prefixed_word(prefix, code)
 
 
 def _pm_badge(prefix: str, code: Any) -> str:
@@ -503,41 +767,54 @@ def _pm_badge(prefix: str, code: Any) -> str:
     return c.badge(code, label=word.label, kind=word.kind)
 
 
+def _pm_state(prefix: str, code: Any, label: str | None = None) -> str:
+    word = _pm_word(prefix, code)
+    return c.state_text(f"{prefix}_{code}", label=label or word.label, kind=word.kind)
+
+
 def pm_event_state(event: Any, catalog_state: Any) -> tuple[str, pr.StateWord]:
-    """The event's relationship state as shown: no related market reads as "not checked" when there is
-    no usable scan, and says the listing is partial or stale otherwise (absence is never evidence)."""
+    """The event's relationship state as shown. "No related market in the listing read" only under a
+    filtered listing read in full; partial or stale says so; anything else reads "not checked"."""
     state = _pm(event, "state")
-    if state == "NO_RELATED_MARKET":
-        if catalog_state in PM_UNCHECKED:
-            return "PM_EVENT_NOT_CHECKED", _pm_word("PM_EVENT", "NOT_CHECKED")
-        if catalog_state in ("PARTIAL_CATALOG", "STALE"):
+    if state == "NO_RELATED_MARKET" and catalog_state != PM_LISTED:
+        if catalog_state in PM_PARTIAL:
             return "PM_EVENT_NONE_IN_PARTIAL", _pm_word("PM_EVENT", "NONE_IN_PARTIAL")
+        return "PM_EVENT_NOT_CHECKED", _pm_word("PM_EVENT", "NOT_CHECKED")
     return str(state), _pm_word("PM_EVENT", state)
+
+
+def _pm_fresh(value: Any) -> str:
+    """Freshness of one research capture at its receipt (within its target window). Never green."""
+    fresh = pr.freshness_code(value)
+    return c.state_text(fresh, label=f"{pr.state_word(fresh).label} at capture",
+                        kind=pr.INFO_K if fresh == "FRESH" else pr.state_word(fresh).kind)
 
 
 def _pm_capture(cap: Any, source: str, now: Any) -> str:
     if not isinstance(cap, dict):
         return c.na("no research book captured yet")
-    fresh = pr.freshness_code(cap.get("freshness"))
     bid, ask = pr.cents(cap.get("yes_bid")), pr.cents(cap.get("yes_ask"))
+    received = cap.get("received_at_utc")
+    ago = pr.age_text(received, now)
     return (c.num(f"YES bid {bid or '—'}") + " · " + c.num(f"YES ask {ask or '—'}")
             + _sub(f"sizes {pr.quantity(cap.get('yes_bid_size')) or '—'} / {pr.quantity(cap.get('yes_ask_size')) or '—'} "
                    "contracts")
-            + _sub(f"received {pr.datetime_et(cap.get('received_at_utc')) or 'at an unrecorded time'}"
-                   + (f" ({pr.age_text(cap.get('received_at_utc'), now)})" if pr.age_text(cap.get('received_at_utc'), now)
-                      else "") + " · research capture, not current")
-            # Timing quality of one research capture, never a signal about the price: not green.
-            + c.state_text(fresh, label=f"{pr.state_word(fresh).label} at capture (its target window)",
-                           kind=pr.INFO_K if fresh == "FRESH" else pr.state_word(fresh).kind)
+            + _sub(f"received {pr.datetime_et(received) or 'at an unrecorded time'}" + (f" ({ago})" if ago else "")
+                   + " · research capture, not current")
+            + _pm_fresh(cap.get("freshness")) + _sub("within its target window")
             + _sub(f"{_pm(cap, 'label') or 'research book capture'} · {source}"))
 
 
 def _pm_targets(history: Any) -> str:
-    if not isinstance(history, list) or not history:
+    if history is PM_NOT_LOADED:
+        return c.state_text("UNKNOWN", label="Not loaded on this page", kind=pr.ND_K) + _sub(
+            "capture history is read only for the events shown with the Odds targets")
+    if not isinstance(history, list):
+        return c.state_text("UNKNOWN", label="Capture history unreadable", kind=pr.WARN_K)
+    if not history:
         return c.na("no capture target planned for this market")
-    return " ".join(c.state_text(f"PM_TARGET_{t.get('state')}", label=f"{t.get('offset')} "
-                                 f"{_pm_word('PM_TARGET', t.get('state')).label}",
-                                 kind=_pm_word("PM_TARGET", t.get("state")).kind)
+    return " ".join(_pm_state("PM_TARGET", t.get("display_state") or t.get("state"),
+                              f"{t.get('offset')} {_pm_word('PM_TARGET', t.get('display_state') or t.get('state')).label}")
                     for t in history if isinstance(t, dict))
 
 
@@ -546,61 +823,69 @@ def pm_market_block(m: Any, source: str, history: Any, now: Any) -> str:
     research book capture with attribution, the capture targets' states; nothing is ranked or priced
     against a sportsbook."""
     checks = _pm(m, "checks") if isinstance(_pm(m, "checks"), dict) else {}
-    rows = [[esc(name.replace("_", " ")), _pm_badge("PM_CHECK", _pm(v, "state")), esc(_pm(v, "detail") or "—")]
+    rows = [[esc(str(name).replace("_", " ")), _pm_badge("PM_CHECK", _pm(v, "state")), esc(_pm(v, "detail") or "—")]
             for name, v in checks.items()]
-    attempts = [a for t in history or [] if isinstance(t, dict) for a in t.get("attempts") or [] if isinstance(a, dict)]
+    attempts = [a for t in (history if isinstance(history, list) else []) if isinstance(t, dict)
+                for a in _pm_list(t.get("attempts"))]
+    reasons = _pm(m, "reasons")
     body = c.facts([
         ("Relationship", _pm_badge("PM_EVENT", _pm(m, "relationship")) + _sub("; ".join(
-            str(r) for r in _pm(m, "reasons") or [] if isinstance(r, str)) or None)),
+            str(r) for r in (reasons if isinstance(reasons, list) else []) if isinstance(r, str)) or None)),
         ("Latest research book", _pm_capture(_pm(m, "latest_capture"), source, now)),
         ("Capture targets", _pm_targets(history)),
         ("Sides (as listed)", esc(f"long {_pm(m, 'long_side') or '—'} · short {_pm(m, 'short_side') or '—'}")),
     ], wide=True, text_cols=(0, 1, 2, 3))
+    flags = _pm(m, "flags")
+    attempts_html = (f'<p class="meta">{esc(source)} · {esc(PM_RESEARCH)}</p>' + c.table(
+        ["target", "status", "received", "YES bid", "YES ask", "freshness at capture", "reason"],
+        [[c.code(a.get("target_id")), _pm_state("PM_TARGET", a.get("status")),
+          esc(pr.datetime_et(a.get("received_at_utc")) or "—"), c.num(pr.cents(a.get("yes_bid")), reason="none"),
+          c.num(pr.cents(a.get("yes_ask")), reason="none"),
+          _pm_fresh(a.get("freshness")) if a.get("received_at_utc") else c.na("nothing received"),
+          esc(d.scrub_paths(a.get("reason")) or "—")] for a in attempts],
+        wrap=(6,), caption=f"Capture attempts · {source} · {PM_RESEARCH}", empty="no attempt recorded")
+        if history is not PM_NOT_LOADED else '<p class="meta">Capture attempts are not loaded on this page.</p>')
     detail = c.disclosure("Relationship checks, flags and attempts", c.kv([
         ("market", c.code(_pm(m, "market_slug"))), ("title", esc(_pm(m, "title") or "—")),
         ("game start (UTC)", c.code(_pm(m, "game_start_utc"))), ("payoff kind", c.code(_pm(m, "payoff_kind"))),
         ("rules sha256", c.code(_pm(m, "rules_sha256"))),
-        ("flags", c.ul([str(f) for f in _pm(m, "flags") or []], empty="none")),
-        ("equivalent", esc("never (by construction)")),
-        ("source", esc(source)),
-    ]) + c.table(["dimension", "state", "detail"], rows, wrap=(2,), caption="Relationship checks")
-      + c.table(["target", "status", "received", "YES bid", "YES ask", "reason"],
-                [[c.code(a.get("target_id")), c.state_text(f"PM_TARGET_{a.get('status')}",
-                                                            label=_pm_word("PM_TARGET", a.get("status")).label,
-                                                            kind=_pm_word("PM_TARGET", a.get("status")).kind),
-                  esc(pr.datetime_et(a.get("received_at_utc")) or "—"), c.num(pr.cents(a.get("yes_bid")), reason="none"),
-                  c.num(pr.cents(a.get("yes_ask")), reason="none"), esc(d.scrub_paths(a.get("reason")) or "—")]
-                 for a in attempts], wrap=(5,), caption="Capture attempts", empty="no attempt recorded"))
+        ("flags", c.ul([str(f) for f in (flags if isinstance(flags, list) else [])], empty="none")),
+        ("equivalent", esc("never (by construction)")), ("source", esc(source)),
+    ]) + c.table(["dimension", "state", "detail"], rows, wrap=(2,), caption="Relationship checks") + attempts_html)
     title = esc(_pm(m, "title") or _pm(m, "market_slug") or "Polymarket US market")
     return f'<h4 class="eyebrow">{title}</h4>' + body + detail
 
 
-def pm_event_row(event: Any, catalog_state: Any, source: str, histories: Any, now: Any) -> str:
-    code, word = pm_event_state(event, catalog_state)
-    markets = [m for m in _pm(event, "markets") or [] if isinstance(m, dict)]
-    body = "".join(pm_market_block(m, source, (histories or {}).get(_pm(m, "market_slug")), now) for m in markets)
-    if not markets:
-        body = f'<p class="row-sub">{esc(PM_EVENT_EMPTY.get(code, "No related market in the listing read."))}</p>'
-    sub = f"kickoff {pr.datetime_et(_pm(event, 'commence_utc')) or 'not recorded'} · Odds API event {_pm(event, 'odds_event_id')}"
-    # The aside capsule never wraps, so it carries a short word; the full label leads the row body.
-    lead = f'<p class="eyebrow">{esc(word.label)}</p>'
-    return c.row(esc(pr.odds_event_label(_pm(event, "away_team"), _pm(event, "home_team"), _pm(event, "odds_event_id"))),
-                 sub=sub, aside=c.badge(code, label=PM_SHORT.get(code, word.label), kind=word.kind),
-                 body=f"<div>{lead}{body}</div>")
-
-
 PM_SHORT = {"RELATED_NOT_EQUIVALENT": "Related", "AMBIGUOUS": "Ambiguous", "NO_RELATED_MARKET": "None seen",
             "PM_EVENT_NONE_IN_PARTIAL": "None seen", "PM_EVENT_NOT_CHECKED": "Not checked"}
-
-
 PM_EVENT_EMPTY = {
-    "PM_EVENT_NOT_CHECKED": "Not looked for yet: no usable Polymarket US scan exists. This says nothing about whether "
-                            "a market exists.",
+    "PM_EVENT_NOT_CHECKED": "Not looked for: no usable, complete Polymarket US listing exists. This says nothing about "
+                            "whether a market exists.",
     "PM_EVENT_NONE_IN_PARTIAL": "None in the listing read, but that listing is partial or stale: absence is not "
                                 "evidence.",
     "NO_RELATED_MARKET": "None in the filtered NFL moneyline listing read (a filtered listing, never the full catalog: "
                          "absence is not evidence).",
 }
+
+
+def pm_event_row(event: Any, catalog_state: Any, source: str, histories: Any, now: Any) -> str:
+    code, word = pm_event_state(event, catalog_state)
+    markets = _pm_list(_pm(event, "markets"))
+
+    def history(m: Any) -> Any:
+        if not isinstance(histories, dict) or _pm(m, "market_slug") not in histories:
+            return PM_NOT_LOADED
+        return histories[_pm(m, "market_slug")]
+    body = "".join(pm_market_block(m, source, history(m), now) for m in markets)
+    if not markets:
+        body = f'<p class="row-sub">{esc(PM_EVENT_EMPTY.get(code, "No related market is recorded for this event."))}</p>'
+    sub = (f"kickoff {pr.datetime_et(_pm(event, 'commence_utc')) or 'not recorded'} · Odds API event "
+           f"{_pm(event, 'odds_event_id')}")
+    # The aside capsule never wraps, so it carries a short word; the full label leads the row body.
+    lead = f'<p class="eyebrow">{esc(word.label)}</p>'
+    return c.row(esc(pr.odds_event_label(_pm(event, "away_team"), _pm(event, "home_team"), _pm(event, "odds_event_id"))),
+                 sub=sub, aside=c.badge(code, label=PM_SHORT.get(code, word.label), kind=word.kind),
+                 body=f"<div>{lead}{body}</div>")
 
 
 def _pm_header(view: Any, now: Any) -> str:
@@ -624,62 +909,92 @@ def _pm_header(view: Any, now: Any) -> str:
                                                          "below are as of that scan.")}
     if cstate in notes:
         out.append(c.empty_state(notes[cstate][0], notes[cstate][1], kind="warn" if cstate != "NO_SCAN" else "nd"))
+    elif cstate != PM_LISTED:
+        out.append(c.empty_state("Polymarket US listing state not recognised",
+                                 f"The pilot reports {cstate!r}; no event below reads as having no market.", kind="warn"))
+    last, usable = _pm(catalog, "last_attempt_utc"), _pm(catalog, "usable_scan_utc")
+    if isinstance(last, str) and isinstance(usable, str) and last != usable:
+        out.append(c.empty_state("The latest scan attempt was not usable",
+                                 f"The attempt at {pr.datetime_et(last) or last} did not produce a usable listing; the "
+                                 f"listing from {pr.datetime_et(usable) or usable} is still used.", kind="warn"))
+    coverage = _pm(catalog, "last_attempt_coverage")
+    coverage_text = PM_COVERAGE.get(coverage, coverage) if isinstance(coverage, str) else None
     out.append(c.facts([
         ("Access", _pm_badge("PM_ACCESS", access) + _sub(f"decision: {_pm(status, 'access_decision')}"
                                                          if _pm(status, "access_decision") else None)),
         ("Catalog", _pm_badge("PM_CATALOG", cstate)
-         + _sub(f"{pr.count(_pm(catalog, 'markets'))} markets · scan {pr.datetime_et(_pm(catalog, 'usable_scan_utc'))}"
-                if _pm(catalog, "usable_scan_utc") else _pm(catalog, "detail"))
+         + _sub(f"{pr.count(_pm(catalog, 'markets'))} markets · scan {pr.datetime_et(usable)}"
+                if isinstance(usable, str) else _pm(catalog, "detail"))
          + _sub(_pm(catalog, "coverage_note") if isinstance(_pm(catalog, "coverage_note"), str) else None)),
-        ("Last scan attempt", c.txt(pr.datetime_et(_pm(catalog, "last_attempt_utc")), reason="none")
-         + _sub(" · ".join(str(x) for x in (_pm(catalog, "last_attempt_coverage"), _pm(catalog, "last_attempt_detail"))
-                           if isinstance(x, str) and x) or None)),
+        ("Last scan attempt", c.txt(pr.datetime_et(last), reason="none")
+         + _sub(" · ".join(x for x in (f"coverage: {coverage_text}" if coverage_text else None,
+                                        _pm(catalog, "last_attempt_detail")) if isinstance(x, str) and x) or None)),
         ("Next discovery", c.txt(pr.datetime_et(_pm(status, "discovery_next_due_utc")), reason="not scheduled")),
     ], wide=True, text_cols=(0, 1, 2, 3)))
     return "".join(out)
 
 
+def pm_shown_events(events: Any, event_ids: Any = ()) -> list[str]:
+    """The events shown as rows: those of the Odds target rows shown, else the soonest; bounded."""
+    if not isinstance(events, dict):
+        return []
+    wanted = [e for e in event_ids if e in events][:d.PM_EVENTS_SHOWN]
+    return wanted or sorted(events, key=lambda k: str(_pm(events[k], "commence_utc")))[:d.PM_EVENTS_SHOWN]
+
+
+def _pm_view(view: Any, now: Any, event_ids: Any, histories: Any) -> str:
+    related = _pm(view, "related") if isinstance(_pm(view, "related"), dict) else {}
+    source = str(_pm(view, "source") or _pm(related, "source") or "source not recorded")
+    catalog_state = _pm(_pm(_pm(view, "status"), "catalog"), "state")
+    events = _pm(related, "events")
+    if events is not None and not isinstance(events, dict):
+        raise TypeError("the related events are not a mapping")
+    events = {k: v for k, v in (events or {}).items() if isinstance(v, dict)}
+    out = [f'<p class="eyebrow">{esc(_pm(view, "label") or PM_LABEL)}</p>', _pm_header(view, now)]
+    if not events:
+        out.append(c.empty_state("No Odds API NFL schedule stored", "Relationships are made per Odds API event; no "
+                                 "stored schedule was found."))
+    else:
+        out.append('<ul class="rows">' + "".join(pm_event_row(events[e], catalog_state, source, histories, now)
+                                                 for e in pm_shown_events(events, event_ids)) + "</ul>")
+
+        def captures(e: Any) -> list:
+            return [m for m in _pm_list(_pm(e, "markets")) if isinstance(_pm(m, "latest_capture"), dict)]
+        table = c.table(["event", "kickoff", "state", "market", "latest YES bid · ask (research)", "received",
+                         "freshness at capture"], [
+            [esc(pr.odds_event_label(_pm(e, "away_team"), _pm(e, "home_team"), _pm(e, "odds_event_id"))),
+             esc(pr.datetime_et(_pm(e, "commence_utc")) or "—"),
+             c.state_text(pm_event_state(e, catalog_state)[0], label=pm_event_state(e, catalog_state)[1].label,
+                          kind=pm_event_state(e, catalog_state)[1].kind),
+             c.ul([str(_pm(m, "market_slug")) for m in _pm_list(_pm(e, "markets"))], empty="—"),
+             esc(" / ".join(f"{pr.cents(_pm(_pm(m, 'latest_capture'), 'yes_bid')) or '—'} · "
+                            f"{pr.cents(_pm(_pm(m, 'latest_capture'), 'yes_ask')) or '—'}" for m in captures(e)) or "—"),
+             esc(" / ".join(pr.datetime_et(_pm(_pm(m, "latest_capture"), "received_at_utc")) or "—"
+                            for m in captures(e)) or "—"),
+             " ".join(_pm_fresh(_pm(_pm(m, "latest_capture"), "freshness")) for m in captures(e)) or c.na("no capture")]
+            for e in sorted(events.values(), key=lambda e: str(_pm(e, "commence_utc")))], wrap=(0, 3),
+            caption=f"Polymarket US relationships per Odds API event · {source} · {PM_RESEARCH}")
+        out.append(c.disclosure(f"All Odds API events ({pr.count(len(events))})",
+                                f'<p class="meta">{esc(source)} · {esc(PM_RESEARCH)}</p>' + table, boxed=True))
+    out.append(f'<p class="note">{esc(PM_NOTE)} Source: {esc(source)}.</p>')
+    return "".join(x for x in out if x)
+
+
 def pm_related_body(result: d.Loaded, now: Any, event_ids: Any = (), histories: Any = None) -> str:
-    """Every state: populated (related, ambiguous, none), no scan, partial or stale catalog, gate blocked,
-    capture captured / missed / failed / not executable, error, source unavailable."""
+    """Every state: populated (related, ambiguous, none), no scan, partial, stale or unrecognised catalog,
+    gate blocked, capture captured / missed / failed / overdue / not executable, history not loaded,
+    error (including a malformed view), source unavailable."""
     if result.status == d.ERROR:
         return c.error_state("Polymarket US related markets unavailable (read error)",
                              f"ERROR — {result.message}. This is not an empty listing.")
     if result.status != d.OK:
         return c.unavailable("Polymarket US related markets unavailable", result.message[:1].upper()
                              + result.message[1:] + ".")
-    view = result.value
-    related = _pm(view, "related") if isinstance(_pm(view, "related"), dict) else {}
-    source = str(_pm(view, "source") or _pm(related, "source") or "source not recorded")
-    catalog_state = _pm(_pm(_pm(view, "status"), "catalog"), "state")
-    events = _pm(related, "events") if isinstance(_pm(related, "events"), dict) else {}
-    out = [f'<p class="eyebrow">{esc(_pm(view, "label") or PM_LABEL)}</p>', _pm_header(view, now)]
-    if not events:
-        out.append(c.empty_state("No Odds API NFL schedule stored", "Relationships are made per Odds API event; no "
-                                 "stored schedule was found."))
-    else:
-        wanted = [e for e in event_ids if e in events][:d.PM_EVENTS_SHOWN] or sorted(
-            events, key=lambda k: str(_pm(events[k], "commence_utc")))[:d.PM_EVENTS_SHOWN]
-        out.append('<ul class="rows">' + "".join(pm_event_row(events[e], catalog_state, source, histories, now)
-                                                 for e in wanted) + "</ul>")
-        table = c.table(["event", "kickoff", "state", "market", "latest YES bid · ask", "received"], [
-            [esc(pr.odds_event_label(_pm(e, "away_team"), _pm(e, "home_team"), _pm(e, "odds_event_id"))),
-             esc(pr.datetime_et(_pm(e, "commence_utc")) or "—"),
-             c.state_text(pm_event_state(e, catalog_state)[0], label=pm_event_state(e, catalog_state)[1].label,
-                          kind=pm_event_state(e, catalog_state)[1].kind),
-             c.ul([str(_pm(m, "market_slug")) for m in _pm(e, "markets") or [] if isinstance(m, dict)], empty="—"),
-             esc(" / ".join(f"{pr.cents(_pm(_pm(m, 'latest_capture'), 'yes_bid')) or '—'} · "
-                            f"{pr.cents(_pm(_pm(m, 'latest_capture'), 'yes_ask')) or '—'}"
-                            for m in _pm(e, "markets") or [] if isinstance(m, dict) and _pm(m, "latest_capture"))
-                 or "—"),
-             esc(" / ".join(pr.datetime_et(_pm(_pm(m, "latest_capture"), "received_at_utc")) or "—"
-                            for m in _pm(e, "markets") or [] if isinstance(m, dict) and _pm(m, "latest_capture"))
-                 or "—")]
-            for e in sorted(events.values(), key=lambda e: str(_pm(e, "commence_utc")))], wrap=(0, 3),
-            caption="Polymarket US relationships per Odds API event")
-        out.append(c.disclosure(f"All Odds API events ({pr.count(len(events))})", table, boxed=True))
-    out.append(f'<p class="note">{esc(PM_NOTE)} Source: {esc(source)}.</p>')
-    return "".join(x for x in out if x)
+    try:
+        return _pm_view(result.value, now, event_ids, histories)
+    except Exception as exc:  # noqa: BLE001 - a malformed view is an error here, never a failed page
+        return c.error_state("Polymarket US related markets unavailable (malformed view)",
+                             f"ERROR — {d.short_error(exc)}. This is not an empty listing.")
 
 
 def pm_event_states(result: d.Loaded) -> dict[str, tuple[str, pr.StateWord]] | None:
@@ -688,11 +1003,14 @@ def pm_event_states(result: d.Loaded) -> dict[str, tuple[str, pr.StateWord]] | N
         return None
     events = _pm(_pm(result.value, "related"), "events")
     catalog_state = _pm(_pm(_pm(result.value, "status"), "catalog"), "state")
-    return {k: pm_event_state(e, catalog_state) for k, e in events.items()} if isinstance(events, dict) else None
+    if not isinstance(events, dict):
+        return None
+    return {k: pm_event_state(e, catalog_state) for k, e in events.items() if isinstance(e, dict)}
 
 
 def pm_related_section(ctx: d.Context) -> str:
-    """After the Odds capture targets: the events of the rows shown there first, then the rest."""
+    """After the Odds capture targets: the events of the rows shown there first, else the soonest; the
+    capture history is read for exactly the events rendered (bounded)."""
     result = ctx.pm_sports
     ids: list[str] = []
     if ctx.odds_targets.status == d.OK:
@@ -701,19 +1019,18 @@ def pm_related_section(ctx: d.Context) -> str:
                 ids.append(t.event_id)
     histories = None
     if result.status == d.OK:
-        events = _pm(_pm(result.value, "related"), "events") or {}
-        shown = [e for e in ids if e in events][:d.PM_EVENTS_SHOWN]
-        slugs = sorted({_pm(m, "market_slug") for e in shown for m in _pm(events[e], "markets") or []
+        events = _pm(_pm(result.value, "related"), "events")
+        shown = pm_shown_events(events, ids)
+        slugs = sorted({_pm(m, "market_slug") for e in shown for m in _pm_list(_pm(events[e], "markets"))
                         if isinstance(_pm(m, "market_slug"), str)})
         loaded = d.pm_market_history(ctx, slugs)
         histories = loaded.value if loaded.status == d.OK else None
     return c.section("Polymarket US related markets", pm_related_body(result, ctx.now, ids, histories),
-                     meta="NFL moneyline · research only · never ranked",
-                     sid="pm-h")
+                     meta="NFL moneyline · research only · never ranked", sid="pm-h")
 
 
 def sources_tab(ctx: d.Context) -> str:
-    out = []
+    out = [freshness_section(ctx)]
     rows = []
     for v in venues.VENUES.values():
         quote = v.stage(venues.Capability.QUOTE_READ).value

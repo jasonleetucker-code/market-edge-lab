@@ -419,6 +419,75 @@ def synthetic_consensus() -> dict[str, Any]:
     }
 
 
+# SYNTHETIC Freshness Fabric reports, all built by the real supervisor (`freshness_fabric.build_status`
+# / `deferred_status`): the registered providers over an empty context (every source UNKNOWN, nothing
+# configured) plus ONE SYNTHETIC provider through the real contract types, so its fresh receipt, miss
+# and disagreement are counted by the fabric's own summary.
+FRESHNESS_NOW = "2026-09-24T21:00:00+00:00"
+
+
+def _synthetic_provider() -> Any:
+    from ..freshness import (AcquisitionMode, FabricProvider, Freshness, ScheduleState, SourceFreshness, SourceHealth,
+                             SourcePolicy)
+
+    policy = SourcePolicy(
+        source_id="synthetic.demo_source", domain="SYNTHETIC", mode=AcquisitionMode.EXTERNAL_SCHEDULE,
+        description="SYNTHETIC source for the gallery: a fresh receipt, one missed run and one disagreement",
+        policy_version="SYNTHETIC", schedule_owner="SYNTHETIC demo timer every 5 min",
+        underlying_mode=AcquisitionMode.POLL, max_useful_age=timedelta(minutes=10))
+
+    def provide(ctx: Any, now: Any) -> list:
+        receipt = now - timedelta(minutes=5)
+        return [SourceFreshness(
+            policy=policy, as_of=now, freshness=Freshness.FRESH, schedule_state=ScheduleState.MISSED,
+            health=SourceHealth.OK, why_due="SYNTHETIC: the 20:50 run was missed; the next is due at 21:05",
+            next_due=now + timedelta(minutes=5), last_attempt=receipt, last_success_receipt=receipt,
+            receipt_ts=receipt, missed_count=1, recent_misses=("SYNTHETIC: 2026-09-24T20:50:00Z",),
+            usable_for_research=True, usable_for_decision=True,
+            disagreements=("SYNTHETIC: the timer tick falls outside the window the gate accepts",),
+            details={"missed_scope": "SYNTHETIC: the latest tick only"})]
+    return FabricProvider("synthetic_demo", (policy,), provide)
+
+
+def synthetic_freshness() -> dict[str, Any]:
+    """name -> a `data.Loaded` of `data.freshness_report`: populated, stale report, partial, deferred
+    carried, deferred with nothing carried, not written, read error."""
+    import tempfile
+    from datetime import datetime, timezone
+    from pathlib import Path
+
+    from .. import freshness_fabric as ff
+    from ..freshness import FabricContext
+    from . import data as d
+
+    now = datetime(2026, 9, 24, 21, 0, tzinfo=timezone.utc)
+    registry = (*ff.REGISTRY, _synthetic_provider())
+    doc = ff.build_status(FabricContext(), now, registry)
+    old = ff.build_status(FabricContext(), now - timedelta(hours=2), registry)  # generated two hours ago
+
+    def boom(ctx: Any, at: Any) -> list:
+        raise RuntimeError("SYNTHETIC provider failure")
+    broken = (*ff.REGISTRY[:-1], ff.FabricProvider(ff.REGISTRY[-1].name, ff.REGISTRY[-1].policies, boom))
+    partial = ff.build_status(FabricContext(), now, broken)
+    guard = ff.close_guard_at(datetime(2026, 9, 25, 4, 58, tzinfo=timezone.utc))
+    at_guard = guard[1] + timedelta(minutes=2)
+    empty_deferred = ff.deferred_status(FabricContext(), at_guard, guard, registry)
+    with tempfile.TemporaryDirectory(prefix="edge-ui-fabric-") as tmp:  # the supervisor's own carry path
+        ctx = FabricContext(status_dir=Path(tmp))
+        ff.write_status(ff.render(ff.build_status(ctx, guard[1] - timedelta(minutes=4), registry)), Path(tmp))
+        carried = ff.deferred_status(ctx, at_guard, guard, registry)
+    return {
+        "populated": d.Loaded(d.OK, d.report_from_doc(doc, now)),
+        "stale": d.Loaded(d.OK, d.report_from_doc(old, now)),
+        "partial": d.Loaded(d.OK, d.report_from_doc(partial, now)),
+        "deferred_carried": d.Loaded(d.OK, d.report_from_doc(carried, at_guard)),
+        "deferred_empty": d.Loaded(d.OK, d.report_from_doc(empty_deferred, at_guard)),
+        "missing": d.Loaded(d.NO_DATA, message="The Freshness Fabric supervisor (edgelab-freshness.timer) has not "
+                                               "written freshness.json to the status directory yet"),
+        "error": d.Loaded(d.ERROR, message="freshness.json has schema 'something-else/9', not freshness-fabric-status/1"),
+    }
+
+
 # SYNTHETIC Polymarket US views in `polymarket_sports.terminal_view`'s shape (pm-sports-status/1). Every
 # relationship, reason and check is the real `polymarket_sports.relate` over SYNTHETIC markets and events.
 PM_NOW = "2026-09-24T21:00:00+00:00"
@@ -486,7 +555,7 @@ def synthetic_pm_views() -> dict[str, Any]:
         {"target_id": "nfl:demo-nfl-1:T-6h", "offset": "T-6h", "state": "CAPTURED",
          "attempts": [{"target_id": "nfl:demo-nfl-1:T-6h", "status": "FAILED", "reason": "SYNTHETIC: BOOK_FAILED: HTTP 503"},
                       {"target_id": "nfl:demo-nfl-1:T-6h", "status": "CAPTURED", **capture}]},
-        {"target_id": "nfl:demo-nfl-1:T-60m", "offset": "T-60m", "state": None, "attempts": []}]}
+        {"target_id": "nfl:demo-nfl-1:T-60m", "offset": "T-60m", "state": "PLANNED", "attempts": []}]}
     ok = d.OK
     return {
         "populated": (d.Loaded(ok, view(catalog("FILTER_COMPLETE"))), history),

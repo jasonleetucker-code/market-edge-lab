@@ -226,7 +226,16 @@ rule; withdrawal **Not enabled**; policy details disclosure.
 **Research & Data `/experiments`** — tabs Research | Data sources. Research: title, ID,
 research stage, historical result, forward valid days, next preregistered look, progress
 labelled "Observations toward the next scheduled evaluation", limitations, details. Data
-sources: The Odds API pilot card (`odds_pilot.dashboard_status`: "The Odds API — SETUP NEEDED" and
+sources: first the Source freshness section (the Freshness Fabric supervisor's `freshness.json`,
+schema `freshness-fabric-status/1`, read as written: what is fresh, what is due next and why; the sources needing attention
+(missed, blocked, failing or degraded, disagreeing) as rows and every source by domain in a disclosure; every
+source's acquisition mode with EXTERNAL_SCHEDULE shown as "supervised only · run by <schedule owner>";
+freshness, schedule state, health, next due, last successful receipt, research/decision usability, why,
+misses and disagreements; the report's own age judged by `generated_at_utc`; a protected-window deferral
+names the window (the Kalshi close-tick guard included) and the carried evaluation
+(`sources_evaluated_at_utc`, `carried_from_utc`); states: populated, stale report, partial, deferred with
+or without a carried evaluation, not written / not configured, read error or foreign schema), then The
+Odds API pilot card (`odds_pilot.dashboard_status`: "The Odds API — SETUP NEEDED" and
 so on; active only with a stored live read that held offers, never "connected"; offered odds are
 research only, never executable), then the Odds capture targets section (`data.odds_capture_targets`
 over the stored `odds_capture_targets` / `odds_capture_transitions` rows): a summary (targets, captured,
@@ -418,6 +427,24 @@ directive), and the screenshots that justify it.
   single-book lines; a later capture whose response lacked the game) and `/gallery` at 360x800 and
   1440x900, 720x450 and 180x400 as 200% zoom (`tests/browser/capture.py`), reviewed locally by the
   author and described in the PR (not attached).
+- **2026-09-24 — Source freshness on Data sources.** Approved by the owner directive of 2026-09-24
+  evening ("Terminal v1": a freshness/source view that makes clear where the fabric only supervises an
+  external timer; contract C4) and the coordinator's phase-2 assignment after Lane A's #81 merged. §8
+  Research & Data: Data sources opens with "Source freshness", read from the supervisor's artifact (no
+  new navigation, no provider is run by the dashboard). Composed in `views/research.py`
+  (`freshness_section`, `freshness_body`, `fabric_source_row`) from the existing section, facts, row,
+  badge, state-text, empty/error/unavailable, disclosure, kv and list components; no new component,
+  token or CSS. New namespaced state words (SCHEDULE_*, HEALTH_*, SUPERVISOR_*) and presentation helpers
+  `prefixed_word`, `mode_label`, `window_label`, `duration_text` (formatting of the artifact's seconds).
+  After the independent review of #91: a stale or undated report fails closed (no positive verdict is
+  green, usability reads "Not decision-grade: report stale / time unknown"); verdicts are labelled "at
+  evaluation, <time>"; one freshness-to-state mapping (`freshness_code`, shared with the consensus view);
+  an unknown namespaced code is neutral; malformed JSON values render unknown or an error state, never a
+  failed page; free text is scrubbed by the fabric's own rule; the artifact is read within the
+  supervisor's 256 KiB bound.
+  Screenshots: fixture states `freshness` and `freshness_deferred` and `/gallery` at 360x800, 1440x900,
+  720x450 and 180x400 (200% zoom) (`tests/browser/capture.py`), reviewed locally by the author and
+  described in the PR (not attached).
 - **2026-09-24 — Polymarket US related markets.** Approved by the owner directive of 2026-09-24 evening
   ("Terminal v1": a related Polymarket US market labelled "RELATED MARKET — NOT ECONOMICALLY
   EQUIVALENT" and never ranked as cheaper; contract C4) and the coordinator's phase-4 assignment after
@@ -426,7 +453,13 @@ directive), and the screenshots that justify it.
   `views/research.py` (`pm_related_section`, `pm_related_body`, `pm_event_row`, `pm_market_block`) from
   the existing section, facts, row, badge, state-text, empty/blocked/error/unavailable, disclosure, kv
   and table components; no new component, token or CSS. New namespaced state words (PM_EVENT_*,
-  PM_CATALOG_*, PM_ACCESS_*, PM_CHECK_*, PM_TARGET_*), none green. Screenshots: fixture states
+  PM_CATALOG_*, PM_ACCESS_*, PM_CHECK_*, PM_TARGET_*), none green. After the independent review of #94:
+  only a filtered listing read in full may say "no related market in the listing read" (any other or
+  unknown catalog state reads "not checked" or "partial or stale"); capture history is read for exactly
+  the events rendered, and one that was not read says so (never "no capture target planned"); an open
+  target past its deadline reads "Overdue · not captured" (the pilot's own rule); every Polymarket table
+  carries the attribution, the research label and freshness at capture; a malformed view is an error
+  state; an unusable latest scan attempt beside an older usable listing is said. Screenshots: fixture states
   `polymarket` and `polymarket_issues` (the recorded gateway bytes replayed through the pilot's own
   entry points) and `/gallery` at 360x800, 1440x900, 720x450 and 180x400 (200% zoom)
   (`tests/browser/capture.py`), reviewed locally by the author and described in the PR (not attached).

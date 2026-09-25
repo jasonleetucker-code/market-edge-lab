@@ -75,7 +75,7 @@ def test_the_related_market_its_capture_and_attribution(pm):
     for needle in ("RELATED MARKET — NOT ECONOMICALLY EQUIVALENT", "Atlanta Falcons @ Green Bay Packers",
                    "same league, both teams and kickoff; contract terms not proven equal",
                    "YES bid 30.5¢ · YES ask 31¢", "received Sep 24, 2:15 PM EDT", "research capture, not current",
-                   "Fresh at capture (its target window)", "RESEARCH BOOK CAPTURE — NOT AN EXECUTABLE PRICE CLAIM",
+                   "Fresh at capture within its target window", "RESEARCH BOOK CAPTURE — NOT AN EXECUTABLE PRICE CLAIM",
                    "T-6h Captured", "T-60m Planned", "Allowed by an owner risk decision · not a terms clearance",
                    "Filtered listing read in full · not a full catalog", "payout structure Differs",
                    "equivalent never (by construction)", "absence is not evidence"):
@@ -103,7 +103,8 @@ def test_a_partial_listing_and_a_failed_capture(pm_issues):
     html = section(page(pm_issues))
     text = plain(html)
     for needle in ("Partial Polymarket US listing", "A market missing below may exist",
-                   "Partial listing · absence is not evidence", "T-6h Failed", "BOOK_FAILED"):
+                   "Partial listing · absence is not evidence", "T-6h Overdue · not captured", "Failed",
+                   "BOOK_FAILED"):
         assert needle in text, needle
     assert 'aria-label="no research book captured yet"' in html  # unknown, never a price of 0
 
@@ -200,3 +201,99 @@ def test_gallery_shows_the_polymarket_states():
             assert needle in text, needle
     finally:
         shutil.rmtree(root, ignore_errors=True)
+
+
+def _body(view_key: str, histories=None, ids=("DEMO-NFL-1", "DEMO-NFL-2", "DEMO-NFL-3"), edit=None) -> str:
+    loaded, _ = fixtures.synthetic_pm_views()[view_key]
+    view = loaded.value
+    if edit is not None:
+        view = edit(view)
+    return research.pm_related_body(d.Loaded(d.OK, view), NOW, ids, histories)
+
+
+def test_history_not_loaded_is_its_own_state_never_none_planned():
+    """Review BLOCKER 2: an unread history never reads "no capture target planned"."""
+    html = _body("populated", histories=None)
+    assert "Not loaded on this page" in plain(html)
+    assert 'aria-label="no capture target planned for this market"' not in html
+    assert "Capture attempts are not loaded on this page" in plain(html)
+
+
+def test_history_is_loaded_for_the_events_actually_rendered(pm, monkeypatch):
+    """With the Odds targets unreadable the section falls back to the soonest events and still reads
+    their history (bounded), so ATL@GB shows its T-6h capture."""
+    monkeypatch.setattr(d, "odds_capture_targets", lambda ctx: d.Loaded(d.ERROR, message="boom"))
+    seen = []
+    real = ps.market_history
+    monkeypatch.setattr(ps, "market_history", lambda store, slug: seen.append(slug) or real(store, slug))
+    text = plain(section(page(pm)))
+    assert "T-6h Captured" in text and "Not loaded on this page" not in text
+    assert 0 < len(seen) <= 2 * d.PM_EVENTS_SHOWN
+    monkeypatch.setattr(d, "pm_market_history", lambda ctx, slugs: d.Loaded(d.ERROR, message="store gone"))
+    html = section(page(pm))
+    assert "Not loaded on this page" in plain(html)
+    assert 'aria-label="no capture target planned for this market"' not in html
+
+
+def test_an_open_target_past_its_deadline_is_overdue(pm):
+    """Review SF-1: the pilot's own rule; a planned target after kickoff never still reads "Planned"."""
+    text = plain(section(page(replace(pm, clock=lambda: datetime(2026, 9, 25, 1, 0, tzinfo=timezone.utc)))))
+    assert "T-60m Overdue · not captured" in text and "T-60m Planned" not in text
+    assert "T-6h Captured" in text
+
+
+@pytest.mark.parametrize("catalog,expected", [
+    ("FILTER_COMPLETE", "NO_RELATED_MARKET"), ("PARTIAL_CATALOG", "PM_EVENT_NONE_IN_PARTIAL"),
+    ("STALE", "PM_EVENT_NONE_IN_PARTIAL"), ("NO_SCAN", "PM_EVENT_NOT_CHECKED"), ("FAILED", "PM_EVENT_NOT_CHECKED"),
+    (None, "PM_EVENT_NOT_CHECKED"), ("SOMETHING_NEW", "PM_EVENT_NOT_CHECKED"),
+])
+def test_only_a_complete_listing_can_say_no_related_market(catalog, expected):
+    """Review SF-2."""
+    code, word = research.pm_event_state({"state": "NO_RELATED_MARKET"}, catalog)
+    assert code == expected
+    if expected != "NO_RELATED_MARKET":
+        assert "No related market in the listing read" not in word.label
+
+
+def test_an_unrecognised_catalog_state_is_said():
+    html = _body("populated", edit=lambda v: {**v, "status": {**v["status"], "catalog": {
+        **v["status"]["catalog"], "state": "SOMETHING_NEW"}}})
+    text = plain(html)
+    assert "Polymarket US listing state not recognised" in text and "No related market in the listing read" not in text
+
+
+def test_every_polymarket_table_carries_attribution_label_and_freshness(pm):
+    """Review SF-3: the owner-attested attribution on all Polymarket data, tables included."""
+    html = section(page(pm))
+    for table in re.findall(r"<table.*?</table>", html, re.S):
+        if "YES bid" in table or "YES ask" in table:
+            assert ps.ATTRIBUTION in table and "not an executable price claim" in table
+            assert "freshness at capture" in table
+    everything = html[html.index("All Odds API events"):]
+    assert ps.ATTRIBUTION in plain(everything[:everything.index("<table")])
+    assert "Fresh at capture" in plain(everything)
+
+
+def test_a_malformed_view_is_an_error_state_not_a_failed_page(pm, monkeypatch):
+    monkeypatch.setattr(ps, "terminal_view", lambda db, now: {"state": "FILTER_COMPLETE", "related": {"events": ["x"]}})
+    body = page(pm)  # 200: the rest of the tab renders
+    assert 'aria-labelledby="src-h"' in body
+    html = section(body)
+    assert "Polymarket US related markets unavailable (malformed view)" in plain(html) and 'role="alert"' in html
+    odd = {"state": "FILTER_COMPLETE", "status": {"catalog": "x"},
+           "related": {"events": {"e": {"markets": "x", "state": 3, "odds_event_id": "e"}}}}
+    monkeypatch.setattr(ps, "terminal_view", lambda db, now: odd)
+    text = plain(section(page(pm)))  # odd types inside are shown as unknown, never a failed page
+    assert "Polymarket US listing state not recognised" in text
+
+
+def test_a_failed_latest_attempt_with_an_older_usable_listing_is_said():
+    html = _body("populated", edit=lambda v: {**v, "status": {**v["status"], "catalog": {
+        **v["status"]["catalog"], "last_attempt_utc": "2026-09-24T20:00:00Z"}}})
+    assert "The latest scan attempt was not usable" in plain(html)
+
+
+def test_the_coverage_code_is_translated(pm):
+    text = plain(section(page(pm)))
+    assert "coverage: a filtered listing (never the full catalog)" in text
+

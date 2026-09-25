@@ -30,7 +30,7 @@ never writes to any store, and never recommends a withdrawal.
 |---|---|---|
 | `--db` | evidence SQLite store | `SnapshotStore.open_readonly` (SQLite `mode=ro` + `query_only`); `forward.summary`, `latest_source_health`; The Odds API capture targets (`odds_targets`, `odds_transitions`, captured snapshots parsed by `odds_api.parse_odds`) |
 | `--ledger` | shadow ledger SQLite file | `ShadowLedger.open_readonly`; `accounts`, `entries`, `state` (hash-chain replay) |
-| `--status-dir` | `latest.json` (collector), `shadow_daily.json` (pipeline receipt), `last_failure.json` (production unit failures), `last_verification.json` (deployment verification records) | JSON, fixed names only, 2 MB cap, every field optional |
+| `--status-dir` | `latest.json` (collector), `shadow_daily.json` (pipeline receipt), `freshness.json` (Freshness Fabric supervisor), `last_failure.json` (production unit failures), `last_verification.json` (deployment verification records) | JSON, fixed names only, 2 MB cap, every field optional |
 | `--odds-ledger` | The Odds API quota ledger (default `odds_quota_ledger.json` beside `--db`) and its `<ledger>.pilot.json` runner state | `odds_pilot.dashboard_status`: read without locking or writing, no key, no network |
 | `--experiments-root` | `experiments/` (defaults to this checkout's) | `experiments.validate_all` / `load`; Stage A result JSON; report **file names** only |
 
@@ -139,7 +139,7 @@ disclosures.
 | `/positions` | Portfolio | Balances with basis labels; Open / Settling / Closed / All positions; accounting method; ledger record; settlement evidence from the receipt. |
 | `/outcome-board` | Outcomes | What matters today: outcome groups ranked by account impact, bounds labelled as bounds. |
 | `/risk` | Risk | Capacity verdict, limit rows, capital release windows, starter rule, withdrawal not enabled, policy details. |
-| `/experiments` | Research & Data | Tabs: Research (experiments, forward valid days, next preregistered look) and Data sources (venues, The Odds API card and its capture-target table with the research-benchmark consensus at each capture shown, related Polymarket US markets per event, source health, fees, venue registry, full receipt). |
+| `/experiments` | Research & Data | Tabs: Research (experiments, forward valid days, next preregistered look) and Data sources (source freshness from the Freshness Fabric, venues, The Odds API card and its capture-target table with the research-benchmark consensus at each capture shown, related Polymarket US markets per event, source health, fees, venue registry, full receipt). |
 | `/alerts` | Alerts | Attention items from blockers, failure records and the local notification outbox, grouped by origin (only production needs attention); nothing is sent. |
 | `/more` | More | Links to Risk, Research & Data, Alerts, System & evidence. |
 | `/gallery` | none | Component gallery, demo mode only. |
