@@ -589,3 +589,101 @@ def test_the_dashboard_result_display_is_a_known_unlogged_consumer():
     from edge_lab.research_evidence import KNOWN_UNLOGGED_CONSUMERS
 
     assert any("EXP-003" in c and "dashboard" in c for c in KNOWN_UNLOGGED_CONSUMERS["kalshi:kxhighny"])
+
+
+# --------------------------------------------------------------------------- re-review regressions (#102, round 2)
+
+
+def _custom_partition(contracts, *, series="KXHIGHNY"):
+    def mk(code):
+        m = market(code)
+        native = m.native_id.replace("KXHIGHNY", series, 1)
+        return replace(m, native_id=native, market_id=f"kalshi:{native}")
+
+    normal = integer_value_states(contracts.values())
+    legs = []
+    for code, contract in contracts.items():
+        m = mk(code)
+        lad = replace(ladder(code, "YES", ("0.20", 50)), market_id=m.market_id, evidence_id=f"snap:{series}:{code}")
+        legs.append(Leg(EVENT, m, "YES", lad, FEES, KALSHI_BINARY_UNITS, numeric_cells(contract, "YES", normal),
+                        structured_contract=contract, rules_contract=contract, settlement_cost=zero_cost))
+    return RelationshipSet("s", "PARTITION", tuple(legs), normal, ALL_EXCLUDED, basket_settlement_cost=lambda s, f: D(0))
+
+
+GAP = {"TL": numeric_contract("less", None, 1), "BA": numeric_contract("between", 1, 2),
+       "BB": numeric_contract("between", 3, 4), "TG": numeric_contract("greater", 4, None)}
+DOT99 = {"TL": numeric_contract("less", None, "100000"), "BA": numeric_contract("between", "100000", "100249.99"),
+         "BB": numeric_contract("between", "100250", "100499.99"), "TG": numeric_contract("greater", "100499.99", None)}
+
+
+@pytest.mark.parametrize("contracts", [GAP, DOT99], ids=["continuous-gap", "dot99-strikes"])
+def test_integer_settlement_must_be_proven_for_the_series(contracts):
+    ev = run(_custom_partition(contracts, series="KXBTC"))
+    assert ev.relationship == "UNSUPPORTED" and ev.sizes == ()
+    assert any("integer settlement is not proven" in r for r in ev.relationship_reasons)
+
+
+def test_non_integer_strikes_are_refused_even_for_a_verified_series():
+    ev = run(_custom_partition(DOT99))
+    assert ev.relationship == "UNSUPPORTED" and any("non-integer strike" in r for r in ev.relationship_reasons)
+
+
+def test_a_kxhighny_partition_missing_a_middle_bracket_fails():
+    ev = run(_custom_partition({k: v for k, v in GAP.items() if k != "BB"}))
+    assert ev.relationship == "UNSUPPORTED" and any("not exhaustive" in r for r in ev.relationship_reasons)
+    whole = run(_custom_partition(GAP))  # on proven integer settlement, 2.5 cannot occur: the set is complete
+    assert whole.relationship == "PROVEN"
+
+
+def _committed():
+    root = Path(__file__).resolve().parents[1] / "experiments" / "EXP-003-same-venue-payoff-consistency"
+    return json.loads((root / "results" / "payoff_scan_laptop_store_2026-09-22.json").read_text(encoding="utf-8")), \
+        root / "evidence_use.jsonl"
+
+
+def _rehash(obj):
+    from edge_lab.provenance import canonical_json, sha256_hex
+
+    r = obj["report"]
+    r["report_sha256"] = sha256_hex(canonical_json({k: v for k, v in r.items() if k != "report_sha256"}))
+    obj["envelope_sha256"] = sha256_hex(canonical_json({k: v for k, v in obj.items() if k != "envelope_sha256"}))
+    return obj
+
+
+@pytest.mark.parametrize("mutate", [
+    lambda o: o["report"].__setitem__("prohibited_fields_never_read", [["result"]]),
+    lambda o: o["provenance"].__setitem__("generated_at_utc", 5),
+    lambda o: o["provenance"].__setitem__("store_identity", ["schema_version"]),
+    lambda o: o["provenance"].__setitem__("event_window", [1, {1: 2}]),
+    lambda o: o.__setitem__("report", []),
+    lambda o: o["report"].__setitem__("sets_evaluated", object()),
+])
+def test_verify_result_file_never_raises(mutate):
+    from edge_lab.payoff_constraints import verify_result_file
+
+    obj, _ = _committed()
+    mutate(obj)
+    ok, reasons = verify_result_file(obj)
+    assert ok is False and reasons
+
+
+def test_provenance_ties_the_result_to_the_append_only_log():
+    from edge_lab.payoff_constraints import verify_result_file, verify_result_provenance
+
+    obj, log = _committed()
+    assert verify_result_provenance(obj, log) == (True, ())
+    forged = json.loads(json.dumps(obj))
+    forged["report"]["claim_counts_by_size_row"] = {"CONDITIONAL_FULL_FILL_SURPLUS": 6}
+    forged = _rehash(forged)
+    assert verify_result_file(forged)[0]  # self-contained hashes cannot detect a forgery...
+    ok, reasons = verify_result_provenance(forged, log)  # ...the log can
+    assert not ok and any("report_sha256" in r for r in reasons)
+    fake = json.loads(json.dumps(obj))
+    fake["provenance"]["evidence_use_event_id"] = "eu-" + "0" * 32
+    ok, reasons = verify_result_provenance(_rehash(fake), log)
+    assert not ok and any("not in the evidence-use log" in r for r in reasons)
+    other = json.loads(json.dumps(obj))
+    other["report"]["input_snapshot_sha256"] = "f" * 64
+    assert not verify_result_provenance(_rehash(other), log)[0]
+    assert not verify_result_provenance(obj, log.parent / "missing.jsonl")[0]
+    assert verify_result_provenance([], log)[0] is False

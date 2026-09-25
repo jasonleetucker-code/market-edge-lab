@@ -187,6 +187,18 @@ VERIFIED_STRIKE_SEMANTICS: dict[str, dict[str, tuple[bool | None, bool | None]]]
 }
 
 
+# Series whose settlement value is a proven integer (whole degrees F: docs/SETTLEMENT.md section 3)
+# and whose markets are integer-strike brackets with the Kalshi strike semantics above. Integer
+# enumeration of states is sound only for these; any other series is refused, not guessed.
+VERIFIED_INTEGER_SERIES = frozenset({"KXHIGHNY"})
+
+
+def integer_settlement_series(leg_venue: str, native_id: str) -> str | None:
+    """The leg's series when it is a verified integer-settlement series, else None."""
+    series = native_id.split("-", 1)[0] if native_id else ""
+    return series if leg_venue == "kalshi" and series in VERIFIED_INTEGER_SERIES else None
+
+
 def numeric_contract(kind: str, floor: Any, cap: Any, *, venue: str = "kalshi") -> NumericContract:
     """A contract with the venue's verified inclusivity (UNKNOWN inclusivity for other venues)."""
     lo_inc, hi_inc = VERIFIED_STRIKE_SEMANTICS.get(venue, {}).get(kind, (None, None))
@@ -450,6 +462,16 @@ def _structure(rel: RelationshipSet) -> tuple[list[str], list[str]]:
     # NORMAL states must be exactly the verified integer enumeration of those contracts (tails
     # included). Every NORMAL cell must then equal what the contract pays in that state.
     contracts = [leg.structured_contract for leg in legs]
+    # Integer enumeration is sound only when integer settlement is a proven premise for every leg:
+    # the leg's series must be a verified integer-settlement series, and every strike an integer.
+    for leg in legs:
+        if integer_settlement_series(leg.market.venue, leg.market.native_id) is None:
+            unsupported.append(f"{leg.market.market_id}: integer settlement is not proven for this series "
+                               f"(verified: {sorted(VERIFIED_INTEGER_SERIES)}); states cannot be enumerated")
+        c = leg.structured_contract
+        if c is not None and any(s is not None and s != s.to_integral_value() for s in (c.floor, c.cap)):
+            unsupported.append(f"{leg.market.market_id}: non-integer strike under integer settlement "
+                               f"({c.floor}, {c.cap})")
     if any(c is None for c in contracts):
         unsupported.append("every leg needs a verified numeric contract: the NORMAL states and cells cannot be "
                            "derived or checked otherwise")
@@ -925,9 +947,6 @@ def _depth_limit(url: str | None) -> int | None:
     return int(match.group(1)) if match else None
 
 
-# Series whose markets are verified integer-strike brackets with the Kalshi strike semantics
-# above (docs/SETTLEMENT.md). Any other series is refused, not guessed.
-VERIFIED_INTEGER_SERIES = frozenset({"KXHIGHNY"})
 _EVENT_DATE = re.compile(r"-(\d{2})([A-Z]{3})(\d{2})$")
 _MONTHS = {m: i for i, m in enumerate(("JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV",
                                        "DEC"), start=1)}
@@ -1112,7 +1131,19 @@ def verify_result_file(obj: Any) -> tuple[bool, tuple[str, ...]]:
     """The one canonical check of a payoff-scan result file (the Terminal calls this, never its own).
 
     Checks the versions, both recomputed hashes, that every built-in prohibited field is declared
-    never read, and that every provenance field is present and well formed. Pure; never raises."""
+    never read, and that every provenance field is present and well formed. Pure; never raises:
+    any malformed input is (False, reasons).
+
+    The hashes detect accidental edits, not forgery: anyone can recompute them after an edit.
+    `verify_result_provenance` additionally ties the file to the experiment's append-only
+    evidence-use log."""
+    try:
+        return _verify_result_file(obj)
+    except Exception as exc:  # noqa: BLE001 - a checker of untrusted files must not raise
+        return False, (f"malformed result file: {type(exc).__name__}: {exc}",)
+
+
+def _verify_result_file(obj: Any) -> tuple[bool, tuple[str, ...]]:
     reasons: list[str] = []
     if not isinstance(obj, Mapping):
         return False, ("not a JSON object",)
@@ -1136,7 +1167,8 @@ def verify_result_file(obj: Any) -> tuple[bool, tuple[str, ...]]:
     if report.get("version") != PAYOFF_VERSION:
         reasons.append(f"report version {report.get('version')!r} is not {PAYOFF_VERSION}")
     never_read = report.get("prohibited_fields_never_read")
-    if not isinstance(never_read, list) or not set(PROHIBITED_MARKET_FIELDS) <= set(never_read):
+    if not (isinstance(never_read, list) and all(isinstance(f, str) for f in never_read)
+            and set(PROHIBITED_MARKET_FIELDS) <= set(never_read)):
         reasons.append("prohibited_fields_never_read does not cover every settled field")
     for key in PROVENANCE_FIELDS:
         if provenance.get(key) in (None, "", []):
@@ -1157,4 +1189,43 @@ def verify_result_file(obj: Any) -> tuple[bool, tuple[str, ...]]:
     event_id = provenance.get("evidence_use_event_id")
     if not (isinstance(event_id, str) and re.fullmatch(r"eu-[0-9a-f]{32}", event_id)):
         reasons.append("provenance.evidence_use_event_id is not an evidence-use event id")
+    return not reasons, tuple(reasons)
+
+
+def verify_result_provenance(obj: Any, log_path: Any) -> tuple[bool, tuple[str, ...]]:
+    """`verify_result_file` plus the tie to the evidence-use log (the Terminal passes the repository's
+    EXP-003 `evidence_use.jsonl`):
+    - the provenance's `evidence_use_event_id` exists in that log, logged for EXP-003;
+    - that event's dataset hash equals the report's `input_snapshot_sha256`;
+    - its window covers exactly the report's event window, in the series' scope;
+    - its note names the report's `report_sha256` (the CLI writes it before any output), so the
+      report's contents are bound to the append-only log.
+
+    A file whose hashes were recomputed after an edit fails here unless the log itself was also
+    rewritten, which the append-only CI check (`check-frozen`) catches. Never raises."""
+    ok, reasons = verify_result_file(obj)
+    reasons = list(reasons)
+    try:
+        from pathlib import Path as _Path
+
+        from .research_evidence import read_log
+
+        log = read_log(_Path(log_path))
+        provenance, report = obj["provenance"], obj["report"]
+        event = next((u for u in log.uses if u.event_id == provenance.get("evidence_use_event_id")), None)
+        if event is None:
+            reasons.append("the evidence_use_event_id is not in the evidence-use log")
+        else:
+            if event.experiment_id != "EXP-003":
+                reasons.append(f"the logged event belongs to {event.experiment_id}, not EXP-003")
+            if event.dataset_sha256 != report.get("input_snapshot_sha256"):
+                reasons.append("the logged dataset hash differs from the report's input_snapshot_sha256")
+            if not (isinstance(report.get("report_sha256"), str) and report["report_sha256"] in event.note):
+                reasons.append("the logged event does not name this report's report_sha256 (edited report?)")
+            window = report.get("event_window") or [None, None]
+            if (event.window.start_utc[:10], event.window.end_utc[:10]) != (window[0], window[1]) or \
+                    event.window.scope.strip().lower() != f"kalshi:{str(report.get('series', '')).lower()}":
+                reasons.append("the logged event window or scope differs from the report's")
+    except Exception as exc:  # noqa: BLE001 - untrusted inputs: report, never raise
+        reasons.append(f"cannot check the evidence-use log: {type(exc).__name__}: {exc}")
     return not reasons, tuple(reasons)

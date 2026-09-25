@@ -72,6 +72,16 @@ relationship, and what it would cost at a given size after fees and states.
      INCOMPLETE and blocks every positive claim.
    - A payout cell in a state that also has a refund rule is refused as a double count.
    - Negative costs or refunds are refused as INVALID.
+   - Integer settlement is a proven premise inside the evaluator itself, not only in the CLI. Every
+     leg's series must be in `VERIFIED_INTEGER_SERIES` (KXHIGHNY, whose value is whole degrees F),
+     and every strike must be an integer. Otherwise the set is UNSUPPORTED.
+7. **Result files.**
+   - `verify_result_file` checks versions, hashes and provenance, and never raises. Its hashes are
+     self-contained, so they detect accidental edits, not forgery.
+   - `verify_result_provenance(obj, log_path)` also requires that the file's evidence-use event
+     exists in the append-only EXP-003 log. That logged event must also carry the report's input
+     dataset hash, its event window, and its `report_sha256`, which the CLI writes before output.
+   - A forger would therefore have to rewrite the log too, and the CI append-only check catches that.
 5. **`storage.SnapshotStore.snapshot_metadata` and `max_row_id`:** public, bounded, payload-free
    reads, so research readers never use the private connection.
 
