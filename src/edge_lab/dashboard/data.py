@@ -1375,18 +1375,37 @@ PAYOFF_RESULT_MAX_FILES = 64
 PAYOFF_STALE_AFTER = timedelta(days=8)  # coordinator decision (EE v1 Section B)
 
 
-PAYOFF_LEGACY_SET_CONSTRUCTION = "legacy-every-anchor"
+# (helper, legacy constant) in payoff_constraints: how the scan built its sets and what its dataset hash covers
+PAYOFF_METHOD_HELPERS = {"set_construction": ("set_construction_of", "LEGACY_SET_CONSTRUCTION"),
+                         "input_hash_definition": ("input_hash_definition_of", "LEGACY_INPUT_HASH_DEFINITION")}
 
 
-def payoff_set_construction(module: Any, obj: Any) -> str:
-    """How the scan built its book sets: `payoff_constraints.set_construction_of(obj)` when installed (PR 105);
-    until then the report's own `set_construction` field, and a file without one is legacy (every anchor)."""
-    helper = getattr(module, "set_construction_of", None)
-    if callable(helper):
-        return str(helper(obj))
-    report = obj.get("report") if isinstance(obj, dict) else None
-    value = report.get("set_construction") if isinstance(report, dict) else None
-    return value if isinstance(value, str) and value else PAYOFF_LEGACY_SET_CONSTRUCTION
+def payoff_methods(module: Any, obj: Any) -> dict[str, Any]:
+    """The result's set construction and input-hash definition, read only through payoff_constraints'
+    helpers (`set_construction_of`, `input_hash_definition_of`); legacy files get the helpers' legacy
+    values. A helper that is absent, raises or returns nothing leaves the value unknown (None) with its
+    reason: it is never guessed here."""
+    out: dict[str, Any] = {}
+    for key, (helper_name, legacy_name) in PAYOFF_METHOD_HELPERS.items():
+        helper = getattr(module, helper_name, None)
+        value, problem = None, None
+        if not callable(helper):
+            problem = f"payoff_constraints.{helper_name} is not in this build"
+        else:
+            try:
+                got = helper(obj)
+            except Exception as exc:  # odd input must not fail the page
+                problem = f"{helper_name} could not read this file ({type(exc).__name__})"
+            else:
+                if isinstance(got, str) and got:
+                    value = got
+                else:
+                    problem = f"{helper_name} returned no value"
+        legacy = getattr(module, legacy_name, None)
+        out[key] = value
+        out[f"{key}_problem"] = problem
+        out[f"{key}_legacy"] = value is not None and value == legacy
+    return out
 
 
 def _result_as_of(obj: Any) -> datetime | None:
@@ -1470,7 +1489,7 @@ def economic_evidence_b(ctx: Context) -> Loaded:
     state = "STALE" if ctx.now - as_of > PAYOFF_STALE_AFTER else "POPULATED"
     sidecar = name[: -len(".json")] + PAYOFF_SIDECAR_SUFFIX
     base["sidecar"] = sidecar if sidecar in base["sidecars"] else None
-    base["set_construction"] = payoff_set_construction(module, obj)
+    base.update(payoff_methods(module, obj))
     return Loaded(OK, {**base, "state": state, "file": name, "as_of_utc": as_of.isoformat().replace("+00:00", "Z"),
                        "stale_after_days": PAYOFF_STALE_AFTER.days, "result": obj,
                        "verification": "verify_result_provenance: passed"})

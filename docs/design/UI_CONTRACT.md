@@ -520,9 +520,11 @@ directive), and the screenshots that justify it.
   logs its own, and the display is registered in `research_evidence.KNOWN_UNLOGGED_CONSUMERS`. A
   `<result>.source.json` sidecar is store-provenance metadata: it is skipped as a result and named in the
   provenance disclosure. A set with no size evaluated says why (its quote validity and reasons). The set-construction
-  method is in the provenance (`payoff_constraints.set_construction_of` once #105 lands; until then the report's field,
-  and a file without one is legacy-every-anchor); a legacy result carries a note that its INVALID set counts include
-  mid-round anchor artifacts and are not comparable with per-round results. Screenshots:
+  method and the input-hash definition are in the provenance, read only through `payoff_constraints.set_construction_of`
+  and `input_hash_definition_of` (#105). A helper that is absent or raises leaves the value unavailable with its
+  reason; it is never guessed. A legacy set construction carries a note that its INVALID set counts include mid-round
+  anchor artifacts and are not comparable with per-round results. A legacy hash definition carries a note that its
+  dataset hash is not comparable with a current-definition hash. Screenshots:
   fixture states `payoff_production` (the committed production result of #103), `payoff` (a SYNTHETIC production
   result with one conditional surplus) and `payoff_laptop` (the committed laptop result, not production evidence)
   at 360x800 and 1440x900, closed and with every disclosure open, and at 200% root text (Chromium emulation, not a

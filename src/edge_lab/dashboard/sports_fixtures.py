@@ -294,7 +294,8 @@ def payoff_registry(root: Path | None = None, *, production: bool = False, posit
         base = json.loads(newest.read_text(encoding="utf-8"))
         report = copy.deepcopy(base["report"])
         report.pop("report_sha256", None)
-        report["set_construction"] = "one-set-per-capture-round-v1"  # the per-round format (PR 105)
+        report["set_construction"] = pc.SET_CONSTRUCTION  # the current formats (PR 105)
+        report["input_hash_definition"] = pc.INPUT_HASH_DEFINITION
         for i, e in enumerate(report["evaluations"]):
             e["set_id"] = f"SYNTHETIC-{e['set_id']}"
             # newer than every committed result; the last set is the newest (and carries any positive claim)

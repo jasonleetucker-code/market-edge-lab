@@ -146,20 +146,46 @@ def test_unreadable_files_and_the_file_bound(tmp_path, monkeypatch):
     assert load(root).status == d.ERROR
 
 
-def test_set_construction_is_shown_and_legacy_files_carry_the_comparability_note(tmp_path, monkeypatch):
-    legacy = sf.payoff_registry(tmp_path / "legacy")  # the committed files predate `set_construction`
-    loaded = load(legacy)
-    assert loaded.value["set_construction"] == d.PAYOFF_LEGACY_SET_CONSTRUCTION
+def test_set_construction_and_hash_definition_come_from_the_helpers_with_legacy_notes(tmp_path):
+    from edge_lab import payoff_constraints as pc
+    legacy = sf.payoff_registry(tmp_path / "legacy")  # #103's production file predates both fields
+    value = load(legacy).value
+    assert value["set_construction"] == pc.LEGACY_SET_CONSTRUCTION and value["set_construction_legacy"]
+    assert value["input_hash_definition"] == pc.LEGACY_INPUT_HASH_DEFINITION and value["input_hash_definition_legacy"]
     text = plain(body(legacy))
-    assert "set construction legacy-every-anchor" in text and plain(research.PAYOFF_LEGACY_NOTE) in text
-    per_round = sf.payoff_registry(tmp_path / "round", production=True)
-    assert load(per_round).value["set_construction"] == "one-set-per-capture-round-v1"
-    text = plain(body(per_round))
-    assert "set construction one-set-per-capture-round-v1" in text and "mid-round anchor artifacts" not in text
-    # once PR 105's helper is installed it is the only source
-    from edge_lab import payoff_constraints
-    monkeypatch.setattr(payoff_constraints, "set_construction_of", lambda obj: "HELPER-SAYS", raising=False)
-    assert load(legacy).value["set_construction"] == "HELPER-SAYS"
+    assert f"set construction {pc.LEGACY_SET_CONSTRUCTION} (legacy)" in text
+    assert f"input hash definition {pc.LEGACY_INPUT_HASH_DEFINITION} (legacy)" in text
+    assert plain(research.PAYOFF_LEGACY_NOTE) in text and plain(research.PAYOFF_LEGACY_HASH_NOTE) in text
+    current = sf.payoff_registry(tmp_path / "round", production=True)
+    value = load(current).value
+    assert (value["set_construction"], value["input_hash_definition"]) == (pc.SET_CONSTRUCTION, pc.INPUT_HASH_DEFINITION)
+    text = plain(body(current))
+    assert f"set construction {pc.SET_CONSTRUCTION}" in text and f"input hash definition {pc.INPUT_HASH_DEFINITION}" in text
+    assert "mid-round anchor artifacts" not in text and "not comparable with a current-definition hash" not in text
+
+
+def test_a_helper_that_raises_leaves_the_method_unknown_and_the_page_renders(tmp_path):
+    from edge_lab import payoff_constraints as pc
+
+    class Odd:  # payoff_constraints, except one helper that raises on this input
+        def __getattr__(self, name):
+            return getattr(pc, name)
+
+        @staticmethod
+        def input_hash_definition_of(obj):
+            raise TypeError("odd mapping")
+
+    methods = d.payoff_methods(Odd(), {"report": {}})
+    assert methods["set_construction"] == pc.LEGACY_SET_CONSTRUCTION and methods["input_hash_definition"] is None
+    assert methods["input_hash_definition_problem"] == "input_hash_definition_of could not read this file (TypeError)"
+    assert not methods["input_hash_definition_legacy"]
+    missing = d.payoff_methods(object(), {"report": {}})
+    assert missing["set_construction"] is None and "not in this build" in missing["set_construction_problem"]
+    view = {**load(sf.payoff_registry(tmp_path)).value, **methods}
+    html = research._payoff_view(view, NOW)
+    # the unavailable marker carries its reason (title and aria-label)
+    assert "input_hash_definition_of could not read this file (TypeError)" in html
+    assert plain(research.PAYOFF_LEGACY_HASH_NOTE) not in plain(html)  # no legacy note for an unknown definition
 
 
 def test_page_views_write_nothing_and_never_touch_the_repository(tmp_path):

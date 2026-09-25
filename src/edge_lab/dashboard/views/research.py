@@ -1240,6 +1240,8 @@ PAYOFF_NOTE = ("A proof is about contract payoffs; a claim is about stored books
 PAYOFF_LEGACY_NOTE = ("Set construction: legacy (every anchor). This scan built a set at every book receipt, so its "
                       "INVALID set counts include mid-round anchor artifacts; they are not comparable with per-round "
                       "results.")
+PAYOFF_LEGACY_HASH_NOTE = ("Dataset hash: legacy definition (books of evaluated sets only). This file's input snapshot "
+                           "hash is not comparable with a current-definition hash for the same store and window.")
 PAYOFF_ROWS_SHOWN = 4  # newest evaluated sets shown as rows; every set is in the disclosure table
 POSITIVE_CLAIM = "CONDITIONAL_FULL_FILL_SURPLUS"  # payoff_constraints.Claim: the only claim with a positive figure
 
@@ -1306,6 +1308,14 @@ def _payoff_set(e: dict) -> str:
                 empty="none recorded")))
 
 
+def _payoff_method(v: dict[str, Any], key: str) -> str:
+    """A method value read by payoff_constraints' helper, or unavailable with the helper's problem."""
+    value = v.get(key)
+    if not value:
+        return c.na(str(v.get(f"{key}_problem") or "not recorded"))
+    return c.code(value) + (" (legacy)" if v.get(f"{key}_legacy") else "")
+
+
 def _payoff_view(v: dict, now: Any) -> str:
     state = str(v.get("state") or "UNKNOWN")
     out = [f'<p class="eyebrow">{esc(PAYOFF_LABEL)}</p>']
@@ -1332,8 +1342,10 @@ def _payoff_view(v: dict, now: Any) -> str:
     if state == "STALE":
         out.append(c.empty_state("Result is stale", f"The newest evaluation is older than {v.get('stale_after_days')} "
                                  "days. Nothing here is current.", kind="warn"))
-    if v.get("set_construction") == d.PAYOFF_LEGACY_SET_CONSTRUCTION:
+    if v.get("set_construction_legacy"):
         out.append(f'<p class="note">{esc(PAYOFF_LEGACY_NOTE)}</p>')
+    if v.get("input_hash_definition_legacy"):
+        out.append(f'<p class="note">{esc(PAYOFF_LEGACY_HASH_NOTE)}</p>')
     counts = report.get("relationship_counts") if isinstance(report.get("relationship_counts"), dict) else {}
     claims = report.get("claim_counts_by_size_row") if isinstance(report.get("claim_counts_by_size_row"), dict) else {}
     out.append(c.facts([
@@ -1374,7 +1386,8 @@ def _payoff_view(v: dict, now: Any) -> str:
         ("file", c.code(v.get("file"))), ("verification", esc(v.get("verification"))),
         ("store-provenance sidecar", c.code(v.get("sidecar")) if v.get("sidecar") else c.na("no sidecar beside "
                                                                                              "this result")),
-        ("set construction", c.code(v.get("set_construction"))),
+        ("set construction", _payoff_method(v, "set_construction")),
+        ("input hash definition", _payoff_method(v, "input_hash_definition")),
         ("source store", _source_badge(source)),
         ("store identity", esc(", ".join(f"{k} {val}" for k, val in sorted(identity.items())) or "—")),
         ("code version", c.code(prov.get("code_version"))), ("generated", esc(prov.get("generated_at_utc"))),
