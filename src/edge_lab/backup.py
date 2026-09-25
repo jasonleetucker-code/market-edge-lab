@@ -2,6 +2,7 @@
 
 Adapted from Brisket's online-backup pattern; no scheduling, remote upload,
 retention deletion, source migration, or restoration over an existing database.
+`retention-plan` is a dry-run report only (PROPOSED policy; it cannot delete).
 """
 from __future__ import annotations
 
@@ -15,8 +16,10 @@ import sqlite3
 import tempfile
 import time
 from contextlib import closing
-from datetime import datetime, timezone
+from dataclasses import dataclass, field
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import Any, Mapping, Sequence
 
 from .storage import SCHEMA_VERSION as CURRENT_SCHEMA_VERSION, SnapshotStore
 
@@ -294,6 +297,323 @@ def verify_backup(bundle: Path, *, timeout: float = 30) -> dict:
     return {"status": status, **original, "database_sha256": manifest["database_sha256"]}
 
 
+# --------------------------------------------------------------------------- retention (DRY RUN ONLY)
+#
+# docs/deploy/CAPTURE_AND_BACKUP_APPROVAL_PLAN.md, section B. No retention policy is approved. This
+# planner only reads bundle directories and manifests and reports KEEP / DELETE-CANDIDATE / QUARANTINE
+# per bundle with its reasons. It has no deletion code path at all: no --apply, no unlink, no rmtree
+# (tests/test_backup_retention.py makes every deletion API fail while it runs). A backup copy is never
+# the original evidence (the live store is), and a DELETE-CANDIDATE is only ever a bundle whose rows a
+# newer kept, valid bundle of the same store also holds.
+
+KEEP, DELETE_CANDIDATE, QUARANTINE = "KEEP", "DELETE-CANDIDATE", "QUARANTINE"
+RETENTION_STATUS = "PROPOSED"  # never APPROVED in code: an approval is recorded in docs/EXECUTION_PLAN.md
+BUNDLE_PREFIX = "edge-backup-"
+MANIFEST_MAX_BYTES = 1024 * 1024
+
+
+@dataclass(frozen=True)
+class RetentionPolicy:
+    name: str
+    keep_all_younger_than: timedelta  # every valid bundle this young is kept (deploy pairs, quick rollback)
+    newest_good: int  # the newest N valid bundles per store are always kept
+    daily_days: int  # the newest valid bundle of each UTC day, for this many days
+    weekly_weeks: int  # ... of each ISO week, for this many weeks
+    monthly_months: int  # ... of each calendar month, for this many months
+    active_grace: timedelta  # a bundle without a manifest this young may still be being written
+    max_newest_good_age: timedelta  # older newest-good bundle: nothing may become a candidate
+    candidate_kinds: tuple[str, ...]  # stores whose bundles may become candidates at all
+    future_tolerance: timedelta = timedelta(minutes=5)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"name": self.name, "status": RETENTION_STATUS,
+                "keep_all_younger_than_hours": self.keep_all_younger_than.total_seconds() / 3600,
+                "newest_good": self.newest_good, "daily_days": self.daily_days, "weekly_weeks": self.weekly_weeks,
+                "monthly_months": self.monthly_months,
+                "active_grace_minutes": self.active_grace.total_seconds() / 60,
+                "max_newest_good_age_hours": self.max_newest_good_age.total_seconds() / 3600,
+                "candidate_kinds": list(self.candidate_kinds),
+                "never_candidates": ["QUARANTINE", "ACTIVE", "newest good", "first bundle", "schema boundary",
+                                     "checkpoint-linked", "pinned baseline", "forensic ledger state",
+                                     "not covered by a newer kept bundle", "any bundle of a store not in candidate_kinds"]}
+
+
+RETENTION_POLICIES = {
+    "proposed-v1": RetentionPolicy(
+        name="proposed-v1", keep_all_younger_than=timedelta(hours=48), newest_good=3, daily_days=7,
+        weekly_weeks=8, monthly_months=12, active_grace=timedelta(minutes=30),
+        max_newest_good_age=timedelta(hours=36), candidate_kinds=("evidence",)),
+}
+
+
+@dataclass
+class BundleInfo:
+    """What a read-only scan found for one bundle directory."""
+
+    kind: str  # the store its location says (evidence: <root>, ledger: <root>/ledger)
+    name: str
+    path: str  # relative to the scanned root
+    status: str  # GOOD | ACTIVE | QUARANTINE
+    problems: list[str] = field(default_factory=list)
+    manifest: dict[str, Any] | None = None
+    completed: datetime | None = None
+    database_bytes: int | None = None
+    forensic: bool = False
+
+
+def _aware(value: Any) -> datetime | None:
+    if not isinstance(value, str):
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return parsed.astimezone(timezone.utc) if parsed.tzinfo is not None else None
+
+
+def _newest_mtime(path: Path) -> datetime:
+    times = [path.lstat().st_mtime]
+    for child in path.iterdir():
+        times.append(child.lstat().st_mtime)
+    return datetime.fromtimestamp(max(times), timezone.utc)
+
+
+def inspect_bundle(path: Path, *, kind: str, root: Path, now: datetime, policy: RetentionPolicy,
+                   verify_hashes: bool = False) -> BundleInfo:
+    """Classify one bundle directory from its manifest and file sizes (optionally its hash). Read-only."""
+    info = BundleInfo(kind=kind, name=path.name, path=path.relative_to(root).as_posix(), status="GOOD")
+
+    def bad(problem: str) -> BundleInfo:
+        info.status = QUARANTINE
+        info.problems.append(problem)
+        return info
+
+    if path.is_symlink():
+        return bad("SYMLINK: symlinked bundles are never trusted")
+    if not path.is_dir():
+        return bad("NOT_A_DIRECTORY")
+    manifest_path, db = path / MANIFEST_NAME, path / DB_NAME
+    if manifest_path.is_symlink():
+        return bad("SYMLINK: the manifest is a symlink")
+    if not manifest_path.is_file():
+        age = now - _newest_mtime(path)
+        if age <= policy.active_grace:
+            info.status = "ACTIVE"
+            info.problems.append(f"ACTIVE_OR_IN_PROGRESS: no manifest yet, last written {int(age.total_seconds())} s ago")
+            return info
+        return bad("INCOMPLETE_NO_MANIFEST: no completion manifest and not written recently (an interrupted backup)")
+    if manifest_path.stat().st_size > MANIFEST_MAX_BYTES:
+        return bad("MANIFEST_INVALID: exceeds the size limit")
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (ValueError, UnicodeError, OSError) as exc:
+        return bad(f"MANIFEST_INVALID: {type(exc).__name__}")
+    if not isinstance(manifest, dict) or manifest.get("format_version") != 1 or manifest.get("database") != DB_NAME:
+        return bad("MANIFEST_INVALID: unsupported format")
+    info.manifest = manifest
+    store_kind = manifest.get("store_kind", "evidence")
+    if store_kind not in KINDS:
+        return bad(f"MANIFEST_INVALID: unknown store kind {store_kind!r}")
+    if store_kind != kind:
+        return bad(f"KIND_LOCATION_MISMATCH: a {store_kind} manifest in the {kind} directory")
+    completed, started = _aware(manifest.get("completed_at_utc")), _aware(manifest.get("started_at_utc"))
+    if completed is None or started is None:
+        return bad("MANIFEST_INVALID: started/completed time missing or without a zone")
+    if completed > now + policy.future_tolerance:
+        return bad(f"FUTURE_TIMESTAMP: completed {completed.isoformat()} is after now")
+    info.completed = completed
+    size = manifest.get("database_bytes")
+    info.database_bytes = size if isinstance(size, int) else None
+    if db.is_symlink() or not db.is_file():
+        return bad("DATABASE_MISSING")
+    if db.stat().st_size != size:
+        return bad(f"SIZE_MISMATCH: {db.stat().st_size} bytes, manifest says {size}")
+    if verify_hashes and file_hash(db) != manifest.get("database_sha256"):
+        return bad("HASH_MISMATCH: database bytes differ from the manifest")
+    heads = manifest.get("chain_heads") or {}
+    if kind == "ledger" and (manifest.get("missing_triggers")
+                             or any(str(h).startswith("REPLAY_FAILED") for h in heads.values())):
+        info.forensic = True
+    return info
+
+
+def scan_bundles(root: Path, *, now: datetime, policy: RetentionPolicy,
+                 verify_hashes: bool = False) -> tuple[list[BundleInfo], list[str]]:
+    """Every bundle under `root` (evidence) and `root/ledger` (ledger). Returns (bundles, ignored entries)."""
+    bundles: list[BundleInfo] = []
+    ignored: list[str] = []
+    for kind, directory in (("evidence", root), ("ledger", root / "ledger")):
+        if not directory.is_dir():
+            continue
+        for entry in sorted(directory.iterdir(), key=lambda p: p.name):
+            if kind == "evidence" and entry.name == "ledger":
+                continue
+            if not entry.name.startswith(BUNDLE_PREFIX):
+                ignored.append(entry.relative_to(root).as_posix())
+                continue
+            bundles.append(inspect_bundle(entry, kind=kind, root=root, now=now, policy=policy,
+                                          verify_hashes=verify_hashes))
+    return bundles, ignored
+
+
+def load_checkpoints(directory: Path) -> tuple[list[dict[str, Any]], list[str]]:
+    """F09 ledger checkpoints (ledger_anchor.export_checkpoint JSON files). Returns (checkpoints, problems)."""
+    out, problems = [], []
+    for path in sorted(directory.glob("*.json")):
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (ValueError, UnicodeError, OSError) as exc:
+            problems.append(f"{path.name}: {type(exc).__name__}")
+            continue
+        created = _aware(data.get("created_at_utc")) if isinstance(data, dict) else None
+        if created is None or not isinstance(data.get("accounts"), dict):
+            problems.append(f"{path.name}: not a ledger checkpoint")
+            continue
+        out.append({"name": path.name, "created_at_utc": created,
+                    "heads": {a: v.get("head_entry_hash") for a, v in data["accounts"].items() if isinstance(v, dict)}})
+    return out, problems
+
+
+def _covers(newer: BundleInfo, older: BundleInfo) -> bool:
+    """Whether `newer` holds at least every table row count `older` holds (append-only stores)."""
+    a = (newer.manifest or {}).get("row_counts") or {}
+    b = (older.manifest or {}).get("row_counts") or {}
+    if not isinstance(a, dict) or not isinstance(b, dict) or not b:
+        return False
+    return all(isinstance(a.get(t), int) and isinstance(n, int) and a[t] >= n for t, n in b.items())
+
+
+def retention_plan(bundles: Sequence[BundleInfo], *, now: datetime, policy: RetentionPolicy,
+                   checkpoints: Sequence[Mapping[str, Any]] = (), pins: Sequence[str] = ()) -> dict[str, Any]:
+    """KEEP / DELETE-CANDIDATE / QUARANTINE per bundle, with reasons. Pure and deterministic."""
+    reasons: dict[tuple[str, str], list[str]] = {}
+    decision: dict[tuple[str, str], str] = {}
+    flags: list[str] = []
+    linked: list[dict[str, Any]] = []
+    pinned = set(pins)
+    found_pins: set[str] = set()
+    for b in bundles:
+        key = (b.kind, b.name)
+        reasons[key] = list(b.problems)
+        if b.status == QUARANTINE:
+            decision[key] = QUARANTINE
+        elif b.status == "ACTIVE":
+            decision[key] = KEEP
+    good_by_kind: dict[str, list[BundleInfo]] = {}
+    for b in bundles:
+        if b.status == "GOOD":
+            good_by_kind.setdefault(b.kind, []).append(b)
+    for kind in KINDS:
+        good = sorted(good_by_kind.get(kind, []), key=lambda b: (b.completed, b.name))
+        if not good:
+            if any(b.kind == kind for b in bundles):
+                flags.append(f"NO_GOOD_BUNDLE:{kind}")
+            continue
+
+        def keep(b: BundleInfo, why: str) -> None:
+            reasons[(b.kind, b.name)].append(why)
+
+        for b in good[-policy.newest_good:]:
+            keep(b, f"NEWEST_GOOD: one of the newest {policy.newest_good} valid bundles")
+        keep(good[0], "FIRST_BUNDLE_BASELINE: the oldest valid bundle of this store")
+        for b in good:
+            if now - b.completed < policy.keep_all_younger_than:
+                keep(b, f"RECENT: younger than {policy.keep_all_younger_than.total_seconds() / 3600:g} h")
+            if b.name in pinned:
+                keep(b, "PINNED_BASELINE: a known-good recovery baseline")
+                found_pins.add(b.name)
+            if b.forensic:
+                keep(b, "FORENSIC_LEDGER_STATE: tampered triggers or a broken chain were recorded")
+            if kind not in policy.candidate_kinds:
+                keep(b, f"NOT_ELIGIBLE_KIND: {kind} bundles are never candidates under {policy.name}")
+        today = now.date()
+        daily: dict[Any, BundleInfo] = {}
+        weekly: dict[Any, BundleInfo] = {}
+        monthly: dict[Any, BundleInfo] = {}
+        this_monday = today - timedelta(days=today.weekday())
+        for b in good:  # sorted oldest first: the last assignment per bucket is the newest
+            d = b.completed.date()
+            if (today - d).days < policy.daily_days:
+                daily[d] = b
+            monday = d - timedelta(days=d.weekday())
+            if (this_monday - monday).days // 7 < policy.weekly_weeks:
+                weekly[monday] = b
+            if (today.year - d.year) * 12 + today.month - d.month < policy.monthly_months:
+                monthly[(d.year, d.month)] = b
+        for d, b in daily.items():
+            keep(b, f"DAILY: newest valid bundle of {d.isoformat()}")
+        for monday, b in weekly.items():
+            keep(b, f"WEEKLY: newest valid bundle of the week of {monday.isoformat()}")
+        for (y, m), b in monthly.items():
+            keep(b, f"MONTHLY: newest valid bundle of {y:04d}-{m:02d}")
+        for older, newer in zip(good, good[1:]):
+            s0 = ((older.manifest or {}).get("schema_version"), (older.manifest or {}).get("schema_sha256"))
+            s1 = ((newer.manifest or {}).get("schema_version"), (newer.manifest or {}).get("schema_sha256"))
+            if s0 != s1:
+                keep(older, f"SCHEMA_BOUNDARY: the last bundle before schema v{s1[0]} ({newer.name})")
+                keep(newer, f"SCHEMA_BOUNDARY: the first bundle at schema v{s1[0]} (after {older.name})")
+        for cp in checkpoints:
+            created, heads = cp["created_at_utc"], cp["heads"]
+            before = [b for b in good if b.completed <= created]
+            after = [b for b in good if b.completed >= created]
+            bracket = ([before[-1]] if before else []) + ([after[0]] if after else [])
+            if kind == "ledger":
+                exact = [b for b in good if (b.manifest or {}).get("chain_heads") == heads]
+                chosen, how = (exact, "EXACT") if exact else (bracket, "BRACKET")
+            else:
+                chosen, how = bracket, "EVIDENCE_BRACKET"
+            for b in chosen:
+                keep(b, f"CHECKPOINT_{how}: F09 checkpoint {cp['name']}")
+            linked.append({"checkpoint": cp["name"], "kind": kind, "match": how if chosen else "NONE",
+                           "bundles": sorted(b.name for b in chosen)})
+        kept = [b for b in good if reasons[(b.kind, b.name)]]
+        stale = now - good[-1].completed > policy.max_newest_good_age
+        if stale:
+            flags.append(f"NEWEST_GOOD_STALE:{kind}")
+        for b in good:
+            key = (b.kind, b.name)
+            if reasons[key]:
+                decision[key] = KEEP
+                continue
+            if stale:
+                reasons[key].append(f"NEWEST_GOOD_STALE: the newest valid {kind} bundle completed "
+                                    f"{good[-1].completed.isoformat()}; no candidate until a fresh verified backup")
+                decision[key] = KEEP
+                continue
+            if not any(k.completed > b.completed and _covers(k, b) for k in kept):
+                reasons[key].append("NOT_COVERED: no newer kept valid bundle holds at least its row counts")
+                decision[key] = KEEP
+                kept.append(b)
+                continue
+            reasons[key].append(f"SUPERSEDED: outside every {policy.name} keep rule; a newer kept valid bundle "
+                                "holds all of its rows")
+            decision[key] = DELETE_CANDIDATE
+    if any(b.status == QUARANTINE for b in bundles):
+        flags.append("QUARANTINE_PRESENT")
+    rows, summary = [], {}
+    for b in sorted(bundles, key=lambda b: (b.kind, b.completed or datetime.max.replace(tzinfo=timezone.utc), b.name)):
+        d = decision[(b.kind, b.name)]
+        rows.append({"kind": b.kind, "name": b.name, "path": b.path, "decision": d,
+                     "reasons": sorted(reasons[(b.kind, b.name)]),
+                     "completed_at_utc": b.completed.isoformat() if b.completed else None,
+                     "database_bytes": b.database_bytes,
+                     "schema_version": (b.manifest or {}).get("schema_version")})
+        s = summary.setdefault(b.kind, {KEEP: 0, DELETE_CANDIDATE: 0, QUARANTINE: 0,
+                                        "bytes_keep": 0, "bytes_delete_candidate": 0, "bytes_quarantine": 0})
+        s[d] += 1
+        s["bytes_" + d.lower().replace("-", "_")] += b.database_bytes or 0
+    return {"command": "backup retention-plan", "mode": "DRY_RUN_ONLY", "deletes_performed": 0,
+            "policy": policy.to_dict(), "now_utc": now.isoformat(), "state": "REVIEW" if flags else "OK",
+            "flags": sorted(flags), "summary": dict(sorted(summary.items())), "bundles": rows,
+            "checkpoints": linked, "pins_not_found": sorted(pinned - found_pins),
+            "limitations": [
+                "a backup copy is not original evidence: the live store is the original, and no candidate is the "
+                "only copy of its rows (a newer kept bundle covers it)",
+                "a checkpoint hash is not a restorable backup; no verified off-host backup exists",
+                "hashes are checked only with --verify-hashes; restore verification is `backup verify` per bundle",
+                "nothing is deleted: this planner has no deletion code path; any deletion needs an approved policy"]}
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     subs = parser.add_subparsers(dest="command", required=True)
@@ -308,7 +628,17 @@ def main(argv: list[str] | None = None) -> int:
     verify = subs.add_parser("verify")
     verify.add_argument("--bundle", type=Path, required=True)
     verify.add_argument("--timeout", type=float, default=30)
+    plan = subs.add_parser("retention-plan", help="DRY RUN ONLY: KEEP / DELETE-CANDIDATE / QUARANTINE per bundle; "
+                                                  "deletes nothing (there is no apply option)")
+    plan.add_argument("--root", type=Path, required=True, help="the backups directory (ledger bundles in root/ledger)")
+    plan.add_argument("--policy", choices=sorted(RETENTION_POLICIES), default="proposed-v1")
+    plan.add_argument("--now", help="ISO-8601 time with zone (default: now)")
+    plan.add_argument("--checkpoints", type=Path, help="directory of F09 ledger checkpoint JSON files")
+    plan.add_argument("--pin", action="append", default=[], help="bundle name kept as a known-good baseline")
+    plan.add_argument("--verify-hashes", action="store_true", help="also check every database's SHA-256 (reads it)")
     args = parser.parse_args(argv)
+    if args.command == "retention-plan":
+        return _retention_main(args)
     try:
         if args.command == "create":
             if args.if_exists and not args.db.exists():
@@ -333,6 +663,24 @@ def main(argv: list[str] | None = None) -> int:
     except (BackupError, sqlite3.Error, OSError, ValueError) as exc:
         print(json.dumps({"status": "FAILED", "error": str(exc)}))
         return 1
+
+
+def _retention_main(args: argparse.Namespace) -> int:
+    now = _aware(args.now) if args.now else datetime.now(timezone.utc)
+    if now is None:
+        print(json.dumps({"status": "FAILED", "error": "--now needs a zone"}))
+        return 2
+    if not args.root.is_dir():
+        print(json.dumps({"status": "FAILED", "error": f"{args.root} is not a directory"}))
+        return 1
+    policy = RETENTION_POLICIES[args.policy]
+    bundles, ignored = scan_bundles(args.root, now=now, policy=policy, verify_hashes=args.verify_hashes)
+    checkpoints, problems = load_checkpoints(args.checkpoints) if args.checkpoints else ([], [])
+    report = retention_plan(bundles, now=now, policy=policy, checkpoints=checkpoints, pins=args.pin)
+    report.update(root=str(args.root), ignored_entries=ignored, checkpoint_problems=problems,
+                  hashes_verified=bool(args.verify_hashes))
+    print(json.dumps(report, indent=2, sort_keys=True))
+    return 0
 
 
 if __name__ == "__main__":
