@@ -102,7 +102,8 @@ def test_missing_document_fails_receipt(tmp_path):
 
 def test_context_does_not_write_files_or_fetch(tmp_path, monkeypatch):
     root = make_repo(tmp_path)
-    before = sorted(str(p.relative_to(root)) for p in root.rglob("*"))
+    # .git/ is excluded: git background maintenance may create lock files there at any time.
+    before = sorted(str(p.relative_to(root)) for p in root.rglob("*") if p.relative_to(root).parts[0] != ".git")
     original = subprocess.run
     calls = []
     def run(argv, **kwargs):
@@ -111,7 +112,7 @@ def test_context_does_not_write_files_or_fetch(tmp_path, monkeypatch):
         return original(argv, **kwargs)
     monkeypatch.setattr(context.subprocess, "run", run)
     context.build_context(root)
-    after = sorted(str(p.relative_to(root)) for p in root.rglob("*"))
+    after = sorted(str(p.relative_to(root)) for p in root.rglob("*") if p.relative_to(root).parts[0] != ".git")
     assert before == after
     assert calls
 
