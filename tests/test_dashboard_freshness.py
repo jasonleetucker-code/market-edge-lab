@@ -33,7 +33,10 @@ NOW = datetime(2026, 9, 24, 21, 0, tzinfo=timezone.utc)
 
 
 def plain(html: str) -> str:
-    return " ".join(re.sub(r"<[^>]+>", " ", html).split())
+    """Visible text: tags removed and entities decoded (an owner text may carry an apostrophe)."""
+    import html as html_lib
+
+    return " ".join(html_lib.unescape(re.sub(r"<[^>]+>", " ", html)).split())
 
 
 def page(cfg: Config) -> str:
@@ -275,7 +278,7 @@ def test_texts_are_scrubbed_and_listed_whole(current):
     path.write_text(json.dumps(doc), encoding="utf-8")
     text = plain(section(page(current)))
     assert "/etc/market-edge-lab" not in text and "/var/lib/secret" not in text
-    assert "&lt;path&gt;" in text and "America/New_York" in text  # the fabric's scrub keeps time zones intact
+    assert "<path>" in text and "America/New_York" in text  # the fabric's scrub keeps time zones intact
     assert "just one" in text and "Disagreements 1 with the canonical scheduler" in text
 
 

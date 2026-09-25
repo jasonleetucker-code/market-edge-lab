@@ -480,9 +480,9 @@ FRESHNESS_NOTE = ("The fabric observes; it runs, triggers and reschedules nothin
 def _scrub(text: str) -> str:
     """Free text without filesystem paths, by the fabric's own rule (`freshness_fabric.scrub`: time zones
     such as America/New_York and windows such as 17:40-18:35 stay intact)."""
-    from ...freshness_fabric import scrub
+    from ...freshness_fabric import strip_paths
 
-    return scrub(text)
+    return strip_paths(text)  # never shortened: the details disclosure shows everything
 
 
 def _texts(value: Any) -> list[str]:
