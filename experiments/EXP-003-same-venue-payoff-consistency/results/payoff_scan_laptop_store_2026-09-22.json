@@ -1,14 +1,14 @@
 {
-  "envelope_sha256": "a3e92c2874ac845a0915e754268015f91ac1747e35d20a2858d56c2c268ab182",
+  "envelope_sha256": "f598837ed409ba5a211d7a0dd8cfcd58ae91491dbbfe8e9226cb38cd698b7665",
   "payoff_version": "payoff-constraints-v1",
   "provenance": {
-    "code_version": "a4a963513ce3a688b080967d9b4543e22dd6ef3d",
+    "code_version": "79edfdabf123f80dcb72bb879f4a260e6953b7e1",
     "event_window": [
       "2026-09-22",
       "2026-09-23"
     ],
-    "evidence_use_event_id": "eu-2cec29434e848288ac12fb8ba6a11981",
-    "generated_at_utc": "2026-09-25T05:17:11+00:00",
+    "evidence_use_event_id": "eu-374acc98ca83fac9d86ed28643e2bc54",
+    "generated_at_utc": "2026-09-25T05:56:03+00:00",
     "source_store": "laptop",
     "store_identity": {
       "latest_snapshot_received_utc": "2026-09-22T22:38:44.096620+00:00",
@@ -27,7 +27,7 @@
         "actual_result": "NONE: no actual fills exist (no orders are placed or simulated against a venue)",
         "as_of_utc": "2026-09-22T22:38:33.774196+00:00",
         "assumptions": [],
-        "evaluation_sha256": "e0ebf1b8c7a36565b4b305177ff3cd14cb503c35a69cf5d518b7ca3d02ef2084",
+        "evaluation_sha256": "fd03aff60bac12863035008be05b72e28ac4431bceb5a352728749dcad027ce5",
         "kind": "PARTITION",
         "leg_skew_seconds": "3.002048",
         "observed_quote_inconsistency": null,
@@ -38,7 +38,8 @@
         "relationship_reasons": [
           "state kind VOID is neither enumerated nor excluded with evidence",
           "state kind REFUND is neither enumerated nor excluded with evidence",
-          "state kind CANCELLATION is neither enumerated nor excluded with evidence"
+          "state kind CANCELLATION is neither enumerated nor excluded with evidence",
+          "relies on an OBSERVED premise (KXHIGHNY): integer settlement observed, not guaranteed (TWC precision unverified): 39 of 39 TWC-era expiration values equal the whole-degree NWS CLI value (docs/SETTLEMENT.md sections 2 and 7); the rules settle on the Source Agency's full precision"
         ],
         "set_id": "KXHIGHNY-26SEP22@2026-09-22T22:38:33.774196+00:00",
         "simulated_execution": "NOT_MODELLED: no leg-timing or fill-probability model; legs are never assumed atomic",
@@ -344,7 +345,7 @@
         "actual_result": "NONE: no actual fills exist (no orders are placed or simulated against a venue)",
         "as_of_utc": "2026-09-22T22:38:29.590184+00:00",
         "assumptions": [],
-        "evaluation_sha256": "91ee517aad1c65f41769bbb6cad7d73b7ddfa142e5cc2971f397a2ee5bf04b90",
+        "evaluation_sha256": "a6d0ec43b2b246ef8dcb85fec5be25c3a259ece21e57d64a48fa2b1494448bd3",
         "kind": "PARTITION",
         "leg_skew_seconds": "3.003634",
         "observed_quote_inconsistency": "-0.0600",
@@ -355,7 +356,8 @@
         "relationship_reasons": [
           "state kind VOID is neither enumerated nor excluded with evidence",
           "state kind REFUND is neither enumerated nor excluded with evidence",
-          "state kind CANCELLATION is neither enumerated nor excluded with evidence"
+          "state kind CANCELLATION is neither enumerated nor excluded with evidence",
+          "relies on an OBSERVED premise (KXHIGHNY): integer settlement observed, not guaranteed (TWC precision unverified): 39 of 39 TWC-era expiration values equal the whole-degree NWS CLI value (docs/SETTLEMENT.md sections 2 and 7); the rules settle on the Source Agency's full precision"
         ],
         "set_id": "KXHIGHNY-26SEP23@2026-09-22T22:38:29.590184+00:00",
         "simulated_execution": "NOT_MODELLED: no leg-timing or fill-probability model; legs are never assumed atomic",
@@ -706,7 +708,7 @@
     "relationship_counts": {
       "INCOMPLETE": 2
     },
-    "report_sha256": "91ad84ad54fd9b2b638453d90f091de419615b882c391892b08656d546ee4cdd",
+    "report_sha256": "6f9990072f2bd98e7136eaf9ce8bd091dc82842a4ef2ee9a2df3bf3c1d8eb2fb",
     "series": "KXHIGHNY",
     "sets_evaluated": 2,
     "sets_skipped": [],

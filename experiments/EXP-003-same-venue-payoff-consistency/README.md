@@ -31,20 +31,25 @@ not captured arbitrage. No fills exist in this experiment.
   and the run over stored KXHIGHNY books follow in PR B.
 - 2026-09-25 03:38Z (EE v1 PR B): first development scan
   (`results/payoff_scan_laptop_store_2026-09-22.json`). Every look at this data is logged, and
-  there are four:
+  there are five:
   - `eu-92904c0f26bf2ab0ad278b774bbc4ac0`: the 03:38Z look, recorded by hand with `record-use`,
     because the scan did not log itself yet. The entry itself says so.
   - `eu-1252b03466882d648c95b9345eec0ce6` (04:55Z) and `eu-c903acfb44e9b10a3950237db62cc074`
     (05:16Z): CLI-logged re-runs during the #102 review fixes. The code version they record is the
     branch HEAD *before* those fixes were committed, so the code that actually ran had uncommitted
     changes. The CLI now marks that case as `+uncommitted-code-changes`.
-  - `eu-2cec29434e848288ac12fb8ba6a11981` (05:17Z): the run that produced the committed result
-    file, at the committed code `a4a9635`.
+  - `eu-2cec29434e848288ac12fb8ba6a11981` (05:17Z): a re-run at the committed code `a4a9635`. Its
+    note names the report hash in the older free-text form.
+  - `eu-374acc98ca83fac9d86ed28643e2bc54`: the run that produced the committed result file, at the
+    committed code `79edfda`. Its note carries the exact `report_sha256=<sha>` token, which
+    `verify_result_provenance` requires.
 
-  All four use the same books and event window (2026-09-22..2026-09-23) and give the same result.
+  All five use the same books and event window (2026-09-22..2026-09-23) and give the same result.
+  Integer settlement is only an observed premise, so every KXHIGHNY proof stays INCOMPLETE on that
+  ground alone. No positive surplus could be claimed here in any case.
   The result file carries its provenance: laptop store, store identity (schema v3, max snapshot
   id 36), code version, event window and evidence-use event id. It is checked by
-  `payoff_constraints.verify_result_file`.
+  `payoff_constraints.verify_result_file` and `verify_result_provenance`.
   - **Input.** The only evidence store in this session: the laptop's
     `data/edge_lab.sqlite3`, read-only. It holds 2 KXHIGHNY events (26SEP22, 26SEP23) with 6
     brackets each, books captured on 2026-09-22 about 22:38Z. The production VPS store, with daily
