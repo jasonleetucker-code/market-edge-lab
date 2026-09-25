@@ -137,10 +137,12 @@ def setup_captured(store, *games, at=T24, offset="T-24h"):
 # --------------------------------------------------------------------------- the switch
 
 
-@pytest.mark.parametrize("value, state", [("on", "ON"), ("ON", "ON"), (" on ", "ON"), ("", "ON"), ("off", "OFF"),
-                                          ("OFF", "OFF"), ("0", "INVALID"), ("false", "INVALID"), ("maybe", "INVALID")])
+@pytest.mark.parametrize("value, state", [("on", "ON"), ("", "ON"), ("off", "OFF"), ("ON", "INVALID"),
+                                          (" on ", "INVALID"), ("OFF", "INVALID"), ("0", "INVALID"),
+                                          ("false", "INVALID"), ("maybe", "INVALID")])
 def test_the_switch_defaults_on_and_off_is_the_kill_switch(value, state):
-    """The owner approved the capture: the deployed code is the activation; off (or garbage) stops it."""
+    """The owner approved the capture: the deployed code is the activation; off stops it. Exactly the values
+    install.sh keeps (lowercase on/off); anything else fails closed."""
     assert po.nfl_switch_value({po.NFL_SWITCH: value}) == state
     assert po.nfl_capture_enabled({po.NFL_SWITCH: value}) is (state == "ON")
     assert po.nfl_capture_enabled({}) is True
@@ -173,12 +175,14 @@ def test_switch_off_holds_pending_targets_without_a_request(store, monkeypatch):
     api = Api(clock, routes("KXNFLGAME-26OCT04ARINYG"))
     monkeypatch.setattr(po, "fetch_json_result", api)
     code, report = capture(store, clock, environ=OFF)
-    assert api.calls == []
-    assert report["nfl_held"]["reason"] == "NFL_CAPTURE_OFF" and len(report["nfl_held"]["targets"]) == 2
-    # They expire MISSED at their deadline; nothing is fetched late.
-    later = Clock(T24 + timedelta(minutes=45))
-    capture(store, later, environ=OFF)
+    assert code == 0 and api.calls == []
+    assert len(report["nfl_held"]) == 2
+    assert all(r.startswith("NFL_CAPTURE_DISABLED") for r in report["nfl_held"].values())
+    # Recorded at once, with the actual cause; never fetched later.
     assert {t["state"] for t in nfl_targets(store)} == {"MISSED"}
+    assert all(t["state_reason"].startswith("NFL_CAPTURE_DISABLED") for t in nfl_targets(store))
+    capture(store, Clock(TICK + timedelta(minutes=15, seconds=20)), environ=ON)
+    assert api.calls == []
 
 
 # --------------------------------------------------------------------------- planning
@@ -330,7 +334,7 @@ def test_capture_is_one_listing_and_two_books_without_in_run_retries(store, monk
     assert len(rows) == 4 and {r["rules_sha256"] is not None for r in rows} == {True}
 
 
-def test_a_failed_game_horizon_is_retried_once_then_final(store, monkeypatch):
+def test_a_failed_game_horizon_is_retried_once_and_never_pages(store, monkeypatch):
     setup_captured(store, ARI_NYG)
     plan(store, TICK)
     failing = routes("KXNFLGAME-26OCT04ARINYG", book=HttpFetchError("HTTP 503", status=503, attempts=1))
@@ -338,10 +342,13 @@ def test_a_failed_game_horizon_is_retried_once_then_final(store, monkeypatch):
     api = Api(clock, failing)
     monkeypatch.setattr(po, "fetch_json_result", api)
     code, first = capture(store, clock)
-    assert code == 0 and sorted(first["failed_retrying"]) == sorted(t["target_id"] for t in nfl_targets(store))
+    ids = sorted(t["target_id"] for t in nfl_targets(store))
+    assert code == 0 and first["nfl_failed"] == ids and first["failed_retrying"] == [] and first["failed_final"] == []
     clock.now = TICK + timedelta(minutes=15, seconds=20)
     code, second = capture(store, clock)
-    assert code == 1 and len(second["failed_final"]) == 2  # the one retry is spent: final, alerting
+    # The one retry is spent: recorded FAILED and visible, never in failed_final, never exit 1 (no EXP-001 page).
+    assert code == 0 and second["nfl_failed"] == ids and second["failed_final"] == []
+    assert second["state"] == "PARTIAL_RETRYING"
     clock.now = TICK + timedelta(minutes=30, seconds=20)  # a third tick (past the deadline) sends nothing
     capture(store, clock)
     assert len(api.calls) == 6 <= po.NFL_WORST_GETS_PER_GAME_HORIZON
@@ -359,11 +366,33 @@ def test_the_attempt_limit_holds_even_if_a_deadline_would_allow_a_third_tick(sto
     clock = Clock(TICK + timedelta(seconds=20))
     api = Api(clock, failing)
     monkeypatch.setattr(po, "fetch_json_result", api)
+    reports = []
     for minutes in (0, 15, 30, 45):
         clock.now = TICK + timedelta(minutes=minutes, seconds=20)
-        _, report = capture(store, clock)
+        reports.append(capture(store, clock)[1])
     assert len(api.calls) == 6
-    assert report["nfl_held"]["reason"] == "NFL_ATTEMPT_LIMIT"
+    assert all(r.startswith("NFL_ATTEMPT_LIMIT") for r in reports[2]["nfl_held"].values())
+    assert all(t["state"] == "MISSED" and t["state_reason"].startswith("NFL_ATTEMPT_LIMIT") for t in nfl_targets(store))
+
+
+def test_six_gets_per_game_horizon_also_with_extra_runs_and_split_books(store, monkeypatch):
+    """A manual or close-tick run inside the window, and a book deferred after its listing, still count."""
+    setup_captured(store, ARI_NYG)
+    plan(store, TICK)
+    failing = routes("KXNFLGAME-26OCT04ARINYG", book=HttpFetchError("HTTP 503", status=503, attempts=1))
+    clock = Clock(TICK + timedelta(seconds=20))
+    api = Api(clock, failing)
+    monkeypatch.setattr(po, "fetch_json_result", api)
+    # Run 1: only 2 GETs allowed: the listing and one book; the other book is deferred after the listing.
+    _, first = po.run_capture(store.path, clock=clock, sleep=clock.sleep, max_requests=2, environ=ON)
+    assert len(api.calls) == 2
+    reasons = {r["miss_reason"].split(":")[0] for r in store.price_observations() if r["target_id"] in first["nfl_failed"]}
+    assert "BOOK_DEFERRED_AFTER_LISTING" in reasons
+    for seconds in (60, 120, 180):  # extra (manual) runs a minute apart, all inside the window
+        clock.now = TICK + timedelta(seconds=20 + seconds)
+        capture(store, clock)
+    assert len(api.calls) <= po.NFL_WORST_GETS_PER_GAME_HORIZON
+    assert {t["state"] for t in nfl_targets(store)} == {"MISSED"}
 
 
 def test_nfl_targets_never_take_an_adr0030_targets_place(store, monkeypatch):
@@ -470,7 +499,7 @@ def test_a_failed_settlement_read_is_final_but_never_pages(store, monkeypatch):
     monkeypatch.setattr(po, "fetch_json_result", api)
     code, report = capture(store, clock)
     assert code == 0 and report["failed_final"] == [] and report["failed_retrying"] == []
-    assert len(report["nfl_settlement_failed"]) == 1  # recorded FAILED, no OnFailure page
+    assert len(report["nfl_failed"]) == 1  # recorded FAILED, no OnFailure page
     clock.now = tick + timedelta(minutes=15, seconds=10)
     capture(store, clock)
     assert len(api.calls) == 1
@@ -504,3 +533,107 @@ def test_observe_plan_shows_the_planned_nfl_targets_for_a_sample_schedule(store)
     assert nfl["budget"] == {"week": "nfl-week-of-2026-09-29", "game_horizons": 3, "game_horizon_cap": 48,
                              "settlement_reads": 0, "settlement_read_cap": 7, "worst_case_gets": 18,
                              "weekly_get_cap": 295, "worst_gets_per_game_horizon": 6, "expected_gets": 9}
+
+
+# --------------------------------------------------------------------------- independent review fixes (2026-09-25)
+
+
+def test_nfl_targets_never_touch_the_exp001_observation_freshness_record(store, monkeypatch):
+    """BLOCKER: NFL misses (kill switch) and NFL receipts must not change price_observations.later."""
+    from edge_lab import freshness_fabric as ff
+    from edge_lab.freshness import FabricContext
+
+    def later():
+        return {r.source_id: r for r in ff.price_observations_schedule(FabricContext(db=store.path), TICK)}[
+            "price_observations.later"]
+    before = later()
+    setup_captured(store, ARI_NYG)
+    plan(store, TICK)
+    capture(store, Clock(TICK + timedelta(seconds=20)), environ=OFF)  # both NFL targets MISSED at once
+    after_misses = later()
+    assert after_misses.missed_count == before.missed_count and after_misses.health == before.health
+    # And an NFL capture never becomes the EXP-001 source's receipt.
+    ids = odds_schedule(store, DEN_SF, planned_at=T24 - timedelta(days=2))
+    odds_captured(store, ids[(DEN_SF.event_id, "T-24h")], T24)
+    plan(store, TICK)
+    clock = Clock(TICK + timedelta(seconds=20))
+    monkeypatch.setattr(po, "fetch_json_result", Api(clock, routes("KXNFLGAME-26OCT04DENSF")))
+    capture(store, clock)
+    assert any(t["state"] == "CAPTURED" for t in nfl_targets(store))
+    assert later().receipt_ts == before.receipt_ts and later().freshness == before.freshness
+
+
+def _close_target(store, close):
+    t = close - po.CLOSE_AIM
+    target = {"target_id": po.target_id("kalshi:KXHIGHNY-26SEP23-B69.5", "close", t), "venue": "kalshi",
+              "market_id": "kalshi:KXHIGHNY-26SEP23-B69.5", "native_market_id": "KXHIGHNY-26SEP23-B69.5",
+              "event_id": "kalshi:KXHIGHNY-26SEP23", "native_event_id": "KXHIGHNY-26SEP23", "phase": "close",
+              "target_utc": po._iso(t), "due_from_utc": po._iso(t - po.CLOSE_EARLY),
+              "deadline_utc": po._iso(close - po.CLOSE_LAST_START), "policy_version": po.POLICY_VERSION,
+              "origin": "ledger_decision", "decision_ref": "d1",
+              "decision_as_of_utc": po._iso(close - timedelta(hours=10)), "close_time_utc": po._iso(close),
+              "close_basis": "kalshi_close_time_v1", "planned_rules_sha256": None, "detail": {},
+              "planned_at_utc": po._iso(close - timedelta(hours=10))}
+    assert store.plan_price_target(target)
+    return target
+
+
+def test_an_exp001_close_target_always_keeps_priority_over_nfl(store, monkeypatch):
+    from test_forward import MARKETS
+    close = datetime(2026, 9, 24, 5, 0, tzinfo=UTC)  # the recorded KXHIGHNY-26SEP23 markets' close_time
+    at = datetime(2026, 9, 24, 4, 55, 1, tzinfo=UTC)
+    ids = odds_schedule(store, ARI_NYG, planned_at=at - timedelta(days=2))
+    odds_captured(store, ids[(ARI_NYG.event_id, "T-6h")], at)  # an NFL pair due inside the close run
+    plan(store, at + timedelta(minutes=1))
+    assert len(nfl_targets(store)) == 2
+    target = _close_target(store, close)
+    clock = Clock(datetime(2026, 9, 24, 4, 57, 45, tzinfo=UTC))
+    api = Api(clock, {**routes("KXNFLGAME-26OCT04ARINYG"), "/markets?event_ticker=KXHIGHNY-26SEP23": MARKETS})
+    monkeypatch.setattr(po, "fetch_json_result", api)
+    _, report = po.run_capture(store.path, clock=clock, sleep=clock.sleep, max_requests=3, environ=ON)
+    assert all("KXNFLGAME" not in c for c in api.calls) and len(api.calls) == 3  # listing, book, confirmation
+    assert sorted(report["nfl_deferred_for_close"]) == sorted(t["target_id"] for t in nfl_targets(store))
+    close_rows = [r for r in store.price_observations() if r["target_id"] == target["target_id"]]
+    assert close_rows and {r["collection_status"] for r in close_rows} == {"CAPTURED"}
+    # The NFL pair is not lost: the next regular tick captures it.
+    clock.now = datetime(2026, 9, 24, 5, 5, 5, tzinfo=UTC)
+    capture(store, clock)
+    assert {t["state"] for t in nfl_targets(store)} == {"CAPTURED"}
+
+
+def test_only_the_approved_horizons_are_paired(store):
+    from edge_lab.odds_schedule import parse_offsets
+
+    targets = plan_targets([ARI_NYG], parse_offsets("24h,2h,60m"))
+    for t in targets:
+        store.plan_odds_target(target_id=t.target_id, sport=SPORT, event_id=t.event_id, offset_label=t.offset_label,
+                               priority=t.priority, commence_time_utc=iso_z(t.commence_utc),
+                               target_utc=iso_z(t.target_utc), planned_at_utc=iso_z(T24 - timedelta(days=2)),
+                               policy_version="game_relative_v1", home_team=t.home_team, away_team=t.away_team)
+    t2 = next(t for t in targets if t.offset_label == "T-2h")
+    odds_captured(store, t2.target_id, t2.target_utc)
+    report = plan(store, t2.target_utc + timedelta(minutes=5))
+    assert nfl_targets(store) == []
+    assert any(s["reason"].startswith("HORIZON_NOT_APPROVED") for s in report["nfl"]["not_planned"])
+    assert po.NFL_HORIZONS == ("T-24h", "T-6h", "T-60m")
+
+
+def test_mapping_and_the_dry_run_are_point_in_time(store):
+    """A listing received after `now` (here: one lacking the markets) is never used at `now`."""
+    event = "KXNFLGAME-26OCT04ARINYG"
+    setup_captured(store, ARI_NYG)
+    _store_listing(store, event, {"cursor": "", "markets": []}, TICK + timedelta(hours=1))
+    at_tick = po.nfl_dry_run(store.path, now=TICK)
+    assert len(at_tick["would_plan"]) == 2
+    assert {t["detail"]["mapping"] for t in at_tick["would_plan"]} == {"DERIVED"}
+    # After that listing was received it is known, and it stops pairing that game.
+    later_capture = TICK + timedelta(hours=2)
+    ids = odds_schedule(store, KC_LV, planned_at=T24)
+    odds_captured(store, ids[(KC_LV.event_id, "T-24h")], later_capture)
+    ids_ari = {(r["event_id"], r["offset_label"]): r["target_id"] for r in store.odds_targets(sport=SPORT)}
+    odds_captured(store, ids_ari[(ARI_NYG.event_id, "T-6h")], later_capture)
+    later = po.nfl_dry_run(store.path, now=later_capture + timedelta(minutes=5))
+    assert {t["native_event_id"] for t in later["would_plan"]} == {"KXNFLGAME-26OCT04KCLV"}
+    assert any(s["reason"].startswith("NOT_LISTED") for s in later["not_planned"])
+    # Odds targets planned after `now` are unknown at `now`.
+    assert po.nfl_dry_run(store.path, now=T24 - timedelta(days=3))["would_plan"] == []

@@ -765,7 +765,9 @@ def price_observations_schedule(ctx: FabricContext, now: datetime) -> list[Sourc
     store, problem = _open_store(ctx)
     if store is None:
         return [unknown_record(p, now, problem or "evidence store unavailable") for p in OBSERVATION_POLICIES]
-    targets = store.price_targets()
+    # The Kalshi NFL pairing targets share the collector but are not ADR 0030 observations: their
+    # misses, kill-switch holds and receipts must never change the EXP-001 observation record.
+    targets = [t for t in store.price_targets() if not po.is_nfl_target(t)]
     return [_observation_record(POLICY_OBSERVE, [t for t in targets if t["phase"] != "close"], targets, now, close=False),
             _observation_record(POLICY_OBSERVE_CLOSE, [t for t in targets if t["phase"] == "close"], targets, now,
                                 close=True)]

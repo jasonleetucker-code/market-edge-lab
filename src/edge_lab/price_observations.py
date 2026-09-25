@@ -840,7 +840,11 @@ def _capture_kalshi_group(store: SnapshotStore, run_id: str, targets: list[Mappi
         try:
             payload, result = req.get(url, pacer=KALSHI_PACER, retries=retries)
         except RequestBudgetExhausted:
-            deferred.append(t["target_id"])
+            if nfl:  # the listing was already sent in this run: it counts as this game-horizon's attempt
+                attempts.append([_base_row(run_id, attempt, t, status="FAILED", **common,
+                                           reason="BOOK_DEFERRED_AFTER_LISTING: the run's request budget was used")])
+            else:
+                deferred.append(t["target_id"])
             continue
         except _FETCH_ERRORS as exc:
             attempts.append([_base_row(run_id, attempt, t, status="FAILED",
@@ -941,9 +945,11 @@ def capture(store: SnapshotStore, *, clock: Clock | None = None, sleep: Sleep = 
     Returns (exit code, report): 1 when a FAILED target cannot be retried by a later scheduled tick
     (`failed_final`), else 0. Retryable failures are recorded and listed in `failed_retrying`.
 
-    NFL pairing targets (`NFL_ORIGIN`) are attempted only while the switch is on (`nfl_enabled`, default
-    from the environment), at most `NFL_MAX_ATTEMPTS` times each, and after every other due target, so
-    they can never take an ADR 0030 observation's place in the per-run caps."""
+    NFL pairing targets (`NFL_ORIGIN`) never take priority over an ADR 0030 observation: they are ordered
+    after every other target, and a run with a due close target attempts no NFL target at all. They are
+    attempted only while the switch is on (`nfl_enabled`, default from the environment; off records them
+    MISSED as NFL_CAPTURE_DISABLED), by at most `NFL_MAX_ATTEMPTS` runs per game-horizon (1 for a settled
+    read), and their failures never fail the run: they are recorded FAILED and listed in `nfl_failed`."""
     clock = clock or _now
     nfl_on = nfl_capture_enabled() if nfl_enabled is None else nfl_enabled
     _check_bounds(max_targets, max_requests)
@@ -965,13 +971,20 @@ def capture(store: SnapshotStore, *, clock: Clock | None = None, sleep: Sleep = 
         due = [t for t in store.price_targets() if t["state"] in (None, "FAILED")
                and _t(t["due_from_utc"]) <= now <= _t(t["deadline_utc"])
                and t["phase"] not in BACKFILL_PHASES]
-        held = [t for t in due if is_nfl_target(t) and (not nfl_on or (t["attempts"] or 0) >= _nfl_attempt_limit(t))]
-        if held:
-            # Not attempted: they expire MISSED at their deadline with the usual reason.
-            report["nfl_held"] = {"reason": "NFL_CAPTURE_OFF" if not nfl_on else "NFL_ATTEMPT_LIMIT",
-                                  "targets": sorted(t["target_id"] for t in held)}
-            held_ids = {t["target_id"] for t in held}
-            due = [t for t in due if t["target_id"] not in held_ids]
+        nfl_due = [t for t in due if is_nfl_target(t)]
+        if nfl_due:
+            held = _nfl_holds(store, nfl_due, nfl_on)
+            for t in nfl_due:  # recorded now, with the actual cause; never attempted
+                if t["target_id"] in held:
+                    store.record_price_observations([_base_row(run_id, _attempt_id(run_id, t["target_id"]), t,
+                                                               status="MISSED", reason=held[t["target_id"]])])
+            if held:
+                report["nfl_held"] = dict(sorted(held.items()))
+            due = [t for t in due if t["target_id"] not in held]
+            if any(t["phase"] == "close" and not is_nfl_target(t) for t in due):
+                # EXP-001 close observations keep the whole run: NFL targets wait for the next tick.
+                report["nfl_deferred_for_close"] = sorted(t["target_id"] for t in due if is_nfl_target(t))
+                due = [t for t in due if not is_nfl_target(t)]
         due.sort(key=lambda t: (is_nfl_target(t), t["target_utc"], t["market_id"]))
         report["deferred"] = [t["target_id"] for t in due[max_targets:]]
         due = due[:max_targets]
@@ -991,7 +1004,7 @@ def capture(store: SnapshotStore, *, clock: Clock | None = None, sleep: Sleep = 
         full_deadline = req.deadline
         guard = min(close_aims) - CLOSE_GUARD if close_aims else None
         for (venue, _, phase, _), targets in sorted(groups.items(),
-                                                    key=lambda kv: (kv[0][2] == "close", is_nfl_target(kv[1][0]))):
+                                                    key=lambda kv: (is_nfl_target(kv[1][0]), kv[0][2] == "close")):
             req.deadline = full_deadline if phase == "close" or guard is None else min(full_deadline, guard)
             if phase != "close" and clock() + forward.MIN_REQUEST_BUDGET >= req.deadline:
                 report["deferred"] += [t["target_id"] for t in targets]
@@ -1036,14 +1049,13 @@ def capture(store: SnapshotStore, *, clock: Clock | None = None, sleep: Sleep = 
     # A FAILED row stays evidence either way. The run fails (and alerts) only for a target that no later
     # scheduled tick can retry: a close target, or one with no unprotected tick left before its deadline.
     end = clock()
-    # A failed NFL settled-markets read never fails the run (no page): it is recorded FAILED, then MISSED,
-    # and listed in `nfl_settlement_failed`. A request-shape mistake must not page every game day.
-    quiet = sorted(i for i, t in failed_targets.items() if is_nfl_target(t) and _nfl_role(t) == NFL_ROLE_SETTLEMENT)
+    # A failed NFL target never fails the run (no page: the owner has not agreed to NFL alerts). It is
+    # recorded FAILED (the run is partial), listed in `nfl_failed`, retried once if allowed, then MISSED.
+    quiet = sorted(i for i, t in failed_targets.items() if is_nfl_target(t))
     if quiet:
-        report["nfl_settlement_failed"] = quiet
+        report["nfl_failed"] = quiet
     final = sorted(i for i, t in failed_targets.items() if i not in quiet and (
-                   t["phase"] == "close" or not _retry_tick_before(_t(t["deadline_utc"]), end)
-                   or (is_nfl_target(t) and (t["attempts"] or 0) + 1 >= _nfl_attempt_limit(t))))
+                   t["phase"] == "close" or not _retry_tick_before(_t(t["deadline_utc"]), end)))
     report["failed_final"] = final
     report["failed_retrying"] = sorted(set(failed_targets) - set(final) - set(quiet))
     report["state"] = ("PARTIAL" if final else "PARTIAL_RETRYING") if failed else (
@@ -1254,6 +1266,7 @@ NFL_SETTLEMENT_WINDOW = timedelta(minutes=9)
 NFL_SETTLEMENT_PLAN_LEAD = timedelta(minutes=30)
 NFL_SETTLEMENT_PAGE_LIMIT = 100  # a game day has at most 13 games (26 markets); one page, never a second
 NFL_MAX_REPORT_ITEMS = 50
+NFL_HORIZONS = ("T-24h", "T-6h", "T-60m")  # the approved horizons, exactly; any other Odds offset is not paired
 _OBSERVE_TICK_MINUTE = 5  # edgelab-observe.timer: *:05/15 America/New_York (whole-hour offset: same UTC minutes)
 
 assert NFL_WEEKLY_GET_CAP == 288 + 7 and NFL_SWITCH == "EDGE_LAB_KALSHI_NFL_CAPTURE"
@@ -1266,8 +1279,8 @@ def nfl_switch_value(environ: Mapping[str, str] | None = None) -> str:
 
     # A literal name (tests/invariants/test_no_execution_paths.py scans every environment read).
     value = environ.get(NFL_SWITCH) if environ is not None else os.environ.get("EDGE_LAB_KALSHI_NFL_CAPTURE")
-    text = (value or "").strip().lower()
-    return "ON" if text in ("", "on") else "OFF" if text == "off" else "INVALID"
+    # Exactly the values install.sh accepts and keeps: on or off, lowercase, nothing else.
+    return "ON" if value in (None, "", "on") else "OFF" if value == "off" else "INVALID"
 
 
 def nfl_capture_enabled(environ: Mapping[str, str] | None = None) -> bool:
@@ -1310,6 +1323,35 @@ def _nfl_attempt_limit(t: Any) -> int:
     return 1 if _nfl_role(t) == NFL_ROLE_SETTLEMENT else NFL_MAX_ATTEMPTS
 
 
+def _nfl_holds(store: SnapshotStore, nfl_due: Sequence[Any], nfl_on: bool) -> dict[str, str]:
+    """{target id: reason} for the due NFL targets that must not be attempted in this run.
+
+    The GET bound is enforced per game-horizon (both team markets at one Odds receipt, or one settled read),
+    not per target: a run that sent any GET for the group left a non-MISSED row for every target it touched
+    (a book deferred after its listing is recorded FAILED too). Each such run costs at most 3 GETs (1 for a
+    settled read), so at most `_nfl_attempt_limit` runs keep a game-horizon within 6 (1), whichever run it
+    was: a scheduled tick, the close tick or a manual capture."""
+    if not nfl_on:
+        return {t["target_id"]: f"NFL_CAPTURE_DISABLED: {NFL_SWITCH} is off (or invalid): not attempted" for t in nfl_due}
+    group_of = lambda t: (t["native_event_id"], t["target_utc"])  # noqa: E731
+    groups = {group_of(t) for t in nfl_due}
+    ids: dict[tuple[str, str], set[str]] = {}
+    markets: dict[tuple[str, str], set[str]] = {}
+    for t in store.price_targets():
+        if is_nfl_target(t) and group_of(t) in groups:
+            ids.setdefault(group_of(t), set()).add(t["target_id"])
+            markets.setdefault(group_of(t), set()).add(t["market_id"])
+    runs: dict[tuple[str, str], set[str]] = {g: set() for g in groups}
+    for g in groups:
+        for market in sorted(markets.get(g, ())):
+            for r in store.price_observations(market_id=market):
+                if r["target_id"] in ids[g] and r["collection_status"] != "MISSED":
+                    runs[g].add(r["run_id"])
+    return {t["target_id"]: f"NFL_ATTEMPT_LIMIT: {len(runs[group_of(t)])} run(s) already sent GETs for this "
+                            f"game-horizon (limit {_nfl_attempt_limit(t)})"
+            for t in nfl_due if len(runs[group_of(t)]) >= _nfl_attempt_limit(t)}
+
+
 _MONTH_CODES = ("JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC")
 
 
@@ -1333,13 +1375,18 @@ def next_observe_tick(instant: datetime) -> datetime:
     return tick
 
 
-def _nfl_mapping(store: SnapshotStore, event: str, expected: Mapping[str, str]) -> tuple[str, str]:
-    """(LISTED | DERIVED | NOT_LISTED | AMBIGUOUS, why) from the newest stored listing of `event` only.
-    With no listing stored yet, the derived tickers are planned and the capture's own listing GET (inside
-    the game-horizon's budget) verifies them; a stored listing that lacks them stops further planning."""
-    row = store.latest_snapshot(source=KALSHI_SOURCE.legacy_name, kind="markets", entity_id=event)
-    if row is None:
-        return "DERIVED", "no listing stored yet: the capture's listing GET verifies the derived tickers"
+def _nfl_mapping(store: SnapshotStore, event: str, expected: Mapping[str, str], now: datetime) -> tuple[str, str]:
+    """(LISTED | DERIVED | NOT_LISTED | AMBIGUOUS, why) from the newest listing of `event` received at or
+    before `now` (point in time: a later listing is never used, also in a dry run for a past `now`).
+    With no listing received yet, the derived tickers are planned and the capture's own listing GET (inside
+    the game-horizon's budget) verifies them; a received listing that lacks them stops further planning."""
+    known = [m for m in store.snapshot_metadata(source=KALSHI_SOURCE.legacy_name, kinds=("markets",),
+                                                entity_prefix=event, limit=1000)
+             if m["entity_id"] == event and (_t(m["fetched_at_utc"]) or now + timedelta(seconds=1)) <= now]
+    if not known:
+        return "DERIVED", "no listing received yet: the capture's listing GET verifies the derived tickers"
+    newest = int(known[-1]["id"])
+    row = store.snapshots_by_id([newest])[newest]
     try:
         payload = json.loads(row["payload_json"])
     except ValueError:
@@ -1391,7 +1438,8 @@ def plan_nfl_targets(store: SnapshotStore, now: datetime) -> tuple[list[dict[str
     kickoff: dict[str, datetime] = {}
     for r in odds:
         c = _t(r["commence_time_utc"])
-        if c is None:
+        planned = _t(r["planned_at_utc"])
+        if c is None or planned is None or planned > now:  # point in time: only targets known by now
             continue
         first_kickoff[r["event_id"]] = min(first_kickoff.get(r["event_id"], c), c)
         if r["state"] != "SUPERSEDED":
@@ -1403,6 +1451,9 @@ def plan_nfl_targets(store: SnapshotStore, now: datetime) -> tuple[list[dict[str
         at = _t(r["captured_at_utc"]).replace(microsecond=0)
         if not now - NFL_PLAN_WINDOW <= at <= now:
             continue  # older captures are never paired late; later ones do not exist yet
+        if r["offset_label"] not in NFL_HORIZONS:
+            skip(r["target_id"], f"HORIZON_NOT_APPROVED: {r['offset_label']!r} (approved: {', '.join(NFL_HORIZONS)})")
+            continue
         commence = _t(r["commence_time_utc"])
         deadline = min(at + NFL_TARGET_WINDOW, commence - NFL_MIN_LEAD)
         if deadline <= now:
@@ -1412,9 +1463,10 @@ def plan_nfl_targets(store: SnapshotStore, now: datetime) -> tuple[list[dict[str
         if home not in NFL_TEAMS or away not in NFL_TEAMS:
             skip(r["target_id"], f"UNMAPPED_TEAM: {away!r} at {home!r} not in the NFL team table")
             continue
-        event = nfl_event_ticker(NFL_TEAMS[away][0], NFL_TEAMS[home][0], et_date(first_kickoff[r["event_id"]]))
+        original = first_kickoff.get(r["event_id"], commence)
+        event = nfl_event_ticker(NFL_TEAMS[away][0], NFL_TEAMS[home][0], et_date(original))
         expected = {f"{event}-{NFL_TEAMS[team][0]}": NFL_TEAMS[team][1] for team in (away, home)}
-        mapping, why = _nfl_mapping(store, event, expected)
+        mapping, why = _nfl_mapping(store, event, expected, now)
         if mapping not in ("LISTED", "DERIVED"):
             skip(r["target_id"], f"{mapping}: {why}")
             continue
