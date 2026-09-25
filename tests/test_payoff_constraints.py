@@ -22,6 +22,7 @@ from edge_lab.payoff_constraints import (
 )
 
 FIXTURES = Path(__file__).parent / "fixtures" / "forward"
+from edge_lab.payoff_constraints import PAYOFF_VERSION as PAYOFF_VERSION_T  # noqa: E402
 T = "2026-09-24T12:00:00Z"
 AS_OF = "2026-09-24T12:00:30Z"
 AGE, SKEW = timedelta(minutes=5), timedelta(seconds=60)
@@ -403,7 +404,7 @@ def _cli_registry(tmp_path, protocol_edit=None):
 def _cli_args(db, root, *extra):
     return ["research", "payoff-scan", "--db", str(db), "--sizes", "1", "--max-quote-age-seconds", "300",
             "--max-leg-skew-seconds", "60", "--event-from", "2026-09-01", "--event-to", "2026-09-30",
-            "--root", str(root), "--code-version", "test", *extra]
+            "--root", str(root), "--code-version", "test", "--source-label", "fixture", *extra]
 
 
 def test_cli_payoff_scan_logs_its_evidence_use_before_output(tmp_path, capsys):
@@ -418,9 +419,15 @@ def test_cli_payoff_scan_logs_its_evidence_use_before_output(tmp_path, capsys):
     with pytest.raises(SystemExit):
         main(["research", "payoff-scan", "--db", str(db), "--sizes", "1"])  # windows are never defaulted
     assert main(_cli_args(db, root, "--out", str(out))) == 0
-    report = json.loads(out.read_text(encoding="utf-8"))
+    envelope = json.loads(out.read_text(encoding="utf-8"))
+    from edge_lab.payoff_constraints import verify_result_file
+
+    assert verify_result_file(envelope) == (True, ())
+    report = envelope["report"]
     uses = read_log(log).uses
-    assert len(uses) == before + 1 and uses[-1].event_id == report["evidence_use_event_id"]
+    assert len(uses) == before + 1 and uses[-1].event_id == envelope["provenance"]["evidence_use_event_id"]
+    assert envelope["provenance"]["source_store"] == "fixture" and envelope["provenance"]["code_version"] == "test"
+    assert report["store_identity"]["max_snapshot_id"] == len(markets) + 1
     assert uses[-1].viewed_labels is False and uses[-1].window.scope == "kalshi:KXHIGHNY"
     assert report["sets_evaluated"] == 1 and "result" in report["prohibited_fields_never_read"]
     assert '"relationship_counts"' in capsys.readouterr().out
@@ -541,3 +548,44 @@ def test_research_sports_evidence_passes_arguments_through(monkeypatch):
     monkeypatch.setattr(sports_evidence, "main", lambda argv: seen.append(argv) or 0)
     assert cli.main(["research", "sports-evidence", "report", "--db", "x.sqlite3", "--summary"]) == 0
     assert seen == [["report", "--db", "x.sqlite3", "--summary"]]
+
+
+
+def test_verify_result_file_catches_edits_and_missing_provenance():
+    from edge_lab.payoff_constraints import result_envelope, verify_result_file
+
+    report = {"version": PAYOFF_VERSION_T, "prohibited_fields_never_read": sorted(PROHIBITED_MARKET_FIELDS),
+              "store_identity": {"schema_version": 7, "max_snapshot_id": 9, "latest_snapshot_received_utc": "x"},
+              "event_window": ["2026-09-22", "2026-09-23"], "sets_evaluated": 0}
+    from edge_lab.provenance import canonical_json, sha256_hex
+
+    report["report_sha256"] = sha256_hex(canonical_json(report))
+    env = result_envelope(report, generated_at_utc="2026-09-25T04:00:00+00:00", source_store="laptop",
+                          code_version="abc", evidence_use_event_id="eu-" + "0" * 32)
+    assert verify_result_file(env) == (True, ())
+    edited = json.loads(json.dumps(env))
+    edited["report"]["sets_evaluated"] = 5
+    ok, reasons = verify_result_file(edited)
+    assert not ok and any("report_sha256" in r for r in reasons) and any("envelope_sha256" in r for r in reasons)
+    bare = json.loads(json.dumps(env))
+    bare["provenance"]["evidence_use_event_id"] = None
+    assert not verify_result_file(bare)[0]
+    with pytest.raises(ValueError):
+        result_envelope(report, generated_at_utc="x", source_store="somewhere", code_version="c",
+                        evidence_use_event_id="eu-" + "0" * 32)
+    assert verify_result_file([]) == (False, ("not a JSON object",))
+
+
+def test_the_committed_laptop_result_file_verifies():
+    from edge_lab.payoff_constraints import verify_result_file
+
+    path = (Path(__file__).resolve().parents[1] / "experiments" / "EXP-003-same-venue-payoff-consistency" / "results"
+            / "payoff_scan_laptop_store_2026-09-22.json")
+    ok, reasons = verify_result_file(json.loads(path.read_text(encoding="utf-8")))
+    assert ok, reasons
+
+
+def test_the_dashboard_result_display_is_a_known_unlogged_consumer():
+    from edge_lab.research_evidence import KNOWN_UNLOGGED_CONSUMERS
+
+    assert any("EXP-003" in c and "dashboard" in c for c in KNOWN_UNLOGGED_CONSUMERS["kalshi:kxhighny"])

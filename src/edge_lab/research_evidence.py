@@ -63,9 +63,13 @@ OUT_OF_BAND_LIMITATION = (
 
 # Scopes whose outcomes are read by processes that keep no evidence-use log. A window in such a
 # scope can never be certified untouched (review SF-5).
-KNOWN_UNLOGGED_CONSUMERS: dict[str, str] = {
-    "kalshi:kxhighny": "EXP-001's daily pipeline, shadow ledger, settlement runs and Terminal read KXHIGHNY "
-                       "outcomes without an evidence-use log",
+KNOWN_UNLOGGED_CONSUMERS: dict[str, tuple[str, ...]] = {
+    "kalshi:kxhighny": (
+        "EXP-001's daily pipeline, shadow ledger, settlement runs and Terminal read KXHIGHNY outcomes without an "
+        "evidence-use log",
+        "EXP-003: dashboard: EXP-003 result-file display (read-only, market-side, no outcome labels); it reads "
+        "without logging, but the payoff-scan run that produced the file is logged by the CLI",
+    ),
 }
 
 
@@ -392,10 +396,10 @@ def holdout_status(logs: Iterable[EvidenceLog], *, dataset_sha256: str, window: 
         state = HoldoutState.UNKNOWN_LEGACY
         reasons.append(f"outcomes from {window.start_utc} predate the first covering evidence log "
                        f"({min(starts).isoformat()}): earlier access is UNKNOWN")
-    for prefix, consumer in KNOWN_UNLOGGED_CONSUMERS.items():
+    for prefix, consumers in KNOWN_UNLOGGED_CONSUMERS.items():
         if scope_matches(window.scope, prefix):
             state = max(state, HoldoutState.UNKNOWN_LEGACY, key=_STATE_ORDER.__getitem__)
-            reasons.append(f"known unlogged consumer of {prefix}: {consumer}")
+            reasons.extend(f"known unlogged consumer of {prefix}: {consumer}" for consumer in consumers)
     matches: list[str] = []
     for log in logs:
         for use in log.uses:

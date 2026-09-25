@@ -973,6 +973,9 @@ def scan_kalshi_store(db_path: str, *, series: str, sizes: Sequence[Decimal], ma
     uri = "file:" + db_path.replace("\\", "/") + "?mode=ro"
     with closing(sqlite3.connect(uri, uri=True)) as con:
         con.execute("PRAGMA query_only = ON")
+        identity_row = con.execute("SELECT MAX(id), MAX(fetched_at_utc) FROM snapshots").fetchone()
+        store_identity = {"schema_version": int(con.execute("PRAGMA user_version").fetchone()[0]),
+                          "max_snapshot_id": identity_row[0], "latest_snapshot_received_utc": identity_row[1]}
         rows = con.execute(
             "SELECT id, kind, entity_id, fetched_at_utc, url, payload_json, payload_sha256 FROM snapshots "
             "WHERE source = 'kalshi' AND kind IN ('markets', 'orderbook') AND substr(entity_id, 1, ?) = ? ORDER BY id",
@@ -1053,6 +1056,7 @@ def scan_kalshi_store(db_path: str, *, series: str, sizes: Sequence[Decimal], ma
     report = {
         "version": PAYOFF_VERSION,
         "series": series,
+        "store_identity": store_identity,
         "event_window": [event_from, event_to],
         "sizes": [str(s) for s in sorted(set(sizes))],
         "max_quote_age_seconds": max_quote_age.total_seconds(),
@@ -1073,3 +1077,84 @@ def scan_kalshi_store(db_path: str, *, series: str, sizes: Sequence[Decimal], ma
     }
     report["report_sha256"] = sha256_hex(canonical_json(report))
     return report
+
+
+
+# --------------------------------------------------------------------------- result files (Terminal input)
+
+RESULT_VERSION = "payoff-scan-result-v1"
+SOURCE_LABELS = ("laptop", "production", "fixture")
+PROVENANCE_FIELDS = ("generated_at_utc", "source_store", "store_identity", "code_version", "event_window",
+                     "evidence_use_event_id")
+
+
+def result_envelope(report: Mapping[str, Any], *, generated_at_utc: str, source_store: str, code_version: str,
+                    evidence_use_event_id: str) -> dict[str, Any]:
+    """The committed/displayed scan result: the report (hashed by `report_sha256`) plus a provenance
+    envelope, and `envelope_sha256` over both. `verify_result_file` checks it."""
+    if source_store not in SOURCE_LABELS:
+        raise ValueError(f"source_store must be one of {SOURCE_LABELS}")
+    provenance = {
+        "generated_at_utc": generated_at_utc,
+        "source_store": source_store,
+        "store_identity": report.get("store_identity"),
+        "code_version": code_version,
+        "event_window": report.get("event_window"),
+        "evidence_use_event_id": evidence_use_event_id,
+    }
+    envelope = {"result_version": RESULT_VERSION, "payoff_version": PAYOFF_VERSION, "provenance": provenance,
+                "report": dict(report)}
+    envelope["envelope_sha256"] = sha256_hex(canonical_json({k: v for k, v in envelope.items()}))
+    return envelope
+
+
+def verify_result_file(obj: Any) -> tuple[bool, tuple[str, ...]]:
+    """The one canonical check of a payoff-scan result file (the Terminal calls this, never its own).
+
+    Checks the versions, both recomputed hashes, that every built-in prohibited field is declared
+    never read, and that every provenance field is present and well formed. Pure; never raises."""
+    reasons: list[str] = []
+    if not isinstance(obj, Mapping):
+        return False, ("not a JSON object",)
+    if obj.get("result_version") != RESULT_VERSION:
+        reasons.append(f"result_version {obj.get('result_version')!r} is not {RESULT_VERSION}")
+    if obj.get("payoff_version") != PAYOFF_VERSION:
+        reasons.append(f"payoff_version {obj.get('payoff_version')!r} is not {PAYOFF_VERSION}")
+    report = obj.get("report")
+    provenance = obj.get("provenance")
+    if not isinstance(report, Mapping) or not isinstance(provenance, Mapping):
+        return False, tuple(reasons + ["report or provenance missing"])
+    try:
+        body = {k: v for k, v in obj.items() if k != "envelope_sha256"}
+        if sha256_hex(canonical_json(body)) != obj.get("envelope_sha256"):
+            reasons.append("envelope_sha256 does not match (edited?)")
+        report_body = {k: v for k, v in report.items() if k != "report_sha256"}
+        if sha256_hex(canonical_json(report_body)) != report.get("report_sha256"):
+            reasons.append("report_sha256 does not match (edited?)")
+    except (TypeError, ValueError) as exc:
+        reasons.append(f"cannot hash: {exc}")
+    if report.get("version") != PAYOFF_VERSION:
+        reasons.append(f"report version {report.get('version')!r} is not {PAYOFF_VERSION}")
+    never_read = report.get("prohibited_fields_never_read")
+    if not isinstance(never_read, list) or not set(PROHIBITED_MARKET_FIELDS) <= set(never_read):
+        reasons.append("prohibited_fields_never_read does not cover every settled field")
+    for key in PROVENANCE_FIELDS:
+        if provenance.get(key) in (None, "", []):
+            reasons.append(f"provenance.{key} is missing")
+    if provenance.get("source_store") not in SOURCE_LABELS:
+        reasons.append(f"provenance.source_store must be one of {SOURCE_LABELS}")
+    if parse_utc(provenance.get("generated_at_utc")) is None:
+        reasons.append("provenance.generated_at_utc is not a timezone-aware time")
+    identity = provenance.get("store_identity")
+    if not (isinstance(identity, Mapping) and all(k in identity for k in ("schema_version", "max_snapshot_id",
+                                                                          "latest_snapshot_received_utc"))):
+        reasons.append("provenance.store_identity needs schema_version, max_snapshot_id, latest_snapshot_received_utc")
+    elif identity != report.get("store_identity"):
+        reasons.append("provenance.store_identity differs from the report's")
+    window = provenance.get("event_window")
+    if window != report.get("event_window") or not (isinstance(window, list) and len(window) == 2):
+        reasons.append("provenance.event_window differs from the report's or is malformed")
+    event_id = provenance.get("evidence_use_event_id")
+    if not (isinstance(event_id, str) and re.fullmatch(r"eu-[0-9a-f]{32}", event_id)):
+        reasons.append("provenance.evidence_use_event_id is not an evidence-use event id")
+    return not reasons, tuple(reasons)

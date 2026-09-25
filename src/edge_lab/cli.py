@@ -192,6 +192,8 @@ def build_parser() -> argparse.ArgumentParser:
     scan.add_argument("--event-from", required=True, help="first event date to evaluate, YYYY-MM-DD")
     scan.add_argument("--event-to", required=True, help="last event date to evaluate, YYYY-MM-DD")
     scan.add_argument("--actor", default="edge-lab-cli", help="who runs the scan (recorded in the evidence log)")
+    scan.add_argument("--source-label", required=True, choices=("laptop", "production", "fixture"),
+                      help="which evidence store this is (recorded in the result provenance)")
     scan.add_argument("--code-version", help="code commit (default: git HEAD of this checkout, else UNKNOWN)")
     scan.add_argument("--sizes", required=True, help="basket sizes, comma separated, e.g. 1,10,100")
     scan.add_argument("--max-quote-age-seconds", type=int, required=True,
@@ -905,7 +907,14 @@ def _code_version() -> str:
     except (OSError, subprocess.SubprocessError):
         return "UNKNOWN (no git checkout)"
     head = out.stdout.strip()
-    return head if out.returncode == 0 and head else "UNKNOWN (no git checkout)"
+    if out.returncode != 0 or not head:
+        return "UNKNOWN (no git checkout)"
+    try:
+        dirty = subprocess.run(["git", "status", "--porcelain", "--", "."], cwd=Path(__file__).resolve().parent,
+                               capture_output=True, text=True, timeout=10).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        return f"{head}+UNKNOWN-WORKTREE-STATE"
+    return f"{head}+uncommitted-code-changes" if dirty else head
 
 
 def _payoff_scan(args: argparse.Namespace) -> int:
@@ -961,6 +970,8 @@ def _payoff_scan(args: argparse.Namespace) -> int:
             event_to=args.event_to, prohibited_fields=prohibited)
     except ValueError as exc:
         return refuse(str(exc))
+    code_version = args.code_version or _code_version()
+    generated = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
     use = rev.EvidenceUse(
         experiment_id="EXP-003", family="B",
         dataset_id=f"kalshi_public:{args.series}_markets_and_orderbooks",
@@ -968,8 +979,8 @@ def _payoff_scan(args: argparse.Namespace) -> int:
                         f"{args.event_to})",
         dataset_sha256=report["input_snapshot_sha256"], role=rev.DatasetRole.DEVELOPMENT, window=window,
         actor=args.actor, tool=f"edge-lab research payoff-scan ({payoff_constraints.PAYOFF_VERSION})",
-        action_time_utc=datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
-        action=rev.Action.FEATURE_INSPECTION, code_version=args.code_version or _code_version(),
+        action_time_utc=generated,
+        action=rev.Action.FEATURE_INSPECTION, code_version=code_version,
         model_version=None, prompt_version=None, viewed_features=True, viewed_labels=False, viewed_results=True,
         influenced_tuning=False,
         note=f"Logged by the CLI before output. Market-side books and rules only; settled fields dropped. Report "
@@ -979,12 +990,14 @@ def _payoff_scan(args: argparse.Namespace) -> int:
                                 prohibited_label_scopes=experiments.prohibited_label_scopes(exp))
     except (OSError, ValueError) as exc:
         return refuse(f"the evidence-use event could not be recorded, so nothing is output: {exc}", code=1)
-    report["evidence_use_event_id"] = use.event_id
-    report["evidence_use_record"] = result
+    envelope = payoff_constraints.result_envelope(report, generated_at_utc=generated, source_store=args.source_label,
+                                                  code_version=code_version, evidence_use_event_id=use.event_id)
     if args.out:
-        Path(args.out).write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8",
+        Path(args.out).write_text(json.dumps(envelope, indent=2, sort_keys=True) + "\n", encoding="utf-8",
                                   newline="\n")
-    summary = {k: v for k, v in report.items() if k != "evaluations"}
+    summary = {"provenance": envelope["provenance"], "evidence_use_record": result,
+               "envelope_sha256": envelope["envelope_sha256"],
+               "report": {k: v for k, v in report.items() if k != "evaluations"}}
     print(json.dumps(summary, indent=2, sort_keys=True))
     return 0
 
