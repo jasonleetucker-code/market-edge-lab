@@ -25,6 +25,58 @@ not captured arbitrage. No fills exist in this experiment.
 4. The size ladder, the multiple-testing plan and the futility rule.
 5. The minimum useful economic effect (**owner input**).
 
+## Scan set construction
+
+`payoff_constraints.scan_kalshi_store` now builds **one set per capture round** (report field
+`set_construction = "one-set-per-capture-round-v1"`).
+- **Anchors.** Every book receipt time of an in-window event is still tried as an anchor, and each
+  leg takes its latest book received by that anchor.
+- **Evaluated.** An anchor is evaluated only when every leg has a book and those books were all
+  received within `max_leg_skew` of each other.
+- **Anchor-level skips.** Every other anchor is listed in `sets_skipped` with a code, and
+  `skip_counts` totals them:
+  - `INCOMPLETE_ROUND`: a leg has no book yet. Before this change these partial anchors in an
+    event's first round were dropped with no record.
+  - `MID_ROUND`: the legs' books span more than `max_leg_skew`. Usually the anchor mixes two
+    rounds; it can also be one round captured too far apart.
+  - `NO_MARKET_RECORD` and `POST_CLOSE`, as before.
+- **Event-level skips.** These are listed separately in `events_skipped`, with `event_skip_counts`:
+  - `OUTSIDE_WINDOW`;
+  - `NO_BOOKS`: an in-window event with no stored book, which previously produced nothing.
+- **Accounting.** `anchors_tried == sets_evaluated + len(sets_skipped)` holds exactly, because
+  event-level skips are not in `sets_skipped`.
+- **Dataset hash.** `input_snapshot_sha256` (`input_hash_definition =
+  "every-snapshot-read-in-window-v1"`) now hashes every snapshot the scan reads for the in-window
+  events, evaluated or not:
+  - the market records that list an in-window bracket;
+  - every stored book of those brackets.
+
+  The protocol identifies a holdout by window plus dataset hash, so the hash must not change with
+  the set construction.
+- **Reading old files.** `payoff_constraints.set_construction_of(obj)` and
+  `input_hash_definition_of(obj)` read a missing field as `legacy-every-anchor` and
+  `legacy-evaluated-set-books`. `verify_result_file` rejects any other unrecognised value.
+
+**Earlier results.** The two result files committed before this change are kept unchanged as
+recorded evidence and were not regenerated:
+- `payoff_scan_laptop_store_2026-09-22.json`;
+- `payoff_scan_production_edge-backup-5q41yg5u.json` (#103).
+
+Both use the **old definitions**:
+- A set was anchored at every book receipt.
+- Their `input_snapshot_sha256` (and the `dataset_sha256` of the CLI events that produced them)
+  hashes only the books of evaluated sets, with repeats. It is therefore not comparable with a
+  hash under the new definition for the same store and window.
+
+Under the new construction, the production scan's 30 INVALID sets (each fails the leg-skew check)
+become MID_ROUND skips, and the 8 VALID sets are unchanged. The reviewer's re-run of #105 on a copy
+of the same backup reported the following. This session has not re-run it; the look is logged
+below.
+- 48 anchors tried;
+- the 8 VALID sets byte-identical to #103's;
+- 30 MID_ROUND skips, equal to the old 30 INVALID sets;
+- 10 INCOMPLETE_ROUND skips, which the old construction had dropped silently.
+
 ## Log
 
 - 2026-09-25: DRAFT registered (EE v1 PR A). No data viewed for this experiment. The evaluator
@@ -108,3 +160,13 @@ not captured arbitrage. No fills exist in this experiment.
     1.09 per $1 basket before fees, so there is no surplus even before fees or the fallback state.
     The other 2 VALID rounds (26SEP24 at 04:50 and 04:59Z) had no B66.5 ask and were not evaluated. This is a valid
     no-surplus result over 2 event days and 8 rounds. It is not a verdict on the family.
+- 2026-09-25 (hand-recorded; the looks themselves were logged only to temporary logs): the
+  reviewer's two verification runs on copies of backup `edge-backup-5q41yg5u` (whole-DB sha256
+  `5ad68c03…c997552a`, window 2026-09-24..2026-09-25, market-side only). They are recorded here so
+  that every look at this data is in the repository log:
+  - `eu-8d78ea819d55c1db37a3a342265b0eab`: the reproduction of the #103 production scan. It
+    reproduced exactly, with an identical `report_sha256`.
+  - `eu-4ea80281771f0fdef757b9bd18fb628f`: the re-run of the #105 per-round construction. Its
+    results are under "Scan set construction" above.
+
+  The exact run times are UNVERIFIED: each `action_time_utc` is an upper bound.

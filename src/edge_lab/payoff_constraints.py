@@ -981,6 +981,21 @@ def event_date(event_ticker: str) -> str | None:
         return None
 
 
+# One set per capture round (see scan_kalshi_store). Result files written before this field existed
+# (EXP-003 results up to 2026-09-25) anchored a set at every book receipt, so mid-round anchors
+# appear there as INVALID sets rather than as MID_ROUND skips; they stay as recorded evidence.
+SET_CONSTRUCTION = "one-set-per-capture-round-v1"
+LEGACY_SET_CONSTRUCTION = "legacy-every-anchor"
+# `input_snapshot_sha256` covers every snapshot the scan reads for the in-window events, whether or
+# not a set is evaluated, so the dataset hash (which identifies a holdout together with the window)
+# does not depend on the set construction. Older result files hashed only the books of evaluated
+# sets (with repeats).
+INPUT_HASH_DEFINITION = "every-snapshot-read-in-window-v1"
+LEGACY_INPUT_HASH_DEFINITION = "legacy-evaluated-set-books"
+EVENT_SKIP_CODES = ("OUTSIDE_WINDOW", "NO_BOOKS")
+ANCHOR_SKIP_CODES = ("INCOMPLETE_ROUND", "MID_ROUND", "NO_MARKET_RECORD", "POST_CLOSE")
+
+
 def scan_kalshi_store(db_path: str, *, series: str, sizes: Sequence[Decimal], max_quote_age: timedelta,
                       max_leg_skew: timedelta, event_from: str, event_to: str,
                       prohibited_fields: Sequence[str] = PROHIBITED_MARKET_FIELDS) -> dict[str, Any]:
@@ -992,7 +1007,16 @@ def scan_kalshi_store(db_path: str, *, series: str, sizes: Sequence[Decimal], ma
       EXP-003's protocol list) are dropped before any use.
     - A set is skipped when any leg's book was received at or after the market's close time.
     - Only `series` in VERIFIED_INTEGER_SERIES, and only events dated within [event_from, event_to]
-      (YYYY-MM-DD, from the event ticker) are evaluated; other events are listed as skipped."""
+      (YYYY-MM-DD, from the event ticker) are evaluated. Event-level skips go to `events_skipped`
+      (EVENT_SKIP_CODES: OUTSIDE_WINDOW, or NO_BOOKS for an in-window event with no stored book).
+    - Set construction (SET_CONSTRUCTION): one set per capture round. Every book receipt time of an
+      in-window event is tried as an anchor; each leg takes its latest book received by the anchor.
+      An anchor is evaluated only when every leg has a book (else INCOMPLETE_ROUND) and those books
+      were all received within `max_leg_skew` of each other (else MID_ROUND, usually an anchor that
+      mixes two rounds). Anchor-level skips go to `sets_skipped` (ANCHOR_SKIP_CODES), so
+      `anchors_tried == sets_evaluated + len(sets_skipped)` exactly.
+    - `input_snapshot_sha256` (INPUT_HASH_DEFINITION) hashes every snapshot read for the in-window
+      events, evaluated or not."""
     if series not in VERIFIED_INTEGER_SERIES:
         raise ValueError(f"series {series!r} is not a verified integer-strike series {sorted(VERIFIED_INTEGER_SERIES)}")
     if not (re.fullmatch(r"\d{4}-\d{2}-\d{2}", event_from or "") and re.fullmatch(r"\d{4}-\d{2}-\d{2}", event_to or "")
@@ -1030,16 +1054,26 @@ def scan_kalshi_store(db_path: str, *, series: str, sizes: Sequence[Decimal], ma
                 by_event.setdefault(str(m.get("event_ticker")), set()).add(str(m.get("ticker")))
     evaluations = []
     skipped: list[dict[str, str]] = []
+    events_skipped: list[dict[str, str]] = []
+    anchors_tried = 0
     inputs: list[str] = []
     for event_ticker in sorted(by_event):
         day = event_date(event_ticker)
         if day is None or not (event_from <= day <= event_to):
-            skipped.append({"event": event_ticker, "as_of": "",
-                            "reason": f"event date {day} outside the requested window {event_from}..{event_to}"})
+            events_skipped.append({"event": event_ticker, "code": "OUTSIDE_WINDOW",
+                                   "reason": f"event date {day} outside the requested window {event_from}..{event_to}"})
             continue
         tickers = sorted(by_event[event_ticker])
+        # Every snapshot read for an in-window event enters the dataset hash, evaluated or not.
+        inputs.extend(sha for _, _, sha, markets in market_snaps
+                      if any(str(m.get("ticker")) in tickers for m in markets))
+        inputs.extend(b[2] for t in tickers for b in books.get(t, []))
         anchors = sorted({b[0] for t in tickers for b in books.get(t, [])})
-        seen_sets: set[tuple[int, ...]] = set()
+        if not anchors:
+            events_skipped.append({"event": event_ticker, "code": "NO_BOOKS",
+                                   "reason": "no order book is stored for any bracket of this in-window event"})
+            continue
+        anchors_tried += len(anchors)
         for anchor in anchors:
             chosen = {}
             for t in tickers:
@@ -1047,14 +1081,20 @@ def scan_kalshi_store(db_path: str, *, series: str, sizes: Sequence[Decimal], ma
                 if prior:
                     chosen[t] = max(prior, key=lambda b: (b[0], b[1]))
             if len(chosen) != len(tickers):
+                missing = [t for t in tickers if t not in chosen]
+                skipped.append({"event": event_ticker, "as_of": anchor, "code": "INCOMPLETE_ROUND",
+                                "reason": f"INCOMPLETE_ROUND: no book received by as_of for {', '.join(missing)}"})
                 continue
-            key = tuple(sorted(b[1] for b in chosen.values()))
-            if key in seen_sets:
+            received = [parse_utc(b[0]) for b in chosen.values()]
+            if all(r is not None for r in received) and max(received) - min(received) > max_leg_skew:
+                skipped.append({"event": event_ticker, "as_of": anchor, "code": "MID_ROUND",
+                                "reason": f"MID_ROUND: leg books span {max(received) - min(received)}, more than "
+                                          f"max_leg_skew {max_leg_skew}"})
                 continue
-            seen_sets.add(key)
             snaps = [s for s in market_snaps if s[0] <= anchor]
             if not snaps:
-                skipped.append({"event": event_ticker, "as_of": anchor, "reason": "no market record received by as_of"})
+                skipped.append({"event": event_ticker, "as_of": anchor, "code": "NO_MARKET_RECORD",
+                                "reason": "no market record received by as_of"})
                 continue
             latest: dict[str, Mapping[str, Any]] = {}
             for _, _, _, markets in sorted(snaps, key=lambda s: (s[0], s[1])):
@@ -1062,18 +1102,18 @@ def scan_kalshi_store(db_path: str, *, series: str, sizes: Sequence[Decimal], ma
                     if str(m.get("ticker")) in tickers:
                         latest[str(m.get("ticker"))] = m
             if len(latest) != len(tickers):
-                skipped.append({"event": event_ticker, "as_of": anchor, "reason": "a bracket has no market record"})
+                skipped.append({"event": event_ticker, "as_of": anchor, "code": "NO_MARKET_RECORD",
+                                "reason": "a bracket has no market record"})
                 continue
             closes = [parse_utc(m.get("close_time")) for m in latest.values()]
             if any(c is None or parse_utc(anchor) >= c for c in closes):
-                skipped.append({"event": event_ticker, "as_of": anchor,
+                skipped.append({"event": event_ticker, "as_of": anchor, "code": "POST_CLOSE",
                                 "reason": "at or after a market's close (post-close snapshots are prohibited)"})
                 continue
             ladders = {}
             for t, (fetched, sid, sha, body, url) in chosen.items():
                 ladders[t] = ladders_from_orderbook(t, body, received_at_utc=fetched, evidence_id=f"snapshot:{sid}",
                                                    depth_limit=_depth_limit(url)).get("YES")
-                inputs.append(sha)
             fee = schedule_for("kalshi", series, as_of=anchor)
             rel = kalshi_partition_set(event_ticker, [latest[t] for t in tickers], ladders, fee_schedule=fee,
                                        set_id=f"{event_ticker}@{anchor}", prohibited_fields=prohibited_fields)
@@ -1087,6 +1127,12 @@ def scan_kalshi_store(db_path: str, *, series: str, sizes: Sequence[Decimal], ma
         validity[e.quote_validity] = validity.get(e.quote_validity, 0) + 1
         for row in e.sizes:
             claims[row.claim] = claims.get(row.claim, 0) + 1
+    skip_counts: dict[str, int] = {}
+    for s in skipped:
+        skip_counts[s["code"]] = skip_counts.get(s["code"], 0) + 1
+    event_skip_counts: dict[str, int] = {}
+    for s in events_skipped:
+        event_skip_counts[s["code"]] = event_skip_counts.get(s["code"], 0) + 1
     inconsistencies = [e.observed_quote_inconsistency for e in evaluations if e.observed_quote_inconsistency is not None]
     report = {
         "version": PAYOFF_VERSION,
@@ -1097,13 +1143,19 @@ def scan_kalshi_store(db_path: str, *, series: str, sizes: Sequence[Decimal], ma
         "max_quote_age_seconds": max_quote_age.total_seconds(),
         "max_leg_skew_seconds": max_leg_skew.total_seconds(),
         "events": len(by_event),
+        "events_skipped": events_skipped,
+        "event_skip_counts": dict(sorted(event_skip_counts.items())),
+        "set_construction": SET_CONSTRUCTION,
+        "anchors_tried": anchors_tried,
         "sets_evaluated": len(evaluations),
         "sets_skipped": skipped,
+        "skip_counts": dict(sorted(skip_counts.items())),
         "relationship_counts": dict(sorted(relationships.items())),
         "quote_validity_counts": dict(sorted(validity.items())),
         "claim_counts_by_size_row": dict(sorted(claims.items())),
         "observed_quote_inconsistency_max": str(max(inconsistencies)) if inconsistencies else None,
         "observed_quote_inconsistency_min": str(min(inconsistencies)) if inconsistencies else None,
+        "input_hash_definition": INPUT_HASH_DEFINITION,
         "input_snapshot_sha256": sha256_hex(canonical_json(sorted(inputs))),
         "prohibited_fields_never_read": sorted(set(prohibited_fields) | set(PROHIBITED_MARKET_FIELDS)),
         "evaluations": [e.to_dict() for e in evaluations],
@@ -1141,6 +1193,35 @@ def result_envelope(report: Mapping[str, Any], *, generated_at_utc: str, source_
                 "report": dict(report)}
     envelope["envelope_sha256"] = sha256_hex(canonical_json({k: v for k, v in envelope.items()}))
     return envelope
+
+
+def _report_of(obj: Any) -> Mapping[str, Any] | None:
+    if not isinstance(obj, Mapping):
+        return None
+    report = obj.get("report", obj)
+    return report if isinstance(report, Mapping) else None
+
+
+def set_construction_of(obj: Any) -> str | None:
+    """The set construction of a result envelope or scan report. A report written before the field
+    existed is LEGACY_SET_CONSTRUCTION (a set at every book receipt). None when `obj` is not a
+    report or envelope at all."""
+    report = _report_of(obj)
+    if report is None:
+        return None
+    value = report.get("set_construction")
+    return LEGACY_SET_CONSTRUCTION if value is None else value
+
+
+def input_hash_definition_of(obj: Any) -> str | None:
+    """What `input_snapshot_sha256` covers in a result envelope or scan report. A report written
+    before the field existed is LEGACY_INPUT_HASH_DEFINITION (books of evaluated sets only), so
+    its hash is not comparable with a current one for the same store and window."""
+    report = _report_of(obj)
+    if report is None:
+        return None
+    value = report.get("input_hash_definition")
+    return LEGACY_INPUT_HASH_DEFINITION if value is None else value
 
 
 def verify_result_file(obj: Any) -> tuple[bool, tuple[str, ...]]:
@@ -1182,6 +1263,10 @@ def _verify_result_file(obj: Any) -> tuple[bool, tuple[str, ...]]:
         reasons.append(f"cannot hash: {exc}")
     if report.get("version") != PAYOFF_VERSION:
         reasons.append(f"report version {report.get('version')!r} is not {PAYOFF_VERSION}")
+    if set_construction_of(report) not in (SET_CONSTRUCTION, LEGACY_SET_CONSTRUCTION):
+        reasons.append(f"set_construction {report.get('set_construction')!r} is not recognised")
+    if input_hash_definition_of(report) not in (INPUT_HASH_DEFINITION, LEGACY_INPUT_HASH_DEFINITION):
+        reasons.append(f"input_hash_definition {report.get('input_hash_definition')!r} is not recognised")
     never_read = report.get("prohibited_fields_never_read")
     if not (isinstance(never_read, list) and all(isinstance(f, str) for f in never_read)
             and set(PROHIBITED_MARKET_FIELDS) <= set(never_read)):

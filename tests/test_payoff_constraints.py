@@ -357,6 +357,7 @@ def test_scan_reads_market_side_books_only_and_skips_post_close(tmp_path):
     assert report["sets_evaluated"] == 1 and report["relationship_counts"] == {"INCOMPLETE": 1}
     assert report["claim_counts_by_size_row"] == {"NO_SURPLUS_EVEN_BEFORE_FEES": 1}
     assert any("post-close" in s["reason"] for s in report["sets_skipped"])
+    assert report["skip_counts"] == {"POST_CLOSE": 1} and report["anchors_tried"] == 2
     again = scan_kalshi_store(str(tmp_path / "evidence.sqlite3"), series="KXHIGHNY", sizes=[D(1)],
                               max_quote_age=AGE, max_leg_skew=SKEW, **WINDOW)
     assert again["report_sha256"] == report["report_sha256"]  # deterministic replay
@@ -378,10 +379,92 @@ def test_scan_refuses_unverified_series_and_filters_by_event_window(tmp_path):
                           event_from="2026-09-30", event_to="2026-09-01")
     outside = scan_kalshi_store(db, series="KXHIGHNY", sizes=[D(1)], max_quote_age=AGE, max_leg_skew=SKEW,
                                 event_from="2026-10-01", event_to="2026-10-31")
-    assert outside["sets_evaluated"] == 0 and "outside the requested window" in outside["sets_skipped"][0]["reason"]
+    assert outside["sets_evaluated"] == 0 and "outside the requested window" in outside["events_skipped"][0]["reason"]
+    # Event-level skips are kept apart, so the anchor identity holds exactly.
+    assert outside["events_skipped"][0]["code"] == "OUTSIDE_WINDOW" and outside["event_skip_counts"] == {
+        "OUTSIDE_WINDOW": 1}
+    assert outside["sets_skipped"] == [] and outside["skip_counts"] == {} and outside["anchors_tried"] == 0
+    assert outside["input_snapshot_sha256"] == _hash_of([])  # nothing read for an out-of-window event
 
 
 WINDOW = {"event_from": "2026-09-01", "event_to": "2026-09-30"}
+
+
+def test_scan_builds_one_set_per_capture_round_and_accounts_for_every_anchor(tmp_path):
+    """Regression: the scan anchored a set at every book receipt, so each later anchor of a round
+    mixed it with the previous round (an artifact INVALID set), and partial anchors in an event's
+    first round were dropped without a trace."""
+    markets = _markets()
+    tickers = sorted(m["ticker"] for m in markets)
+    books = [(t, f"2026-09-23T21:58:0{i}Z", [["0.8500", "5.00"]]) for i, t in enumerate(tickers)]  # round 1
+    books += [(t, f"2026-09-23T22:08:0{i}Z", [["0.8400", "5.00"]]) for i, t in enumerate(tickers)]  # round 2
+    report = scan_kalshi_store(str(_store(tmp_path, markets, books)), series="KXHIGHNY", sizes=[D(1)],
+                               max_quote_age=AGE, max_leg_skew=SKEW, **WINDOW)
+    n = len(tickers)
+    assert report["set_construction"] == "one-set-per-capture-round-v1"
+    assert [e["as_of_utc"] for e in report["evaluations"]] == [f"2026-09-23T21:58:0{n - 1}+00:00",
+                                                                f"2026-09-23T22:08:0{n - 1}+00:00"]
+    assert report["quote_validity_counts"] == {"VALID": 2}  # no artifact INVALID sets
+    assert report["anchors_tried"] == 2 * n
+    assert report["anchors_tried"] == report["sets_evaluated"] + len(report["sets_skipped"])
+    assert report["skip_counts"] == {"INCOMPLETE_ROUND": n - 1, "MID_ROUND": n - 1}
+    first = [s for s in report["sets_skipped"] if s["code"] == "INCOMPLETE_ROUND"]
+    assert [s["as_of"] for s in first] == [f"2026-09-23T21:58:0{i}Z" for i in range(n - 1)]
+    assert tickers[-1] in first[0]["reason"] and tickers[0] not in first[0]["reason"]
+    assert all("more than max_leg_skew" in s["reason"] for s in report["sets_skipped"] if s["code"] == "MID_ROUND")
+    assert report["events_skipped"] == [] and report["event_skip_counts"] == {}
+
+
+def _hash_of(shas):
+    from edge_lab.provenance import canonical_json, sha256_hex
+
+    return sha256_hex(canonical_json(sorted(shas)))
+
+
+def test_scan_dataset_hash_covers_every_snapshot_read_not_only_evaluated_sets(tmp_path):
+    """The dataset hash identifies a holdout together with the window, so it must not change with
+    the set construction: it covers every snapshot read for the in-window events."""
+    markets = _markets()
+    tickers = sorted(m["ticker"] for m in markets)
+    staggered = [(t, f"2026-09-23T21:58:0{i}Z", [["0.8500", "5.00"]]) for i, t in enumerate(tickers)]
+    post_close = [(t, "2026-09-24T05:30:00Z", [["0.9900", "5.00"]]) for t in tickers]
+    report = scan_kalshi_store(str(_store(tmp_path, markets, staggered + post_close)), series="KXHIGHNY",
+                               sizes=[D(1)], max_quote_age=AGE, max_leg_skew=SKEW, **WINDOW)
+    n = len(tickers)
+    assert report["sets_evaluated"] == 1  # 1 of 2n books' sets evaluated; every book still counts
+    assert report["input_hash_definition"] == "every-snapshot-read-in-window-v1"
+    assert report["input_snapshot_sha256"] == _hash_of(["m"] + [f"b{i}" for i in range(2, 2 + 2 * n)])
+
+
+def test_scan_reports_an_in_window_event_with_no_books(tmp_path):
+    report = scan_kalshi_store(str(_store(tmp_path, _markets(), [])), series="KXHIGHNY", sizes=[D(1)],
+                               max_quote_age=AGE, max_leg_skew=SKEW, **WINDOW)
+    (skip,) = report["events_skipped"]
+    assert skip["code"] == "NO_BOOKS" and skip["event"] == "KXHIGHNY-26SEP23"
+    assert report["event_skip_counts"] == {"NO_BOOKS": 1} and report["anchors_tried"] == 0
+    assert report["sets_evaluated"] == 0 and report["sets_skipped"] == []
+    assert report["input_snapshot_sha256"] == _hash_of(["m"])  # the market record was read
+
+
+def test_scan_round_skew_boundary_matches_the_evaluator(tmp_path):
+    """A round whose books span exactly max_leg_skew is evaluated (the evaluator's rule is also
+    span > skew); one second more and it is a MID_ROUND skip, never an evaluated INVALID set."""
+    markets = _markets()
+    tickers = sorted(m["ticker"] for m in markets)
+    at = {True: "2026-09-23T21:59:00Z", False: "2026-09-23T21:59:01Z"}
+    for exact in (True, False):
+        folder = tmp_path / str(exact)
+        folder.mkdir()
+        books = [(t, "2026-09-23T21:58:00Z" if i == 0 else at[exact], [["0.8500", "5.00"]])
+                 for i, t in enumerate(tickers)]
+        report = scan_kalshi_store(str(_store(folder, markets, books)), series="KXHIGHNY", sizes=[D(1)],
+                                   max_quote_age=AGE, max_leg_skew=SKEW, **WINDOW)
+        assert report["anchors_tried"] == 2
+        if exact:
+            assert report["sets_evaluated"] == 1 and report["quote_validity_counts"] == {"VALID": 1}
+            assert report["skip_counts"] == {"INCOMPLETE_ROUND": 1}
+        else:
+            assert report["sets_evaluated"] == 0 and report["skip_counts"] == {"INCOMPLETE_ROUND": 1, "MID_ROUND": 1}
 
 
 def test_exp003_prohibited_fields_are_dropped_before_use():
@@ -581,6 +664,45 @@ def test_verify_result_file_catches_edits_and_missing_provenance():
         result_envelope(report, generated_at_utc="x", source_store="somewhere", code_version="c",
                         evidence_use_event_id="eu-" + "0" * 32)
     assert verify_result_file([]) == (False, ("not a JSON object",))
+
+
+def test_set_construction_and_hash_definition_are_readable_for_legacy_and_current_files(tmp_path):
+    from edge_lab.payoff_constraints import (
+        input_hash_definition_of,
+        result_envelope,
+        set_construction_of,
+        verify_result_file,
+    )
+    from edge_lab.provenance import canonical_json, sha256_hex
+
+    results = Path(__file__).resolve().parents[1] / "experiments" / "EXP-003-same-venue-payoff-consistency" / "results"
+    for name in ("payoff_scan_laptop_store_2026-09-22.json", "payoff_scan_production_edge-backup-5q41yg5u.json"):
+        legacy = json.loads((results / name).read_text(encoding="utf-8"))
+        assert set_construction_of(legacy) == "legacy-every-anchor"
+        assert input_hash_definition_of(legacy) == "legacy-evaluated-set-books"
+        assert verify_result_file(legacy) == (True, ())
+    markets = _markets()
+    books = [(m["ticker"], "2026-09-23T21:58:00Z", [["0.8500", "5.00"]]) for m in markets]
+    report = scan_kalshi_store(str(_store(tmp_path, markets, books)), series="KXHIGHNY", sizes=[D(1)],
+                               max_quote_age=AGE, max_leg_skew=SKEW, **WINDOW)
+    assert set_construction_of(report) == "one-set-per-capture-round-v1"
+    assert input_hash_definition_of(report) == "every-snapshot-read-in-window-v1"
+
+    def envelope(**edits):
+        body = {k: v for k, v in report.items() if k != "report_sha256"}
+        body.update(edits)
+        body["report_sha256"] = sha256_hex(canonical_json(body))
+        return result_envelope(body, generated_at_utc="2026-09-25T04:00:00+00:00", source_store="fixture",
+                               code_version="abc", evidence_use_event_id="eu-" + "0" * 32)
+
+    current = envelope()
+    assert set_construction_of(current) == "one-set-per-capture-round-v1"
+    assert verify_result_file(current) == (True, ())
+    ok, reasons = verify_result_file(envelope(set_construction="made-up"))
+    assert not ok and any("set_construction" in r for r in reasons)
+    ok, reasons = verify_result_file(envelope(input_hash_definition="made-up"))
+    assert not ok and any("input_hash_definition" in r for r in reasons)
+    assert set_construction_of([]) is None and input_hash_definition_of("x") is None
 
 
 def test_the_committed_laptop_result_file_verifies():
