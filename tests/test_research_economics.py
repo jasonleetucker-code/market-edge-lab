@@ -432,7 +432,7 @@ def test_screen_minimums_come_from_the_protocol_never_from_the_caller():
     report = economic_screen(_inputs(_two_days(), experiment_id="EXP-003",
                                      minimum_useful_annual=Labeled(D(5), Basis.OWNER_INPUT)))
     assert report.verdict == "INSUFFICIENT_EVIDENCE"
-    assert any("differ from EXP-003's protocol" in r for r in report.verdict_reasons)
+    assert any("differ from 'EXP-003''s protocol" in r for r in report.verdict_reasons)
     assert report.inputs["min_independent_clusters"].value is None
 
 
@@ -454,3 +454,32 @@ def test_settled_protocol_minimums_are_read_as_owner_inputs(tmp_path):
     declared = protocol_minimums("EXP-003", root=tmp_path)
     assert declared["min_episodes_for_scenario"].value == 30 and declared["min_independent_clusters"].value == 12
     assert declared["min_independent_clusters"].basis is Basis.OWNER_INPUT
+
+
+
+@pytest.mark.parametrize("spelling", ["exp-002", "EXP-002 ", " Exp-003", "EXP-777", "FAMILY-A", ""])
+def test_no_spelling_of_an_id_lets_a_caller_supply_its_own_minimums(spelling):
+    two = [obs("a", "2026-09-02T00:00:00Z", keys=("k1",), cluster="d1", ladder=(pt(1, "0.05"), pt(10, "0.05"))),
+           obs("b", "2026-09-10T00:00:00Z", keys=("k2",), cluster="d2", ladder=(pt(1, "0.04"), pt(10, "0.04")),
+               release="2026-09-11T00:00:00Z")]
+    report = economic_screen(_inputs(two, experiment_id=spelling, minimum_useful_annual=Labeled(D(4), Basis.OWNER_INPUT)))
+    assert report.verdict == "INSUFFICIENT_EVIDENCE"
+    assert report.inputs["min_independent_clusters"].value is None
+    control = economic_screen(_inputs(two, minimum_useful_annual=Labeled(D(4), Basis.OWNER_INPUT)))  # EXP-900
+    assert control.verdict == "CONTINUE"  # the same data passes only under the explicit test id
+
+
+def test_a_protocol_without_the_economics_keys_is_unknown(tmp_path):
+    import re
+    import shutil
+
+    from edge_lab.research_economics import protocol_minimums
+
+    registry = Path(__file__).resolve().parents[1] / "experiments"
+    target = tmp_path / "EXP-003-copy"
+    shutil.copytree(registry / "EXP-003-same-venue-payoff-consistency", target)
+    proto = target / "protocol.toml"
+    text = re.sub(r"min_(episodes_for_scenario|independent_clusters) = \"[^\"]*\"\n", "",
+                  proto.read_text(encoding="utf-8"))
+    proto.write_text(text, encoding="utf-8")
+    assert all(v.value is None for v in protocol_minimums(" exp-003 ", root=tmp_path).values())

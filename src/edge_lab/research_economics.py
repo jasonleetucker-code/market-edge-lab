@@ -73,6 +73,14 @@ from .provenance import canonical_json, sha256_hex
 ECONOMICS_VERSION = "research-economics-v1"
 REPO_EXPERIMENTS = Path(__file__).resolve().parents[2] / "experiments"
 PROTOCOL_MINIMUMS = ("min_episodes_for_scenario", "min_independent_clusters")
+# The only experiment ids whose screen minimums may come from the caller (unit tests). Every
+# other id, whatever its spelling, takes them from the repository protocol, and an id without
+# settled protocol values gets UNKNOWN, never the caller's numbers.
+SCREEN_TEST_EXPERIMENT_IDS = frozenset({"EXP-900"})
+
+
+def normalize_experiment_id(experiment_id: str) -> str:
+    return str(experiment_id).strip().upper()
 ILLUSTRATIVE = "ILLUSTRATIVE_SCENARIO_NOT_APPROVED_BANKROLL"
 DAYS_PER_YEAR = Decimal(365)
 # Analysis parameters of the uncertainty band (not research thresholds): a fixed seed and
@@ -705,7 +713,10 @@ def protocol_minimums(experiment_id: str, *, root: Path | None = None) -> dict[s
     An experiment without a protocol yields UNKNOWN for both."""
     from . import experiments
 
+    # The repository's own experiments/ registry, not a dashboard --experiments-root: the
+    # screen's minimums are whatever the committed protocol says.
     root = root or REPO_EXPERIMENTS
+    experiment_id = normalize_experiment_id(experiment_id)
     out = {k: Labeled.unknown(f"{experiment_id}: no protocol value") for k in PROTOCOL_MINIMUMS}
     matches = [p for p in experiments.discover(root) if p.parent.name.startswith(experiment_id + "-")]
     if len(matches) != 1:
@@ -747,18 +758,19 @@ def economic_screen(inputs: ScreenInputs) -> ScreenReport:
     episodes = in_window(all_episodes, inputs.window_start_utc, inputs.window_end_utc)
     outside = len(all_episodes) - len(episodes)
     reasons: list[str] = list(inputs.episodes.problems)
-    # The minimums come from the experiment's protocol; a caller may not supply different numbers.
-    declared = protocol_minimums(inputs.experiment_id)
-    has_protocol = any(v.value is not None or "no protocol value" not in v.note for v in declared.values())
-    if has_protocol:
+    # The minimums come from the experiment's protocol (the repository experiments/ root); a caller
+    # never supplies them. Only the explicit test ids may. Anything else that is not found, or whose
+    # protocol lacks the keys, is UNKNOWN, so the verdict is INSUFFICIENT_EVIDENCE (fail closed).
+    if normalize_experiment_id(inputs.experiment_id) not in SCREEN_TEST_EXPERIMENT_IDS:
+        declared = protocol_minimums(inputs.experiment_id)
         supplied = {"min_episodes_for_scenario": inputs.min_episodes_for_scenario,
                     "min_independent_clusters": inputs.min_independent_clusters}
         mismatched = [k for k in PROTOCOL_MINIMUMS if supplied[k].value != declared[k].value]
         if mismatched:
-            reasons.append(f"screen minimums {mismatched} differ from {inputs.experiment_id}'s protocol; the "
+            reasons.append(f"screen minimums {mismatched} differ from {inputs.experiment_id!r}'s protocol; the "
                            "protocol values are used (research_economics.protocol_minimums)")
-            inputs = replace(inputs, min_episodes_for_scenario=declared["min_episodes_for_scenario"],
-                             min_independent_clusters=declared["min_independent_clusters"])
+        inputs = replace(inputs, min_episodes_for_scenario=declared["min_episodes_for_scenario"],
+                         min_independent_clusters=declared["min_independent_clusters"])
     reasons += inputs.scenario.problems()
     runs = {mode: replay(episodes, inputs.scenario, size=inputs.primary_size, mode=mode,
                          window_start_utc=inputs.window_start_utc, window_end_utc=inputs.window_end_utc)

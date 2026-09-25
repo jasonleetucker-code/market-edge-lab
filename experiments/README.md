@@ -129,8 +129,10 @@ the unchanged manifest.
     checks. See the limitation in `research_evidence.OUT_OF_BAND_LIMITATION`.
   - `[economics] min_episodes_for_scenario` and `min_independent_clusters` feed the economic
     screen. Callers read them with `research_economics.protocol_minimums(experiment_id)` and never
-    pass their own numbers; `economic_screen` replaces any caller value that differs from the
-    protocol and says so. While either is unknown, the screen can only say INSUFFICIENT_EVIDENCE.
+    pass their own numbers. `economic_screen` always uses the committed protocol's values, and
+    says so when a caller's differ. The id is normalized, so case and spaces make no difference.
+    An id with no settled values gets UNKNOWN. Only the explicit unit-test ids in
+    `research_economics.SCREEN_TEST_EXPERIMENT_IDS` may supply their own. While either is unknown, the screen can only say INSUFFICIENT_EVIDENCE.
 - **Open decisions.** An optional top-level `open_decisions` list names choices that are not
   settled yet. A DRAFT may list any; PREREGISTERED and later must have an empty list.
   - The log is append-only: `edge-lab experiments check-frozen` (run in CI) fails if an existing
