@@ -63,6 +63,7 @@ from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime, timedelta
 from decimal import ROUND_DOWN, Decimal
 from enum import Enum
+from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 
 from .freshness import parse_utc
@@ -70,6 +71,8 @@ from .opportunity import DepthLadder, DepthStatus, FeeSchedule, PriceGrid, price
 from .provenance import canonical_json, sha256_hex
 
 ECONOMICS_VERSION = "research-economics-v1"
+REPO_EXPERIMENTS = Path(__file__).resolve().parents[2] / "experiments"
+PROTOCOL_MINIMUMS = ("min_episodes_for_scenario", "min_independent_clusters")
 ILLUSTRATIVE = "ILLUSTRATIVE_SCENARIO_NOT_APPROVED_BANKROLL"
 DAYS_PER_YEAR = Decimal(365)
 # Analysis parameters of the uncertainty band (not research thresholds): a fixed seed and
@@ -693,6 +696,44 @@ def cluster_bootstrap_mean(values_by_cluster: Mapping[str, Decimal], *, seed: in
     return (sum(values, Decimal(0)) / n).quantize(_Q), lower.quantize(_Q), upper.quantize(_Q)
 
 
+def protocol_minimums(experiment_id: str, *, root: Path | None = None) -> dict[str, Labeled]:
+    """The screen minimums an experiment's protocol has settled, as `Labeled` values.
+
+    Callers (PR C, the Terminal) take `min_episodes_for_scenario` and `min_independent_clusters`
+    from here and never pass their own numbers. A value the protocol has not settled (for example
+    "MISSING_POWER_ANALYSIS: ...") is UNKNOWN, so the screen can only say INSUFFICIENT_EVIDENCE.
+    An experiment without a protocol yields UNKNOWN for both."""
+    from . import experiments
+
+    root = root or REPO_EXPERIMENTS
+    out = {k: Labeled.unknown(f"{experiment_id}: no protocol value") for k in PROTOCOL_MINIMUMS}
+    matches = [p for p in experiments.discover(root) if p.parent.name.startswith(experiment_id + "-")]
+    if len(matches) != 1:
+        return out
+    try:
+        protocol = experiments.load_protocol(experiments.load(matches[0])) or {}
+    except (OSError, ValueError):
+        return out
+    table = protocol.get("economics") if isinstance(protocol.get("economics"), dict) else {}
+    for key in PROTOCOL_MINIMUMS:
+        raw = table.get(key)
+        if isinstance(raw, bool) or raw is None:
+            continue
+        if isinstance(raw, str) and experiments._unsettled(raw):
+            out[key] = Labeled.unknown(f"{experiment_id} protocol [economics] {key}: {raw}")
+            continue
+        try:
+            value = Decimal(str(raw).strip())
+        except Exception:  # noqa: BLE001 - any unparseable text stays UNKNOWN
+            out[key] = Labeled.unknown(f"{experiment_id} protocol [economics] {key} is not a number: {raw!r}")
+            continue
+        if value.is_finite() and value >= 0 and value == value.to_integral_value():
+            out[key] = Labeled(value, Basis.OWNER_INPUT, f"{experiment_id} protocol [economics] {key}")
+        else:
+            out[key] = Labeled.unknown(f"{experiment_id} protocol [economics] {key} is not a whole count: {raw!r}")
+    return out
+
+
 def _cluster_key(outer: bool, cluster_id: str, outer_id: str | None) -> str:
     return (outer_id or cluster_id) if outer else cluster_id
 
@@ -706,6 +747,18 @@ def economic_screen(inputs: ScreenInputs) -> ScreenReport:
     episodes = in_window(all_episodes, inputs.window_start_utc, inputs.window_end_utc)
     outside = len(all_episodes) - len(episodes)
     reasons: list[str] = list(inputs.episodes.problems)
+    # The minimums come from the experiment's protocol; a caller may not supply different numbers.
+    declared = protocol_minimums(inputs.experiment_id)
+    has_protocol = any(v.value is not None or "no protocol value" not in v.note for v in declared.values())
+    if has_protocol:
+        supplied = {"min_episodes_for_scenario": inputs.min_episodes_for_scenario,
+                    "min_independent_clusters": inputs.min_independent_clusters}
+        mismatched = [k for k in PROTOCOL_MINIMUMS if supplied[k].value != declared[k].value]
+        if mismatched:
+            reasons.append(f"screen minimums {mismatched} differ from {inputs.experiment_id}'s protocol; the "
+                           "protocol values are used (research_economics.protocol_minimums)")
+            inputs = replace(inputs, min_episodes_for_scenario=declared["min_episodes_for_scenario"],
+                             min_independent_clusters=declared["min_independent_clusters"])
     reasons += inputs.scenario.problems()
     runs = {mode: replay(episodes, inputs.scenario, size=inputs.primary_size, mode=mode,
                          window_start_utc=inputs.window_start_utc, window_end_utc=inputs.window_end_utc)

@@ -1,6 +1,7 @@
 """Economic screen: episodes (not snapshots), capital-constrained replay, size ladder, honest verdicts."""
 
 from decimal import Decimal as D
+from pathlib import Path
 
 import pytest
 
@@ -234,7 +235,7 @@ def test_capacity_ladder_marks_where_more_size_adds_only_idle_capital():
 
 def _inputs(observations, **over):
     base = dict(
-        family="B", experiment_id="EXP-003", episodes=build_episodes(observations, DEF), scenario=scen(),
+        family="B", experiment_id="EXP-900", episodes=build_episodes(observations, DEF), scenario=scen(),
         primary_size=D(10), sizes=(D(1), D(10)), window_start_utc=W0, window_end_utc=W1,
         fixed_cash_costs_annual=Labeled(D(0), Basis.OBSERVED, "no paid services"),
         owner_hours_annual=Labeled(D(100), Basis.OWNER_INPUT), owner_hourly_cost=Labeled(D(50), Basis.OWNER_INPUT),
@@ -417,3 +418,39 @@ def test_a_mixed_cluster_level_is_insufficient_not_silently_finer():
                  outer="week1" if i < 3 else None, release=f"2026-09-{3 + i:02d}T00:00:00Z") for i in range(4)]
     report = economic_screen(_inputs(mixed))
     assert report.cluster_level == "mixed" and report.verdict == "INSUFFICIENT_EVIDENCE"
+
+
+
+def test_screen_minimums_come_from_the_protocol_never_from_the_caller():
+    from edge_lab.research_economics import protocol_minimums
+
+    for exp in ("EXP-002", "EXP-003"):
+        declared = protocol_minimums(exp)
+        assert all(v.value is None and "MISSING_POWER_ANALYSIS" in v.note for v in declared.values())
+    assert all(v.value is None for v in protocol_minimums("EXP-999").values())
+    # A caller passing its own numbers for a protocol experiment gets the protocol's UNKNOWNs instead.
+    report = economic_screen(_inputs(_two_days(), experiment_id="EXP-003",
+                                     minimum_useful_annual=Labeled(D(5), Basis.OWNER_INPUT)))
+    assert report.verdict == "INSUFFICIENT_EVIDENCE"
+    assert any("differ from EXP-003's protocol" in r for r in report.verdict_reasons)
+    assert report.inputs["min_independent_clusters"].value is None
+
+
+def test_settled_protocol_minimums_are_read_as_owner_inputs(tmp_path):
+    import shutil
+
+    from edge_lab.research_economics import protocol_minimums
+
+    registry = Path(__file__).resolve().parents[1] / "experiments"
+    target = tmp_path / "EXP-003-copy"
+    shutil.copytree(registry / "EXP-003-same-venue-payoff-consistency", target)
+    proto = target / "protocol.toml"
+    text = proto.read_text(encoding="utf-8")
+    import re
+
+    text = re.sub(r'min_episodes_for_scenario = "[^"]*"', "min_episodes_for_scenario = 30", text)
+    text = re.sub(r'min_independent_clusters = "[^"]*"', 'min_independent_clusters = "12"', text)
+    proto.write_text(text, encoding="utf-8")
+    declared = protocol_minimums("EXP-003", root=tmp_path)
+    assert declared["min_episodes_for_scenario"].value == 30 and declared["min_independent_clusters"].value == 12
+    assert declared["min_independent_clusters"].basis is Basis.OWNER_INPUT

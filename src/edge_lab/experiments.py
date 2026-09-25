@@ -512,6 +512,13 @@ def protocol_problems(exp: Experiment) -> list[str]:
     if exception is not None and not owner_exception_ok(exception, repo=exp.path.resolve().parents[2]):
         problems.append(f"{PROTOCOL_NAME} owner_exception must name an existing owner decision file inside "
                         f"{OWNER_EXCEPTION_DIR}")
+    open_decisions = protocol.get("open_decisions")
+    if open_decisions is not None and not (isinstance(open_decisions, list)
+                                           and all(isinstance(d, str) and d.strip() for d in open_decisions)):
+        problems.append(f"{PROTOCOL_NAME} open_decisions must be a list of non-empty strings")
+    elif open_decisions and exp.status in LOCKED:
+        problems.append(f"{exp.status} experiment still lists {len(open_decisions)} open decision(s); decide and "
+                        "record each before preregistering, then empty open_decisions")
     fields = roles.get("prohibited_fields") if isinstance(roles, dict) else None
     if fields is not None and not (isinstance(fields, list)
                                    and all(isinstance(f, str) and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", f)

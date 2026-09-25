@@ -128,7 +128,11 @@ the unchanged manifest.
   - Scopes, roles and viewed flags are self-declared: a mislabelled scope or flag sidesteps the
     checks. See the limitation in `research_evidence.OUT_OF_BAND_LIMITATION`.
   - `[economics] min_episodes_for_scenario` and `min_independent_clusters` feed the economic
-    screen. While either is unknown, the screen can only say INSUFFICIENT_EVIDENCE.
+    screen. Callers read them with `research_economics.protocol_minimums(experiment_id)` and never
+    pass their own numbers; `economic_screen` replaces any caller value that differs from the
+    protocol and says so. While either is unknown, the screen can only say INSUFFICIENT_EVIDENCE.
+- **Open decisions.** An optional top-level `open_decisions` list names choices that are not
+  settled yet. A DRAFT may list any; PREREGISTERED and later must have an empty list.
   - The log is append-only: `edge-lab experiments check-frozen` (run in CI) fails if an existing
     line changes or the file is deleted.
   - `edge-lab experiments holdout-status` says whether an outcome window can still support an

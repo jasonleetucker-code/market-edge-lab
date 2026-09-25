@@ -1,6 +1,7 @@
 """Research-protocol sidecar (EE v1): honest DRAFT, strict PREREGISTERED, family slots, legacy EXP-001."""
 
 import json
+import re
 import shutil
 from pathlib import Path
 
@@ -169,6 +170,10 @@ def _settled(text):
     return re.sub(pattern, '"settled concrete value"', text)
 
 
+def _decided(text):
+    return re.sub(r"open_decisions = \[.*?\n\]", "open_decisions = []", _settled(text), flags=re.S)
+
+
 def _settled_manifest(text):
     import re
 
@@ -176,7 +181,7 @@ def _settled_manifest(text):
 
 
 def test_freeze_includes_the_protocol_and_detects_a_later_protocol_edit(tmp_path):
-    target = _copy(tmp_path, edit_manifest=_settled_manifest, edit_protocol=_settled)
+    target = _copy(tmp_path, edit_manifest=_settled_manifest, edit_protocol=_decided)
     exp = load(target / "experiment.toml")
     assert [p for p in validate(exp) if "baseline" not in p] == []
     baseline_path = freeze(exp, now_utc="2026-09-25T12:00:00Z")
@@ -227,3 +232,16 @@ def test_prohibited_fields_reject_non_field_entries(tmp_path):
     exp = _copy(tmp_path, source=EXP3, edit_protocol=lambda s: s.replace(
         '"settlement_ts"]', '"settlement_ts", "last price after close"]'))
     assert any("prohibited_fields must be a list of record field names" in p for p in _problems(exp))
+
+
+
+def test_open_decisions_block_preregistration(tmp_path):
+    settled = _copy(tmp_path, edit_manifest=_settled_manifest, edit_protocol=_settled)
+    problems = [p for p in _problems(settled) if "baseline" not in p]
+    assert any("open decision" in p for p in problems) and len(problems) == 1  # EXP-002 lists five
+    emptied = _copy(tmp_path, name="EXP-002-decided", edit_manifest=_settled_manifest,
+                    edit_protocol=lambda s: re.sub(r"open_decisions = \[.*?\n\]", "open_decisions = []",
+                                                   _settled(s), flags=re.S))
+    assert [p for p in _problems(emptied) if "baseline" not in p] == []
+    draft = _copy(tmp_path, name="EXP-002-draft")
+    assert _problems(draft) == []  # a DRAFT may list open decisions
