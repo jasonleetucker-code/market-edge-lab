@@ -12,7 +12,7 @@ from edge_lab import daily, exp001_shadow as shadow, exp001_stageb as stageb, fo
 from edge_lab.http import FetchResult, HttpFetchError
 from edge_lab.shadow_ledger import LedgerConflict, ShadowLedger
 from edge_lab.storage import SnapshotStore
-from test_exp001_shadow import CLOSED, _result, _settled
+from test_exp001_shadow import CLOSED, _result, _save, _settled
 from test_forward import BRACKETS, MARKETS, D, _full_day, default_routes
 
 UTC = timezone.utc
@@ -211,6 +211,58 @@ def test_evidence_not_from_the_refresh_after_now_still_waits(store, tmp_path, mo
     assert receipt["settlement"]["refresh"]["status"] == "not_requested"
     assert receipt["settlement"]["evidence_cutoff_utc"] == "2026-09-24T13:00:00+00:00"
     assert receipt["settlement"]["settled"] == 0
+
+
+def test_a_refresh_receipt_past_its_bound_does_not_extend_the_cutoff(store, tmp_path, monkeypatch, model):
+    # A receipt later than the refresh could have finished (clock step, or `now` behind the wall
+    # clock) must not book settlements "known" in the future: the cutoff stays at now.
+    _full_day(store, monkeypatch)
+    _run(store, tmp_path, model)
+    due = datetime(2026, 9, 24, 16, tzinfo=UTC)
+    _refresh_received_at(monkeypatch, "2026-10-30T00:00:00+00:00")
+    receipt, _ = _run(store, tmp_path, model, now=due, refresh_settlements=True)
+    assert receipt["settlement"]["evidence_cutoff_utc"] == due.isoformat()
+    assert receipt["settlement"]["settled"] == 0
+    assert any("after the refresh bound" in p for p in receipt["problems"])
+
+
+def test_another_writer_during_the_refresh_does_not_widen_the_extension(store, tmp_path, monkeypatch, model):
+    # Only the refresh's own run counts: evidence another writer stores meanwhile (a manual
+    # `settlement collect` takes no lock) is used only up to the refresh's own receipt time.
+    _full_day(store, monkeypatch)
+    _run(store, tmp_path, model)
+    due = datetime(2026, 9, 24, 16, tzinfo=UTC)
+    _refresh_received_at(monkeypatch, "2026-09-24T16:00:05+00:00")
+    real = kalshi.refresh_event_settlements
+
+    def with_foreign_writer(store_, **kw):
+        out = real(store_, **kw)
+        markets = [dict(m, status="settled", expiration_value="67", result=_result(67)(m)) for m in MARKETS["markets"]]
+        fetch = FetchResult("u", "u", 200, "application/json", b"{}", "2026-09-24T16:30:00+00:00", 1, 1)
+        store_.start_run("foreign-run")
+        _save(store_, run_id="foreign-run", kind="settled_markets", entity_id="KXHIGHNY", url="u",
+              payload={"markets": markets, "cursor": None}, fetch=fetch, spec=SETTLEMENT_SOURCE)
+        store_.finish_run("foreign-run", status="succeeded")
+        return out
+    monkeypatch.setattr(kalshi, "refresh_event_settlements", with_foreign_writer)
+    receipt, _ = _run(store, tmp_path, model, now=due, refresh_settlements=True)
+    assert receipt["settlement"]["refresh"]["evidence_received_through_utc"] == "2026-09-24T16:00:05+00:00"
+    assert receipt["settlement"]["evidence_cutoff_utc"] == "2026-09-24T16:00:05+00:00"
+    assert receipt["settlement"]["settled"] == 6
+
+
+def test_an_unreadable_receipt_time_keeps_the_refresh_ok_and_the_cutoff_at_now(store, tmp_path, monkeypatch, model):
+    _full_day(store, monkeypatch)
+    _run(store, tmp_path, model)
+    due = datetime(2026, 9, 24, 16, tzinfo=UTC)
+    _refresh_received_at(monkeypatch, "2026-09-24T16:00:05+00:00")
+    monkeypatch.setattr(daily, "_settlement_evidence_received_by_run",
+                        lambda *a, **k: (_ for _ in ()).throw(OSError("disk")))
+    receipt, code = _run(store, tmp_path, model, now=due, refresh_settlements=True)
+    refresh = receipt["settlement"]["refresh"]
+    assert refresh["status"] == "ok" and refresh["evidence_received_through_utc"] is None
+    assert any("cutoff not extended" in e for e in refresh["errors"])
+    assert receipt["state"] != "FAILED" and receipt["settlement"]["evidence_cutoff_utc"] == due.isoformat()
 
 
 def test_failed_refresh_keeps_bookkeeping_and_reports_failed(store, tmp_path, monkeypatch, model):
