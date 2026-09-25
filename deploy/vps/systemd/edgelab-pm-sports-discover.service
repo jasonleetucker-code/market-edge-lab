@@ -1,0 +1,40 @@
+[Unit]
+Description=Market Edge Lab: Polymarket US NFL research pilot discovery (read-only, public gateway, ADR 0032)
+Documentation=file:///opt/market-edge-lab/app/docs/decisions/0032-polymarket-us-nfl-research-pilot.md
+After=network-online.target
+Wants=network-online.target
+OnFailure=edgelab-alert@%n.service
+
+[Service]
+Type=oneshot
+Slice=edgelab.slice
+User=edgelab
+Group=edgelab
+EnvironmentFile=/etc/market-edge-lab/env
+WorkingDirectory=/var/lib/market-edge-lab
+# No secrets: the public gateway needs no key and none is loaded. The code refuses every run
+# (BLOCKED_TERMS_REVIEW, no network, exit 0) while no owner access decision is in force
+# (edge_lab.polymarket_sports.OWNER_ACCESS_DECISION is None). Bounds: at most 6 pages, 12 HTTP requests
+# (one retry each), a 1 s pacer and a 3-minute run deadline; about 0.35 MB per page.
+ExecStart=/opt/market-edge-lab/venv/bin/python -m edge_lab.cli pm-sports discover --db /var/lib/market-edge-lab/db/edge_lab.sqlite3
+TimeoutStartSec=5min
+UMask=0077
+MemoryHigh=192M
+MemoryMax=256M
+CPUQuota=15%
+TasksMax=16
+Nice=10
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+ReadWritePaths=/var/lib/market-edge-lab /var/lib/market-edge-lab-status

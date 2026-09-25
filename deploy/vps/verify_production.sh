@@ -361,6 +361,9 @@ timer_state SHADOW_TIMER edgelab-shadow
 timer_state SETTLEMENT_TIMER edgelab-settlement
 timer_state OBSERVE_TIMER edgelab-observe
 timer_state OBSERVE_CLOSE_TIMER edgelab-observe-close
+# Separately activated (runbook 5e, ADR 0032): shown as systemd reports them; "disabled" is expected before 5e.
+timer_state PM_SPORTS_TIMER edgelab-pm-sports
+timer_state PM_SPORTS_DISCOVER_TIMER edgelab-pm-sports-discover
 
 # --------------------------------------------------------------------------- status files
 if [ -r "$STATUS/latest.json" ]; then

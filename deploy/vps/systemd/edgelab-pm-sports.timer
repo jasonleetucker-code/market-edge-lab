@@ -1,0 +1,16 @@
+[Unit]
+Description=Market Edge Lab: Polymarket US NFL research capture tick every 15 minutes (ADR 0032)
+
+[Timer]
+# Installed with the other units but separately activated (install.sh SEPARATELY_ACTIVATED): the
+# installer never enables it. Runbook section 5e enables it under the owner's recorded risk decision.
+# :10, :25, :40 and :55 every hour, staggered off the odds (:00/:15) and observe (:05/:20) ticks.
+# The code makes no request unless a target is due, and refuses protected windows itself.
+OnCalendar=*-*-* *:10/15:00 America/New_York
+AccuracySec=15s
+# Missed ticks are not replayed late: the next tick records expired targets as MISSED.
+Persistent=false
+Unit=edgelab-pm-sports.service
+
+[Install]
+WantedBy=timers.target

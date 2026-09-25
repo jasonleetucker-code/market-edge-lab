@@ -199,7 +199,8 @@ def test_freshness_unit_reads_the_production_paths_the_other_units_write():
 def test_installer_installs_it_as_a_core_timer():
     units = re.search(r"UNITS=\(([^)]*)\)", INSTALL).group(1).split()
     assert "edgelab-freshness" in units
-    assert "SEPARATELY_ACTIVATED=edgelab-odds" in INSTALL  # so it lands in CORE_TIMERS
+    separate = re.search(r"SEPARATELY_ACTIVATED=\(([^)]*)\)", INSTALL).group(1).split()
+    assert "edgelab-freshness" not in separate  # so it lands in CORE_TIMERS
 
 
 # =========================================================================== forward weather parity

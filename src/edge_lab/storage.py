@@ -11,7 +11,7 @@ from typing import Any, Iterable
 from .http import FetchResult
 from .provenance import bytes_sha256, canonical_json, sha256_hex, shape_fingerprint
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 SOURCE_HEALTH_STATUSES = ("ok", "partial", "failed")
 
 
@@ -559,38 +559,221 @@ END;
 """
 
 
+# Version 7: the Polymarket US NFL research pilot (ADR 0032). Additive only: three new tables
+# with triggers on those tables only; nothing existing changes.
+# - A scan is one discovery run over the filtered NFL listing: its catalog coverage (a filtered
+#   listing is never a full-catalog COMPLETE), the page snapshots it stored, and the NFL
+#   moneyline markets it derived from them (reproducible from those snapshots).
+# - A target is one intended research book capture of one related market at one offset before
+#   the game (T-24h / T-6h / T-60m), written once with its intended time and due window.
+# - An attempt row is append-only. CAPTURED, NOT_EXECUTABLE, MISSED, SUPERSEDED and SKIPPED_CAP
+#   are final; FAILED may be retried until the deadline. A book is research evidence only.
+PM_SPORTS_STATUSES = ("CAPTURED", "NOT_EXECUTABLE", "FAILED", "MISSED", "SUPERSEDED", "SKIPPED_CAP")
+PM_SPORTS_FINAL_STATUSES = ("CAPTURED", "NOT_EXECUTABLE", "MISSED", "SUPERSEDED", "SKIPPED_CAP")
+
+_SCHEMA_V7 = """
+CREATE TABLE IF NOT EXISTS pm_sports_scans (
+    scan_id TEXT PRIMARY KEY,
+    run_id TEXT NOT NULL,
+    league TEXT NOT NULL,
+    endpoint TEXT NOT NULL,
+    started_at_utc TEXT NOT NULL,
+    completed_at_utc TEXT NOT NULL,
+    coverage_state TEXT NOT NULL CHECK (coverage_state IN ('COMPLETE', 'PARTIAL', 'FAILED')),
+    -- Every page of the FILTERED listing was read, ending with an empty page. Covers that filter only.
+    filter_complete INTEGER NOT NULL CHECK (filter_complete IN (0, 1)),
+    pages_ok INTEGER NOT NULL CHECK (pages_ok >= 0),
+    requests INTEGER NOT NULL CHECK (requests >= 0),
+    events INTEGER NOT NULL CHECK (events >= 0),
+    markets INTEGER NOT NULL CHECK (markets >= 0),
+    coverage_detail TEXT NOT NULL,
+    page_snapshot_ids_json TEXT NOT NULL DEFAULT '[]',
+    catalog_json TEXT NOT NULL DEFAULT '[]',
+    anomalies_json TEXT NOT NULL DEFAULT '[]',
+    parser_version TEXT NOT NULL,
+    policy_version TEXT NOT NULL,
+    CHECK (filter_complete = 0 OR coverage_state != 'FAILED'),
+    CHECK (coverage_state != 'FAILED' OR pages_ok = 0),
+    FOREIGN KEY (run_id) REFERENCES collection_runs(run_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_pm_sports_scans_time
+ON pm_sports_scans(league, completed_at_utc);
+
+CREATE TABLE IF NOT EXISTS pm_sports_targets (
+    target_id TEXT PRIMARY KEY,
+    league TEXT NOT NULL,
+    market_slug TEXT NOT NULL,
+    pm_event_slug TEXT,
+    odds_event_id TEXT,
+    relationship TEXT NOT NULL CHECK (relationship = 'RELATED_NOT_EQUIVALENT'),
+    relationship_json TEXT NOT NULL,
+    offset_label TEXT NOT NULL,
+    priority INTEGER NOT NULL,
+    game_start_utc TEXT NOT NULL,
+    target_utc TEXT NOT NULL,
+    effective_utc TEXT NOT NULL,
+    due_from_utc TEXT NOT NULL,
+    deadline_utc TEXT NOT NULL,
+    planned_at_utc TEXT NOT NULL,
+    scan_id TEXT NOT NULL,
+    planned_rules_sha256 TEXT,
+    policy_version TEXT NOT NULL,
+    detail_json TEXT NOT NULL DEFAULT '{}',
+    CHECK (due_from_utc <= effective_utc AND effective_utc <= deadline_utc),
+    CHECK (deadline_utc < game_start_utc),
+    FOREIGN KEY (scan_id) REFERENCES pm_sports_scans(scan_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_pm_sports_targets_due
+ON pm_sports_targets(due_from_utc);
+
+CREATE INDEX IF NOT EXISTS idx_pm_sports_targets_market
+ON pm_sports_targets(market_slug, target_utc);
+
+CREATE TABLE IF NOT EXISTS pm_sports_observations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id TEXT NOT NULL,
+    attempt_id TEXT NOT NULL UNIQUE,
+    target_id TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (status IN (
+        'CAPTURED', 'NOT_EXECUTABLE', 'FAILED', 'MISSED', 'SUPERSEDED', 'SKIPPED_CAP'
+    )),
+    reason TEXT,
+    received_at_utc TEXT,
+    source_timestamp_utc TEXT,
+    deviation_s REAL,
+    snapshot_id INTEGER,
+    source_sha256 TEXT,
+    book_state TEXT,
+    yes_bid TEXT,
+    yes_bid_size TEXT,
+    yes_ask TEXT,
+    yes_ask_size TEXT,
+    depth_json TEXT,
+    freshness TEXT NOT NULL CHECK (freshness IN ('fresh', 'stale', 'unknown')),
+    recorded_at_utc TEXT NOT NULL,
+    policy_version TEXT NOT NULL,
+    -- A capture names its evidence and when it was received, and explains nothing.
+    CHECK (status != 'CAPTURED' OR (snapshot_id IS NOT NULL AND received_at_utc IS NOT NULL AND reason IS NULL)),
+    -- Anything else says why.
+    CHECK (status = 'CAPTURED' OR reason IS NOT NULL),
+    -- Only a captured book carries prices.
+    CHECK (status = 'CAPTURED' OR (yes_bid IS NULL AND yes_ask IS NULL AND yes_bid_size IS NULL
+                                   AND yes_ask_size IS NULL AND depth_json IS NULL)),
+    FOREIGN KEY (run_id) REFERENCES collection_runs(run_id),
+    FOREIGN KEY (target_id) REFERENCES pm_sports_targets(target_id),
+    FOREIGN KEY (snapshot_id) REFERENCES snapshots(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_pm_sports_observations_target
+ON pm_sports_observations(target_id, id);
+
+CREATE TRIGGER IF NOT EXISTS pm_sports_scans_no_replace
+BEFORE INSERT ON pm_sports_scans
+WHEN EXISTS (SELECT 1 FROM pm_sports_scans WHERE scan_id = NEW.scan_id)
+BEGIN
+    SELECT RAISE(ABORT, 'pm sports scans are immutable evidence');
+END;
+
+CREATE TRIGGER IF NOT EXISTS pm_sports_scans_no_update
+BEFORE UPDATE ON pm_sports_scans
+BEGIN
+    SELECT RAISE(ABORT, 'pm sports scans are immutable evidence');
+END;
+
+CREATE TRIGGER IF NOT EXISTS pm_sports_scans_no_delete
+BEFORE DELETE ON pm_sports_scans
+BEGIN
+    SELECT RAISE(ABORT, 'pm sports scans are immutable evidence');
+END;
+
+-- Planning is idempotent: re-planning a known target keeps the original row.
+CREATE TRIGGER IF NOT EXISTS pm_sports_targets_keep_original
+BEFORE INSERT ON pm_sports_targets
+WHEN EXISTS (SELECT 1 FROM pm_sports_targets WHERE target_id = NEW.target_id)
+BEGIN
+    SELECT RAISE(IGNORE);
+END;
+
+CREATE TRIGGER IF NOT EXISTS pm_sports_targets_no_update
+BEFORE UPDATE ON pm_sports_targets
+BEGIN
+    SELECT RAISE(ABORT, 'pm sports targets are immutable evidence');
+END;
+
+CREATE TRIGGER IF NOT EXISTS pm_sports_targets_no_delete
+BEFORE DELETE ON pm_sports_targets
+BEGIN
+    SELECT RAISE(ABORT, 'pm sports targets are immutable evidence');
+END;
+
+CREATE TRIGGER IF NOT EXISTS pm_sports_observations_no_replace
+BEFORE INSERT ON pm_sports_observations
+WHEN NEW.id IS NOT NULL AND EXISTS (SELECT 1 FROM pm_sports_observations WHERE id = NEW.id)
+BEGIN
+    SELECT RAISE(ABORT, 'pm sports observations are immutable evidence');
+END;
+
+-- A target that reached a final status takes no further attempt.
+CREATE TRIGGER IF NOT EXISTS pm_sports_observations_final_is_final
+BEFORE INSERT ON pm_sports_observations
+WHEN EXISTS (
+    SELECT 1 FROM pm_sports_observations
+    WHERE target_id = NEW.target_id
+      AND status IN ('CAPTURED', 'NOT_EXECUTABLE', 'MISSED', 'SUPERSEDED', 'SKIPPED_CAP'))
+BEGIN
+    SELECT RAISE(ABORT, 'pm sports target already reached a final status');
+END;
+
+CREATE TRIGGER IF NOT EXISTS pm_sports_observations_no_update
+BEFORE UPDATE ON pm_sports_observations
+BEGIN
+    SELECT RAISE(ABORT, 'pm sports observations are immutable evidence');
+END;
+
+CREATE TRIGGER IF NOT EXISTS pm_sports_observations_no_delete
+BEFORE DELETE ON pm_sports_observations
+BEGIN
+    SELECT RAISE(ABORT, 'pm sports observations are immutable evidence');
+END;
+"""
+
+
 def _objects(script: str) -> frozenset[str]:
     return frozenset(re.findall(r"CREATE (?:UNIQUE )?(?:TABLE|INDEX|TRIGGER) IF NOT EXISTS (\w+)", script))
 
 
 V5_OBJECTS = _objects(_SCHEMA_V5)
 V6_OBJECTS = _objects(_SCHEMA_V6)
+V7_OBJECTS = _objects(_SCHEMA_V7)
 V4_REQUIRED_TABLES = ("collection_runs", "snapshots", "source_health", "document_blobs", "document_retrievals",
                       "forward_captures")
 
 
 def _additive_steps() -> tuple[tuple[int, str], ...]:
     """The additive migrations after v4, read at call time (so a test can stand in for older code)."""
-    return ((5, _SCHEMA_V5), (6, _SCHEMA_V6))
+    return ((5, _SCHEMA_V5), (6, _SCHEMA_V6), (7, _SCHEMA_V7))
 
 
 # What each forward-only step added, for the rollback helper: {from_version: objects that version added}.
 _ROLLBACK_KEPT = {5: ("odds_targets_kept", "odds_capture_targets"),
-                  6: ("price_observation_targets_kept", "price_observation_targets")}
+                  6: ("price_observation_targets_kept", "price_observation_targets"),
+                  7: ("pm_sports_targets_kept", "pm_sports_targets")}
 
 
 def mark_schema_for_rollback(db_path: str | Path, *, from_version: int) -> dict[str, Any]:
     """Code rollback helper (runbook "Rollback"): stamp a complete v`from_version` evidence
     store as v`from_version - 1`, so the previous code opens it.
 
-    Nothing is deleted or rewritten. v5 only added the odds capture tables and v6 only the
-    price observation tables, with triggers on those tables only; the previous code never reads
-    them. Before stamping it checks: user_version is `from_version`; every v4 table and
+    Nothing is deleted or rewritten. v5 only added the odds capture tables, v6 only the price
+    observation tables and v7 only the Polymarket US NFL pilot tables (ADR 0032), each with
+    triggers on those tables only; the previous code never reads them. Before stamping it checks: user_version is `from_version`; every v4 table and
     snapshots column exists; every table, index and trigger of every additive step up to
     `from_version` exists (a complete store); and SQLite integrity_check passes.
     Re-installing the newer code later stamps it again (its migration is idempotent), and the
     rows written meanwhile are kept. Refuses anything else. Run it with the timers stopped.
-    To go back two versions, run it twice (v6 -> v5, then v5 -> v4)."""
+    To go back several versions, run it once per step (v7 -> v6, v6 -> v5, v5 -> v4)."""
     if from_version not in _ROLLBACK_KEPT:
         raise ValueError(f"no rollback step from v{from_version}")
     path = Path(db_path)
@@ -619,6 +802,9 @@ def mark_schema_for_rollback(db_path: str | Path, *, from_version: int) -> dict[
                                label: int(conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0])}
         if from_version == 6:
             out["price_observations_kept"] = int(conn.execute("SELECT COUNT(*) FROM price_observations").fetchone()[0])
+        if from_version == 7:
+            for extra in ("pm_sports_scans", "pm_sports_observations"):
+                out[f"{extra}_kept"] = int(conn.execute(f"SELECT COUNT(*) FROM {extra}").fetchone()[0])
         return out
 
 
@@ -632,19 +818,27 @@ def mark_schema_v5_for_rollback(db_path: str | Path) -> dict[str, Any]:
     return mark_schema_for_rollback(db_path, from_version=6)
 
 
+def mark_schema_v6_for_rollback(db_path: str | Path) -> dict[str, Any]:
+    """Stamp a complete v7 store as v6 (ADR 0032 rollback)."""
+    return mark_schema_for_rollback(db_path, from_version=7)
+
+
 def main(argv: list[str] | None = None) -> int:
-    """`python -m edge_lab.storage mark-v5-for-rollback --db PATH` (v6 -> v5) or
-    `mark-v4-for-rollback` (v5 -> v4); see the rollback runbook."""
+    """`python -m edge_lab.storage mark-v6-for-rollback --db PATH` (v7 -> v6),
+    `mark-v5-for-rollback` (v6 -> v5) or `mark-v4-for-rollback` (v5 -> v4); see the rollback runbook."""
     import argparse
 
     parser = argparse.ArgumentParser(prog="python -m edge_lab.storage")
     sub = parser.add_subparsers(dest="command", required=True)
+    helpers = {"mark-v4-for-rollback": mark_schema_v4_for_rollback, "mark-v5-for-rollback": mark_schema_v5_for_rollback,
+               "mark-v6-for-rollback": mark_schema_v6_for_rollback}
     for name, text in (("mark-v4-for-rollback", "stamp a v5 evidence store as v4 before a code rollback"),
-                       ("mark-v5-for-rollback", "stamp a v6 evidence store as v5 before a code rollback")):
+                       ("mark-v5-for-rollback", "stamp a v6 evidence store as v5 before a code rollback"),
+                       ("mark-v6-for-rollback", "stamp a v7 evidence store as v6 before a code rollback")):
         rb = sub.add_parser(name, help=text)
         rb.add_argument("--db", required=True)
     args = parser.parse_args(argv)
-    helper = mark_schema_v4_for_rollback if args.command == "mark-v4-for-rollback" else mark_schema_v5_for_rollback
+    helper = helpers[args.command]
     try:
         print(json.dumps(helper(args.db), sort_keys=True))
     except ValueError as exc:
@@ -736,7 +930,7 @@ class SnapshotStore:
             conn.executescript(_SCHEMA_V2)
             conn.executescript(_SCHEMA_V3)
             conn.executescript(_SCHEMA_V4)
-            # The additive steps (v5 odds targets, v6 price observations) land in one
+            # The additive steps (v5 odds targets, v6 price observations, v7 Polymarket US NFL pilot) land in one
             # transaction, and the version is stamped only after every object exists: a crash
             # leaves either the old version or a complete new one. An already complete store
             # takes no write lock here.
@@ -1062,6 +1256,80 @@ class SnapshotStore:
         where, params = ("WHERE market_id = ?", [market_id]) if market_id is not None else ("", [])
         with closing(self._connect()) as conn, conn:
             return conn.execute(f"SELECT * FROM price_observations {where} ORDER BY id", params).fetchall()
+
+    # ------------------------------------------------ Polymarket US NFL pilot (v7, ADR 0032)
+
+    _PM_SCAN_COLUMNS = (
+        "scan_id", "run_id", "league", "endpoint", "started_at_utc", "completed_at_utc", "coverage_state",
+        "filter_complete", "pages_ok", "requests", "events", "markets", "coverage_detail", "page_snapshot_ids_json",
+        "catalog_json", "anomalies_json", "parser_version", "policy_version",
+    )
+    _PM_TARGET_COLUMNS = (
+        "target_id", "league", "market_slug", "pm_event_slug", "odds_event_id", "relationship", "relationship_json",
+        "offset_label", "priority", "game_start_utc", "target_utc", "effective_utc", "due_from_utc", "deadline_utc",
+        "planned_at_utc", "scan_id", "planned_rules_sha256", "policy_version", "detail_json",
+    )
+    _PM_OBSERVATION_COLUMNS = (
+        "run_id", "attempt_id", "target_id", "status", "reason", "received_at_utc", "source_timestamp_utc",
+        "deviation_s", "snapshot_id", "source_sha256", "book_state", "yes_bid", "yes_bid_size", "yes_ask",
+        "yes_ask_size", "depth_json", "freshness", "recorded_at_utc", "policy_version",
+    )
+
+    def record_pm_sports_scan(self, scan: dict[str, Any]) -> None:
+        """Record one discovery scan (immutable)."""
+        row = {c: scan.get(c) for c in self._PM_SCAN_COLUMNS}
+        with closing(self._connect()) as conn, conn:
+            conn.execute(f"INSERT INTO pm_sports_scans({', '.join(row)}) VALUES ({', '.join('?' * len(row))})",
+                         tuple(row.values()))
+
+    def pm_sports_scans(self, *, league: str | None = None, limit: int | None = None) -> list[sqlite3.Row]:
+        """Scans, newest first."""
+        where, params = ("WHERE league = ?", [league]) if league is not None else ("", [])
+        tail = f" LIMIT {int(limit)}" if limit is not None else ""
+        with closing(self._connect()) as conn, conn:
+            return conn.execute(f"SELECT * FROM pm_sports_scans {where} ORDER BY completed_at_utc DESC, rowid DESC{tail}",
+                                params).fetchall()
+
+    def plan_pm_sports_target(self, target: dict[str, Any]) -> bool:
+        """Record a newly planned target. Returns False (and changes nothing) if it exists."""
+        row = {c: target.get(c) for c in self._PM_TARGET_COLUMNS}
+        with closing(self._connect()) as conn, conn:
+            cursor = conn.execute(
+                f"INSERT INTO pm_sports_targets({', '.join(row)}) VALUES ({', '.join('?' * len(row))})",
+                tuple(row.values()))
+            return cursor.rowcount == 1
+
+    def record_pm_sports_observation(self, row: dict[str, Any]) -> int:
+        """Append one attempt row."""
+        values = {c: row.get(c) for c in self._PM_OBSERVATION_COLUMNS}
+        with closing(self._connect()) as conn, conn:
+            cursor = conn.execute(
+                f"INSERT INTO pm_sports_observations({', '.join(values)}) VALUES ({', '.join('?' * len(values))})",
+                tuple(values.values()))
+            return int(cursor.lastrowid)
+
+    def pm_sports_targets(self, *, market_slug: str | None = None) -> list[sqlite3.Row]:
+        """Every target with its latest attempt's status (NULL when never attempted), by due time."""
+        where, params = ("WHERE t.market_slug = ?", [market_slug]) if market_slug is not None else ("", [])
+        with closing(self._connect()) as conn, conn:
+            return conn.execute(
+                f"""
+                SELECT t.*, o.status AS state, o.reason AS state_reason, o.recorded_at_utc AS state_at_utc,
+                       (SELECT COUNT(*) FROM pm_sports_observations WHERE target_id = t.target_id) AS attempts
+                FROM pm_sports_targets t
+                LEFT JOIN pm_sports_observations o ON o.id = (
+                    SELECT MAX(id) FROM pm_sports_observations WHERE target_id = t.target_id)
+                {where}
+                ORDER BY t.due_from_utc, t.market_slug, t.priority
+                """,
+                params,
+            ).fetchall()
+
+    def pm_sports_observations(self, *, target_id: str | None = None) -> list[sqlite3.Row]:
+        """Attempt rows, oldest first, optionally for one target."""
+        where, params = ("WHERE target_id = ?", [target_id]) if target_id is not None else ("", [])
+        with closing(self._connect()) as conn, conn:
+            return conn.execute(f"SELECT * FROM pm_sports_observations {where} ORDER BY id", params).fetchall()
 
     def latest_snapshot(self, *, source: str, kind: str, entity_id: str) -> sqlite3.Row | None:
         """The newest snapshot of one kind for one entity (payload included), or None."""

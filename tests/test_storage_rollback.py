@@ -26,6 +26,17 @@ V4_COMMIT = "dd3ab4d"  # main before schema v5 (PR #57)
 V5_COMMIT = "cbfbddf"  # main before schema v6 (ADR 0030)
 
 
+@pytest.fixture(autouse=True)
+def _v6_code(monkeypatch):
+    """These tests pin the v6 -> v5 -> v4 chain, so "the current code" here is the v6 code (no v7
+    step). The v7 -> v6 step (ADR 0032) is tested in tests/test_polymarket_sports_storage.py."""
+    from edge_lab import backup
+
+    monkeypatch.setattr(storage, "SCHEMA_VERSION", 6)
+    monkeypatch.setattr(backup, "CURRENT_SCHEMA_VERSION", 6)
+    monkeypatch.setattr(backup, "_reference_triggers_cache", None)
+
+
 def _v6_store_with_rows(tmp_path: Path) -> Path:
     db = tmp_path / "edge.sqlite3"
     store = SnapshotStore(db)

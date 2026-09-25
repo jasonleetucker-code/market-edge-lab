@@ -39,12 +39,16 @@ column lists which issues each primitive serves.
 | Fee models and fee verification | `src/edge_lab/fee_schedules.py` | BUILT (Kalshi, with dated component-level verification records, ADR 0017; Polymarket US taker schedule from official US docs with its own record, UNVERIFIED estimate that never supports a claim, ADR 0027; other venues unsupported). It reuses the hash-frozen EXP-001 cost model in `fees.py`, never forks it | #6 #30 #9 |
 | Model estimates | `src/edge_lab/opportunity.py` | BUILT (ModelEstimate; EXP-001 only) | #5 #9 #32 |
 | Source ingestion and provenance | `src/edge_lab/sources.py` | BUILT: the registry (with a read-only data-feed credential kind), fronting `storage.py`, `provenance.py` and the shared `redaction.py` | #7 #29 #30 #27 |
-| Freshness orchestration / collection scheduling | `src/edge_lab/freshness.py` | **NOW design rule / NEXT generalized primitive** (orchestrator PLANNED under #74, beside the `sources.py` registry). Existing specialized schedules remain canonical for their current domains: forward weather, ADR 0029 odds targets, and ADR 0030 scheduled later/closing observations. The future orchestrator must absorb these contracts rather than fork them | #74 #7 #9 #29 #50 |
+| Freshness orchestration / collection scheduling | `src/edge_lab/freshness.py` | **v1 BUILT and DEPLOYED 2026-09-24** (ADR 0031, PR #81; production c6e0dd9): shared types, read-only EXTERNAL_SCHEDULE providers for every existing schedule, network-free 5-minute supervisor writing `freshness.json` (0 disagreements at first run). It observes and explains; it controls nothing yet. Migration of a schedule into the fabric needs parity evidence and owner approval, one source at a time. Every new collector (#86, #88) is a fabric provider, never its own scheduler | #74 #86 #88 #7 #9 #29 #50 |
 | Rules / settlement equivalence | `src/edge_lab/opportunity.py` | BUILT (`Event.settlement_identity`, `Market.rules_resolved`); cross-venue classification in `discovery.py` (title match is never equivalence); no equivalence proven across venues yet | #30 #9 |
 | Shadow / live ledger boundary | `src/edge_lab/shadow_ledger.py` | BUILT (shadow only; no live ledger). Head checkpoints: `ledger_anchor.py`; the first independent checkpoint is stored off-host and in Git and verified (F09 closed for the anchored history, 2026-09-23) | #6 #3 #32 |
 | Risk engine | `src/edge_lab/risk.py` | BUILT (limits, capital release, withdrawal contract) | #6 #3 |
 | Stake sizing (research challenger) | `src/edge_lab/sizing_v2.py` (evaluation in sizing_eval.py) | BUILT 2026-09-24, research only (ADR 0026): robust log-growth optimizer over the payoff's admissible uncertainty set, reusing risk, starter policy, depth and fees. The counterfactual runner `sizing_counterfactual.py` (PR #64) replays every recorded decision through policies A-H into a derived artifact, and Terminal v1 shows it read-only as RESEARCH SIZING (PR #69). `sizing.py` remains the frozen operational path; v2 influences fills only after its own experiment passes | #6 #3 #32 |
 | Best-price-for-size comparator | `src/edge_lab/best_price.py` | BUILT 2026-09-24 (ADR 0027): one comparator over the shared depth, grid, fee, equivalence, freshness and venue primitives; honest claim ladder; cross-venue "cheaper" only on proven order. Shown in the market detail "Across venues" slot (PR #65), with no arithmetic in the UI | #30 #9 |
+| Sportsbook consensus research benchmark | `src/edge_lab/odds_consensus.py` | BUILT (math in the odds_api.py consensus section) 2026-09-24 (ADR 0033, PR #79), shown in Terminal (PR #85): exact-line two-way de-vig, median, dispersion, book counts, combined freshness, point-in-time; RESEARCH BENCHMARK — NOT EXECUTABLE; offered price and consensus probability never conflated | #9 #5 #29 #82 |
+| Per-domain research readiness | `src/edge_lab/research_readiness.py` | BUILT 2026-09-24 (PR #79): YES / PARTIAL / NOT_YET / UNKNOWN per prerequisite from real stores; explicit YES rules; never green by default. #86 §50 extends it to every domain (market history, depth, rules, external features, vintages, model, rejections, later prices, labels, source failures) | #50 #86 #88 #82 |
+| Release / event calendar | `src/edge_lab/event_calendar.py` | PLANNED (contract in docs/research/SOURCE_READINESS.md §9). ONE shared calendar (event id, domain, scheduled and actual times, source, expected fields, related markets, capture targets, exchange sessions and holidays), mapped onto fabric RELEASE_DRIVEN / EVENT_RELATIVE modes. Never one per domain | #86 #88 #74 #82 |
+| Instrument selection (how to express an edge) | `src/edge_lab/instrument_selection.py` | PLANNED. #88 §6: separate "we found an edge" from "how to express it": stock, ETF, option, option spread, future, prediction-market contract, or nothing, compared on payoff, spread, depth, slippage, fees, convexity, leverage, capital, downside, horizon, permissions and capacity. Builds on the best-price comparator and sizing v2; integrates with #82 | #88 #30 #82 #6 |
 | Sports odds capture scheduling | `src/edge_lab/odds_schedule.py` (runner odds_pilot.py; adapter odds_api.py) | BUILT 2026-09-24 (ADR 0029): game-relative T-24h/T-6h/T-60m targets, persisted with intended times, worst-case budget proof under 450 credits. ACTIVE on production since 2026-09-24 13:40Z (budget PROVEN, one smoke read CAPTURED, redaction verified; runbook §5b activation record) | #29 #5 #9 #50 |
 | Later / closing price observations | `src/edge_lab/price_observations.py` | BUILT 2026-09-24 (ADR 0030, PR #68). **Option A schedule approved 2026-09-24 11:24 ET**; PR #76 merged (9d66c90) and DEPLOYED 2026-09-24 20:31Z, timers enabled 20:32Z, first scheduled plan 20:35Z (42 targets; close tick ALIGNED). First scheduled network capture pending. "Close" remains only within the stored tolerance; missed point-in-time targets remain MISSED | #74 #50 #30 #9 #29 |
 | Capital-eligibility policies | `src/edge_lab/starter_policy.py` | BUILT (`STARTER_MAX_7D_V1`, ADR 0018); enforced prospectively in the operational shadow account | #32 #6 |
@@ -73,90 +77,119 @@ column lists which issues each primitive serves.
 | #50 | Longitudinal learning dataset across every domain, including rejected opportunities | **NOW as a permanent data-design rule; NEXT for a generalized cross-domain learning/reporting layer** | Existing provenance, opportunity/rejection, experiment and shadow-ledger primitives already preserve much of the required history. Every new domain should preserve point-in-time observations, model/version context, decisions and rejections, later outcomes and failures before it is called research-ready. No automatic retraining or self-modifying decision policy is authorized. |
 | #74 | Always-on freshness fabric — staggered 24/7 adaptive collection | **NOW as a P0 data-design/operational rule; NEXT for the generalized orchestrator** | One shared freshness supervisor should eventually own source cadence, staggering, streaming/polling choice, quotas, missed-target accounting and decision-time freshness. Immediate action: ADR 0030 Option A is approved so currently lost later/closing depth begins being preserved without waiting for the full orchestrator. |
 | #86 | Cross-domain prospective evidence — collect learning-ready data before models exist | **NOW: portfolio + Multi-City Weather v1 design; gated collectors one source at a time** (2026-09-24 evening directive) | Extends #7/#50/#74/#82 and serves #30; duplicates none. Irrecoverable point-in-time evidence first; every source registered, market-relevant, outcome-labelled, budgeted, and scheduled through #74. Record: `docs/owner/2026-09-24-cross-domain-prospective-evidence-directive.md`. COLLECT ≠ MODEL ≠ VALIDATED ≠ ACTIONABLE. |
+| #88 | Public Markets Edge — equities, options, futures and intraday research | **First-class domain. NOW: source and licensing research, SEC/official-source planning, paper/sandbox evaluation (no signup), architecture compatibility. NEXT: bounded equity/event data, SEC/macro event studies, liquid ETF/mega-cap universe, paper/sandbox integration. NEXT/LATER by data access: options surfaces, futures cross-asset. GATED: paid data, funding, margin, shorting, derivatives permissions, order-write credentials, live trading** (owner directive 2026-09-24 evening) | Event-driven and relative-value first; options as a volatility/distribution market; futures from a small liquid universe; day trading is a horizon, not an edge. Portfolio rows in `docs/research/ACQUISITION_PORTFOLIO.md` §1.7 (PR #89). Competes on equal terms for first tiny-live. |
 
-## Roadmap (re-run 2026-09-24 after the next-build-chunk directive and the Odds / ntfy activation)
+## Roadmap (re-run 2026-09-24 evening: Freshness Fabric + sports mission, #86 cross-domain evidence, #88 public markets)
 
-This ordering authorizes nothing; `docs/EXECUTION_PLAN.md` does. Re-prioritizing never
-authorizes implementation. The owner's domain sequence (directive, "Domain expansion") is
-recorded below and in the Domain Readiness matrix. Gate 7 is unchanged and **not passed**.
+This ordering authorizes nothing; `docs/EXECUTION_PLAN.md` does. Re-prioritizing never authorizes
+implementation. Gate 7 is unchanged and **not passed**.
+
+**First-live competition (owner, #88 §7).** No domain is pre-selected as the first live strategy.
+Weather, sports, public markets, macro, crypto or another legitimate strategy may become the first
+tiny-live candidate. The first to clear its own preregistered evidence bar **and** the common
+operational live-readiness gate goes first. Research criteria are never weakened to make one win.
 
 **NOW** (critical path; authorized)
-1. **Keep production collecting and verified** (#10, #11). Every day lost is a Stage B day lost.
-   Production runs the merged `main` SHA recorded in `HANDOFF.md`. Deploys stay outside
-   17:40–18:50 ET and away from the 11:15 / 16:15 ET settlement runs.
-2. **Accumulate valid Stage B days and real shadow bookkeeping** (EXP-001). The first valid day
-   is 2026-09-24, and its first settlement is due. One valid day is pipeline evidence only: no
-   retuning, no sizing change, no criteria change.
-3. **F09 manual checkpoints** (owner decision 2026-09-24). Roughly weekly, and additionally
-   after a notable ledger event:
-   - the first settlement;
-   - a settlement conflict;
-   - a significant ledger or risk-schema migration;
-   - before and after a recovery that affects ledger durability.
-
-   **No F09 timer.**
-4. **Re-check Kalshi scheduled fee changes by 2026-10-23.** At the same re-check, add the
-   `SETTLEMENT_AND_TRANSFER_FEES` component to the Kalshi record (ADR 0027). Also re-check
-   Polymarket US fees by 2026-10-24T01:39Z.
-5. **#50 learning-history completeness** applies from the first prospective observation of
-   every domain. See the audit in `docs/DATA_PROVENANCE.md`.
-6. **#29 Odds API pilot: live.** Activated 2026-09-24 13:40Z. Snapshots accrue under the
-   game-relative policy, within 450 credits a month and never above the provider's remaining
-   quota. Watch the first paid slots (14:15 and 19:15 ET on 2026-09-24): CAPTURED or MISSED
-   with a reason, 3 credits each. Nothing about this authorizes a sports model or a bet.
-7. **#33 ntfy.** The topic was rotated by the owner on 2026-09-24 after exposure. One TEST was
-   SUBMITTED by ntfy, but the owner confirmed at 11:24 ET that **nothing arrived on the phone**.
-   End-to-end delivery is unresolved; diagnose before claiming the alert path works.
-8. **Scheduled later/closing observations** (ADR 0030; #74/#50). Option A is deployed (PR #76,
-   9d66c90; both timers enabled 2026-09-24 20:32Z). Verify the first real captures from stored
-   rows. Re-check `close_tick_alignment` after the 2026-11-01 DST change.
-9. **#74 freshness fabric.** Treat continuous freshness, staggered collection, explicit missed-target
-   accounting and fail-closed decision freshness as permanent design rules now. The generalized
-   cross-domain orchestrator is NEXT; do not destabilize the running weather/Odds pipelines to rush
-   a refactor.
-
-9a. **#86 cross-domain prospective evidence: Wave 1.** Produce the acquisition portfolio,
-   the source-readiness classification and the combined resource budget. Design Multi-City
-   Weather v1, including verification of recurring Kalshi weather families, rules and stations.
-   Its implementation starts after the Freshness Fabric + sports lanes are merged and deployed.
-   Queued behind those lanes, with no forked abstraction: new collectors become #74 providers;
-   readiness extends `research_readiness.py`; one shared release/event calendar primitive.
+1. **Keep production collecting and verified** (#10, #11). Production runs the merged `main` SHA
+   recorded in `HANDOFF.md`. Deploys stay outside 17:40–18:50 ET and the 11:15 / 16:15 ET settlement
+   runs. **Preflight must PASS before every install.** On 2026-09-24 one install proceeded after a
+   load FAIL; the deploy helper now refuses.
+2. **EXP-001 Stage B days and shadow bookkeeping.** 2 valid days (2026-09-24, 2026-09-25). No
+   retuning, sizing change or criteria change.
+3. **First real settlement and F09.**
+   - The first positions are due from 2026-09-25T03:50Z, so settlement is possible in the
+     2026-09-25 11:15 ET run.
+   - Verify fully, then take the manual F09 checkpoint.
+   - F09 stays manual: roughly weekly plus notable ledger events. **No F09 timer.**
+4. **Backup growth and retention (#86 prerequisite; found by Lanes F and G).**
+   - `edgelab-backup` writes a full uncompressed copy of both stores every day and deletes nothing,
+     so backup disk grows quadratically. It fills about 64 GB in about 400 days today, and in about
+     85–180 days with the proposed collectors.
+   - The fixed 30 s backup timeout will also fail once the DB reaches about 0.5–1 GB.
+   - Required before any new collector: compression, a size-aware timeout, and a retention or
+     off-host policy.
+   - **Deleting old backups is an owner decision.**
+5. **#74 Freshness Fabric v1, live** (DEPLOYED 2026-09-24, c6e0dd9).
+   - Watch the supervisor, disagreements and missed targets.
+   - Terminal "Source freshness" view: PR #91 (in review fixes).
+   - Migrating an existing schedule into the fabric needs parity evidence and owner approval, one
+     source at a time.
+6. **Sports prospective data (domain 2) and #9 consensus.**
+   - The Odds API pilot is live: 3 captures on 2026-09-24, 491 credits remaining.
+   - The consensus benchmark and the target table are live in Terminal.
+   - Polymarket US NFL pilot (#84): activated by the **owner's risk decision** (2026-09-24),
+     pending review, merge and deploy. Captures are RELATED_NOT_EQUIVALENT only.
+7. **Later/closing observations (ADR 0030).**
+   - Live: the first scheduled +1 h captures (12 rows) at 19:05 ET on 2026-09-24.
+   - Verify the close capture (04:57:45Z tick).
+   - Re-check `close_tick_alignment` after the 2026-11-01 DST change. Lane G found city closes at
+     midnight local *standard* time.
+8. **#86 cross-domain prospective evidence, Wave 1: done** (PRs #89 and #90). Acquisition portfolio,
+   source readiness, combined budget and the Multi-City Weather v1 design (12 cities). Next is Wave 2
+   (item 11), after item 4.
+9. **#88 public markets: research and architecture (no signup, no data purchase).**
+   - Licensing research per source.
+   - EDGAR filing-event planning for a bounded mega-cap universe (keyless).
+   - A security ADR for broker-data keys: header transport and order-scoped paper keys.
+   - Paper/sandbox route evaluation (Alpaca paper-only first).
+   - Instrument/contract identity in the shared primitives (options OCC symbols, futures months,
+     sessions via the calendar).
+10. **Fee re-checks:** Kalshi by 2026-10-23T13:39:48Z (add SETTLEMENT_AND_TRANSFER_FEES); Polymarket
+    US by 2026-10-24T01:39Z.
 
 **NEXT** (ready once the named prerequisite lands)
-10. **Sizing v2 evidence** (#6). The counterfactual runner and the read-only RESEARCH SIZING
-   panel are built. What remains is evidence: settled decisions under `STARTER_MAX_7D_V1`
-   (every decision before 2026-09-24T00:00Z is CAPITAL_HORIZON), an evidence-based n_eff, and
-   the preregistered sizing experiment. Operational fills change only after it passes.
-11. **Sports prospective data** (domain 2). Odds snapshots accrue under the game-relative
-    policy. Add Polymarket US sports catalog reads, which are related-only until rules are
-    resolved. The split-cancel and alternative-settlement payoffs stay refused until the
-    generic payoff engine supports them.
-12. **#30 cross-venue weather comparison** (Kalshi vs a Polymarket US weather market). It
-    waits on resolved Polymarket rules and fees that reach claim grade.
-13. **Odds capture targets in Terminal v1** (CAPTURED / MISSED / SKIPPED_BUDGET). The
-    status card and the alerts-by-origin view are live (PR #70); a per-target table follows.
+11. **Multi-City Weather v1 collection** (#86 Wave 2).
+    - Needs item 4.
+    - Rollout: 12 cities in six bounded PRs (`docs/research/MULTI_CITY_WEATHER_V1.md`); starts with
+      the historical Kalshi-vs-NWS settlement agreement check.
+    - Every city starts as DATA_COLLECTION, never as an EXP-001 clone.
+12. **Kalshi NFL/NCAAF game-market books at the existing Odds capture times.** Lane F's
+    recommended next stream: keyless, about 10 requests a day, and it completes the sports series.
+13. **Macro release markets and vintages** (#86 Wave 3). Keyless BLS v1, release calendars and Fed
+    RSS first; FRED/ALFRED, BEA and EIA need free owner keys. Kalshi macro markets close before the
+    release (CPI 08:25 ET), so any reaction window exists only in other open markets.
+14. **#88 bounded equity/event data.**
+    - EDGAR filing events (keyless) plus the versioned exchange calendar.
+    - Then SEC/macro event studies on a liquid ETF and mega-cap universe (SPY, QQQ, IWM, DIA, sector
+      ETFs, selected mega-caps). Equity bars and quotes are fetched historically on demand, never
+      duplicated prospectively.
+    - Then paper/sandbox integration after the security ADR and the owner's free key.
+15. **Sizing v2 evidence** (#6): settled decisions under STARTER_MAX_7D_V1, then the preregistered
+    sizing experiment.
+16. **BTC/ETH bounded public data** (#86 Wave 4), after an exchange terms review. EIA and SEC
+    EDGAR for energy and corporate events (Wave 5).
+
+**NEXT / LATER, depending on data access**
+17. **#88 options:** volatility and distribution research (implied vs realized, event moves, term
+    structure, skew) on INDICATIVE snapshots after the owner's key and the ADR. INDICATIVE is never
+    OPRA or execution-grade.
+18. **#88 futures:** macro-release and cross-asset studies. CME real-time and historical data are
+    PAID/ROI BLOCKED, CFTC COT is slow context only, and synthetic continuous history is never
+    executable evidence.
+19. **Instrument-selection layer** (#88 §6), once two instruments share a thesis.
 
 **LATER** (wanted; not on the 2026-10-22 path)
-14. Sports baseline / preregistered models (domain 3; #5, #9), each as its own preregistered
-    experiment.
-15. Economics/macro (4), crypto (5), energy/commodities (6), business/technology (7),
-    culture/entertainment (8), politics/government (9), long-tail discovery (10). The owner's
-    order. No broad implementation in this mission.
-16. #27 Action PRO; #32 execution modes (gate 8+); #33 SMS provider; broader venues.
-17. **Security task, separate:** root SSH hardening. It stays out of scope for Market Edge
-    missions (owner decision 2026-09-24; no key, sshd, sudo or root-login changes here).
-18. **Brisket follow-ups** (other repository; not Market Edge work): the six failing refresh
-    units are handed off in riskittogetthebrisket#1409 (PRs #1406 and #1407 are paused). Also
-    `public-league-warmup` should accept 503.
+20. Sports baseline and preregistered models (#5, #9), each its own experiment. More sports only
+    within the free Odds budget: at most one more, moneyline at T-60m.
+21. Politics (structured official data only), culture (market data first), long-tail discovery.
+    News, social and polling are not tier 1.
+22. #27 Action PRO; #32 execution modes (gate 8+); #33 SMS provider; broader venues.
+23. **Security task, separate:** root SSH hardening. Out of scope for Market Edge missions.
+24. **Brisket follow-ups** (other repository): riskittogetthebrisket#1409; PRs #1406 and #1407 are
+    paused.
 
-**BLOCKED** (named blocker)
-- ntfy end-to-end phone delivery: the TEST was SUBMITTED, and ntfy.sh holds it on the configured
-  topic (server path proven clean 2026-09-24). The remaining problem is the phone/subscription side,
-  which needs an owner check. Proving a fix needs one more TEST, with the owner's OK.
-- SMS: provider choice and approval. Novig live API: developer credentials.
-- Polymarket US claim-grade totals: settlement/transfer fees, debit rounding, account type and
-  scheduled changes are all unverified.
-- Any execution: gates 8–10.
+**GATED / BLOCKED** (named blocker)
+- **Paid data:** SIP, OPRA, CME, CF Benchmarks, paid Odds tiers. Needs the #7 ROI case and owner
+  approval.
+- **Accounts and orders:** brokerage funding, margin, short selling, derivatives permissions,
+  order-write credentials, live trading or paper orders. Gates 8–10.
+- **Free keys, owner-only** (READY_FOR_OWNER_KEY): FRED/ALFRED, BEA, EIA, Census, Alpaca/Tradier
+  data. The broker keys also need the security ADR first.
+- **Backup deletion or retention:** owner decision (item 4).
+- **ntfy phone delivery:** the phone was subscribed to a different topic. Owner action; out of
+  scope for the current mission.
+- **Polymarket US claim-grade totals:** settlement/transfer fees, debit rounding and account type
+  are unverified.
 
 ### Domain Readiness matrix (states, not scores)
 
@@ -175,6 +208,7 @@ Deliberately no numerical score: no weights have been validated. States:
 | 5 Crypto | P | E | E | E | P | P | E | U (efficient market) | E | P | P | P | Not started |
 | 6 Energy / commodities | P | P | E | P | U | U | P | U | P | U | U | P | Not started |
 | 7 Business / technology | U | U | P | P | U | U | U | U | U | U | U | U | Not started |
+| 11 Public markets (#88: equities/ETFs, options, futures) | E (exchange-defined) | P (EDGAR keyless; IEX single-venue via owner key; SIP/OPRA/CME paid) | E | E continuous | E (bounded liquid universe) | P (commissions/fees per broker; not verified) | E (equities/ETFs) / P (derivatives) | U | P (research-grade feeds only) | P | P (history via vendor APIs; not executable) | E low | **Research and architecture (NOW); data collection NEXT** |
 | 8 Culture / entertainment | U | U | P | P | U | U | U | U | U | U | U | U | Not started |
 | 9 Politics / government | P | P | P | N rare | P | P | N (long horizons) | U | P | P | P | P | Not started |
 | 10 Long-tail discovery | U | U | U | U | U | U | U | U | U | U | U | U | Discovery only |
@@ -217,6 +251,20 @@ Related owner records that are not ideas:
   its own branch and file claim. It does not touch Gate 3 files.
 
 ## Review log
+
+- **2026-09-24 (night): canonical reconciliation after the Freshness Fabric + sports mission,
+  #86 and #88.**
+  - **#88 Public Markets Edge** becomes a first-class domain: an index row, a Domain Readiness row,
+    and NOW/NEXT/LATER/GATED placement.
+  - **First-live competition:** no domain is pre-selected.
+  - **New canonical owners:** the consensus benchmark, research readiness, a planned release/event
+    calendar, and a planned instrument-selection layer.
+  - **#74 v1 deployed:** it observes and controls nothing yet.
+  - **Backup growth/retention** is a NOW prerequisite before any new collector. Deletion is an owner
+    decision.
+  - **#86 Wave 1 is done;** Multi-City Weather v1 (Wave 2) is NEXT.
+  - **Polymarket US pilot:** owner risk decision recorded, not a verified grant.
+  - No gate change. No paid source. The 2026-10-22 date is unchanged.
 
 - **2026-09-24 (evening, later): #86 cross-domain prospective evidence intake.**
   - One new canonical idea (#86). It extends #7, #50, #74 and #82 and serves #30; it duplicates none.
