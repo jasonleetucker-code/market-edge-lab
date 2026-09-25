@@ -48,10 +48,12 @@ EVIDENCE:
       legacy = UNKNOWN); dated venue facts DOCUMENTED_UNVERIFIED_BYTES (no endpoint called);
       KXNFLGAME fees UNSUPPORTED (sources conflict); payoff_constraints with the corrected formula;
       research payoff-scan CLI; ADR 0035 (execution package, design only, no transport) and
-      ADR 0036. 4 review rounds; the last blocker made integer settlement an OBSERVED premise
-      (39/39 TWC-era values), so no KXHIGHNY set can be PROVEN.
+      ADR 0036. 4 review rounds. The round-2 blocker restricted integer-state enumeration to
+      KXHIGHNY with integer strikes. Round 3 made integer settlement an OBSERVED premise (39/39
+      TWC-era values) that blocks PROVEN, so no KXHIGHNY set from stored evidence can be PROVEN.
     - #103 (f5dec06) first production payoff scan; test_agent_context ignores .git lock files.
-    - #105 (9f9bce8) one set per capture round; every anchor and event accounted for; the dataset
+    - #105 (9f9bce8) one set per capture round; every anchor, and every event with a market
+      record, accounted for; the dataset
       hash covers every snapshot read in the window; legacy files are labelled.
     - #104 (efe86e3) Terminal Section B from the verified EXP-003 result file (verify_result_file +
       verify_result_provenance against the repository log); sports_evidence on the store's public
@@ -61,12 +63,14 @@ EVIDENCE:
     13 timers:
     - f8adf4f at 05:04Z (01:04 ET): #100, #101;
     - 5e8b07f at 06:19Z (02:19 ET): #102;
-    - efe86e3 at 08:02Z (04:02 ET): #103, #105, #104.
+    - efe86e3 at 08:02-08:03Z (04:02 ET; backups edge-backup-iu9x5w73 before, 08:02:46Z, and
+      edge-backup-gci308lm after, 08:03:14Z): #103, #105, #104.
     - Each: verify_production.sh -> DEPLOYED_SHA matches; COLLECTOR_HEALTH VALID (valid_days 2);
       FRESHNESS CURRENT, 0 disagreements; both restores VERIFIED (ledger 60 entries); Chase
       Upside HEALTHY; 63 GB free.
-  - Close capture 2026-09-25: 24 rows CAPTURED (12 pre_close, 12 close), 8 requests, no
-    failures; freshness 0 unreadable.
+  - Close capture 2026-09-25: 24 rows CAPTURED in stored rows (12 pre_close from the 04:50Z
+    edgelab-observe round, 12 close). The edgelab-observe-close run (04:57:45Z timer) reported
+    6 targets attempted, 8 requests, state CAPTURED, no failures; freshness 0 unreadable.
   - Family A coverage on production (read-only report, as of 2026-09-25 05:05Z): 32 events,
     95 horizons, 190 opportunities; 93 horizons not yet due, 2 due; 0 paired: no KXNFLGAME
     listing or book is stored (G1). Waterfalls reconcile (EVENT, HORIZON, OPPORTUNITY);
@@ -76,8 +80,10 @@ EVIDENCE:
     (asks sum 1.06-1.09 per $1 basket; worst state the fair-price fallback, pays 0), 11
     NOT_EVALUATED (fractional depth with no fee rule; a bracket with no ask). Every set is
     INCOMPLETE (VOID/REFUND/CANCELLATION not excluded; integer settlement only observed).
-    No positive claim. Evidence-use: every look is in EXP-003's log, including two reviewer
-    re-runs recorded by hand with upper-bound times.
+    No positive claim. Evidence-use: every known scan run of this data is in EXP-003's log
+    (CLI-logged, plus two reviewer re-runs recorded by hand with upper-bound times). The
+    Terminal's display of the result file is a registered unlogged consumer. The log records
+    declared access only.
   - Terminal on production (efe86e3): Section A "No paired evidence yet"; Section B shows the
     production result, "Production store", both legacy notes, Settlement costs Unknown, Positive
     claims 0; no absolute path on the page.
@@ -161,13 +167,13 @@ remains MANUAL EMERGENCY FALLBACK ONLY.
 
 ## 30-day plan (issue #11, target 2026-10-22)
 
-- **Remaining calendar days:** 28.
+- **Remaining calendar days:** 27 (as of 2026-09-25).
 - The binding constraint is now the calendar (at most one valid day per day), not
   deployment. The ordered roadmap and the Domain Readiness matrix are in
   `docs/OWNER_IDEAS.md` → Roadmap (re-run 2026-09-24).
 - By 2026-10-22 the system can show:
   - a deployed, verified pipeline;
-  - up to about 29 days of point-in-time shadow bookkeeping, claimable only as a lower
+  - up to about 28 days of point-in-time shadow bookkeeping, claimable only as a lower
     bound;
   - settled results;
   - multi-venue read-only foundations.
@@ -221,12 +227,12 @@ UNRESOLVED:
   - Once after the restart, the tape read "No quotes captured yet" while captures existed. Five
     later renders were correct and it was not reproduced. When the loader errors, the tape
     should say "unavailable" rather than "none yet" (follow-up).
-  - CHASE_UPSIDE_HEALTH is UNHEALTHY: Brisket /api/health returns 503 "degraded". This predates
-    this install and is not Market Edge.
+  - RESOLVED (2026-09-25): CHASE_UPSIDE_HEALTH was UNHEALTHY (Brisket /api/health 503
+    "degraded"); it has been HEALTHY at every EV1 verification.
 BLOCKERS: NONE.
 NEXT ACTION: the owner opens the tailnet URL on the iPhone and reviews Terminal, Markets, the
   market detail and Portfolio against UI_CONTRACT.md.
 ```
 
 - Every user-visible change now follows docs/design/UI_CONTRACT.md (AI_INSTRUCTIONS.md, section User interface). New features use docs/design/FEATURE_INTEGRATION.md, and the PR template asks for the UI evidence.
-- Rollback: /opt/market-edge-lab/app.prev (7aac49c), per DAILY_SHADOW_ACTIVATION.md → Rollback. No store or schema changed.
+- Rollback: /opt/market-edge-lab/app.prev holds the previous release (5e8b07f as of the efe86e3 deploy, 2026-09-25 08:02Z; install.sh keeps exactly one), per DAILY_SHADOW_ACTIVATION.md → Rollback. The previous bundles are also kept under ~dynasty/edgelab-release/prev-<sha>/. No store or schema changed in EV1.
