@@ -9,8 +9,9 @@ evidence-v1-directive.md; strategy reset #96), the first real settlement, the F0
 #107._
 
 ```
-STATUS: DONE for the build scope. Every Economic Evidence v1 PR and #107 is merged, DEPLOYED and
-  PRODUCTION_VERIFIED (production dee5805). The first real settlement is recorded and verified,
+STATUS: DONE for the build scope. Every Economic Evidence v1 PR is merged, DEPLOYED and
+  PRODUCTION_VERIFIED; #107 is merged and DEPLOYED with deploy checks passing (production
+  dee5805), and its same-run settlement is not yet observed in production. The first real settlement is recorded and verified,
   and the manual F09 checkpoint is taken. Pending, time-based:
   - the 26SEP25 positions (due once Kalshi finalizes that event);
   - the first Polymarket US research capture (2026-09-26 16:53Z).
@@ -20,7 +21,8 @@ ACCEPTANCE: the Economic Evidence v1 directive, sections 6-20: W0 operating veri
   (protocols, evidence consumption, attrition, economic screen, #96 canonical integration); PR B
   (semantic conformance, pure same-venue payoff evaluator, execution-package design); PR C (NFL
   paired evidence, gaps, capacity, Terminal); review, tests and exact-head CI before merge;
-  deploy only reviewed merged code. Not authorized and not done: orders of any kind, credentials,
+  deploy only reviewed merged code. Also: #107, and verification of the first real settlement
+  plus the F09 checkpoint. Not authorized and not done: orders of any kind, credentials,
   paid data, new timers, backup deletion, public exposure, any gate advance.
 EVIDENCE:
   - W0 (PRODUCTION_VERIFIED 2026-09-25 02:13Z, before any EV1 change):
@@ -94,7 +96,8 @@ EVIDENCE:
       15:15:09Z) but settled nothing: its evidence cutoff was the run start, 15:15:04Z. Fixed by
       #107 (below). The 16:15 run settled 4 positions from snapshot 85.
     - Event KXHIGHNY-26SEP24: expiration value 66.00; B66.5 YES, the other 5 brackets NO; Kalshi
-      result and the frozen resolver ("between rule applied to 66.00") agree.
+      result and the frozen resolver ("between rule applied to 66.00") agree (all 6 brackets read
+      from snapshot 85 in the evidence DB).
     - Per account (research and operational alike): B66.5 NO, 1 contract, cost 0.58 incl. 0.02
       fee -> payout 0, net -0.58; B70.5 YES, 1 contract, cost 0.09 incl. 0.01 fee -> payout 0,
       net -0.09. Equity 1000.00 -> 999.33 (operational) and 100000.00 -> 99999.33 (research);
@@ -109,7 +112,8 @@ EVIDENCE:
     new checkpoint, EXTENDED against 2026-09-23T224720Z and 2026-09-23T173009Z.
   - #107 (dee5805): a settlement run counts the evidence its own refresh received (bounded by
     now + deadline + 60 s, the refresh's own run id only; the catch-up hold unchanged).
-    Independent review READY after one round; exact-head CI green. DEPLOYED 2026-09-25 20:16Z
+    Independent review READY; its findings were fixed at 3414dd8 and re-reviewed READY; 9ee25a5
+    (the reviewer's one-line NIT) was merged with exact-head CI green. DEPLOYED 2026-09-25 20:16Z
     (16:16 ET, after the 16:15 run): preflight PASS, backups verified before and after,
     fail-closed PASS, no failed units, 13 timers, COLLECTOR_HEALTH VALID, ledger restore
     VERIFIED (64 entries), Chase Upside HEALTHY.
@@ -260,4 +264,4 @@ NEXT ACTION: the owner opens the tailnet URL on the iPhone and reviews Terminal,
 ```
 
 - Every user-visible change now follows docs/design/UI_CONTRACT.md (AI_INSTRUCTIONS.md, section User interface). New features use docs/design/FEATURE_INTEGRATION.md, and the PR template asks for the UI evidence.
-- Rollback: /opt/market-edge-lab/app.prev holds the previous release (5e8b07f as of the efe86e3 deploy, 2026-09-25 08:02Z; install.sh keeps exactly one), per DAILY_SHADOW_ACTIVATION.md → Rollback. The previous bundles are also kept under ~dynasty/edgelab-release/prev-<sha>/. No store or schema changed in EV1.
+- Rollback: /opt/market-edge-lab/app.prev holds the previous release (efe86e3 as of the dee5805 deploy, 2026-09-25 20:16Z, confirmed on the VPS; install.sh keeps exactly one), per DAILY_SHADOW_ACTIVATION.md → Rollback. The previous bundles are also kept under ~dynasty/edgelab-release/prev-<sha>/. No store or schema changed in EV1 or #107.
