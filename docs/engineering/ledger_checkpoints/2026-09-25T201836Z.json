@@ -1,0 +1,21 @@
+{
+  "accounts": {
+    "EXP-001-stage-b-research": {
+      "entries": 32,
+      "head_effective_at_utc": "2026-09-25T11:10:08.10454Z",
+      "head_entry_hash": "e7a0ae88c6f6b7da667e29081524a0fb0e88f1c0b2e01b420373792bf872845e",
+      "head_seq": 62
+    },
+    "EXP-001-stage-b-shadow": {
+      "entries": 32,
+      "head_effective_at_utc": "2026-09-25T11:10:08.10454Z",
+      "head_entry_hash": "599128071fb870b8fbbe62c0808de88f3220a955e6e5dd370f29c599ac797049",
+      "head_seq": 64
+    }
+  },
+  "checkpoint_sha256": "40fca5b77bbd648fcaffdb2d127b505d3f0fb594dfd74e6a6b73385776f514e8",
+  "created_at_utc": "2026-09-25T20:18:36.858924+00:00",
+  "ledger_file": "shadow_ledger.sqlite3",
+  "ledger_schema_version": 1,
+  "schema": "edge-lab-ledger-checkpoint/1"
+}
