@@ -981,6 +981,12 @@ def event_date(event_ticker: str) -> str | None:
         return None
 
 
+# One set per capture round (see scan_kalshi_store). Result files written before this field existed
+# (EXP-003 results up to 2026-09-25) anchored a set at every book receipt, so mid-round anchors
+# appear there as INVALID sets rather than as MID_ROUND skips; they stay as recorded evidence.
+SET_CONSTRUCTION = "one-set-per-capture-round-v1"
+
+
 def scan_kalshi_store(db_path: str, *, series: str, sizes: Sequence[Decimal], max_quote_age: timedelta,
                       max_leg_skew: timedelta, event_from: str, event_to: str,
                       prohibited_fields: Sequence[str] = PROHIBITED_MARKET_FIELDS) -> dict[str, Any]:
@@ -992,7 +998,13 @@ def scan_kalshi_store(db_path: str, *, series: str, sizes: Sequence[Decimal], ma
       EXP-003's protocol list) are dropped before any use.
     - A set is skipped when any leg's book was received at or after the market's close time.
     - Only `series` in VERIFIED_INTEGER_SERIES, and only events dated within [event_from, event_to]
-      (YYYY-MM-DD, from the event ticker) are evaluated; other events are listed as skipped."""
+      (YYYY-MM-DD, from the event ticker) are evaluated; other events are listed as skipped.
+    - Set construction (SET_CONSTRUCTION): one set per capture round. Every book receipt time of the
+      event is tried as an anchor; each leg takes its latest book received by the anchor. An anchor
+      is evaluated only when every leg has a book (else INCOMPLETE_ROUND) and those books were all
+      received within `max_leg_skew` of each other (else MID_ROUND: it mixes two rounds). Every
+      tried anchor is accounted for: evaluated, or listed in `sets_skipped` with a reason code, so
+      `anchors_tried == sets_evaluated + skipped anchors`."""
     if series not in VERIFIED_INTEGER_SERIES:
         raise ValueError(f"series {series!r} is not a verified integer-strike series {sorted(VERIFIED_INTEGER_SERIES)}")
     if not (re.fullmatch(r"\d{4}-\d{2}-\d{2}", event_from or "") and re.fullmatch(r"\d{4}-\d{2}-\d{2}", event_to or "")
@@ -1030,16 +1042,17 @@ def scan_kalshi_store(db_path: str, *, series: str, sizes: Sequence[Decimal], ma
                 by_event.setdefault(str(m.get("event_ticker")), set()).add(str(m.get("ticker")))
     evaluations = []
     skipped: list[dict[str, str]] = []
+    anchors_tried = 0
     inputs: list[str] = []
     for event_ticker in sorted(by_event):
         day = event_date(event_ticker)
         if day is None or not (event_from <= day <= event_to):
-            skipped.append({"event": event_ticker, "as_of": "",
+            skipped.append({"event": event_ticker, "as_of": "", "code": "OUTSIDE_WINDOW",
                             "reason": f"event date {day} outside the requested window {event_from}..{event_to}"})
             continue
         tickers = sorted(by_event[event_ticker])
         anchors = sorted({b[0] for t in tickers for b in books.get(t, [])})
-        seen_sets: set[tuple[int, ...]] = set()
+        anchors_tried += len(anchors)
         for anchor in anchors:
             chosen = {}
             for t in tickers:
@@ -1047,14 +1060,20 @@ def scan_kalshi_store(db_path: str, *, series: str, sizes: Sequence[Decimal], ma
                 if prior:
                     chosen[t] = max(prior, key=lambda b: (b[0], b[1]))
             if len(chosen) != len(tickers):
+                missing = [t for t in tickers if t not in chosen]
+                skipped.append({"event": event_ticker, "as_of": anchor, "code": "INCOMPLETE_ROUND",
+                                "reason": f"INCOMPLETE_ROUND: no book received by as_of for {', '.join(missing)}"})
                 continue
-            key = tuple(sorted(b[1] for b in chosen.values()))
-            if key in seen_sets:
+            received = [parse_utc(b[0]) for b in chosen.values()]
+            if all(r is not None for r in received) and max(received) - min(received) > max_leg_skew:
+                skipped.append({"event": event_ticker, "as_of": anchor, "code": "MID_ROUND",
+                                "reason": f"MID_ROUND: leg books span {max(received) - min(received)} > {max_leg_skew}"
+                                          "; the anchor mixes two capture rounds"})
                 continue
-            seen_sets.add(key)
             snaps = [s for s in market_snaps if s[0] <= anchor]
             if not snaps:
-                skipped.append({"event": event_ticker, "as_of": anchor, "reason": "no market record received by as_of"})
+                skipped.append({"event": event_ticker, "as_of": anchor, "code": "NO_MARKET_RECORD",
+                                "reason": "no market record received by as_of"})
                 continue
             latest: dict[str, Mapping[str, Any]] = {}
             for _, _, _, markets in sorted(snaps, key=lambda s: (s[0], s[1])):
@@ -1062,11 +1081,12 @@ def scan_kalshi_store(db_path: str, *, series: str, sizes: Sequence[Decimal], ma
                     if str(m.get("ticker")) in tickers:
                         latest[str(m.get("ticker"))] = m
             if len(latest) != len(tickers):
-                skipped.append({"event": event_ticker, "as_of": anchor, "reason": "a bracket has no market record"})
+                skipped.append({"event": event_ticker, "as_of": anchor, "code": "NO_MARKET_RECORD",
+                                "reason": "a bracket has no market record"})
                 continue
             closes = [parse_utc(m.get("close_time")) for m in latest.values()]
             if any(c is None or parse_utc(anchor) >= c for c in closes):
-                skipped.append({"event": event_ticker, "as_of": anchor,
+                skipped.append({"event": event_ticker, "as_of": anchor, "code": "POST_CLOSE",
                                 "reason": "at or after a market's close (post-close snapshots are prohibited)"})
                 continue
             ladders = {}
@@ -1087,6 +1107,9 @@ def scan_kalshi_store(db_path: str, *, series: str, sizes: Sequence[Decimal], ma
         validity[e.quote_validity] = validity.get(e.quote_validity, 0) + 1
         for row in e.sizes:
             claims[row.claim] = claims.get(row.claim, 0) + 1
+    skip_counts: dict[str, int] = {}
+    for s in skipped:
+        skip_counts[s["code"]] = skip_counts.get(s["code"], 0) + 1
     inconsistencies = [e.observed_quote_inconsistency for e in evaluations if e.observed_quote_inconsistency is not None]
     report = {
         "version": PAYOFF_VERSION,
@@ -1097,8 +1120,11 @@ def scan_kalshi_store(db_path: str, *, series: str, sizes: Sequence[Decimal], ma
         "max_quote_age_seconds": max_quote_age.total_seconds(),
         "max_leg_skew_seconds": max_leg_skew.total_seconds(),
         "events": len(by_event),
+        "set_construction": SET_CONSTRUCTION,
+        "anchors_tried": anchors_tried,
         "sets_evaluated": len(evaluations),
         "sets_skipped": skipped,
+        "skip_counts": dict(sorted(skip_counts.items())),
         "relationship_counts": dict(sorted(relationships.items())),
         "quote_validity_counts": dict(sorted(validity.items())),
         "claim_counts_by_size_row": dict(sorted(claims.items())),

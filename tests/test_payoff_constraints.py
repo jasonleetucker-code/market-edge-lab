@@ -357,6 +357,7 @@ def test_scan_reads_market_side_books_only_and_skips_post_close(tmp_path):
     assert report["sets_evaluated"] == 1 and report["relationship_counts"] == {"INCOMPLETE": 1}
     assert report["claim_counts_by_size_row"] == {"NO_SURPLUS_EVEN_BEFORE_FEES": 1}
     assert any("post-close" in s["reason"] for s in report["sets_skipped"])
+    assert report["skip_counts"] == {"POST_CLOSE": 1} and report["anchors_tried"] == 2
     again = scan_kalshi_store(str(tmp_path / "evidence.sqlite3"), series="KXHIGHNY", sizes=[D(1)],
                               max_quote_age=AGE, max_leg_skew=SKEW, **WINDOW)
     assert again["report_sha256"] == report["report_sha256"]  # deterministic replay
@@ -379,9 +380,55 @@ def test_scan_refuses_unverified_series_and_filters_by_event_window(tmp_path):
     outside = scan_kalshi_store(db, series="KXHIGHNY", sizes=[D(1)], max_quote_age=AGE, max_leg_skew=SKEW,
                                 event_from="2026-10-01", event_to="2026-10-31")
     assert outside["sets_evaluated"] == 0 and "outside the requested window" in outside["sets_skipped"][0]["reason"]
+    assert outside["sets_skipped"][0]["code"] == "OUTSIDE_WINDOW" and outside["anchors_tried"] == 0
 
 
 WINDOW = {"event_from": "2026-09-01", "event_to": "2026-09-30"}
+
+
+def test_scan_builds_one_set_per_capture_round_and_accounts_for_every_anchor(tmp_path):
+    """Regression: the scan anchored a set at every book receipt, so each later anchor of a round
+    mixed it with the previous round (an artifact INVALID set), and partial anchors in an event's
+    first round were dropped without a trace."""
+    markets = _markets()
+    tickers = sorted(m["ticker"] for m in markets)
+    books = [(t, f"2026-09-23T21:58:0{i}Z", [["0.8500", "5.00"]]) for i, t in enumerate(tickers)]  # round 1
+    books += [(t, f"2026-09-23T22:08:0{i}Z", [["0.8400", "5.00"]]) for i, t in enumerate(tickers)]  # round 2
+    report = scan_kalshi_store(str(_store(tmp_path, markets, books)), series="KXHIGHNY", sizes=[D(1)],
+                               max_quote_age=AGE, max_leg_skew=SKEW, **WINDOW)
+    n = len(tickers)
+    assert report["set_construction"] == "one-set-per-capture-round-v1"
+    assert [e["as_of_utc"] for e in report["evaluations"]] == [f"2026-09-23T21:58:0{n - 1}+00:00",
+                                                                f"2026-09-23T22:08:0{n - 1}+00:00"]
+    assert report["quote_validity_counts"] == {"VALID": 2}  # no artifact INVALID sets
+    assert report["anchors_tried"] == 2 * n
+    assert report["anchors_tried"] == report["sets_evaluated"] + len(report["sets_skipped"])
+    assert report["skip_counts"] == {"INCOMPLETE_ROUND": n - 1, "MID_ROUND": n - 1}
+    first = [s for s in report["sets_skipped"] if s["code"] == "INCOMPLETE_ROUND"]
+    assert [s["as_of"] for s in first] == [f"2026-09-23T21:58:0{i}Z" for i in range(n - 1)]
+    assert tickers[-1] in first[0]["reason"] and tickers[0] not in first[0]["reason"]
+    assert all("mixes two capture rounds" in s["reason"] for s in report["sets_skipped"] if s["code"] == "MID_ROUND")
+
+
+def test_scan_round_skew_boundary_matches_the_evaluator(tmp_path):
+    """A round whose books span exactly max_leg_skew is evaluated (the evaluator's rule is also
+    span > skew); one second more and it is a MID_ROUND skip, never an evaluated INVALID set."""
+    markets = _markets()
+    tickers = sorted(m["ticker"] for m in markets)
+    at = {True: "2026-09-23T21:59:00Z", False: "2026-09-23T21:59:01Z"}
+    for exact in (True, False):
+        folder = tmp_path / str(exact)
+        folder.mkdir()
+        books = [(t, "2026-09-23T21:58:00Z" if i == 0 else at[exact], [["0.8500", "5.00"]])
+                 for i, t in enumerate(tickers)]
+        report = scan_kalshi_store(str(_store(folder, markets, books)), series="KXHIGHNY", sizes=[D(1)],
+                                   max_quote_age=AGE, max_leg_skew=SKEW, **WINDOW)
+        assert report["anchors_tried"] == 2
+        if exact:
+            assert report["sets_evaluated"] == 1 and report["quote_validity_counts"] == {"VALID": 1}
+            assert report["skip_counts"] == {"INCOMPLETE_ROUND": 1}
+        else:
+            assert report["sets_evaluated"] == 0 and report["skip_counts"] == {"INCOMPLETE_ROUND": 1, "MID_ROUND": 1}
 
 
 def test_exp003_prohibited_fields_are_dropped_before_use():

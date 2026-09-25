@@ -25,6 +25,36 @@ not captured arbitrage. No fills exist in this experiment.
 4. The size ladder, the multiple-testing plan and the futility rule.
 5. The minimum useful economic effect (**owner input**).
 
+## Scan set construction
+
+`payoff_constraints.scan_kalshi_store` now builds **one set per capture round** (report field
+`set_construction = "one-set-per-capture-round-v1"`).
+- **Anchors.** Every book receipt time is still tried as an anchor, and each leg takes its latest
+  book received by that anchor.
+- **Evaluated.** An anchor is evaluated only when every leg has a book and those books were all
+  received within `max_leg_skew` of each other.
+- **Skipped.** Every other anchor is listed in `sets_skipped` with a code:
+  - `INCOMPLETE_ROUND`: a leg has no book yet. Before this change these partial anchors in an
+    event's first round were dropped with no record.
+  - `MID_ROUND`: the legs' books span more than `max_leg_skew`, so the anchor mixes two rounds.
+- **Accounting.** `anchors_tried == sets_evaluated + skipped anchors`, and `skip_counts` totals
+  the skips by code.
+
+**Earlier results.** The result files committed before this change are kept unchanged as recorded
+evidence and were not regenerated:
+- `payoff_scan_laptop_store_2026-09-22.json`;
+- the production scan of backup `edge-backup-5q41yg5u`, recorded in #103.
+
+Those scans anchored a set at every book receipt. In the production scan, each of the 30 INVALID
+sets fails the leg-skew check, which the evaluator also applies. Under the new construction all
+30 would be MID_ROUND skips instead of evaluated sets.
+- The 8 VALID sets are the last anchor of each complete round. Their inputs are the same under the
+  new construction.
+- The number of partial first-round anchors that were silently dropped is not recorded in those
+  files.
+
+Neither expectation has been checked by a re-run, which would be a new, logged look at the data.
+
 ## Log
 
 - 2026-09-25: DRAFT registered (EE v1 PR A). No data viewed for this experiment. The evaluator
