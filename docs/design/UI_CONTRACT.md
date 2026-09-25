@@ -243,15 +243,18 @@ is evaluated per request and a page view writes nothing (a registered known unlo
 label "PAYOFF RESEARCH — NOT A CAPTURED RESULT", the result's source store prominently (a laptop or fixture
 result reads "not production evidence"), as-of and event window, proof completeness per set
 (PROVEN / INCOMPLETE / UNSUPPORTED with reasons), claims per size with their reasons (NOT_EVALUATED included),
-settlement costs (Unknown when the evaluator could not cost a state), orphan-leg exposure, execution none,
+settlement costs from the evaluator's structured fields ("Settlement cost unknown", or "Refund unknown" for a
+state it could not value; never parsed from reason text), orphan-leg exposure as an unsigned worst-state loss
+(never a signed or positive figure), execution none,
 and provenance and verification in a disclosure. A figure appears in the surplus column only for the
 evaluator's CONDITIONAL_FULL_FILL_SURPLUS claim ("conditional on every leg filling · not captured
 arbitrage"); every other claim shows its claim, never a number. Never profit for missing outcomes, never
 "arbitrage" as a result, never a funded or approved-bankroll state, no edge score, nothing green. States:
 populated, partial, stale, empty, unsupported, unknown (not configured or not readable), error, malformed;
 Family B populated, stale (newest evaluation older than 8 days), empty (no result file), blocked (EXP-003 slot
-not ACTIVE), error (unreadable, over the file bound, or not verified: never a silent fallback to an older
-file), not available (evaluator or registry absent), malformed. Data
+not ACTIVE), error (unreadable, over the file or byte bound, not verified, or an evaluation as-of later than now or than
+the file's generation time: never a silent fallback to an older file and never POPULATED forever; a link is
+never followed), not available (evaluator or registry absent), malformed. Data
 sources: first the Source freshness section (the Freshness Fabric supervisor's `freshness.json`,
 schema `freshness-fabric-status/1`, read as written: what is fresh, what is due next and why; the sources needing attention
 (missed, blocked, failing or degraded, disagreeing) as rows and every source by domain in a disclosure; every
@@ -524,7 +527,10 @@ directive), and the screenshots that justify it.
   and `input_hash_definition_of` (#105). A helper that is absent or raises leaves the value unavailable with its
   reason; it is never guessed. A legacy set construction carries a note that its INVALID set counts include mid-round
   anchor artifacts and are not comparable with per-round results. A legacy hash definition carries a note that its
-  dataset hash is not comparable with a current-definition hash. Screenshots:
+  dataset hash is not comparable with a current-definition hash. After the #104 review: settlement costs are read
+  from `states_skipped` and `worst_state_surplus` only (new word EV_SETTLE_REFUND_UNKNOWN); orphan exposure is
+  unsigned; the surplus column shows only the claim-adjusted figure; a future as-of is an error; the verifier's
+  reasons are path-scrubbed. Screenshots:
   fixture states `payoff_production` (the committed production result of #103), `payoff` (a SYNTHETIC production
   result with one conditional surplus) and `payoff_laptop` (the committed laptop result, not production evidence)
   at 360x800 and 1440x900, closed and with every disclosure open, and at 200% root text (Chromium emulation, not a

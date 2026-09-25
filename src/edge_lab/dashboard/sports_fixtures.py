@@ -252,15 +252,31 @@ REPO_EXPERIMENTS = Path(__file__).resolve().parents[3] / "experiments"
 PAYOFF_NOW = datetime(2026, 9, 25, 12, 0, tzinfo=UTC)  # three days after the committed laptop scan's books
 
 
+def _require_temporary(root: Path) -> None:
+    """Refuse a forging target outside the system temporary directory or inside the repository."""
+    target = root.resolve()
+    temp = Path(tempfile.gettempdir()).resolve()
+    repo = REPO_EXPERIMENTS.parent.resolve()
+    if not target.is_relative_to(temp) or target.is_relative_to(repo) and not temp.is_relative_to(repo):
+        raise ValueError(f"payoff_registry forges SYNTHETIC results and writes only under {temp}, not {target}")
+
+
 def payoff_registry(root: Path | None = None, *, production: bool = False, positive: bool = False,
                     slot_status: str | None = None, results: bool = True, tamper: bool = False,
                     keep: str | None = None) -> Path:
-    """A throwaway experiment registry holding a copy of the repository's EXP-003 (protocol, evidence-use log,
-    the committed result files and their `.source.json` sidecars). `keep` (a glob) removes every other result
-    file; `production` adds a newer SYNTHETIC production-labelled result, logged in the copy's own log exactly
-    as the payoff-scan CLI logs one; `positive` gives it one conditional full-fill surplus row; `slot_status`
-    rewrites the protocol's slot; `results=False` removes every result file; `tamper` edits the newest result
-    (by evaluation as-of) after it was hashed. The repository's files are never written."""
+    """FORGES RESULT FILES. SYNTHETIC ONLY: never point it at, or copy its output into, a real registry.
+
+    Builds a throwaway experiment registry holding a copy of the repository's EXP-003 (protocol, evidence-use
+    log, the committed result files and their `.source.json` sidecars) for tests, browser states and the
+    /gallery demo sections (the gallery calls it at runtime, so it lives in the package). `keep` (a glob)
+    removes every other result file; `production` adds a newer SYNTHETIC production-labelled result, logged in
+    the copy's own log exactly as the payoff-scan CLI logs one; `positive` gives it one conditional full-fill
+    surplus row; `slot_status` rewrites the protocol's slot; `results=False` removes every result file; `tamper`
+    edits the newest result (by evaluation as-of) after it was hashed.
+
+    It writes only inside the system temporary directory (`root` defaults to a new temporary directory, and any
+    other `root` must resolve inside `tempfile.gettempdir()` and outside the repository), so the repository's
+    files, and any real registry, are never written."""
     import copy
     import json
     import shutil
@@ -269,7 +285,8 @@ def payoff_registry(root: Path | None = None, *, production: bool = False, posit
     from .. import research_evidence as rev
     from ..provenance import canonical_json, sha256_hex
 
-    root = root or Path(tempfile.mkdtemp(prefix="edge-payoff-registry-"))
+    root = Path(root) if root is not None else Path(tempfile.mkdtemp(prefix="edge-payoff-registry-"))
+    _require_temporary(root)
     src = next(REPO_EXPERIMENTS.glob("EXP-003-*"))
     exp = root / src.name
     shutil.copytree(src, exp)
@@ -312,11 +329,11 @@ def payoff_registry(root: Path | None = None, *, production: bool = False, posit
             dataset_sha256=report["input_snapshot_sha256"], role=rev.DatasetRole.DEVELOPMENT,
             window=rev.InformationWindow("kalshi:KXHIGHNY", f"{window[0]}T00:00:00Z", f"{window[1]}T23:59:59Z"),
             actor="SYNTHETIC fixture", tool="dashboard.sports_fixtures.payoff_registry",
-            action_time_utc="2026-09-25T00:00:00Z", action=rev.Action.FEATURE_INSPECTION, code_version="SYNTHETIC",
+            action_time_utc="2026-09-25T11:00:00Z", action=rev.Action.FEATURE_INSPECTION, code_version="SYNTHETIC",
             model_version=None, prompt_version=None, viewed_features=True, viewed_labels=False, viewed_results=True,
             influenced_tuning=False, note=f"SYNTHETIC fixture. report_sha256={report['report_sha256']}")
         rev.record_use(exp / "evidence_use.jsonl", use)
-        envelope = pc.result_envelope(report, generated_at_utc="2026-09-25T00:00:00+00:00", source_store="production",
+        envelope = pc.result_envelope(report, generated_at_utc="2026-09-25T11:00:00+00:00", source_store="production",
                                       code_version="SYNTHETIC", evidence_use_event_id=use.event_id)
         newest = results_dir / "payoff_scan_SYNTHETIC_production_2026-09-25.json"
         newest.write_text(json.dumps(envelope, indent=2, sort_keys=True) + "\n", encoding="utf-8", newline="\n")

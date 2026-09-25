@@ -741,10 +741,15 @@ def scrub_paths(text: Any, config: Config | None = None) -> Any:
     """A free-text detail with every filesystem path reduced to its final name (as `short_error`)."""
     if not isinstance(text, str):
         return text
+
+    def last(m: re.Match) -> str:
+        return re.split(r"[\\/]", m.group(0).rstrip("\\/"))[-1]
     for p in (config.paths() if config else []):
-        for variant in {str(p), str(p.resolve())}:
-            text = text.replace(variant, p.name)
-    return _ABS_PATH.sub(lambda m: re.split(r"[\\/]", m.group(0).rstrip("\\/"))[-1], text)
+        for variant in sorted({str(p), str(p.resolve())}, key=len, reverse=True):
+            # A configured path, and any path beneath it, reduces to its own final name (a file under the
+            # experiments root reads as that file's name, never as the root's name glued to it).
+            text = re.sub(re.escape(variant) + r"(?![^\s\\/:'\"])(?:[\\/][^\s\\/:'\"]+)*[\\/]?", last, text)
+    return _ABS_PATH.sub(last, text)
 
 
 def _scrubbed(panel: dict[str, Any], config: Config) -> dict[str, Any]:
@@ -1373,6 +1378,11 @@ PAYOFF_SIDECAR_SUFFIX = ".source.json"  # metadata beside a result (how the scan
 PAYOFF_RESULT_MAX_BYTES = 8_000_000  # one result file (the committed laptop scan is ~40 KB)
 PAYOFF_RESULT_MAX_FILES = 64
 PAYOFF_STALE_AFTER = timedelta(days=8)  # coordinator decision (EE v1 Section B)
+PAYOFF_RESULT_MAX_TOTAL_BYTES = 32_000_000  # every result file together (read at most once per (size, mtime))
+PAYOFF_CLOCK_TOLERANCE = timedelta(minutes=5)  # an evaluation as-of later than now by more than this is an error
+# resolved path -> ((size, mtime_ns), parsed result or why it is unreadable). Shared and read-only: a page
+# view never mutates a result. Cleared when it outgrows twice the file bound.
+_PAYOFF_READS: dict[str, tuple[tuple[int, int], Any]] = {}
 
 
 # (helper, legacy constant) in payoff_constraints: how the scan built its sets and what its dataset hash covers
@@ -1406,6 +1416,11 @@ def payoff_methods(module: Any, obj: Any) -> dict[str, Any]:
         out[f"{key}_problem"] = problem
         out[f"{key}_legacy"] = value is not None and value == legacy
     return out
+
+
+@dataclass(frozen=True)
+class _Unreadable:
+    reason: str
 
 
 def _result_as_of(obj: Any) -> datetime | None:
@@ -1446,6 +1461,10 @@ def economic_evidence_b(ctx: Context) -> Loaded:
     except Exception as exc:  # noqa: BLE001
         return Loaded(ERROR, message=f"{exp.id} protocol unreadable: {short_error(exc, ctx.config)}")
     base["slot_status"] = protocol.get("slot_status")
+    if str(base["slot_status"] or "").upper() != "ACTIVE":  # decided before any result file is read
+        return Loaded(OK, {**base, "state": "BLOCKED",
+                           "detail": f"{exp.id} slot is {base['slot_status'] or 'not recorded'}, not ACTIVE: its "
+                                     "results are not shown"})
     log = exp.path.parent / "evidence_use.jsonl"
     results_dir = exp.path.parent / "results"
     listed = sorted(results_dir.glob(PAYOFF_RESULT_GLOB)) if results_dir.is_dir() else []
@@ -1458,14 +1477,39 @@ def economic_evidence_b(ctx: Context) -> Loaded:
                                      f"{PAYOFF_RESULT_MAX_FILES}; archive older results")
     candidates: list[tuple[datetime, str, Any]] = []
     unreadable: list[str] = []
-    for path in files:
-        try:
-            if path.stat().st_size > PAYOFF_RESULT_MAX_BYTES:
-                unreadable.append(f"{path.name}: larger than {PAYOFF_RESULT_MAX_BYTES} bytes")
+    stats = []
+    try:
+        inside = results_dir.resolve()
+        for path in files:
+            # A link, or anything resolving outside results/, is never followed: results are plain files.
+            if path.is_symlink() or not path.resolve().is_relative_to(inside) or not path.is_file():
+                unreadable.append(f"{path.name}: not a plain file inside results/ (not read)")
                 continue
-            obj = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, UnicodeDecodeError, ValueError) as exc:
-            unreadable.append(f"{path.name}: {short_error(exc, ctx.config)}")
+            stats.append((path, path.stat()))
+    except OSError as exc:
+        return Loaded(ERROR, message=f"{exp.id} results unreadable: {short_error(exc, ctx.config)}")
+    total = sum(st.st_size for _, st in stats)
+    if total > PAYOFF_RESULT_MAX_TOTAL_BYTES:
+        return Loaded(ERROR, message=f"result files total {total} bytes, over the Terminal's bound of "
+                                     f"{PAYOFF_RESULT_MAX_TOTAL_BYTES}; archive older results")
+    if len(_PAYOFF_READS) > 2 * PAYOFF_RESULT_MAX_FILES:
+        _PAYOFF_READS.clear()
+    for path, st in stats:
+        key, stamp = str(path.resolve()), (st.st_size, st.st_mtime_ns)
+        cached = _PAYOFF_READS.get(key)
+        if cached is not None and cached[0] == stamp:
+            obj = cached[1]
+        else:
+            if st.st_size > PAYOFF_RESULT_MAX_BYTES:
+                obj = _Unreadable(f"larger than {PAYOFF_RESULT_MAX_BYTES} bytes")
+            else:
+                try:
+                    obj = json.loads(path.read_text(encoding="utf-8"))
+                except (OSError, UnicodeDecodeError, ValueError) as exc:
+                    obj = _Unreadable(short_error(exc, ctx.config))
+            _PAYOFF_READS[key] = (stamp, obj)
+        if isinstance(obj, _Unreadable):
+            unreadable.append(f"{path.name}: {obj.reason}")
             continue
         as_of = _result_as_of(obj)
         if as_of is None:
@@ -1473,10 +1517,6 @@ def economic_evidence_b(ctx: Context) -> Loaded:
             continue
         candidates.append((as_of, path.name, obj))
     base["unreadable"] = unreadable
-    if str(base["slot_status"] or "").upper() != "ACTIVE":
-        return Loaded(OK, {**base, "state": "BLOCKED",
-                           "detail": f"{exp.id} slot is {base['slot_status'] or 'not recorded'}, not ACTIVE: its "
-                                     "results are not shown"})
     if not candidates:
         if unreadable:
             return Loaded(ERROR, message="no EXP-003 result file could be read: " + "; ".join(unreadable)[:300])
@@ -1484,8 +1524,18 @@ def economic_evidence_b(ctx: Context) -> Loaded:
                            "detail": "no payoff-scan result file is recorded for EXP-003 yet"})
     as_of, name, obj = max(candidates, key=lambda c: (c[0], c[1]))
     ok, reasons = module.verify_result_provenance(obj, log)
-    if not ok:
-        return Loaded(ERROR, message=f"the newest result ({name}) does not verify: " + "; ".join(reasons)[:400])
+    if not ok:  # the checker's reasons can quote the log's absolute path
+        return Loaded(ERROR, message=scrub_paths(f"the newest result ({name}) does not verify: "
+                                                 + "; ".join(str(r) for r in reasons), ctx.config)[:400])
+    # An as-of in the future would never go stale: it is an error, never POPULATED.
+    prov = obj.get("provenance") if isinstance(obj.get("provenance"), dict) else {}
+    generated = parse_utc(prov.get("generated_at_utc"))
+    if as_of > ctx.now + PAYOFF_CLOCK_TOLERANCE:
+        return Loaded(ERROR, message=f"the newest result ({name}) has an evaluation as-of "
+                                     f"{as_of.isoformat()}, later than now; it cannot be shown")
+    if generated is not None and as_of > generated:
+        return Loaded(ERROR, message=f"the newest result ({name}) has an evaluation as-of {as_of.isoformat()}, "
+                                     f"later than its generation time {generated.isoformat()}")
     state = "STALE" if ctx.now - as_of > PAYOFF_STALE_AFTER else "POPULATED"
     sidecar = name[: -len(".json")] + PAYOFF_SIDECAR_SUFFIX
     base["sidecar"] = sidecar if sidecar in base["sidecars"] else None

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from decimal import Decimal, InvalidOperation
 import re
 from typing import Any
 
@@ -1251,30 +1252,62 @@ def _source_badge(source: Any) -> str:
 
 
 def _payoff_settlement(size: dict) -> str:
-    """Settlement costs as the evaluator states them: UNKNOWN when it could not cost a state."""
-    reasons = " ".join(str(r) for r in size.get("claim_reasons") or [])
-    if "settlement cost UNKNOWN" in reasons or (size.get("evaluated") and size.get("worst_state_surplus") is None):
-        return c.state_text("EV_SETTLE_UNKNOWN", label="Unknown", kind=pr.WARN_K)
+    """Settlement costs from the evaluator's structured fields only (never its reason text):
+    - a state it skipped (`states_skipped`) could not be valued because a refund rule is UNKNOWN;
+    - an evaluated size with no `worst_state_surplus` and no skipped state has an UNKNOWN settlement cost;
+    - otherwise every state was costed."""
     if not size.get("evaluated"):
         return c.na("not evaluated at this size")
+    skipped = [str(s) for s in size.get("states_skipped") or []]
+    if skipped:
+        return c.state_text("EV_SETTLE_REFUND_UNKNOWN", kind=pr.WARN_K) + _sub(
+            f"state(s) {', '.join(skipped)} not valued")
+    if size.get("worst_state_surplus") is None:
+        return c.state_text("EV_SETTLE_UNKNOWN", kind=pr.WARN_K)
     return c.txt("Costed by the evaluator")
 
 
+def _settlement_fact(evaluated: list, refund_unknown: int, settle_unknown: int) -> str:
+    """The section's settlement-cost fact, from the same structured fields as `_payoff_settlement`."""
+    if not evaluated:
+        return c.na("no size was evaluated, so no settlement cost was assessed")
+    parts = []
+    if settle_unknown:
+        parts.append(c.state_text("EV_SETTLE_UNKNOWN", label="Unknown", kind=pr.WARN_K)
+                     + _sub(f"{pr.count(settle_unknown)} evaluated size(s): settlement cost not yet verified, "
+                            "so surpluses after all costs cannot be stated"))
+    if refund_unknown:
+        parts.append(c.state_text("EV_SETTLE_REFUND_UNKNOWN", kind=pr.WARN_K)
+                     + _sub(f"{pr.count(refund_unknown)} evaluated size(s): a state could not be valued"))
+    return "".join(parts) or c.txt("Costed by the evaluator where evaluated")
+
+
 def _payoff_surplus(size: dict) -> str:
-    """A figure only for the evaluator's own positive claim; every other claim reads its claim, not a number."""
+    """A figure only for the evaluator's own positive claim (its claim-adjusted surplus); every other claim
+    reads its claim, not a number."""
     if size.get("claim") == POSITIVE_CLAIM:
-        value = size.get("claim_adjusted_surplus") if size.get("claim_adjusted_surplus") is not None \
-            else size.get("worst_state_surplus")
-        return c.num(pr.money(value), reason="the evaluator stated no figure") + _sub(
+        return c.num(pr.money(size.get("claim_adjusted_surplus")),
+                     reason="the evaluator stated no claim-adjusted figure") + _sub(
             "conditional on every leg filling · not captured arbitrage")
     return c.na("no positive claim: the evaluator made none at this size")
+
+
+def _orphan_amount(value: Any) -> str:
+    """A leg that fills alone, as an unsigned exposure: the worst-state loss, or none. A gain is never shown."""
+    try:
+        amount = Decimal(str(value))
+    except (InvalidOperation, ValueError, TypeError):
+        return "unknown"
+    if not amount.is_finite():
+        return "unknown"
+    return f"{pr.money(-amount)} worst-state loss" if amount < 0 else "no worst-state loss"
 
 
 def _payoff_orphans(size: dict) -> str:
     orphans = size.get("orphan_exposure") if isinstance(size.get("orphan_exposure"), dict) else {}
     if not orphans:
         return c.na("no leg evaluated alone at this size")
-    return c.ul([f"{leg}: {pr.money(v, signed=True) or 'unknown'}" for leg, v in sorted(orphans.items())])
+    return c.ul([f"{leg}: {_orphan_amount(v) if v is not None else 'unknown'}" for leg, v in sorted(orphans.items())])
 
 
 def _payoff_set(e: dict) -> str:
@@ -1289,7 +1322,7 @@ def _payoff_set(e: dict) -> str:
         "No size evaluated for this set", "The evaluator made no claim at any size: quotes "
         + str(e.get("quote_validity") or "not recorded").lower() + " ("
         + ("; ".join(str(r) for r in e.get("quote_reasons") or []) or "no reason recorded") + ").", kind="nd")
-    orphans = c.table(["basket", "orphan-leg exposure (a leg that fills alone: worst-state value minus its cost)"],
+    orphans = c.table(["basket", "orphan-leg exposure (a leg that fills alone: its worst-state loss after its cost)"],
                       [[c.num(pr.quantity(s.get("basket_quantity"))), _payoff_orphans(s)] for s in sizes],
                       wrap=(1,), right=(0,), caption=f"Orphan-leg exposure for {e.get('set_id')}")
     head = c.facts([
@@ -1332,7 +1365,9 @@ def _payoff_view(v: dict, now: Any) -> str:
                          key=lambda e: str(e.get("as_of_utc")), reverse=True)
     sizes = [s for e in evaluations for s in e.get("sizes") or [] if isinstance(s, dict)]
     positive = sum(1 for s in sizes if s.get("claim") == POSITIVE_CLAIM)
-    unknown_costs = any(s.get("evaluated") and s.get("worst_state_surplus") is None for s in sizes)
+    evaluated = [s for s in sizes if s.get("evaluated")]
+    refund_unknown = sum(1 for s in evaluated if s.get("states_skipped"))
+    settle_unknown = sum(1 for s in evaluated if not s.get("states_skipped") and s.get("worst_state_surplus") is None)
     out.append(f'<p class="meta">{_source_badge(source)} {_pm_badge("EV_BSTATE", state)} '
                f'{esc(report.get("series") or "")} · file {esc(v.get("file"))}</p>')
     if source != "production":
@@ -1358,10 +1393,7 @@ def _payoff_view(v: dict, now: Any) -> str:
                                      or None, reason="no set evaluated")),
         ("Claims (set × size)", c.txt(" · ".join(f"{k.replace('_', ' ').lower()} {pr.count(n)}"
                                                  for k, n in sorted(claims.items())) or None, reason="none")),
-        ("Settlement costs", c.state_text("EV_SETTLE_UNKNOWN", label="Unknown", kind=pr.WARN_K)
-         + _sub("not yet verified: surpluses after all costs cannot be stated") if unknown_costs
-         else c.txt("Costed by the evaluator where evaluated") if any(s.get("evaluated") for s in sizes)
-         else c.na("no size was evaluated, so no settlement cost was assessed")),
+        ("Settlement costs", _settlement_fact(evaluated, refund_unknown, settle_unknown)),
         ("Positive claims", c.num(pr.count(positive)) + _sub("conditional full-fill surplus only · never captured")),
         ("Execution", c.txt("None") + _sub(str(report.get("actual_result") or "no fills"))),
     ], wide=True, text_cols=(0, 1, 3, 4, 5, 7)))

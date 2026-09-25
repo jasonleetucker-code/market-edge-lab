@@ -77,12 +77,14 @@ def test_the_committed_laptop_result_is_shown_and_labelled_not_production(tmp_pa
     for needle in ("PAYOFF RESEARCH — NOT A CAPTURED RESULT", "Laptop store · not production evidence",
                    "Not production evidence", "Proof completeness", "incomplete 2", "Proof incomplete",
                    "Claims (set × size)", "not evaluated 5", "no surplus even before fees 1",
-                   "Settlement costs", "Unknown", "Positive claims", "INSUFFICIENT_DEPTH (complete capture offers 0 < 1)",
-                   "No surplus, even before fees", "Orphan-leg exposure", "−$0.49", "As of Sep 22, 6:38 PM EDT",
+                   "Settlement costs", "Settlement cost unknown", "Positive claims",
+                   "INSUFFICIENT_DEPTH (complete capture offers 0 < 1)", "No surplus, even before fees",
+                   "Orphan-leg exposure", "$0.49 worst-state loss", "As of Sep 22, 6:38 PM EDT",
                    "evidence-use event", "eu-374acc98ca83fac9d86ed28643e2bc54", "writes no evidence-use event"):
         assert needle in text, needle
     assert "k-ok" not in body(root)  # nothing green
     assert "$1.14" in text  # an all-in acquisition cost is a cost, not a surplus
+    assert "−$0.49" not in text and "+$" not in text  # orphan exposure is an unsigned loss, never a signed figure
 
 
 def test_the_newest_result_by_evaluation_as_of_wins_and_only_its_positive_claim_shows_a_figure(tmp_path):
@@ -186,6 +188,111 @@ def test_a_helper_that_raises_leaves_the_method_unknown_and_the_page_renders(tmp
     # the unavailable marker carries its reason (title and aria-label)
     assert "input_hash_definition_of could not read this file (TypeError)" in html
     assert plain(research.PAYOFF_LEGACY_HASH_NOTE) not in plain(html)  # no legacy note for an unknown definition
+
+
+def test_a_verification_error_never_shows_the_logs_absolute_path(tmp_path):
+    root = sf.payoff_registry(tmp_path)
+    log = next(root.glob("EXP-003-*/evidence_use.jsonl"))
+    with log.open("a", encoding="utf-8", newline="\n") as fh:
+        fh.write("{not json\n")
+    loaded = load(root)
+    assert loaded.status == d.ERROR and "does not verify" in loaded.message
+    assert "EvidenceError: evidence_use.jsonl:" in loaded.message  # the file is named ...
+    assert str(tmp_path) not in loaded.message and str(log.parent) not in loaded.message  # ... never its path
+    assert not re.search(r"[A-Za-z]:\\|/tmp/|/home/|/Users/", loaded.message), loaded.message
+
+
+def test_a_symlinked_result_is_never_followed(tmp_path):
+    root = sf.payoff_registry(tmp_path / "r", keep="payoff_scan_laptop_*")
+    results = next(root.glob("EXP-003-*/results"))
+    outside = tmp_path / "outside.json"
+    shutil.copy(next(results.glob("payoff_scan_laptop_*.json")), outside)
+    link = results / "payoff_scan_zz_link.json"
+    try:
+        link.symlink_to(outside)
+    except (OSError, NotImplementedError):
+        pytest.skip("symbolic links are not permitted on this machine")
+    loaded = load(root)
+    assert loaded.status == d.OK and loaded.value["file"] == "payoff_scan_laptop_store_2026-09-22.json"
+    assert any("payoff_scan_zz_link.json: not a plain file" in u for u in loaded.value["unreadable"])
+
+
+def test_result_files_are_read_once_per_size_and_mtime_and_never_when_blocked(tmp_path, monkeypatch):
+    reads = []
+    real = Path.read_text
+
+    def counting(self, *args, **kwargs):
+        if self.name.startswith("payoff_scan_"):
+            reads.append(self.name)
+        return real(self, *args, **kwargs)
+    monkeypatch.setattr(Path, "read_text", counting)
+    blocked = sf.payoff_registry(tmp_path / "b", slot_status="QUEUED")
+    reads.clear()
+    assert load(blocked).value["state"] == "BLOCKED" and reads == []  # the slot decides before any read
+    root = sf.payoff_registry(tmp_path / "r")
+    reads.clear()
+    load(root)
+    first = sorted(reads)
+    assert first and len(first) == len(set(first))
+    load(root)
+    assert sorted(reads) == first  # the second view read nothing
+    results = next(root.glob("EXP-003-*/results"))
+    changed = next(results.glob("payoff_scan_laptop_*.json"))
+    changed.write_text(changed.read_text(encoding="utf-8") + "\n", encoding="utf-8")
+    reads.clear()
+    load(root)
+    assert reads == [changed.name]  # only the changed file is read again
+    monkeypatch.setattr(d, "PAYOFF_RESULT_MAX_TOTAL_BYTES", 1000)
+    over = load(root)
+    assert over.status == d.ERROR and "over the Terminal's bound" in over.message
+
+
+def test_a_future_evaluation_as_of_is_an_error_never_populated_forever(tmp_path):
+    root = sf.payoff_registry(tmp_path)
+    early = load(root, NOW.replace(hour=4))  # before the committed production result's newest evaluation
+    assert early.status == d.ERROR and "later than now" in early.message
+    assert load(root, NOW).status == d.OK
+    # an as-of after the file's own generation time: re-hashed so only this check can fail
+    from edge_lab import payoff_constraints as pc
+    path = next(root.glob("EXP-003-*/results/payoff_scan_production_*.json"))
+    obj = json.loads(path.read_text(encoding="utf-8"))
+    prov = obj["provenance"]
+    envelope = pc.result_envelope(obj["report"], generated_at_utc="2026-09-25T01:00:00+00:00",
+                                  source_store=prov["source_store"], code_version=prov["code_version"],
+                                  evidence_use_event_id=prov["evidence_use_event_id"])
+    path.write_text(json.dumps(envelope), encoding="utf-8")
+    late = load(root)
+    assert late.status == d.ERROR and "later than its generation time" in late.message, late.message
+
+
+def _size(**kw):
+    return {"basket_quantity": "1", "evaluated": True, "states_skipped": [], "worst_state_surplus": "0.01",
+            "claim": "NO_SURPLUS_AFTER_FEES", "claim_reasons": [], **kw}
+
+
+def test_settlement_costs_come_from_structured_fields_never_reason_text():
+    assert "Settlement cost unknown" in plain(research._payoff_settlement(_size(worst_state_surplus=None)))
+    refund = plain(research._payoff_settlement(_size(worst_state_surplus=None, states_skipped=["VOID"])))
+    assert "Refund unknown" in refund and "VOID not valued" in refund and "Settlement cost unknown" not in refund
+    # the evaluator's wording is never parsed: this reason text changes nothing
+    costed = plain(research._payoff_settlement(_size(claim_reasons=["settlement cost UNKNOWN"])))
+    assert costed == "Costed by the evaluator"
+    assert "not evaluated" in research._payoff_settlement(_size(evaluated=False))
+
+
+def test_orphan_exposure_is_an_unsigned_loss_and_a_positive_claim_shows_only_its_adjusted_figure():
+    text = plain(research._payoff_orphans(_size(orphan_exposure={"a/YES": "-0.49", "b/YES": "0.20", "c/YES": None})))
+    assert text == "a/YES: $0.49 worst-state loss b/YES: no worst-state loss c/YES: unknown"
+    positive = research._payoff_surplus(_size(claim=research.POSITIVE_CLAIM, claim_adjusted_surplus=None,
+                                              worst_state_surplus="0.0400"))
+    assert "$0.04" not in plain(positive) and "the evaluator stated no claim-adjusted figure" in positive
+
+
+def test_the_forging_fixture_writes_only_to_temporary_copies(tmp_path):
+    with pytest.raises(ValueError, match="writes only under"):
+        sf.payoff_registry(sf.REPO_EXPERIMENTS.parent / "not-a-temp-dir")
+    assert not (sf.REPO_EXPERIMENTS.parent / "not-a-temp-dir").exists()
+    assert sf.payoff_registry(tmp_path / "ok").is_dir()  # pytest's tmp_path is under the system temp dir
 
 
 def test_page_views_write_nothing_and_never_touch_the_repository(tmp_path):
