@@ -13,7 +13,7 @@ of §14–15. Writer: RU Writer O (operations). Date: 2026-09-25 (America/New_Yo
 A recommendation is not an approval.
 
 **What is and is not approved:**
-- **APPROVED:** Kalshi NFL capture. The owner approved it on 2026-09-25 ("Approve Kalshi NFL capture"). The record is in `docs/EXECUTION_PLAN.md` via PR #110, bounded by `docs/research/SPORTS_PAIRED_EVIDENCE_GAPS.md` §6, review 2026-10-22. PR #110 was open at the time of writing.
+- **APPROVED:** Kalshi NFL capture. The owner approved it on 2026-09-25 ("Approve Kalshi NFL capture"). The record is in `docs/EXECUTION_PLAN.md` via PR #110, bounded by `docs/research/SPORTS_PAIRED_EVIDENCE_GAPS.md` §6, review 2026-10-22. PR #110 is merged (886fbff), and the implementation, PR #112, is merged (c05bd8a). Deployment is the coordinator's step; this document does not claim it.
 - **Not approved:** backup retention and deletion, an off-host copy, and any storage purchase. Part B is a proposal. The code shipped with it is a dry-run report that cannot delete.
 
 **Inputs.**
@@ -56,7 +56,7 @@ PR #112 implements this, as revised after independent review (head 5a5632b). Its
 - Point-in-time mapping.
 - The kill switch.
 
-### A2. How the capture works (CURRENT in PR #112)
+### A2. How the capture works (CURRENT on main since #112; not yet verified in production)
 
 1. **Pairing is reactive.** It deviates from the wording of §6 ("at the Odds target's effective due time"), and the coordinator accepted the deviation on 2026-09-25.
    - A Kalshi target is planned only after its Odds target is `CAPTURED`. Its target time is the Odds receipt time.
@@ -139,6 +139,7 @@ Reusing the observe timer does **not** establish precision. What the two timers 
 - A limit of about 7 min admits the normal case.
 - About 25 min also admits the refused and retry cases.
 - Under option (a), pairs beyond the frozen limit stay in the denominators as PAIR_SKEW_EXCEEDED.
+- Writer R's provisional window (`docs/research/RESEARCH_UNBLOCKING_DECISIONS.md` A.C, PROPOSED) runs from the book 5 min before the odds to 10 min after. That window admits the normal case (+5 min). It still excludes the +20 min cases, which is consistent with this table.
 
 **Option (b), same-run capture (PROPOSED follow-up, not built).** The Odds runner would fetch the two books right after its own call and pair within seconds. This needs a runner change, review, and a new shared-lock decision, because the Odds tick and the Kalshi pacer lock would then meet.
 
