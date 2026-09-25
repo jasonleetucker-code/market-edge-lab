@@ -105,6 +105,31 @@ def test_the_placebo_flags_mirror_quoted_books_that_would_bias_the_primary():
     assert r.placebo_mean > 4 * r.placebo_se  # and the Kalshi-only placebo sees it
 
 
+def test_the_remaining_cross_book_bias_is_about_rho_times_the_naive_bias():
+    for rho in (0.25, 0.5):
+        r = ps.simulate_null(noise_sd=0.01, book_noise_corr=rho, n=40_000, seed=7)
+        assert r.cross_mean == pytest.approx(rho * r.naive_mean, abs=4 * r.cross_se)
+
+
+def test_the_analytic_naive_bias_matches_the_simulation_without_rounding():
+    for noise in (0.005, 0.01):
+        r = ps.simulate_null(noise_sd=noise, n=40_000, seed=3)
+        analytic = ps.naive_bias(noise, math.sqrt(0.01 ** 2 + noise ** 2))
+        assert r.naive_mean == pytest.approx(analytic, abs=4 * r.naive_se)
+
+
+def test_rho_max_is_a_quarter_of_the_minimum_effect_over_the_naive_bias():
+    gap = math.sqrt(0.01 ** 2 + 0.005 ** 2)
+    bias = ps.naive_bias(0.005, gap)
+    assert ps.rho_max(0.005, 0.005, gap) == pytest.approx(0.25 * 0.005 / bias)
+    assert ps.rho_max(0.005, 0.005, gap) == pytest.approx(0.70, abs=0.01)  # the documented worked example
+    assert ps.rho_max(0.01, 0.0025, math.sqrt(0.01 ** 2 + 0.0025 ** 2)) == 1.0  # capped
+    with pytest.raises(ValueError):
+        ps.rho_max(0.0, 0.005, gap)
+    with pytest.raises(ValueError):
+        ps.naive_bias(0.005, 0.0)
+
+
 def test_the_cross_book_primary_detects_real_information():
     r = ps.simulate_null(noise_sd=0.005, informative=True, n=20_000)
     assert r.cross_mean > 20 * r.cross_se

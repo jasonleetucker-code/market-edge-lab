@@ -253,19 +253,56 @@ def simulate_null(*, noise_sd: float, book_noise_corr: float = 0.0, tick: float 
     return NullCheck(noise_sd, book_noise_corr, tick, informative, n, seed, nm, ns, cm, cs, pm, pse)
 
 
-NULL_CHECK_GRID = ((0.0025, 0.0, 0.0), (0.005, 0.0, 0.0), (0.005, 0.0, 0.01), (0.005, 0.5, 0.0), (0.005, 1.0, 0.0))
+NULL_CHECK_GRID = ((0.0025, 0.0, 0.0), (0.005, 0.0, 0.0), (0.005, 0.0, 0.01),
+                   (0.005, 0.25, 0.0), (0.005, 0.5, 0.0), (0.005, 0.75, 0.0), (0.005, 1.0, 0.0),
+                   (0.01, 0.0, 0.0), (0.01, 0.25, 0.0), (0.01, 0.5, 0.0), (0.01, 1.0, 0.0))
+SQRT_2_OVER_PI = math.sqrt(2 / math.pi)
 
 
-def null_check_markdown(n: int = 40_000) -> str:
+def naive_bias(noise_sd: float, gap_sd: float) -> float:
+    """Approximate bias of the old same-book statistic sign(c - k6) * (k1 - k6) under the null.
+
+    With the gap g = c - k6 and the book noise e (SD `noise_sd`) jointly normal, cov(e, g) = -noise_sd**2,
+    so E[-e * sign(g)] = noise_sd**2 * sqrt(2/pi) / sd(g). `gap_sd` is the observed SD of the gap (noise
+    included). Both inputs are feature-side quantities: no label is needed."""
+    if noise_sd < 0 or gap_sd <= 0:
+        raise ValueError("noise_sd >= 0 and gap_sd > 0")
+    return noise_sd ** 2 * SQRT_2_OVER_PI / gap_sd
+
+
+def rho_max(min_effect: float, noise_sd: float, gap_sd: float, *, tolerable_fraction: float = 0.25) -> float:
+    """The largest cross-book noise correlation the cross-book primary can tolerate.
+
+    The cross-book statistic's remaining bias is about rho x naive_bias. Tolerating at most
+    `tolerable_fraction` of the pre-registered minimum effect gives
+    rho_max = tolerable_fraction * min_effect / naive_bias(noise_sd, gap_sd), capped at 1."""
+    if min_effect <= 0 or not 0 < tolerable_fraction <= 1:
+        raise ValueError("min_effect > 0 and tolerable_fraction in (0, 1]")
+    bias = naive_bias(noise_sd, gap_sd)
+    return 1.0 if bias == 0 else min(1.0, tolerable_fraction * min_effect / bias)
+
+
+def null_check_markdown(n: int = 40_000, consensus_sd: float = 0.01) -> str:
     lines = ["# Markout statistics under a no-information null (simulation; model in the module docstring)", "",
-             "Means in cents per game (standard error). Under the null a valid statistic has mean 0.", "",
-             "| mid noise SD | book-noise corr | tick | naive | cross (primary) | placebo (bias check) |",
-             "|---|---|---|---|---|---|"]
+             "Means in cents per game (standard error). Under the null a valid statistic has mean 0. `rho x naive` "
+             "is the approximation of the cross-book bias; `analytic naive` is noise^2 * sqrt(2/pi) / sd(gap).", "",
+             "| mid noise SD | book-noise corr (rho) | tick | naive | analytic naive | cross (primary) | rho x naive "
+             "| placebo (supplementary) |",
+             "|---|---|---|---|---|---|---|---|"]
     for noise, corr, tick in NULL_CHECK_GRID:
-        r = simulate_null(noise_sd=noise, book_noise_corr=corr, tick=tick, n=n)
-        lines.append(f"| {noise * 100:.2f}c | {corr} | {tick * 100:.0f}c | {r.naive_mean * 100:+.3f} ({r.naive_se * 100:.3f}) "
-                     f"| {r.cross_mean * 100:+.3f} ({r.cross_se * 100:.3f}) | {r.placebo_mean * 100:+.3f} "
+        r = simulate_null(noise_sd=noise, book_noise_corr=corr, tick=tick, n=n, consensus_sd=consensus_sd)
+        analytic = naive_bias(noise, math.sqrt(consensus_sd ** 2 + noise ** 2))
+        lines.append(f"| {noise * 100:.2f}c | {corr} | {tick * 100:.0f}c | {r.naive_mean * 100:+.3f} "
+                     f"({r.naive_se * 100:.3f}) | {analytic * 100:+.3f} | {r.cross_mean * 100:+.3f} "
+                     f"({r.cross_se * 100:.3f}) | {corr * r.naive_mean * 100:+.3f} | {r.placebo_mean * 100:+.3f} "
                      f"({r.placebo_se * 100:.3f}) |")
+    lines += ["", "Worked rho_max (tolerable bias = 1/4 of the minimum effect; gap SD = sqrt(1c^2 + noise^2)):", "",
+              "| minimum effect | mid noise SD | naive bias | rho_max |", "|---|---|---|---|"]
+    for effect in (0.0025, 0.005, 0.01):
+        for noise in (0.0025, 0.005, 0.01):
+            gap = math.sqrt(consensus_sd ** 2 + noise ** 2)
+            lines.append(f"| {effect * 100:.2f}c | {noise * 100:.2f}c | {naive_bias(noise, gap) * 100:.3f}c | "
+                         f"{rho_max(effect, noise, gap):.2f} |")
     return "\n".join(lines) + "\n"
 
 
