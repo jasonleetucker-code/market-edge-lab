@@ -10,6 +10,8 @@ and status-file shapes, and returns a dashboard Config with a fixed clock:
 - odds: The Odds API pilot as production held it on 2026-09-24 (95 targets, one captured);
 - odds_issues: the same with a missed, a failed, a budget-skipped and an overdue target and an
   exhausted quota;
+- economics / economics_issues: SYNTHETIC NFL Odds captures and Kalshi KXNFLGAME books (Economic
+  Evidence v1 Family A), complete or with a missed capture and skewed, missing and crossed books;
 - freshness / freshness_deferred: the Freshness Fabric artifact over the odds fixture, current or
   carried through the Kalshi close-tick guard.
 """

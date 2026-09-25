@@ -1354,7 +1354,7 @@ def economic_evidence_a(ctx: Context) -> Loaded:
     if missing is not None:
         return missing
     try:
-        view = module.terminal_view(ctx.config.db, now=ctx.now)
+        view = module.terminal_view(ctx.config.db, now=ctx.now, experiments_root=ctx.config.experiments_root)
     except Exception as exc:  # noqa: BLE001 - the contract never raises; anything else is shown
         return Loaded(ERROR, message=short_error(exc, ctx.config))
     if not isinstance(view, dict):

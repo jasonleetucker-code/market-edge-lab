@@ -1058,19 +1058,11 @@ def _ev_count(v: Any, *keys: str) -> str | None:
     return pr.count(_ev(v, *keys))
 
 
-def _ev_fill(cell: Any) -> str:
-    """One fill-assumption cell: its status word, then the gross cost (fees excluded) or what the book offers."""
-    if not isinstance(cell, dict):
-        return c.na("not computed")
-    gross = pr.money(cell.get("gross_cost"))
-    return (_pm_state("EV_FILL", cell.get("status"))
-            + _sub(f"gross {gross} · fees excluded" if gross else f"offers {pr.quantity(cell.get('available')) or '—'}"))
-
-
 def _ev_capacity(cap: Any) -> str:
+    """The latest paired book's size ladder (research_economics.size_ladder_from_depth), as the report gives it."""
     latest = _ev(cap, "latest")
-    assumptions = [f"{_ev(a, 'kind')} ({_ev(a, 'id')}, {_ev(a, 'basis')}): {_ev(a, 'text')}"
-                   for a in (_ev(cap, "fill_assumptions") or []) if isinstance(a, dict)]
+    modes = [f"{_ev(a, 'id')} ({_ev(a, 'basis')}): {_ev(a, 'text')}"
+             for a in (_ev(cap, "fill_modes") or []) if isinstance(a, dict)]
     head = (f'<p class="meta">{esc(_ev_count(cap, "sides_with_book") or "0")} paired side(s) with a book · '
             f'{esc(_ev_count(cap, "truncated") or "0")} truncated capture(s)</p>')
     if not isinstance(latest, dict):
@@ -1079,21 +1071,59 @@ def _ev_capacity(cap: Any) -> str:
     else:
         lock = _ev(latest, "lockup_hours")
         meta = (f"Latest paired book: {_ev(latest, 'ticker')} · {_ev(latest, 'horizon')} · decision "
-                f"{pr.datetime_et(_ev(latest, 'decision_utc')) or 'time not recorded'} · depth "
+                f"{pr.datetime_et(_ev(latest, 'decision_utc')) or 'time not recorded'} · captured depth "
+                f"{pr.quantity(_ev(latest, 'visible_depth')) or '—'} contracts, "
                 f"{'truncated' if _ev(latest, 'depth_truncated') else 'complete as requested'} · lockup to expected "
                 f"expiration {_ev(lock, 'expected') if _ev(lock, 'expected') is not None else '—'} h (latest "
                 f"{_ev(lock, 'latest') if _ev(lock, 'latest') is not None else '—'} h)")
-        rows = [[c.num(pr.quantity(_ev(r, "size"))), _ev_fill(_ev(r, "less_conservative")),
-                 _ev_fill(_ev(r, "conservative")),
-                 c.state_text("EV_GAP_UNSUPPORTED", label="Fee unsupported") if _ev(r, "less_conservative", "fee_status")
-                 == "FEE_UNSUPPORTED" else c.txt(pr.money(_ev(r, "less_conservative", "fee")), reason="not priced")]
+        rows = [[c.num(pr.quantity(_ev(r, "size"))), _pm_state("EV_FILL", _ev(r, "depth_status")),
+                 c.num(pr.cents(_ev(r, "all_in_cost_per_unit")), reason="no all-in cost: fees not priced"),
+                 c.state_text("EV_GAP_UNSUPPORTED", label="Fee unsupported") if _ev(r, "fee_status") == "FEE_UNSUPPORTED"
+                 else _pm_state("EV_FEE", _ev(r, "fee_status"))]
                 for r in (_ev(latest, "ladder") or []) if isinstance(r, dict)]
         body = (f'<p class="meta">{esc(meta)}</p>'
-                + c.table(["contracts", "all captured depth (less conservative)", "top level only (conservative)",
-                           "fee"], rows, wrap=(1, 2, 3), right=(0,), caption="Size ladder over the latest paired book"))
-    return head + body + c.ul(assumptions, empty="no fill assumption recorded") + (
+                + c.table(["contracts", "captured depth", "all-in cost / contract", "fee"], rows, wrap=(1, 3),
+                          right=(0, 2), caption="Size ladder over the latest paired book (research_economics)"))
+    return head + body + '<p class="meta">Fill modes (applied to episodes, never to one look):</p>' + c.ul(
+        modes, empty="no fill mode recorded") + (
         '<p class="note">Visible depth is an instantaneous ceiling, not capacity; a small fill is never extrapolated '
-        "across a bankroll. All-in cost is unknown while fees are unsupported.</p>")
+        "across a bankroll. All-in cost is unknown while fees are unsupported, and no expected value is estimated "
+        "without a probability of this contract's payoff.</p>")
+
+
+def _ev_none(value: Any, reason: str) -> str:
+    """A denominator: a number, or the unavailable marker (None is unknown / not applicable, never 0)."""
+    return c.num(pr.count(value), reason=reason)
+
+
+def _ev_protocol_attrition(pa: Any) -> str:
+    den = _ev(pa, "denominators") if isinstance(_ev(pa, "denominators"), dict) else {}
+    labels = (("events", "games"), ("markets", "Kalshi markets"), ("scheduled_horizons", "scheduled horizons"),
+              ("snapshots", "snapshots"), ("opportunities", "opportunities (horizon × side)"),
+              ("eligible_opportunities", "eligible"), ("signals", "signals"), ("simulated_fills", "simulated fills"),
+              ("final_evaluable_outcomes", "final-evaluable outcomes"))
+    facts = c.facts([(label, _ev_none(den.get(key), "not enumerated or not applicable: unknown, not zero"))
+                     for key, label in labels], wide=True)
+    opp = next((w for w in (_ev(pa, "waterfalls") or []) if isinstance(w, dict) and w.get("level") == "OPPORTUNITY"),
+               None)
+    table = "" if not isinstance(opp, dict) else c.table(
+        ["exclusion", "stage", "primary", "remaining"],
+        [[esc(str(r.get("exclusion")).replace("_", " ").capitalize()), esc(str(r.get("stage")).capitalize()),
+          c.num(pr.count(r.get("primary_count")), reason="not applicable: no registered rule"),
+          c.num(pr.count(r.get("remaining_after")))] for r in opp.get("rows") or [] if isinstance(r, dict)],
+        wrap=(0,), right=(2, 3), caption="Opportunity waterfall (research_evidence.attrition_report)")
+    return facts + table + c.ul([str(n) for n in (_ev(pa, "notes") or [])], empty="")
+
+
+def _ev_screen(screen: Any) -> str:
+    eps = _ev(screen, "episodes") if isinstance(_ev(screen, "episodes"), dict) else {}
+    return (c.facts([("Verdict", _pm_badge("EV_SCREEN", _ev(screen, "verdict"))),
+                     ("Observations", c.num(pr.count(eps.get("observations")), reason="none")),
+                     ("Episodes", c.num(pr.count(eps.get("episodes")), reason="none")),
+                     ("Report sha256", c.code(_ev(screen, "report_sha256")))], wide=True, text_cols=(0, 3))
+            + c.ul([str(r) for r in (_ev(screen, "reasons") or [])], empty="no reason recorded")
+            + f'<p class="note">{esc(_ev(screen, "not_an_edge_claim") or "A screen verdict is a research state, not an edge.")}'
+              "</p>")
 
 
 def _ev_family_a(v: dict, now: Any) -> str:
@@ -1106,7 +1136,7 @@ def _ev_family_a(v: dict, now: Any) -> str:
     protocol = v.get("protocol") if isinstance(v.get("protocol"), dict) else {}
     edge = v.get("edge_at_size") if isinstance(v.get("edge_at_size"), dict) else {}
     window = v.get("window") if isinstance(v.get("window"), dict) else {}
-    waterfall = [w for w in (v.get("waterfall") or []) if isinstance(w, dict)]
+    waterfall = [w for w in (v.get("join_stages") or []) if isinstance(w, dict)]
     gaps = [g for g in (v.get("gaps") or []) if isinstance(g, dict)]
     top = max(waterfall, key=lambda w: (w.get("excluded") or 0), default=None)
     out = [f'<p class="eyebrow">{esc(v.get("label") or EV_LABEL)}</p>',
@@ -1143,12 +1173,16 @@ def _ev_family_a(v: dict, now: Any) -> str:
                 "tie")),
         ("Edge at a size", _pm_badge("EV_EDGE", edge.get("state"))
          + _sub((edge.get("reasons") or ["no reason recorded"])[0] if isinstance(edge.get("reasons"), list) else None)),
-        ("Signal and fills", c.txt("Not evaluated", reason="no signal rule")
-         + _sub("no signal or episode rule is registered: not zero")),
+        ("Protocol-eligible", _ev_none(_ev(v, "protocol_attrition", "denominators", "eligible_opportunities"),
+                                       "not enumerated: unknown, not zero")
+         + _sub(f"of {pr.count(_ev(v, 'protocol_attrition', 'denominators', 'opportunities')) or '—'} opportunities · "
+                "signals and fills not evaluated (no registered rule)")),
+        ("Economic screen", _pm_badge("EV_SCREEN", _ev(v, "screen", "verdict"))
+         + _sub(f"{pr.count(_ev(v, 'screen', 'episodes', 'episodes')) or '0'} episodes · no capital scenario supplied")),
         ("Next action", c.txt(v.get("next_action"), reason="none recorded") + _sub(
             f"blocker: {v['blocker']}" if v.get("blocker") else None)),
-    ], wide=True, text_cols=tuple(range(10))))
-    out.append(c.disclosure(f"Attrition over {pr.count(den.get('targets_due')) or '—'} due horizons", c.table(
+    ], wide=True, text_cols=tuple(range(11))))
+    out.append(c.disclosure(f"Join diagnostics over {pr.count(den.get('targets_due')) or '—'} due horizons", c.table(
         ["stage", "excluded", "remaining", "kind", "meaning"],
         [[esc(str(w.get("stage")).replace("_", " ").capitalize()), c.num(pr.count(w.get("excluded"))),
           c.num(pr.count(w.get("remaining_after"))), _pm_state("EV_KIND", w.get("kind")),
@@ -1163,7 +1197,10 @@ def _ev_family_a(v: dict, now: Any) -> str:
         [[c.code(g.get("id")), esc(g.get("stream")), _pm_state("EV_GAP", g.get("state")), esc(g.get("why")),
           esc(g.get("smallest_fix"))] for g in gaps], wrap=(1, 3, 4), empty="no gap recorded",
         caption="Data gaps: exact missing streams and the smallest justified fix")))
-    out.append(c.disclosure("Capacity and fill assumptions", _ev_capacity(v.get("capacity"))))
+    out.append(c.disclosure(f"Protocol attrition ({protocol.get('experiment_id') or 'no protocol'})",
+                            _ev_protocol_attrition(v.get("protocol_attrition"))))
+    out.append(c.disclosure("Economic screen", _ev_screen(v.get("screen"))))
+    out.append(c.disclosure("Capacity and fill modes", _ev_capacity(v.get("capacity"))))
     inputs = [i for i in (v.get("inputs") or []) if isinstance(i, dict)]
     costs = [f for f in (v.get("fixed_costs") or []) if isinstance(f, dict)]
     out.append(c.disclosure("Costs and inputs", c.table(

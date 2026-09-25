@@ -87,11 +87,11 @@ def test_populated_section_sits_in_the_research_tab_after_the_experiments(state)
     for needle in ("Economic evidence", "PAIRED RESEARCH EVIDENCE — NOT AN EDGE CLAIM", "Paired evidence",
                    "3 games · 1 NFL weeks · 3 not yet due · 0 superseded", "9 of 9",
                    "pending 6 · final 3", "Conditional mapping · not equivalent",
-                   "YES pays $0.50 on a tie", "Not defensible", "FEE_UNSUPPORTED", "Not evaluated",
-                   "Register the Family A DRAFT protocol", "Not registered",
+                   "YES pays $0.50 on a tie", "Not defensible", "FEE_UNSUPPORTED", "signals and fills not evaluated",
+                   "Settle and freeze EXP-002", "Draft",
                    "Economic evidence · B", "Same-venue payoff consistency", "Not yet available",
                    "No payoff proof, conditional surplus or captured result is shown",
-                   "Size ladder over the latest paired book", "Over the conservative cap", "Fee unsupported",
+                   "Size ladder over the latest paired book", "Fee unsupported", "Insufficient evidence", "Protocol-eligible", "Protocol attrition (EXP-002)",
                    "Visible depth is an instantaneous ceiling, not capacity"):
         assert needle in text, needle
     lower = text.replace(plain(research.EV_NOTE), "").lower()  # the note negates these words on purpose
@@ -104,7 +104,7 @@ def test_populated_section_sits_in_the_research_tab_after_the_experiments(state)
 def test_partial_section_names_what_is_missing(state):
     text = plain(section(page(state)))
     for needle in ("Partial evidence", "Evidence incomplete", "5 of 9", "Odds not captured",
-                   "Kalshi book missing", "Pair skew exceeded", "Kalshi book unusable", "Missing evidence (5)",
+                   "Kalshi book missing", "Pair skew exceeded", "Kalshi book unusable", "Missing evidence (6)",
                    "Kalshi KXNFLGAME order books at the Odds horizons", "Partial"):
         assert needle in text, needle
 
@@ -112,7 +112,7 @@ def test_partial_section_names_what_is_missing(state):
 @pytest.mark.parametrize("state", ["odds"], indirect=True)
 def test_production_like_state_shows_the_gap_and_the_owner_decision(state):
     text = plain(section(page(state)))
-    for needle in ("Partial evidence", "0 of 1", "Kalshi not mapped", "Missing evidence (7)",
+    for needle in ("Partial evidence", "0 of 1", "Kalshi not mapped", "Missing evidence (8)",
                    "Kalshi KXNFLGAME listings (tickers, rules, status, result)", "no new timer is authorized today",
                    "blocker: no Kalshi NFL books are stored", "Capacity not measured", "Not established"):
         assert needle in text, needle

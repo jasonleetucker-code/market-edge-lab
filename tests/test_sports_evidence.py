@@ -12,7 +12,6 @@ import io
 import json
 import socket
 from contextlib import redirect_stdout
-from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
@@ -21,7 +20,7 @@ import pytest
 
 from edge_lab import sports_evidence as se
 from edge_lab.dashboard import sports_fixtures as sf
-from edge_lab.odds_schedule import ScheduledEvent, iso_z, plan_targets
+from edge_lab.odds_schedule import iso_z
 from edge_lab.storage import SnapshotStore
 
 UTC = timezone.utc
@@ -201,7 +200,7 @@ def test_pick_book_is_point_in_time_and_never_substitutes():
 def test_populated_fixture_pairs_every_due_horizon(populated):
     path, now = populated
     rep = report(path, now)
-    a = rep["attrition"]
+    a = rep["join"]
     den = a["denominators"]
     assert den["targets_planned"] == 12 and den["targets_due"] == 9 and den["targets_not_yet_due"] == 3
     assert a["primary"]["PAIRED"] == 9 and sum(a["primary"].values()) == den["targets_due"]
@@ -227,26 +226,26 @@ def test_populated_fixture_pairs_every_due_horizon(populated):
     assert len(side["book_sha256"]) == 64 and len(side["rules_sha256"]) == 64 and len(side["listing_sha256"]) == 64
 
 
-def test_capacity_ladder_separates_depth_fill_assumptions_and_unsupported_fees(populated):
+def test_capacity_ladder_uses_the_shared_size_ladder_with_unsupported_fees(populated):
     path, now = populated
     side = rows_by(report(path, now))[("fxsyn002", "T-60m")]["sides"]["Miami Dolphins"]
     ladder = {r["size"]: r for r in side["capacity"]}
     assert set(ladder) == {"1", "10", "25", "100", "250"}
     one, big = ladder["1"], ladder["250"]
-    assert one["less_conservative"]["status"] == "FILLABLE" and one["less_conservative"]["fee_status"] == "FEE_UNSUPPORTED"
-    assert one["less_conservative"]["all_in_cost"] is None and one["less_conservative"]["fee"] is None
+    # research_economics.size_ladder_from_depth: the walk fills, but KXNFLGAME fees cannot be priced
+    assert one["depth_status"] == "FILLABLE" and one["fee_status"] == "FEE_UNSUPPORTED"
+    assert one["all_in_cost_per_unit"] is None and one["net_edge_per_unit"] is None and one["fillable"] is False
     # the complete captured ladder offers 40 + 80 + 120 = 240 < 250: insufficient, never extrapolated
-    assert big["less_conservative"]["status"] == "INSUFFICIENT_DEPTH" and big["less_conservative"]["available"] == "240"
-    assert big["less_conservative"]["gross_cost"] is None
-    assert ladder["25"]["conservative"]["status"] == "CONSERVATIVE_CAP"  # half of the 40 at the top level
+    assert big["depth_status"] == "INSUFFICIENT_DEPTH" and "240.00 < 250" in big["detail"]
     assert side["depth_truncated"] is False and side["visible_depth"] == "240"
     assert side["lockup_hours"]["basis"] == "OBSERVED" and side["lockup_hours"]["expected"] > 0
+    assert "_points" not in side and "_release" not in side  # private objects never reach the artifact
 
 
 def test_issue_fixture_attrition_reconciles_with_every_reason_kept(issues):
     path, now = issues
     rep = report(path, now)
-    a = rep["attrition"]
+    a = rep["join"]
     assert sum(a["primary"].values()) == a["denominators"]["targets_due"] == 9
     assert a["primary"] == {**{s.value: 0 for s in se.Stage}, "ODDS_NOT_CAPTURED": 1, "PAIR_SKEW_EXCEEDED": 1,
                             "KALSHI_BOOK_MISSING": 1, "KALSHI_BOOK_UNUSABLE": 1, "PARTIAL_PAIR": 0, "PAIRED": 5}
@@ -259,18 +258,18 @@ def test_issue_fixture_attrition_reconciles_with_every_reason_kept(issues):
     assert "crossed book" in " ".join(rows[("fxsyn003", "T-6h")]["reasons"])
     shallow = rows[("fxsyn001", "T-60m")]["sides"]["Green Bay Packers"]
     assert shallow["depth_truncated"] is True
-    big = {r["size"]: r for r in shallow["capacity"]}["250"]["less_conservative"]
-    assert big["status"] == "DEPTH_UNKNOWN"  # truncated capture: running out is unknown, not insufficient
+    big = {r["size"]: r for r in shallow["capacity"]}["250"]
+    assert big["depth_status"] == "DEPTH_UNKNOWN"  # truncated capture: running out is unknown, not insufficient
     assert any(g["id"] == "G2" and g["state"] == "PARTIAL" for g in rep["gaps"])
 
 
 def test_production_like_store_without_kalshi_evidence_reports_gaps_not_a_dataset(tmp_path):
     path, now = sf.fixture_store(tmp_path, kalshi=False)
     rep = report(path, now)
-    assert rep["attrition"]["primary"]["KALSHI_NOT_MAPPED"] == 9 and rep["attrition"]["paired_targets"] == 0
+    assert rep["join"]["primary"]["KALSHI_NOT_MAPPED"] == 9 and rep["join"]["paired_targets"] == 0
     assert all(not r["sides"] for r in rep["rows"])
     gaps = {g["id"]: g for g in rep["gaps"]}
-    assert set(gaps) == {"G1", "G2", "G3", "G4", "G5", "G6", "G7"}
+    assert set(gaps) == {"G1", "G2", "G3", "G4", "G5", "G6", "G7", "G8"} and gaps["G7"]["state"] == "DRAFT"
     assert gaps["G2"]["state"] == "MISSING" and gaps["G2"]["due_targets_without_book"] == 9
     assert gaps["G2"]["by_horizon"] == {"T-24h": 3, "T-60m": 3, "T-6h": 3}
     econ = rep["economics"]
@@ -289,7 +288,7 @@ def test_not_yet_due_is_never_missed_and_superseded_is_its_own_bucket(tmp_path):
     store.record_odds_transition(target_id=t["target_id"], state="SUPERSEDED", at_utc=iso_z(now - timedelta(minutes=5)),
                                  reason="SYNTHETIC: commence time changed")
     rep = report(path, now)
-    den = rep["attrition"]["denominators"]
+    den = rep["join"]["denominators"]
     assert den["targets_superseded"] == 1 and den["targets_not_yet_due"] == 2 and den["targets_due"] == 9
     fut = rows_by(rep)[("fxsyn004", "T-6h")]
     assert fut["status"] == "NOT_YET_DUE" and "not missed" in fut["reasons"][0] and not fut["sides"]
@@ -344,7 +343,7 @@ def test_declared_bounds_give_a_bounded_comparison_but_never_an_edge(populated):
 def test_rules_or_payoff_problems_block_the_pair(tmp_path):
     path, now = sf.fixture_store(tmp_path / "a", tie_clause=False)
     rep = report(path, now)
-    assert rep["attrition"]["primary"]["KALSHI_RULES_UNRESOLVED"] == 9
+    assert rep["join"]["primary"]["KALSHI_RULES_UNRESOLVED"] == 9
     assert "tie_payout" in " ".join(rows_by(rep)[("fxsyn001", "T-6h")]["reasons"])
     path, now = sf.fixture_store(tmp_path / "b", market_type="scalar")
     rep = report(path, now)
@@ -485,7 +484,7 @@ def test_cli_report_summary_and_no_store(tmp_path):
     with redirect_stdout(buf):
         assert se.main(["report", "--db", str(path), "--as-of", iso_z(now), "--summary"]) == 0
     out = json.loads(buf.getvalue())
-    assert out["schema"] == se.SCHEMA and "rows" not in out and out["attrition"]["paired_targets"] == 9
+    assert out["schema"] == se.SCHEMA and "rows" not in out and out["join"]["paired_targets"] == 9
     target = tmp_path / "out" / "report.json"
     buf = io.StringIO()
     with redirect_stdout(buf):
@@ -503,6 +502,67 @@ def test_bounds_are_stated_in_the_report(populated, monkeypatch):
     monkeypatch.setattr(se, "MAX_LISTING_PARSES", 0)
     rep = report(path, now)
     assert rep["bounds"]["kalshi_truncated"] is True and "LISTINGS_TRUNCATED" in rep["bounds"]["problems"][0]
+
+
+# ================================================================== shared contracts (PR A)
+
+
+def test_protocol_status_reads_the_registry_and_never_guesses(tmp_path):
+    status = se.protocol_status()
+    assert status["state"] == "DRAFT" and status["experiment_id"] == "EXP-002" and status["frozen"] is False
+    assert status["unsettled_fields"] and any("episode" in f for f in status["unsettled_fields"])
+    assert se.protocol_status(tmp_path)["state"] == "NOT_REGISTERED"
+    definition = se.episode_definition(status)
+    assert definition.start_threshold is None and definition.minimum_size is None and not definition.frozen
+    assert definition.problems()  # an UNKNOWN definition yields no episodes
+
+
+def test_protocol_attrition_uses_the_shared_contract_with_none_for_unregistered_stages(populated):
+    path, now = populated
+    att = report(path, now)["attrition"]
+    den = att["denominators"]
+    assert den["events"] == 4 and den["scheduled_horizons"] == 12 and den["opportunities"] == 24
+    assert den["markets"] == 6 and den["snapshots"] is None  # SNAPSHOT not enumerated: unknown, never 0
+    assert den["signals"] is None and den["simulated_fills"] is None  # no registered rule: None, never 0
+    # EXP-002 excludes the conditional mapping (tie pays $0.50): nothing is eligible yet
+    assert den["eligible_opportunities"] == 0 and den["final_evaluable_outcomes"] == 0
+    opp = next(w for w in att["waterfalls"] if w["level"] == "OPPORTUNITY")
+    rows = {r["exclusion"]: r for r in opp["rows"]}
+    assert rows["PENDING_TARGET"]["primary_count"] == 6 and rows["RULES_UNRESOLVED"]["primary_count"] == 18
+    assert rows["NO_SIGNAL"]["primary_count"] is None and rows["CAPITAL_VETO"]["primary_count"] is None
+    assert all(w["reconciled"] for w in att["waterfalls"] if w["start"] is not None)
+    accepted = report(path, now, conditional_mapping_accepted=True)["attrition"]["denominators"]
+    assert accepted["eligible_opportunities"] == 18 and accepted["final_evaluable_outcomes"] == 6  # G1 settled
+
+
+def test_protocol_attrition_without_kalshi_evidence(tmp_path):
+    path, now = sf.fixture_store(tmp_path, kalshi=False)
+    att = report(path, now)["attrition"]
+    assert att["denominators"]["markets"] is None  # no listing stored: Kalshi markets are unknown, not 0
+    opp = next(w for w in att["waterfalls"] if w["level"] == "OPPORTUNITY")
+    assert {r["exclusion"]: r["primary_count"] for r in opp["rows"]}["MISSING_SOURCE"] == 18
+
+
+def test_economics_come_from_the_shared_screen(populated):
+    path, now = populated
+    econ = report(path, now)["economics"]
+    assert econ["contract"]["state"] == "WIRED" and econ["state"] == "INSUFFICIENT_EVIDENCE"
+    assert econ["episodes"]["observations"] == 18 and econ["episodes"]["episodes"] == 0
+    assert econ["episodes"]["problems"]  # the episode definition is UNKNOWN in EXP-002
+    screen = econ["screen"]
+    assert screen["verdict"] == "INSUFFICIENT_EVIDENCE" and screen["experiment_id"] == "EXP-002"
+    assert any("no capital scenario was supplied" in r for r in screen["verdict_reasons"])
+    assert screen["capital"]["total_capital"] is None  # no bankroll is ever assumed
+    assert screen["fixed_cash_costs_annual"]["value"] == "0" and screen["fixed_cash_costs_annual"]["basis"] == "OBSERVED"
+    assert econ["edge_at_size"]["state"] == "NOT_DEFENSIBLE"
+
+
+def test_results_are_withheld_unless_asked(populated):
+    path, now = populated
+    kept = rows_by(se.build_report(SnapshotStore.open_readonly(path), as_of=now, results=False))
+    out = kept[("fxsyn001", "T-6h")]["outcome"]["Green Bay Packers"]
+    assert out["state"] == "OUTCOME_FINAL" and out["result"] == "WITHHELD"
+    assert "not_recorded" in se.build_report(SnapshotStore.open_readonly(path), as_of=now)["evidence_use"].lower()
 
 
 def test_module_makes_no_network_import_at_runtime():
