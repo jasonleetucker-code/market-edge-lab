@@ -9,7 +9,9 @@ and status-file shapes, and returns a dashboard Config with a fixed clock:
 - broken: malformed and unreadable sources (corrupt JSON, a non-SQLite ledger and evidence DB);
 - odds: The Odds API pilot as production held it on 2026-09-24 (95 targets, one captured);
 - odds_issues: the same with a missed, a failed, a budget-skipped and an overdue target and an
-  exhausted quota.
+  exhausted quota;
+- freshness / freshness_deferred: the Freshness Fabric artifact over the odds fixture, current or
+  carried through the Kalshi close-tick guard.
 """
 
 from __future__ import annotations
@@ -281,4 +283,38 @@ def odds_issues() -> tuple[Config, Path]:
     return odds_pilot(issues=True)
 
 
-BUILDERS = {"early": early, "demo": demo, "broken": broken, "odds": odds_pilot, "odds_issues": odds_issues}
+def _with_freshness(cfg: Config, root: Path, evaluated: datetime, now: datetime, window=None) -> Config:
+    """Write the supervisor's artifact exactly as `edge-lab freshness status --write` does, over this
+    fixture's evidence (the real providers), then serve the dashboard with `status_dir` pointing at it."""
+    from dataclasses import replace as _replace
+
+    from edge_lab import freshness_fabric as ff
+    from edge_lab.freshness import FabricContext
+
+    status = root / "status"
+    status.mkdir(exist_ok=True)
+    ctx = FabricContext(db=cfg.db, odds_ledger=root / "odds_quota_ledger.json", status_dir=status)
+    ff.write_status(ff.render(ff.build_status(ctx, evaluated)), status)
+    if window is not None:  # the next supervisor tick falls inside a protected window: carried forward
+        ff.write_status(ff.render(ff.deferred_status(ctx, window[1] + timedelta(minutes=2), window)), status)
+    return _replace(cfg, status_dir=status, clock=lambda: now)
+
+
+def freshness() -> tuple[Config, Path]:
+    """The Freshness Fabric's artifact over the production-shaped odds fixture, written 3 minutes ago."""
+    cfg, root = odds_pilot()
+    return _with_freshness(cfg, root, ODDS_NOW - timedelta(minutes=3), ODDS_NOW), root
+
+
+def freshness_deferred() -> tuple[Config, Path]:
+    """Inside the Kalshi close-tick guard: the supervisor carried its previous evaluation forward."""
+    from edge_lab import freshness_fabric as ff
+
+    cfg, root = odds_pilot()
+    guard = ff.close_guard_at(datetime(2026, 9, 25, 4, 58, tzinfo=timezone.utc))
+    return _with_freshness(cfg, root, guard[1] - timedelta(minutes=4), guard[1] + timedelta(minutes=3),
+                           window=guard), root
+
+
+BUILDERS = {"early": early, "demo": demo, "broken": broken, "odds": odds_pilot, "odds_issues": odds_issues,
+            "freshness": freshness, "freshness_deferred": freshness_deferred}

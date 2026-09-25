@@ -1126,9 +1126,14 @@ def _summary(sources: Sequence[Mapping[str, Any]], now: datetime) -> dict[str, A
 _PATHLIKE = re.compile(r"""(?<![\w.-])(?:[A-Za-z]:)?[\\/][^\s'",;)\]]+""")
 
 
+def strip_paths(text: str) -> str:
+    """Text without filesystem paths, never shortened (time zones such as America/New_York stay)."""
+    return _PATHLIKE.sub("<path>", str(text))
+
+
 def scrub(text: str) -> str:
-    """A problem text without filesystem paths (exception messages can carry them)."""
-    return _clip(_PATHLIKE.sub("<path>", str(text)), 200)
+    """A problem text without filesystem paths (exception messages can carry them), clipped."""
+    return _clip(strip_paths(text), 200)
 
 
 def code_version() -> str | None:

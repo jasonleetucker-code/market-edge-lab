@@ -1272,7 +1272,7 @@ def fabric_policies() -> tuple[Any, Any]:
             description="Polymarket US NFL moneyline discovery (a filtered /v1/events listing, never a full-catalog "
                         "COMPLETE); objective: the registered nfl_events max_age" + gate,
             policy_version=POLICY_VERSION,
-            schedule_owner="systemd edgelab-pm-sports-discover.timer 02,08,14,20:40 America/New_York (installed, "
+            schedule_owner="systemd edgelab-pm-sports-discover.timer 02,08,14,20:47 America/New_York (installed, "
                            "enabled only by the runbook's pilot activation) + edge_lab.polymarket_sports.run_discover",
             max_useful_age=get_source(HEALTH_DISCOVERY).max_age["nfl_events"],
             min_safe_cadence=DISCOVERY_INTERVAL, max_useful_cadence=DISCOVERY_INTERVAL,

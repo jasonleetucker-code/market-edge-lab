@@ -94,3 +94,12 @@ def test_the_installer_installs_but_never_enables_the_pilot_timers():
     assert "systemctl enable" not in INSTALL.split("cat <<EOF")[0]  # the installer enables nothing itself
     # The printed stop line names every separately activated timer too.
     assert "disable --now ${CORE_TIMERS[*]/%/.timer} ${SEPARATELY_ACTIVATED[*]/%/.timer}" in INSTALL
+
+
+def test_fabric_schedule_owner_names_the_timers_real_schedule():
+    """The fabric shows schedule_owner verbatim in Terminal; it must match the unit files."""
+    disc = _parse("edgelab-pm-sports-discover.timer")[("Timer", "OnCalendar")][0]
+    cal = disc.removeprefix("*-*-* ").replace(":00 America/New_York", " America/New_York")
+    import inspect
+
+    assert f"edgelab-pm-sports-discover.timer {cal}" in inspect.getsource(ps), cal

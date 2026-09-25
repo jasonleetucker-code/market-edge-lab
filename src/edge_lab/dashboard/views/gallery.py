@@ -127,6 +127,19 @@ def view(ctx: d.Context, p: pr.Params) -> cm.Page:
                            "".join(research.consensus_body(*consensus[k])
                                    for k in ("failed_closed", "none", "missing", "unavailable", "error")),
                            sid="g-cons-states"))
+    fresh = fixtures.synthetic_freshness()
+    fnow = parse_utc(fixtures.FRESHNESS_NOW)
+    parts.append(c.section("Source freshness (populated · a fresh, missed, disagreeing SYNTHETIC source)",
+                           research.freshness_body(fresh["populated"], fnow), sid="g-fresh"))
+    parts.append(c.section("Source freshness (deferred: carried)",
+                           research.freshness_body(fresh["deferred_carried"], fnow), sid="g-fresh-carried"))
+    parts.append(c.section("Source freshness (stale report: nothing reads as current)",
+                           research.freshness_body(fresh["stale"], fnow), sid="g-fresh-stale"))
+    parts.append(c.section("Source freshness (partial / deferred, nothing carried / not written / error)",
+                           "".join(research.freshness_body(fresh[k], fnow) if fresh[k].status != d.OK
+                                   else research.supervisor_state(fresh[k].value.doc, fresh[k].value, fnow)
+                                   for k in ("partial", "deferred_empty", "missing", "error")),
+                           sid="g-fresh-states"))
     origin_rows = [
         cm.failure_alert(d.FailureRecord(d.FAILURE_FILE, fixtures.synthetic_failure_record("edgelab-decision.service"),
                                          "PRODUCTION", False)),

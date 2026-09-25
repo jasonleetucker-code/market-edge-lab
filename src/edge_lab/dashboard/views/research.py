@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 from typing import Any
 
@@ -467,8 +468,267 @@ def odds_targets_section(ctx: d.Context) -> str:
                      sid="odds-t-h")
 
 
-def sources_tab(ctx: d.Context) -> str:
+# --------------------------------------------------------------------------- Freshness Fabric (ADR 0031)
+
+FRESHNESS_NOTE = ("The fabric observes; it runs, triggers and reschedules nothing. A source in external-schedule mode "
+                  "is run by its own timer (named on each row) and only supervised here. Every verdict is the "
+                  "supervisor's at its evaluation time, never recomputed here: data fresh then may be older now. "
+                  "Research use needs a receipt of known freshness; decision use needs fresh data and healthy "
+                  "acquisition, and never rests on a stale or undated report.")
+
+
+def _scrub(text: str) -> str:
+    """Free text without filesystem paths, by the fabric's own rule (`freshness_fabric.scrub`: time zones
+    such as America/New_York and windows such as 17:40-18:35 stay intact)."""
+    from ...freshness_fabric import strip_paths
+
+    return strip_paths(text)  # never shortened: the details disclosure shows everything
+
+
+def _texts(value: Any) -> list[str]:
+    """A JSON list of free texts as a list (a bare string is one item, never its characters), scrubbed."""
+    if isinstance(value, str):
+        value = [value]
+    if not isinstance(value, (list, tuple)):
+        return []
+    return [_scrub(x if isinstance(x, str) else json.dumps(x, default=str)) for x in value]
+
+
+def _text(value: Any) -> str | None:
+    """An identifier or recorded time as written (a string only; anything else is unknown)."""
+    return value if isinstance(value, str) and value else None
+
+
+def _items(summary: Any, key: str) -> list | None:
+    value = summary.get(key) if isinstance(summary, dict) else None
+    return value if isinstance(value, list) else None
+
+
+def _count_of(summary: Any, key: str) -> str:
+    items = _items(summary, key)
+    return c.num(pr.count(len(items)) if items is not None else None, reason="not recorded in the report")
+
+
+def _trusted_badge(code: Any, word: pr.StateWord, trusted: bool, suffix: str = "") -> str:
+    """A state capsule; under a report that is not fresh, a positive verdict is shown neutral, never green."""
+    kind = word.kind if trusted or word.kind != pr.OK_K else pr.ND_K
+    return c.badge(code, label=word.label + suffix, kind=kind)
+
+
+def _usable(src: Any, trusted: bool, report_word: str) -> str:
+    research, decision = src.get("usable_for_research") is True, src.get("usable_for_decision") is True
+    if not trusted:
+        return c.state_text("UNKNOWN", label=f"Not decision-grade: report {report_word}", kind=pr.WARN_K)
+    if decision:
+        return c.state_text("FRESH", label="Research and decision, at evaluation")
+    if research:
+        return c.state_text("STALE", label="Research only")
+    return c.state_text("UNKNOWN", label="Not usable")
+
+
+ATTENTION_SCHEDULE = ("MISSED", "PAUSED", "BUDGET_BLOCKED", "QUOTA_BLOCKED", "LOCK_BUSY")
+ATTENTION_HEALTH = ("FAILING", "DEGRADED")
+
+
+def needs_attention(src: Any) -> bool:
+    """A source the owner should look at first, by the artifact's own states (a filter, not a verdict)."""
+    return (src.get("schedule_state") in ATTENTION_SCHEDULE or src.get("health") in ATTENTION_HEALTH
+            or bool(_texts(src.get("disagreements"))))
+
+
+def fabric_source_row(src: Any, policy: Any, now: Any, *, trusted: bool = True, report_word: str = "stale",
+                      judged_at: Any = None) -> str:
+    """One supervised source: freshness and usability at evaluation, schedule state, health, next due,
+    why; the policy and every recorded time in a disclosure. Values are the artifact's, only formatted.
+    `trusted` is False when the report itself is stale or undated: nothing then reads as current."""
+    src = src if isinstance(src, dict) else {}
+    policy = policy if isinstance(policy, dict) else {}
+    carried = _text(src.get("carried_from_utc"))
+    at = _text(judged_at) or (_text(src.get("as_of_utc")))
+    at_text = f"at evaluation, {pr.datetime_et(at)}" if pr.datetime_et(at) else "at evaluation"
+    age = pr.duration_text(src.get("data_age_s"))
+    objective = pr.duration_text(src.get("max_useful_age_s"))
+    fresh_code = pr.freshness_code(src.get("freshness"))
+    facts = [
+        ("Freshness", _trusted_badge(fresh_code, pr.state_word(fresh_code), trusted) + _sub(" · ".join(x for x in (
+            at_text, f"data {age} old then" if age else "no receipt recorded",
+            f"objective {objective}" if objective else "no objective") if x))),
+        ("Schedule", _trusted_badge(src.get("schedule_state"), pr.prefixed_word("SCHEDULE", src.get("schedule_state")),
+                                    trusted) + _sub(f"as of {pr.datetime_et(carried)}" if carried else None)),
+        ("Health", _trusted_badge(src.get("health"), pr.prefixed_word("HEALTH", src.get("health")), trusted)),
+        ("Next due", c.txt(pr.datetime_et(src.get("next_due_utc")), reason="nothing planned or not known")),
+        ("Last successful receipt", c.txt(pr.datetime_et(src.get("last_success_receipt_utc")),
+                                          reason="no successful receipt recorded")),
+        ("Usable for", _usable(src, trusted, report_word) + _sub(at_text if trusted else None)),
+        ("Why", esc(_scrub(_text(src.get("why_due")) or "not stated"))),
+    ]
+    misses = src.get("missed_count")
+    disagreements = _texts(src.get("disagreements"))
+    details = src.get("details") if isinstance(src.get("details"), dict) else {}
+    if isinstance(misses, int) and not isinstance(misses, bool) and misses > 0:
+        facts.append(("Missed", c.num(pr.count(misses), cls="neg") + _sub(_text(details.get("missed_scope")))))
+    if disagreements:
+        facts.append(("Disagreements", c.state_text("WARNING", label=f"{pr.count(len(disagreements))} with the canonical "
+                                                                      "scheduler")))
+    detail = c.disclosure("Source details and policy", c.kv([
+        ("source id", c.code(_text(src.get("source_id")))),
+        ("description", esc(_text(policy.get("description")) or "not recorded")),
+        ("acquisition mode", esc(pr.mode_label(src.get("mode"))) + " " + c.code(_text(src.get("mode")))),
+        ("underlying mode", c.code(_text(src.get("underlying_mode")))),
+        ("run by (schedule owner)", esc(_text(src.get("schedule_owner")) or "not recorded")),
+        ("policy version", c.code(_text(src.get("policy_version")))),
+        ("objective (max useful age)", c.txt(pr.duration_text(src.get("max_useful_age_s")), reason="no objective")),
+        ("slowest safe cadence", c.txt(pr.duration_text(policy.get("min_safe_cadence_s")), reason="not defined")),
+        ("fastest useful cadence", c.txt(pr.duration_text(policy.get("max_useful_cadence_s")), reason="not defined")),
+        ("pacing", esc(_text(policy.get("pacing")) or "not stated")),
+        ("budget or quota", esc(_text(policy.get("budget")) or "not stated")),
+        ("protected windows", c.ul(_texts(policy.get("protected_windows")), empty="none")),
+        ("retry", esc(_text(policy.get("retry")) or "not stated")),
+        ("intended at", c.code(_text(src.get("intended_at_utc")))), ("next due", c.code(_text(src.get("next_due_utc")))),
+        ("last attempt", c.code(_text(src.get("last_attempt_utc")))), ("receipt", c.code(_text(src.get("receipt_ts_utc")))),
+        ("upstream timestamp", c.code(_text(src.get("upstream_ts_utc")))),
+        ("upstream age at evaluation", c.txt(pr.duration_text(src.get("upstream_age_s")), reason="not recorded")),
+        ("evaluated at", c.code(_text(src.get("as_of_utc")))), ("carried from", c.code(carried)),
+        ("recent misses", c.ul(_texts(src.get("recent_misses")), empty="none")),
+        ("disagreements", c.ul(disagreements, empty="none")), ("notes", c.ul(_texts(src.get("notes")), empty="none")),
+        ("details", esc(_scrub(c._json_text(details))) if details else c.na("none recorded")),
+    ]))
+    sub = f"{_text(src.get('domain')) or 'domain not recorded'} · {pr.mode_label(src.get('mode'))}"
+    if src.get("mode") == "EXTERNAL_SCHEDULE":
+        sub += f" · run by {_text(src.get('schedule_owner')) or 'an owner not recorded'}"
+    return c.row(esc(_text(src.get("source_id")) or "unnamed source"), sub=sub,
+                 aside=_trusted_badge(fresh_code, pr.state_word(fresh_code), trusted),
+                 body=c.facts(facts, wide=True, text_cols=(0, 1, 2, 3, 4, 5, 6)) + detail)
+
+
+def supervisor_state(doc: Any, report: d.FreshnessReport, now: Any) -> str:
+    """The report-level states: stale or undated report, deferred (carried or not), partial or unknown."""
+    sup = doc.get("supervisor") if isinstance(doc.get("supervisor"), dict) else {}
     out = []
+    generated = _text(doc.get("generated_at_utc"))
+    if report.report_freshness != "FRESH":
+        ago = pr.age_text(generated, now)
+        out.append(c.empty_state(
+            "Freshness report is stale" if report.report_freshness == "STALE" else "Freshness report time unknown",
+            f"Generated {pr.datetime_et(generated) or 'at an unreadable time'}" + (f" ({ago})" if ago else "")
+            + f"; the supervisor runs every 5 minutes and a report older than "
+            f"{pr.duration_text(report.max_age.total_seconds())} is stale. Every source below is as of that time, not "
+            "now, and none is decision-grade.", kind="warn"))
+    state = sup.get("state")
+    if state == "DEFERRED_PROTECTED_WINDOW":
+        deferred = sup.get("deferred") if isinstance(sup.get("deferred"), dict) else {}
+        evaluated = _text(doc.get("sources_evaluated_at_utc"))
+        window = (f"{pr.window_label(deferred.get('window'))} ({pr.datetime_et(deferred.get('from_utc')) or '?'} to "
+                  f"{pr.time_et(deferred.get('to_utc')) or '?'})")
+        text = (f"Inside the {window} the supervisor opens no store. Sources are carried from the "
+                f"{pr.datetime_et(evaluated)} evaluation and re-judged at {pr.datetime_et(generated)} from their receipt "
+                "times; schedule states are as of that evaluation; none is decision-grade."
+                if pr.datetime_et(evaluated) else f"Inside the {window} the supervisor opens no store, and no recent "
+                                                  "evaluation could be carried: every source is unknown until the "
+                                                  "window closes.")
+        out.append(c.empty_state("Supervisor deferred: protected window", text, kind="warn"))
+    elif state is None:
+        out.append(c.empty_state("Supervisor state not recorded", "The report does not say how the supervisor ran; "
+                                 "its sources are shown as recorded.", kind="nd"))
+    elif state != "OK":
+        out.append(c.empty_state(pr.prefixed_word("SUPERVISOR", state).label,
+                                 "; ".join(_texts(sup.get("problems"))) or "a provider reported a problem", kind="warn"))
+    return "".join(out)
+
+
+def _freshness_view(report: d.FreshnessReport, now: Any) -> str:
+    doc = report.doc
+    sources = [s for s in doc.get("sources") or [] if isinstance(s, dict)]
+    policies = {p["source_id"]: p for p in doc.get("policies") or []
+                if isinstance(p, dict) and isinstance(p.get("source_id"), str)}
+    summary = doc.get("summary") if isinstance(doc.get("summary"), dict) else {}
+    sup = doc.get("supervisor") if isinstance(doc.get("supervisor"), dict) else {}
+    out = [supervisor_state(doc, report, now)]
+    if not sources:
+        out.append(c.empty_state("No sources in the report", "The supervisor's report lists no source."))
+        return "".join(out)
+    trusted = report.report_freshness == "FRESH"
+    report_word = "stale" if report.report_freshness == "STALE" else "time unknown"
+    generated = _text(doc.get("generated_at_utc"))
+    fresh_ids = _items(summary, "fresh")
+    total = summary.get("sources") if isinstance(summary.get("sources"), int) else None
+    external = sum(1 for s in sources if s.get("mode") == "EXTERNAL_SCHEDULE")
+    out.append(c.facts([
+        ("Report generated", c.txt(pr.datetime_et(generated), reason="not recorded") + _sub(pr.age_text(generated, now))),
+        ("Sources evaluated", c.txt(pr.datetime_et(doc.get("sources_evaluated_at_utc")), reason="nothing evaluated")),
+        ("Fresh at evaluation", c.num(f"{pr.count(len(fresh_ids))} of {pr.count(total)}"
+                                      if fresh_ids is not None and total is not None else None,
+                                      reason="not recorded in the report")),
+        ("Due now", _count_of(summary, "due_now")), ("Missed", _count_of(summary, "missed")),
+        ("Blocked", _count_of(summary, "blocked")), ("Schedule unknown", _count_of(summary, "unknown")),
+    ], wide=True, text_cols=(0, 1)))
+    if total is not None and total != len(sources):
+        out.append(f'<p class="meta">The report counts {esc(pr.count(total))} sources and lists '
+                   f"{esc(pr.count(len(sources)))}.</p>")
+    out.append(f'<p class="meta">{esc(pr.count(external))} of {esc(pr.count(len(sources)))} sources listed are external '
+               f"schedules the fabric only supervises · network: {esc(_text(sup.get('network')) or 'not recorded')} · "
+               f"controls schedules: {'no' if sup.get('controls_schedules') is False else 'not recorded'}</p>")
+    upcoming = [n for n in _items(summary, "next_due") or [] if isinstance(n, dict)]
+    if upcoming:
+        out.append('<h3 class="eyebrow">Due next (at evaluation)</h3>' + c.ul(
+            f"{pr.datetime_et(n.get('next_due_utc')) or 'time not recorded'} · {_text(n.get('source_id')) or '—'}: "
+            f"{_scrub(_text(n.get('why')) or '—')}" for n in upcoming))
+
+    def rows(items: list) -> str:
+        return '<ul class="rows">' + "".join(fabric_source_row(
+            s, policies.get(s.get("source_id")) if isinstance(s.get("source_id"), str) else None, now,
+            trusted=trusted, report_word=report_word,
+            judged_at=generated if s.get("carried_from_utc") else None) for s in items) + "</ul>"
+    attention = [s for s in sources if needs_attention(s)]
+    out.append('<h3 class="eyebrow">Needs attention</h3>' + (
+        rows(attention) if attention else '<p class="meta">No source is missed, blocked, failing, degraded or '
+                                          "disagreeing with its scheduler.</p>"))
+    domains: dict[str, list] = {}
+    for s in sources:
+        domains.setdefault(_text(s.get("domain")) or "other", []).append(s)
+    every = "".join(f'<h4 class="eyebrow">{esc(domain)}</h4>' + rows(items) for domain, items in domains.items())
+    out.append(c.disclosure(f"Every source by domain ({pr.count(len(sources))})", every, boxed=True))
+    word = pr.prefixed_word("SUPERVISOR", sup.get("state"))
+    word = word if trusted or word.kind != pr.OK_K else pr.StateWord(word.label, pr.ND_K)
+    out.append(c.disclosure("Supervisor details", c.kv([
+        ("schema", c.code(_text(doc.get("schema")))), ("fabric version", c.code(_text(doc.get("fabric_version")))),
+        ("supervisor state", c.state_text(sup.get("state"), label=word.label, kind=word.kind) + " "
+         + c.code(_text(sup.get("state")))), ("code version", c.code(_text(sup.get("code_version")))),
+        ("providers", c.ul(f"{x.get('provider')}: {x.get('state')}" for x in _items(sup, "providers") or []
+                           if isinstance(x, dict))),
+        ("problems", c.ul(_texts(sup.get("problems")), empty="none")),
+        ("disagreements (all sources)", c.num(pr.count(summary.get("disagreements")), reason="not recorded")),
+        ("generated at (UTC)", c.code(generated)),
+        ("sources evaluated at (UTC)", c.code(_text(doc.get("sources_evaluated_at_utc")))),
+    ])))
+    out.append(f'<p class="note">{esc(FRESHNESS_NOTE)}</p>')
+    return "".join(x for x in out if x)
+
+
+def freshness_body(result: d.Loaded, now: Any) -> str:
+    """Every state of the freshness view: populated, stale or undated report (nothing reads as current),
+    deferred (carried or not), partial or unrecorded supervisor state, no sources, not written yet /
+    not configured (source unavailable), read error, foreign schema or a malformed report."""
+    if result.status == d.ERROR:
+        return c.error_state("Source freshness unavailable (read error)",
+                             f"ERROR — {result.message}. This is not a healthy or empty report.")
+    if result.status != d.OK:
+        msg = result.message or "the status directory is not configured"
+        return c.unavailable("Source freshness unavailable", msg[:1].upper() + msg[1:] + ".")
+    try:
+        return _freshness_view(result.value, now)
+    except Exception as exc:  # noqa: BLE001 - a malformed report is an error here, never a failed page
+        return c.error_state("Source freshness unavailable (malformed report)",
+                             f"ERROR — {d.short_error(exc)}. This is not a healthy or empty report.")
+
+
+def freshness_section(ctx: d.Context) -> str:
+    return c.section("Source freshness", freshness_body(ctx.freshness_status, ctx.now),
+                     meta="What is fresh, what is due next, and why · Freshness Fabric", sid="fresh-h")
+
+
+def sources_tab(ctx: d.Context) -> str:
+    out = [freshness_section(ctx)]
     rows = []
     for v in venues.VENUES.values():
         quote = v.stage(venues.Capability.QUOTE_READ).value
