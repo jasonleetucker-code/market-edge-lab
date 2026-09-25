@@ -140,6 +140,17 @@ def view(ctx: d.Context, p: pr.Params) -> cm.Page:
                                    else research.supervisor_state(fresh[k].value.doc, fresh[k].value, fnow)
                                    for k in ("partial", "deferred_empty", "missing", "error")),
                            sid="g-fresh-states"))
+    pm = fixtures.synthetic_pm_views()
+    pnow = parse_utc(fixtures.PM_NOW)
+    for key, title in (("populated", "related with a capture · ambiguous · none in a complete listing"),
+                       ("partial", "partial listing · absence is not evidence")):
+        loaded, history = pm[key]
+        parts.append(c.section(f"Polymarket US related markets ({title})",
+                               research.pm_related_body(loaded, pnow, ("DEMO-NFL-1", "DEMO-NFL-2", "DEMO-NFL-3"), history),
+                               sid=f"g-pm-{key}"))
+    parts.append(c.section("Polymarket US related markets (no scan / stale / gate blocked / error / unavailable)",
+                           "".join(research.pm_related_body(pm[k][0], pnow, ("DEMO-NFL-1",), pm[k][1])
+                                   for k in ("no_scan", "stale", "blocked", "error", "unavailable")), sid="g-pm-states"))
     origin_rows = [
         cm.failure_alert(d.FailureRecord(d.FAILURE_FILE, fixtures.synthetic_failure_record("edgelab-decision.service"),
                                          "PRODUCTION", False)),
