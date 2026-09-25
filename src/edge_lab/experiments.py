@@ -96,6 +96,8 @@ def validate(exp: Experiment) -> list[str]:
 
     if exp.id and not ID_PATTERN.match(exp.id):
         problems.append(f"id '{exp.id}' must look like EXP-001")
+    if exp.id.strip().upper() in RESERVED_TEST_EXPERIMENT_IDS:
+        problems.append(f"id '{exp.id}' is reserved for unit tests of the economic screen")
     if exp.id and not exp.path.parent.name.startswith(exp.id + "-"):
         problems.append(f"directory '{exp.path.parent.name}' must start with '{exp.id}-'")
     if exp.status and exp.status not in STATUSES:
@@ -377,6 +379,11 @@ PROTOCOL_NAME = "protocol.toml"
 PROTOCOL_VERSION = "research-protocol-v1"
 LEGACY_EXPERIMENTS = frozenset({"EXP-001"})  # predate the sidecar; the only experiments allowed without one
 OWNER_EXCEPTION_DIR = "docs/owner/"
+# Ids reserved for unit tests of the economic screen (research_economics.SCREEN_TEST_EXPERIMENT_IDS):
+# no real experiment may be registered under one.
+RESERVED_TEST_EXPERIMENT_IDS = frozenset({"EXP-900"})
+# [economics] minimums that must be whole numbers >= 2 once preregistered (0 or 1 would mean "no minimum").
+PROTOCOL_COUNT_MINIMUMS = ("min_episodes_for_scenario", "min_independent_clusters")
 MAX_ACTIVE_FAMILIES = 2
 SLOT_STATES = ("ACTIVE", "QUEUED", "ENDED")
 PROTOCOL_TOP = ("protocol_version", "experiment_id", "family", "family_title", "slot_status", "authority",
@@ -512,6 +519,13 @@ def protocol_problems(exp: Experiment) -> list[str]:
     if exception is not None and not owner_exception_ok(exception, repo=exp.path.resolve().parents[2]):
         problems.append(f"{PROTOCOL_NAME} owner_exception must name an existing owner decision file inside "
                         f"{OWNER_EXCEPTION_DIR}")
+    evaluation_table = protocol.get("evaluation") if isinstance(protocol.get("evaluation"), dict) else {}
+    windows = evaluation_table.get("holdout_windows")
+    if windows is not None and not (isinstance(windows, list) and all(
+            isinstance(w, dict) and all(isinstance(w.get(k), str) and w.get(k).strip()
+                                        for k in ("scope", "start_utc", "end_utc")) for w in windows)):
+        problems.append(f"{PROTOCOL_NAME} [evaluation] holdout_windows must be a list of "
+                        "{scope, start_utc, end_utc} tables")
     open_decisions = protocol.get("open_decisions")
     if open_decisions is not None and not (isinstance(open_decisions, list)
                                            and all(isinstance(d, str) and d.strip() for d in open_decisions)):
@@ -534,6 +548,18 @@ def protocol_problems(exp: Experiment) -> list[str]:
         except ValueError:
             problems.append(f"{PROTOCOL_NAME} [budget] review_date must be YYYY-MM-DD or \"UNKNOWN: <why>\"")
     if exp.status in LOCKED:
+        economics = protocol.get("economics") if isinstance(protocol.get("economics"), dict) else {}
+        for key in PROTOCOL_COUNT_MINIMUMS:
+            raw = economics.get(key)
+            if raw is None or _unsettled(raw):
+                continue  # reported as unsettled below
+            try:
+                count = int(str(raw).strip()) if not isinstance(raw, bool) else None
+            except ValueError:
+                count = None
+            if count is None or count < 2 or str(count) != str(raw).strip():
+                problems.append(f"{exp.status} experiment: [economics] {key} must be a whole number >= 2, "
+                                f"not {raw!r}")
         for table in PROTOCOL_TABLES:
             if table == PROTOCOL_KNOWLEDGE_TABLE:
                 continue
@@ -564,6 +590,32 @@ def prohibited_fields(exp: Experiment) -> tuple[str, ...]:
     roles = (protocol or {}).get("data_roles")
     values = roles.get("prohibited_fields") if isinstance(roles, dict) else None
     return tuple(v for v in values if isinstance(v, str) and v.strip()) if isinstance(values, list) else ()
+
+
+def holdout_windows(exp: Experiment) -> list[tuple[str, str, str]] | None:
+    """Declared holdout / untouched windows as (scope, start_utc, end_utc).
+
+    Returns None when the protocol settles an untouched window only in prose (no machine-readable
+    `[evaluation] holdout_windows`): a reader must then refuse rather than guess. An experiment
+    whose untouched window is still UNKNOWN and declares none returns []."""
+    try:
+        protocol = load_protocol(exp)
+    except (OSError, tomllib.TOMLDecodeError):
+        return None
+    evaluation = (protocol or {}).get("evaluation")
+    evaluation = evaluation if isinstance(evaluation, dict) else {}
+    declared = evaluation.get("holdout_windows")
+    if isinstance(declared, list):
+        out = []
+        for w in declared:
+            if not (isinstance(w, dict) and all(isinstance(w.get(k), str) for k in ("scope", "start_utc", "end_utc"))):
+                return None
+            out.append((w["scope"], w["start_utc"], w["end_utc"]))
+        return out
+    prose = evaluation.get("untouched_future_window")
+    if isinstance(prose, str) and not _unsettled(prose):
+        return None
+    return []
 
 
 def prohibited_label_scopes(exp: Experiment) -> tuple[str, ...]:

@@ -170,7 +170,11 @@ def test_family_b_view_is_rendered_when_the_evaluator_is_installed(tmp_path, mon
 def test_loaders_report_absence_honestly(tmp_path):
     ctx = d.Context(Config(db=None))
     assert ctx.economic_a.status == d.NO_DATA and "no evidence database configured" in ctx.economic_a.message
-    assert ctx.economic_b.status == d.NO_DATA and "PR B" in ctx.economic_b.message
+    # Coordinator-granted claim exception (EE v1 #102): either honest absence message is accepted, PR B absent
+    # or installed without a Terminal view; the state is never OK or populated. Writer 2 rewrites this in the
+    # Section B follow-up.
+    assert ctx.economic_b.status == d.NO_DATA and ctx.economic_b.value is None
+    assert "PR B" in ctx.economic_b.message or "installed without a Terminal view" in ctx.economic_b.message
     missing = d.Context(Config(db=tmp_path / "missing.sqlite3"))
     assert missing.economic_a.status == d.NO_DATA and "not readable" in missing.economic_a.message
     assert str(tmp_path) not in missing.economic_a.message  # no path leaks

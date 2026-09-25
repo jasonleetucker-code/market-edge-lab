@@ -167,7 +167,8 @@ def _settled(text):
     import re
 
     pattern = r'"[^"\n]*(UNKNOWN|UNVERIFIED|TBD|MISSING_OWNER_INPUT|MISSING_POWER_ANALYSIS|to be frozen|to be chosen)[^"\n]*"'
-    return re.sub(pattern, '"settled concrete value"', text)
+    text = re.sub(pattern, '"settled concrete value"', text)
+    return re.sub(r'(min_episodes_for_scenario|min_independent_clusters) = "settled concrete value"', r"\1 = 12", text)
 
 
 def _decided(text):
@@ -245,3 +246,35 @@ def test_open_decisions_block_preregistration(tmp_path):
     assert [p for p in _problems(emptied) if "baseline" not in p] == []
     draft = _copy(tmp_path, name="EXP-002-draft")
     assert _problems(draft) == []  # a DRAFT may list open decisions
+
+
+
+def test_preregistered_count_minimums_are_whole_numbers_of_at_least_two(tmp_path):
+    for value, ok in (("0", False), ("1", False), ("2.5", False), ("2", True), ("30", True)):
+        target = _copy(tmp_path, name=f"EXP-002-min{value.replace('.', '_')}", edit_manifest=_settled_manifest,
+                       edit_protocol=lambda s, v=value: re.sub(
+                           r'min_independent_clusters = \S+', f"min_independent_clusters = {v}",
+                           _decided(s)))
+        problems = [p for p in _problems(target) if "baseline" not in p]
+        assert (not any("min_independent_clusters must be a whole number" in p for p in problems)) == ok, (value, problems)
+
+
+def test_the_screen_test_ids_are_reserved(tmp_path):
+    target = _copy(tmp_path, name="EXP-900-real", edit_manifest=lambda s: s.replace('id = "EXP-002"', 'id = "EXP-900"'),
+                   edit_protocol=lambda s: s.replace('experiment_id = "EXP-002"', 'experiment_id = "EXP-900"'))
+    assert any("reserved for unit tests" in p for p in _problems(target))
+
+
+def test_holdout_windows_are_machine_readable(tmp_path):
+    from edge_lab.experiments import holdout_windows
+
+    assert holdout_windows(load(EXP3 / "experiment.toml")) == []  # untouched window still UNKNOWN: none declared
+    bad = _copy(tmp_path, source=EXP3, edit_protocol=lambda s: s.replace(
+        "[evaluation]\n", '[evaluation]\nholdout_windows = ["2026-11"]\n'))
+    assert any("holdout_windows must be a list" in p for p in _problems(bad))
+    good = _copy(tmp_path, source=EXP3, name="EXP-003-good", edit_protocol=lambda s: s.replace(
+        "[evaluation]\n", '[evaluation]\nholdout_windows = [{scope = "kalshi:KXHIGHNY", start_utc = '
+                          '"2026-11-01T00:00:00Z", end_utc = "2026-12-31T23:59:59Z"}]\n'))
+    assert _problems(good) == []
+    assert holdout_windows(load(good / "experiment.toml")) == [
+        ("kalshi:KXHIGHNY", "2026-11-01T00:00:00Z", "2026-12-31T23:59:59Z")]

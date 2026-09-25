@@ -181,6 +181,33 @@ def build_parser() -> argparse.ArgumentParser:
     ev_status.add_argument("--end", required=True, help="outcome window end (UTC ISO)")
     ev_status.add_argument("--root", default="experiments")
 
+    research = subparsers.add_parser("research", help="Research-family tools (EE v1). Local, read-only, no network.")
+    research_sub = research.add_subparsers(dest="research_command", required=True)
+    scan = research_sub.add_parser(
+        "payoff-scan", help="EXP-003: evaluate stored same-venue partition book sets (read-only; market side only)."
+    )
+    scan.add_argument("--db", required=True, help="evidence store path (opened read-only)")
+    scan.add_argument("--series", default="KXHIGHNY",
+                      help="a verified integer-strike series (payoff_constraints.VERIFIED_INTEGER_SERIES)")
+    scan.add_argument("--event-from", required=True, help="first event date to evaluate, YYYY-MM-DD")
+    scan.add_argument("--event-to", required=True, help="last event date to evaluate, YYYY-MM-DD")
+    scan.add_argument("--actor", default="edge-lab-cli", help="who runs the scan (recorded in the evidence log)")
+    scan.add_argument("--source-label", required=True, choices=("laptop", "production", "fixture"),
+                      help="which evidence store this is (recorded in the result provenance)")
+    scan.add_argument("--code-version", help="code commit (default: git HEAD of this checkout, else UNKNOWN)")
+    scan.add_argument("--sizes", required=True, help="basket sizes, comma separated, e.g. 1,10,100")
+    scan.add_argument("--max-quote-age-seconds", type=int, required=True,
+                      help="stated explicitly per run: the protocol value is UNKNOWN until preregistration")
+    scan.add_argument("--max-leg-skew-seconds", type=int, required=True,
+                      help="stated explicitly per run: the protocol value is UNKNOWN until preregistration")
+    scan.add_argument("--root", default="experiments",
+                      help="experiment registry holding EXP-003 (its protocol and evidence log are required)")
+    scan.add_argument("--out", help="write the full report (every evaluation) as JSON here")
+    sports = research_sub.add_parser(
+        "sports-evidence", help="EXP-002 paired sports evidence (edge_lab.sports_evidence, PR C); args pass through."
+    )
+    sports.add_argument("args", nargs=argparse.REMAINDER)
+
     notify = subparsers.add_parser(
         "notify", help="ntfy push (ADR 0022): relay the local outbox, or send one test event."
     )
@@ -859,6 +886,122 @@ def _experiments(args: argparse.Namespace) -> int:
     return 1 if failed else 0
 
 
+def _research(args: argparse.Namespace) -> int:
+    """Research-family tools. Nothing here touches the network, a ledger or an account."""
+    if args.research_command == "sports-evidence":
+        try:
+            from . import sports_evidence
+        except ImportError:
+            print("edge_lab.sports_evidence is not installed in this checkout (EE v1 PR C)", file=sys.stderr)
+            return 2
+        return int(sports_evidence.main(list(args.args)) or 0)
+    return _payoff_scan(args)
+
+
+def _code_version() -> str:
+    import subprocess
+
+    try:
+        out = subprocess.run(["git", "rev-parse", "HEAD"], cwd=Path(__file__).resolve().parent, capture_output=True,
+                             text=True, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        return "UNKNOWN (no git checkout)"
+    head = out.stdout.strip()
+    if out.returncode != 0 or not head:
+        return "UNKNOWN (no git checkout)"
+    try:
+        dirty = subprocess.run(["git", "status", "--porcelain", "--", "."], cwd=Path(__file__).resolve().parent,
+                               capture_output=True, text=True, timeout=10).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        return f"{head}+UNKNOWN-WORKTREE-STATE"
+    return f"{head}+uncommitted-code-changes" if dirty else head
+
+
+def _payoff_scan(args: argparse.Namespace) -> int:
+    """EXP-003 payoff scan. Fails closed: the EXP-003 protocol and evidence log must exist, the
+    series must be verified, the event window must not overlap a declared holdout, and the scan's
+    evidence-use event is appended before any output is written."""
+    from datetime import datetime, timedelta, timezone
+    from decimal import Decimal, InvalidOperation
+
+    from . import payoff_constraints
+    from . import research_evidence as rev
+
+    def refuse(message: str, code: int = 2) -> int:
+        print(f"refused: {message}", file=sys.stderr)
+        return code
+
+    try:
+        sizes = [Decimal(s) for s in args.sizes.split(",") if s.strip()]
+    except InvalidOperation:
+        return refuse("--sizes must be comma-separated numbers")
+    if not sizes or any(s <= 0 for s in sizes) or args.max_quote_age_seconds <= 0 or args.max_leg_skew_seconds < 0:
+        return refuse("sizes and the quote age must be positive; the leg skew must not be negative")
+    if args.series not in payoff_constraints.VERIFIED_INTEGER_SERIES:
+        return refuse(f"series {args.series!r} is not a verified integer-strike series "
+                      f"{sorted(payoff_constraints.VERIFIED_INTEGER_SERIES)}")
+    matches = [p for p in experiments.discover(Path(args.root)) if p.parent.name.startswith("EXP-003-")]
+    if len(matches) != 1:
+        return refuse(f"expected exactly one EXP-003 manifest under {args.root!r}, found {len(matches)}")
+    exp = experiments.load(matches[0])
+    if experiments.protocol_state(exp) != "PRESENT" or experiments.protocol_problems(exp):
+        return refuse(f"EXP-003's protocol under {args.root!r} is missing or invalid")
+    log_path = matches[0].parent / rev.LOG_NAME
+    if not log_path.exists():
+        return refuse(f"EXP-003's evidence-use log {log_path} is missing")
+    window = rev.InformationWindow(f"kalshi:{args.series}", f"{args.event_from}T00:00:00Z",
+                                   f"{args.event_to}T23:59:59Z")
+    try:
+        window.bounds()
+    except rev.EvidenceError as exc:
+        return refuse(str(exc))
+    holdouts = experiments.holdout_windows(exp)
+    if holdouts is None:
+        return refuse("EXP-003 declares an untouched window only in prose; declare [evaluation] holdout_windows "
+                      "before scanning")
+    for scope, start, end in holdouts:
+        if window.overlaps(rev.InformationWindow(scope, start, end)):
+            return refuse(f"the event window overlaps EXP-003's declared holdout {scope} {start}..{end}")
+    prohibited = list(payoff_constraints.PROHIBITED_MARKET_FIELDS) + list(experiments.prohibited_fields(exp))
+    try:
+        report = payoff_constraints.scan_kalshi_store(
+            args.db, series=args.series, sizes=sizes, max_quote_age=timedelta(seconds=args.max_quote_age_seconds),
+            max_leg_skew=timedelta(seconds=args.max_leg_skew_seconds), event_from=args.event_from,
+            event_to=args.event_to, prohibited_fields=prohibited)
+    except ValueError as exc:
+        return refuse(str(exc))
+    code_version = args.code_version or _code_version()
+    generated = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+    use = rev.EvidenceUse(
+        experiment_id="EXP-003", family="B",
+        dataset_id=f"kalshi_public:{args.series}_markets_and_orderbooks",
+        dataset_version=f"{Path(args.db).name} ({report['sets_evaluated']} sets, events {args.event_from}.."
+                        f"{args.event_to})",
+        dataset_sha256=report["input_snapshot_sha256"], role=rev.DatasetRole.DEVELOPMENT, window=window,
+        actor=args.actor, tool=f"edge-lab research payoff-scan ({payoff_constraints.PAYOFF_VERSION})",
+        action_time_utc=generated,
+        action=rev.Action.FEATURE_INSPECTION, code_version=code_version,
+        model_version=None, prompt_version=None, viewed_features=True, viewed_labels=False, viewed_results=True,
+        influenced_tuning=False,
+        note=f"Logged by the CLI before output. Market-side books and rules only; settled fields dropped. "
+             f"report_sha256={report['report_sha256']}")
+    try:
+        result = rev.record_use(log_path, use, prohibited_prefixes=experiments.prohibited_inputs(exp),
+                                prohibited_label_scopes=experiments.prohibited_label_scopes(exp))
+    except (OSError, ValueError) as exc:
+        return refuse(f"the evidence-use event could not be recorded, so nothing is output: {exc}", code=1)
+    envelope = payoff_constraints.result_envelope(report, generated_at_utc=generated, source_store=args.source_label,
+                                                  code_version=code_version, evidence_use_event_id=use.event_id)
+    if args.out:
+        Path(args.out).write_text(json.dumps(envelope, indent=2, sort_keys=True) + "\n", encoding="utf-8",
+                                  newline="\n")
+    summary = {"provenance": envelope["provenance"], "evidence_use_record": result,
+               "envelope_sha256": envelope["envelope_sha256"],
+               "report": {k: v for k, v in report.items() if k != "evaluations"}}
+    print(json.dumps(summary, indent=2, sort_keys=True))
+    return 0
+
+
 def _evidence(args: argparse.Namespace) -> int:
     """Evidence-consumption commands (research_evidence). Local files only; no network."""
     from . import research_evidence as rev
@@ -1026,6 +1169,8 @@ def main(argv: list[str] | None = None) -> int:
         if args.settlement_command == "collect":
             return _settlement_collect(args)
         return _settlement_audit(args)
+    if args.command == "research":
+        return _research(args)
     if args.command == "experiments":
         return _experiments(args)
     if args.command == "notify":
