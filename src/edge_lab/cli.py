@@ -161,9 +161,25 @@ def build_parser() -> argparse.ArgumentParser:
     freeze_cmd.add_argument("experiment_id")
     freeze_cmd.add_argument("--root", default="experiments")
     frozen = exps_sub.add_parser(
-        "check-frozen", help="Fail if any committed preregistration baseline was modified/deleted."
+        "check-frozen",
+        help="Fail if any committed preregistration baseline was modified/deleted, or an evidence-use log "
+             "was changed other than by appending.",
     )
     frozen.add_argument("--base", required=True, help="git ref to compare against, e.g. origin/main")
+    ev_record = exps_sub.add_parser(
+        "record-use", help="Append one evidence-use event (JSON file) to an experiment's evidence_use.jsonl."
+    )
+    ev_record.add_argument("experiment_id")
+    ev_record.add_argument("--use", required=True, help="path to one EvidenceUse JSON object")
+    ev_record.add_argument("--root", default="experiments")
+    ev_status = exps_sub.add_parser(
+        "holdout-status", help="Can this dataset/outcome window still support an untouched-evaluation claim?"
+    )
+    ev_status.add_argument("--dataset-sha256", required=True)
+    ev_status.add_argument("--scope", required=True, help='outcome universe, e.g. "sports:nfl:moneyline"')
+    ev_status.add_argument("--start", required=True, help="outcome window start (UTC ISO)")
+    ev_status.add_argument("--end", required=True, help="outcome window end (UTC ISO)")
+    ev_status.add_argument("--root", default="experiments")
 
     notify = subparsers.add_parser(
         "notify", help="ntfy push (ADR 0022): relay the local outbox, or send one test event."
@@ -819,10 +835,17 @@ def _experiments(args: argparse.Namespace) -> int:
         print(f"wrote {target}")
         return 0
     if args.experiments_command == "check-frozen":
+        from . import research_evidence
+
         changed = experiments.changed_baselines(args.base, repo=Path("."))
         for line in changed:
             print(f"FAIL preregistration baseline modified or deleted: {line}")
-        return 1 if changed else 0
+        rewritten = research_evidence.check_append_only(args.base, repo=Path("."))
+        for line in rewritten:
+            print(f"FAIL evidence-use log: {line}")
+        return 1 if changed or rewritten else 0
+    if args.experiments_command in ("record-use", "holdout-status"):
+        return _evidence(args)
     results = experiments.validate_all(Path(args.root))
     if not results:
         print(f"No experiments found under {args.root}", file=sys.stderr)
@@ -834,6 +857,33 @@ def _experiments(args: argparse.Namespace) -> int:
             print(f"     - {problem}")
         failed = failed or bool(problems)
     return 1 if failed else 0
+
+
+def _evidence(args: argparse.Namespace) -> int:
+    """Evidence-consumption commands (research_evidence). Local files only; no network."""
+    from . import research_evidence as rev
+
+    root = Path(args.root)
+    if args.experiments_command == "holdout-status":
+        window = rev.InformationWindow(args.scope, args.start, args.end)
+        status = rev.holdout_status(rev.load_all_logs(root), dataset_sha256=args.dataset_sha256, window=window)
+        print(json.dumps(status.to_dict(), indent=2, sort_keys=True))
+        return 0
+    matches = [p for p in experiments.discover(root) if p.parent.name.startswith(args.experiment_id + "-")]
+    if len(matches) != 1:
+        print(f"expected one manifest for {args.experiment_id}, found {len(matches)}", file=sys.stderr)
+        return 2
+    exp = experiments.load(matches[0])
+    try:
+        use = rev.use_from_dict(json.loads(Path(args.use).read_text(encoding="utf-8")))
+        result = rev.record_use(matches[0].parent / rev.LOG_NAME, use,
+                                prohibited_prefixes=experiments.prohibited_inputs(exp),
+                                prohibited_label_scopes=experiments.prohibited_label_scopes(exp))
+    except (OSError, ValueError) as exc:
+        print(f"refused: {exc}", file=sys.stderr)
+        return 1
+    print(f"{result} {use.event_id}")
+    return 0
 
 
 def _notify(args: argparse.Namespace) -> int:

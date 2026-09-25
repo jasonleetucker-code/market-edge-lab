@@ -1,0 +1,141 @@
+# Research-protocol sidecar (research-protocol-v1). DRAFT: explicit UNKNOWN / MISSING_* values
+# are honest placeholders; every decision field must be settled before PREREGISTERED
+# (experiments/README.md, Research-protocol sidecar). Nothing here is a validated strategy.
+
+protocol_version = "research-protocol-v1"
+experiment_id = "EXP-003"
+family = "B"
+family_title = "Same-venue mathematical payoff relationships"
+slot_status = "ACTIVE"
+authority = "docs/owner/2026-09-25-economic-evidence-v1-directive.md; docs/EXECUTION_PLAN.md 2026-09-25 entry; issue #96"
+mechanism = "Related contracts on one venue are quoted by different participants and may be momentarily inconsistent; when a proven complete payoff set can be bought for less than its worst-state payout net of all costs, the full-fill basket has a non-negative terminal surplus in every admissible settlement state."
+named_hypothesis = "H-B1 (payoff consistency): for an allowlisted, fully proven same-venue relationship set, the conditional full-fill worst-state surplus min_s( sum_i( q_i*payout_i(s) - settlement_cost_i(s, fill_i) + refund_i(s, fill_i) ) - basket_settlement_cost(s, fill) ) - sum_i(acquisition_cost_i(fill_i)) - state_independent_costs is positive at a fillable size often enough, and persists long enough, to clear the owner's minimum useful economic effect."
+baseline = "No-trade baseline (zero contribution, zero capital). The surplus is a deterministic bound, not a stochastic EV: no probability model is fitted or needed."
+
+[universe]
+eligible = "Allowlist only: (1) YES/NO complements of one market; (2) mutually exclusive and exhaustive partitions (every bracket of one event, tails included); (3) verified nested thresholds. First candidate: Kalshi KXHIGHNY daily brackets from stored market-side books. Long legs only."
+exclusions = [
+  "Any set whose settlement states are not completely enumerated and proven (missing tail, overlapping or non-exhaustive ranges, unproven inclusivity, changed station/window/rules): UNSUPPORTED, never a partial proof",
+  "Legs with non-overlapping or stale quote-validity intervals, truncated or unknown depth, unknown fees, or mixed native units",
+  "Sale/short legs and collateral economics (out of v1 scope)",
+]
+
+[observation]
+unit = "Event day (one KXHIGHNY event = one outcome unit); every capture instant and relationship set on that day is nested inside it."
+clusters = [
+  "event day: all captures, sets and sizes of one event are one cluster",
+]
+dependence = "Captures minutes apart re-observe the same resting orders; overlapping sets share legs and liquidity. Episodes are deduplicated by shared liquidity and uncertainty is computed on event days, never on snapshot counts."
+
+[endpoints]
+primary = "UNKNOWN: to be frozen before preregistration; candidate: the count and after-cost dollar size of distinct positive worst-state full-fill surplus episodes per event day at the smallest rung."
+secondary = [
+  "Observed quote inconsistency (pre-cost) kept separate from the after-cost bound",
+  "Partial/orphan-leg exposure at each rung",
+  "Attrition waterfall with separate denominators (research_evidence.attrition_report)",
+]
+
+[information]
+cutoff = "Each evaluation instant uses only books received at or before it; every leg's quote-validity interval must overlap the others'."
+max_input_age = "UNKNOWN: maximum leg book age and maximum leg-to-leg receipt skew, frozen before preregistration."
+clock_uncertainty = "Kalshi books carry receipt time (second precision) and no per-level source time; leg skew is the receipt-time difference plus unknown in-flight change."
+
+[data_roles]
+data = [
+  "stored kalshi_public markets and orderbooks for KXHIGHNY events (market side only)",
+  "captured rules text and hashes",
+  "versioned fee schedule records",
+]
+features = [
+  "per leg: ask ladder, receipt time; per set: payout matrix and proof",
+]
+labels = [
+  "none: the proof needs no realized settlement; KXHIGHNY labels (market result, expiration_value, settlement fields, post-close snapshots) are prohibited",
+]
+permission_lineage = "Kalshi public market data under its published terms (sources.py license_notes); derived artifacts inherit it and are research-only."
+prohibited_inputs = [
+  "exp001:",
+  "shadow_ledger:",
+  "nws_pfm:",
+  "nws_cli:",
+  "kalshi_settlement:",
+]
+# Labels reach this family through non-prohibited datasets too: the market records inside
+# kalshi_public snapshots carry settled fields. No use may view labels/outcomes in these scopes
+# (research_evidence.record_use refuses it). prohibited_fields are market-record fields that this
+# family's readers must drop; they are enforced by the readers that consume this protocol (the
+# payoff scan in EE v1 PR B) and are declarative until then. Snapshots received at or after a
+# market's close are excluded by the same readers.
+prohibited_label_scopes = ["kalshi:KXHIGHNY"]
+prohibited_fields = ["result", "expiration_value", "settlement_value", "settlement_value_dollars", "settlement_ts"]
+
+[variants]
+allowed = [
+  "V0 only while DRAFT. A new relationship type, venue, series, fee treatment or fill rule is a registered variant that consumes research budget.",
+]
+multiple_testing = "UNKNOWN: the number of relationship sets and variants and the error control are frozen before preregistration; every tried set is counted."
+
+[costs_fills]
+fees = "Kalshi versioned fee schedule and claim basis at each capture (fee_schedules.py; ADR 0017), once per leg fill path at the documented rounding scope; state-dependent settlement costs and refunds inside the per-state minimum; UNKNOWN fees prevent a claim."
+fills = "Per-leg depth walk at the capture; full-fill bound reported separately from partial/orphan-leg exposure; no atomic multi-leg execution is assumed; duplicate synthetic liquidity is counted once."
+evidence_quality = "Kalshi fee evidence: CONSERVATIVE_BOUND for KXHIGHNY direct members from 2026-09-23 (ADR 0017); settlement/transfer fees not yet verified for this scope; fractional (0.01) native quantities UNVERIFIED until captured as fixtures (PR B)."
+
+[size_capital]
+size_ladder = "UNKNOWN: rungs to be frozen before preregistration (research_economics.capacity_ladder); no rung is an approved bankroll."
+capital_scenarios = "UNKNOWN: illustrative capital scenarios only (ILLUSTRATIVE_SCENARIO_NOT_APPROVED_BANKROLL)."
+capital_assumptions = "Full acquisition cost locked from entry to settlement cash release; one shared pool per venue across strategies; reserve MISSING_OWNER_INPUT."
+
+[evaluation]
+chronological = "Development, validation and evaluation windows are strictly chronological by event day."
+untouched_future_window = "UNKNOWN: a window of future event days after the freeze, identified by event-day window as well as dataset hash (research_evidence)."
+exposure_history = "Every access is logged in evidence_use.jsonl; access before the log existed is UNKNOWN. This family never accesses EXP-001 forecasts, outcomes or ledger (prohibited_inputs, enforced by research_evidence.record_use)."
+controls = [
+  "Counterexample fixtures (missing tail, overlapping ranges, wrong inclusivity, changed rules, stale/non-overlapping quotes, truncated depth, one-cent vs $1 units, fees erasing surplus, duplicate liquidity, refund breaking a naive proof, one leg filling) must return UNSUPPORTED/UNKNOWN or the correct non-arbitrage answer",
+]
+
+[budget]
+research_cash_usd = "0 incremental: no paid data or services are authorized (owner directive of 2026-09-24 ET / 2026-09-25 UTC)."
+owner_hours = "MISSING_OWNER_INPUT: owner hours budget and the hourly opportunity cost used in the economic screen."
+data_costs = "0: stored evidence only; no new collector or timer."
+review_date = "2026-10-22"
+
+[stopping]
+futility = "UNKNOWN: preregistered futility rule (for example: stop if no positive after-cost worst-state episode appears over a frozen number of evaluable event days at the smallest rung)."
+stop = [
+  "ECONOMICALLY_UNVIABLE: surplus episodes too rare or too small to clear fixed cash costs",
+  "OPERATIONALLY_UNUSABLE: surplus exists only across non-overlapping quotes or unfillable depth",
+  "BUDGET_EXHAUSTED: the research budget or review date passes without the named missing observation",
+]
+continue_rule = "UNKNOWN: continue only with a named missing observation and its marginal cost/value."
+verdicts = ["ACCESS_BLOCKED", "ECONOMICALLY_UNVIABLE", "STATISTICAL_FUTILITY", "OPERATIONALLY_UNUSABLE", "BUDGET_EXHAUSTED", "INSUFFICIENT_EVIDENCE", "CONTINUE"]
+
+[economics]
+minimum_useful_effect = "MISSING_OWNER_INPUT: the minimum useful annual after-cost contribution for this family."
+power_analysis = "MISSING_POWER_ANALYSIS: a deterministic bound has no sampling error per instant, but episode frequency and size do; requires development-window counts."
+min_episodes_for_scenario = "MISSING_POWER_ANALYSIS: the minimum number of distinct in-window episodes before any annual scenario is computed (research_economics.ScreenInputs)."
+min_independent_clusters = "MISSING_POWER_ANALYSIS: the minimum number of independent clusters, at the coarsest level used, before any screen verdict other than INSUFFICIENT_EVIDENCE."
+
+[readiness]
+product = "Depth, grid, fee and settlement-identity contracts exist; the payoff evaluator is PR B."
+strategy = "None. A conditional bound is not captured arbitrage."
+permitted_uses = [
+  "research on stored evidence and fixtures",
+  "payoff proofs and counterexamples",
+  "economics/capacity screen",
+]
+remaining_blockers = [
+  "Payoff evaluator and semantic conformance (PR B)",
+  "Kalshi settlement/transfer fee and fractional-quantity conformance evidence",
+  "Minimum useful effect and owner hours are owner inputs",
+]
+
+[episode]
+definition = "An episode starts at the first capture where a relationship set's after-cost worst-state full-fill surplus at the minimum size is at or above the start threshold, and ends at the first later capture below it or after the end/merge gap; captures of the same resting orders inside one episode are one opportunity; sets sharing legs share one liquidity key (research_economics.build_episodes)."
+start_threshold = "UNKNOWN: frozen before any outcome is viewed."
+end_merge_gap = "UNKNOWN: frozen before any outcome is viewed; cannot be finer than the capture schedule."
+minimum_size = "UNKNOWN: frozen before any outcome is viewed."
+
+[knowledge]
+source_independence = "Not applicable in the usual sense (one venue); leg quotes may come from the same participants: UNKNOWN."
+annual_episode_count = "UNKNOWN: never annualized from a few observations."
+fill_probability = "UNKNOWN: no fill evidence; observed depth is only a ceiling."

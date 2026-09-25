@@ -131,7 +131,7 @@ def validate(exp: Experiment) -> list[str]:
                 for k in ("date", "change", "reason")
             ):
                 problems.append(f"amendment {i} needs non-empty date, change, reason")
-            elif "field" in amendment and amendment["field"] not in FROZEN_FIELDS:
+            elif "field" in amendment and not _amendable_field(amendment["field"]):
                 problems.append(f"amendment {i} names unknown field {amendment['field']!r}")
 
     if exp.status in CONCLUDED:
@@ -146,6 +146,7 @@ def validate(exp: Experiment) -> list[str]:
             if isinstance(report, str) and report and not (exp.path.parent / report).exists():
                 problems.append(f"[result] report '{report}' does not exist")
 
+    problems.extend(protocol_problems(exp))
     problems.extend(baseline_problems(exp))
     return problems
 
@@ -194,9 +195,11 @@ def discover(root: Path) -> list[Path]:
 
 
 def validate_all(root: Path) -> dict[str, list[str]]:
-    """Validate every manifest under `root`, including cross-manifest ID uniqueness."""
+    """Validate every manifest under `root`, including cross-manifest ID uniqueness
+    and the active research-family slot limit."""
     results: dict[str, list[str]] = {}
     seen: dict[str, Path] = {}
+    loaded: list[tuple[str, Experiment]] = []
     for path in discover(root):
         key = str(path.relative_to(root))
         try:
@@ -209,6 +212,9 @@ def validate_all(root: Path) -> dict[str, list[str]]:
             problems.append(f"duplicate id {exp.id} (also {seen[exp.id]})")
         seen[exp.id] = path
         results[key] = problems
+        loaded.append((key, exp))
+    for key, problem in family_slot_problems(loaded, repo=root.resolve().parent):
+        results[key].append(problem)
     return results
 
 
@@ -274,6 +280,13 @@ def freeze(exp: Experiment, *, now_utc: str) -> Path:
         "frozen_fields_sha256": frozen_hash(view),
         "frozen_fields": view,
     }
+    protocol = load_protocol(exp)
+    if protocol is not None:
+        # Additive: only experiments with a protocol sidecar carry these keys, so every
+        # existing baseline (EXP-001) keeps its exact bytes and hash.
+        baseline["protocol_file"] = PROTOCOL_NAME
+        baseline["protocol_sha256"] = frozen_hash(protocol)
+        baseline["protocol"] = protocol
     target.write_text(json.dumps(baseline, indent=2, sort_keys=True, ensure_ascii=False) + "\n",
                       encoding="utf-8", newline="\n")
     return target
@@ -305,6 +318,21 @@ def baseline_problems(exp: Experiment) -> list[str]:
             f"locked fields changed since preregistration: {changed} "
             "(record changes in [[amendments]] instead of editing)"
         )
+    try:
+        protocol = load_protocol(exp)
+    except (OSError, tomllib.TOMLDecodeError):
+        protocol = None  # reported by protocol_problems
+    if "protocol" in baseline:
+        frozen_protocol = baseline.get("protocol")
+        if not isinstance(frozen_protocol, dict) or frozen_hash(frozen_protocol) != baseline.get("protocol_sha256"):
+            problems.append("preregistration baseline protocol does not match its own hash (edited?)")
+        elif protocol != frozen_protocol:
+            problems.append(
+                f"{PROTOCOL_NAME} changed since preregistration "
+                "(record changes in [[amendments]] with field = \"protocol.<table>.<key>\")"
+            )
+    elif protocol is not None:
+        problems.append(f"{PROTOCOL_NAME} was added after preregistration; it is not part of the frozen baseline")
     return problems
 
 
@@ -317,3 +345,287 @@ def changed_baselines(base_ref: str, *, repo: Path) -> list[str]:
         cwd=repo, capture_output=True, text=True, check=True,
     ).stdout
     return [line for line in out.splitlines() if line and not line.startswith("A")]
+
+
+
+# ---------------------------------------------------------------------------
+# Research-protocol sidecar (Economic Evidence v1, #96)
+# ---------------------------------------------------------------------------
+# New experiments carry `protocol.toml` beside `experiment.toml`. The sidecar holds the
+# research-governance fields the original manifest schema never had: family slot,
+# mechanism, universe, clustering, endpoints, information cutoff, data roles, variants
+# and multiple testing, cost/fill and size/capital assumptions, chronological and
+# untouched-future evaluation, budget, review date, stopping/futility, minimum useful
+# effect, readiness and the frozen episode definition.
+#
+# Compatibility: the sidecar is additive. Only the experiments in LEGACY_EXPERIMENTS (EXP-001,
+# which predates the sidecar) may lack one; they are read as LEGACY and nothing in their
+# manifest, baseline or validation changes. Every other experiment needs a sidecar, whatever
+# its `created` date says (a backdated manifest cannot dodge the rule). A sidecar is part of
+# the preregistration baseline of any experiment frozen with one.
+#
+# Honesty rules: in DRAFT every field must be present, but its value may be an explicit
+# "UNKNOWN: ..." or "MISSING_OWNER_INPUT: ..." / "MISSING_POWER_ANALYSIS: ...". From
+# PREREGISTERED on, every *decision* field must be settled. The [knowledge] table holds
+# facts that may honestly stay UNKNOWN even after preregistration (for example source
+# independence or an annual opportunity count); it must be present, never invented.
+# The settled-value check is a heuristic: it rejects UNKNOWN / UNVERIFIED / TBD / MISSING_*
+# tokens anywhere and deferral phrases ("to be frozen", "will be decided"); an inadequate
+# but concrete-looking value is still a review question.
+
+PROTOCOL_NAME = "protocol.toml"
+PROTOCOL_VERSION = "research-protocol-v1"
+LEGACY_EXPERIMENTS = frozenset({"EXP-001"})  # predate the sidecar; the only experiments allowed without one
+OWNER_EXCEPTION_DIR = "docs/owner/"
+MAX_ACTIVE_FAMILIES = 2
+SLOT_STATES = ("ACTIVE", "QUEUED", "ENDED")
+PROTOCOL_TOP = ("protocol_version", "experiment_id", "family", "family_title", "slot_status", "authority",
+                "mechanism", "named_hypothesis", "baseline")
+PROTOCOL_TABLES: dict[str, tuple[str, ...]] = {
+    "universe": ("eligible", "exclusions"),
+    "observation": ("unit", "clusters", "dependence"),
+    "endpoints": ("primary", "secondary"),
+    "information": ("cutoff", "max_input_age", "clock_uncertainty"),
+    "data_roles": ("data", "features", "labels", "permission_lineage", "prohibited_inputs"),
+    "variants": ("allowed", "multiple_testing"),
+    "costs_fills": ("fees", "fills", "evidence_quality"),
+    "size_capital": ("size_ladder", "capital_scenarios", "capital_assumptions"),
+    "evaluation": ("chronological", "untouched_future_window", "exposure_history", "controls"),
+    "budget": ("research_cash_usd", "owner_hours", "data_costs", "review_date"),
+    "stopping": ("futility", "stop", "continue_rule", "verdicts"),
+    "economics": ("minimum_useful_effect", "power_analysis", "min_episodes_for_scenario",
+                  "min_independent_clusters"),
+    "readiness": ("product", "strategy", "permitted_uses", "remaining_blockers"),
+    "episode": ("definition", "start_threshold", "end_merge_gap", "minimum_size"),
+    "knowledge": ("source_independence", "annual_episode_count", "fill_probability"),
+}
+# May stay UNKNOWN after preregistration (descriptive facts, never decision parameters).
+PROTOCOL_KNOWLEDGE_TABLE = "knowledge"
+_UNSETTLED_START = re.compile(r"^\s*(missing|unknown|unverified\b)", re.I)
+_UNSETTLED_TOKEN = re.compile(r"\bUNKNOWN\b|\bUNVERIFIED\b|\bTBD\b|MISSING_OWNER_INPUT|MISSING_POWER_ANALYSIS")
+_UNSETTLED_PHRASE = re.compile(r"\b(to be|will be|still to be|yet to be)\s+(frozen|decided|determined|settled|chosen|"
+                               r"defined|set|agreed)\b", re.I)
+
+
+def protocol_path(exp: Experiment) -> Path:
+    return exp.path.parent / PROTOCOL_NAME
+
+
+def load_protocol(exp: Experiment) -> dict[str, Any] | None:
+    """The experiment's protocol sidecar, or None when it has none (a LEGACY experiment).
+
+    Raises tomllib.TOMLDecodeError for a malformed sidecar; `protocol_problems` reports it."""
+    path = protocol_path(exp)
+    if not path.exists():
+        return None
+    with path.open("rb") as handle:
+        return tomllib.load(handle)
+
+
+def protocol_state(exp: Experiment) -> str:
+    """PRESENT, LEGACY (an allowlisted pre-sidecar experiment: EXP-001) or MISSING.
+
+    This is the explicit compatibility reader: callers never infer protocol fields for a
+    LEGACY experiment; every such field is UNKNOWN."""
+    if protocol_path(exp).exists():
+        return "PRESENT"
+    if exp.id in LEGACY_EXPERIMENTS:
+        return "LEGACY"
+    return "MISSING"
+
+
+def _unsettled(value: Any) -> bool:
+    return isinstance(value, str) and (bool(_UNSETTLED_START.match(value)) or bool(_UNSETTLED_TOKEN.search(value))
+                                       or bool(_UNSETTLED_PHRASE.search(value)) or _is_placeholder(value))
+
+
+def _unsettled_paths(value: Any, path: str) -> list[str]:
+    if isinstance(value, dict):
+        if not value:
+            return [path]
+        return [p for k, v in value.items() for p in _unsettled_paths(v, f"{path}.{k}")]
+    if isinstance(value, list):
+        if not value:
+            return [path]
+        return [p for i, v in enumerate(value) for p in _unsettled_paths(v, f"{path}[{i}]")]
+    return [path] if _unsettled(value) else []
+
+
+def _present(value: Any) -> bool:
+    """Present means stated: a non-empty string, a number, a bool, or a non-empty list/table of them.
+    An explicit "UNKNOWN: ..." string is present; an empty value is not."""
+    if isinstance(value, bool) or isinstance(value, (int, float)):
+        return True
+    if isinstance(value, str):
+        return bool(value.strip())
+    if isinstance(value, list):
+        return bool(value) and all(_present(v) for v in value)
+    if isinstance(value, dict):
+        return bool(value) and all(_present(v) for v in value.values())
+    return False
+
+
+def protocol_problems(exp: Experiment) -> list[str]:
+    """Problems with the protocol sidecar. LEGACY experiments have none by construction."""
+    state = protocol_state(exp)
+    if state == "LEGACY":
+        return []
+    if state == "MISSING":
+        return [f"every experiment except {', '.join(sorted(LEGACY_EXPERIMENTS))} needs a {PROTOCOL_NAME} sidecar "
+                "(experiments/README.md, Research-protocol sidecar)"]
+    try:
+        protocol = load_protocol(exp)
+    except (OSError, tomllib.TOMLDecodeError) as exc:
+        return [f"{PROTOCOL_NAME} is not valid TOML: {exc}"]
+    assert protocol is not None
+    problems: list[str] = []
+    for key in PROTOCOL_TOP:
+        if not _present(protocol.get(key)):
+            problems.append(f"{PROTOCOL_NAME} missing or empty '{key}' (write \"UNKNOWN: <why>\" if unknown)")
+    for table, keys in PROTOCOL_TABLES.items():
+        section = protocol.get(table)
+        if not isinstance(section, dict):
+            problems.append(f"{PROTOCOL_NAME} missing table [{table}]")
+            continue
+        for key in keys:
+            if not _present(section.get(key)):
+                problems.append(f"{PROTOCOL_NAME} [{table}] missing or empty '{key}' "
+                                "(write \"UNKNOWN: <why>\" if unknown)")
+    if protocol.get("protocol_version") != PROTOCOL_VERSION:
+        problems.append(f"{PROTOCOL_NAME} protocol_version must be {PROTOCOL_VERSION!r}")
+    if protocol.get("experiment_id") != exp.id:
+        problems.append(f"{PROTOCOL_NAME} experiment_id {protocol.get('experiment_id')!r} is not {exp.id!r}")
+    if protocol.get("slot_status") not in SLOT_STATES:
+        problems.append(f"{PROTOCOL_NAME} slot_status must be one of {', '.join(SLOT_STATES)}")
+    family = protocol.get("family")
+    if isinstance(family, str) and not re.fullmatch(r"[A-Z][A-Z0-9_]*", family):
+        problems.append(f"{PROTOCOL_NAME} family {family!r} must be one uppercase token (one slot, no hidden split)")
+    roles = protocol.get("data_roles")
+    prohibited = roles.get("prohibited_inputs") if isinstance(roles, dict) else None
+    if prohibited is not None and not (isinstance(prohibited, list) and all(isinstance(p, str) for p in prohibited)):
+        problems.append(f"{PROTOCOL_NAME} [data_roles] prohibited_inputs must be a list of dataset-id prefixes")
+    label_scopes = roles.get("prohibited_label_scopes") if isinstance(roles, dict) else None
+    if label_scopes is not None and not (isinstance(label_scopes, list)
+                                         and all(isinstance(s, str) and s.strip() for s in label_scopes)):
+        problems.append(f"{PROTOCOL_NAME} [data_roles] prohibited_label_scopes must be a list of outcome scopes")
+    exception = protocol.get("owner_exception")
+    if exception is not None and not owner_exception_ok(exception, repo=exp.path.resolve().parents[2]):
+        problems.append(f"{PROTOCOL_NAME} owner_exception must name an existing owner decision file inside "
+                        f"{OWNER_EXCEPTION_DIR}")
+    open_decisions = protocol.get("open_decisions")
+    if open_decisions is not None and not (isinstance(open_decisions, list)
+                                           and all(isinstance(d, str) and d.strip() for d in open_decisions)):
+        problems.append(f"{PROTOCOL_NAME} open_decisions must be a list of non-empty strings")
+    elif open_decisions and exp.status in LOCKED:
+        problems.append(f"{exp.status} experiment still lists {len(open_decisions)} open decision(s); decide and "
+                        "record each before preregistering, then empty open_decisions")
+    fields = roles.get("prohibited_fields") if isinstance(roles, dict) else None
+    if fields is not None and not (isinstance(fields, list)
+                                   and all(isinstance(f, str) and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", f)
+                                           for f in fields)):
+        problems.append(f"{PROTOCOL_NAME} [data_roles] prohibited_fields must be a list of record field names")
+    budget = protocol.get("budget")
+    review = budget.get("review_date") if isinstance(budget, dict) else None
+    if isinstance(review, str) and not _unsettled(review):
+        try:
+            if not DATE_PATTERN.match(review):
+                raise ValueError
+            date.fromisoformat(review)
+        except ValueError:
+            problems.append(f"{PROTOCOL_NAME} [budget] review_date must be YYYY-MM-DD or \"UNKNOWN: <why>\"")
+    if exp.status in LOCKED:
+        for table in PROTOCOL_TABLES:
+            if table == PROTOCOL_KNOWLEDGE_TABLE:
+                continue
+            for label in _unsettled_paths(protocol.get(table, {}), table):
+                problems.append(f"{exp.status} experiment has unsettled protocol field '{label}' "
+                                "(settle it, with a power/cost rationale, before preregistering)")
+        for key in PROTOCOL_TOP:
+            for label in _unsettled_paths(protocol.get(key, ""), key):
+                problems.append(f"{exp.status} experiment has unsettled protocol field '{label}'")
+    return problems
+
+
+def owner_exception_ok(exception: Any, *, repo: Path) -> bool:
+    """An owner exception is an existing file that resolves inside <repo>/docs/owner/ (no `..` escape)."""
+    if not isinstance(exception, str) or not exception.strip():
+        return False
+    owner_dir = (repo / OWNER_EXCEPTION_DIR).resolve()
+    target = (repo / exception).resolve()
+    return target.is_file() and owner_dir in target.parents
+
+
+def prohibited_fields(exp: Experiment) -> tuple[str, ...]:
+    """Record fields this experiment's readers must drop (enforced by the readers that consume it)."""
+    try:
+        protocol = load_protocol(exp)
+    except (OSError, tomllib.TOMLDecodeError):
+        return ()
+    roles = (protocol or {}).get("data_roles")
+    values = roles.get("prohibited_fields") if isinstance(roles, dict) else None
+    return tuple(v for v in values if isinstance(v, str) and v.strip()) if isinstance(values, list) else ()
+
+
+def prohibited_label_scopes(exp: Experiment) -> tuple[str, ...]:
+    """Outcome scopes whose labels/results this experiment may never view (none for LEGACY)."""
+    try:
+        protocol = load_protocol(exp)
+    except (OSError, tomllib.TOMLDecodeError):
+        return ()
+    roles = (protocol or {}).get("data_roles")
+    values = roles.get("prohibited_label_scopes") if isinstance(roles, dict) else None
+    return tuple(v for v in values if isinstance(v, str) and v.strip()) if isinstance(values, list) else ()
+
+
+def prohibited_inputs(exp: Experiment) -> tuple[str, ...]:
+    """Dataset-id prefixes this experiment's protocol forbids it to access (none for LEGACY)."""
+    try:
+        protocol = load_protocol(exp)
+    except (OSError, tomllib.TOMLDecodeError):
+        return ()
+    roles = (protocol or {}).get("data_roles")
+    values = roles.get("prohibited_inputs") if isinstance(roles, dict) else None
+    return tuple(v for v in values if isinstance(v, str) and v.strip()) if isinstance(values, list) else ()
+
+
+def family_slot_problems(loaded: list[tuple[str, Experiment]], *, repo: Path) -> list[tuple[str, str]]:
+    """At most MAX_ACTIVE_FAMILIES distinct ACTIVE families among open experiments.
+
+    EXP-001 (LEGACY, protected) does not use a slot. A family beyond the limit needs an
+    `owner_exception` naming an existing owner-decision document. Several experiments may
+    share one family (one slot); splitting a family into differently named families to
+    dodge the limit is exactly what this check refuses."""
+    active: dict[str, list[str]] = {}
+    exceptions: set[str] = set()
+    for key, exp in loaded:
+        if exp.status in CONCLUDED or exp.status == "ABANDONED":
+            continue
+        try:
+            protocol = load_protocol(exp)
+        except (OSError, tomllib.TOMLDecodeError):
+            continue
+        if not protocol or protocol.get("slot_status") != "ACTIVE" or not isinstance(protocol.get("family"), str):
+            continue
+        family = protocol["family"]
+        active.setdefault(family, []).append(key)
+        if owner_exception_ok(protocol.get("owner_exception"), repo=repo):
+            exceptions.add(family)
+    unexcepted = [f for f in sorted(active) if f not in exceptions]
+    problems: list[tuple[str, str]] = []
+    for position, family in enumerate(unexcepted, start=1):
+        if position <= MAX_ACTIVE_FAMILIES:
+            continue
+        for key in active[family]:
+            problems.append((key, f"family {family!r} would be active family #{position}; at most "
+                                  f"{MAX_ACTIVE_FAMILIES} new active families are allowed without an "
+                                  "owner_exception document (#96)"))
+    return problems
+
+
+def _amendable_field(field: Any) -> bool:
+    if not isinstance(field, str):
+        return False
+    if field in FROZEN_FIELDS:
+        return True
+    parts = field.split(".")
+    return len(parts) >= 2 and parts[0] == "protocol" and (parts[1] in PROTOCOL_TABLES or parts[1] in PROTOCOL_TOP)

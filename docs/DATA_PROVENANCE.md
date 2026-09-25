@@ -287,6 +287,42 @@ identity.
 The full coverage matrix, with P0/P1/P2 classification for every source and process, is
 `docs/research/LEARNING_HISTORY_COVERAGE.md`.
 
+## 6d. Research purpose, rights, clocks, units and finality (#96, 2026-09-25)
+
+These rules apply to every **new** stream and derived research dataset from Economic Evidence v1
+on. Existing authorized collectors keep running under their current authority until an explicit
+review. Their stored rows are not rewritten, and missing fields stay UNKNOWN.
+
+- **Purpose and budget.** A new stream names the hypothesis or purpose it serves, and its outcome
+  and label plan. It also records its request, quota and storage cost and a **review date and
+  stop date** (`docs/OWNER_IDEAS.md`, #86 narrowed). A new collector without an active experiment
+  starts only as an explicitly approved, bounded sentinel/archive with a documented prospective
+  value. Any timer needs explicit EXECUTION_PLAN authority and the owner's approval.
+- **Rights inheritance.** A derived artifact inherits the most restrictive terms of its inputs.
+  That covers use restrictions, attribution, no-redistribution and research-only status. The
+  source's `license_notes` and the owner's risk decisions travel into the dataset's manifest. A
+  derived dataset never "clears" a restriction its inputs carry. An owner risk acceptance is not a
+  terms clearance (Polymarket US).
+- **Clocks.** The event time, the source update time, the first time we observed it, the receipt
+  (`fetched_at_utc`), ingestion and processing time are different clocks. Each carries its
+  precision and, when known, its uncertainty. Example: Kalshi books have second-precision receipt
+  time and no per-level source time. Pair skew between two inputs is a receipt-time difference
+  plus the unknown change in flight. A capture schedule's resolution bounds every lag claim made
+  from it: a T-60m schedule cannot show seconds-level lead or lag.
+- **Units.** Native quantity and granularity, the price convention, payout per native unit,
+  currency and multiplier are preserved as the source states them. Conversion is explicit and
+  versioned: a one-cent contract is never multiplied as a $1 contract, and a fractional quantity
+  is never truncated to an integer. The shared metadata contract lands with EE v1 PR B (semantic
+  conformance).
+- **Outcome finality.** Labels are pending, preliminary, corrected or final, with the source and
+  the time each state became known. A correction appends a new label and never rewrites a settled
+  one.
+- **Raw-byte limitation.** JSON snapshots keep canonical JSON plus the exact-byte hash, not the
+  exact bytes (§2, ADR 0002). Documents keep exact bytes. A byte-sensitive new feed needs bounded
+  raw preservation. Bytes that were not kept cannot be recovered from their hash.
+- **As-of research use.** Evidence that was valid at a decision time may support research with an
+  explicit as-of cutoff even when it is stale now. It is never used as current (§4).
+
 ## 7. Adding a source
 
 1. Choose the highest access tier available. Read the terms and write them in `license_notes`.

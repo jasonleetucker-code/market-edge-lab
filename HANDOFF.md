@@ -137,8 +137,9 @@ remains MANUAL EMERGENCY FALLBACK ONLY.
   anchored history, with the residual accepted in ADR 0021.
 - **Production evidence:** deployed and verified; the first valid day and the first real
   shadow bookkeeping are recorded; settlement not yet observed.
-- **Research evidence:** 1 valid Stage B day. The EXP-001 180/365-valid-day looks are far
-  off, and nothing here is evidence of an edge.
+- **Research evidence:** 2 valid Stage B days (2026-09-24, 2026-09-25; `verify_production.sh`
+  COLLECTOR_HEALTH, 2026-09-25 01:57Z, as recorded above). The EXP-001 180/365-valid-day looks
+  are far off, and nothing here is evidence of an edge.
 - **Gate 7 is NOT PASSED.** No Gate 8 or real-money work was done.
 
 ## 30-day plan (issue #11, target 2026-10-22)

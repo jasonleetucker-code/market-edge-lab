@@ -25,4 +25,10 @@ Under the 2026-09-24 (evening) Freshness Fabric and sports directive:
   Terms do not clear it (PR #84).
 - 0033: the sportsbook consensus research benchmark (landed, PR #79).
 
-New decisions start at 0034.
+Under the 2026-09-25 Economic Evidence v1 directive (#96):
+- 0034: research-protocol sidecar, evidence consumption, attrition and the economic screen (EE v1 PR A).
+- 0035: reserved for the next execution package (durable intent journal, reservation, fencing,
+  reconciliation). Design only (EE v1 PR B).
+- 0036: reserved for EE v1 semantic conformance, if a separate record is needed.
+
+New decisions start at 0037.

@@ -1,0 +1,145 @@
+# Research-protocol sidecar (research-protocol-v1). DRAFT: explicit UNKNOWN / MISSING_* values
+# are honest placeholders; every decision field must be settled before PREREGISTERED
+# (experiments/README.md, Research-protocol sidecar). Nothing here is a validated strategy.
+
+protocol_version = "research-protocol-v1"
+experiment_id = "EXP-002"
+family = "A"
+family_title = "Narrow sportsbook information vs executable event-market pricing"
+slot_status = "ACTIVE"
+authority = "docs/owner/2026-09-25-economic-evidence-v1-directive.md; docs/EXECUTION_PLAN.md 2026-09-25 entry; issue #96"
+mechanism = "Sportsbook lines aggregate many professional prices and may move before thinner event-market books reprice; if an event-market ask for a payoff-equivalent contract lags the consensus by more than all-in costs, buying it has positive expected value."
+named_hypothesis = "H-A1 (consensus information): at a frozen pregame horizon, the odds-consensus-v1 probability for a payoff-equivalent NFL moneyline contract exceeds its executable all-in ask by more than a frozen threshold often enough, and at enough fillable size, to clear the owner's minimum useful economic effect."
+baseline = "odds-consensus-v1 exactly as implemented (edge_lab.odds_api pair_offers / group_propositions / median; proportional two-way de-vig; exact line; no weighting, no filters) versus the executable ask; plus the no-trade baseline (zero contribution, zero capital)."
+# OPEN DECISIONS (not settled values). Each must be decided, with evidence, before PREREGISTERED.
+# Items 1 and 2 were raised by EE Writer 2 (PR C, #101) from the captured market rules. The rules
+# facts they cite stay UNVERIFIED here until PR C's captured-rules evidence is merged.
+open_decisions = [
+  "OPEN 1, tie and not-played treatment. PR C reports that KXNFLGAME rules pay $0.50 on a tie and resolve at a discretionary 'fair price' if the game is not played within 48 h (UNVERIFIED here). A sportsbook two-way moneyline de-vig is conditional on the book's own tie/void rules, so no pair is payoff-equivalent today: every pair is a CONDITIONAL mapping. Decide whether and how tie and not-played states are represented (payoff_constraints-style states) or excluded, and what that does to the equivalence claim.",
+  "OPEN 2, maximum pair skew between the odds snapshot and the event-market book. PR C suggests 10 minutes as a disclosed candidate. That is NOT frozen: freeze it with the capture-schedule resolution before any outcome is viewed.",
+  "OPEN 3, the size ladder rungs ([size_capital] size_ladder).",
+  "OPEN 4, the episode definition: start threshold, end/merge gap and minimum size ([episode]).",
+  "OPEN 5, the minimum number of independent clusters (game and NFL week) before a screen verdict ([economics] min_independent_clusters), and the minimum episode count for an annual scenario ([economics] min_episodes_for_scenario).",
+]
+
+[universe]
+eligible = "NFL regular- and post-season games; pregame moneyline (team-win) only; one execution-candidate venue first (Kalshi) and only contracts whose captured rules, tie/overtime/postponement/void treatment and payout units are mapped as payoff-equivalent to the consensus side. No other league, market type (spreads, totals, props) or venue is added to inflate the sample."
+exclusions = [
+  "Contracts whose mapping is RELATED_NOT_EQUIVALENT (every Polymarket US NFL market today, ADR 0032): kept as observations, never compared as equivalent",
+  "Two-way de-vig where a tie, void or refund state is unmapped: excluded with reason UNSUPPORTED_RULES (a conditional-on-no-tie probability is not an unconditional team-win probability)",
+  "Horizons without a paired event-market book received at or before the cutoff: DATA_GAP, never filled from a later book",
+]
+
+[observation]
+unit = "Game (one NFL game = one outcome unit). Markets, sides, books and horizons are nested inside it."
+clusters = [
+  "game: both team sides, every book, every horizon and every snapshot of one game are one cluster",
+  "NFL week / slate: games in the same week share news, weather and market-wide flows; uncertainty is also clustered by week",
+]
+dependence = "Books are not independent (shared line sources); sides of one game are complements; repeated snapshots re-observe the same liquidity. Uncertainty is computed on game- and week-clustered units, never on book or snapshot counts: research_economics bootstraps on the coarsest level present on every episode (outer_cluster_id = NFL week)."
+
+[endpoints]
+primary = "UNKNOWN: exactly one of (a) calibration/outcome information at a frozen horizon (for example a log-score difference vs the executable-price-implied probability) or (b) predictive markout at a named later horizon; to be chosen and frozen before preregistration."
+secondary = [
+  "After-cost conditional contribution per game at each size-ladder rung (research_economics)",
+  "Episode persistence bounds at capture-schedule resolution (never below it)",
+  "Attrition waterfall with separate denominators (research_evidence.attrition_report)",
+]
+
+[information]
+cutoff = "Receipt time (fetched_at_utc) at or before the frozen decision horizon for every input; source update times recorded separately; later captures are labels, never features."
+max_input_age = "UNKNOWN: maximum book age and maximum sportsbook last_update age to be frozen before preregistration."
+clock_uncertainty = "Capture times are second-precision receipt clocks; sportsbook last_update precision is source-reported; pair skew between the odds snapshot and the event-market book is UNKNOWN until paired captures exist and must have a frozen maximum."
+
+[data_roles]
+data = [
+  "the_odds_api NFL h2h snapshots (stored; 450-credit pilot)",
+  "event-market books for the same games (Kalshi: not yet stored)",
+  "captured rules and settlement documents (hashes)",
+  "final outcomes with finality state",
+]
+features = [
+  "consensus probability, dispersion, freshness at the horizon",
+  "executable ask ladder at the horizon (same cutoff)",
+]
+labels = [
+  "final game outcome and contract resolution state (pending / preliminary / corrected / final); tie, void and refund states explicit",
+  "later executable prices only for a markout endpoint, never as features",
+]
+permission_lineage = "The Odds API free-tier terms (recorded in sources.py license_notes and experiments/multi_venue/odds_api_docs_2026-09-23.md) are inherited by every derived dataset; Kalshi public-data terms for Kalshi books; Polymarket US data stays research-only, attributed and never redistributed (owner risk decision). Derived artifacts inherit the most restrictive input."
+prohibited_inputs = [
+  "exp001:",
+  "shadow_ledger:",
+]
+
+[variants]
+allowed = [
+  "V0 baseline only while DRAFT. Any change of de-vig method, book set, weighting, freshness filter, horizon or exclusion is a registered challenger variant that consumes research budget.",
+]
+multiple_testing = "UNKNOWN: the number of variants and the correction (for example a holdout reserved for one final decision, or a deflated statistic) are frozen before preregistration; every tried variant is counted."
+
+[costs_fills]
+fees = "The execution venue's versioned fee schedule and claim basis at the decision time (fee_schedules.py; ADR 0017); UNVERIFIED or UNSUPPORTED fees block a net claim. Fees enter once, inside the net edge per unit."
+fills = "Depth-walk of the captured ask ladder at the cutoff; conservative (fill at detection, first observation of an episode) and less-conservative (best single observation) bounds; observed depth is a ceiling, not a guaranteed fill; no fill probability is assumed."
+evidence_quality = "UNKNOWN: no paired Kalshi NFL book is stored yet; fee claim basis for Kalshi sports markets UNVERIFIED for this scope."
+
+[size_capital]
+size_ladder = "UNKNOWN: rungs to be frozen before preregistration (research_economics.capacity_ladder consumes them); no rung is an approved bankroll."
+capital_scenarios = "UNKNOWN: illustrative capital scenarios only (ILLUSTRATIVE_SCENARIO_NOT_APPROVED_BANKROLL); the owner sets any real amount."
+capital_assumptions = "Capital locked from entry until settlement cash release (game end plus the venue's settlement timer); one shared pool per venue across strategies; reserve MISSING_OWNER_INPUT."
+
+[evaluation]
+chronological = "Development, validation and evaluation windows are strictly chronological by kickoff; no shuffled splits."
+untouched_future_window = "UNKNOWN: to be frozen before preregistration as a window of future kickoffs after the freeze; identified by its outcome window as well as its dataset hash (research_evidence)."
+exposure_history = "Every access to evaluation data is logged in evidence_use.jsonl; access before the log existed is UNKNOWN, never certified untouched."
+controls = [
+  "Delayed-signal control: the same rule applied with the consensus lagged by one capture horizon",
+  "Placebo control: the rule applied to a mismatched game or a side-swapped consensus",
+]
+
+[budget]
+research_cash_usd = "0 incremental: no paid data or services are authorized (owner directive of 2026-09-24 ET / 2026-09-25 UTC); existing VPS and free-tier quota only."
+owner_hours = "MISSING_OWNER_INPUT: owner hours budget and the hourly opportunity cost used in the economic screen."
+data_costs = "0 additional Odds API credits; within the existing 450-credit monthly cap."
+review_date = "2026-10-22"
+
+[stopping]
+futility = "UNKNOWN: preregistered futility rule (for example: stop if the upper confidence bound of after-cost contribution per game at the smallest rung is below the minimum useful effect after a frozen number of evaluable games)."
+stop = [
+  "ACCESS_BLOCKED: no payoff-equivalent executable route with captured rules exists",
+  "ECONOMICALLY_UNVIABLE: the less-conservative scenario cannot clear fixed cash costs",
+  "BUDGET_EXHAUSTED: the research budget or review date passes without the named missing observation",
+]
+continue_rule = "UNKNOWN: continue only with a named missing observation and its marginal cost/value (no indefinite extension)."
+verdicts = ["ACCESS_BLOCKED", "ECONOMICALLY_UNVIABLE", "STATISTICAL_FUTILITY", "OPERATIONALLY_UNUSABLE", "BUDGET_EXHAUSTED", "INSUFFICIENT_EVIDENCE", "CONTINUE"]
+
+[economics]
+minimum_useful_effect = "MISSING_OWNER_INPUT: the minimum useful annual after-cost contribution for this family (the $50k-100k aspiration is not a per-experiment minimum)."
+power_analysis = "MISSING_POWER_ANALYSIS: requires the primary endpoint, the minimum effect and a variance estimate from development data."
+min_episodes_for_scenario = "MISSING_POWER_ANALYSIS: the minimum number of distinct in-window episodes before any annual scenario is computed (research_economics.ScreenInputs)."
+min_independent_clusters = "MISSING_POWER_ANALYSIS: the minimum number of independent clusters, at the coarsest level used, before any screen verdict other than INSUFFICIENT_EVIDENCE."
+
+[readiness]
+product = "Data foundations exist (odds pilot, consensus benchmark, Terminal views); paired event-market books and rules mapping do not."
+strategy = "None. No sports model or strategy is operational or authorized."
+permitted_uses = [
+  "research on stored evidence",
+  "data-gap report and bounded capture plan (PR C)",
+  "economics/capacity screen",
+]
+remaining_blockers = [
+  "Paired Kalshi NFL books are not collected (a new bounded collector needs explicit EXECUTION_PLAN authority and owner approval)",
+  "Payoff-equivalence mapping (ties, overtime, void, units) not established",
+  "Minimum useful effect and owner hours are owner inputs",
+]
+
+[episode]
+definition = "An episode starts at the first observation of a (game, side, venue) liquidity key whose after-cost edge at the minimum size is at or above the start threshold, and ends at the first later observation below it or after the end/merge gap; repeated observations inside one episode are the same opportunity (research_economics.build_episodes)."
+start_threshold = "UNKNOWN: frozen before any outcome is viewed."
+end_merge_gap = "UNKNOWN: frozen before any outcome is viewed; cannot be finer than the capture schedule."
+minimum_size = "UNKNOWN: frozen before any outcome is viewed."
+
+[knowledge]
+source_independence = "UNKNOWN: bookmaker source-family links are not established; no independence or sharp-book weighting is assumed."
+annual_episode_count = "UNKNOWN: no paired observations exist; never annualized from a few observations."
+fill_probability = "UNKNOWN: no fill evidence; observed depth is only a ceiling."

@@ -13,7 +13,7 @@ be written here when they are made.
 | 4 | Baseline model | **EXIT CRITERIA MET 2026-09-22 (PR #18).** The frozen baseline was implemented; validation selected V1; the test split was opened once; **Stage A PASS** (model − R0 +1.253, 95% CI [+1.147, +1.362]; PIT coverage 0.806 ∈ [0.75, 0.85]). EXP-001 is `RUNNING` (Stage B pending). A Stage A pass is not evidence of an edge; see `experiments/EXP-001-kxhighny-nws-vs-market/gate4/REPORT.md`. Closed: the owner approved Gate 5 on 2026-09-22. |
 | 5 | Market-vs-model | **PASSED 2026-09-23 (PR #22).** The domain-neutral opportunity engine (ADR 0013): contracts for event, market, executable quote, model estimate and opportunity; executable Kalshi prices (never mid or last); versioned fees (`kalshi-quadratic-taker-v1`, `UNVERIFIED_CURRENT_SCHEDULE`, so no result is claimable); fail-closed freshness; explicit liquidity; machine-readable rejection reasons. EXP-001 probabilities and forward books plug in (`edge-lab forward opportunities`). An independent review found one blocker (settlement equivalence), which was fixed and re-reviewed with no blocker. CI is green on the exact head. |
 | 6 | Simulated / shadow trading | **PASSED 2026-09-23 (PR #23).** Append-only, hash-chained shadow ledger with all account state derived by replay (ADR 0014). The fill policy is deterministic (`latency-confirmed-v1`, the frozen EXP-001 execution model). The sizing foundation has hard caps and fractional Kelly. `edge-lab shadow run|settle|account`. No real-order path. The independent review found no blocker; 4 should-fix items were fixed and re-reviewed. CI is green on the exact head. The P0 risk/capital foundation (issue #6) and the Outcome Board backend (issue #3) were then built under the same directive (PR #24, ADR 0015): shadow only, with no withdrawal recommendation. Gate 7 engineering was authorized on 2026-09-23. |
-| 7 | Adversarial validation | **Engineering authorized 2026-09-23** (daily-shadow directive): adversarial software tests on disposable stores, risk/ledger/timing/execution fault handling. **Engineering suite merged (PR #26):** `tests/gate7/`, `docs/engineering/GATE7_FINDINGS.md`. F01–F08 and F10–F14 are FIXED; F09 (no external anchor for the ledger head): support landed in PR #37 (ADR 0021); closed for the anchored history on 2026-09-23 (independent checkpoints stored and verified off-host), with the ADR 0021 residual. The dashboard review (PR #28) added reporting fixes. **Production evidence (2026-09-23):** the daily pipeline is deployed and verified; the first valid Stage B day (2026-09-24) was captured and booked (2 shadow fills per account), and settlement is not yet observed (`docs/deploy/PRODUCTION_ACTIVATION_2026-09-23.md`). F09 is closed for the anchored history (two independent checkpoints). **Research evidence:** 1 valid Stage B day, which is not evidence of an edge. Gate 7 research needs many real Stage B days; the EXP-001 180/365-valid-day looks are unaffected. **Not passed.** |
+| 7 | Adversarial validation | **Engineering authorized 2026-09-23** (daily-shadow directive): adversarial software tests on disposable stores, risk/ledger/timing/execution fault handling. **Engineering suite merged (PR #26):** `tests/gate7/`, `docs/engineering/GATE7_FINDINGS.md`. F01–F08 and F10–F14 are FIXED; F09 (no external anchor for the ledger head): support landed in PR #37 (ADR 0021); closed for the anchored history on 2026-09-23 (independent checkpoints stored and verified off-host), with the ADR 0021 residual. The dashboard review (PR #28) added reporting fixes. **Production evidence (2026-09-23):** the daily pipeline is deployed and verified; the first valid Stage B day (2026-09-24) was captured and booked (2 shadow fills per account), and settlement is not yet observed (`docs/deploy/PRODUCTION_ACTIVATION_2026-09-23.md`). F09 is closed for the anchored history (two independent checkpoints). **Research evidence:** 2 valid Stage B days (2026-09-24, 2026-09-25; production verification 2026-09-25 01:57Z, `HANDOFF.md`), which is not evidence of an edge. Gate 7 research needs many real Stage B days; the EXP-001 180/365-valid-day looks are unaffected. **Not passed.** |
 | 8–10 | Paper/shadow → tiny real money → scaling | Not authorized. |
 
 ## Owner authorization record
@@ -443,6 +443,42 @@ be written here when they are made.
     only.
   - **Not authorized:** trading, account credentials, orders, money movement, paid services,
     Polymarket International.
+
+- **2026-09-24 ~22:10 America/New_York (2026-09-25 UTC), MISSION: ECONOMIC EVIDENCE V1 (#96).** Recorded in substance in
+  `docs/owner/2026-09-25-economic-evidence-v1-directive.md`. Strategy record and handoff:
+  `docs/strategy/2026-09-24-evidence-to-economics-reset.md` and
+  `docs/strategy/CLAUDE_ECONOMIC_EVIDENCE_V1.md`. Those two documents authorize nothing by
+  themselves; this entry records the owner's scope for them.
+  - **Authorized (this bounded batch only):**
+    - two DRAFT research protocols, one per new family (not PREREGISTERED);
+    - evidence consumption and attrition records;
+    - an economic screen, including the size ladder and capacity sensitivity;
+    - semantic conformance metadata (units, rules, fees, probability meaning, clocks, finality,
+      rights);
+    - a pure same-venue payoff evaluator;
+    - stored-evidence sports pairing, a data-gap report, economics/capacity, and a compact view
+      in the existing Terminal;
+    - an execution-package ADR, **design only** (no transport);
+    - canonical integration of #96;
+    - review, merge and deployment of reviewed code under
+      `docs/deploy/DAILY_SHADOW_ACTIVATION.md` (preflight PASS, protected windows).
+  - **Research families.** Protected EXP-001 is unchanged. At most two new active hypothesis
+    families:
+    - **A:** narrow sportsbook information versus executable event-market pricing;
+    - **B:** same-venue mathematical payoff relationships.
+
+    Family A is stored-evidence research. It is **not** the excluded "sports model or sports
+    strategy" of the 2026-09-23 directive: no winner model, no operational sports strategy.
+  - **Not authorized:** live orders; authenticated paper orders; account signup; credential
+    installation or readback; deposits or withdrawals; margin; paid data or services; outside
+    investor capital; new timers or new production network scope; backup deletion; public
+    dashboard exposure; any research or execution gate advance; changes to EXP-001 or
+    `STARTER_MAX_7D_V1` semantics. `EXECUTION_NOT_AUTHORIZED` stays enforced.
+  - **Unchanged.** Gate 7 is not passed. Collectors already authorized above (Odds API,
+    Polymarket US pilot, ADR 0030 observations, the Freshness supervisor) continue under their
+    existing authority until an explicit review. The 450-credit Odds cap is unchanged. The
+    automatic twelve-city Multi-City Weather rollout is no longer the next build
+    (`docs/OWNER_IDEAS.md`, roadmap re-run 2026-09-25); its design (#90) is kept.
 
 ## Standing merge rule: docs-only and test-only PRs
 

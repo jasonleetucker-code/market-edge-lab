@@ -52,6 +52,7 @@ authorize something, that thing is not authorized.
 | why an architecture choice was made | `docs/decisions/` |
 | reuse of patterns from the Brisket repo | `docs/BRISKET_REUSE_AUDIT.md` |
 | owner ideas, future features, backlog readiness | `docs/OWNER_IDEAS.md` |
+| strategy: evidence-to-economics reset (#96), the two research families, Economic Evidence v1 handoff | `docs/strategy/` |
 | any user-visible UI: pages, components, styles, fonts, icons | `docs/design/UI_CONTRACT.md`, `docs/design/COMPONENTS.md`, `docs/design/FEATURE_INTEGRATION.md` |
 
 ## Authority: autonomy is not authority

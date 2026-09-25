@@ -1,0 +1,87 @@
+id = "EXP-002"
+title = "Family A: NFL pregame moneyline sportsbook consensus vs executable event-market prices (DRAFT)"
+status = "DRAFT"
+owner = "jasonleetucker-code"
+created = "2026-09-25"
+
+hypothesis = """
+DRAFT, not preregistered. At a named pregame horizon, the existing sportsbook consensus
+research benchmark (odds-consensus-v1: exact-line proportional two-way de-vig, median across
+books) carries information about the final outcome of an NFL game that the executable ask of
+a payoff-equivalent event-market contract (first intended route: Kalshi) does not already
+price, by more than all-in costs, often enough and at enough fillable size to matter in
+dollars. Exactly one primary objective will be chosen before preregistration: (a) calibration /
+outcome information at defined pregame horizons, or (b) predictive markout at a named later
+horizon. The null hypothesis is that executable prices already reflect the consensus.
+"""
+
+economic_rationale = """
+Sportsbook lines aggregate many professional prices; event-market order books in the same
+game may be thinner and updated less often. The rationale is unproven. A two-way moneyline
+de-vig encodes economics conditional on the book's own tie/void rules and is not automatically
+an unconditional binary team-win probability; related-but-not-equivalent contracts are never
+compared as if equivalent. Any edge may be too small, too rare or too thin to fill.
+"""
+
+market = "TBD: NFL pregame moneyline (team-win) event-market contracts; first intended execution-price route Kalshi, only where market, rules and access evidence support payoff equivalence (protocol.toml [universe])"
+decision_time = "TBD: one or more of the existing pregame capture horizons T-24h / T-6h / T-60m (odds_schedule game_relative_v1); receipt time at or before the cutoff; frozen before preregistration"
+model = "TBD: no model is fitted. Baseline = the existing consensus research benchmark (odds_api CONSENSUS_VERSION odds-consensus-v1) exactly as implemented; any change of de-vig, weighting or filter is a registered variant (protocol.toml [variants])"
+
+data_sources = [
+  "the_odds_api: stored NFL h2h snapshots from the 450-credit free-tier pilot (ADR 0029); receipt times and per-book last_update; no extra credits",
+  "Event-market books for the same games: Kalshi NFL game markets are NOT yet stored (docs/OWNER_IDEAS.md roadmap: NEXT); Polymarket US NFL books are stored but RELATED_NOT_EQUIVALENT (ADR 0032) and are never an equivalent-payoff route",
+  "Captured market rules (rules text + hash) for every contract used; a title is not settlement documentation",
+  "Final outcomes with finality state (pending / preliminary / corrected / final), from the contract's named settlement source",
+]
+
+features = [
+  "TBD: consensus probability for the contract's side at the horizon (point-in-time read, snapshots received at or before the cutoff)",
+  "TBD: executable ask and depth ladder of the payoff-equivalent contract received at or before the cutoff; never a later book",
+  "TBD: freshness, pair skew and dispersion (range, MAD) as reported by the benchmark; UNKNOWN stays UNKNOWN",
+]
+
+success_criteria = [
+  "TBD: settled with a power/cost rationale before preregistration (protocol.toml [economics] minimum_useful_effect is MISSING owner/power input)",
+]
+
+failure_criteria = [
+  "TBD: preregistered futility rule (protocol.toml [stopping]); ECONOMICALLY_UNVIABLE, STATISTICAL_FUTILITY and ACCESS_BLOCKED are valid outcomes",
+  "Any result that uses a later book, a mid or last price, a de-vigged probability as a price, or a related-not-equivalent contract as equivalent is void",
+]
+
+risk_constraints = [
+  "Research on stored evidence only: no orders, no credentials, no funded account, no execution code (EXECUTION_NOT_AUTHORIZED)",
+  "Not a winner model and not an operational sports strategy (owner directive of 2026-09-24 ET / 2026-09-25 UTC); no sports model becomes operational from this work",
+  "No additional Odds API credits, no paid data, no new timers; the 450-credit monthly cap is unchanged",
+]
+
+limitations = [
+  "Existing T-24h/T-6h/T-60m captures support defined-horizon feasibility/calibration only, never seconds-level lag or fill claims",
+  "Paired Kalshi NFL books do not exist yet; without them this experiment can only produce a data-gap report (PR C)",
+  "Books are not independent observations: nine books, both team sides and several snapshots of one game are one cluster (protocol.toml [observation])",
+  "Consensus is a research benchmark, not calibrated truth and not an executable price",
+]
+
+gates_required = [
+  "PREREGISTERED only after every protocol.toml decision field is settled and frozen before outcomes are viewed",
+  "Owner-set minimum useful economic effect or a documented power analysis",
+  "Payoff-equivalence evidence (rules, ties, overtime, void/refund, units) for every contract in the universe",
+]
+
+[periods]
+train = "TBD: development window (chronologically before validation); protocol.toml [evaluation]"
+validation = "TBD: chronological validation window"
+test = "TBD: untouched future evaluation window, identified by outcome window as well as dataset hash (research_evidence)"
+
+[costs]
+fee_model = "TBD: the execution venue's versioned fee schedule (fee_schedules.py) with its claim basis at the decision time; UNSUPPORTED or UNVERIFIED fees block a net claim"
+spread = "Crossed in full at captured asks; never mid or last price"
+
+[execution]
+fill_model = "TBD: conservative and less-conservative depth-walk fill bounds (research_economics size ladder); observed depth is a ceiling, not a guaranteed fill"
+latency = "TBD: bounded by the capture schedule resolution; no sub-horizon latency claim"
+
+[artifacts]
+spec = "experiments/EXP-002-nfl-consensus-vs-event-market/experiment.toml"
+protocol = "experiments/EXP-002-nfl-consensus-vs-event-market/protocol.toml"
+log = "experiments/EXP-002-nfl-consensus-vs-event-market/README.md"

@@ -48,7 +48,7 @@ column lists which issues each primitive serves.
 | Sportsbook consensus research benchmark | `src/edge_lab/odds_consensus.py` | BUILT (math in the odds_api.py consensus section) 2026-09-24 (ADR 0033, PR #79), shown in Terminal (PR #85): exact-line two-way de-vig, median, dispersion, book counts, combined freshness, point-in-time; RESEARCH BENCHMARK — NOT EXECUTABLE; offered price and consensus probability never conflated | #9 #5 #29 #82 |
 | Per-domain research readiness | `src/edge_lab/research_readiness.py` | BUILT 2026-09-24 (PR #79): YES / PARTIAL / NOT_YET / UNKNOWN per prerequisite from real stores; explicit YES rules; never green by default. #86 §50 extends it to every domain (market history, depth, rules, external features, vintages, model, rejections, later prices, labels, source failures) | #50 #86 #88 #82 |
 | Release / event calendar | `src/edge_lab/event_calendar.py` | PLANNED (contract in docs/research/SOURCE_READINESS.md §9). ONE shared calendar (event id, domain, scheduled and actual times, source, expected fields, related markets, capture targets, exchange sessions and holidays), mapped onto fabric RELEASE_DRIVEN / EVENT_RELATIVE modes. Never one per domain | #86 #88 #74 #82 |
-| Instrument selection (how to express an edge) | `src/edge_lab/instrument_selection.py` | PLANNED. #88 §6: separate "we found an edge" from "how to express it": stock, ETF, option, option spread, future, prediction-market contract, or nothing, compared on payoff, spread, depth, slippage, fees, convexity, leverage, capital, downside, horizon, permissions and capacity. Builds on the best-price comparator and sizing v2; integrates with #82 | #88 #30 #82 #6 |
+| Instrument selection (how to express an edge) | `src/edge_lab/instrument_selection.py` | PLANNED; **DEFERRED 2026-09-25 by #96** (no general instrument optimizer before two concrete expressions exist). #88 §6: separate "we found an edge" from "how to express it": stock, ETF, option, option spread, future, prediction-market contract, or nothing, compared on payoff, spread, depth, slippage, fees, convexity, leverage, capital, downside, horizon, permissions and capacity. Builds on the best-price comparator and sizing v2; integrates with #82 | #88 #30 #82 #6 |
 | Sports odds capture scheduling | `src/edge_lab/odds_schedule.py` (runner odds_pilot.py; adapter odds_api.py) | BUILT 2026-09-24 (ADR 0029): game-relative T-24h/T-6h/T-60m targets, persisted with intended times, worst-case budget proof under 450 credits. ACTIVE on production since 2026-09-24 13:40Z (budget PROVEN, one smoke read CAPTURED, redaction verified; runbook §5b activation record) | #29 #5 #9 #50 |
 | Later / closing price observations | `src/edge_lab/price_observations.py` | BUILT 2026-09-24 (ADR 0030, PR #68). **Option A schedule approved 2026-09-24 11:24 ET**; PR #76 merged (9d66c90) and DEPLOYED 2026-09-24 20:31Z, timers enabled 20:32Z, first scheduled plan 20:35Z (42 targets; close tick ALIGNED). First scheduled network capture pending. "Close" remains only within the stored tolerance; missed point-in-time targets remain MISSED | #74 #50 #30 #9 #29 |
 | Capital-eligibility policies | `src/edge_lab/starter_policy.py` | BUILT (`STARTER_MAX_7D_V1`, ADR 0018); enforced prospectively in the operational shadow account | #32 #6 |
@@ -56,6 +56,10 @@ column lists which issues each primitive serves.
 | Execution-ticket contract | `src/edge_lab/execution_ticket.py` | BUILT (data contract plus an ordered pre-submit control chain, PR #43; `EXECUTION_NOT_AUTHORIZED` always fails) | #32 #33 #30 |
 | Operator views | `src/edge_lab/dashboard/` | BUILT (read-only; on chaseupside reachable only on the owner's tailnet via Tailscale Serve, ADR 0024) | #3 #6 #10 |
 | Design system (Market Edge Terminal v1) | `docs/design/UI_CONTRACT.md` | BUILT (implemented in dashboard presentation.py, components.py, html.py and static/tokens.css; shell, tokens, fonts, components, honest states, gallery; ADR 0025, issue #47). Every user-visible feature reuses it per docs/design/FEATURE_INTEGRATION.md | #47 #3 #6 #9 #10 #29 #30 #32 #33 |
+| Experiment registry, research-protocol sidecar and family slots | `src/edge_lab/experiments.py` | BUILT (TOML manifests, preregistration freeze, ADR 0004/0009). **Extended 2026-09-25 (EE v1 PR A):** an additive `protocol.toml` sidecar for new experiments (mechanism, universe, clusters, endpoints, cutoffs, data roles, variants, cost/fill, size/capital, untouched window, budget, review date, futility, minimum useful effect, frozen episode definition), frozen with the baseline; at most two new ACTIVE families (#96). EXP-001 is read as LEGACY and is unchanged | #96 #82 #5 #9 |
+| Research-evidence lineage (evidence consumption, attrition) | `src/edge_lab/research_evidence.py` | BUILT 2026-09-25 (EE v1 PR A): append-only per-experiment `evidence_use.jsonl` (role, window, actor, action, features/labels/results viewed, tuning influence); holdout identity by outcome window as well as hash; legacy access UNKNOWN; protocol `prohibited_inputs` enforced; attrition waterfalls with separate denominators and one primary reason per unit. Not a second registry or memory store | #96 #82 #50 |
+| Research economics (episodes, capital-constrained replay, size ladder, screen) | `src/edge_lab/research_economics.py` | BUILT 2026-09-25 (EE v1 PR A): distinct episodes under a frozen definition; chronological replay with finite per-venue capital, reserve, settlement release and one shared pool; size ladder over the canonical depth walk and fees (fees once); OBSERVED/ESTIMATED/OWNER_INPUT/UNKNOWN inputs; verdicts INSUFFICIENT_EVIDENCE / ECONOMICALLY_UNVIABLE / BELOW_MINIMUM_USEFUL / CONTINUE. No amount is an approved bankroll | #96 #93 #6 #32 |
+| Same-venue payoff-constraint evaluator | `src/edge_lab/payoff_constraints.py` | PLANNED (EE v1 PR B): a pure, allowlisted evaluator (complements, exhaustive partitions, nested thresholds; long legs only) over the opportunity/depth/fee/settlement contracts. Not a general optimizer | #96 #5 #9 #30 |
 | Longitudinal learning history | `docs/DATA_PROVENANCE.md` | FOUNDATION BUILT in immutable snapshots/documents, forward captures, experiment records, opportunity reasons and the shadow ledger; issue #50 makes prospective learning-history completeness a cross-domain acceptance rule. A generalized derived learning/reporting layer is NEXT only when additional domains produce data; do not create a duplicate evidence store | #50 #5 #7 #9 #27 #29 #30 |
 
 ## Index
@@ -64,22 +68,85 @@ column lists which issues each primitive serves.
 |---|---|---|---|
 | #4 | Durable idea intake and readiness backlog (process) | **Implemented** 2026-09-22 (Gate 3 PR) | `AI_INSTRUCTIONS.md` rule + this index |
 | #3 | Outcome Board / What Matters Today dashboard | **BACKEND + LOCAL VIEW IMPLEMENTED** 2026-09-23 (PR #28); hosting NOT READY | `edge_lab.outcome_board` (ADR 0015) plus the `/outcome-board` view of the local read-only dashboard (127.0.0.1 only). Hosting, auth and live marks are unauthorized and not built. |
-| #5 | Sports prediction-market and sports-modeling expansion | **LATER** (discovery and data foundations NEXT via #29/#30; any sports model BLOCKED on a preregistered experiment) | Core framework is proving out on weather. Needs the shared identity, venue and equivalence layers; the 2026-09-23 directive authorizes data foundations only, not sports models. |
-| #9 | Sportsbook odds aggregation, consensus pricing, best-venue comparison | **NEXT** (The Odds API data foundation via #29); comparison LATER | Sub-idea of #5. Needs market equivalence and verified access terms. Offered odds are never executable prices. |
+| #5 | Sports prediction-market and sports-modeling expansion | **LATER** (discovery and data foundations NEXT via #29/#30; any sports model BLOCKED on a preregistered experiment) | Core framework is proving out on weather. Needs the shared identity, venue and equivalence layers; the 2026-09-23 directive authorizes data foundations only, not sports models. **2026-09-25 (#96):** Family A (EXP-002, DRAFT) is narrow stored-evidence research on NFL pregame moneyline consensus vs executable event-market prices. It is not a sports model or strategy; any winner model stays BLOCKED on its own preregistered experiment. |
+| #9 | Sportsbook odds aggregation, consensus pricing, best-venue comparison | **NEXT** (The Odds API data foundation via #29); comparison LATER | Sub-idea of #5. Needs market equivalence and verified access terms. Offered odds are never executable prices. **2026-09-25 (#96):** the consensus benchmark is Family A's frozen baseline (EXP-002); a de-vig/weighting/filter change is a registered variant, never a quiet improvement. |
 | #6 | Dynamic bankroll, position sizing, withdrawal guidance | **P0 FOUNDATION IMPLEMENTED** 2026-09-23 (shadow only); **sizing v2 research challenger IMPLEMENTED** 2026-09-24 (ADR 0026; no effect on fills) | Shadow ledger (ADR 0014), `suggest_position_size`, and the risk/capital report with a withdrawal contract (ADR 0015). The withdrawal contract never recommends a draw. Since PR #26 the operational shadow account enforces the risk limits **before** each fill (NO_FILL RISK_VETO); the frozen research account is separate. A real-money policy, a verified edge and verified fees are all still missing. |
 | #10 | Host privately on existing Chase Upside infrastructure (separate service/subdomain, real access control) | **IMPLEMENTED, private** 2026-09-23: collector, daily shadow and settlement deployed and verified (`docs/deploy/PRODUCTION_ACTIVATION_2026-09-23.md`); the dashboard is tailnet-only via Tailscale Serve (PR #46, ADR 0024) | A separate service with its own user, slice and stores on the VPS. Access control is tailnet membership. A public subdomain, DNS/TLS and public exposure remain unauthorized and are not planned. |
-| #7 | Free-first multi-domain ingestion with paid-source ROI gate | APPLY SELECTIVELY NOW | Gate 3 applied it: the free IEM archive of NWS forecasts was chosen and paid weather data was not considered. The general ingestion platform is not built. |
-| #32 | Starter policy: 7-day capital-release limit, broad discovery, API-first execution preference | **Policy IMPLEMENTED** 2026-09-23 (PR #38, ADR 0018; enforced prospectively in the operational shadow account; no deployment known or verified from this session); discovery foundation IMPLEMENTED (PR #39); execution BLOCKED (no live authority) | Governing clock: venue-tradable cash within 168 h. The ticket contract carries the verdict with execution disabled. |
+| #7 | Free-first multi-domain ingestion with paid-source ROI gate | APPLY SELECTIVELY NOW | Gate 3 applied it: the free IEM archive of NWS forecasts was chosen and paid weather data was not considered. The general ingestion platform is not built. **2026-09-25 (#96):** paid data needs a hypothesis-specific value case (which active family, which decision it changes, marginal value vs cost), not a general ROI argument. |
+| #32 | Starter policy: 7-day capital-release limit, broad discovery, API-first execution preference | **Policy IMPLEMENTED** 2026-09-23 (PR #38, ADR 0018; enforced prospectively in the operational shadow account; no deployment known or verified from this session); discovery foundation IMPLEMENTED (PR #39); execution BLOCKED (no live authority) | Governing clock: venue-tradable cash within 168 h. The ticket contract carries the verdict with execution disabled. **2026-09-25 (#96):** preserved unchanged; the economic screen reports lockup and capital-days against it and never assumes an early resale satisfies the 168-hour policy. |
 | #33 | SMS-first alerting through one shared notification layer | **Contract IMPLEMENTED; ntfy relay ACTIVE; PHONE DELIVERY FAILED FIRST TEST** (owner confirmed 2026-09-24 11:24 ET) | Provider acceptance was SUBMITTED, but the phone showed nothing. Investigate subscription/client delivery without exposing the topic. Do not claim end-to-end delivery until a later owner-observed test succeeds. SMS delivery remains BLOCKED on provider approval. |
 | #30 | Multi-venue coverage, best-price comparison, unique-market discovery | **Foundation IMPLEMENTED**; **best-price-for-size comparator IMPLEMENTED** 2026-09-24 (PR #58, ADR 0027) with Polymarket US fee evidence (unverified estimate) and split-cancel refusal; comparator UI NEXT; Novig live API BLOCKED (credentials) | Cross-venue "cheaper" is impossible until rules equivalence and claim-grade fees are proven (Polymarket US rules stay unresolved). |
 | #29 | The Odds API free tier (quota-capped sports odds pilot) | **LIVE / ACTIVE** 2026-09-24: free key installed privately, budget PROVEN, smoke read verified, `edgelab-odds.timer` enabled | Sportsbook-consensus input for #5/#9 under the 450-credit monthly ceiling. Offered odds and de-vigged values are never executable prices; broader/faster collection remains constrained by quota and #7 ROI discipline. |
-| #27 | Action PRO permission and comparative sports-data subscription value | **LATER / BLOCKED** (no purchase authorized) | Paid source; needs the #7 ROI gate and a sports experiment that would use it. |
+| #27 | Action PRO permission and comparative sports-data subscription value | **LATER / BLOCKED** (no purchase authorized) | Paid source; needs the #7 ROI gate and a sports experiment that would use it. **2026-09-25 (#96):** still BLOCKED; a purchase case would have to come from an active family's data-gap report. |
 | #50 | Longitudinal learning dataset across every domain, including rejected opportunities | **NOW as a permanent data-design rule; NEXT for a generalized cross-domain learning/reporting layer** | Existing provenance, opportunity/rejection, experiment and shadow-ledger primitives already preserve much of the required history. Every new domain should preserve point-in-time observations, model/version context, decisions and rejections, later outcomes and failures before it is called research-ready. No automatic retraining or self-modifying decision policy is authorized. |
 | #74 | Always-on freshness fabric — staggered 24/7 adaptive collection | **NOW as a P0 data-design/operational rule; NEXT for the generalized orchestrator** | One shared freshness supervisor should eventually own source cadence, staggering, streaming/polling choice, quotas, missed-target accounting and decision-time freshness. Immediate action: ADR 0030 Option A is approved so currently lost later/closing depth begins being preserved without waiting for the full orchestrator. |
-| #86 | Cross-domain prospective evidence — collect learning-ready data before models exist | **NOW: portfolio + Multi-City Weather v1 design; gated collectors one source at a time** (2026-09-24 evening directive) | Extends #7/#50/#74/#82 and serves #30; duplicates none. Irrecoverable point-in-time evidence first; every source registered, market-relevant, outcome-labelled, budgeted, and scheduled through #74. Record: `docs/owner/2026-09-24-cross-domain-prospective-evidence-directive.md`. COLLECT ≠ MODEL ≠ VALIDATED ≠ ACTIONABLE. |
-| #88 | Public Markets Edge — equities, options, futures and intraday research | **First-class domain. NOW: source and licensing research, SEC/official-source planning, paper/sandbox evaluation (no signup), architecture compatibility. NEXT: bounded equity/event data, SEC/macro event studies, liquid ETF/mega-cap universe, paper/sandbox integration. NEXT/LATER by data access: options surfaces, futures cross-asset. GATED: paid data, funding, margin, shorting, derivatives permissions, order-write credentials, live trading** (owner directive 2026-09-24 evening) | Event-driven and relative-value first; options as a volatility/distribution market; futures from a small liquid universe; day trading is a horizon, not an edge. Portfolio rows in `docs/research/ACQUISITION_PORTFOLIO.md` §1.7 (PR #89). Competes on equal terms for first tiny-live. |
+| #86 | Cross-domain prospective evidence — collect learning-ready data before models exist | **NOW: portfolio + Multi-City Weather v1 design; gated collectors one source at a time** (2026-09-24 evening directive) | Extends #7/#50/#74/#82 and serves #30; duplicates none. Irrecoverable point-in-time evidence first; every source registered, market-relevant, outcome-labelled, budgeted, and scheduled through #74. Record: `docs/owner/2026-09-24-cross-domain-prospective-evidence-directive.md`. COLLECT ≠ MODEL ≠ VALIDATED ≠ ACTIONABLE. **Narrowed 2026-09-25 (#96):** purpose-budgeted collection only. Existing legitimate flows continue; a *new* stream needs a named hypothesis/purpose, outcome plan, rights record, request/storage cost, review/stop date and operational headroom. The automatic twelve-city Multi-City Weather rollout is **no longer the next build** (design #90 kept; queued). Nothing is deleted. |
+| #88 | Public Markets Edge — equities, options, futures and intraday research | **First-class domain. NOW: source and licensing research, SEC/official-source planning, paper/sandbox evaluation (no signup), architecture compatibility. NEXT: bounded equity/event data, SEC/macro event studies, liquid ETF/mega-cap universe, paper/sandbox integration. NEXT/LATER by data access: options surfaces, futures cross-asset. GATED: paid data, funding, margin, shorting, derivatives permissions, order-write credentials, live trading** (owner directive 2026-09-24 evening) | Event-driven and relative-value first; options as a volatility/distribution market; futures from a small liquid universe; day trading is a horizon, not an edge. Portfolio rows in `docs/research/ACQUISITION_PORTFOLIO.md` §1.7 (PR #89). Competes on equal terms for first tiny-live. **Queued and narrowed 2026-09-25 (#96):** still first-class, but no public-markets family is active until a research slot opens; the next candidates are slower SEC/earnings events, then exact-fixing crypto, options replication/bounds and slower macro/EIA. The unconditional rule "equity quotes are never duplicated prospectively" (roadmap item 14) is **superseded**: historical products may not reproduce the observed bid/ask/latency, so prospective quote capture may be proposed with a hypothesis-specific value case (still no paid data without approval). |
+| #96 | Evidence-to-economics reset: two active research families, capacity-first delivery (owner directive) | **NOW (2026-09-25): Economic Evidence v1** (`docs/owner/2026-09-25-economic-evidence-v1-directive.md`; strategy `docs/strategy/`) | Beside protected EXP-001, at most two new ACTIVE families: **A** narrow sportsbook information vs executable event-market pricing (EXP-002, DRAFT) and **B** same-venue payoff relationships (EXP-003, DRAFT). Economics, capacity, attrition and consumed evidence before model work. Authorizes no order, account, credential, paid service, timer or gate advance. |
+| #82 | Adaptive Learning Engine: continuous edge preservation, champion/challenger lifecycle | **Simplified 2026-09-25 (#96): NOW = lineage, evaluation and governance only** (experiment/dataset/model lineage, evidence-consumption records, attrition, standardized challenger review, separate data/model/execution/economic/capacity drift). Autonomous RL, general AutoML and live promotion are **LATER** | Built on `experiments.py` and `research_evidence.py`; no second memory database; no automatic promotion. |
+| #83 | External capital: investor unit/NAV accounting and fee governance | **LATER / deferred 2026-09-25 (#96)** | Durable intent kept. Outside investor capital is not authorized; no implementation until an edge and a legal structure exist. |
+| #93 | Bootstrap Capital Mode: grow a small bankroll without reckless leverage | **Preserved 2026-09-25 (#96); principles NOW inside the economic screen** | Capital-days, return on deployed vs total capital, lockup, idle cash and capacity are reported by `research_economics.py`. No strategy class is assigned without evidence; no amount is an approved bankroll; #32's 168-hour policy stays intact. |
 
-## Roadmap (re-run 2026-09-24 evening: Freshness Fabric + sports mission, #86 cross-domain evidence, #88 public markets)
+## Roadmap re-run 2026-09-25: #96 evidence-to-economics reset (Economic Evidence v1)
+
+Dates labelled 2026-09-25 here are UTC. The owner's directive arrived on 2026-09-24 at about
+22:10 America/New_York.
+
+This ordering authorizes nothing; `docs/EXECUTION_PLAN.md` does (its 2026-09-25 entry records
+the owner's Economic Evidence v1 scope). Re-prioritizing never authorizes implementation. Gate 7
+is unchanged and **not passed**. The 2026-09-24 roadmap below stays as the dated record. Where
+the two disagree, this re-run wins, and each changed item is named here. Nothing is deleted.
+
+**Research slots.** Protected EXP-001 plus **at most two new ACTIVE families** (validator-enforced;
+an exception needs an owner decision document):
+- **A:** EXP-002 (DRAFT), NFL pregame moneyline consensus vs executable event-market prices;
+- **B:** EXP-003 (DRAFT), same-venue payoff consistency.
+
+Passive bounded collection is not a family, but a *new* stream needs a purpose, budget and
+review/stop date. Existing authorized collectors continue until an explicit review.
+
+**NOW** (critical path; authorized by the 2026-09-25 entry)
+1. Keep production collecting and verified; EXP-001 Stage B days; first settlement and F09
+   (items 1–3 below are unchanged).
+2. **Economic Evidence v1:**
+   - PR A: the directive record, canonical integration, two DRAFT protocols, evidence
+     consumption, attrition and the economic screen;
+   - PR B: semantic conformance, the pure same-venue payoff evaluator and the execution-package
+     ADR (design only);
+   - PR C: paired sports evidence from stored data, a data-gap report, economics/capacity and a
+     compact Terminal view.
+3. Backup growth and retention (item 4 below): still the prerequisite before any **new**
+   production collector.
+4. W0 operating verification (coordinator lane).
+
+**NEXT** (named prerequisite)
+5. **Kalshi NFL game-market books** (old item 12). Family A's data-gap report defines the exact
+   bounded capture. Activation needs explicit EXECUTION_PLAN authority, the owner's approval and
+   item 3.
+6. **Preregistration of A and/or B.** Needs the owner's minimum useful effect and owner-hour
+   budget, a power analysis, and a frozen episode definition and untouched window.
+7. Sizing v2 evidence (old item 15), unchanged.
+
+**QUEUED (waits for a research slot; re-evaluated on economics and access, not sunk effort)**
+8. Weather forecast-revision / information-accumulation.
+9. #88: slower SEC/earnings event studies, then exact-fixing BTC/ETH, options
+   replication/bounds, slower macro/EIA.
+10. Multi-City Weather v1 collection (old item 11). The automatic twelve-city rollout is **no
+    longer the next build**. The design (#90) is kept, and a city starts only with a named purpose
+    and budget.
+11. Conditional liquidity provision.
+
+**DEFERRED** (#96): #83 investor/fund implementation; the general instrument-selection engine;
+broad AutoML/RL (#82 beyond lineage); every other sport and props; full options surfaces;
+multiple brokerage adapters; HFT-style macro response; social/news firehoses.
+
+**Superseded (dated, kept below as history):**
+- the old item 11 "Multi-City Weather v1 collection" as the next automatic build;
+- the old item 14 rule that equity bars and quotes are "never duplicated prospectively". It is now
+  proposable with a hypothesis-specific value case;
+- the idea that many simultaneous domain and model races maximize progress.
+
+## Roadmap (re-run 2026-09-24 evening; superseded in part 2026-09-25, see the re-run above: Freshness Fabric + sports mission, #86 cross-domain evidence, #88 public markets)
 
 This ordering authorizes nothing; `docs/EXECUTION_PLAN.md` does. Re-prioritizing never authorizes
 implementation. Gate 7 is unchanged and **not passed**.
@@ -254,6 +321,41 @@ Related owner records that are not ideas:
   its own branch and file claim. It does not touch Gate 3 files.
 
 ## Review log
+
+- **2026-09-25: #96 evidence-to-economics reset and the Economic Evidence v1 directive
+  (canonical integration, EE v1 PR A).**
+  - **Priority:** NOW. Two DRAFT families (A: EXP-002, B: EXP-003) beside protected EXP-001.
+    Economics, capacity, attrition and consumed evidence come before model work.
+  - **Dependencies:** the existing registry, consensus benchmark, depth/fee/settlement contracts,
+    Terminal. Family A also needs paired Kalshi NFL books (not collected). Preregistration needs
+    owner inputs (minimum useful effect, owner hours).
+  - **Overlap and supersession:**
+    - #82 is simplified to lineage, evaluation and governance;
+    - #86 is narrowed to purpose-budgeted collection;
+    - #88 stays first-class but is queued and narrower;
+    - #83 is deferred;
+    - #93 and #32 are preserved;
+    - the automatic twelve-city rollout and the unconditional equity-quote rule are superseded
+      (dated, not deleted).
+  - **Shared infrastructure:**
+    - the registry is extended with a protocol sidecar and family slots;
+    - new canonical owners: `research_evidence.py`, `research_economics.py`;
+    - `payoff_constraints.py` is planned (PR B).
+
+    No second registry, ledger or memory store.
+  - **Safe parallel lanes:**
+    - EE Writer 1 owns the shared contracts and canonical docs (PR A, PR B);
+    - EE Writer 2 owns sports pairing and the Terminal (PR C) and consumes the attrition and
+      economics contracts;
+    - the coordinator owns W0 and the final HANDOFF.
+  - **Roadmap effect:** re-run 2026-09-25 above. The 2026-10-22 checkpoint now emphasizes two
+    budgeted protocols, their evidence reports, the semantic/unit/fee proof, paired-data gaps,
+    dollar/capacity scenarios, a restore result and one disabled order-lifecycle specification.
+    It is not a scheduled alpha verdict. The date is unchanged.
+  - **Classification:** #96 NOW; #82 NOW (lineage only) and LATER (autonomy); #83 LATER; #86 NOW
+    (existing flows) and NEXT/QUEUED (new streams); #88 QUEUED; #93 NOW (inside the screen).
+  - No gate change. No paid source. No order, account, credential or timer.
+
 
 - **2026-09-24 (night): canonical reconciliation after the Freshness Fabric + sports mission,
   #86 and #88.**
