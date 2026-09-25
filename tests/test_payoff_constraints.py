@@ -532,3 +532,12 @@ def test_variables_need_ordered_finite_bounds():
     with pytest.raises(ValueError):
         Variable("v", D("NaN"), D(1))
     assert Variable("v", D(0), D(1)).high == 1
+
+
+def test_research_sports_evidence_passes_arguments_through(monkeypatch):
+    from edge_lab import cli, sports_evidence
+
+    seen = []
+    monkeypatch.setattr(sports_evidence, "main", lambda argv: seen.append(argv) or 0)
+    assert cli.main(["research", "sports-evidence", "report", "--db", "x.sqlite3", "--summary"]) == 0
+    assert seen == [["report", "--db", "x.sqlite3", "--summary"]]
