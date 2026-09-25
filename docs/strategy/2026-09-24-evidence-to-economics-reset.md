@@ -153,9 +153,15 @@ Outputs: universe/coverage census, mapping evidence, attrition waterfall, paired
 
 ### Family B: same-venue payoff consistency
 
-Start with a small allowlisted set of complements, exhaustive partitions and nested thresholds using stored Kalshi evidence where semantics are complete. Build a payout matrix: rows are contracts, columns are all admissible settlement states, cells are exact native-currency payouts. Include void/refund/corrected/disputed/fallback cases or declare the proof incomplete.
+Start with a small allowlisted set of complements, exhaustive partitions and nested thresholds using stored Kalshi evidence where semantics are complete. Build a payout matrix: rows are contracts, columns are all admissible settlement states, cells are exact native-currency payouts. Include void/refund/corrected/disputed/fallback cases or declare the proof incomplete. Void/refund cells hold only the non-refund payout; refunds are counted once, in `refund_i` below.
 
-For nonnegative long positions q, compute conditional full-fill worst-state surplus as `min_s( sum_i(q_i * payout_i(s)) - sum_i(settlement_cost_i(s, q_i)) + refund_i(s, q_i) ) - sum_i(acquisition_cost_i(q_i)) - state_independent_costs`. Costs or refunds that depend on the settlement state (settlement/transfer fees, fee reversals on void, price- and fill-dependent refunds) belong inside the per-state term before the minimum. Only state-independent costs stay outside it. Fees enter once, with rounding at the correct scope. Use actual ask ladders and depth caps; sale legs require an explicit proven short/sell/collateral model and are out of v1 scope.
+For nonnegative long positions q, compute conditional full-fill worst-state surplus as `min_s( sum_i( q_i * payout_i(s) - settlement_cost_i(s, fill_i) + refund_i(s, fill_i) ) - basket_settlement_cost(s, fill) ) - sum_i(acquisition_cost_i(fill_i)) - state_independent_costs`, where `fill_i` is the actual fill path of leg i (its quantity, ladder levels and per-level prices and fees), not only `q_i`. Costs or refunds that depend on the settlement state belong inside the per-state term before the minimum:
+- settlement/transfer fees, per leg;
+- fees charged on net winnings or per event, through `basket_settlement_cost`;
+- fee reversals on void;
+- price- and fill-dependent refunds.
+
+Only state-independent costs stay outside the minimum. A refund is counted exactly once. Void/refund cells of the payout matrix hold the non-refund payout (usually 0); the returned purchase price and any reversed fees appear only in `refund_i`. Fees enter once, with rounding at the correct scope. Use actual ask ladders and depth caps; sale legs require an explicit proven short/sell/collateral model and are out of v1 scope.
 
 Validate exact settlement identity, units, rule versions, currency, clocks and overlap of quote-validity intervals. A label match is not a proof. Unknown fees or rules prevent a claim. A raw quote imbalance, a proof, an executable-looking full-fill bound and realized profit are separate outputs.
 
