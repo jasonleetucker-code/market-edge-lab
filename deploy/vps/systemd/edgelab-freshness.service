@@ -40,8 +40,11 @@ RestrictNamespaces=yes
 LockPersonality=yes
 RestrictAddressFamilies=AF_UNIX
 IPAddressDeny=any
-# Data stays read-only in content (SQLite mode=ro plus query_only). The status directory is writable
-# for freshness.json; the two store directories only so SQLite can create the WAL side files
-# (-wal/-shm) when no writer holds them (ADR 0016). Without this every provider reads UNKNOWN
-# ("evidence store unreadable") whenever the last writer has closed (production, 2026-09-24).
-ReadWritePaths=/var/lib/market-edge-lab-status /var/lib/market-edge-lab/db /var/lib/market-edge-lab/ledger
+# The status directory is writable for freshness.json. The db directory is writable only so SQLite
+# can create the evidence DB's WAL side files (-wal/-shm) when no writer holds them (ADR 0016);
+# without it every provider reads UNKNOWN ("evidence store unreadable") once the last writer has
+# closed (production 2026-09-24). The database file and the odds quota ledger are re-pinned
+# read-only by the kernel (the more specific path wins); connections are mode=ro + query_only too.
+# The shadow ledger uses a rollback journal and needs no write access.
+ReadWritePaths=/var/lib/market-edge-lab-status /var/lib/market-edge-lab/db
+ReadOnlyPaths=-/var/lib/market-edge-lab/db/edge_lab.sqlite3 -/var/lib/market-edge-lab/db/odds_quota_ledger.json

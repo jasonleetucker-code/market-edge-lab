@@ -302,24 +302,39 @@ this.
 - The owner wants crash alerts: add a rate-limited (once a day) alert path, not `OnFailure=` on a
   5-minute unit.
 
-
 ## Amendment 2026-09-24 (night): read-only readers need the WAL side files
 
-On production the supervisor (and the dashboard) reported "evidence store unreadable
-(OperationalError)" for every store-backed source whenever no collector held the evidence DB
-open. The store runs in WAL mode. A read-only reader must create `-wal`/`-shm` when they are
-absent (ADR 0016), and the unit's sandbox forbade any write outside the status directory.
+**Observed on production.** The supervisor (and the dashboard) reported "evidence store unreadable
+(OperationalError)" for every store-backed source whenever no collector held the evidence DB open.
+- The evidence DB runs in WAL mode. SQLite opens `-wal`/`-shm` read-write and creates them if they
+  are absent, even on a `mode=ro` connection (ADR 0016).
+- On a read-only mount it falls back to a read-only open, which fails for a file that does not
+  exist.
+- While a collector held the DB, the side files existed and reads worked.
 
-**Decision.** `edgelab-freshness.service` and `edgelab-dashboard.service` may write the two store
-directories (`/var/lib/market-edge-lab/db`, `/var/lib/market-edge-lab/ledger`) so SQLite can
-create those side files.
-- Store contents stay unchanged: connections are still `mode=ro` plus `query_only`.
-- The data root and every other path stay read-only, and the supervisor still has no network.
+**Decision.**
+- `edgelab-freshness.service` and `edgelab-dashboard.service` may write
+  `/var/lib/market-edge-lab/db` (the directory only).
+- `ReadOnlyPaths=` re-pins `edge_lab.sqlite3` and `odds_quota_ledger.json` read-only at kernel level.
+  The more specific path wins.
+- The shadow ledger uses a rollback journal. A read-only reader never creates a file for it, so its
+  directory stays read-only.
+- Connections remain `mode=ro` plus `query_only`.
+
+**What these units can now do at kernel level.** Inside `db/` they can create, write and delete
+files other than the two re-pinned ones: the WAL side files, the `*.lock` files, and any leftover
+`-wal`. So a buggy or compromised dashboard could delete an uncheckpointed `-wal` left by a crashed
+collector. They cannot write or delete the database file or the quota ledger, and they cannot
+write the data root, the ledger directory or anything else.
+
+**Restore note.** A long-running dashboard keeps the bind-mounted inode of `edge_lab.sqlite3`. A
+restore that replaces the file by rename therefore needs a dashboard restart; the rollback runbook
+already restarts it. The supervisor is a oneshot and picks up the new inode on its next run.
 
 **Alternatives rejected:**
-- `immutable=1` can read a torn state while a writer commits.
-- Switching the store to rollback-journal mode would change the writers' concurrency.
-- Persistent WAL cannot be set from Python's sqlite3 module.
-
-**Tradeoff.** A bug in these units could create files in the store directories; it still could not
-alter a committed row through a `mode=ro` connection.
+- `immutable=1`: torn reads while a writer commits.
+- A rollback journal for the evidence DB: readers would block collector commits.
+- Persistent WAL: not settable from Python's sqlite3 module.
+- `nolock=1`: WAL still needs the shm and locks, and it is unsafe.
+- Per-file `ReadWritePaths` for `-wal`/`-shm`: systemd requires the path to exist at unit start, and
+  SQLite deletes and recreates these files.

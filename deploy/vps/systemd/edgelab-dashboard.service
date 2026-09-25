@@ -25,12 +25,15 @@ CPUQuota=10%
 TasksMax=8
 Nice=10
 # Read-only data: ProtectSystem=strict, and the stores are opened with SQLite mode=ro plus
-# query_only, so their contents never change. The two store directories are writable only so that
-# SQLite can create the WAL side files (-wal/-shm) when no writer holds them open (ADR 0016: a
-# reader creates them if absent). Without this, every read fails "unable to open database file"
-# whenever the last collector connection has closed (seen on production 2026-09-24).
+# query_only. The evidence DB runs in WAL mode, and a reader must create -wal/-shm when no writer
+# holds them (ADR 0016); without that, every read fails "unable to open database file" once the last
+# collector connection has closed (production 2026-09-24). So the db directory is writable, but the
+# database file and the odds quota ledger inside it are re-pinned read-only by the kernel (the more
+# specific path wins). The shadow ledger uses a rollback journal and needs no write access.
+# A restore that replaces edge_lab.sqlite3 by rename needs a dashboard restart (bind-mounted inode).
 # Loopback traffic only, enforced by the kernel.
-ReadWritePaths=/var/lib/market-edge-lab/db /var/lib/market-edge-lab/ledger
+ReadWritePaths=/var/lib/market-edge-lab/db
+ReadOnlyPaths=-/var/lib/market-edge-lab/db/edge_lab.sqlite3 -/var/lib/market-edge-lab/db/odds_quota_ledger.json
 NoNewPrivileges=yes
 PrivateTmp=yes
 PrivateDevices=yes
