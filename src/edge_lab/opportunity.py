@@ -169,6 +169,9 @@ class Market:
     rules_detail: str
     timing: MarketTiming | None = None  # never part of the opportunity id; used by eligibility policies
     price_grid: PriceGrid | None = None  # venue-published tick grid; None = not published (never assumed)
+    # Semantic conformance metadata (EE v1). Never part of the opportunity id. None = a legacy
+    # market: read it through `semantics_for`, which reports every field UNKNOWN, never guessed.
+    semantics: ContractSemantics | None = None
 
 
 @dataclass(frozen=True)
@@ -687,3 +690,208 @@ def reason_counts(opportunities: Iterable[Opportunity]) -> dict[str, int]:
     for o in opportunities:
         counts[o.rejection_reason] = counts.get(o.rejection_reason, 0) + 1
     return dict(sorted(counts.items()))
+
+
+
+# --------------------------------------------------------------------------- semantic conformance (EE v1)
+#
+# The minimum metadata two contracts need before any economic comparison between them is
+# meaningful (#96, handoff section 6). It is additive: legacy `Market`s carry no semantics and
+# `semantics_for` reads them as UNKNOWN, so every frozen EXP-001 id and output is unchanged, and
+# nothing downstream may treat an unknown unit, rule, fee, clock or right as a known one.
+
+SEMANTICS_VERSION = "contract-semantics-v1"
+
+
+class ProbabilityMeaning(str, Enum):
+    """What a probability-like number means. These are never interchangeable."""
+
+    PHYSICAL_ESTIMATE = "PHYSICAL_ESTIMATE"  # a model's estimate of the real-world frequency
+    SPORTSBOOK_CONSENSUS = "SPORTSBOOK_CONSENSUS"  # de-vigged book prices (conditional on book rules)
+    MARKET_IMPLIED_PRICE = "MARKET_IMPLIED_PRICE"  # an executable price read as a probability
+    RISK_NEUTRAL_OPTION_QUANTITY = "RISK_NEUTRAL_OPTION_QUANTITY"  # not a physical probability
+    DETERMINISTIC_PAYOFF_BOUND = "DETERMINISTIC_PAYOFF_BOUND"  # a replication/payoff bound, no probability
+    UNKNOWN = "UNKNOWN"
+
+
+class RelationTier(str, Enum):
+    """The economic relation between contracts, independent of probability meaning."""
+
+    EQUIVALENT = "EQUIVALENT"  # identical payoff in every admissible state (proven)
+    CONDITIONAL_EQUIVALENT = "CONDITIONAL_EQUIVALENT"  # identical only on stated states (e.g. no tie, played)
+    COMPLEMENT = "COMPLEMENT"
+    PARTITION_MEMBER = "PARTITION_MEMBER"
+    NESTED_THRESHOLD = "NESTED_THRESHOLD"
+    RELATED_NOT_EQUIVALENT = "RELATED_NOT_EQUIVALENT"
+    UNRELATED = "UNRELATED"
+    UNKNOWN = "UNKNOWN"
+
+
+class OutcomeFinality(str, Enum):
+    PENDING = "PENDING"
+    PRELIMINARY = "PRELIMINARY"
+    CORRECTED = "CORRECTED"
+    FINAL = "FINAL"
+    UNKNOWN = "UNKNOWN"
+
+
+class ClockKind(str, Enum):
+    EVENT = "EVENT"  # when the real-world thing happened
+    SOURCE_UPDATE = "SOURCE_UPDATE"  # the source's own update time
+    FIRST_OBSERVED = "FIRST_OBSERVED"  # when we first saw this content
+    RECEIPT = "RECEIPT"  # fetched_at_utc of this copy
+    INGESTION = "INGESTION"  # stored
+    PROCESSING = "PROCESSING"  # derived
+
+
+class FeeRoundingScope(str, Enum):
+    PER_FILL = "PER_FILL"  # each fill (each ladder level taken) is rounded on its own
+    PER_ORDER = "PER_ORDER"
+    PER_SETTLEMENT = "PER_SETTLEMENT"
+    UNKNOWN = "UNKNOWN"
+
+
+@dataclass(frozen=True)
+class UnitSemantics:
+    """Native units exactly as the venue documents them. None = UNKNOWN (never assumed)."""
+
+    quantity_step: Decimal | None  # smallest native quantity (Kalshi fixed point: 0.01)
+    price_convention: str | None  # e.g. "USD_PER_CONTRACT", "DECIMAL_PROBABILITY_PER_CENT_CONTRACT"
+    payout_per_unit: Decimal | None  # what one winning native unit pays, in `currency`
+    currency: str | None
+    multiplier: Decimal | None
+    normalization_version: str
+    evidence: str = ""
+    verification: str = "UNVERIFIED"  # VERIFIED_FROM_DOCS (dated fixture) | UNVERIFIED
+
+    @property
+    def known(self) -> bool:
+        return None not in (self.quantity_step, self.price_convention, self.payout_per_unit, self.currency,
+                            self.multiplier)
+
+    def incompatibility(self, other: "UnitSemantics") -> str | None:
+        """Why a quantity of `self` cannot be added to a quantity of `other` without an explicit
+        conversion, or None when they are the same native unit."""
+        if not (self.known and other.known):
+            return "native units UNKNOWN"
+        for name in ("price_convention", "payout_per_unit", "currency", "multiplier"):
+            if getattr(self, name) != getattr(other, name):
+                return f"native {name} differs: {getattr(self, name)} vs {getattr(other, name)}"
+        return None
+
+
+def payout_value(quantity: Decimal, units: UnitSemantics) -> Decimal:
+    """The currency value of `quantity` winning native units: the only unit conversion allowed.
+
+    Refuses unknown units and quantities off the native step (a fractional count is never
+    truncated, and a one-cent contract is never counted as a $1 contract)."""
+    if not units.known:
+        raise ValueError("native units are UNKNOWN: no conversion is possible")
+    if not isinstance(quantity, Decimal) or not quantity.is_finite() or quantity < 0:
+        raise ValueError("quantity must be a non-negative finite Decimal")
+    if quantity % units.quantity_step != 0:
+        raise ValueError(f"quantity {quantity} is off the native step {units.quantity_step}")
+    return quantity * units.payout_per_unit * units.multiplier
+
+
+# Dated venue facts (tests/fixtures/conformance/venue_facts_2026-09-25.json holds the source
+# quotes and URLs). Verified from documentation only; no endpoint was called.
+KALSHI_BINARY_UNITS = UnitSemantics(
+    quantity_step=Decimal("0.01"), price_convention="USD_PER_CONTRACT", payout_per_unit=Decimal("1"),
+    currency="USD", multiplier=Decimal("1"), normalization_version="kalshi-fixed-point-v1",
+    evidence="docs.kalshi.com/getting_started/fixed_point_migration (last updated 2026-08-20): minimum "
+             "granularity 0.01 contracts; fractional values appear in fills",
+    verification="VERIFIED_FROM_DOCS")
+NOVIG_V3_UNITS = UnitSemantics(
+    quantity_step=Decimal("1"), price_convention="DECIMAL_PROBABILITY_PER_CENT_CONTRACT",
+    payout_per_unit=Decimal("0.01"), currency="USD", multiplier=Decimal("1"),
+    normalization_version="novig-v3-cent-contract-v1",
+    evidence="docs.novig.com api-reference execution/place-an-order and public/get-the-order-book (API 3.0.0): "
+             "a winning contract pays 1 cent; integer contract counts",
+    verification="VERIFIED_FROM_DOCS")
+
+
+@dataclass(frozen=True)
+class RulesIdentity:
+    rules_sha256: str | None
+    settlement_identity: str | None  # source, station/instrument, window: what settles it
+    evidence_hash: str | None  # the captured rules document or payload
+    captured_at_utc: str | None
+
+
+@dataclass(frozen=True)
+class FeeSemantics:
+    schedule_id: str | None
+    effective_from_utc: str | None
+    rounding_scope: FeeRoundingScope
+    claim_basis: str  # fee_schedules.ClaimBasis value at the evaluation time; NONE when unknown
+
+
+@dataclass(frozen=True)
+class ClockStamp:
+    kind: ClockKind
+    value_utc: str | None
+    precision_seconds: Decimal | None  # None = UNKNOWN
+    uncertainty_seconds: Decimal | None  # None = UNKNOWN
+    origin: str  # which field or process produced it
+
+
+@dataclass(frozen=True)
+class DataRights:
+    """Use restrictions a dataset carries. A derived dataset inherits the union of its inputs'."""
+
+    restrictions: frozenset[str]
+    sources: tuple[str, ...]
+    version: str = "data-rights-v1"
+
+    @staticmethod
+    def inherit(*inputs: "DataRights | None") -> "DataRights":
+        """The most restrictive combination. An input with unknown rights adds UNKNOWN_RIGHTS:
+        it never makes the output less restricted."""
+        restrictions: set[str] = set()
+        sources: list[str] = []
+        for rights in inputs:
+            if rights is None:
+                restrictions.add("UNKNOWN_RIGHTS")
+                continue
+            restrictions |= set(rights.restrictions)
+            sources += [s for s in rights.sources if s not in sources]
+        return DataRights(frozenset(restrictions), tuple(sources))
+
+
+@dataclass(frozen=True)
+class ContractSemantics:
+    units: UnitSemantics
+    rules: RulesIdentity
+    fees: FeeSemantics | None
+    probability_meaning: ProbabilityMeaning
+    relation_tier: RelationTier
+    source_family: str | None  # None = UNKNOWN (independence is never assumed)
+    clocks: tuple[ClockStamp, ...]
+    finality: OutcomeFinality
+    rights: DataRights | None
+    version: str = SEMANTICS_VERSION
+    legacy: bool = False
+
+
+LEGACY_UNITS = UnitSemantics(None, None, None, None, None, normalization_version="legacy-unknown")
+
+
+def semantics_for(market: Market) -> ContractSemantics:
+    """The compatibility reader. A market built before EE v1 has no semantics: every field is
+    UNKNOWN except what the legacy contract already states (its rules hash). Its `Payoff.amount`
+    is the frozen engine's binary assumption, not documented native units, so it is not copied."""
+    if market.semantics is not None:
+        return market.semantics
+    return ContractSemantics(
+        units=LEGACY_UNITS,
+        rules=RulesIdentity(market.rules_sha256, None, None, None),
+        fees=None,
+        probability_meaning=ProbabilityMeaning.UNKNOWN,
+        relation_tier=RelationTier.UNKNOWN,
+        source_family=None,
+        clocks=(),
+        finality=OutcomeFinality.UNKNOWN,
+        rights=None,
+        legacy=True,
+    )

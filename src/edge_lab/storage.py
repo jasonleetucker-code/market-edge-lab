@@ -6,7 +6,7 @@ import sqlite3
 from contextlib import closing
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Iterable, Sequence
 
 from .http import FetchResult
 from .provenance import bytes_sha256, canonical_json, sha256_hex, shape_fingerprint
@@ -1376,6 +1376,48 @@ class SnapshotStore:
                 """,
                 (source, kind),
             ).fetchall()
+
+    SNAPSHOT_METADATA_COLUMNS = ("id", "source", "kind", "entity_id", "fetched_at_utc", "source_timestamp_utc", "url",
+                                 "payload_sha256")
+    ROW_ID_TABLES = frozenset({"snapshots", "odds_capture_transitions", "pm_sports_observations", "price_observations",
+                               "forward_captures"})
+
+    def snapshot_metadata(self, *, source: str, kinds: Sequence[str], entity_prefix: str | None = None,
+                          limit: int, after_id: int | None = None) -> list[sqlite3.Row]:
+        """Metadata only (no payload) for snapshots of `source` whose kind is in `kinds`, optionally
+        only entities starting with `entity_prefix`, oldest first, at most `limit` rows after
+        `after_id` (keyset paging). Additive (EE v1): a public, bounded read so research readers
+        never need the private connection. Callers apply their own as-of cut on
+        `fetched_at_utc`, and load payloads with `snapshots_by_id` only for the rows they select."""
+        if not isinstance(limit, int) or isinstance(limit, bool) or limit < 1:
+            raise ValueError("limit must be a positive int")
+        kinds = [str(k) for k in kinds]
+        if not kinds:
+            raise ValueError("kinds must not be empty")
+        clauses = ["source = ?", f"kind IN ({','.join('?' * len(kinds))})"]
+        params: list[Any] = [source, *kinds]
+        if entity_prefix is not None:
+            # A prefix match without LIKE wildcards: '%' and '_' in the prefix are literal.
+            clauses.append("substr(entity_id, 1, ?) = ?")
+            params += [len(entity_prefix), entity_prefix]
+        if after_id is not None:
+            clauses.append("id > ?")
+            params.append(int(after_id))
+        with closing(self._connect()) as conn, conn:
+            return conn.execute(
+                f"SELECT {', '.join(self.SNAPSHOT_METADATA_COLUMNS)} FROM snapshots "
+                f"WHERE {' AND '.join(clauses)} ORDER BY id LIMIT ?",
+                (*params, limit),
+            ).fetchall()
+
+    def max_row_id(self, table: str) -> int | None:
+        """The largest row id of an allowlisted evidence table (None when it is empty): a cheap
+        change marker for caches. Additive (EE v1)."""
+        if table not in self.ROW_ID_TABLES:
+            raise ValueError(f"table {table!r} is not in the allowlist")
+        with closing(self._connect()) as conn, conn:
+            row = conn.execute(f"SELECT MAX(id) FROM {table}").fetchone()
+        return None if row is None or row[0] is None else int(row[0])
 
     def snapshots_of_kind_newest(
         self, *, source: str, kind: str, entity_id: str | None = None, limit: int, before_id: int | None = None
