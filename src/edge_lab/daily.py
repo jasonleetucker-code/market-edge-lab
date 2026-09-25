@@ -458,7 +458,7 @@ def _run_locked(db: Path, ledger_path: Path, now: datetime, receipt: dict[str, A
         # after every fill recorded above (all at or before `now`), so it can never fund an
         # earlier fill; without this a run could never settle on what it fetched (2026-09-25).
         through = parse_utc((receipt["settlement"]["refresh"] or {}).get("evidence_received_through_utc"))
-        bound = now + timedelta(seconds=deadline_s) + REFRESH_RECEIPT_SLACK
+        bound = now + timedelta(seconds=deadline_s) + REFRESH_RECEIPT_SLACK if through is not None else None
         if through is not None and through > bound:
             # A receipt later than the refresh could have finished (a clock step, or a run whose
             # `now` is behind the wall clock) would book settlements "known" in the future and
