@@ -104,6 +104,7 @@ not captured arbitrage. No fills exist in this experiment.
       (INSUFFICIENT_DEPTH, 0 offered), so no size could be evaluated.
     - "Not evaluated: fractional level" means the depth walk crossed a fractional-size Kalshi
       level, and no fee rule for fractional fills is modelled.
-  - **Reading.** In every complete round the top-of-book asks cost 1.06 to 1.09 per $1 basket
-    before fees, so there is no surplus even before fees or the fallback state. This is a valid
+  - **Reading.** In the 6 rounds with an ask on every bracket, the top-of-book asks cost 1.06 to
+    1.09 per $1 basket before fees, so there is no surplus even before fees or the fallback state.
+    The other 2 VALID rounds (26SEP24 at 04:50 and 04:59Z) had no B66.5 ask and were not evaluated. This is a valid
     no-surplus result over 2 event days and 8 rounds. It is not a verdict on the family.

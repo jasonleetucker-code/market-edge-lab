@@ -100,10 +100,15 @@ def test_missing_document_fails_receipt(tmp_path):
     assert "HANDOFF.md" in report["missing_documents"]
 
 
+def _is_git_lock(rel):
+    return rel.parts[0] == ".git" and rel.name.endswith(".lock")
+
+
 def test_context_does_not_write_files_or_fetch(tmp_path, monkeypatch):
     root = make_repo(tmp_path)
-    # .git/ is excluded: git background maintenance may create lock files there at any time.
-    before = sorted(str(p.relative_to(root)) for p in root.rglob("*") if p.relative_to(root).parts[0] != ".git")
+    # Git lock files under .git/ are excluded: background maintenance may create them at any time.
+    # Everything else under .git/ (new refs, FETCH_HEAD, objects) is still compared.
+    before = sorted(str(p.relative_to(root)) for p in root.rglob("*") if not _is_git_lock(p.relative_to(root)))
     original = subprocess.run
     calls = []
     def run(argv, **kwargs):
@@ -112,7 +117,7 @@ def test_context_does_not_write_files_or_fetch(tmp_path, monkeypatch):
         return original(argv, **kwargs)
     monkeypatch.setattr(context.subprocess, "run", run)
     context.build_context(root)
-    after = sorted(str(p.relative_to(root)) for p in root.rglob("*") if p.relative_to(root).parts[0] != ".git")
+    after = sorted(str(p.relative_to(root)) for p in root.rglob("*") if not _is_git_lock(p.relative_to(root)))
     assert before == after
     assert calls
 
