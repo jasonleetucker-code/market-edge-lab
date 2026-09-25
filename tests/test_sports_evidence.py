@@ -31,6 +31,12 @@ LISTED_AT = datetime(2026, 9, 25, 2, 24, 44, tzinfo=UTC)
 
 
 @pytest.fixture(autouse=True)
+def fixture_clock(monkeypatch):
+    """The SYNTHETIC stores live in late September 2026; the CLI clamps --as-of to its clock."""
+    monkeypatch.setattr(se, "_clock", lambda: datetime(2026, 10, 10, tzinfo=timezone.utc))
+
+
+@pytest.fixture(autouse=True)
 def no_network(monkeypatch):
     def refuse(*args, **kwargs):
         raise AssertionError("sports_evidence attempted a network connection")
@@ -39,8 +45,10 @@ def no_network(monkeypatch):
     monkeypatch.setattr(socket.socket, "connect", refuse)
 
 
-def report(path: Path, as_of: datetime, **policy) -> dict:
-    return se.build_report(SnapshotStore.open_readonly(path), as_of=as_of, policy=se.JoinPolicy(**policy))
+def report(path: Path, as_of: datetime, results: bool = True, **policy) -> dict:
+    """Research assertions below look at outcome labels, so they opt in (a real run must be logged)."""
+    return se.build_report(SnapshotStore.open_readonly(path), as_of=as_of, policy=se.JoinPolicy(**policy),
+                           results=results)
 
 
 def rows_by(rep: dict) -> dict[tuple[str, str], dict]:
@@ -277,7 +285,7 @@ def test_production_like_store_without_kalshi_evidence_reports_gaps_not_a_datase
     assert any(r.startswith("NO_PAIRED_EVIDENCE") for r in econ["edge_at_size"]["reasons"])
     assert {i["basis"] for i in econ["inputs"]} <= {"OBSERVED", "ESTIMATED", "OWNER_INPUT", "UNKNOWN"}
     view = se.view_from_report(rep, now)
-    assert view["state"] == "PARTIAL" and view["next_action"].startswith("Owner decision")
+    assert view["state"] == "UNPAIRED" and view["next_action"].startswith("Owner decision")
     assert "no new timer is authorized" in view["next_action"]
 
 
@@ -485,6 +493,7 @@ def test_cli_report_summary_and_no_store(tmp_path):
         assert se.main(["report", "--db", str(path), "--as-of", iso_z(now), "--summary"]) == 0
     out = json.loads(buf.getvalue())
     assert out["schema"] == se.SCHEMA and "rows" not in out and out["join"]["paired_targets"] == 9
+    assert out["outcome_labels"].startswith("HIDDEN") and out["join"]["outcomes"].startswith("HIDDEN")
     target = tmp_path / "out" / "report.json"
     buf = io.StringIO()
     with redirect_stdout(buf):
@@ -522,7 +531,7 @@ def test_protocol_attrition_uses_the_shared_contract_with_none_for_unregistered_
     att = report(path, now)["attrition"]
     den = att["denominators"]
     assert den["events"] == 4 and den["scheduled_horizons"] == 12 and den["opportunities"] == 24
-    assert den["markets"] == 6 and den["snapshots"] is None  # SNAPSHOT not enumerated: unknown, never 0
+    assert den["markets"] == 8 and den["snapshots"] is None  # SNAPSHOT not enumerated: unknown, never 0
     assert den["signals"] is None and den["simulated_fills"] is None  # no registered rule: None, never 0
     # EXP-002 excludes the conditional mapping (tie pays $0.50): nothing is eligible yet
     assert den["eligible_opportunities"] == 0 and den["final_evaluable_outcomes"] == 0
@@ -547,8 +556,10 @@ def test_economics_come_from_the_shared_screen(populated):
     path, now = populated
     econ = report(path, now)["economics"]
     assert econ["contract"]["state"] == "WIRED" and econ["state"] == "INSUFFICIENT_EVIDENCE"
-    assert econ["episodes"]["observations"] == 18 and econ["episodes"]["episodes"] == 0
-    assert econ["episodes"]["problems"]  # the episode definition is UNKNOWN in EXP-002
+    # the episode definition is UNKNOWN in EXP-002: episodes are NOT EVALUABLE (None), never "0 episodes"
+    assert econ["episodes"]["observations"] == 18 and econ["episodes"]["episodes"] is None
+    assert econ["episodes"]["qualifying"] is None and econ["episodes"]["problems"]
+    assert screen_minimums_unknown(econ["screen"])
     screen = econ["screen"]
     assert screen["verdict"] == "INSUFFICIENT_EVIDENCE" and screen["experiment_id"] == "EXP-002"
     assert any("no capital scenario was supplied" in r for r in screen["verdict_reasons"])
@@ -557,12 +568,140 @@ def test_economics_come_from_the_shared_screen(populated):
     assert econ["edge_at_size"]["state"] == "NOT_DEFENSIBLE"
 
 
-def test_results_are_withheld_unless_asked(populated):
+def screen_minimums_unknown(screen: dict) -> bool:
+    """The screen's minimums come from EXP-002 ([economics], MISSING_POWER_ANALYSIS today), never from here."""
+    inputs = screen["inputs"]
+    return all(inputs[k]["value"] is None and inputs[k]["basis"] == "UNKNOWN" and "EXP-002" in inputs[k]["note"]
+               for k in ("min_episodes_for_scenario", "min_independent_clusters"))
+
+
+def test_outcome_labels_are_hidden_by_default_everywhere(populated):
     path, now = populated
-    kept = rows_by(se.build_report(SnapshotStore.open_readonly(path), as_of=now, results=False))
-    out = kept[("fxsyn001", "T-6h")]["outcome"]["Green Bay Packers"]
-    assert out["state"] == "OUTCOME_FINAL" and out["result"] == "WITHHELD"
-    assert "not_recorded" in se.build_report(SnapshotStore.open_readonly(path), as_of=now)["evidence_use"].lower()
+    rep = se.build_report(SnapshotStore.open_readonly(path), as_of=now)
+    assert rep["outcome_labels"].startswith("HIDDEN")
+    assert all(r.get("outcome") in (None, se.OUTCOMES_HIDDEN) for r in rep["rows"])
+    assert rep["join"]["outcomes"] == se.OUTCOMES_HIDDEN and rep["join"]["final_evaluable_targets"] is None
+    att = rep["attrition"]
+    assert "OUTCOME" in att["not_applicable_stages"] and att["denominators"]["final_evaluable_outcomes"] is None
+    opp = next(w for w in att["waterfalls"] if w["level"] == "OPPORTUNITY")
+    counts = {r["exclusion"]: r["primary_count"] for r in opp["rows"]}
+    assert counts["OUTCOME_PENDING"] is None and counts["OUTCOME_VOID"] is None
+    text = json.dumps(rep)
+    for label in ("OUTCOME_FINAL", "OUTCOME_PENDING\": 1", "\"result\": \"YES\"", "\"result\": \"NO\""):
+        assert label not in text
+    view = se.terminal_view(path, now=now)["family_a"]
+    assert "outcomes" not in view and "final_evaluable_targets" not in view
+    assert view["outcome_labels"].startswith("HIDDEN") and "OUTCOME_FINAL" not in json.dumps(view)
+
+
+def _log(tmp_path) -> Path:
+    from edge_lab import research_evidence as rev
+    return rev.init_log(tmp_path / "evidence_use.jsonl", experiment_id="EXP-002", started_at_utc="2026-09-25T00:00:00Z",
+                        covered_scopes=["sports:nfl:moneyline"])
+
+
+def test_with_results_refuses_without_a_log_and_records_before_printing(tmp_path, populated):
+    from edge_lab import research_evidence as rev
+    path, now = populated
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        assert se.main(["report", "--db", str(path), "--as-of", iso_z(now), "--with-results"]) == 2
+    out = json.loads(buf.getvalue())
+    assert out["state"] == "REFUSED" and "OUTCOME_FINAL" not in buf.getvalue()
+    log = _log(tmp_path)
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        assert se.main(["report", "--db", str(path), "--as-of", iso_z(now), "--with-results", "--summary",
+                        "--evidence-log", str(log), "--actor", "test", "--code-version", "abc123"]) == 0
+    out = json.loads(buf.getvalue())
+    assert out["evidence_use"] == "APPENDED" and out["join"]["outcomes"]["OUTCOME_FINAL"] == 3
+    uses = rev.read_log(log).uses
+    assert len(uses) == 1 and uses[0].action is rev.Action.LABEL_RESULT_INSPECTION
+    assert uses[0].viewed_labels is True and uses[0].window.scope == "sports:nfl:moneyline"
+    assert uses[0].dataset_sha256 == out["output_sha256"]
+    # a log that belongs to another experiment refuses, and nothing is shown
+    other = rev.init_log(tmp_path / "other.jsonl", experiment_id="EXP-003", started_at_utc="2026-09-25T00:00:00Z")
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        assert se.main(["report", "--db", str(path), "--as-of", iso_z(now), "--with-results", "--evidence-log",
+                        str(other), "--actor", "test", "--code-version", "abc123"]) == 2
+    assert json.loads(buf.getvalue())["state"] == "REFUSED" and "OUTCOME_FINAL" not in buf.getvalue()
+
+
+def test_as_of_in_the_future_is_clamped_to_now(tmp_path, capsys):
+    path, _ = sf.fixture_store(tmp_path)  # the clock is 2026-10-10 here
+    assert se.main(["report", "--db", str(path), "--as-of", "2099-01-01T00:00:00Z", "--summary"]) == 0
+    captured = capsys.readouterr()
+    assert "clamped" in captured.err and not json.loads(captured.out)["as_of_utc"].startswith("2099")
+
+
+def test_market_denominator_counts_every_listed_market(issues):
+    path, now = issues
+    att = report(path, now, results=False)["attrition"]
+    markets = next(w for w in att["waterfalls"] if w["level"] == "MARKET")
+    assert att["denominators"]["markets"] == 8  # 4 listed games x 2 markets, not only the 6 evaluated sides
+    rows = {r["exclusion"]: r["primary_count"] for r in markets["rows"]}
+    assert rows["PENDING_TARGET"] == 2 and rows["RULES_UNRESOLVED"] == 6  # next week's game; conditional mapping
+
+
+def test_a_listing_received_after_the_decision_time_is_never_used(tmp_path):
+    """The listing arrives after the odds capture and the book (as price_observations would store it late):
+    a cutoff-based mapping would use it; the decision-time rule does not."""
+    path, now = sf.fixture_store(tmp_path, kalshi=False)
+    store = SnapshotStore(path)
+    store.start_run("SYNTHETIC-late")
+    g = sf.GAMES[1]
+    rows = {(r["event_id"], r["offset_label"]): dict(r) for r in store.odds_targets(sport=se.SPORT)}
+    six = rows[("fxsyn002", "T-6h")]
+    odds_at = datetime.fromisoformat(six["captured_at_utc"].replace("Z", "+00:00"))
+    for team in (g.home, g.away):
+        ticker = f"{sf.event_ticker(g)}-{se.NFL_TEAMS[team][0]}"
+        store.save_snapshot(run_id="SYNTHETIC-late", source="kalshi", kind="orderbook", entity_id=ticker,
+                            url=f"{sf.KALSHI_API}/markets/{ticker}/orderbook?depth=100", payload=sf._book(Decimal("0.5")),
+                            fetched_at_utc=iso_z(odds_at + timedelta(seconds=60)), source_id="kalshi_public")
+    store.save_snapshot(run_id="SYNTHETIC-late", source="kalshi", kind="markets", entity_id=sf.event_ticker(g),
+                        url=f"{sf.KALSHI_API}/markets?event_ticker={sf.event_ticker(g)}",
+                        payload={"markets": [sf._market(g, g.home), sf._market(g, g.away)], "cursor": ""},
+                        fetched_at_utc=iso_z(odds_at + timedelta(seconds=120)), source_id="kalshi_public")
+    row = rows_by(report(path, now))[("fxsyn002", "T-6h")]
+    assert row["kalshi"]["state"] == "MAPPED"  # the candidate mapping (listings known by the cutoff)
+    side = row["sides"]["Miami Dolphins"]
+    assert side["stage"] == "KALSHI_NOT_MAPPED" and "NOT_MAPPED_AT_DECISION" in side["reasons"][0]
+    assert row["status"] == "EXCLUDED" and "rules" not in side
+
+
+def test_partial_pair_keeps_the_failing_sides_stage(tmp_path):
+    import sqlite3
+    path, now = sf.fixture_store(tmp_path)
+    row = rows_by(report(path, now))[("fxsyn002", "T-60m")]
+    book = row["sides"]["Kansas City Chiefs"]["book_snapshot_id"]
+    with sqlite3.connect(path) as conn:  # the stored payload no longer matches its hash
+        conn.execute("DROP TRIGGER IF EXISTS snapshots_no_update")
+        conn.execute("UPDATE snapshots SET payload_json = ? WHERE id = ?", ('{"orderbook_fp": {}}', book))
+    row = rows_by(report(path, now))[("fxsyn002", "T-60m")]
+    assert row["status"] == "PARTIAL_PAIR" and row["all_stages"] == ["KALSHI_BOOK_UNUSABLE"]
+
+
+def test_fee_status_comes_from_the_schedule_not_from_text(monkeypatch, populated):
+    path, now = populated
+    side = rows_by(report(path, now))[("fxsyn002", "T-60m")]["sides"]["Miami Dolphins"]
+    assert {r["fee_status"] for r in side["capacity"]} == {"FEE_UNSUPPORTED"}
+    from edge_lab import fee_schedules
+    monkeypatch.setattr(se, "fee_schedule", lambda: fee_schedules.KALSHI_QUADRATIC_TAKER_V1)
+    priced = rows_by(report(path, now))[("fxsyn002", "T-60m")]["sides"]["Miami Dolphins"]["capacity"]
+    assert priced[0]["fee_status"] == "PRICED" and priced[0]["all_in_cost_per_unit"] is not None
+
+
+def test_terminal_cache_ignores_writes_by_other_collectors(tmp_path):
+    path, now = sf.fixture_store(tmp_path)
+    se._VIEW_CACHE.clear()
+    se.terminal_view(path, now=now)
+    store = SnapshotStore(path)
+    store.start_run("SYNTHETIC-weather")
+    store.save_snapshot(run_id="SYNTHETIC-weather", source="kalshi", kind="orderbook", entity_id="KXHIGHNY-26SEP27-B70.5",
+                        url="u", payload={"orderbook_fp": {}}, fetched_at_utc=iso_z(now))
+    se.terminal_view(path, now=now)
+    assert len(se._VIEW_CACHE) == 1  # a KXHIGHNY book does not rebuild the NFL report
 
 
 def test_module_makes_no_network_import_at_runtime():

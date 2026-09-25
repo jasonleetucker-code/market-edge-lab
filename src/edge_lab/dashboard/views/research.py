@@ -1041,6 +1041,8 @@ EV_STATE_TEXT = {
                                        "Missing evidence; nothing is filled from a later book."),
     "STALE": ("Evidence is stale", "No new evidence has arrived for longer than an NFL week while horizons fell due. "
                                    "Nothing here is current."),
+    "UNPAIRED": ("No paired evidence yet", "Horizons fell due, but none has both a usable consensus and a Kalshi "
+                                           "book. What is missing is listed under Missing evidence."),
     "EMPTY": ("No NFL capture targets yet", "The Odds API pilot has planned no due horizon, so there is nothing to "
                                             "pair yet."),
     "UNSUPPORTED": ("Kalshi payoff unsupported", "The mapped Kalshi markets are not $1 binary contracts, so no "
@@ -1063,8 +1065,8 @@ def _ev_capacity(cap: Any) -> str:
     latest = _ev(cap, "latest")
     modes = [f"{_ev(a, 'id')} ({_ev(a, 'basis')}): {_ev(a, 'text')}"
              for a in (_ev(cap, "fill_modes") or []) if isinstance(a, dict)]
-    head = (f'<p class="meta">{esc(_ev_count(cap, "sides_with_book") or "0")} paired side(s) with a book · '
-            f'{esc(_ev_count(cap, "truncated") or "0")} truncated capture(s)</p>')
+    head = (f'<p class="meta">{esc(_ev_count(cap, "sides_with_book") or "—")} paired side(s) with a book · '
+            f'{esc(_ev_count(cap, "truncated") or "—")} truncated capture(s)</p>')
     if not isinstance(latest, dict):
         body = c.empty_state("Capacity not measured", "No paired Kalshi book exists, so no size ladder can be walked. "
                                                       "Visible depth would still not be capacity.")
@@ -1109,7 +1111,8 @@ def _ev_protocol_attrition(pa: Any) -> str:
     table = "" if not isinstance(opp, dict) else c.table(
         ["exclusion", "stage", "primary", "remaining"],
         [[esc(str(r.get("exclusion")).replace("_", " ").capitalize()), esc(str(r.get("stage")).capitalize()),
-          c.num(pr.count(r.get("primary_count")), reason="not applicable: no registered rule"),
+          c.num(pr.count(r.get("primary_count")), reason="not applicable (no registered rule) or withheld (outcome "
+                                                          "labels): unknown, not zero"),
           c.num(pr.count(r.get("remaining_after")))] for r in opp.get("rows") or [] if isinstance(r, dict)],
         wrap=(0,), right=(2, 3), caption="Opportunity waterfall (research_evidence.attrition_report)")
     return facts + table + c.ul([str(n) for n in (_ev(pa, "notes") or [])], empty="")
@@ -1118,8 +1121,9 @@ def _ev_protocol_attrition(pa: Any) -> str:
 def _ev_screen(screen: Any) -> str:
     eps = _ev(screen, "episodes") if isinstance(_ev(screen, "episodes"), dict) else {}
     return (c.facts([("Verdict", _pm_badge("EV_SCREEN", _ev(screen, "verdict"))),
-                     ("Observations", c.num(pr.count(eps.get("observations")), reason="none")),
-                     ("Episodes", c.num(pr.count(eps.get("episodes")), reason="none")),
+                     ("Observations", c.num(pr.count(eps.get("observations")), reason="not recorded")),
+                     ("Episodes", c.num(pr.count(eps.get("episodes")),
+                                        reason="not evaluable: no frozen episode definition")),
                      ("Report sha256", c.code(_ev(screen, "report_sha256")))], wide=True, text_cols=(0, 3))
             + c.ul([str(r) for r in (_ev(screen, "reasons") or [])], empty="no reason recorded")
             + f'<p class="note">{esc(_ev(screen, "not_an_edge_claim") or "A screen verdict is a research state, not an edge.")}'
@@ -1130,7 +1134,6 @@ def _ev_family_a(v: dict, now: Any) -> str:
     state = str(v.get("state") or "UNKNOWN")
     word = pr.prefixed_word("EV_STATE", state)
     den = v.get("denominators") if isinstance(v.get("denominators"), dict) else {}
-    outcomes = v.get("outcomes") if isinstance(v.get("outcomes"), dict) else {}
     rel = v.get("relation") if isinstance(v.get("relation"), dict) else {}
     tier = rel.get("tier") or "NONE"
     protocol = v.get("protocol") if isinstance(v.get("protocol"), dict) else {}
@@ -1158,16 +1161,16 @@ def _ev_family_a(v: dict, now: Any) -> str:
          + _sub(f"{_ev_count(den, 'events_due') or '—'} games · {_ev_count(den, 'weeks_due') or '—'} NFL weeks · "
                 f"{_ev_count(den, 'targets_not_yet_due') or '—'} not yet due · "
                 f"{_ev_count(den, 'targets_superseded') or '—'} superseded")),
-        ("Paired", c.num(f"{pr.count(v.get('paired_targets')) or '0'} of {pr.count(den.get('targets_due')) or '—'}")
-         + _sub(f"{pr.count(v.get('partial_targets')) or '0'} partial · {pr.count(v.get('paired_games')) or '0'} games · "
-                f"{pr.count(v.get('paired_weeks')) or '0'} weeks")),
+        ("Paired", c.num(f"{pr.count(v.get('paired_targets')) or '—'} of {pr.count(den.get('targets_due')) or '—'}")
+         + _sub(f"{pr.count(v.get('partial_targets')) or '—'} partial · {pr.count(v.get('paired_games')) or '—'} games · "
+                f"{pr.count(v.get('paired_weeks')) or '—'} weeks")),
         ("Largest exclusion", (_pm_state("EV_KIND", top.get("kind"), label=str(top.get("stage")).replace("_", " ")
                                          .capitalize())
                                + _sub(f"{pr.count(top.get('excluded'))} of {pr.count(top.get('of'))} · {top.get('text')}"))
          if top and top.get("excluded") else c.txt("none", reason="no exclusion")),
-        ("Final-evaluable", c.num(pr.count(v.get("final_evaluable_targets")), reason="not recorded")
-         + _sub(" · ".join(f"{k.replace('OUTCOME_', '').lower()} {pr.count(n)}" for k, n in outcomes.items() if n)
-                or "no paired horizon, so no label attached")),
+        ("Outcome labels", c.txt("Hidden · holdout protection")
+         + _sub("EXP-002 labels (outcome states and results) are shown only by a report run logged in its "
+                "evidence-use log, never here")),
         ("Probability / relation", _pm_badge("EV_REL", tier)
          + _sub("consensus: conditional on a decided game (book tie rules unverified) · Kalshi YES pays $0.50 on a "
                 "tie")),
@@ -1178,7 +1181,9 @@ def _ev_family_a(v: dict, now: Any) -> str:
          + _sub(f"of {pr.count(_ev(v, 'protocol_attrition', 'denominators', 'opportunities')) or '—'} opportunities · "
                 "signals and fills not evaluated (no registered rule)")),
         ("Economic screen", _pm_badge("EV_SCREEN", _ev(v, "screen", "verdict"))
-         + _sub(f"{pr.count(_ev(v, 'screen', 'episodes', 'episodes')) or '0'} episodes · no capital scenario supplied")),
+         + _sub((f"{pr.count(_ev(v, 'screen', 'episodes', 'episodes'))} episodes"
+                 if _ev(v, "screen", "episodes", "episodes") is not None else
+                 "episodes not evaluable (no frozen episode definition)") + " · no capital scenario supplied")),
         ("Next action", c.txt(v.get("next_action"), reason="none recorded") + _sub(
             f"blocker: {v['blocker']}" if v.get("blocker") else None)),
     ], wide=True, text_cols=tuple(range(11))))
@@ -1189,9 +1194,9 @@ def _ev_family_a(v: dict, now: Any) -> str:
           esc(w.get("text"))] for w in waterfall], wrap=(0, 4), right=(1, 2),
         caption="Attrition waterfall: one primary reason per due horizon, every raw reason kept in the report")
         + f'<p class="meta">Denominators: {esc(_ev_count(den, "targets_planned") or "—")} planned horizons, '
-          f'{esc(_ev_count(den, "events") or "—")} games, {esc(_ev_count(den, "kalshi_markets_mapped") or "0")} Kalshi '
-          f'markets mapped, {esc(_ev_count(den, "odds_snapshots_used") or "0")} odds snapshots and '
-          f'{esc(_ev_count(den, "kalshi_books_used") or "0")} Kalshi books used.</p>'))
+          f'{esc(_ev_count(den, "events") or "—")} games, {esc(_ev_count(den, "kalshi_markets_mapped") or "—")} Kalshi '
+          f'markets mapped, {esc(_ev_count(den, "odds_snapshots_used") or "—")} odds snapshots and '
+          f'{esc(_ev_count(den, "kalshi_books_used") or "—")} Kalshi books used.</p>'))
     out.append(c.disclosure(f"Missing evidence ({pr.count(len(gaps))})", c.table(
         ["id", "stream", "state", "why", "smallest fix"],
         [[c.code(g.get("id")), esc(g.get("stream")), _pm_state("EV_GAP", g.get("state")), esc(g.get("why")),

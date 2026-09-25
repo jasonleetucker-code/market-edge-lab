@@ -446,6 +446,7 @@ STATES: dict[str, StateWord] = {
     # paired evidence is not an edge, and no state reads as profit.
     "EV_STATE_POPULATED": StateWord("Paired evidence", INFO_K),
     "EV_STATE_PARTIAL": StateWord("Partial evidence", WARN_K),
+    "EV_STATE_UNPAIRED": StateWord("No paired evidence", WARN_K),
     "EV_STATE_EMPTY": StateWord("No targets yet", ND_K),
     "EV_STATE_STALE": StateWord("Stale · not current", WARN_K),
     "EV_STATE_UNSUPPORTED": StateWord("Unsupported payoff", WARN_K),

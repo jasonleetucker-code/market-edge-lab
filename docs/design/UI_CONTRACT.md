@@ -227,10 +227,10 @@ rule; withdrawal **Not enabled**; policy details disclosure.
 research stage, historical result, forward valid days, next preregistered look, progress
 labelled "Observations toward the next scheduled evaluation", limitations, details; then one
 "Economic evidence · A" and one "Economic evidence · B" section (the two research families at most; no
-new navigation). Family A renders `sports_evidence.terminal_view` (schema sports-evidence-view/1, outcome
-results withheld): the contract's label "PAIRED RESEARCH EVIDENCE — NOT AN EDGE CLAIM", the family state,
+new navigation). Family A renders `sports_evidence.terminal_view` (schema sports-evidence-view/1; EXP-002
+outcome labels hidden: no resolution state, result or count, "Hidden · holdout protection"): the contract's label "PAIRED RESEARCH EVIDENCE — NOT AN EDGE CLAIM", the family state,
 protocol state (from the experiment registry), as-of and evidence window, due horizons with games, NFL
-weeks, not-yet-due and superseded, paired horizons, largest exclusion, final-evaluable outcomes,
+weeks, not-yet-due and superseded, paired horizons, largest exclusion, outcome labels (hidden),
 probability / relation (CONDITIONAL_MAPPING, never equivalent), edge at a size ("Not defensible" with its
 first reason), protocol-eligible opportunities (research_evidence attrition), the economic-screen verdict
 (research_economics), next action and blocker; in disclosures the join diagnostics, missing evidence (the

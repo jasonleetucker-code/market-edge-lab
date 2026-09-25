@@ -27,8 +27,11 @@ sudo -u edgelab /opt/market-edge-lab/venv/bin/python -m edge_lab.sports_evidence
 
 It opens the store with `SnapshotStore.open_readonly` (mode=ro, query_only), makes no request, writes
 nothing unless `--out` is given, parses at most 600 listing snapshots and one odds payload per capture
-slot, and states its bounds in `bounds`. Outcome results are withheld unless `--with-results` is passed;
-a run that views results of an evaluation window must be logged in EXP-002's `evidence_use.jsonl`.
+slot, and states its bounds in `bounds`. Outcome labels (resolution states, results and their counts)
+are EXP-002 labels, so they are hidden by default, in the report and in the Terminal. `--with-results`
+shows them only after recording the view in an explicit evidence-use log (`--evidence-log`, `--actor`,
+`--code-version`) through `research_evidence.record_use`, and refuses (exit 2, nothing shown) otherwise.
+`--as-of` is clamped to now.
 
 **Result on the production-shaped fixture** (`odds`, as production held it on 2026-09-24, as-of
 2026-09-24 21:00Z): 95 horizons planned, 1 due, 94 not yet due, 0 paired. The single due horizon has a
@@ -132,24 +135,37 @@ writer's files.
 **Schedule.** Due at the Odds target's effective due time and captured by the existing
 `edgelab-observe` tick (:05/:20/:35/:50 ET). `edgelab-odds` ticks at :00/:15/:30/:45, so the book
 typically lands about 5 min after the odds response. That is at the join's 5-minute pair-skew limit,
-so many pairs would fail. There are two ways out:
-- (a) EXP-002 freezes a maximum pair skew of 10 min and discloses it;
-- (b) the book is captured in the same run as the odds, a runner change that needs review.
+so many pairs would fail. Two cases are worse than 5 min, and even a 10-minute limit fails them:
+- **Sunday late kickoffs at T-24h.** A 16:25 ET Sunday game's T-24h target is Saturday 16:25 ET. The Odds
+  pilot captures it at the 16:15 tick (a slot may fire 7 min early), but `price_observations` refuses to
+  run in the 16:13–16:30 ET settlement-run window, so the book comes at the 16:35 tick: about **20 min**
+  of skew. That is about 3–5 games a week (the late Sunday window).
+- **Crowded slots.** An observe run takes at most 24 markets (and 40 GETs). A Sunday 1 pm slot with more
+  than 12 games (24 markets) defers the rest to the next tick, 15 min later: those pairs fail a 10-minute
+  limit too. A normal slot of about 10 games fits.
 
-Option (a) is the smallest.
+There are two ways out:
+- (a) EXP-002 freezes a maximum pair skew of 10 min and discloses it, and accepts that the cases above are
+  excluded as PAIR_SKEW_EXCEEDED (they stay in the denominators);
+- (b) the book is captured in the same run as the odds, a runner change that needs review and removes
+  both cases.
+
+Option (a) is the smallest; (b) is the only one that pairs every horizon.
 
 **Worst-case requests.** Per game-horizon: 1 listing + 2 books = 3 GETs, and at most 6 with one retry
 each.
 - A normal NFL week is about 16 games × 3 horizons = 48 targets: **144 GETs**, worst **288**.
 - The busiest capture day (Sunday: T-6h and T-60m for about 13 games, plus Monday's T-24h) is about
   28 targets: **84 GETs**, worst **168**.
-- These are spread over the day's kickoff groups. One 1 pm slot is about 10 games: 30 GETs, inside one
-  observe run's 40-GET cap.
+- These are spread over the day's kickoff groups. A 1 pm slot of about 10 games is 30 GETs and 20
+  markets, inside one observe run's caps. More than 12 games (24 markets) exceeds the market cap, and the
+  overflow is deferred a tick (see Schedule).
 
 **Settlement.** One settled-markets read per game day after expected expiration: 1–2 GETs a day, 7 at
 most a week.
 
-**Bytes.** Measured: listing 5.2 KB per event. Estimated: book 2–6 KB at depth 100. That is about
+**Bytes.** Measured: listing about 4.95 KB per event (158,491 B for 32 events in the `/events` shape
+with nested markets). Estimated: book 2–6 KB at depth 100. That is about
 15 KB per target, about **0.7 MB a week** and about 15 MB a season including playoffs. It fits inside
 the acquisition portfolio's estimate for this stream.
 

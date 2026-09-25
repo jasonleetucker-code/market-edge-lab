@@ -86,7 +86,7 @@ def test_populated_section_sits_in_the_research_tab_after_the_experiments(state)
     text = plain(section(body))
     for needle in ("Economic evidence", "PAIRED RESEARCH EVIDENCE — NOT AN EDGE CLAIM", "Paired evidence",
                    "3 games · 1 NFL weeks · 3 not yet due · 0 superseded", "9 of 9",
-                   "pending 6 · final 3", "Conditional mapping · not equivalent",
+                   "Hidden · holdout protection", "episodes not evaluable", "Conditional mapping · not equivalent",
                    "YES pays $0.50 on a tie", "Not defensible", "FEE_UNSUPPORTED", "signals and fills not evaluated",
                    "Settle and freeze EXP-002", "Draft",
                    "Economic evidence · B", "Same-venue payoff consistency", "Not yet available",
@@ -98,6 +98,10 @@ def test_populated_section_sits_in_the_research_tab_after_the_experiments(state)
     for word in FORBIDDEN:
         assert word not in lower, word
     assert "k-ok" not in section(body)  # nothing green in this section
+    # EXP-002 outcome labels never reach the Terminal: no state, count or result (holdout protection)
+    for label in ("final 3", "pending 6", "Outcome final", "OUTCOME_FINAL", "OUTCOME_PENDING", "final-evaluable 3"):
+        assert label not in text, label
+    assert "0 episodes" not in text
 
 
 @pytest.mark.parametrize("state", ["economics_issues"], indirect=True)
@@ -112,7 +116,7 @@ def test_partial_section_names_what_is_missing(state):
 @pytest.mark.parametrize("state", ["odds"], indirect=True)
 def test_production_like_state_shows_the_gap_and_the_owner_decision(state):
     text = plain(section(page(state)))
-    for needle in ("Partial evidence", "0 of 1", "Kalshi not mapped", "Missing evidence (8)",
+    for needle in ("No paired evidence", "No paired evidence yet", "0 of 1", "Kalshi not mapped", "Missing evidence (8)",
                    "Kalshi KXNFLGAME listings (tickers, rules, status, result)", "no new timer is authorized today",
                    "blocker: no Kalshi NFL books are stored", "Capacity not measured", "Not established"):
         assert needle in text, needle
