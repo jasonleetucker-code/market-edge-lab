@@ -2,11 +2,14 @@
 
 Owner directive "RESEARCH UNBLOCKING" of 2026-09-25 (`docs/owner/2026-09-25-research-unblocking-directive.md`),
 sections 6, 7, 9 and 10 and the matching parts of 14 and 15. Written by RU Writer R (research,
-protocol and contract evidence) on 2026-09-25 from `main` at `706a340`.
+protocol and contract evidence) on 2026-09-25. First written from `main` at `706a340`; revised after
+review on `main` at `886fbff` (the owner's Kalshi NFL capture approval, #110).
 
-**This document authorizes nothing.** It is a set of recommendations with evidence. It does not
-approve any of these:
-- Kalshi NFL collection;
+**This document authorizes nothing.** It is a set of recommendations with evidence. Kalshi NFL
+collection was approved separately by the owner on 2026-09-25 (`docs/EXECUTION_PLAN.md`, #110),
+bounded by `docs/research/SPORTS_PAIRED_EVIDENCE_GAPS.md` §6; this document neither creates nor widens
+that approval. It does not approve any of these:
+- anything outside #110's capture bounds;
 - Odds API spending;
 - contacting Kalshi;
 - a capital amount;
@@ -22,7 +25,7 @@ numbers proposed here are not written into their decision fields.
 |---|---|
 | CURRENT | What the repository does or states today. |
 | PROPOSED | A recommendation from this document. Not settled, not approved. |
-| APPROVED | Only with a cited, recorded owner decision. **No item in this document is APPROVED.** |
+| APPROVED | Only with a cited, recorded owner decision. **The only APPROVED item cited here is Kalshi NFL collection (#110); every recommendation is PROPOSED.** |
 | BLOCKED | Cannot proceed until the named blocker is removed. |
 | VERIFIED | Checked against primary evidence cited here (a document, a fixture or a test run). |
 
@@ -30,18 +33,18 @@ numbers proposed here are not written into their decision fields.
 
 | # | Topic | Recommendation | Status | Needs |
 |---|---|---|---|---|
-| A.A | EXP-002 primary endpoint | **Predictive markout**: the gap between the sportsbook consensus and the Kalshi mid at T-6h, tested against the Kalshi mid change to the T-60m capture. Calibration and hold-to-settlement economics are secondary and descriptive only. | PROPOSED | technical review; freeze before preregistration |
+| A.A | EXP-002 primary endpoint | **Cross-book predictive markout**: the sign of the consensus-vs-Kalshi gap at T-6h is taken from one team market's book, and the markout to T-60m is measured on the *other* team market's book (converted to the same team's units), averaged over both assignments. This fixes the review's finding that a same-book markout is biased upward under a no-information null. **Required bias check:** a Kalshi-only placebo (the same statistic with the consensus replaced by the signal book's own T-24h mid). Calibration and hold-to-settlement economics are secondary and descriptive only. | PROPOSED | technical review; freeze before preregistration |
 | A.B | Horizon and cutoff | Decision horizon T-6h; markout target T-60m. Decision time = the later of the two receipts, at or before the capture deadline. A later observation is never moved back. | PROPOSED | technical review |
-| A.C | Input age and pair skew | Keep the CURRENT source limits (odds 10 min, Kalshi book 5 min). Provisional pair window: the book from 5 min before to 10 min after the odds receipt. Calibrate on the development pilot's timing data only. | PROPOSED | technical review; a join variant |
+| A.C | Input age and pair skew | Keep the CURRENT source limits (odds 10 min, Kalshi book 5 min). Provisional pair window: the book from 5 min before to 10 min after the odds receipt, chosen prospectively (the latest book at or before the odds within 5 min, else the first book within 10 min after). Only book-at-or-after-odds pairs support executable-price or economics figures. It fits #110's pairing clause (option (a)). Calibrate on pilot timing data only. | PROPOSED | technical review; a join variant and a `pick_book` follow-up |
 | A.D | Ties, cancellations, not-played | Explicit payoff modelling with ex-ante bounds; every state kept in the sample. Cite the verified contract terms. | PROPOSED; rules VERIFIED | owner input on the bounds is not needed; technical review |
 | A.E | Size ladder and capital | Research rungs of 1, 10, 50, 100 and 250 contracts, with the minimum episode size at 10. Illustrative capital of $250, $1,000 and $5,000, each labelled ILLUSTRATIVE. No approved capital exists. | PROPOSED | owner choice only for any real amount |
 | A.F | Episode | One pool per game. Start at 2 cents per contract after fees at 10 contracts. An episode spans the capture horizons of one game and one direction and never infers persistence between captures. | PROPOSED | technical review; freeze before any label |
 | A.G | Sample size, clusters, power | Game unit, NFL-week clusters. `scripts/research_power_sensitivity.py` gives ranges. The frozen n comes from a logged 3-week development pilot, not from this document. | PROPOSED (script VERIFIED by tests) | technical review |
-| A.H | Windows and stopping | Pilot in NFL weeks 4–6; freeze by 2026-10-21; untouched evaluation in weeks 7–18; review 2026-10-22; one interim futility look; a variant budget of V0 plus at most 2. | PROPOSED | owner approval of collection is the gate (BLOCKED until then) |
-| B | EXP-003 proof | The KXHIGHNY partition **cannot be proven** under current contractual text. The discretionary fair-price fallback makes its worst state pay 0, and an admissible full-refund cancellation caps the worst state at 0. The single-market YES+NO complement survives fallback, but it cannot show a surplus from one consistent book. **Pause the scope.** Keep one bounded fact-verification task (8 drafted Kalshi questions, not sent). Reject the scope if it is unresolved by 2026-11-15. | PROPOSED | owner approval to contact Kalshi |
-| C | Economics and effort | Scenario tables per family. Bootstrap threshold PROPOSED at $1,000 per year (conservative lower band, illustrative capital of $2,500 or less), with $250 and $5,000 as alternatives. Owner-hour allowances: Family A 6 h to 2026-10-22, then +8 h if extended; Family B 2 h. | PROPOSED | owner decision (packet Decision 2) |
-| D | Shadow-fill language | "Fill at first detection" relabelled FIRST_DETECTION_ZERO_LATENCY. "Best single observation" relabelled HINDSIGHT_UPPER_BOUND. Both are marked non-executable, versioned as `research-economics-v2` / `fill-mode-labels-v2` (ADR 0037). | IMPLEMENTED, TESTED_LOCALLY | review |
-| E | Stale EXP-003 readiness | The protocol's "evaluator is PR B / not built" wording is replaced with the real blockers. The proof requirements are unchanged. | IMPLEMENTED | review |
+| A.H | Windows and stopping | Pilot on kickoffs 2026-09-27 to 2026-10-19 ET (first targets: the Saturday 2026-09-26 T-24h captures for Sunday games, if #112 is deployed by then); freeze by 2026-10-21; untouched evaluation on kickoffs from 2026-10-22 (weeks 7–18); review 2026-10-22; one interim futility look; a variant budget of V0 plus at most 2. | Collection APPROVED (#110; implementation #112 pending deploy). The pilot design is PROPOSED | technical review |
+| B | EXP-003 proof | The KXHIGHNY partition **cannot be proven** under current contractual text. Nothing constrains the discretionary fair-price fallback, so a worst-state payout of 0 cannot be excluded and the evaluator must assume it; integer settlement is only observed. The single-market YES+NO complement survives fallback, but it cannot show a surplus from one consistent book. Emergency powers (Rule 2.8) need an explicit scoping decision: PROPOSED to exclude them from the admissible states and report them as residual venue risk (otherwise no Kalshi payoff relation is ever provable, and the verdict becomes reject). **Pause the scope.** Keep one bounded fact-verification task (8 drafted Kalshi questions, not sent). Reject the scope if it is unresolved by 2026-11-15. | PROPOSED | owner approval to contact Kalshi; review of the scoping |
+| C | Economics and effort | Scenario tables per family (Family A within the research ladder: $1.70 to $382.50 a season). Bootstrap threshold PROPOSED at $1,000 per year (first-detection lower band, illustrative capital of $2,500 or less), with $250 and $5,000 as alternatives. Owner-hour allowances: Family A 6 h to 2026-10-22, then +8 h if extended; Family B 2 h. | PROPOSED | owner decision (packet Decision 2) |
+| D | Shadow-fill language | "Fill at first detection" relabelled FIRST_DETECTION_ZERO_LATENCY. "Best single observation" relabelled HINDSIGHT_UPPER_BOUND. Both are marked non-executable, versioned as `research-economics-v2` / `fill-mode-labels-v2` (ADR 0037). | PROPOSED (a change in this PR; its tests pass) | review |
+| E | Stale EXP-003 readiness | The protocol's "evaluator is PR B / not built" wording is replaced with the real blockers. The proof requirements are unchanged. | PROPOSED (a change in this PR) | review |
 
 ## 0. Evidence consulted
 
@@ -61,6 +64,9 @@ numbers proposed here are not written into their decision fields.
 **No measured pairing timing exists to this session.** The production store holds the Odds side
 only; HANDOFF reports 2 captured NFL targets. No KXNFLGAME book has ever been stored. Every timing
 limit below is therefore provisional, with a calibration procedure. None is empirically proven.
+The planned implementation (#112, not merged at this writing) captures the Kalshi target at the
+Odds receipt time, so a book is expected about 5 min after the odds, or about 20 min after when a
+protected window, a lock wait or a retry intervenes. That is a plan, not a measurement.
 
 ---
 
@@ -74,21 +80,25 @@ market type or venue is added to inflate the sample.
 
 | | |
 |---|---|
-| **Recommended** | **Predictive markout.** For each game: the gap `g = c − k₆`, where `c` is the consensus value of the home team's KXNFLGAME YES contract (A.D) at the T-6h decision time and `k₆` is the Kalshi YES mid in the paired book. The outcome is `y = sign(g) · (k₁ − k₆)`, where `k₁` is the Kalshi YES mid in the first book received for the T-60m horizon. Test H₀: E[y] ≤ 0, one-sided, on game units with NFL-week clusters. `|g|` enters only as a pre-registered filter (for example `|g|` ≥ 2 cents) or not at all; it is never tuned. |
-| **Probability benchmark vs execution price** | Kept separate. The markout uses the **mid** (a probability benchmark, and only when the spread is at most a frozen width). All economics use the **executable all-in ask** at size (A.E, §C). An ask includes spread and fees, so it is a price to pay, not an unbiased estimate of probability. A YES ask on Kalshi is `1 − best NO bid` (documented orderbook behaviour, `kalshi_quotes`), so the mid is `(yes_bid + 1 − no_bid)/2`. |
-| **Reason** | (1) The capture design (T-24h / T-6h / T-60m, PR C) gives a later Kalshi price for every paired game, so a markout exists per game. An economics endpoint exists only per rare episode. (2) Power: the per-game hold-to-settlement P&L has SD ≈ 0.5 per contract (a mathematical bound for a binary payoff). Under every assumption in the grid it needs more than 120 weeks (about 7 seasons; §A.G). A markout SD of 1–4 cents fits one season under some assumptions. (3) Ties and fair prices move `k₆` and `k₁` alike, so the markout does not depend on the tie treatment in the way a level comparison does (A.D). (4) It tests the stated mechanism: "event-market books lag the consensus". |
-| **Evidence** | `docs/research/SPORTS_PAIRED_EVIDENCE_GAPS.md` §2 item 7 (horizon resolution only); `scripts/research_power_sensitivity.py` output (§A.G); contract terms (A.D). **No result of any kind exists**, so the choice cannot have been made by looking at which result is better. No outcome, label or markout has been viewed. |
-| **Tradeoff** | A markout is forecast quality about a *later price*, not money. A positive markout proves information transfer, not an exploitable edge. Exploiting it means buying at T-6h and either holding to settlement (high variance) or exiting at T-60m (a second spread and fee). The T-60m mid is itself a benchmark, not truth. |
-| **Uncertain** | The markout SD (a pilot estimate), the spread width at which a mid is meaningful, the stability of the lag, and whether Kalshi pregame books update between captures at all. |
-| **Needs** | Technical review (statistics). Freeze in `[endpoints] primary` before preregistration. |
+| **Recommended** | **Cross-book predictive markout** (v2 after review). Each game has two KXNFLGAME markets, one per team, each with its own book; both are captured in the same run at every horizon (#110 bounds: 2 book GETs per game-horizon). Work in home-team units: `H_t` is the home market's YES mid; `A_t = 1 − (away market's YES mid)`. `c` is the consensus value of the home team's YES contract (A.D) at the T-6h decision time `D`. Per game: `y = ½·[ sign(c − H₆)·(A₁ − A₆) + sign(c − A₆)·(H₁ − H₆) ]`, where subscript 6 is the paired T-6h book and 1 the first book received for the T-60m horizon. The sign of each half comes from one book and its markout from the other. Test H₀: E[y] ≤ 0, one-sided, on game units with NFL-week clusters. `|c − H₆|` may enter only as a pre-registered filter, never tuned. |
+| **Why not the v1 statistic** | The v1 statistic `sign(c − k₆)·(k₁ − k₆)` used one book's noisy mid `k₆` both in the sign and as the base. Mid noise then reverts and makes E[y] > 0 with **no information at all**. The review simulated +0.05¢ at 0.25¢ of mid noise and +0.18¢ at 0.5¢, the size of the effect grid. `python scripts/research_power_sensitivity.py --null-check` reproduces it: +0.06¢ and +0.19¢, with standard errors of about 0.01¢. |
+| **Required bias check (placebo)** | The same cross-book statistic with `c` replaced by a Kalshi-only prior signal: the signal book's own T-24h mid (`y_pl = ½·[sign(H₂₄ − H₆)·(A₁ − A₆) + sign(A₂₄ − A₆)·(H₁ − H₆)]`). It carries no consensus information. It is computed on the pilot before the freeze and reported beside the primary in the evaluation. The claim needs the primary one-sided test to pass **and** the paired game-level difference `y − y_pl` to pass the same test. |
+| **Null check (simulation, VERIFIED by tests)** | Model: a martingale latent value; a consensus that knows only the current value; each book's mid = latent + noise. The cross-book primary and the placebo are centred at 0 under independent book noise, including 1¢ rounding (`tests/test_research_economics_power_sensitivity.py`). When the two books' noises are correlated, for example mirror-quoted books, the bias returns (at correlation 1 it equals the v1 bias). The placebo then turns positive, but at only about a third to 40% of the bias. So a clean placebo on a 45-game pilot cannot certify a sub-cent bias away. Two further pre-freeze checks on pilot data: (a) the cross-book noise correlation, estimated from the variance of `H₆ − A₆` against a Roll-type noise variance (minus the covariance of successive mid changes of one book); (b) if the one-sided 90% upper confidence bound of that correlation is not below 0.5, the endpoint is **not frozen** and goes back to design. There is no silent fallback. |
+| **Model limits** | Assumptions: (i) the two team books' mid noises are independent at a given capture; (ii) under the null the latent value is a martingale between captures; (iii) `A = 1 − away mid` measures the home contract. The last holds in win, loss and tie states; fair-price and post-start disqualification states break it (§B #11), but they are rare and shift the level, not the markout. |
+| **Probability benchmark vs execution price** | Kept separate. The markout uses **mids** (probability benchmarks, used only when the spread is at most a frozen width). All economics use the **executable all-in ask** at size (A.E, §C). An ask includes spread and fees, so it is a price to pay, not an unbiased estimate of probability. A YES ask on Kalshi is `1 − best NO bid` (documented orderbook behaviour, `kalshi_quotes`), so a mid is `(yes_bid + 1 − no_bid)/2`. |
+| **Reason** | (1) The capture design (T-24h / T-6h / T-60m, both team books each time) gives a later price on two books for every paired game, so a markout exists per game. An economics endpoint exists only per rare episode. (2) Power: the per-game hold-to-settlement P&L has SD ≈ 0.5 per contract (a mathematical bound for a binary payoff), and under every assumption in the grid it needs more than 120 weeks (about 7 seasons; §A.G). A markout SD of 1–4¢ fits one season under some assumptions; 6–8¢ (news-driven repricing) does not. (3) Ties and fair prices move both captures alike, so the markout is less sensitive to the tie treatment than a level comparison is (A.D). (4) It tests the stated mechanism, that event-market books lag the consensus. |
+| **Evidence** | `docs/research/SPORTS_PAIRED_EVIDENCE_GAPS.md` §2 item 7 (horizon resolution only); `scripts/research_power_sensitivity.py` (grid and `--null-check`); contract terms (A.D). **No result of any kind exists**, so the choice cannot have been made by looking at which result is better. No outcome, label or markout has been viewed. |
+| **Tradeoff** | A markout is forecast quality about a *later price*, not money. A positive markout proves information transfer, not an exploitable edge. Exploiting it means buying at T-6h and either holding to settlement (high variance) or exiting at T-60m (a second spread and fee). The T-60m mid is itself a benchmark, not truth. The cross-book design costs no extra capture, but it depends on assumption (i). |
+| **Uncertain** | The markout SD and the cross-book noise correlation (both from the pilot); the spread width at which a mid is meaningful; the stability of the lag; whether pregame books update between captures at all. |
+| **Needs** | Technical review (statistics). Freeze in `[endpoints] primary` before preregistration, with the placebo and the pre-freeze checks. |
 | **Status** | PROPOSED |
 
 **Secondary endpoints (PROPOSED, descriptive only this season).**
 1. Outcome calibration at T-60m: log loss and Brier score of `c` (tie-adjusted interval midpoint)
    against the Kalshi mid, per game. It is reported with its interval and never tested for
    significance this season.
-2. Hold-to-settlement after-cost contribution per contract at each rung, conservative and
-   hindsight bounds (§D). Descriptive and capacity evidence only. §A.G shows it cannot be
+2. Hold-to-settlement after-cost contribution per contract at each rung, first-detection and
+   hindsight bounds (§D), from book-at-or-after-odds pairs only (A.C). Descriptive and capacity evidence only. §A.G shows it cannot be
    inferential in one season.
 3. The attrition waterfall with separate denominators (CURRENT, `research_evidence`).
 
@@ -97,8 +107,13 @@ at T-60m). It is closer to settlement economics. It needs the tie and fallback b
 level comparison, and it is badly under-powered in one season. It fits a multi-season plan only.
 
 **Alternative 2: a markout to a later "closing" book** (for example T-10m). It captures more of
-the pregame repricing. It needs a new capture horizon, which is not in the current design, so it
-would need a capture change and new approval.
+the pregame repricing. It needs a new capture horizon, which is outside #110's bounds, so it would
+need a capture change and a new approval.
+
+**Alternative 3: a regression.** Regress `H₁ − H₆` on `c − H₆`, controlling for the Kalshi-only term
+`H₆ − H₂₄`. This is the review's third option. It uses one book, so the noise in `H₆` sits in both
+the regressor and the outcome (errors-in-variables). The control absorbs only part of that. It is
+kept as a sensitivity analysis, not as the primary endpoint.
 
 ### A.B Horizon and information cutoff
 
@@ -124,11 +139,22 @@ executable. A book is an executable-price candidate only at its own receipt time
 | Sportsbook source-update age (receipt − per-book market `last_update`) | ≤ 10 min; a stale or undated book makes the proposition not fresh (fail closed) | CURRENT (`sources.py` odds max age 10 min; `odds_consensus`) | The Odds API documents market `last_update` as the last time odds were seen, and removes suspended markets after about 15 min (`experiments/multi_venue/odds_api_docs_2026-09-23.md`). Changing it is a variant of odds-consensus-v1. |
 | Local observation age of the odds at `D` (`D − R_o`) | ≤ 10 min | CURRENT (judged at `D` by `sports_evidence`) | the same registry limit |
 | Event-market book age at `D` (`D − R_k`) | ≤ 5 min | CURRENT (`kalshi_public` orderbook max age 5 min) | Kalshi books have no per-level source time, so receipt is the only clock. |
-| Odds/book receipt skew (`R_k − R_o`) | **from −5 min to +10 min**: a book up to 5 min before the odds, or up to 10 min after | PROPOSED (CURRENT is a symmetric 5 min, `JoinPolicy.max_pair_skew`) | The asymmetry follows from the two age limits. A book *before* the odds becomes the stale input at `D`, so it must be within the book limit (5 min). A book *after* the odds is fresh at `D` and makes the odds the older input, bounded by the odds limit (10 min). The planned observe tick lands about +5 min after the odds tick (PR C §6), exactly at today's symmetric limit, so ordinary jitter would fail pairs. PR C's symmetric 10-min candidate would admit a 10-min-old book as the executable side, which is not supported. |
+| Odds/book receipt skew (`R_k − R_o`) | **from −5 min to +10 min**: a book up to 5 min before the odds, or up to 10 min after | PROPOSED (CURRENT is a symmetric 5 min, `JoinPolicy.max_pair_skew`) | The asymmetry follows from the two age limits. A book *before* the odds becomes the stale input at `D`, so it must be within the book limit (5 min). A book *after* the odds is fresh at `D` and makes the odds the older input, bounded by the odds limit (10 min). #112 plans the book about +5 min after the odds, exactly at today's symmetric limit, so ordinary jitter would fail pairs. PR C's symmetric 10-min candidate would admit a 10-min-old book as the executable side, which is not supported. |
+| Book choice within the window | **Prospective rule:** the latest book received at or before the odds receipt and within 5 min of it; if there is none, the first book received within 10 min after the odds. The choice never depends on how close a later book happens to be. | PROPOSED. CURRENT `sports_evidence.pick_book` (lines 754–765) picks the book *closest* to the odds receipt. Comparing distances to a later book is a mild look-ahead, so the rule change is a follow-up code change, not made here | A decision-maker at the odds receipt holds the latest book already received, or waits for the next one. |
+| Pair use | **Book-at-or-after-odds pairs** (`R_k ≥ R_o`) support executable-price and economics figures (A.E, §C, the episode screen). **Book-before-odds pairs** are comparability-only: they may enter the markout and calibration endpoints, but not an executable price or an economics figure, because their book is older than the decision time. | PROPOSED | An executable price exists only at the book's own receipt time. |
+
+**Fit with the owner's approval (#110).** The approval leaves pairing precision to "proposal §6
+options (a) or (b)". Option (a) freezes a maximum skew of 10 min and keeps the pairs outside it in
+the denominators as PAIR_SKEW_EXCEEDED. The window above is inside option (a): its "after" side is
+10 min, and its "before" side is tighter. Under #112's plan almost every book arrives at or after
+the odds, so the "before" side will rarely be used and almost all pairs support executable-price
+figures. The +20-min cases (protected windows, lock waits, retries) fall outside the window. They
+are excluded as PAIR_SKEW_EXCEEDED and counted in the denominators. Under option (b), capturing the
+book in the same run, the skew would shrink to seconds and the window would not bind.
 
 **Calibration procedure (PROPOSED; bounded; before any label is viewed).**
 1. Use only the development pilot weeks (A.H) and only **timing and feature-side fields**:
-   `R_o`, `R_k`, `last_update`, spreads and depth. No outcome and no markout (`k₁`) is read.
+   `R_o`, `R_k`, `last_update`, spreads and depth. No outcome and no T-60m markout book is read.
    Record the look in EXP-002's evidence-use log as FEATURE_INSPECTION, DEVELOPMENT role.
 2. Report the distributions of: skew; book age at `D`; per-book `last_update` age; the fraction of
    due T-6h pairs kept at windows of [−5, +5], [−5, +10] and [−10, +15] minutes; and, where two
@@ -141,8 +167,9 @@ executable. A book is an executable-price candidate only at its own receipt time
 4. Every limit tried is counted in the variant budget. Pairs lost to skew stay in the denominators
    (CURRENT attrition).
 
-**Needs:** technical review. The asymmetric window is a `JoinPolicy` change and therefore a
-registered join variant. It is not implemented here.
+**Needs:** technical review. The asymmetric window and the prospective book choice are
+`JoinPolicy` / `pick_book` changes and therefore a registered join variant. Neither is implemented
+here; they are a follow-up for the `sports_evidence` owner.
 
 ### A.D Ties, overtime, cancellations and not-played states
 
@@ -157,7 +184,8 @@ rules; rules_evidence/MANIFEST.md).**
 | Postponed, started within 48 h | normal result | terms; market rules |
 | Not started within 48 h | "last fair market price as determined by Kalshi", a discretionary F in [0, 1] | terms; market rules |
 | Suspended before 55 min of play and not resumed within 48 h | last fair price (discretionary) | terms |
-| Suspended after 55 min, or declared final by the league | the result as it stands (Sept terms) or a fair price (Feb certification): conflicting texts, UNVERIFIED which governs | terms vs certification |
+| The league declares the game complete or final (any time) | the result as declared or as it stands | terms; certification (both agree) |
+| Suspended after 55 min of play, not resumed, not declared final | the result as it stands (Sept terms) or the last fair market price (Feb certification): conflicting texts, UNVERIFIED which governs | terms vs certification |
 | Forfeit before kickoff / after kickoff | fair price / the league's determination | terms |
 | Venue moved outside the week, or home/away reversed | fair price | terms |
 | Disqualified before the game / after it starts | fair price / "No" for that team, "Yes" for the opponent only if declared the winner | terms |
@@ -210,6 +238,7 @@ The API reports `quadratic_with_maker_fees`, multiplier 1. Event-level fee overr
 | **Fractional fills** | Kalshi fills are in 0.01-contract steps, and "fills can be fractional even when the order is for whole contracts" (Fixed-Point docs; `fee_verification/VERIFICATION.md`). A whole-number rung therefore does not remove fractional-fill fee questions. A walk that crosses a fractional level stays NOT_EVALUATED (CURRENT, ADR 0036) until a fractional-fill fee rule is modelled from the documented fee accumulator. |
 | **Reason** | 10 contracts cost $2–8, which is meaningful above a one-lot while small enough that depth is unlikely to bind. 250 probes capacity. Visible depth stays a ceiling (CURRENT). |
 | **Evidence** | Fee PDF p.2 formula; the fixture series record; Fixed-Point docs. The 450k-contract top-of-book size in the 2026-09-25 listing fixture was **in-game** (ATL@GB was live), so it is not pregame depth evidence. |
+| **Pairs used** | Only book-at-or-after-odds pairs (A.C). A book-before-odds pair is comparability-only and never prices a rung. |
 | **Tradeoff** | More rungs mean more capacity rows but no extra inferential tests: rungs are descriptive. |
 | **Uncertain** | Pregame depth; the KXNFLGAME fee claim basis. |
 | **Needs** | Technical review of the rungs. The owner decides any real capital separately (packet Decision 2). A fee-verification record belongs to the `fee_schedules` owner. |
@@ -241,7 +270,7 @@ The API reports `quadratic_with_maker_fees`, multiplier 1. Event-level fee overr
 | Several books on one game | The consensus is one number per game; books are never units. Source families are UNKNOWN (CURRENT `[knowledge]`). |
 | Both sides of one game | Complements: one statistic per game (the home team's contract). |
 | Several horizons | One primary horizon (T-6h); the others are secondary or challengers, never pooled as independent. |
-| Week and slate | Games are clustered by NFL week (`sports_evidence.week_cluster`, CURRENT). Inference uses week-cluster bootstrap or cluster-robust errors. |
+| Week and slate | Games are clustered by NFL week (`sports_evidence.week_cluster`, CURRENT). Inference uses a **wild cluster bootstrap** (Rademacher weights, week clusters; preferred because only about 12 week clusters exist), with cluster-robust errors as a check. |
 | Rare signals | The economics endpoint has about 1–3 episodes a week (see below), so it is descriptive. |
 | Missing or unsupported events | Stay in the attrition denominators with raw reasons (CURRENT). A game missing because its book was thin is informative missingness, reported and not imputed. |
 
@@ -251,15 +280,19 @@ assumption.
 
 | Endpoint | Scenarios that fit 14 weeks | Weeks needed across the grid |
 |---|---|---|
-| Markout (primary): SD 0.01–0.04, effect 0.25–1 cent, ICC 0–0.10, eligible 30–90% | 51 of 108 | 0.46 to 475 |
+| Markout (primary): SD 1–8¢ (up to 6–8¢ covers inactive/injury-news repricing), effect 0.25–1¢, ICC 0–0.10, eligible 30–90% | 51 of 180 | 0.46 to 1,899 |
 | Hold-to-settlement P&L per contract: SD 0.45–0.5, effect 1–5 cents, episode rate 10–30% | **0 of 144** | 124 to 34,000 |
 
 Examples:
 - Markout SD 0.02, effect 0.5 cent, ICC 0.05, 60% eligible (9 games a week): about 15.4 weeks, so
   it does not fit.
 - The same with a 1-cent effect: about 3.9 weeks.
-- The minimum detectable markout over a 12-week evaluation window at 9 games a week: 0.48–0.64
-  cent at SD 0.02, and 0.96–1.28 cents at SD 0.04 (ICC 0–0.10).
+- The minimum detectable markout over a 12-week evaluation window at 9 games a week (ICC 0–0.10):
+  0.48–0.64¢ at SD 2¢, 0.96–1.28¢ at SD 4¢, 1.44–1.92¢ at SD 6¢ and 1.92–2.56¢ at SD 8¢.
+- SD 6¢ and 8¢ with a 1¢ effect need about 35 and 62 weeks (ICC 0.05, 60% eligible): out of reach
+  this season.
+- The 0.25¢ effect is at or below half a tick of mid resolution (a mid on a 1¢ grid moves in 0.5¢
+  steps). It is a lower-edge scenario, not a detectable per-game price move.
 - Hold-to-settlement over 12 weeks at 2.7 episodes a week: about 22 cents per contract. It is not
   a usable inferential endpoint.
 
@@ -272,15 +305,16 @@ timing data they must give:
 1. the pairing yield of due T-6h and T-60m horizons;
 2. the skew and age distributions (A.C);
 3. spreads and pregame depth at the rungs;
-4. the SD of the markout statistic, which **does** need `k₁`, a label. This step comes only after
-   the A.C timing limits are frozen from timing data alone, so no timing limit is chosen with
-   markouts in view. The pilot games' markouts are then viewed, logged as LABEL_RESULT_INSPECTION
-   on DEVELOPMENT data, and those games are permanently excluded from the untouched window.
+4. the SD of the markout statistic, the Kalshi-only placebo and the cross-book noise correlation
+   (A.A). These **do** need the T-60m books, which are labels. This step comes only after the A.C
+   timing limits are frozen from timing data alone, so no timing limit is chosen with markouts in
+   view. The pilot games' markouts are then viewed, logged as LABEL_RESULT_INSPECTION on
+   DEVELOPMENT data, and those games are permanently excluded from the untouched window.
 
 Three weeks cannot estimate the week ICC, so ICC stays a sensitivity range (0–0.10), and the
 frozen n uses the pessimistic end (ICC 0.10) unless the evaluation window is long enough to
 tolerate it. The frozen `min_independent_clusters` (weeks) is `ceil(weeks_required)` at the
-pessimistic ICC, with a floor of 8 weeks so the cluster bootstrap is meaningful.
+pessimistic ICC, with a floor of 8 weeks so the wild cluster bootstrap is meaningful.
 
 **Four kinds of evidence (PROPOSED), never mixed:**
 1. **Descriptive feasibility** (pilot): counts, yield, timing, spreads and depth.
@@ -292,7 +326,7 @@ pessimistic ICC, with a floor of 8 weeks so the cluster bootstrap is meaningful.
 
 | Item | Recommended | Status |
 |---|---|---|
-| Development pilot | The first 3 complete NFL weeks after collection is approved. If approved before the week 4 T-24h targets (about 2026-09-30), that is weeks 4–6: kickoffs 2026-10-01 to 2026-10-19 ET. DEVELOPMENT role, every look logged. | PROPOSED; BLOCKED on the capture approval (packet Decision 1) |
+| Development pilot | Kickoffs from 2026-09-27 to 2026-10-19 ET: the Sunday and Monday games of the week of 2026-09-22 plus three complete Tuesday-anchored weeks (`sports_evidence.week_cluster`). The first targets are the Saturday 2026-09-26 T-24h captures for the Sunday 2026-09-27 games, if #112 is deployed by then; otherwise the pilot starts at the first deployed capture, with its end date unchanged. By the repository fixtures' numbering, Sunday 2026-09-27 is NFL week 3 (Thursday 2026-09-24 was week 3); dates govern, not week numbers. DEVELOPMENT role, every look logged. | **Collection APPROVED** (owner, 2026-09-25, `docs/EXECUTION_PLAN.md`, #110; collection only, within SPORTS_PAIRED_EVIDENCE_GAPS §6). Implementation #112 **pending deploy** (expected about Saturday morning). The pilot design and its use are PROPOSED; the protocol stays DRAFT |
 | Validation approach | No parameter search. V0 only. The delayed-signal and placebo controls (CURRENT `[evaluation] controls`) run on pilot data. Timing limits are calibrated as in A.C. | PROPOSED |
 | Freeze | Protocol frozen (PREREGISTERED) by 2026-10-21, before the first evaluation kickoff, with `holdout_windows` set | PROPOSED |
 | Untouched future window | Kickoffs from 2026-10-22 (week 7 Thursday) through the end of the regular season (week 18, about 2027-01-10); scope `sports:nfl:moneyline`, identified by outcome window **and** dataset hash. Playoffs are a pre-registered optional extension. Pilot games are never relabelled as untouched. | PROPOSED |
@@ -310,8 +344,13 @@ The question is whether any allowlisted set can meet its proof requirements unde
 formula:
 
 ```
-worst = min_s( Σ_i( q_i·payout_i(s) − settlement_cost_i(s) + refund_i(s) ) − basket_cost(s) ) − Σ_i acquisition_cost_i
+worst_state_surplus = min_s( sum_i( q_i*payout_i(s) - settlement_cost_i(s, fill_i)
+                                    + refund_i(s, fill_i) ) - basket_settlement_cost(s, fill) )
+                      - sum_i(acquisition_cost_i(fill_i)) - state_independent_costs
 ```
+
+This is verbatim from `src/edge_lab/payoff_constraints.py` (module docstring, lines 21–23), and it is
+the same formula as EXP-003 `protocol.toml` `named_hypothesis`.
 
 **Evidence strength:**
 - **E** = explicit contractual guarantee (contract terms or rulebook);
@@ -325,10 +364,10 @@ A run of observed integer outcomes is O, never E.
 | # | Relationship | Instrument scope | Required proposition | Current evidence | Strength | Missing fact | Consequence if unresolved | Best next action |
 |---|---|---|---|---|---|---|---|---|
 | 1 | Partition | KXHIGHNY, all 6 brackets of one event, YES | The NORMAL states are exhaustive: every possible settlement value lies in exactly one bracket | Brackets are integer-inclusive (`between` = ≥ low and ≤ high; SETTLEMENT §3); 739/739 audited values are whole degrees, 39 of them in the TWC era; the rules settle on "the full precision reported by the Source Agency" | E (inclusivity), O (integers), U (TWC precision) | Is a KXHIGHNY expiration value guaranteed to be a whole °F? | A value such as 81.5 lies in **no** bracket, so every leg pays 0: INCOMPLETE (CURRENT) | Q4 to Kalshi |
-| 2 | Partition, nested threshold | KXHIGHNY, any cross-market set | The discretionary fallback preserves the relation: Σ v_i = 1 across the event | Rules: with missing data, all strikes resolve to "the last fair price" at the Exchange's sole discretion. Each strike gets its own value. No text constrains the sum | E (the state exists), U (sum constraint) | Are fallback prices across a mutually exclusive event constrained to sum to $1? | Worst state = every v_i = 0, so the basket pays 0 and **no positive surplus can ever be claimed** (VERIFIED: every evaluated production and laptop scan row had the fallback as its worst state, paying 0) | Q1 to Kalshi |
-| 3 | Any set | Kalshi, any series | The VOID / REFUND / CANCELLATION cash flow is known | Rule 2.8(d): an emergency may cancel a contract and return the funds paid to enter trades; Rule 6.3(c): discretionary payouts | E (the state exists), U (whether fees are refunded) | Does a cancellation return trading fees and rounding fees as well as prices? | If fees are not returned, that state's surplus is −fees, so worst < 0. **If everything is returned, that state's surplus is exactly 0, so worst ≤ 0 anyway.** A strictly positive worst-state surplus is impossible while a full-refund state is admissible (see note B-1) | Q3 to Kalshi; technical review of note B-1 |
-| 4 | Complement | One Kalshi market, YES + NO in equal quantity | NO pays 1 − v in every state, including fallback | Rule 6.3(c) example: last traded $0.10 → $0.10 long / $0.90 short; Rule 6.3(b): the settlement value is split between long and short; settlement docs: "Only net positions are settled (after netting)" | E for the last-traded method; I for the Outcome Review Committee's "fair allocation"; D (netting) | Is NO always paid $1 − v under a committee allocation? | The relation holds in structure under E and I. `payoff_constraints.fallback_cell` already records NO = 1 − v as an assumption (CURRENT) | Q2 to Kalshi |
-| 5 | Complement (economics) | One Kalshi market | A YES + NO surplus can exist in a consistent book | The orderbook returns bids only; best YES ask = $1 − best NO bid, best NO ask = $1 − best YES bid (docs `orderbook_responses`; `kalshi_quotes`). So YES ask + NO ask = 2 − (yes bid + no bid) ≥ 1 unless the book is crossed, which is flagged as an anomaly | D, and I that the matching engine prevents a resting crossed book | none | **Pre-fee surplus ≤ 0 in any consistent snapshot, so the complement is provable-in-structure but economically empty.** A positive reading would be a data artefact (non-simultaneous levels) | VERIFIED no-surplus by construction; no further work |
+| 2 | Partition, nested threshold | KXHIGHNY, any cross-market set | The discretionary fallback preserves the relation: Σ v_i = 1 across the event | Rules: with missing data, all strikes resolve to "the last fair price" at the Exchange's sole discretion. Each strike gets its own value. No text constrains the sum | E (the state exists), U (sum constraint) | Are fallback prices across a mutually exclusive event constrained to sum to $1? | Every v_i = 0 cannot be excluded, so a conservative evaluator must assume the basket pays 0 in that state, and **no positive surplus can be claimed**. Every evaluated production and laptop scan row had the fallback, valued at 0, as its worst state (CURRENT evaluator behaviour) | Q1 to Kalshi |
+| 3 | Any set | Kalshi, any series | The VOID / REFUND / CANCELLATION cash flow is known | Rule 2.8(d), emergency actions: (b) reduction of positions, (c) cancellation of a contract with the return of funds paid to enter trades, (f) changing a contract's terms; Rule 6.3(c): discretionary payouts | E (the powers exist), U (whether a cancellation returns fees) | Does a cancellation return trading fees and rounding fees as well as prices? | Depends on the scoping decision in note B-1. If emergency actions are admissible states, a cancellation state caps the worst-state surplus at 0 (at −fees if fees are not returned), and reductions and term changes make every relation unprovable | Scoping decision (note B-1, PROPOSED); Q3 to Kalshi |
+| 4 | Complement | One Kalshi market, YES + NO in equal quantity | NO pays 1 − v in every state, including fallback | Rule 6.3(a): a binary contract pays the settlement value to long holders when the payout criterion is met, otherwise to short holders; Rule 6.3(c): when the payout cannot be determined, its last-traded-price example pays $0.10 long / $0.90 short, otherwise the committee's "fair allocation"; Rule 6.3(b): a scalar settlement is split between long and short; settlement docs: "Only net positions are settled (after netting)" | E for the last-traded method; I for the Outcome Review Committee's "fair allocation"; D (netting) | Is NO always paid $1 − v under a committee allocation? | The relation holds in structure under E and I. `payoff_constraints.fallback_cell` already records NO = 1 − v as an assumption (CURRENT) | Q2 to Kalshi |
+| 5 | Complement (economics) | One Kalshi market | A YES + NO surplus can exist in a consistent book | The orderbook returns bids only; best YES ask = $1 − best NO bid, best NO ask = $1 − best YES bid (docs `orderbook_responses`; `kalshi_quotes`). So YES ask + NO ask = 2 − (yes bid + no bid) ≥ 1 unless the book is crossed, which is flagged as an anomaly | D, and I that the matching engine prevents a resting crossed book | none | **Pre-fee surplus ≤ 0 in any consistent snapshot, so the complement is provable-in-structure but economically empty.** A positive reading would be a data artefact (non-simultaneous levels) | D + I: no surplus by construction (the reciprocal book is documented; that the matching engine never rests a crossed book is inference); no further work |
 | 6 | Tie state | KXHIGHNY | No TIE state | Integer settlement puts every value in one bracket (CURRENT proof, `KXHIGHNY_PROOF`) | depends on #1 | #1 | Stands or falls with #1 | — |
 | 7 | Correction state | KXHIGHNY | Corrections only select among the NORMAL states | "Revisions after the Expiration Date are not included" (GLOBALTEMPERATURE; SETTLEMENT §4) | E | none | Excluded with evidence (CURRENT) | — |
 | 8 | Fees on fractional fills | Kalshi taker fills | The all-in cost of a walk that crosses fractional levels is known | Fee Rounding docs: per-fill trade fee rounded up to $0.000001, balance alignment to $0.0001 (direct) or $0.01, and an order-level accumulator with a capped rebate; 0.01-contract granularity | D (mechanics), with the account type owner-attested | none for the mechanics; exact rebate order across split fills (Q5) | Those sizes are NOT_EVALUATED (CURRENT). Implementable from the docs, but not worth building while #2 and #3 block any claim | Defer. Q5 only if the scope reopens |
@@ -336,33 +375,55 @@ A run of observed integer outcomes is O, never E.
 | 10 | Transfer costs | Account funding | Basket economics include deposit and withdrawal costs | Fee PDF p.3: ACH free; debit card up to 2%; wire bank fees; crypto processor fees; alternate rails 0–2% | E | the owner's funding rail (not needed for research) | These are per-account fixed costs, outside the per-basket formula. They belong in §C fixed costs, not in `settlement_cost_i` | Note in §C |
 | 11 | Partition | KXNFLGAME, the two team markets of one game, YES + YES | Exhaustive and exclusive, summing to $1 | Win/loss: 1 + 0; tie: 0.50 + 0.50 (E); fair price: v_A + v_B unconstrained (U); disqualification after the start: "No" for the disqualified team and "Yes" for the opponent only if declared winner, so 0 + 0 is possible (E). The event record says `mutually_exclusive: true`, `collateral_return_type: MECNET` (undocumented here) | E / U | Q1 for this series; Q8 (MECNET) | Not provable. It is also **outside EXP-003's allowlist and universe**: adding it would be a new series variant and need review | Do not add. Recorded only because Family A shares the series |
 
-**Note B-1 (a finding for technical review; the formula is not changed).**
-- H-B1 asks for a *positive* worst-state full-fill surplus.
-- Whenever a cancellation state that refunds all funds is admissible, the basket's surplus in
-  that state is exactly 0. The minimum over states is then at most 0, whatever the prices.
-- Rule 2.8 makes that state admissible for every Kalshi contract. So H-B1 as worded is
-  unattainable on Kalshi even with perfect prices.
-- A meaningful criterion would be "non-negative in every admissible state, and positive in every
-  NORMAL state" (a weak arbitrage). It needs fees to be refunded on cancellation (Q3).
-- That is a change to the hypothesis. It must be a logged, reviewed protocol amendment before any
-  further scan. Nothing is changed here.
+**Note B-1: emergency powers need an explicit scoping decision (PROPOSED; technical review; the
+formula is not changed).**
+- Rulebook v1.29 Rule 2.8(d) lets Kalshi, in an emergency, among other things:
+  - (b) reduce positions;
+  - (c) cancel a contract and return the funds paid to enter trades;
+  - (f) change a contract's terms and specifications.
+- These powers exist for every Kalshi contract. Treated as admissible settlement states:
+  - (c) caps any basket's worst-state surplus at 0. It is at −fees if fees are not returned, which
+    is unknown (Q3).
+  - (b) and (f) can put a basket in any state.
+  - So **no payoff relation on Kalshi is ever provable**, and H-B1 is unattainable whatever the
+    prices.
+- **PROPOSED scoping:** exclude Rule 2.8 emergency actions (and Rule 7.2 contract modifications)
+  from the admissible settlement states.
+  - Record them as **residual venue risk** in every result, beside counterparty, operational and
+    orphan-leg risk.
+  - The contract's own fallback clauses (fair price, #2) and Rule 6.3(c) / 7.1 outcome
+    determination stay **admissible**, because they are ordinary settlement provisions, not
+    emergency actions.
+  - `StateProof.excluded_kinds` would carry this scoping as its evidence text. That is a reviewed
+    protocol amendment, logged, before any further scan.
+- **How the verdict depends on it:**
+  - **With the proposed scoping**, the cancellation cap disappears. The pause rests on #1 (integer
+    settlement, Q4) and #2 (the fallback sum, Q1). Q3 only informs the residual-risk statement.
+  - **If emergency actions are admissible**, every Kalshi same-venue relation is unprovable, and
+    the recommendation becomes **reject now**, for EXP-003's whole Kalshi scope, not just
+    KXHIGHNY.
 
 **Verdict (PROPOSED).**
-1. **The full KXHIGHNY bracket partition cannot be proven today.** Its worst admissible state (the
-   fallback) pays 0 under the contractual text (#2). Integer settlement is only observed (#1). No
-   positive surplus can be claimed, and every stored scan agrees (no surplus even before fees:
-   1.06–1.09 per $1 basket).
+1. **The full KXHIGHNY bracket partition cannot be proven today.** The contract text does not
+   constrain the fallback prices, so a worst-state payout of 0 cannot be excluded and a
+   conservative evaluator must assume 0 (#2). Integer settlement is only observed (#1). No positive
+   surplus can be claimed, and every stored scan agrees (no surplus even before fees: 1.06–1.09 per
+   $1 basket).
 2. **The simpler allowlisted relationship, the single-market complement, is the only one that
-   survives fallback** (#4: E and I). It cannot produce a surplus from one consistent book (#5).
-   It is provable-in-structure but economically empty.
-3. **Recommendation: pause the current EXP-003 scope, and keep one bounded fact-verification
-   task.**
-   - No new solver, scan or fractional-fee feature is built while #2 and #3 are open.
+   survives fallback** (#4: E for Rule 6.3(a) and the last-traded method, I for a committee
+   allocation). It cannot produce a surplus from one consistent book (#5, D + I). It is
+   provable-in-structure but economically empty.
+3. **Recommendation, under the proposed emergency-power scoping: pause the current EXP-003 scope,
+   and keep one bounded fact-verification task.**
+   - No new solver, scan or fractional-fee feature is built while #1 and #2 are open.
    - If the owner approves, send Q1–Q4 (and Q5–Q8 for completeness) to Kalshi.
    - Reopen only on a written, official answer that fallback prices of a mutually exclusive event
-     sum to $1 **and** that cancellation refunds fees. The note B-1 amendment is also needed.
+     sum to $1 (Q1) **and** that KXHIGHNY values are whole degrees or the brackets cover
+     non-integers (Q4). The scoping amendment must also be recorded.
    - **Reject** the KXHIGHNY partition scope, recorded with its reasons and never deleted, if there
      is no answer by **2026-11-15**, or the answer is negative.
+   - If review rejects the scoping and treats emergency actions as admissible: reject now (note
+     B-1).
    - Status: PROPOSED. It needs owner approval to contact Kalshi (sending a message on the owner's
      behalf).
 4. **Separation kept.** Operational settlement audits of KXHIGHNY (EXP-001, `settlement audit`) are
@@ -383,9 +444,9 @@ A run of observed integer outcomes is O, never E.
 > sub-cent?
 >
 > **Q3 (cancellation refunds).** Rulebook v1.29 Rule 2.8 lets an emergency action cancel a contract
-> and return the funds paid to enter trades. In that case, are trading fees and rounding fees returned together
-> with contract prices? Are there other paths (Rule 6.3(c), Rule 7.1) by which a contract is voided
-> with funds returned rather than settled at a value?
+> and return the funds paid to enter trades. In that case, are trading fees and rounding fees
+> returned together with contract prices? Are there other paths (Rule 6.3(c), Rule 7.1) by which a
+> contract is voided with funds returned rather than settled at a value?
 >
 > **Q4 (settlement precision).** For KXHIGHNY under The Weather Company source, is the expiration
 > value guaranteed to be a whole degree Fahrenheit? If a fractional value is reported (for example
@@ -433,7 +494,7 @@ Assumptions:
 |---|---|---|---|---|---|
 | Low | 17 | 10 | $0.01 | **$1.70** | ~$5 (1 concurrent × $5.175) |
 | Mid | 34 | 100 | $0.02 | **$68** | ~$104 (2 concurrent × $51.75) |
-| High (capacity UNVERIFIED) | 51 | 1,000 | $0.03 | **$1,530** | ~$1,553 (3 concurrent × $517.50) |
+| High (the ladder's top rung; capacity UNVERIFIED) | 51 | 250 | $0.03 | **$382.50** | ~$388 (3 concurrent × $129.375) |
 
 Other quantities:
 - **Fixed incremental cash costs:** $0. The Odds API free tier stays inside its 450-credit cap,
@@ -444,10 +505,12 @@ Other quantities:
   the per-contract formula.
 - **Concurrency** (an assumption): about 20 weeks a season, playoffs included, give 1, 2 or 3
   episodes a week, taken as concurrent on one Sunday slate.
-- **Return on deployed vs total capital:** in the mid scenario, $68 over a peak of about $104 is
-  about 65% a season on peak deployed capital. On a $1,000 illustrative total it is 6.8%. The two
-  are shown separately (CURRENT screen fields; the screen uses average deployed capital, which is
-  lower than peak).
+- **Return on deployed vs total capital:** the screen reports these separately (CURRENT fields,
+  using average rather than peak deployed capital). As **scenario arithmetic only**, not a return
+  and never to be quoted as one: the mid row is $68 against about $104 of peak deployed capital, or
+  against a $1,000 illustrative total.
+- **Economics use only book-at-or-after-odds pairs** (A.C). Book-before-odds pairs are
+  comparability-only.
 - **Capacity:** UNKNOWN. Pregame depth has never been stored.
 - **Uncertainty:** the effect size is unknown and may be zero. §A.G shows even the sign of the
   settlement P&L is not inferable in one season.
@@ -467,13 +530,14 @@ Other quantities:
 ### C.3 Bootstrap-relevant economic threshold (PROPOSED; not an approved target)
 
 This is the minimum useful annual after-cost contribution (`[economics] minimum_useful_effect`),
-tested on the **conservative** (FIRST_DETECTION_ZERO_LATENCY) lower band, never on the hindsight
-bound.
+tested on the **first-detection** (FIRST_DETECTION_ZERO_LATENCY) lower band, never on the
+hindsight bound. The first-detection bound is not delay-adjusted, so passing it is a research
+state, not an execution result.
 
 | Option | Threshold | Reading | Tradeoff |
 |---|---|---|---|
 | A: learning | $250 / year at ≤ $1,000 illustrative capital | proves after-cost value exists at research size | continues families that can never matter |
-| **B: bootstrap (recommended)** | **$1,000 / year at ≤ $2,500 illustrative peak deployed capital** (about 40% a year on illustrative total capital) | worth the owner's attention for a small bankroll; clearly above today's $0 incremental fixed cost, with room for a small paid data item later (to be priced then) | Family A reaches it only in the high scenario |
+| **B: bootstrap (recommended)** | **$1,000 / year at ≤ $2,500 illustrative peak deployed capital** | worth the owner's attention for a small bankroll; clearly above today's $0 incremental fixed cost, with room for a small paid data item later (to be priced then) | No Family A scenario within the research ladder reaches it (the high row is $382.50), so reaching it needs capacity beyond 250 contracts, which is UNVERIFIED |
 | C: step toward the aspiration | $5,000 / year | a meaningful income step | likely needs capacity beyond research sizes; it may stop a family that is small but real |
 
 A small-capacity strategy can justify a small research budget. Option B is a floor for *continuing
@@ -483,7 +547,7 @@ beyond research*, not for *doing* the research.
 
 | Family | Initial allowance | Review point | Extension condition | Stop condition |
 |---|---|---|---|---|
-| A (EXP-002) | **6 owner hours** to 2026-10-22: about 1 h for the capture decision, 2 h to review the pilot report, 2 h to review the freeze, 1 h buffer | 2026-10-22 | pairing yield ≥ 50%, and the pilot-based sensitivity shows the markout test fits weeks 7–18 at the pessimistic ICC. Then +8 h to 2027-01-13 | yield < 50% after fixes; the pessimistic MDE over the remaining weeks is above 1 cent; interim futility (A.H); or the hours are spent |
+| A (EXP-002) | **6 owner hours** to 2026-10-22: the capture decision (given 2026-09-25, #110), 2 h to review the pilot report, 2 h to review the freeze, 2 h buffer | 2026-10-22 | pairing yield ≥ 50%, and the pilot-based sensitivity shows the markout test fits weeks 7–18 at the pessimistic ICC. Then +8 h to 2027-01-13 | yield < 50% after fixes; the pessimistic MDE over the remaining weeks is above 1 cent; interim futility (A.H); or the hours are spent |
 | B (EXP-003) | **2 owner hours**: decide whether to send the questions; read the answer | 2026-11-15 | a written official answer resolving #2 and #3 favourably. Then a re-plan with a new allowance | no answer by 2026-11-15, or an unfavourable answer: reject the scope |
 
 Agent and computer elapsed time is logged in PRs and handoffs. It is not charged to these
@@ -501,7 +565,7 @@ allowances, and it is bounded by the same review dates.
   episode was seen*. No prospective policy could make that choice, so it is an oracle, a hindsight
   upper bound.
 
-**Change (IMPLEMENTED, TESTED_LOCALLY; ADR 0037).**
+**Change (PROPOSED in this PR; its tests pass locally and in CI; ADR 0037).**
 - The enum values `CONSERVATIVE` / `LESS_CONSERVATIVE` are kept for compatibility.
 - `research_economics` is now `research-economics-v2` with `fill-mode-labels-v2`. Its
   `FILL_MODE_SEMANTICS` defines:
@@ -522,7 +586,7 @@ allowances, and it is bounded by the same review dates.
   delay-adjusted fill mode. It is proposed as a future registered variant: fill at the first
   observation received at least *d* seconds after detection.
 
-## E. Stale EXP-003 readiness references (IMPLEMENTED)
+## E. Stale EXP-003 readiness references (PROPOSED in this PR)
 
 In `experiments/EXP-003-same-venue-payoff-consistency/protocol.toml`, "the payoff evaluator is
 PR B" and the blocker "Payoff evaluator and semantic conformance (PR B)" now name the merged
@@ -553,8 +617,9 @@ Stale references outside this writer's claim are reported to the coordinator, no
 
 | Item | Owner | Why |
 |---|---|---|
-| Record Decision 1 (Kalshi NFL capture) with the A.C pair window and the A.H pilot dates | coordinator / RU Writer O | The pilot cannot start without it. Each NFL week not captured is lost for good. |
+| Deploy #112 (Kalshi NFL capture, APPROVED in #110) before the Saturday 2026-09-26 T-24h targets | coordinator / RU Writer O | Each NFL week not captured is lost for good. |
+| `sports_evidence.pick_book` (lines 754–765): the prospective book choice and the asymmetric window (A.C) | `sports_evidence` owner (a join variant) | the CURRENT "closest book" choice is a mild look-ahead |
+| `dashboard/views/research.py:1067` renders the fill-mode enum id before its text | Terminal owner | show the v2 label (`FIRST_DETECTION_ZERO_LATENCY` / `HINDSIGHT_UPPER_BOUND`) first; the text already leads with it |
 | A KXNFLGAME fee-verification record (Q7 reading; event-level overrides) | `fee_schedules` owner | FEE_UNSUPPORTED blocks every all-in cost in Family A. |
-| `JoinPolicy` asymmetric pair window as a registered join variant | `sports_evidence` owner (behaviour change) | A.C |
 | The stale references in §E | coordinator / Terminal owner | stale documentation |
 | Owner packet Decision 2 (§C thresholds and hours) | coordinator | owner input |

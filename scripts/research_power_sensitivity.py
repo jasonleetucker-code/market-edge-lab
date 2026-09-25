@@ -2,6 +2,7 @@
 
     python scripts/research_power_sensitivity.py            # Markdown tables (the default grid)
     python scripts/research_power_sensitivity.py --json     # the same rows as JSON
+    python scripts/research_power_sensitivity.py --null-check   # the markout statistics under a no-information null
 
 It reads no data and makes no request. Every input is an assumption stated in the output, so the
 result is a *range* of what a design would need, never a sample size to freeze. The frozen value
@@ -23,7 +24,22 @@ Model (one primary per-game statistic, cluster = NFL week):
 Limits: a normal approximation with an exchangeable within-week correlation; no multiplicity
 adjustment (divide `alpha` by the number of registered variants, or use the variant budget);
 no interim looks; `m` is an average; `sd` and `icc` must come from development data or stay a
-range. Stdlib only, deterministic.
+range.
+
+Null-bias simulation (`simulate_null`, `--null-check`): under a model where the latent value is a
+martingale, the consensus knows only the current latent value (no information about later moves)
+and each Kalshi mid is the latent value plus noise, it reports the mean of three per-game
+statistics:
+- `naive`: sign(c - k6) * (k1 - k6) on one book. It is **biased upward under the null**, because the
+  noise in k6 enters both the sign and the base (mean reversion of mid noise).
+- `cross` (PROPOSED primary): the gap sign from one team market's book and the markout from the other
+  team market's book (converted to the same team's units), averaged over both assignments. Unbiased
+  when the two books' noises are independent.
+- `placebo` (PROPOSED required bias check): `cross` with the consensus replaced by the signal book's own
+  earlier (T-24h) mid, a Kalshi-only signal with no consensus information. Zero under the model; away from
+  zero when the two books' noises are correlated (for example mirror-quoted) or Kalshi has its own
+  momentum or reversal.
+Stdlib only, deterministic (fixed seeds).
 """
 
 from __future__ import annotations
@@ -31,6 +47,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import random
 from dataclasses import asdict, dataclass
 from statistics import NormalDist
 
@@ -113,7 +130,10 @@ class Row:
 # Assumption grids (ASSUMPTIONS, not measurements). Each is stated in the output.
 # Per-game SD of the primary markout statistic (the signed change of the Kalshi mid, in probability points,
 # from the decision horizon to the later horizon): UNKNOWN until pilot data; range spans quiet to volatile.
-MARKOUT_SD = (0.01, 0.02, 0.04)
+# The top of the range (6-8 cents) covers games repriced by inactive/injury news between T-6h and T-60m.
+MARKOUT_SD = (0.01, 0.02, 0.04, 0.06, 0.08)
+# 0.25 cent is at or below half a tick of mid resolution (a mid on a 1-cent grid moves in 0.5-cent steps):
+# it is kept as a lower-edge scenario, not as a detectable price move of a single game.
 MARKOUT_EFFECT = (0.0025, 0.005, 0.01)
 # Per-contract P&L of a binary contract held to settlement: SD = sqrt(p (1 - p)) <= 0.5, a mathematical
 # bound (ties and fair prices only lower it), so 0.5 is conservative and 0.45 is near p = 0.3 or 0.7.
@@ -160,6 +180,95 @@ def summary(rows: list[Row]) -> dict[str, dict[str, float | int | None]]:
     return out
 
 
+# --------------------------------------------------------------------------- null-bias simulation
+
+
+def _sign(x: float) -> int:
+    return (x > 0) - (x < 0)
+
+
+def _round_to(x: float, tick: float) -> float:
+    return x if tick <= 0 else round(x / tick) * tick
+
+
+@dataclass(frozen=True)
+class NullCheck:
+    noise_sd: float  # SD of each book's mid around the latent value
+    book_noise_corr: float  # correlation of the two books' noises at the same time (1 = mirror-quoted)
+    tick: float  # rounding of each mid (0 = none)
+    informative: bool  # False: the no-information null; True: the consensus knows the later latent value
+    n: int
+    seed: int
+    naive_mean: float
+    naive_se: float
+    cross_mean: float
+    cross_se: float
+    placebo_mean: float
+    placebo_se: float
+
+
+def simulate_null(*, noise_sd: float, book_noise_corr: float = 0.0, tick: float = 0.0, informative: bool = False,
+                  n: int = 40_000, seed: int = 20260925, move_sd: float = 0.02, early_move_sd: float = 0.03,
+                  consensus_sd: float = 0.01) -> NullCheck:
+    """Means (and standard errors) of the naive, cross-book and placebo markout statistics per game.
+
+    Model: latent L24 ~ U(0.3, 0.7); L6 = L24 + N(0, early_move_sd); L1 = L6 + N(0, move_sd) (a martingale:
+    under the null nothing predicts L1 - L6). Consensus c = L6 + N(0, consensus_sd), or L1 + N(0,
+    consensus_sd) when `informative`. Book mids (home-team units): H_t = L_t + e_t, A_t = L_t + f_t, with
+    corr(e_t, f_t) = `book_noise_corr`, independent across t, each rounded to `tick`."""
+    if not (noise_sd >= 0 and -1 <= book_noise_corr <= 1 and n >= 2):
+        raise ValueError("noise_sd >= 0, book_noise_corr in [-1, 1], n >= 2")
+    rng = random.Random(seed)
+    rho, rest = book_noise_corr, math.sqrt(max(0.0, 1 - book_noise_corr ** 2))
+
+    def books(latent: float) -> tuple[float, float]:
+        z1, z2 = rng.gauss(0, 1), rng.gauss(0, 1)
+        return (_round_to(latent + noise_sd * z1, tick), _round_to(latent + noise_sd * (rho * z1 + rest * z2), tick))
+
+    sums = {"naive": [0.0, 0.0], "cross": [0.0, 0.0], "placebo": [0.0, 0.0]}
+    for _ in range(n):
+        l24 = rng.uniform(0.3, 0.7)
+        l6 = l24 + rng.gauss(0, early_move_sd)
+        l1 = l6 + rng.gauss(0, move_sd)
+        c = (l1 if informative else l6) + rng.gauss(0, consensus_sd)
+        h24, a24 = books(l24)
+        h6, a6 = books(l6)
+        h1, a1 = books(l1)
+        values = {
+            "naive": _sign(c - h6) * (h1 - h6),
+            "cross": 0.5 * (_sign(c - h6) * (a1 - a6) + _sign(c - a6) * (h1 - h6)),
+            "placebo": 0.5 * (_sign(h24 - h6) * (a1 - a6) + _sign(a24 - a6) * (h1 - h6)),
+        }
+        for k, v in values.items():
+            sums[k][0] += v
+            sums[k][1] += v * v
+
+    def mean_se(k: str) -> tuple[float, float]:
+        total, sq = sums[k]
+        mean = total / n
+        var = max(0.0, (sq - n * mean * mean) / (n - 1))
+        return mean, math.sqrt(var / n)
+
+    (nm, ns), (cm, cs), (pm, pse) = mean_se("naive"), mean_se("cross"), mean_se("placebo")
+    return NullCheck(noise_sd, book_noise_corr, tick, informative, n, seed, nm, ns, cm, cs, pm, pse)
+
+
+NULL_CHECK_GRID = ((0.0025, 0.0, 0.0), (0.005, 0.0, 0.0), (0.005, 0.0, 0.01), (0.005, 0.5, 0.0), (0.005, 1.0, 0.0))
+
+
+def null_check_markdown(n: int = 40_000) -> str:
+    lines = ["# Markout statistics under a no-information null (simulation; model in the module docstring)", "",
+             "Means in cents per game (standard error). Under the null a valid statistic has mean 0.", "",
+             "| mid noise SD | book-noise corr | tick | naive | cross (primary) | placebo (bias check) |",
+             "|---|---|---|---|---|---|"]
+    for noise, corr, tick in NULL_CHECK_GRID:
+        r = simulate_null(noise_sd=noise, book_noise_corr=corr, tick=tick, n=n)
+        lines.append(f"| {noise * 100:.2f}c | {corr} | {tick * 100:.0f}c | {r.naive_mean * 100:+.3f} ({r.naive_se * 100:.3f}) "
+                     f"| {r.cross_mean * 100:+.3f} ({r.cross_se * 100:.3f}) | {r.placebo_mean * 100:+.3f} "
+                     f"({r.placebo_se * 100:.3f}) |")
+    return "\n".join(lines) + "\n"
+
+
 def markdown(rows: list[Row], *, alpha: float, power: float) -> str:
     horizon = rows[0].feasible_in_weeks if rows else SEASON_WEEKS_AVAILABLE
     lines = [f"# {LABEL}", "", f"`{VERSION}`; alpha {alpha} one-sided, power {power}; planning horizon "
@@ -184,7 +293,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--alpha", type=float, default=0.05)
     parser.add_argument("--power", type=float, default=0.80)
     parser.add_argument("--horizon-weeks", type=float, default=SEASON_WEEKS_AVAILABLE)
+    parser.add_argument("--null-check", action="store_true", help="simulate the markout statistics under the null")
     args = parser.parse_args(argv)
+    if args.null_check:
+        print(null_check_markdown(), end="")
+        return 0
     rows = grid(alpha=args.alpha, power=args.power, horizon_weeks=args.horizon_weeks)
     if args.json:
         print(json.dumps({"version": VERSION, "label": LABEL, "alpha": args.alpha, "power": args.power,

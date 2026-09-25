@@ -124,8 +124,8 @@ permitted_uses = [
   "economics/capacity screen",
 ]
 remaining_blockers = [
-  "Settlement-state proof (docs/research/RESEARCH_UNBLOCKING_DECISIONS.md section B): the discretionary fair-price fallback is admissible and nothing constrains the fallback prices of an event to sum to $1, so a KXHIGHNY partition's worst state pays 0; integer settlement is observed, not guaranteed; the cash flow of a cancellation with refund (Rule 2.8) is unknown (fees)",
-  "An admissible full-refund cancellation caps any worst-state surplus at 0, so H-B1's positive-surplus wording needs a reviewed amendment before any further scan (docs/research/RESEARCH_UNBLOCKING_DECISIONS.md note B-1)",
+  "Settlement-state proof (docs/research/RESEARCH_UNBLOCKING_DECISIONS.md section B): the discretionary fair-price fallback is admissible and nothing constrains the fallback prices of an event to sum to $1, so a worst-state payout of 0 cannot be excluded and the evaluator assumes 0 for a KXHIGHNY partition; integer settlement is observed, not guaranteed; whether a Rule 2.8 cancellation returns fees is unknown",
+  "Emergency powers (Rulebook v1.29 Rule 2.8(d): reduction of positions, cancellation with return of funds paid, changed terms) need an explicit scoping decision before any further scan. PROPOSED: exclude them from the admissible states and report them as residual venue risk; if they are admissible instead, no Kalshi payoff relation is provable and the scope should be rejected (docs/research/RESEARCH_UNBLOCKING_DECISIONS.md note B-1)",
   "Fractional-fill fee rule not modelled (walks crossing fractional levels are NOT_EVALUATED)",
   "Minimum useful effect and owner hours are owner inputs",
 ]

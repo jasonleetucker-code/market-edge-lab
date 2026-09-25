@@ -22,7 +22,7 @@ open_decisions = [
   "OPEN 3, the size ladder rungs ([size_capital] size_ladder) [A.E]. PROPOSED: 1, 10, 50, 100, 250 contracts.",
   "OPEN 4, the episode definition: start threshold, end/merge gap and minimum size ([episode]) [A.F].",
   "OPEN 5, the minimum number of independent clusters (NFL weeks) before a screen verdict ([economics] min_independent_clusters), and the minimum episode count for an annual scenario ([economics] min_episodes_for_scenario) [A.G]; sensitivity ranges from scripts/research_power_sensitivity.py; the frozen values need a logged development pilot.",
-  "OPEN 6, the primary endpoint [A.A]. PROPOSED: predictive markout (T-6h consensus-vs-Kalshi-mid gap against the Kalshi mid change to T-60m), chosen on data design and power with no result viewed.",
+  "OPEN 6, the primary endpoint [A.A]. PROPOSED (revised after review): a cross-book predictive markout. The sign of the T-6h consensus-vs-Kalshi-mid gap comes from one team market's book and the mid change to T-60m is measured on the other team market's book, averaged over both assignments, because a same-book markout is biased upward under a no-information null (mid-noise reversion). A Kalshi-only placebo (the signal book's own T-24h mid instead of the consensus) is a required bias check, plus pre-freeze checks of the cross-book noise correlation. Chosen on data design and power with no result viewed.",
 ]
 
 [universe]
@@ -42,7 +42,7 @@ clusters = [
 dependence = "Books are not independent (shared line sources); sides of one game are complements; repeated snapshots re-observe the same liquidity. Uncertainty is computed on game- and week-clustered units, never on book or snapshot counts: research_economics bootstraps on the coarsest level present on every episode (outer_cluster_id = NFL week)."
 
 [endpoints]
-primary = "UNKNOWN: exactly one of (a) calibration/outcome information at a frozen horizon (for example a log-score difference vs a market probability benchmark, never the executable ask) or (b) predictive markout at a named later horizon; to be chosen and frozen before preregistration. PROPOSED (not settled): (b), T-6h to T-60m (docs/research/RESEARCH_UNBLOCKING_DECISIONS.md A.A)."
+primary = "UNKNOWN: exactly one of (a) calibration/outcome information at a frozen horizon (for example a log-score difference vs a market probability benchmark, never the executable ask) or (b) predictive markout at a named later horizon; to be chosen and frozen before preregistration. PROPOSED (not settled): (b), a cross-book markout T-6h to T-60m with a Kalshi-only placebo as a required bias check (docs/research/RESEARCH_UNBLOCKING_DECISIONS.md A.A)."
 secondary = [
   "After-cost conditional contribution per game at each size-ladder rung (research_economics)",
   "Episode persistence bounds at capture-schedule resolution (never below it)",
@@ -131,7 +131,7 @@ permitted_uses = [
   "economics/capacity screen",
 ]
 remaining_blockers = [
-  "Paired Kalshi NFL books are not collected (a new bounded collector needs explicit EXECUTION_PLAN authority and owner approval)",
+  "Paired Kalshi NFL books are not collected yet: collection was APPROVED by the owner on 2026-09-25 (docs/EXECUTION_PLAN.md, #110; collection only, within SPORTS_PAIRED_EVIDENCE_GAPS section 6); the implementation (#112) is pending deploy",
   "Payoff-equivalence mapping (ties, overtime, void, units) not established",
   "Minimum useful effect and owner hours are owner inputs",
 ]

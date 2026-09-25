@@ -84,9 +84,41 @@ def test_the_cli_prints_the_label_and_valid_json(capsys):
     assert all(math.isfinite(r["n_eff"]) for r in data["rows"])
 
 
+def test_the_naive_markout_is_biased_under_a_no_information_null():
+    # Mid noise enters both the sign and the base of sign(c - k6) * (k1 - k6): mean reversion alone makes it
+    # positive with no information at all (the review's finding on #111).
+    r = ps.simulate_null(noise_sd=0.005, n=40_000)
+    assert r.naive_mean > 8 * r.naive_se and r.naive_mean > 0.001
+
+
+@pytest.mark.parametrize("seed", [11, 12])
+def test_the_cross_book_primary_and_the_kalshi_only_placebo_are_centred_under_the_null(seed):
+    for tick in (0.0, 0.01):
+        r = ps.simulate_null(noise_sd=0.005, tick=tick, n=40_000, seed=seed)
+        assert abs(r.cross_mean) < 4 * r.cross_se
+        assert abs(r.placebo_mean) < 4 * r.placebo_se
+
+
+def test_the_placebo_flags_mirror_quoted_books_that_would_bias_the_primary():
+    r = ps.simulate_null(noise_sd=0.005, book_noise_corr=1.0, n=100_000, seed=5)
+    assert r.cross_mean > 8 * r.cross_se  # correlated book noise brings the bias back
+    assert r.placebo_mean > 4 * r.placebo_se  # and the Kalshi-only placebo sees it
+
+
+def test_the_cross_book_primary_detects_real_information():
+    r = ps.simulate_null(noise_sd=0.005, informative=True, n=20_000)
+    assert r.cross_mean > 20 * r.cross_se
+
+
+def test_the_null_check_is_deterministic_and_printable(capsys):
+    assert ps.simulate_null(noise_sd=0.005, n=2_000) == ps.simulate_null(noise_sd=0.005, n=2_000)
+    assert ps.main(["--null-check"]) == 0
+    assert "cross (primary)" in capsys.readouterr().out
+
+
 def test_the_script_is_stdlib_only_and_has_no_network_path():
     tree = ast.parse(SCRIPT.read_text(encoding="utf-8"))
     imported = {a.name.split(".")[0] for node in ast.walk(tree) if isinstance(node, ast.Import) for a in node.names}
     imported |= {node.module.split(".")[0] for node in ast.walk(tree)
                  if isinstance(node, ast.ImportFrom) and node.module}
-    assert imported <= {"__future__", "argparse", "json", "math", "dataclasses", "statistics"}
+    assert imported <= {"__future__", "argparse", "json", "math", "random", "dataclasses", "statistics"}

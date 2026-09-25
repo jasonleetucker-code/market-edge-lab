@@ -179,11 +179,14 @@ below.
 
   The findings:
   - The discretionary fair-price fallback is admissible. Nothing constrains the fallback prices of
-    an event to sum to $1, so a partition's worst state pays 0. This agrees with every scan so far.
+    an event to sum to $1, so a worst-state payout of 0 cannot be excluded and the evaluator
+    assumes 0. This agrees with every scan so far.
   - Integer settlement is observed, not guaranteed.
-  - A full-refund cancellation (Rulebook v1.29 Rule 2.8) is admissible, which caps any worst-state
-    surplus at 0. H-B1's "positive" wording therefore needs a reviewed amendment before any
-    further scan (note B-1).
+  - Rulebook v1.29 Rule 2.8(d) emergency powers need an explicit scoping decision. They are reduction
+    of positions, cancellation with a return of the funds paid to enter trades (whether fees are
+    returned is unknown), and changed terms. PROPOSED: exclude them from the admissible states and
+    report them as residual venue risk. If they are admissible, no Kalshi payoff relation is
+    provable and the scope should be rejected (note B-1).
   - The single-market YES+NO complement survives fallback, but it cannot show a surplus from one
     consistent book (YES ask = 1 − NO bid).
 

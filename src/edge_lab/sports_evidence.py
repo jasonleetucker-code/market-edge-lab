@@ -246,11 +246,11 @@ class JoinPolicy:
 # is executable performance.
 FILL_MODES = (
     {"id": rec.FillMode.CONSERVATIVE.value, "basis": ESTIMATED,
-     "text":"FIRST_DETECTION_ZERO_LATENCY: an episode fills from its first qualifying observation at its receipt "
+     "text": "FIRST_DETECTION_ZERO_LATENCY: an episode fills from its first qualifying observation at its receipt "
              "time, with no decision or submission delay (not delay-adjusted; the quote may be gone by then); "
              "not executable performance"},
     {"id": rec.FillMode.LESS_CONSERVATIVE.value, "basis": ESTIMATED,
-     "text":"HINDSIGHT_UPPER_BOUND: an episode fills from its best single observation (never a sum), chosen after "
+     "text": "HINDSIGHT_UPPER_BOUND: an episode fills from its best single observation (never a sum), chosen after "
              "the whole episode was seen: an oracle upper bound that may only rule a family out, never an "
              "achievable policy or executable performance; captured depth is an instantaneous ceiling, not "
              "capacity"},

@@ -30,9 +30,10 @@ edge, and no sports model or strategy is operational or authorized.
 
 ## Current blockers
 
-- Paired Kalshi NFL books are not collected. The first output is PR C's data-gap report and
-  bounded capture plan. Activating a new collector needs explicit EXECUTION_PLAN authority and
-  the owner's approval.
+- Paired Kalshi NFL books are not collected yet. Collection was **APPROVED** by the owner on
+  2026-09-25 (`docs/EXECUTION_PLAN.md`, #110; collection only, within
+  `docs/research/SPORTS_PAIRED_EVIDENCE_GAPS.md` §6). The implementation (#112) is pending deploy.
+  The protocol stays DRAFT.
 - The payoff-equivalence mapping (ties, overtime, postponement, void and refund, units) is not
   established. The contract states are now verified (`rules_evidence/MANIFEST.md`). The proposed
   treatment is explicit payoff modelling with ex-ante bounds
@@ -57,6 +58,10 @@ edge, and no sports model or strategy is operational or authorized.
     from their public URLs and stored in `rules_evidence/` with hashes. The terms add fair-price
     states the market rules text does not list: suspension before 55 minutes, a forfeit before
     kickoff, a venue or home/away change, and a pre-game disqualification.
+  - **Revised after review (same PR):** the primary-endpoint proposal is now a *cross-book*
+    markout with a Kalshi-only placebo as a required bias check. The earlier same-book statistic
+    was biased upward under a no-information null. The pilot dates follow the owner's collection
+    approval (#110).
   - **Data looked at.** None in this experiment's scope. The laptop store was inventoried
     read-only to look for measured Odds/Kalshi timing. It holds no Odds API or KXNFLGAME rows, so
     no `sports:nfl:moneyline` data was viewed and nothing is appended to `evidence_use.jsonl`. The
