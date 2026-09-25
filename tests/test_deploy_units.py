@@ -63,7 +63,9 @@ def test_dashboard_is_read_only_loopback_only_and_tailnet_host_pinned():
     u = _parse("edgelab-dashboard.service")
     assert u[("Service", "User")] == ["edgelab"] and u[("Service", "Slice")] == ["edgelab.slice"]
     assert u[("Service", "ProtectSystem")] == ["strict"] and u[("Service", "NoNewPrivileges")] == ["yes"]
-    assert ("Service", "ReadWritePaths") not in u  # it writes nothing
+    # Store content is never written (mode=ro + query_only); the store directories are writable only
+    # for SQLite's WAL side files (ADR 0016), never the data root or the status directory.
+    assert u[("Service", "ReadWritePaths")] == ["/var/lib/market-edge-lab/db /var/lib/market-edge-lab/ledger"]
     assert u[("Service", "IPAddressDeny")] == ["any"] and u[("Service", "IPAddressAllow")] == ["localhost"]
     assert u[("Service", "RestrictAddressFamilies")] == ["AF_INET AF_UNIX"]
     assert u[("Service", "MemoryMax")] == ["128M"]

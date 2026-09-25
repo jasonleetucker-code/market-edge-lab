@@ -160,7 +160,8 @@ def test_freshness_unit_is_network_free_small_and_writes_only_the_status_dir():
     assert s[("Service", "Type")] == ["oneshot"] and s[("Service", "User")] == ["edgelab"]
     assert s[("Service", "Slice")] == ["edgelab.slice"]
     assert s[("Service", "RestrictAddressFamilies")] == ["AF_UNIX"] and s[("Service", "IPAddressDeny")] == ["any"]
-    assert s[("Service", "ReadWritePaths")] == ["/var/lib/market-edge-lab-status"]
+    # freshness.json, plus the store directories for SQLite's WAL side files only (ADR 0016).
+    assert s[("Service", "ReadWritePaths")] == ["/var/lib/market-edge-lab-status /var/lib/market-edge-lab/db /var/lib/market-edge-lab/ledger"]
     assert s[("Service", "ProtectSystem")] == ["strict"] and s[("Service", "NoNewPrivileges")] == ["yes"]
     assert s[("Service", "MemoryMax")] == ["128M"] and s[("Service", "CPUQuota")] == ["10%"]
     assert s[("Service", "TimeoutStartSec")] == ["120s"] and s[("Service", "UMask")] == ["0022"]

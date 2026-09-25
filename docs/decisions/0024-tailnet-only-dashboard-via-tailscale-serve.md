@@ -57,3 +57,25 @@ Until now it ran only on a laptop, over copied files.
 - the dashboard gains any write path;
 - the owner wants access without the Tailscale app;
 - Tailscale changes Serve so that the Host header or the tailnet-only reachability differs.
+
+
+## Amendment 2026-09-24 (night): read-only readers need the WAL side files
+
+On production the supervisor (and the dashboard) reported "evidence store unreadable
+(OperationalError)" for every store-backed source whenever no collector held the evidence DB
+open. The store runs in WAL mode. A read-only reader must create `-wal`/`-shm` when they are
+absent (ADR 0016), and the unit's sandbox forbade any write outside the status directory.
+
+**Decision.** `edgelab-freshness.service` and `edgelab-dashboard.service` may write the two store
+directories (`/var/lib/market-edge-lab/db`, `/var/lib/market-edge-lab/ledger`) so SQLite can
+create those side files.
+- Store contents stay unchanged: connections are still `mode=ro` plus `query_only`.
+- The data root and every other path stay read-only, and the supervisor still has no network.
+
+**Alternatives rejected:**
+- `immutable=1` can read a torn state while a writer commits.
+- Switching the store to rollback-journal mode would change the writers' concurrency.
+- Persistent WAL cannot be set from Python's sqlite3 module.
+
+**Tradeoff.** A bug in these units could create files in the store directories; it still could not
+alter a committed row through a `mode=ro` connection.

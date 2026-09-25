@@ -24,8 +24,13 @@ MemoryMax=128M
 CPUQuota=10%
 TasksMax=8
 Nice=10
-# Read-only everywhere: ProtectSystem=strict and no ReadWritePaths. The stores are opened
-# with SQLite mode=ro as well. Loopback traffic only, enforced by the kernel.
+# Read-only data: ProtectSystem=strict, and the stores are opened with SQLite mode=ro plus
+# query_only, so their contents never change. The two store directories are writable only so that
+# SQLite can create the WAL side files (-wal/-shm) when no writer holds them open (ADR 0016: a
+# reader creates them if absent). Without this, every read fails "unable to open database file"
+# whenever the last collector connection has closed (seen on production 2026-09-24).
+# Loopback traffic only, enforced by the kernel.
+ReadWritePaths=/var/lib/market-edge-lab/db /var/lib/market-edge-lab/ledger
 NoNewPrivileges=yes
 PrivateTmp=yes
 PrivateDevices=yes
