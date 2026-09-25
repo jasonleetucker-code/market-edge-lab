@@ -16,9 +16,14 @@ results were seen or influenced tuning. Rules:
   its dataset hash. Copying, renaming or re-hashing the same outcomes never makes them
   untouched again;
 - access history from before a log existed is UNKNOWN (`UNKNOWN_LEGACY`), never certified
-  untouched. Unknown booleans (None) count as the worst case;
-- a protocol's `prohibited_inputs` are refused at record time (Family B never logs access
-  to EXP-001 forecasts, outcomes or ledger).
+  untouched. So is any scope that no log declares it covers (`covered_scopes`), and any scope
+  with a known consumer that does not log (`KNOWN_UNLOGGED_CONSUMERS`: EXP-001's pipeline,
+  ledger and Terminal read KXHIGHNY outcomes daily). Unknown booleans (None) count as the
+  worst case. Scopes are compared case-insensitively;
+- a protocol's `prohibited_inputs` (dataset-id prefixes) and `prohibited_label_scopes`
+  (outcome scopes whose labels or results it may never view) are refused at record time.
+  Family B never logs access to EXP-001 forecasts, outcomes or ledger, nor to KXHIGHNY labels
+  through any dataset.
 - **Limitation, stated in every status:** a log records declared access. It cannot prove that
   nobody viewed a file outside it. Holdout protection stays procedural as well as technical.
 
@@ -53,6 +58,24 @@ OUT_OF_BAND_LIMITATION = (
     "An evidence-use log records declared access only. It cannot prove that nobody viewed the data "
     "outside it (another tool, a copy, a shell, a chat). Holdout protection is procedural as well as technical."
 )
+
+
+# Scopes whose outcomes are read by processes that keep no evidence-use log. A window in such a
+# scope can never be certified untouched (review SF-5).
+KNOWN_UNLOGGED_CONSUMERS: dict[str, str] = {
+    "kalshi:kxhighny": "EXP-001's daily pipeline, shadow ledger, settlement runs and Terminal read KXHIGHNY "
+                       "outcomes without an evidence-use log",
+}
+
+
+def norm_scope(scope: str) -> str:
+    return scope.strip().lower()
+
+
+def scope_matches(scope: str, prefix: str) -> bool:
+    """True when `scope` is `prefix` or lies under it (':'-separated, case-insensitive)."""
+    s, p = norm_scope(scope), norm_scope(prefix)
+    return bool(p) and (s == p or s.startswith(p + ":") or s.startswith(p + "-"))
 
 
 class EvidenceError(ValueError):
@@ -117,7 +140,7 @@ class InformationWindow:
         return start, end
 
     def overlaps(self, other: "InformationWindow") -> bool:
-        if self.scope != other.scope:
+        if norm_scope(self.scope) != norm_scope(other.scope):
             return False
         a0, a1 = self.bounds()
         b0, b1 = other.bounds()
@@ -208,12 +231,13 @@ class EvidenceLog:
     experiment_id: str | None
     started_at_utc: str | None  # None: no log, so all history is UNKNOWN
     uses: tuple[EvidenceUse, ...]
+    covered_scopes: tuple[str, ...] = ()  # the outcome scopes whose research access this log records
 
 
 def read_log(path: Path) -> EvidenceLog:
     """Parse and verify one log. A missing file is an empty log with an unknown start."""
     if not path.exists():
-        return EvidenceLog(path, None, None, ())
+        return EvidenceLog(path, None, None, (), ())
     header: dict[str, Any] | None = None
     uses: list[EvidenceUse] = []
     seen: dict[str, EvidenceUse] = {}
@@ -242,17 +266,23 @@ def read_log(path: Path) -> EvidenceLog:
         uses.append(use)
     if header is None:
         raise EvidenceError(f"{path}: missing header line")
-    return EvidenceLog(path, header.get("experiment_id"), header["started_at_utc"], tuple(uses))
+    scopes = header.get("covered_scopes", [])
+    if not isinstance(scopes, list) or not all(isinstance(s, str) and s.strip() for s in scopes):
+        raise EvidenceError(f"{path}: covered_scopes must be a list of non-empty strings")
+    return EvidenceLog(path, header.get("experiment_id"), header["started_at_utc"], tuple(uses), tuple(scopes))
 
 
-def init_log(path: Path, *, experiment_id: str, started_at_utc: str) -> Path:
-    """Create an empty log with its header. Refuses to overwrite: history is never restarted."""
+def init_log(path: Path, *, experiment_id: str, started_at_utc: str, covered_scopes: Sequence[str] = ()) -> Path:
+    """Create an empty log with its header. Refuses to overwrite: history is never restarted.
+
+    `covered_scopes` declares the outcome scopes whose research access this log records. A
+    scope no log covers stays UNKNOWN for holdout purposes."""
     if path.exists():
         raise EvidenceError(f"{path} already exists; an evidence log is never restarted")
     if parse_utc(started_at_utc) is None:
         raise EvidenceError("started_at_utc must be a timezone-aware time")
     header = {"record": "header", "log_version": LOG_VERSION, "experiment_id": experiment_id,
-              "started_at_utc": started_at_utc,
+              "started_at_utc": started_at_utc, "covered_scopes": [norm_scope(s) for s in covered_scopes],
               "limitation": OUT_OF_BAND_LIMITATION}
     path.write_text(canonical_json(header) + "\n", encoding="utf-8", newline="\n")
     return path
@@ -265,15 +295,22 @@ def is_prohibited(dataset_id: str, prohibited_prefixes: Sequence[str]) -> str | 
     return None
 
 
-def record_use(path: Path, use: EvidenceUse, *, prohibited_prefixes: Sequence[str] = ()) -> str:
+def record_use(path: Path, use: EvidenceUse, *, prohibited_prefixes: Sequence[str] = (),
+               prohibited_label_scopes: Sequence[str] = ()) -> str:
     """Append one event. Returns "APPENDED" or "DUPLICATE" (an identical event already logged).
 
-    Raises ProhibitedInput when the experiment's protocol forbids the dataset, and
+    Raises ProhibitedInput when the experiment's protocol forbids the dataset, or forbids
+    viewing labels/results in the event's outcome scope (whatever the dataset is called), and
     EvidenceError when the event is malformed or the log is missing or invalid."""
     use.validate()
     blocked = is_prohibited(use.dataset_id, prohibited_prefixes)
     if blocked:
         raise ProhibitedInput(f"{use.experiment_id} may not access {use.dataset_id} (prohibited_inputs {blocked!r})")
+    for scope in prohibited_label_scopes:
+        if scope_matches(use.window.scope, scope) and (
+                use.viewed_labels is not False or use.action is Action.LABEL_RESULT_INSPECTION):
+            raise ProhibitedInput(f"{use.experiment_id} may not view labels or outcomes in scope {use.window.scope} "
+                                  f"(prohibited_label_scopes {scope!r}); viewed_labels must be false")
     if not path.exists():
         raise EvidenceError(f"{path} does not exist; create it with init_log first")
     log = read_log(path)
@@ -329,20 +366,31 @@ def _use_state(use: EvidenceUse) -> tuple[HoldoutState, str]:
 def holdout_status(logs: Iterable[EvidenceLog], *, dataset_sha256: str, window: InformationWindow) -> HoldoutStatus:
     """Can this dataset/window still support a clean untouched-evaluation claim?
 
-    Matching is by dataset hash **or** by an overlapping outcome window in the same scope,
-    across every experiment's log. Outcomes dated before the earliest log start are
-    UNKNOWN_LEGACY at best. Only UNTOUCHED allows a clean claim."""
+    Matching is by dataset hash **or** by an overlapping outcome window in the same scope
+    (case-insensitive), across every experiment's log. UNKNOWN_LEGACY at best when:
+    - no log declares that it covers the scope;
+    - the scope has a known unlogged consumer;
+    - the outcomes predate the earliest covering log.
+
+    Only UNTOUCHED allows a clean claim."""
     start, _ = window.bounds()
     logs = list(logs)
-    starts = [parse_utc(log.started_at_utc) for log in logs if log.started_at_utc]
+    covering = [log for log in logs if log.started_at_utc
+                and any(scope_matches(window.scope, s) for s in log.covered_scopes)]
+    starts = [parse_utc(log.started_at_utc) for log in covering]
     reasons: list[str] = []
     state = HoldoutState.UNTOUCHED
     if not starts:
-        state, reasons = HoldoutState.UNKNOWN_LEGACY, ["no evidence-use log exists: access history is UNKNOWN"]
+        state, reasons = HoldoutState.UNKNOWN_LEGACY, [
+            f"no evidence-use log covers scope {norm_scope(window.scope)!r}: access history is UNKNOWN"]
     elif start < min(starts):
         state = HoldoutState.UNKNOWN_LEGACY
-        reasons.append(f"outcomes from {window.start_utc} predate the first evidence log "
+        reasons.append(f"outcomes from {window.start_utc} predate the first covering evidence log "
                        f"({min(starts).isoformat()}): earlier access is UNKNOWN")
+    for prefix, consumer in KNOWN_UNLOGGED_CONSUMERS.items():
+        if scope_matches(window.scope, prefix):
+            state = max(state, HoldoutState.UNKNOWN_LEGACY, key=_STATE_ORDER.__getitem__)
+            reasons.append(f"known unlogged consumer of {prefix}: {consumer}")
     matches: list[str] = []
     for log in logs:
         for use in log.uses:
@@ -472,7 +520,7 @@ class Waterfall:
     rows: tuple[WaterfallRow, ...]
     survivors: int | None
     raw_reason_counts: dict[str, int]  # may sum to more than `start`: units carry several reasons
-    corrected_premature: tuple[str, ...]  # units reported missing/failed before their deadline
+    corrected_premature: tuple[str, ...]  # units whose reasons were corrected against their deadline
     clusters: int | None  # distinct cluster ids among the units (None when not given)
     reconciled: bool
 
@@ -500,7 +548,8 @@ def _plain(value: Any) -> Any:
     return value
 
 
-def _primary(unit: AttritionUnit, as_of: datetime, not_applicable: set[Stage]) -> tuple[Exclusion | None, bool]:
+def _primary(unit: AttritionUnit, as_of: datetime,
+             not_applicable: set[Stage]) -> tuple[Exclusion | None, bool, tuple[str, ...]]:
     reasons: list[Exclusion] = []
     for raw in unit.reasons:
         try:
@@ -517,9 +566,14 @@ def _primary(unit: AttritionUnit, as_of: datetime, not_applicable: set[Stage]) -
     if deadline is not None and deadline > as_of and any(r in _PREMATURE for r in reasons):
         reasons = [Exclusion.PENDING_TARGET] + [r for r in reasons if r not in _PREMATURE]
         corrected = True
+    if deadline is not None and deadline <= as_of and Exclusion.PENDING_TARGET in reasons:
+        # Still "pending" after its deadline: it was missed.
+        reasons = [Exclusion.MISSED_TARGET if r is Exclusion.PENDING_TARGET else r for r in reasons]
+        corrected = True
+    reasons = list(dict.fromkeys(reasons))
     if not reasons:
-        return None, corrected
-    return min(reasons, key=_PRECEDENCE.__getitem__), corrected
+        return None, corrected, ()
+    return min(reasons, key=_PRECEDENCE.__getitem__), corrected, tuple(r.value for r in reasons)
 
 
 def _waterfall(level: Level, units: list[AttritionUnit], *, as_of: datetime, not_applicable: set[Stage],
@@ -535,9 +589,9 @@ def _waterfall(level: Level, units: list[AttritionUnit], *, as_of: datetime, not
     corrected: list[str] = []
     survivors = 0
     for unit in units:
-        for r in dict.fromkeys(unit.reasons):
+        primary, fixed, effective = _primary(unit, as_of, not_applicable)
+        for r in effective:  # after deadline corrections: a corrected MISSED is counted as PENDING
             raw[r] = raw.get(r, 0) + 1
-        primary, fixed = _primary(unit, as_of, not_applicable)
         if fixed:
             corrected.append(unit.unit_id)
         if primary is None:
@@ -603,7 +657,7 @@ def attrition_report(units: Iterable[AttritionUnit], *, as_of_utc: str, levels_e
         "eligible_opportunities": eligible,
         "signals": signals,
         "simulated_fills": fills,
-        "final_evaluable_outcomes": opp.survivors,
+        "final_evaluable_outcomes": None if Stage.OUTCOME in not_applicable else opp.survivors,
     }
     body = {"version": ATTRITION_VERSION, "as_of_utc": as_of.isoformat(),
             "not_applicable_stages": sorted(s.value for s in not_applicable),

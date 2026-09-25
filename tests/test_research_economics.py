@@ -24,9 +24,10 @@ def pt(q, net, cost="0.50", status="FILLABLE", gross=None):
 
 
 def obs(oid, t, *, keys=("kalshi:M1:YES",), cluster="day1", ladder=None, release="2026-09-03T00:00:00Z",
-        venue="kalshi"):
+        venue="kalshi", outer=None):
     ladder = ladder if ladder is not None else (pt(1, "0.05"), pt(10, "0.04"), pt(100, "0.03"))
-    return Observation(oid, tuple(keys), venue, t, cluster, EdgeKind.CONDITIONAL_BOUND, tuple(ladder), release)
+    return Observation(oid, tuple(keys), venue, t, cluster, EdgeKind.CONDITIONAL_BOUND, tuple(ladder), release,
+                       outer_cluster_id=outer)
 
 
 def scen(capital="1000", reserve="0", label="S1", **venues):
@@ -96,7 +97,7 @@ def test_best_observation_is_a_single_observation_never_a_sum():
     observations = [obs("a", "2026-09-02T00:00:00Z", ladder=(pt(1, "0.03"), pt(10, "0.03"))),
                     obs("b", "2026-09-02T00:10:00Z", ladder=(pt(1, "0.06"), pt(10, "0.05")))]
     (episode,) = build_episodes(observations, DEF).episodes
-    assert episode.entry.observation_id == "a" and episode.best.observation_id == "b"
+    assert episode.entry.observation_id == "a" and episode.best_at(D(10)).observation_id == "b"
     cons = replay([episode], scen(), size=D(10), mode=FillMode.CONSERVATIVE, window_start_utc=W0, window_end_utc=W1)
     less = replay([episode], scen(), size=D(10), mode=FillMode.LESS_CONSERVATIVE, window_start_utc=W0,
                   window_end_utc=W1)
@@ -142,13 +143,51 @@ def test_simultaneous_strategies_share_one_capital_pool():
     assert [f.state for f in r.fills] == ["FILLED", "CAPITAL_VETO"]
 
 
-def test_shared_liquidity_is_never_taken_twice():
+def test_shared_liquidity_is_one_pool_and_never_taken_twice():
     basket_a = obs("a", "2026-09-02T00:00:00Z", keys=("leg1", "leg2"))
-    basket_b = obs("b", "2026-09-02T00:00:30Z", keys=("leg2", "leg3"))  # shares leg2 while a is open
-    after = obs("c", "2026-09-05T00:00:00Z", keys=("leg2", "leg3"))  # a released on 09-03
-    r = replay(_episodes(basket_a, basket_b, after), scen(), size=D(1), mode=FillMode.CONSERVATIVE,
-               window_start_utc=W0, window_end_utc=W1)
+    basket_b = obs("b", "2026-09-02T00:00:30Z", keys=("leg2", "leg3"))  # shares leg2: same pool, same episode
+    later = obs("c", "2026-09-02T03:00:00Z", keys=("leg2", "leg3"))  # gap > 1 h: new episode, a still open
+    after = obs("d", "2026-09-05T00:00:00Z", keys=("leg2", "leg3"), release="2026-09-06T00:00:00Z")  # a released
+    episodes = _episodes(basket_a, basket_b, later, after)
+    assert [e.observation_ids for e in episodes] == [("a", "b"), ("c",), ("d",)]
+    r = replay(episodes, scen(), size=D(1), mode=FillMode.CONSERVATIVE, window_start_utc=W0, window_end_utc=W1)
     assert [f.state for f in r.fills] == ["FILLED", "SHARED_LIQUIDITY", "FILLED"]
+
+
+def test_a_leg_and_a_basket_containing_it_are_one_opportunity():
+    leg = obs("leg", "2026-09-02T00:00:00Z", keys=("A",))
+    basket = obs("basket", "2026-09-02T00:05:00Z", keys=("A", "B"))
+    episodes = _episodes(leg, basket)
+    assert len(episodes) == 1 and episodes[0].liquidity_keys == ("A", "B")
+
+
+def test_a_pool_stays_open_while_any_instrument_still_qualifies():
+    a1 = obs("a1", "2026-09-02T00:00:00Z", keys=("A",))
+    b1 = obs("b1", "2026-09-02T00:05:00Z", keys=("A", "B"))
+    a2 = obs("a2", "2026-09-02T00:10:00Z", keys=("A",), ladder=(pt(1, "0.00"),))  # A reprices; basket still open
+    b2 = obs("b2", "2026-09-02T00:15:00Z", keys=("A", "B"))
+    b3 = obs("b3", "2026-09-02T00:20:00Z", keys=("A", "B"), ladder=(pt(1, "0.00"),))  # everything closed
+    a3 = obs("a3", "2026-09-02T00:25:00Z", keys=("A",))
+    assert [e.observation_ids for e in _episodes(a1, b1, a2, b2, b3, a3)] == [("a1", "b1", "b2"), ("a3",)]
+
+
+def test_release_before_entry_is_refused():
+    bad = obs("a", "2026-09-05T00:00:00Z", release="2026-09-04T00:00:00Z")
+    r = replay(_episodes(bad), scen(), size=D(1), mode=FillMode.CONSERVATIVE, window_start_utc=W0,
+               window_end_utc=W1)
+    assert r.fills[0].state == "INVALID_RELEASE" and r.capital_days == 0 and r.problems
+
+
+def test_best_observation_is_chosen_at_the_replayed_size():
+    # "a" is better at size 1, "b" at size 10: the less-conservative fill at 10 must use "b".
+    a = obs("a", "2026-09-02T00:00:00Z", ladder=(pt(1, "0.20"), pt(10, "0.01")))
+    b = obs("b", "2026-09-02T00:10:00Z", ladder=(pt(1, "0.05"), pt(10, "0.05")))
+    (episode,) = _episodes(a, b)
+    cons = replay([episode], scen(), size=D(10), mode=FillMode.CONSERVATIVE, window_start_utc=W0, window_end_utc=W1)
+    less = replay([episode], scen(), size=D(10), mode=FillMode.LESS_CONSERVATIVE, window_start_utc=W0,
+                  window_end_utc=W1)
+    assert episode.best_at(D(1)).observation_id == "a" and episode.best_at(D(10)).observation_id == "b"
+    assert less.contribution == D("0.50") >= cons.contribution == D("0.10")
 
 
 def test_doubling_non_binding_capital_changes_nothing_no_bankroll_multiplication():
@@ -233,7 +272,8 @@ def test_annual_scenario_is_window_contribution_times_365_over_window_days():
 def test_owner_time_is_shown_separately_and_never_inside_cash_results():
     report = economic_screen(_inputs(_two_days()))
     assert report.owner_time_cost_annual.value == D(5000)
-    assert report.net_after_fixed_annual["conservative"].value == report.variable["annual_scenario_net_conservative"].value
+    assert report.net_after_fixed_annual["conservative_point"].value == \
+        report.variable["annual_scenario_net_conservative"].value
 
 
 def test_verdicts_are_research_states():
@@ -256,8 +296,8 @@ def test_verdict_depending_on_the_fill_assumption_is_insufficient():
                         ladder=(pt(1, "0.30"), pt(10, "0.30"))),
                     obs("b", "2026-09-10T00:00:00Z", keys=("k2",), cluster="d2")]
     report = economic_screen(_inputs(observations, minimum_useful_annual=Labeled(D(20), Basis.OWNER_INPUT)))
-    cons = report.net_after_fixed_annual["conservative"].value
-    less = report.net_after_fixed_annual["less_conservative"].value
+    cons = report.net_after_fixed_annual["conservative_lower"].value
+    less = report.net_after_fixed_annual["less_conservative_upper"].value
     assert cons < 20 <= less and report.verdict == "INSUFFICIENT_EVIDENCE"
 
 
@@ -276,3 +316,58 @@ def test_cluster_bootstrap_needs_two_clusters_and_is_deterministic():
     assert band == cluster_bootstrap_mean({"c": D(2), "a": D(1), "b": D(3)})
     mean, low, high = band
     assert mean == D(2) and low <= mean <= high
+
+
+# --------------------------------------------------------------------------- review B1 / B2 / SF-4
+
+
+def test_one_cluster_is_insufficient_whatever_the_point_estimate():
+    five = [obs(f"e{i}", f"2026-09-{2 + i:02d}T00:00:00Z", keys=(f"k{i}",), cluster="only-day",
+                release=f"2026-09-{3 + i:02d}T00:00:00Z") for i in range(5)]
+    report = economic_screen(_inputs(five, minimum_useful_annual=Labeled(D(1), Basis.OWNER_INPUT)))
+    assert report.variable["annual_scenario_net_conservative"].value > 1
+    assert not report.uncertainty["estimable"] and report.verdict == "INSUFFICIENT_EVIDENCE"
+
+
+def test_an_outlier_cluster_cannot_carry_a_continue():
+    big = (pt(1, "0.90"), pt(10, "0.90"))
+    small = (pt(1, "0.02"), pt(10, "0.002"))
+    three = [obs("a", "2026-09-02T00:00:00Z", keys=("k1",), cluster="d1", ladder=big),
+             obs("b", "2026-09-10T00:00:00Z", keys=("k2",), cluster="d2", ladder=small,
+                 release="2026-09-11T00:00:00Z"),
+             obs("c", "2026-09-20T00:00:00Z", keys=("k3",), cluster="d3", ladder=small,
+                 release="2026-09-21T00:00:00Z")]
+    report = economic_screen(_inputs(three, minimum_useful_annual=Labeled(D(5), Basis.OWNER_INPUT)))
+    assert report.net_after_fixed_annual["conservative_point"].value > 5  # the point estimate alone would pass
+    assert report.net_after_fixed_annual["conservative_lower"].value < 5
+    assert report.verdict == "INSUFFICIENT_EVIDENCE"
+
+
+def test_only_in_window_episodes_count_toward_minima_and_frequency():
+    august = [obs(f"aug{i}", f"2026-08-{10 + i:02d}T00:00:00Z", keys=(f"a{i}",), cluster=f"ad{i}",
+                  release=f"2026-08-{11 + i:02d}T00:00:00Z") for i in range(10)]
+    september = [obs("sep", "2026-09-02T00:00:00Z", keys=("s",), cluster="sd")]
+    report = economic_screen(_inputs(august + september, min_episodes_for_scenario=Labeled(D(10), Basis.OWNER_INPUT),
+                                     minimum_useful_annual=Labeled(D(1), Basis.OWNER_INPUT)))
+    assert report.episodes == 1 and report.episodes_outside_window == 10 and report.clusters == 1
+    assert report.variable["annual_scenario_net_conservative"].value is None
+    assert report.verdict == "INSUFFICIENT_EVIDENCE"
+
+
+def test_the_coarsest_cluster_level_is_used_when_every_episode_has_one():
+    games = [obs(f"g{i}", f"2026-09-{2 + i:02d}T00:00:00Z", keys=(f"k{i}",), cluster=f"game{i}",
+                 outer="week1" if i < 3 else "week2", release=f"2026-09-{3 + i:02d}T00:00:00Z") for i in range(4)]
+    report = economic_screen(_inputs(games))
+    assert report.cluster_level == "outer" and report.clusters == 2
+    one_week = [obs(f"g{i}", f"2026-09-{2 + i:02d}T00:00:00Z", keys=(f"k{i}",), cluster=f"game{i}", outer="week1",
+                    release=f"2026-09-{3 + i:02d}T00:00:00Z") for i in range(4)]
+    assert economic_screen(_inputs(one_week)).verdict == "INSUFFICIENT_EVIDENCE"  # one week: no band
+    mixed = games[:3] + [obs("g9", "2026-09-20T00:00:00Z", keys=("k9",), cluster="game9",
+                             release="2026-09-21T00:00:00Z")]
+    assert economic_screen(_inputs(mixed)).cluster_level == "fine"
+
+
+def test_unviable_and_below_minimum_keep_the_accumulated_reasons():
+    report = economic_screen(_inputs(_two_days(), fixed_cash_costs_annual=Labeled(D(1800), Basis.OWNER_INPUT),
+                                     data_gaps=("x",)))
+    assert report.verdict == "ECONOMICALLY_UNVIABLE" and len(report.verdict_reasons) >= 1

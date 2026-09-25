@@ -50,7 +50,7 @@ features = [
   "per leg: ask ladder, receipt time; per set: payout matrix and proof",
 ]
 labels = [
-  "none required for the proof; realized settlement is never needed to state a worst-state bound",
+  "none: the proof needs no realized settlement; KXHIGHNY labels (market result, expiration_value, settlement fields, post-close snapshots) are prohibited",
 ]
 permission_lineage = "Kalshi public market data under its published terms (sources.py license_notes); derived artifacts inherit it and are research-only."
 prohibited_inputs = [
@@ -60,6 +60,12 @@ prohibited_inputs = [
   "nws_cli:",
   "kalshi_settlement:",
 ]
+# Labels reach this family through non-prohibited datasets too: the market records inside
+# kalshi_public snapshots carry settled fields. No use may view labels/outcomes in these scopes
+# (research_evidence.record_use refuses it), and the payoff scan never reads the fields below
+# nor any snapshot received after the market's close.
+prohibited_label_scopes = ["kalshi:KXHIGHNY"]
+prohibited_fields = ["result", "expiration_value", "settlement_value", "settlement_value_dollars", "settlement_ts", "last_price_dollars after close"]
 
 [variants]
 allowed = [
@@ -86,7 +92,7 @@ controls = [
 ]
 
 [budget]
-research_cash_usd = "0 incremental: no paid data or services are authorized (owner directive 2026-09-25)."
+research_cash_usd = "0 incremental: no paid data or services are authorized (owner directive of 2026-09-24 ET / 2026-09-25 UTC)."
 owner_hours = "MISSING_OWNER_INPUT: owner hours budget and the hourly opportunity cost used in the economic screen."
 data_costs = "0: stored evidence only; no new collector or timer."
 review_date = "2026-10-22"

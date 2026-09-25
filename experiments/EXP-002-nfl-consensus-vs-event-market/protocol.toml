@@ -26,7 +26,7 @@ clusters = [
   "game: both team sides, every book, every horizon and every snapshot of one game are one cluster",
   "NFL week / slate: games in the same week share news, weather and market-wide flows; uncertainty is also clustered by week",
 ]
-dependence = "Books are not independent (shared line sources); sides of one game are complements; repeated snapshots re-observe the same liquidity. Uncertainty is computed on game- and week-clustered units, never on book or snapshot counts."
+dependence = "Books are not independent (shared line sources); sides of one game are complements; repeated snapshots re-observe the same liquidity. Uncertainty is computed on game- and week-clustered units, never on book or snapshot counts: research_economics bootstraps on the coarsest level present on every episode (outer_cluster_id = NFL week)."
 
 [endpoints]
 primary = "UNKNOWN: exactly one of (a) calibration/outcome information at a frozen horizon (for example a log-score difference vs the executable-price-implied probability) or (b) predictive markout at a named later horizon; to be chosen and frozen before preregistration."
@@ -88,7 +88,7 @@ controls = [
 ]
 
 [budget]
-research_cash_usd = "0 incremental: no paid data or services are authorized (owner directive 2026-09-25); existing VPS and free-tier quota only."
+research_cash_usd = "0 incremental: no paid data or services are authorized (owner directive of 2026-09-24 ET / 2026-09-25 UTC); existing VPS and free-tier quota only."
 owner_hours = "MISSING_OWNER_INPUT: owner hours budget and the hourly opportunity cost used in the economic screen."
 data_costs = "0 additional Odds API credits; within the existing 450-credit monthly cap."
 review_date = "2026-10-22"

@@ -51,7 +51,7 @@ failure_criteria = [
 
 risk_constraints = [
   "Research on stored evidence only: no orders, no credentials, no funded account, no execution code (EXECUTION_NOT_AUTHORIZED)",
-  "Not a winner model and not an operational sports strategy (owner directive 2026-09-25); no sports model becomes operational from this work",
+  "Not a winner model and not an operational sports strategy (owner directive of 2026-09-24 ET / 2026-09-25 UTC); no sports model becomes operational from this work",
   "No additional Odds API credits, no paid data, no new timers; the 450-credit monthly cap is unchanged",
 ]
 

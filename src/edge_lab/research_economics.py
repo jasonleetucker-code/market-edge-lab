@@ -11,38 +11,52 @@ build these; they never re-implement the arithmetic):
 - `SizePoint` / `size_ladder_from_depth`: one rung of a size ladder for one observation,
   priced by the existing depth walk and fee schedule (`opportunity.walk_ladder`,
   `opportunity.price_depth_fill`). Fees enter **once**, inside `net_edge_per_unit`.
-- `Observation`: one point-in-time look at one liquidity pool (a market side, or the legs
-  of a basket), with its size ladder, cluster and capital-release time.
-- `EpisodeDefinition` / `build_episodes`: distinct opportunity episodes under a definition
-  frozen in the protocol **before outcomes are viewed** (start threshold, end/merge gap,
-  minimum size). Repeated observations of the same resting orders are one episode, never
-  many. An incomplete or unfrozen definition yields no episodes (INSUFFICIENT_EVIDENCE).
-- `CapitalScenario` / `replay`: chronological, capital-constrained replay with finite
-  capital per venue, a reserve, release on settlement, and one shared pool for every
-  strategy passed in together (capital is never double counted across simultaneous
-  strategies). A liquidity pool held by an open position is not taken again until release.
+- `Observation`: one point-in-time look at one liquidity pool (a market side, or the legs of a
+  basket). It carries its size ladder, its dependence clusters (a fine `cluster_id` and an
+  optional coarser `outer_cluster_id`, for example game and NFL week) and its capital-release
+  time.
+- `EpisodeDefinition` / `build_episodes`: distinct opportunity episodes under a definition that
+  is frozen in the protocol **before outcomes are viewed** (start threshold, end/merge gap,
+  minimum size).
+  - Observations that share any liquidity key form one pool (connected components), so a leg
+    and a basket containing it are never two opportunities.
+  - Repeated observations of the same resting orders are one episode, never many.
+  - An incomplete or unfrozen definition yields no episodes (INSUFFICIENT_EVIDENCE).
+- `CapitalScenario` / `replay`: chronological, capital-constrained replay.
+  - Capital is finite per venue, with a reserve and release on settlement.
+  - Every strategy passed in together shares one pool, so capital is never double counted
+    across simultaneous strategies.
+  - A liquidity pool held by an open position is not taken again until release.
+  - A release before entry is refused.
 - `capacity_ladder`: the replay at every rung, conservative (fill at detection) and less
-  conservative (best single observation), with marginal contribution and marginal capital,
-  flagging where more capital only adds idle balance.
-- `economic_screen`: variable economics, fixed cash costs, owner-hour cost (all shown
-  separately), return on deployed versus total capital, capital-days, frequency, a
-  cluster-bootstrap uncertainty band, assumptions and data gaps, and a verdict.
+  conservative (the best single observation *at that size*). It reports marginal contribution
+  and marginal capital, and flags where more capital only adds idle balance.
+- `economic_screen` reports, each shown separately:
+  - variable economics, fixed cash costs and owner-hour cost;
+  - return on deployed versus total capital, and capital-days;
+  - frequency;
+  - a cluster-bootstrap band on the coarsest cluster level;
+  - assumptions and data gaps;
+  - a verdict decided on the band, not the point estimate.
 
 Rules:
 - Every input is `Labeled` OBSERVED / ESTIMATED / OWNER_INPUT / UNKNOWN; UNKNOWN has no value.
 - `net_edge_per_unit` is after variable costs (fees, spread, slippage). Nothing subtracts a
   fee or a loss again later. There is no bankroll x size x turnover product anywhere.
 - Observed depth is a ceiling, not a guaranteed fill; fill probability is not assumed.
+- Only episodes that start inside the window count, for frequency, clusters and minima alike.
 - The annual figure is a SIMPLIFIED SCENARIO (window contribution x 365 / window days) under a
-  stated stationarity assumption, produced only when the protocol's minimum episode count
-  is supplied and met. It is never an income forecast.
-- Verdicts (INSUFFICIENT_EVIDENCE, ECONOMICALLY_UNVIABLE, BELOW_MINIMUM_USEFUL, CONTINUE) are
-  research states, not code failures, and none of them is an edge claim.
+  stated stationarity assumption. It is produced only when the protocol's minimum episode count
+  is supplied and met, and it is never an income forecast.
+- The verdicts are INSUFFICIENT_EVIDENCE, ECONOMICALLY_UNVIABLE, BELOW_MINIMUM_USEFUL and
+  CONTINUE. They are research states, not code failures, and none of them is an edge claim.
+  - CONTINUE needs the conservative band's *lower* bound, net of fixed costs, to reach the
+    owner's minimum.
+  - Fewer than two independent clusters is INSUFFICIENT_EVIDENCE.
 
 Pure, deterministic, stdlib-only and network-free.
 """
 
-from __future__ import annotations
 
 import random
 from dataclasses import asdict, dataclass, replace
@@ -153,17 +167,21 @@ def size_ladder_from_depth(ladder: DepthLadder, quantities: Sequence[Decimal], f
 # --------------------------------------------------------------------------- episodes
 
 
+# --------------------------------------------------------------------------- episodes
+
+
 @dataclass(frozen=True)
 class Observation:
     observation_id: str
     liquidity_keys: tuple[str, ...]  # resting-order pools it draws on (a market side; every leg of a basket)
     venue: str
     observed_at_utc: str  # receipt time of the newest input
-    cluster_id: str  # game / event day: the dependence unit
+    cluster_id: str  # the fine dependence unit (game / event day)
     edge_kind: EdgeKind
     ladder: tuple[SizePoint, ...]
     release_at_utc: str | None  # when an entry here would get its cash back (settlement); None = unknown
     evidence_ids: tuple[str, ...] = ()
+    outer_cluster_id: str | None = None  # a coarser dependence unit (NFL week / slate), when one applies
 
     def rung(self, quantity: Decimal) -> SizePoint | None:
         for point in self.ladder:
@@ -174,6 +192,13 @@ class Observation:
     def best_fillable_at_most(self, quantity: Decimal) -> SizePoint | None:
         fillable = [p for p in self.ladder if p.quantity <= quantity and p.fillable]
         return max(fillable, key=lambda p: p.quantity) if fillable else None
+
+    def value_at(self, quantity: Decimal) -> Decimal | None:
+        """Net contribution of taking up to `quantity` here, before capital limits (None = unknown)."""
+        point = self.best_fillable_at_most(quantity)
+        if point is None or point.net_edge_per_unit is None:
+            return None
+        return point.quantity * point.net_edge_per_unit
 
 
 @dataclass(frozen=True)
@@ -197,18 +222,34 @@ class EpisodeDefinition:
 @dataclass(frozen=True)
 class Episode:
     episode_id: str
-    liquidity_keys: tuple[str, ...]
+    liquidity_keys: tuple[str, ...]  # the union over the pool's observations in this episode
     venue: str
     cluster_id: str
+    outer_cluster_id: str | None
     edge_kind: str
     start_utc: str
     end_utc: str
     observation_ids: tuple[str, ...]
-    entry: Observation  # CONSERVATIVE: the first qualifying observation
-    best: Observation  # LESS_CONSERVATIVE: the best single qualifying observation
+    observations: tuple[Observation, ...]  # the qualifying observations, in time order
 
-    def chosen(self, mode: FillMode) -> Observation:
-        return self.entry if mode is FillMode.CONSERVATIVE else self.best
+    @property
+    def entry(self) -> Observation:
+        """CONSERVATIVE: the first qualifying observation (what was there at detection)."""
+        return self.observations[0]
+
+    def best_at(self, size: Decimal, *, until: datetime | None = None) -> Observation:
+        """LESS_CONSERVATIVE: the single observation (never a sum) with the largest value at the
+        replayed `size`; ties go to the earliest. Observations after `until` are not eligible."""
+        eligible = [o for o in self.observations if until is None or _time(o.observed_at_utc, "t") <= until]
+        if not eligible:
+            return self.entry
+        known = [o for o in eligible if o.value_at(size) is not None]
+        if not known:
+            return eligible[0]
+        return max(known, key=lambda o: (o.value_at(size), -_time(o.observed_at_utc, "t").timestamp()))
+
+    def chosen(self, mode: FillMode, size: Decimal, *, until: datetime | None = None) -> Observation:
+        return self.entry if mode is FillMode.CONSERVATIVE else self.best_at(size, until=until)
 
 
 @dataclass(frozen=True)
@@ -233,13 +274,38 @@ def _time(value: str, what: str) -> datetime:
     return parsed
 
 
-def build_episodes(observations: Iterable[Observation], definition: EpisodeDefinition) -> EpisodeSet:
-    """Group observations into distinct episodes per liquidity pool.
+def _components(observations: Sequence[Observation]) -> dict[str, list[Observation]]:
+    """Pools = connected components of observations that share any liquidity key."""
+    parent: dict[str, str] = {}
 
-    Per pool (the observation's full key tuple), in time order: a qualifying observation
-    starts an episode or extends the open one when within the merge gap; a non-qualifying
-    observation, or a longer gap, ends it. The best observation is chosen by the net edge x
-    quantity at `minimum_size`. Observation ids must be unique."""
+    def find(k: str) -> str:
+        while parent.setdefault(k, k) != k:
+            parent[k] = parent[parent[k]]
+            k = parent[k]
+        return k
+
+    for obs in observations:
+        if not obs.liquidity_keys:
+            raise ValueError(f"observation {obs.observation_id} has no liquidity key")
+        keys = sorted(obs.liquidity_keys)
+        for other in keys[1:]:
+            a, b = find(keys[0]), find(other)
+            if a != b:
+                parent[max(a, b)] = min(a, b)
+    pools: dict[str, list[Observation]] = {}
+    for obs in observations:
+        pools.setdefault(find(sorted(obs.liquidity_keys)[0]), []).append(obs)
+    return pools
+
+
+def build_episodes(observations: Iterable[Observation], definition: EpisodeDefinition) -> EpisodeSet:
+    """Group observations into distinct episodes per shared-liquidity pool.
+
+    A pool is a connected component of observations linked by any common liquidity key. In
+    time order within a pool, a qualifying observation starts an episode, or extends the open
+    one when it is within the merge gap of the previous qualifying observation. The episode
+    ends when the latest observation of every instrument in the pool no longer qualifies, or
+    when the gap is exceeded. Observation ids must be unique."""
     observations = list(observations)
     ids = [o.observation_id for o in observations]
     if len(ids) != len(set(ids)):
@@ -248,44 +314,50 @@ def build_episodes(observations: Iterable[Observation], definition: EpisodeDefin
     if problems:
         return EpisodeSet(definition, (), len(observations), 0, tuple(problems))
     gap = timedelta(seconds=definition.end_merge_gap_seconds)
-    pools: dict[tuple[str, ...], list[Observation]] = {}
     for obs in observations:
         _time(obs.observed_at_utc, "observed_at_utc")
-        pools.setdefault(tuple(sorted(obs.liquidity_keys)), []).append(obs)
     episodes: list[Episode] = []
     qualifying = 0
 
     def close(run: list[Observation]) -> None:
         if not run:
             return
-        size = definition.minimum_size
-
-        def value(o: Observation) -> Decimal:
-            return o.rung(size).net_edge_per_unit * size
-
-        best = max(run, key=lambda o: (value(o), o.observed_at_utc, o.observation_id))
         first = run[0]
-        eid = "ep-" + sha256_hex(canonical_json([definition.version, list(first.liquidity_keys),
+        keys = tuple(sorted({k for o in run for k in o.liquidity_keys}))
+        eid = "ep-" + sha256_hex(canonical_json([definition.version, list(keys),
                                                  [o.observation_id for o in run]]))[:24]
-        episodes.append(Episode(eid, tuple(sorted(first.liquidity_keys)), first.venue, first.cluster_id,
+        episodes.append(Episode(eid, keys, first.venue, first.cluster_id, first.outer_cluster_id,
                                 first.edge_kind.value, first.observed_at_utc, run[-1].observed_at_utc,
-                                tuple(o.observation_id for o in run), first, best))
+                                tuple(o.observation_id for o in run), tuple(run)))
 
-    for key in sorted(pools):
+    pools = _components(observations)
+    for root in sorted(pools):
         run: list[Observation] = []
-        for obs in sorted(pools[key], key=lambda o: (_time(o.observed_at_utc, "observed_at_utc"), o.observation_id)):
-            if not _qualifies(obs, definition):
+        latest: dict[tuple[str, ...], bool] = {}
+        last_t: datetime | None = None
+        for obs in sorted(pools[root], key=lambda o: (_time(o.observed_at_utc, "t"), o.observation_id)):
+            t = _time(obs.observed_at_utc, "t")
+            q = _qualifies(obs, definition)
+            if q and run and last_t is not None and t - last_t > gap:
                 close(run)
-                run = []
-                continue
-            qualifying += 1
-            if run and _time(obs.observed_at_utc, "t") - _time(run[-1].observed_at_utc, "t") > gap:
+                run, latest = [], {}
+            latest[tuple(sorted(obs.liquidity_keys))] = q
+            if q:
+                qualifying += 1
+                run.append(obs)
+                last_t = t
+            elif run and not any(latest.values()):
                 close(run)
-                run = []
-            run.append(obs)
+                run, latest = [], {}
         close(run)
     episodes.sort(key=lambda e: (e.start_utc, e.episode_id))
     return EpisodeSet(definition, tuple(episodes), len(observations), qualifying, ())
+
+
+def in_window(episodes: Iterable[Episode], window_start_utc: str, window_end_utc: str) -> tuple[Episode, ...]:
+    """Episodes that start inside [start, end]: the only ones that count anywhere."""
+    start, end = _time(window_start_utc, "window start"), _time(window_end_utc, "window end")
+    return tuple(e for e in episodes if start <= _time(e.start_utc, "episode start") <= end)
 
 
 # --------------------------------------------------------------------------- replay
@@ -324,14 +396,16 @@ class CapitalScenario:
 class EpisodeFill:
     episode_id: str
     cluster_id: str
-    state: str  # FILLED / CAPITAL_LIMITED / CAPITAL_VETO / DEPTH_LIMITED / NOT_FILLABLE / SHARED_LIQUIDITY
+    outer_cluster_id: str | None
+    state: str  # FILLED / CAPITAL_LIMITED / CAPITAL_VETO / DEPTH_LIMITED / NOT_FILLABLE / SHARED_LIQUIDITY /
+    #             INVALID_RELEASE
     requested: Decimal
     filled: Decimal
     rung_used: Decimal | None
     net_edge_per_unit: Decimal | None
     gross_edge_per_unit: Decimal | None
     committed_cash: Decimal
-    entry_utc: str
+    entry_utc: str  # the chosen observation's time
     release_utc: str | None
     release_known: bool
     contribution: Decimal | None  # filled x net edge per unit; None when the edge is unknown
@@ -364,26 +438,31 @@ def _floor_to(value: Decimal, step: Decimal) -> Decimal:
     return (value / step).to_integral_value(rounding=ROUND_DOWN) * step
 
 
+REPLAY_STATES = ("FILLED", "CAPITAL_LIMITED", "CAPITAL_VETO", "DEPTH_LIMITED", "NOT_FILLABLE", "SHARED_LIQUIDITY",
+                 "INVALID_RELEASE", "UNKNOWN_RELEASE")
+
+
 def replay(episodes: Sequence[Episode], scenario: CapitalScenario, *, size: Decimal, mode: FillMode,
            window_start_utc: str, window_end_utc: str) -> ReplayResult:
-    """Chronological, capital-constrained replay of the episodes at one requested size.
+    """Chronological, capital-constrained replay of the in-window episodes at one requested size.
 
-    Each episode is entered once, at its start, using the chosen observation's ladder: the
-    largest FILLABLE rung at or below `size`, then cut to the venue cash left after the
-    reserve and open commitments. Commitments are released at `release_at_utc`; an unknown
-    release keeps the cash committed to the window end (flagged). An episode sharing a
-    liquidity key with a position that is still open gets nothing: stored books never show
-    our own simulated take, so the same resting orders could otherwise be taken twice
-    (conservative: one entry per pool until release). Contribution uses the rung's per-unit
-    net edge; a capital-limited smaller fill keeps that (lower, deeper-rung) edge, which
-    understates rather than overstates."""
+    Each episode is entered once, at the chosen observation (CONSERVATIVE: the first;
+    LESS_CONSERVATIVE: the best single observation at `size` inside the window). The entry
+    takes the largest FILLABLE rung at or below `size`, cut to the venue cash left after the
+    reserve and open commitments.
+    - Commitments are released at `release_at_utc`. An unknown release keeps the cash committed
+      to the window end (flagged); a release before the entry is refused (INVALID_RELEASE).
+    - An episode sharing a liquidity key with a position that is still open gets nothing.
+      Stored books never show our own simulated take, so the same resting orders could otherwise
+      be taken twice (conservative: one entry per pool until release).
+    - Contribution uses the rung's per-unit net edge. A capital-limited smaller fill keeps that
+      (lower, deeper-rung) edge, which understates rather than overstates."""
     start, end = _time(window_start_utc, "window start"), _time(window_end_utc, "window end")
     if end <= start:
         raise ValueError("the replay window must have positive length")
     problems = scenario.problems()
     total = scenario.total()
-    counts = {s: 0 for s in ("FILLED", "CAPITAL_LIMITED", "CAPITAL_VETO", "DEPTH_LIMITED", "NOT_FILLABLE",
-                             "SHARED_LIQUIDITY", "UNKNOWN_RELEASE")}
+    counts = {s: 0 for s in REPLAY_STATES}
     if problems:
         return ReplayResult(scenario.label, scenario.status, mode.value, size, window_start_utc, window_end_utc, (),
                             None, None, Decimal(0), Decimal(0), Decimal(0), total, None, None, None, counts,
@@ -394,15 +473,15 @@ def replay(episodes: Sequence[Episode], scenario: CapitalScenario, *, size: Deci
     capital_days = Decimal(0)
     max_deployed = Decimal(0)
     unknown_edge = False
-    ordered = sorted(episodes, key=lambda e: (_time(e.start_utc, "start"), e.episode_id))
-    for ep in ordered:
-        entry_t = _time(ep.start_utc, "episode start")
-        if entry_t < start or entry_t > end:
-            continue
+    extra_problems: list[str] = []
+    entries = []
+    for ep in in_window(episodes, window_start_utc, window_end_utc):
+        obs = ep.chosen(mode, size, until=end)
+        entries.append((_time(obs.observed_at_utc, "entry"), ep.episode_id, ep, obs))
+    for entry_t, _, ep, obs in sorted(entries, key=lambda x: (x[0], x[1])):
         for pos in [p for p in open_positions if p[0] <= entry_t]:
             committed[pos[1]] -= pos[2]
             open_positions.remove(pos)
-        obs = ep.chosen(mode)
         keys = set(ep.liquidity_keys)
 
         def record(state: str, filled: Decimal, point, cash: Decimal, release: datetime | None) -> None:
@@ -417,14 +496,23 @@ def replay(episodes: Sequence[Episode], scenario: CapitalScenario, *, size: Deci
             if filled > 0 and net is None:
                 unknown_edge = True
             fills.append(EpisodeFill(
-                ep.episode_id, ep.cluster_id, state, size, filled, None if point is None else point.quantity,
-                net, gross, cash, ep.start_utc, obs.release_at_utc, known,
+                ep.episode_id, ep.cluster_id, ep.outer_cluster_id, state, size, filled,
+                None if point is None else point.quantity, net, gross, cash, obs.observed_at_utc,
+                obs.release_at_utc, known,
                 None if net is None else (filled * net).quantize(_Q),
                 None if gross is None else (filled * gross).quantize(_Q)))
 
         if ep.venue not in scenario.capital_by_venue:
             record("CAPITAL_VETO", Decimal(0), None, Decimal(0), None)
             continue
+        release = None
+        if obs.release_at_utc:
+            release = parse_utc(obs.release_at_utc)
+            if release is None or release < entry_t:
+                record("INVALID_RELEASE", Decimal(0), None, Decimal(0), None)
+                extra_problems.append(f"{ep.episode_id}: release {obs.release_at_utc} is unparseable or before the "
+                                      f"entry {obs.observed_at_utc}; not filled")
+                continue
         if any(keys & set(p[3]) for p in open_positions):
             record("SHARED_LIQUIDITY", Decimal(0), None, Decimal(0), None)
             continue
@@ -440,7 +528,6 @@ def replay(episodes: Sequence[Episode], scenario: CapitalScenario, *, size: Deci
             record("CAPITAL_VETO", Decimal(0), point, Decimal(0), None)
             continue
         cash = filled * point.all_in_cost_per_unit
-        release = parse_utc(obs.release_at_utc) if obs.release_at_utc else None
         state = "CAPITAL_LIMITED" if filled < point.quantity else ("DEPTH_LIMITED" if point.quantity < size else "FILLED")
         if release is None:
             counts["UNKNOWN_RELEASE"] += 1
@@ -458,11 +545,11 @@ def replay(episodes: Sequence[Episode], scenario: CapitalScenario, *, size: Deci
     rod = None if contribution is None or average_deployed == 0 else (contribution / average_deployed).quantize(_Q)
     rot = None if contribution is None or not total else (contribution / total).quantize(_Q)
     idle = None if total is None else (total - average_deployed).quantize(_Q)
+    if unknown_edge:
+        extra_problems.append("contribution UNKNOWN: a filled episode has no net edge (no probability, no EV)")
     return ReplayResult(scenario.label, scenario.status, mode.value, size, window_start_utc, window_end_utc,
                         tuple(fills), contribution, gross, capital_days.quantize(_Q), average_deployed, max_deployed,
-                        total, idle, rod, rot, counts,
-                        ("contribution UNKNOWN: a filled episode has no net edge (no probability, no EV)",)
-                        if unknown_edge else ())
+                        total, idle, rod, rot, counts, tuple(extra_problems))
 
 
 # --------------------------------------------------------------------------- capacity
@@ -505,7 +592,8 @@ def capacity_ladder(episodes: Sequence[Episode], scenario: CapitalScenario, size
                 by_cluster: dict[str, Decimal] = {}
                 for f in r.fills:
                     if f.contribution is not None and f.filled > 0:
-                        by_cluster[f.cluster_id] = by_cluster.get(f.cluster_id, Decimal(0)) + f.contribution
+                        key = f.outer_cluster_id or f.cluster_id
+                        by_cluster[key] = by_cluster.get(key, Decimal(0)) + f.contribution
                 share = (max(by_cluster.values()) / r.contribution).quantize(_Q) if by_cluster else None
             rows.append(CapacityRow(size, mode.value, r.counts["FILLED"] + r.counts["DEPTH_LIMITED"]
                                     + r.counts["CAPITAL_LIMITED"], r.counts["DEPTH_LIMITED"],
@@ -549,14 +637,16 @@ class ScreenReport:
     window_start_utc: str
     window_end_utc: str
     window_days: Decimal
-    episodes: int
-    clusters: int
+    episodes: int  # distinct episodes that start inside the window
+    episodes_outside_window: int
+    clusters: int  # on `cluster_level`
+    cluster_level: str  # "outer" (for example NFL week) when every episode has one, else "fine"
     observations: int
     episodes_per_cluster: Decimal | None
     variable: dict[str, Labeled]  # window and annual-scenario variable economics, both fill modes
     fixed_cash_costs_annual: Labeled
     owner_time_cost_annual: Labeled  # shown separately; never inside the cash figures
-    net_after_fixed_annual: dict[str, Labeled]
+    net_after_fixed_annual: dict[str, Labeled]  # point, band lower and band upper, per fill mode
     capital: dict[str, Any]
     uncertainty: dict[str, Any]
     capacity: tuple[CapacityRow, ...]
@@ -584,7 +674,7 @@ def _plain(value: Any) -> Any:
 
 def cluster_bootstrap_mean(values_by_cluster: Mapping[str, Decimal], *, seed: int = BOOTSTRAP_SEED,
                            resamples: int = BOOTSTRAP_RESAMPLES, alpha: float = 0.05) -> tuple[Decimal, Decimal, Decimal] | None:
-    """(mean, lower, upper) of the per-cluster total, resampling whole clusters (games / event days).
+    """(mean, lower, upper) of the per-cluster total, resampling whole clusters.
 
     None with fewer than two clusters: no band is estimable. Deterministic for a given seed."""
     keys = sorted(values_by_cluster)
@@ -599,50 +689,84 @@ def cluster_bootstrap_mean(values_by_cluster: Mapping[str, Decimal], *, seed: in
     return (sum(values, Decimal(0)) / n).quantize(_Q), lower.quantize(_Q), upper.quantize(_Q)
 
 
+def _cluster_key(outer: bool, cluster_id: str, outer_id: str | None) -> str:
+    return (outer_id or cluster_id) if outer else cluster_id
+
+
 def economic_screen(inputs: ScreenInputs) -> ScreenReport:
     """The screen. It never raises for thin or missing evidence: it says INSUFFICIENT_EVIDENCE."""
     start = _time(inputs.window_start_utc, "window start")
     end = _time(inputs.window_end_utc, "window end")
     window_days = (Decimal((end - start).total_seconds()) / Decimal(86400)).quantize(_Q)
-    episodes = inputs.episodes.episodes
+    all_episodes = inputs.episodes.episodes
+    episodes = in_window(all_episodes, inputs.window_start_utc, inputs.window_end_utc)
+    outside = len(all_episodes) - len(episodes)
     reasons: list[str] = list(inputs.episodes.problems)
     reasons += inputs.scenario.problems()
     runs = {mode: replay(episodes, inputs.scenario, size=inputs.primary_size, mode=mode,
                          window_start_utc=inputs.window_start_utc, window_end_utc=inputs.window_end_utc)
             for mode in FillMode}
     for mode, run in runs.items():
-        reasons += [f"{mode.value}: {p}" for p in run.problems if p not in reasons]
-    clusters = sorted({e.cluster_id for e in episodes})
+        reasons += [f"{mode.value}: {p}" for p in run.problems if f"{mode.value}: {p}" not in reasons]
+    outer = bool(episodes) and all(e.outer_cluster_id for e in episodes)
+    level = "outer" if outer else "fine"
+    clusters = sorted({_cluster_key(outer, e.cluster_id, e.outer_cluster_id) for e in episodes})
     min_n = inputs.min_episodes_for_scenario
     annual_ok = bool(episodes) and min_n.value is not None and len(episodes) >= min_n.value and window_days > 0
+    if outside:
+        reasons.append(f"{outside} episode(s) outside the window are not counted")
     if not episodes and not inputs.episodes.problems:
         reasons.append("no distinct episode qualified in the window")
     if min_n.value is None:
         reasons.append("no annual scenario: the protocol's minimum episode count is UNKNOWN")
     elif len(episodes) < min_n.value:
-        reasons.append(f"no annual scenario: {len(episodes)} distinct episodes < the protocol minimum {min_n.value}")
+        reasons.append(f"no annual scenario: {len(episodes)} distinct in-window episodes < the protocol minimum "
+                       f"{min_n.value}")
 
-    variable: dict[str, Labeled] = {}
-    net_after_fixed: dict[str, Labeled] = {}
     scale = DAYS_PER_YEAR / window_days if window_days > 0 else None
     fixed = inputs.fixed_cash_costs_annual
+    variable: dict[str, Labeled] = {}
+    net_after_fixed: dict[str, Labeled] = {}
+    bands: dict[FillMode, tuple[Decimal, Decimal, Decimal] | None] = {}
     for mode, run in runs.items():
         key = mode.value.lower()
+        per_cluster: dict[str, Decimal] = {c: Decimal(0) for c in clusters}
+        if run.contribution is not None:
+            for f in run.fills:
+                if f.contribution is not None:
+                    k = _cluster_key(outer, f.cluster_id, f.outer_cluster_id)
+                    per_cluster[k] = per_cluster.get(k, Decimal(0)) + f.contribution
+        bands[mode] = cluster_bootstrap_mean(per_cluster) if run.contribution is not None else None
         variable[f"window_net_{key}"] = (Labeled(run.contribution, Basis.ESTIMATED,
                                                  "window sum of filled qty x net edge per unit (after variable costs)")
                                          if run.contribution is not None else Labeled.unknown("edge unknown"))
         variable[f"window_gross_{key}"] = (Labeled(run.gross_contribution, Basis.ESTIMATED, "before variable costs")
                                            if run.gross_contribution is not None else Labeled.unknown())
+        scenario_note = f"SIMPLIFIED SCENARIO under stationarity: {inputs.stationarity_assumption}"
         if annual_ok and run.contribution is not None:
             annual = (run.contribution * scale).quantize(_Q)
-            variable[f"annual_scenario_net_{key}"] = Labeled(
-                annual, Basis.ESTIMATED, f"SIMPLIFIED SCENARIO under stationarity: {inputs.stationarity_assumption}")
-            net_after_fixed[key] = (Labeled((annual - fixed.value).quantize(_Q), Basis.ESTIMATED,
-                                            "annual scenario minus incremental fixed cash costs")
-                                    if fixed.value is not None else Labeled.unknown("fixed cash costs UNKNOWN"))
+            variable[f"annual_scenario_net_{key}"] = Labeled(annual, Basis.ESTIMATED, scenario_note)
+            band = bands[mode]
+            per_year = Decimal(len(clusters)) * scale
+            for label, value in (("lower", None if band is None else band[1]),
+                                 ("upper", None if band is None else band[2])):
+                variable[f"annual_band_{label}_{key}"] = (
+                    Labeled((value * per_year).quantize(_Q), Basis.ESTIMATED,
+                            f"95% cluster-bootstrap {label} bound ({level} clusters), annualized; {scenario_note}")
+                    if value is not None else Labeled.unknown("fewer than two independent clusters"))
+            for label, source in (("point", f"annual_scenario_net_{key}"), ("lower", f"annual_band_lower_{key}"),
+                                  ("upper", f"annual_band_upper_{key}")):
+                value = variable[source].value
+                net_after_fixed[f"{key}_{label}"] = (
+                    Labeled((value - fixed.value).quantize(_Q), Basis.ESTIMATED, f"{label} minus fixed cash costs")
+                    if value is not None and fixed.value is not None
+                    else Labeled.unknown("fixed cash costs or the band UNKNOWN"))
         else:
             variable[f"annual_scenario_net_{key}"] = Labeled.unknown("no annual scenario")
-            net_after_fixed[key] = Labeled.unknown("no annual scenario")
+            for label in ("lower", "upper"):
+                variable[f"annual_band_{label}_{key}"] = Labeled.unknown("no annual scenario")
+            for label in ("point", "lower", "upper"):
+                net_after_fixed[f"{key}_{label}"] = Labeled.unknown("no annual scenario")
     if fixed.value is None:
         reasons.append("incremental fixed cash costs are UNKNOWN")
 
@@ -652,21 +776,20 @@ def economic_screen(inputs: ScreenInputs) -> ScreenReport:
                   if hours.value is not None and rate.value is not None
                   else Labeled.unknown("owner hours or hourly opportunity cost UNKNOWN"))
 
-    cons = runs[FillMode.CONSERVATIVE]
-    per_cluster: dict[str, Decimal] = {c: Decimal(0) for c in clusters}
-    if cons.contribution is not None:
-        for f in cons.fills:
-            if f.contribution is not None:
-                per_cluster[f.cluster_id] = per_cluster.get(f.cluster_id, Decimal(0)) + f.contribution
-    band = cluster_bootstrap_mean(per_cluster) if cons.contribution is not None else None
+    cons, less = runs[FillMode.CONSERVATIVE], runs[FillMode.LESS_CONSERVATIVE]
+    inversion = (cons.contribution is not None and less.contribution is not None
+                 and less.contribution < cons.contribution)
+    if inversion:
+        reasons.append(f"fill-mode inversion: less-conservative {less.contribution} < conservative "
+                       f"{cons.contribution} (capital path dependence); the band check uses each mode as computed")
     uncertainty = {
-        "method": f"cluster bootstrap of per-cluster conservative contribution (seed {BOOTSTRAP_SEED}, "
-                  f"{BOOTSTRAP_RESAMPLES} resamples, 95%)",
+        "method": f"cluster bootstrap of per-cluster contribution (seed {BOOTSTRAP_SEED}, {BOOTSTRAP_RESAMPLES} "
+                  "resamples, 95%), on the coarsest cluster level present on every episode",
+        "cluster_level": level,
         "clusters": len(clusters),
-        "per_cluster_mean": None if band is None else band[0],
-        "per_cluster_lower": None if band is None else band[1],
-        "per_cluster_upper": None if band is None else band[2],
-        "estimable": band is not None,
+        **{f"{m.value.lower()}_per_cluster_{name}": (None if bands[m] is None else bands[m][i])
+           for m in FillMode for i, name in enumerate(("mean", "lower", "upper"))},
+        "estimable": bands[FillMode.CONSERVATIVE] is not None and bands[FillMode.LESS_CONSERVATIVE] is not None,
         "note": "episodes within a cluster are dependent; the band is on clusters, never on episodes or snapshots",
     }
     capital = {
@@ -677,13 +800,14 @@ def economic_screen(inputs: ScreenInputs) -> ScreenReport:
            for k in ("average_deployed", "max_deployed", "capital_days", "idle_capital_average",
                      "return_on_deployed", "return_on_total")},
         "conservative_counts": cons.counts,
-        "less_conservative_counts": runs[FillMode.LESS_CONSERVATIVE].counts,
+        "less_conservative_counts": less.counts,
+        "fill_mode_inversion": inversion,
     }
     capacity = capacity_ladder(episodes, inputs.scenario, inputs.sizes or (inputs.primary_size,),
                                window_start_utc=inputs.window_start_utc,
                                window_end_utc=inputs.window_end_utc) if not inputs.scenario.problems() else ()
 
-    verdict, why = _verdict(inputs, net_after_fixed, reasons)
+    verdict, why = _verdict(inputs, net_after_fixed, uncertainty["estimable"], len(clusters), reasons)
     input_labels = {"fixed_cash_costs_annual": fixed, "owner_hours_annual": hours, "owner_hourly_cost": rate,
                     "minimum_useful_annual": inputs.minimum_useful_annual,
                     "min_episodes_for_scenario": min_n,
@@ -693,7 +817,7 @@ def economic_screen(inputs: ScreenInputs) -> ScreenReport:
         ECONOMICS_VERSION, inputs.family, inputs.experiment_id, verdict.value, tuple(why),
         "A screen verdict is a research state. It is not evidence of an edge, and no amount here is an approved "
         "bankroll or an income forecast.",
-        inputs.window_start_utc, inputs.window_end_utc, window_days, len(episodes), len(clusters),
+        inputs.window_start_utc, inputs.window_end_utc, window_days, len(episodes), outside, len(clusters), level,
         inputs.episodes.observations,
         (Decimal(len(episodes)) / len(clusters)).quantize(_Q) if clusters else None,
         variable, fixed, owner_cost, net_after_fixed, capital, uncertainty, capacity, input_labels,
@@ -703,32 +827,41 @@ def economic_screen(inputs: ScreenInputs) -> ScreenReport:
         tuple(inputs.data_gaps), inputs.scenario.status)
     body = report.to_dict()
     body.pop("report_sha256")
-    return _with_hash(report, sha256_hex(canonical_json(body)))
+    return replace(report, report_sha256=sha256_hex(canonical_json(body)))
 
 
-def _with_hash(report: ScreenReport, digest: str) -> ScreenReport:
-    return replace(report, report_sha256=digest)
-
-
-def _verdict(inputs: ScreenInputs, net_after_fixed: Mapping[str, Labeled],
+def _verdict(inputs: ScreenInputs, net: Mapping[str, Labeled], estimable: bool, clusters: int,
              reasons: list[str]) -> tuple[Verdict, list[str]]:
-    cons = net_after_fixed.get(FillMode.CONSERVATIVE.value.lower())
-    less = net_after_fixed.get(FillMode.LESS_CONSERVATIVE.value.lower())
-    if less is None or less.value is None or cons is None or cons.value is None:
+    """Decided on the cluster-bootstrap band, never on the point estimate alone.
+
+    UNVIABLE: even the less-conservative band's upper bound cannot clear the fixed costs.
+    BELOW_MINIMUM_USEFUL: even that upper bound is below the owner's minimum.
+    CONTINUE: the conservative band's lower bound reaches the minimum.
+    Anything else, including fewer than two clusters, is INSUFFICIENT_EVIDENCE."""
+    reasons = list(reasons)
+    cons_lower = net.get("conservative_lower")
+    less_upper = net.get("less_conservative_upper")
+    points = [net.get("conservative_point"), net.get("less_conservative_point")]
+    if any(p is None or p.value is None for p in points):
         return Verdict.INSUFFICIENT_EVIDENCE, reasons or ["annual scenario unavailable"]
-    if less.value <= 0:
-        return Verdict.ECONOMICALLY_UNVIABLE, [
-            f"even the less-conservative annual scenario net of fixed cash costs is {less.value} <= 0"]
+    if not estimable:
+        return Verdict.INSUFFICIENT_EVIDENCE, reasons + [
+            f"{clusters} independent cluster(s): no uncertainty band is estimable, so no verdict beyond "
+            "INSUFFICIENT_EVIDENCE is possible"]
+    if less_upper.value <= 0:
+        return Verdict.ECONOMICALLY_UNVIABLE, reasons + [
+            f"even the less-conservative band's upper bound net of fixed cash costs is {less_upper.value} <= 0"]
     minimum = inputs.minimum_useful_annual
     if minimum.value is None:
         return Verdict.INSUFFICIENT_EVIDENCE, reasons + [
             "the minimum useful annual contribution is an OWNER_INPUT that was not supplied"]
-    if less.value < minimum.value:
-        return Verdict.BELOW_MINIMUM_USEFUL, [
-            f"less-conservative scenario {less.value} < minimum useful {minimum.value}"]
-    if cons.value >= minimum.value:
-        return Verdict.CONTINUE, [f"conservative scenario {cons.value} >= minimum useful {minimum.value}; "
-                                  "continue research, not an edge claim"]
+    if less_upper.value < minimum.value:
+        return Verdict.BELOW_MINIMUM_USEFUL, reasons + [
+            f"less-conservative upper bound {less_upper.value} < minimum useful {minimum.value}"]
+    if cons_lower.value >= minimum.value:
+        return Verdict.CONTINUE, reasons + [
+            f"conservative lower bound {cons_lower.value} >= minimum useful {minimum.value}; continue research, "
+            "not an edge claim"]
     return Verdict.INSUFFICIENT_EVIDENCE, reasons + [
-        f"the verdict depends on the fill assumption: conservative {cons.value} < minimum {minimum.value} "
-        f"<= less-conservative {less.value}"]
+        f"the band straddles the minimum: conservative lower {cons_lower.value} < minimum {minimum.value} <= "
+        f"less-conservative upper {less_upper.value}"]

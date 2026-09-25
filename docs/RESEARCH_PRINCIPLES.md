@@ -73,12 +73,16 @@ work (`edge_lab.research_economics`):
 - **A holdout is identified by its outcome window as well as its hash.** Copying, renaming or
   re-hashing the same outcomes never restores "untouched". Evaluating a holdout consumes it. A
   second look is validation, not a test.
-- Access from before a log existed is **UNKNOWN**, never certified untouched. Only a prospective
-  window that starts after the log can be claimed untouched.
+- Access from before a log existed is **UNKNOWN**, never certified untouched. So is a scope that
+  no log declares it covers, and a scope with a known unlogged consumer (KXHIGHNY outcomes are
+  read daily by EXP-001). Only a prospective window, in a covered scope, that starts after the
+  log can be claimed untouched.
 - A log records declared access. It cannot prove that nobody looked outside it, so holdout
   protection remains procedural as well.
-- A protocol may list `prohibited_inputs`, and access to them is refused at record time. For
-  example, Family B never touches EXP-001 forecasts, outcomes or the ledger.
+- A protocol may list `prohibited_inputs` (dataset prefixes) and `prohibited_label_scopes`
+  (outcome scopes), and access to them is refused at record time. For example, Family B never
+  touches EXP-001 forecasts, outcomes or the ledger, and never views KXHIGHNY labels through any
+  dataset, including the settled fields inside market snapshots.
 
 ## Attrition
 

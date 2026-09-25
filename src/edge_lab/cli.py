@@ -877,7 +877,8 @@ def _evidence(args: argparse.Namespace) -> int:
     try:
         use = rev.use_from_dict(json.loads(Path(args.use).read_text(encoding="utf-8")))
         result = rev.record_use(matches[0].parent / rev.LOG_NAME, use,
-                                prohibited_prefixes=experiments.prohibited_inputs(exp))
+                                prohibited_prefixes=experiments.prohibited_inputs(exp),
+                                prohibited_label_scopes=experiments.prohibited_label_scopes(exp))
     except (OSError, ValueError) as exc:
         print(f"refused: {exc}", file=sys.stderr)
         return 1

@@ -444,7 +444,7 @@ be written here when they are made.
   - **Not authorized:** trading, account credentials, orders, money movement, paid services,
     Polymarket International.
 
-- **2026-09-25, MISSION: ECONOMIC EVIDENCE V1 (#96).** Recorded in substance in
+- **2026-09-24 ~22:10 America/New_York (2026-09-25 UTC), MISSION: ECONOMIC EVIDENCE V1 (#96).** Recorded in substance in
   `docs/owner/2026-09-25-economic-evidence-v1-directive.md`. Strategy record and handoff:
   `docs/strategy/2026-09-24-evidence-to-economics-reset.md` and
   `docs/strategy/CLAUDE_ECONOMIC_EVIDENCE_V1.md`. Those two documents authorize nothing by

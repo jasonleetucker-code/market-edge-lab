@@ -1,8 +1,10 @@
-# Owner directive, 2026-09-25: MISSION: ECONOMIC EVIDENCE V1
+# Owner directive, 2026-09-24 America/New_York (2026-09-25 UTC): MISSION: ECONOMIC EVIDENCE V1
 
 Source: the owner's message "MISSION: ECONOMIC EVIDENCE V1" to the laptop Claude Code
-coordinator session, 2026-09-25 (America/New_York), relayed by the coordinator to the two
-Economic Evidence v1 writers. Canonical strategy issue: #96. Strategy record and executable
+coordinator session. It arrived on 2026-09-24 at about 22:10 America/New_York, which is
+2026-09-25 at about 02:10 UTC. The coordinator relayed it to the two Economic Evidence v1
+writers. The file name and the `2026-09-25` labels in the canonical documents and experiment
+manifests (`created`) use the UTC date. Canonical strategy issue: #96. Strategy record and executable
 handoff: `docs/strategy/2026-09-24-evidence-to-economics-reset.md` and
 `docs/strategy/CLAUDE_ECONOMIC_EVIDENCE_V1.md` (PR #98), including the "Post-audit update and
 review corrections" note at the top of both, which supersedes their audit snapshot.

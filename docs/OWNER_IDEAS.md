@@ -89,6 +89,9 @@ column lists which issues each primitive serves.
 
 ## Roadmap re-run 2026-09-25: #96 evidence-to-economics reset (Economic Evidence v1)
 
+Dates labelled 2026-09-25 here are UTC. The owner's directive arrived on 2026-09-24 at about
+22:10 America/New_York.
+
 This ordering authorizes nothing; `docs/EXECUTION_PLAN.md` does (its 2026-09-25 entry records
 the owner's Economic Evidence v1 scope). Re-prioritizing never authorizes implementation. Gate 7
 is unchanged and **not passed**. The 2026-09-24 roadmap below stays as the dated record. Where

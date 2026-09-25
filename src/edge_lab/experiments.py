@@ -358,20 +358,25 @@ def changed_baselines(base_ref: str, *, repo: Path) -> list[str]:
 # untouched-future evaluation, budget, review date, stopping/futility, minimum useful
 # effect, readiness and the frozen episode definition.
 #
-# Compatibility: the sidecar is additive. Experiments created before
-# SIDECAR_REQUIRED_FROM (EXP-001) have none and are read as LEGACY; nothing in their
-# manifest, baseline or validation changes. A sidecar is part of the preregistration
-# baseline of any experiment frozen with one.
+# Compatibility: the sidecar is additive. Only the experiments in LEGACY_EXPERIMENTS (EXP-001,
+# which predates the sidecar) may lack one; they are read as LEGACY and nothing in their
+# manifest, baseline or validation changes. Every other experiment needs a sidecar, whatever
+# its `created` date says (a backdated manifest cannot dodge the rule). A sidecar is part of
+# the preregistration baseline of any experiment frozen with one.
 #
 # Honesty rules: in DRAFT every field must be present, but its value may be an explicit
 # "UNKNOWN: ..." or "MISSING_OWNER_INPUT: ..." / "MISSING_POWER_ANALYSIS: ...". From
 # PREREGISTERED on, every *decision* field must be settled. The [knowledge] table holds
 # facts that may honestly stay UNKNOWN even after preregistration (for example source
 # independence or an annual opportunity count); it must be present, never invented.
+# The settled-value check is a heuristic: it rejects UNKNOWN / UNVERIFIED / TBD / MISSING_*
+# tokens anywhere and deferral phrases ("to be frozen", "will be decided"); an inadequate
+# but concrete-looking value is still a review question.
 
 PROTOCOL_NAME = "protocol.toml"
 PROTOCOL_VERSION = "research-protocol-v1"
-SIDECAR_REQUIRED_FROM = "2026-09-25"
+LEGACY_EXPERIMENTS = frozenset({"EXP-001"})  # predate the sidecar; the only experiments allowed without one
+OWNER_EXCEPTION_DIR = "docs/owner/"
 MAX_ACTIVE_FAMILIES = 2
 SLOT_STATES = ("ACTIVE", "QUEUED", "ENDED")
 PROTOCOL_TOP = ("protocol_version", "experiment_id", "family", "family_title", "slot_status", "authority",
@@ -395,7 +400,10 @@ PROTOCOL_TABLES: dict[str, tuple[str, ...]] = {
 }
 # May stay UNKNOWN after preregistration (descriptive facts, never decision parameters).
 PROTOCOL_KNOWLEDGE_TABLE = "knowledge"
-_UNSETTLED = re.compile(r"^\s*(missing|unknown|unverified\b)|MISSING_OWNER_INPUT|MISSING_POWER_ANALYSIS", re.I)
+_UNSETTLED_START = re.compile(r"^\s*(missing|unknown|unverified\b)", re.I)
+_UNSETTLED_TOKEN = re.compile(r"\bUNKNOWN\b|\bUNVERIFIED\b|\bTBD\b|MISSING_OWNER_INPUT|MISSING_POWER_ANALYSIS")
+_UNSETTLED_PHRASE = re.compile(r"\b(to be|will be|still to be|yet to be)\s+(frozen|decided|determined|settled|chosen|"
+                               r"defined|set|agreed)\b", re.I)
 
 
 def protocol_path(exp: Experiment) -> Path:
@@ -414,20 +422,20 @@ def load_protocol(exp: Experiment) -> dict[str, Any] | None:
 
 
 def protocol_state(exp: Experiment) -> str:
-    """LEGACY (no sidecar, created before the requirement), MISSING (required, absent) or PRESENT.
+    """PRESENT, LEGACY (an allowlisted pre-sidecar experiment: EXP-001) or MISSING.
 
     This is the explicit compatibility reader: callers never infer protocol fields for a
     LEGACY experiment; every such field is UNKNOWN."""
     if protocol_path(exp).exists():
         return "PRESENT"
-    created = exp.data.get("created")
-    if isinstance(created, str) and created < SIDECAR_REQUIRED_FROM:
+    if exp.id in LEGACY_EXPERIMENTS:
         return "LEGACY"
     return "MISSING"
 
 
 def _unsettled(value: Any) -> bool:
-    return isinstance(value, str) and (bool(_UNSETTLED.search(value)) or _is_placeholder(value))
+    return isinstance(value, str) and (bool(_UNSETTLED_START.match(value)) or bool(_UNSETTLED_TOKEN.search(value))
+                                       or bool(_UNSETTLED_PHRASE.search(value)) or _is_placeholder(value))
 
 
 def _unsettled_paths(value: Any, path: str) -> list[str]:
@@ -462,7 +470,7 @@ def protocol_problems(exp: Experiment) -> list[str]:
     if state == "LEGACY":
         return []
     if state == "MISSING":
-        return [f"experiments created from {SIDECAR_REQUIRED_FROM} need a {PROTOCOL_NAME} sidecar "
+        return [f"every experiment except {', '.join(sorted(LEGACY_EXPERIMENTS))} needs a {PROTOCOL_NAME} sidecar "
                 "(experiments/README.md, Research-protocol sidecar)"]
     try:
         protocol = load_protocol(exp)
@@ -495,6 +503,13 @@ def protocol_problems(exp: Experiment) -> list[str]:
     prohibited = roles.get("prohibited_inputs") if isinstance(roles, dict) else None
     if prohibited is not None and not (isinstance(prohibited, list) and all(isinstance(p, str) for p in prohibited)):
         problems.append(f"{PROTOCOL_NAME} [data_roles] prohibited_inputs must be a list of dataset-id prefixes")
+    label_scopes = roles.get("prohibited_label_scopes") if isinstance(roles, dict) else None
+    if label_scopes is not None and not (isinstance(label_scopes, list)
+                                         and all(isinstance(s, str) and s.strip() for s in label_scopes)):
+        problems.append(f"{PROTOCOL_NAME} [data_roles] prohibited_label_scopes must be a list of outcome scopes")
+    exception = protocol.get("owner_exception")
+    if exception is not None and not (isinstance(exception, str) and exception.startswith(OWNER_EXCEPTION_DIR)):
+        problems.append(f"{PROTOCOL_NAME} owner_exception must name an owner decision under {OWNER_EXCEPTION_DIR}")
     budget = protocol.get("budget")
     review = budget.get("review_date") if isinstance(budget, dict) else None
     if isinstance(review, str) and not _unsettled(review):
@@ -515,6 +530,17 @@ def protocol_problems(exp: Experiment) -> list[str]:
             for label in _unsettled_paths(protocol.get(key, ""), key):
                 problems.append(f"{exp.status} experiment has unsettled protocol field '{label}'")
     return problems
+
+
+def prohibited_label_scopes(exp: Experiment) -> tuple[str, ...]:
+    """Outcome scopes whose labels/results this experiment may never view (none for LEGACY)."""
+    try:
+        protocol = load_protocol(exp)
+    except (OSError, tomllib.TOMLDecodeError):
+        return ()
+    roles = (protocol or {}).get("data_roles")
+    values = roles.get("prohibited_label_scopes") if isinstance(roles, dict) else None
+    return tuple(v for v in values if isinstance(v, str) and v.strip()) if isinstance(values, list) else ()
 
 
 def prohibited_inputs(exp: Experiment) -> tuple[str, ...]:
@@ -549,7 +575,7 @@ def family_slot_problems(loaded: list[tuple[str, Experiment]], *, repo: Path) ->
         family = protocol["family"]
         active.setdefault(family, []).append(key)
         exception = protocol.get("owner_exception")
-        if isinstance(exception, str) and exception.strip() and (repo / exception).exists():
+        if isinstance(exception, str) and exception.startswith(OWNER_EXCEPTION_DIR) and (repo / exception).is_file():
             exceptions.add(family)
     unexcepted = [f for f in sorted(active) if f not in exceptions]
     problems: list[tuple[str, str]] = []

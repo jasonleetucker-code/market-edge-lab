@@ -21,22 +21,26 @@ bankroll × size products were the named failure modes (strategy §6).
 
 ## Decision
 
-1. **A sidecar, not a schema change.** New experiments (created from 2026-09-25) carry
-   `protocol.toml`; older ones are read as LEGACY by an explicit reader (`protocol_state`).
+1. **A sidecar, not a schema change.** Every experiment except the explicit LEGACY allowlist
+   (EXP-001 only) carries `protocol.toml`. EXP-001 is read by an explicit reader
+   (`protocol_state`); a backdated manifest cannot dodge the rule.
    - DRAFT requires every field present and allows explicit `UNKNOWN` / `MISSING_*` values.
    - PREREGISTERED rejects them outside `[knowledge]`.
    - The freeze adds `protocol` and `protocol_sha256` keys only when a sidecar exists, so
      EXP-001's baseline bytes and hash are untouched.
-   - `validate_all` enforces at most two ACTIVE families; an extra family needs an owner-exception
-     document.
+   - `validate_all` enforces at most two ACTIVE families. An extra family needs an
+     owner-exception document under `docs/owner/`.
 2. **Evidence consumption lives in the registry directory**, as `evidence_use.jsonl`
    (`research_evidence.py`).
    - Append-only: `check-frozen` in CI compares the file with its base.
    - Event ids are content hashes, so only identical events deduplicate.
-   - A holdout is matched by its outcome window (scope plus interval) or by its hash, across every
-     experiment's log.
-   - Access before the log started is `UNKNOWN_LEGACY`; unknown booleans count as viewed.
-   - Protocol `prohibited_inputs` are refused at record time.
+   - A holdout is matched by its outcome window (scope plus interval, case-insensitive) or by its
+     hash, across every experiment's log.
+   - These are `UNKNOWN_LEGACY`: access before the covering log started, a scope no log covers,
+     and a scope with a known unlogged consumer (KXHIGHNY, read daily by EXP-001). Unknown
+     booleans count as viewed.
+   - Protocol `prohibited_inputs` (dataset prefixes) and `prohibited_label_scopes` (outcome scopes)
+     are refused at record time.
    - The out-of-band limitation is carried in every status.
 3. **Attrition is a pure report over units the caller enumerates** from existing stores.
    - Each level (event, market, horizon, snapshot, opportunity) has its own waterfall.
@@ -47,18 +51,24 @@ bankroll × size products were the named failure modes (strategy §6).
 4. **Economics is episode-based and capital-constrained** (`research_economics.py`).
    - Size-ladder rungs come from the canonical depth walk and fee schedule, with fees once, inside
      the net edge.
-   - Episodes form under a frozen definition.
+   - Episodes form under a frozen definition, per shared-liquidity pool (connected components of
+     liquidity keys). Only episodes that start in the window count.
    - Chronological replay uses finite per-venue capital, a reserve and settlement release. One
      pool serves every strategy passed together, and an open position's liquidity pool is not
      taken twice.
-   - The replay reports conservative (detection) and less-conservative (best single observation)
-     fills.
+   - The replay reports conservative (detection) and less-conservative (the best single
+     observation at the replayed size) fills, and reports any inversion. A release before entry is
+     refused.
    - The capacity ladder reports marginal contribution and marginal capital, and flags idle
      capital.
    - The screen keeps variable economics, fixed cash costs and owner hours separate. The annual
      figure is a scenario, produced only when the protocol's minimum episode count is met.
-   - A cluster bootstrap gives the uncertainty band.
-   - The verdict is INSUFFICIENT_EVIDENCE, ECONOMICALLY_UNVIABLE, BELOW_MINIMUM_USEFUL or CONTINUE.
+   - A cluster bootstrap gives the uncertainty band. It runs on the coarsest cluster level present
+     on every episode (for example NFL week over game).
+   - The verdict is INSUFFICIENT_EVIDENCE, ECONOMICALLY_UNVIABLE, BELOW_MINIMUM_USEFUL or CONTINUE,
+     and it is decided on the band, never on the point estimate:
+     - CONTINUE needs the conservative lower bound, net of fixed costs, to reach the minimum;
+     - fewer than two clusters is INSUFFICIENT_EVIDENCE.
    - Every input is labelled OBSERVED / ESTIMATED / OWNER_INPUT / UNKNOWN. Amounts are
      `ILLUSTRATIVE_SCENARIO_NOT_APPROVED_BANKROLL`.
 

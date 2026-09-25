@@ -81,7 +81,11 @@ def test_every_protocol_field_must_be_present_even_as_unknown(tmp_path):
 def test_new_experiment_without_a_sidecar_is_refused(tmp_path):
     target = _copy(tmp_path)
     (target / PROTOCOL_NAME).unlink()
-    assert any("need a protocol.toml sidecar" in p for p in _problems(target))
+    assert any("needs a protocol.toml sidecar" in p for p in _problems(target))
+    backdated = _copy(tmp_path, name="EXP-002-backdated",
+                      edit_manifest=lambda s: s.replace('created = "2026-09-25"', 'created = "2026-01-01"'))
+    (backdated / PROTOCOL_NAME).unlink()
+    assert any("needs a protocol.toml sidecar" in p for p in _problems(backdated))  # a backdated date is no exemption
 
 
 def test_sidecar_must_name_its_own_experiment_and_one_family_token(tmp_path):
@@ -125,9 +129,17 @@ def test_several_experiments_may_share_one_family_slot(tmp_path):
 
 
 def test_an_extra_family_needs_an_existing_owner_exception_document(tmp_path):
-    (tmp_path / "owner_ok.md").write_text("owner decision", encoding="utf-8")
-    root = _registry_with_families(tmp_path, ["A", "B", "C"], exception=("C", "owner_ok.md"))
+    (tmp_path / "docs" / "owner").mkdir(parents=True)
+    (tmp_path / "docs" / "owner" / "ok.md").write_text("owner decision", encoding="utf-8")
+    (tmp_path / "README.md").write_text("not an owner decision", encoding="utf-8")
+    root = _registry_with_families(tmp_path, ["A", "B", "C"], exception=("C", "docs/owner/ok.md"))
     assert not any(validate_all(root).values())
+    outside = tmp_path / "third"
+    outside.mkdir()
+    (outside / "README.md").write_text("x", encoding="utf-8")
+    root3 = _registry_with_families(outside, ["A", "B", "C"], exception=("C", "README.md"))
+    problems = [p for ps in validate_all(root3).values() for p in ps]
+    assert any("under docs/owner/" in p for p in problems) and any("active family #3" in p for p in problems)
     missing = tmp_path / "second"
     missing.mkdir()
     root2 = _registry_with_families(missing, ["A", "B", "C"], exception=("C", "no_such_file.md"))
@@ -146,8 +158,8 @@ def test_ended_or_concluded_families_free_their_slot(tmp_path):
 def _settled(text):
     import re
 
-    text = re.sub(r'"(UNKNOWN|UNVERIFIED)[^"]*"', '"settled concrete value"', text)
-    return re.sub(r'"[^"\n]*MISSING_(OWNER_INPUT|POWER_ANALYSIS)[^"\n]*"', '"settled concrete value"', text)
+    pattern = r'"[^"\n]*(UNKNOWN|UNVERIFIED|TBD|MISSING_OWNER_INPUT|MISSING_POWER_ANALYSIS|to be frozen|to be chosen)[^"\n]*"'
+    return re.sub(pattern, '"settled concrete value"', text)
 
 
 def _settled_manifest(text):
@@ -184,3 +196,13 @@ def test_family_b_prohibits_exp001_forecasts_outcomes_and_ledger():
     for prefix in ("exp001:", "shadow_ledger:", "nws_pfm:", "kalshi_settlement:"):
         assert prefix in prohibited
     assert prohibited_inputs(load(EXP1 / "experiment.toml")) == ()
+
+
+
+def test_preregistered_rejects_unsettled_tokens_anywhere_in_a_value(tmp_path):
+    for bad in ("frozen later: will be decided after a look", "20 games, source links UNKNOWN", "0.05 (UNVERIFIED)"):
+        target = _copy(tmp_path, name=f"EXP-002-{abs(hash(bad))}", edit_manifest=_settled_manifest,
+                       edit_protocol=lambda s, bad=bad: _settled(s).replace(
+                           'review_date = "2026-10-22"', 'review_date = "2026-10-22"').replace(
+                           'futility = "settled concrete value"', f'futility = "{bad}"'))
+        assert any("stopping.futility" in p for p in _problems(target)), bad

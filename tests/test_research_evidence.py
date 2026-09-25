@@ -35,7 +35,7 @@ def use(**over):
 def log(tmp_path):
     path = tmp_path / "EXP-002-x" / LOG_NAME
     path.parent.mkdir()
-    init_log(path, experiment_id="EXP-002", started_at_utc=LOG_START)
+    init_log(path, experiment_id="EXP-002", started_at_utc=LOG_START, covered_scopes=[FUTURE.scope])
     return path
 
 
@@ -131,8 +131,11 @@ def test_copying_or_rehashing_the_same_outcomes_never_restores_untouched(log):
     copied = InformationWindow(FUTURE.scope, "2026-10-15T00:00:00Z", "2026-11-15T00:00:00Z")  # overlaps
     status = holdout_status([read_log(log)], dataset_sha256="b" * 64, window=copied)
     assert status.state is HoldoutState.CONSUMED
-    elsewhere = InformationWindow("kalshi:KXHIGHNY", FUTURE.start_utc, FUTURE.end_utc)
-    assert holdout_status([read_log(log)], dataset_sha256="b" * 64, window=elsewhere).state is HoldoutState.UNTOUCHED
+    elsewhere = InformationWindow("sports:nfl:spreads", FUTURE.start_utc, FUTURE.end_utc)  # not covered by any log
+    assert holdout_status([read_log(log)], dataset_sha256="b" * 64, window=elsewhere).state is \
+        HoldoutState.UNKNOWN_LEGACY
+    upper = InformationWindow("SPORTS:NFL:MONEYLINE", "2026-10-15T00:00:00Z", "2026-11-15T00:00:00Z")  # case
+    assert holdout_status([read_log(log)], dataset_sha256="b" * 64, window=upper).state is HoldoutState.CONSUMED
     later = InformationWindow(FUTURE.scope, "2026-11-01T00:00:00Z", "2026-11-30T00:00:00Z")
     assert holdout_status([read_log(log)], dataset_sha256="b" * 64, window=later).state is HoldoutState.UNTOUCHED
 
@@ -140,7 +143,7 @@ def test_copying_or_rehashing_the_same_outcomes_never_restores_untouched(log):
 def test_consumption_is_judged_across_every_experiments_log(tmp_path, log):
     other = tmp_path / "EXP-003-y" / LOG_NAME
     other.parent.mkdir()
-    init_log(other, experiment_id="EXP-003", started_at_utc=LOG_START)
+    init_log(other, experiment_id="EXP-003", started_at_utc=LOG_START, covered_scopes=["kalshi:KXHIGHNY"])
     record_use(other, use(experiment_id="EXP-003", family="B", action=Action.LABEL_RESULT_INSPECTION,
                           viewed_labels=True, dataset_sha256="c" * 64))
     status = holdout_status(load_all_logs(tmp_path), dataset_sha256="a" * 64, window=FUTURE)
@@ -241,6 +244,7 @@ def test_a_future_target_is_never_missed_before_its_deadline():
     counts = {r.exclusion: r.primary_count for r in horizon.rows}
     assert counts["PENDING_TARGET"] == 2 and counts["MISSED_TARGET"] == 1 and counts["COLLECTION_FAILURE"] == 0
     assert horizon.corrected_premature == ("h-fail-future", "h-future")
+    assert horizon.raw_reason_counts == {"MISSED_TARGET": 1, "PENDING_TARGET": 2}  # corrected, not the raw MISSED
 
 
 def test_zero_is_not_missing():
@@ -253,7 +257,8 @@ def test_zero_is_not_missing():
 
 def test_not_applicable_stages_report_none_and_refuse_their_reasons():
     report = attrition_report([_opp("a"), _opp("b", "NO_SIGNAL")], as_of_utc=AS_OF, levels_enumerated=ALL,
-                              not_applicable_stages=[Stage.FILL])
+                              not_applicable_stages=[Stage.FILL, Stage.OUTCOME])
+    assert report.denominators["final_evaluable_outcomes"] is None
     assert report.denominators["simulated_fills"] is None and report.denominators["signals"] == 1
     opp = next(w for w in report.waterfalls if w.level == "OPPORTUNITY")
     assert next(r for r in opp.rows if r.exclusion == "NO_FILL").primary_count is None
@@ -298,4 +303,45 @@ def test_cli_record_use_refuses_prohibited_inputs_and_reports_status(tmp_path, c
     assert "DUPLICATE" in capsys.readouterr().out
     assert main(["experiments", "holdout-status", "--dataset-sha256", "a" * 64, "--scope", FUTURE.scope,
                  "--start", FUTURE.start_utc, "--end", FUTURE.end_utc, "--root", str(root)]) == 0
-    assert '"state": "UNTOUCHED"' in capsys.readouterr().out
+    assert '"state": "UNKNOWN_LEGACY"' in capsys.readouterr().out  # EXP-003's log does not cover NFL
+    label = use(experiment_id="EXP-003", family="B", dataset_id="kalshi_public:KXHIGHNY_markets", viewed_labels=True,
+                window=InformationWindow("kalshi:KXHIGHNY", FUTURE.start_utc, FUTURE.end_utc)).to_dict()
+    label_path = tmp_path / "label.json"
+    label_path.write_text(json.dumps(label), encoding="utf-8")
+    assert main(["experiments", "record-use", "EXP-003", "--use", str(label_path), "--root", str(root)]) == 1
+
+
+
+def test_family_b_cannot_view_kxhighny_labels_through_any_dataset(tmp_path):
+    from edge_lab.experiments import prohibited_label_scopes
+
+    exp3 = load(REGISTRY / "EXP-003-same-venue-payoff-consistency" / "experiment.toml")
+    scopes = prohibited_label_scopes(exp3)
+    assert scopes == ("kalshi:KXHIGHNY",)
+    path = tmp_path / LOG_NAME
+    init_log(path, experiment_id="EXP-003", started_at_utc=LOG_START, covered_scopes=["kalshi:KXHIGHNY"])
+    window = InformationWindow("kalshi:kxhighny-26sep23", "2026-09-23T00:00:00Z", "2026-09-24T00:00:00Z")
+    for over in (dict(viewed_labels=True), dict(viewed_labels=None),
+                 dict(action=Action.LABEL_RESULT_INSPECTION, viewed_labels=False)):
+        with pytest.raises(ProhibitedInput, match="labels"):
+            record_use(path, use(experiment_id="EXP-003", family="B", dataset_id="kalshi_public:KXHIGHNY_markets",
+                                 window=window, **over), prohibited_label_scopes=scopes)
+    assert record_use(path, use(experiment_id="EXP-003", family="B", dataset_id="kalshi_public:KXHIGHNY_books",
+                                window=window, action=Action.FEATURE_INSPECTION, viewed_features=True,
+                                viewed_results=True), prohibited_label_scopes=scopes) == "APPENDED"
+
+
+def test_a_scope_with_a_known_unlogged_consumer_is_never_untouched(tmp_path):
+    path = tmp_path / LOG_NAME
+    init_log(path, experiment_id="EXP-003", started_at_utc=LOG_START, covered_scopes=["kalshi:KXHIGHNY"])
+    october = InformationWindow("Kalshi:KXHIGHNY", "2026-10-01T00:00:00Z", "2026-10-31T00:00:00Z")
+    status = holdout_status([read_log(path)], dataset_sha256="q" * 64, window=october)
+    assert status.state is HoldoutState.UNKNOWN_LEGACY and any("EXP-001" in r for r in status.reasons)
+
+
+def test_explicit_pending_after_the_deadline_is_missed():
+    unit = AttritionUnit(Level.HORIZON, "h", ("PENDING_TARGET",), deadline_utc="2026-09-24T00:00:00Z")
+    horizon = next(w for w in attrition_report([unit], as_of_utc=AS_OF, levels_enumerated=ALL).waterfalls
+                   if w.level == "HORIZON")
+    counts = {r.exclusion: r.primary_count for r in horizon.rows}
+    assert counts["MISSED_TARGET"] == 1 and counts["PENDING_TARGET"] == 0 and horizon.corrected_premature == ("h",)
