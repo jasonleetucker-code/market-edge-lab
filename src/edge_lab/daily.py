@@ -16,7 +16,10 @@
    pending events only, through the collector's existing write path. This step is
    bounded: a limited number of events, pacing, bounded retries and a deadline.
 5. Settles every position with conclusive, compatible evidence. Missing or conflicting
-   evidence leaves it pending.
+   evidence leaves it pending. Evidence counts up to the run's start, extended to the
+   latest receipt of the settlement evidence this run's own refresh stored, so a run
+   settles on what it fetched. The extension never applies while settlement is held for
+   an unfinished capture day.
 6. Computes the account, risk and Outcome Board summaries with the canonical functions.
 7. Writes a receipt atomically and returns an explicit exit code.
 
@@ -176,6 +179,7 @@ def _refresh(db: Path, ledger: ShadowLedger, now: datetime, *, max_events: int, 
                 "reason": "no open position is due for settlement"}
     store = SnapshotStore(db)  # the authorized evidence write path (collection), not analysis
     run_id = f"settlement-refresh-{uuid.uuid4()}"
+    before_id = store.max_row_id("snapshots")
     store.start_run(run_id)
     outcome: dict[str, Any] = {}
     try:
@@ -188,9 +192,31 @@ def _refresh(db: Path, ledger: ShadowLedger, now: datetime, *, max_events: int, 
         store.finish_run(run_id, status={"ok": "succeeded", "partial": "partial"}.get(status, "failed"),
                          error=None if status == "ok" else (outcome.get("error") or "see source_health"))
     counts = outcome.get("counts") or {}
+    through = _settlement_evidence_received_after(store, before_id)
     return {"status": status or "failed", "run_id": run_id, "events_requested": counts.get("events_requested", 0),
             "markets_stored": counts.get("markets", 0), "settled_markets": counts.get("settled_markets", 0),
+            "evidence_received_through_utc": _iso(through) if through is not None else None,
             "errors": [e for e in [outcome.get("error")] if e] + list(outcome.get("anomalies") or [])}
+
+
+def _settlement_evidence_received_after(store: SnapshotStore, after_id: int | None) -> datetime | None:
+    """The latest receipt time of settlement evidence stored after snapshot `after_id` (None if none).
+
+    Called right after the refresh, under the collector lock, so these are the snapshots the
+    refresh itself stored. Only settlement kinds count: this bounds how far a run may extend
+    its own evidence cutoff, and settlement reads nothing else."""
+    latest: datetime | None = None
+    cursor = after_id
+    while True:
+        rows = store.snapshot_metadata(source=shadow.SETTLEMENT_SOURCE.legacy_name, kinds=shadow.SETTLEMENT_KINDS,
+                                       after_id=cursor, limit=500)
+        for row in rows:
+            fetched = parse_utc(row["fetched_at_utc"])
+            if fetched is not None and (latest is None or fetched > latest):
+                latest = fetched
+        if len(rows) < 500:
+            return latest
+        cursor = int(rows[-1]["id"])
 
 
 def _summaries(ledger: ShadowLedger, now: datetime) -> dict[str, Any]:
@@ -414,6 +440,13 @@ def _run_locked(db: Path, ledger_path: Path, now: datetime, receipt: dict[str, A
     if cutoff < now:
         receipt["problems"].append(f"settlement held at evidence received by {_iso(cutoff)} until the earliest "
                                    "unfinished capture day is processed")
+    else:
+        # Not held: the evidence this run's refresh just stored counts too. Its receipt time is
+        # after every fill recorded above (all at or before `now`), so it can never fund an
+        # earlier fill; without this a run could never settle on what it fetched (2026-09-25).
+        through = parse_utc((receipt["settlement"]["refresh"] or {}).get("evidence_received_through_utc"))
+        if through is not None and through > cutoff:
+            cutoff = through
     receipt["settlement"]["evidence_cutoff_utc"] = _iso(cutoff)
     report = shadow.settle_open_positions(store, ledger, known_by=cutoff)
     receipt["settlement"]["settled"] = len(report["settled"])

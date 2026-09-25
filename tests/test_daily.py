@@ -158,6 +158,61 @@ def test_settlement_refresh_is_targeted_and_settles(store, tmp_path, monkeypatch
     assert receipt["settlement"]["pending"] == []
 
 
+def _refresh_received_at(monkeypatch, received_at: str):
+    """Fake Kalshi settlement refresh whose evidence is received at `received_at`."""
+    def fake_json(url, **kwargs):
+        markets = [dict(m, status="finalized", expiration_value="67", result=_result(67)(m)) for m in MARKETS["markets"]]
+        return ({"markets": markets, "cursor": ""},
+                FetchResult(url, url, 200, "application/json", b"{}", received_at, 1, 1))
+    monkeypatch.setattr(kalshi, "fetch_json_result", fake_json)
+
+
+def test_a_run_settles_on_the_evidence_its_own_refresh_received(store, tmp_path, monkeypatch, model):
+    # Production 2026-09-25 11:15 ET: the cutoff was the run start (15:15:04Z), the refresh stored
+    # the finalized markets at 15:15:09Z, and nothing settled until the next run.
+    _full_day(store, monkeypatch)
+    _run(store, tmp_path, model)
+    due = datetime(2026, 9, 24, 16, tzinfo=UTC)
+    _refresh_received_at(monkeypatch, "2026-09-24T16:00:05+00:00")  # received after the run started
+    receipt, code = _run(store, tmp_path, model, now=due, refresh_settlements=True)
+    assert receipt["settlement"]["refresh"]["status"] == "ok"
+    assert receipt["settlement"]["settled"] == 6 and receipt["settlement"]["pending"] == []
+    assert receipt["settlement"]["evidence_cutoff_utc"] == "2026-09-24T16:00:05+00:00"
+    assert receipt["settlement"]["refresh"]["evidence_received_through_utc"] == "2026-09-24T16:00:05+00:00"
+    ledger = ShadowLedger(tmp_path / "ledger.sqlite3")
+    for account in ledger.accounts():  # the replay (hash chain, knowledge-time order, equity) still holds
+        state = ledger.state(account)
+        assert all(p.status == "SETTLED" for p in state.positions)
+        assert all(p.settled_at_utc for p in state.positions)
+
+
+def test_a_held_settlement_is_not_extended_by_the_runs_own_refresh(store, tmp_path, monkeypatch, model):
+    # While an earlier capture day is unfinished, settlement stays capped at its decision time,
+    # even for evidence this run fetched (catch-up never borrows from the future).
+    _full_day(store, monkeypatch)
+    _run(store, tmp_path, model)
+    due = datetime(2026, 9, 24, 16, tzinfo=UTC)
+    held = datetime(2026, 9, 23, 22, tzinfo=UTC)
+    monkeypatch.setattr(daily, "settlement_cutoff", lambda *a, **k: held)
+    _refresh_received_at(monkeypatch, "2026-09-24T16:00:05+00:00")
+    receipt, _ = _run(store, tmp_path, model, now=due, refresh_settlements=True)
+    assert receipt["settlement"]["evidence_cutoff_utc"] == held.isoformat()
+    assert receipt["settlement"]["settled"] == 0 and len(receipt["settlement"]["pending"]) == 6
+    assert any("settlement held" in p for p in receipt["problems"])
+
+
+def test_evidence_not_from_the_refresh_after_now_still_waits(store, tmp_path, monkeypatch, model):
+    # The extension covers only settlement evidence the run's refresh stored: evidence received
+    # after `now` by any other path is still not used yet.
+    _full_day(store, monkeypatch)
+    _run(store, tmp_path, model)
+    _settled(store, 67, _result(67))  # stored with receipt time 2026-09-24T14:00Z
+    receipt, _ = _run(store, tmp_path, model, now=datetime(2026, 9, 24, 13, tzinfo=UTC), refresh_settlements=False)
+    assert receipt["settlement"]["refresh"]["status"] == "not_requested"
+    assert receipt["settlement"]["evidence_cutoff_utc"] == "2026-09-24T13:00:00+00:00"
+    assert receipt["settlement"]["settled"] == 0
+
+
 def test_failed_refresh_keeps_bookkeeping_and_reports_failed(store, tmp_path, monkeypatch, model):
     _full_day(store, monkeypatch)
 
