@@ -59,7 +59,7 @@ Pure, deterministic, stdlib-only and network-free.
 
 
 import random
-from dataclasses import asdict, dataclass, replace
+from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime, timedelta
 from decimal import ROUND_DOWN, Decimal
 from enum import Enum
@@ -624,6 +624,10 @@ class ScreenInputs:
     stationarity_assumption: str
     data_gaps: tuple[str, ...] = ()
     assumptions: tuple[str, ...] = ()
+    # Protocol input: the minimum number of independent clusters, at the level actually used,
+    # before any verdict other than INSUFFICIENT_EVIDENCE. UNKNOWN (the default) = no verdict.
+    min_independent_clusters: Labeled = field(default_factory=lambda: Labeled(
+        None, Basis.UNKNOWN, "protocol minimum independent clusters not supplied"))
 
 
 @dataclass(frozen=True)
@@ -709,7 +713,12 @@ def economic_screen(inputs: ScreenInputs) -> ScreenReport:
     for mode, run in runs.items():
         reasons += [f"{mode.value}: {p}" for p in run.problems if f"{mode.value}: {p}" not in reasons]
     outer = bool(episodes) and all(e.outer_cluster_id for e in episodes)
-    level = "outer" if outer else "fine"
+    mixed = not outer and any(e.outer_cluster_id for e in episodes)
+    level = "outer" if outer else ("mixed" if mixed else "fine")
+    if mixed:
+        # Falling back to the finer level would narrow the band; refuse a verdict instead.
+        reasons.append("some episodes carry an outer cluster id and some do not: the dependence level is "
+                       "inconsistent, so no verdict beyond INSUFFICIENT_EVIDENCE is possible")
     clusters = sorted({_cluster_key(outer, e.cluster_id, e.outer_cluster_id) for e in episodes})
     min_n = inputs.min_episodes_for_scenario
     annual_ok = bool(episodes) and min_n.value is not None and len(episodes) >= min_n.value and window_days > 0
@@ -790,7 +799,10 @@ def economic_screen(inputs: ScreenInputs) -> ScreenReport:
         **{f"{m.value.lower()}_per_cluster_{name}": (None if bands[m] is None else bands[m][i])
            for m in FillMode for i, name in enumerate(("mean", "lower", "upper"))},
         "estimable": bands[FillMode.CONSERVATIVE] is not None and bands[FillMode.LESS_CONSERVATIVE] is not None,
-        "note": "episodes within a cluster are dependent; the band is on clusters, never on episodes or snapshots",
+        "note": "episodes within a cluster are dependent; the band is on clusters, never on episodes or snapshots. "
+                "The annualized band scales the per-cluster mean by the observed cluster rate: it does not include "
+                "uncertainty in how often clusters occur, so it is narrower than the full uncertainty",
+        "min_independent_clusters": inputs.min_independent_clusters.value,
     }
     capital = {
         "scenario_label": inputs.scenario.label,
@@ -807,10 +819,12 @@ def economic_screen(inputs: ScreenInputs) -> ScreenReport:
                                window_start_utc=inputs.window_start_utc,
                                window_end_utc=inputs.window_end_utc) if not inputs.scenario.problems() else ()
 
-    verdict, why = _verdict(inputs, net_after_fixed, uncertainty["estimable"], len(clusters), reasons)
+    verdict, why = _verdict(inputs, net_after_fixed, uncertainty["estimable"] and not mixed, len(clusters), level,
+                            inversion, reasons)
     input_labels = {"fixed_cash_costs_annual": fixed, "owner_hours_annual": hours, "owner_hourly_cost": rate,
                     "minimum_useful_annual": inputs.minimum_useful_annual,
                     "min_episodes_for_scenario": min_n,
+                    "min_independent_clusters": inputs.min_independent_clusters,
                     **{f"capital:{v}": a for v, a in sorted(inputs.scenario.capital_by_venue.items())},
                     **{f"reserve:{v}": a for v, a in sorted(inputs.scenario.reserve_by_venue.items())}}
     report = ScreenReport(
@@ -830,14 +844,19 @@ def economic_screen(inputs: ScreenInputs) -> ScreenReport:
     return replace(report, report_sha256=sha256_hex(canonical_json(body)))
 
 
-def _verdict(inputs: ScreenInputs, net: Mapping[str, Labeled], estimable: bool, clusters: int,
-             reasons: list[str]) -> tuple[Verdict, list[str]]:
+def _verdict(inputs: ScreenInputs, net: Mapping[str, Labeled], estimable: bool, clusters: int, level: str,
+             inversion: bool, reasons: list[str]) -> tuple[Verdict, list[str]]:
     """Decided on the cluster-bootstrap band, never on the point estimate alone.
 
-    UNVIABLE: even the less-conservative band's upper bound cannot clear the fixed costs.
-    BELOW_MINIMUM_USEFUL: even that upper bound is below the owner's minimum.
-    CONTINUE: the conservative band's lower bound reaches the minimum.
-    Anything else, including fewer than two clusters, is INSUFFICIENT_EVIDENCE."""
+    Preconditions, each otherwise INSUFFICIENT_EVIDENCE:
+    - an annual scenario exists;
+    - the band is estimable at one consistent cluster level;
+    - the protocol's minimum number of independent clusters is supplied and met;
+    - the fill modes do not invert.
+
+    Then UNVIABLE: even the less-conservative band's upper bound cannot clear the fixed costs.
+    BELOW_MINIMUM_USEFUL: even that upper bound is below the owner's minimum. CONTINUE: the
+    conservative band's lower bound reaches the minimum. Anything else is INSUFFICIENT_EVIDENCE."""
     reasons = list(reasons)
     cons_lower = net.get("conservative_lower")
     less_upper = net.get("less_conservative_upper")
@@ -846,8 +865,19 @@ def _verdict(inputs: ScreenInputs, net: Mapping[str, Labeled], estimable: bool, 
         return Verdict.INSUFFICIENT_EVIDENCE, reasons or ["annual scenario unavailable"]
     if not estimable:
         return Verdict.INSUFFICIENT_EVIDENCE, reasons + [
-            f"{clusters} independent cluster(s): no uncertainty band is estimable, so no verdict beyond "
+            f"{clusters} independent cluster(s) at level {level}: no usable uncertainty band, so no verdict beyond "
             "INSUFFICIENT_EVIDENCE is possible"]
+    min_clusters = inputs.min_independent_clusters
+    if min_clusters.value is None:
+        return Verdict.INSUFFICIENT_EVIDENCE, reasons + [
+            "the protocol's minimum number of independent clusters is UNKNOWN"]
+    if clusters < min_clusters.value:
+        return Verdict.INSUFFICIENT_EVIDENCE, reasons + [
+            f"{clusters} independent {level} cluster(s) < the protocol minimum {min_clusters.value}"]
+    if inversion or cons_lower.value > less_upper.value:
+        return Verdict.INSUFFICIENT_EVIDENCE, reasons + [
+            f"the fill modes invert (conservative lower {cons_lower.value} vs less-conservative upper "
+            f"{less_upper.value}): capital path dependence makes the bounds unreliable"]
     if less_upper.value <= 0:
         return Verdict.ECONOMICALLY_UNVIABLE, reasons + [
             f"even the less-conservative band's upper bound net of fixed cash costs is {less_upper.value} <= 0"]

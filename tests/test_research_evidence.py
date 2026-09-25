@@ -322,7 +322,9 @@ def test_family_b_cannot_view_kxhighny_labels_through_any_dataset(tmp_path):
     init_log(path, experiment_id="EXP-003", started_at_utc=LOG_START, covered_scopes=["kalshi:KXHIGHNY"])
     window = InformationWindow("kalshi:kxhighny-26sep23", "2026-09-23T00:00:00Z", "2026-09-24T00:00:00Z")
     for over in (dict(viewed_labels=True), dict(viewed_labels=None),
-                 dict(action=Action.LABEL_RESULT_INSPECTION, viewed_labels=False)):
+                 dict(action=Action.LABEL_RESULT_INSPECTION, viewed_labels=False),
+                 dict(action=Action.VALIDATION_TUNING, role=DatasetRole.VALIDATION, viewed_results=True),
+                 dict(action=Action.TRAINING_DEVELOPMENT, role=DatasetRole.DEVELOPMENT, viewed_results=None)):
         with pytest.raises(ProhibitedInput, match="labels"):
             record_use(path, use(experiment_id="EXP-003", family="B", dataset_id="kalshi_public:KXHIGHNY_markets",
                                  window=window, **over), prohibited_label_scopes=scopes)

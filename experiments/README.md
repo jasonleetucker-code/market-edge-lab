@@ -120,7 +120,15 @@ the unchanged manifest.
     certified untouched. KXHIGHNY is such a scope: EXP-001's pipeline, ledger and Terminal read
     it daily.
   - `[data_roles] prohibited_label_scopes` makes `record-use` refuse any label- or outcome-viewing
-    use in those scopes, whatever the dataset is called.
+    use in those scopes, whatever the dataset is called. That includes tuning or development that
+    saw outcome-derived results.
+  - `[data_roles] prohibited_fields` names record fields the family's readers must drop. It is
+    enforced by the readers that consume the protocol, and is declarative for any reader that does
+    not.
+  - Scopes, roles and viewed flags are self-declared: a mislabelled scope or flag sidesteps the
+    checks. See the limitation in `research_evidence.OUT_OF_BAND_LIMITATION`.
+  - `[economics] min_episodes_for_scenario` and `min_independent_clusters` feed the economic
+    screen. While either is unknown, the screen can only say INSUFFICIENT_EVIDENCE.
   - The log is append-only: `edge-lab experiments check-frozen` (run in CI) fails if an existing
     line changes or the file is deleted.
   - `edge-lab experiments holdout-status` says whether an outcome window can still support an

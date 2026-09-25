@@ -56,7 +56,8 @@ LOG_VERSION = "evidence-use-v1"
 ATTRITION_VERSION = "attrition-v1"
 OUT_OF_BAND_LIMITATION = (
     "An evidence-use log records declared access only. It cannot prove that nobody viewed the data "
-    "outside it (another tool, a copy, a shell, a chat). Holdout protection is procedural as well as technical."
+    "outside it (another tool, a copy, a shell, a chat), and scopes, roles and viewed flags are self-declared: "
+    "a mislabelled scope or flag sidesteps the checks. Holdout protection is procedural as well as technical."
 )
 
 
@@ -307,8 +308,12 @@ def record_use(path: Path, use: EvidenceUse, *, prohibited_prefixes: Sequence[st
     if blocked:
         raise ProhibitedInput(f"{use.experiment_id} may not access {use.dataset_id} (prohibited_inputs {blocked!r})")
     for scope in prohibited_label_scopes:
+        # Outcome-derived results count as labels here: tuning or development that saw results in
+        # the scope is refused too.
         if scope_matches(use.window.scope, scope) and (
-                use.viewed_labels is not False or use.action is Action.LABEL_RESULT_INSPECTION):
+                use.viewed_labels is not False or use.action is Action.LABEL_RESULT_INSPECTION
+                or (use.action in (Action.VALIDATION_TUNING, Action.TRAINING_DEVELOPMENT)
+                    and use.viewed_results is not False)):
             raise ProhibitedInput(f"{use.experiment_id} may not view labels or outcomes in scope {use.window.scope} "
                                   f"(prohibited_label_scopes {scope!r}); viewed_labels must be false")
     if not path.exists():

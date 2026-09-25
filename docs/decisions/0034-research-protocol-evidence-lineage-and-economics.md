@@ -68,7 +68,10 @@ bankroll × size products were the named failure modes (strategy §6).
    - The verdict is INSUFFICIENT_EVIDENCE, ECONOMICALLY_UNVIABLE, BELOW_MINIMUM_USEFUL or CONTINUE,
      and it is decided on the band, never on the point estimate:
      - CONTINUE needs the conservative lower bound, net of fixed costs, to reach the minimum;
-     - fewer than two clusters is INSUFFICIENT_EVIDENCE.
+     - these all give INSUFFICIENT_EVIDENCE: fewer independent clusters than the protocol minimum,
+       with UNKNOWN counting as unmet; a mixed cluster level; inverted fill modes;
+     - the annualized band ignores uncertainty in how often clusters occur, so it is narrower than
+       the full uncertainty.
    - Every input is labelled OBSERVED / ESTIMATED / OWNER_INPUT / UNKNOWN. Amounts are
      `ILLUSTRATIVE_SCENARIO_NOT_APPROVED_BANKROLL`.
 

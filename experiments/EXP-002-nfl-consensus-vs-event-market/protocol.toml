@@ -11,6 +11,16 @@ authority = "docs/owner/2026-09-25-economic-evidence-v1-directive.md; docs/EXECU
 mechanism = "Sportsbook lines aggregate many professional prices and may move before thinner event-market books reprice; if an event-market ask for a payoff-equivalent contract lags the consensus by more than all-in costs, buying it has positive expected value."
 named_hypothesis = "H-A1 (consensus information): at a frozen pregame horizon, the odds-consensus-v1 probability for a payoff-equivalent NFL moneyline contract exceeds its executable all-in ask by more than a frozen threshold often enough, and at enough fillable size, to clear the owner's minimum useful economic effect."
 baseline = "odds-consensus-v1 exactly as implemented (edge_lab.odds_api pair_offers / group_propositions / median; proportional two-way de-vig; exact line; no weighting, no filters) versus the executable ask; plus the no-trade baseline (zero contribution, zero capital)."
+# OPEN DECISIONS (not settled values). Each must be decided, with evidence, before PREREGISTERED.
+# Items 1 and 2 were raised by EE Writer 2 (PR C, #101) from the captured market rules. The rules
+# facts they cite stay UNVERIFIED here until PR C's captured-rules evidence is merged.
+open_decisions = [
+  "OPEN 1, tie and not-played treatment. PR C reports that KXNFLGAME rules pay $0.50 on a tie and resolve at a discretionary 'fair price' if the game is not played within 48 h (UNVERIFIED here). A sportsbook two-way moneyline de-vig is conditional on the book's own tie/void rules, so no pair is payoff-equivalent today: every pair is a CONDITIONAL mapping. Decide whether and how tie and not-played states are represented (payoff_constraints-style states) or excluded, and what that does to the equivalence claim.",
+  "OPEN 2, maximum pair skew between the odds snapshot and the event-market book. PR C suggests 10 minutes as a disclosed candidate. That is NOT frozen: freeze it with the capture-schedule resolution before any outcome is viewed.",
+  "OPEN 3, the size ladder rungs ([size_capital] size_ladder).",
+  "OPEN 4, the episode definition: start threshold, end/merge gap and minimum size ([episode]).",
+  "OPEN 5, the minimum number of independent clusters (game and NFL week) before a screen verdict ([economics] min_independent_clusters), and the minimum episode count for an annual scenario ([economics] min_episodes_for_scenario).",
+]
 
 [universe]
 eligible = "NFL regular- and post-season games; pregame moneyline (team-win) only; one execution-candidate venue first (Kalshi) and only contracts whose captured rules, tie/overtime/postponement/void treatment and payout units are mapped as payoff-equivalent to the consensus side. No other league, market type (spreads, totals, props) or venue is added to inflate the sample."
@@ -106,6 +116,8 @@ verdicts = ["ACCESS_BLOCKED", "ECONOMICALLY_UNVIABLE", "STATISTICAL_FUTILITY", "
 [economics]
 minimum_useful_effect = "MISSING_OWNER_INPUT: the minimum useful annual after-cost contribution for this family (the $50k-100k aspiration is not a per-experiment minimum)."
 power_analysis = "MISSING_POWER_ANALYSIS: requires the primary endpoint, the minimum effect and a variance estimate from development data."
+min_episodes_for_scenario = "MISSING_POWER_ANALYSIS: the minimum number of distinct in-window episodes before any annual scenario is computed (research_economics.ScreenInputs)."
+min_independent_clusters = "MISSING_POWER_ANALYSIS: the minimum number of independent clusters, at the coarsest level used, before any screen verdict other than INSUFFICIENT_EVIDENCE."
 
 [readiness]
 product = "Data foundations exist (odds pilot, consensus benchmark, Terminal views); paired event-market books and rules mapping do not."

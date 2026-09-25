@@ -241,6 +241,7 @@ def _inputs(observations, **over):
         minimum_useful_annual=Labeled(D(10), Basis.OWNER_INPUT),
         min_episodes_for_scenario=Labeled(D(2), Basis.OWNER_INPUT),
         stationarity_assumption="the window's episode rate and size persist (test)",
+        min_independent_clusters=Labeled(D(2), Basis.OWNER_INPUT),
     )
     base.update(over)
     return ScreenInputs(**base)
@@ -364,10 +365,55 @@ def test_the_coarsest_cluster_level_is_used_when_every_episode_has_one():
     assert economic_screen(_inputs(one_week)).verdict == "INSUFFICIENT_EVIDENCE"  # one week: no band
     mixed = games[:3] + [obs("g9", "2026-09-20T00:00:00Z", keys=("k9",), cluster="game9",
                              release="2026-09-21T00:00:00Z")]
-    assert economic_screen(_inputs(mixed)).cluster_level == "fine"
+    assert economic_screen(_inputs(mixed)).cluster_level == "mixed"
 
 
 def test_unviable_and_below_minimum_keep_the_accumulated_reasons():
     report = economic_screen(_inputs(_two_days(), fixed_cash_costs_annual=Labeled(D(1800), Basis.OWNER_INPUT),
                                      data_gaps=("x",)))
     assert report.verdict == "ECONOMICALLY_UNVIABLE" and len(report.verdict_reasons) >= 1
+
+
+
+# --------------------------------------------------------------------------- re-review N1 / SF-1 / SF-2
+
+
+def test_two_clusters_cannot_continue_without_the_protocol_cluster_minimum():
+    two = [obs("a", "2026-09-02T00:00:00Z", keys=("k1",), cluster="d1", ladder=(pt(1, "0.05"), pt(10, "0.05"))),
+           obs("b", "2026-09-10T00:00:00Z", keys=("k2",), cluster="d2", ladder=(pt(1, "0.04"), pt(10, "0.04")),
+               release="2026-09-11T00:00:00Z")]
+    base = dict(minimum_useful_annual=Labeled(D(4), Basis.OWNER_INPUT))
+    unknown = economic_screen(_inputs(two, min_independent_clusters=Labeled.unknown(), **base))
+    assert unknown.verdict == "INSUFFICIENT_EVIDENCE" and any("independent clusters is UNKNOWN" in r
+                                                               for r in unknown.verdict_reasons)
+    unmet = economic_screen(_inputs(two, min_independent_clusters=Labeled(D(3), Basis.OWNER_INPUT), **base))
+    assert unmet.verdict == "INSUFFICIENT_EVIDENCE" and any("< the protocol minimum 3" in r
+                                                             for r in unmet.verdict_reasons)
+    assert ScreenInputs.__dataclass_fields__["min_independent_clusters"].default_factory().value is None
+
+
+def test_eight_games_in_two_weeks_are_two_clusters():
+    games = [obs(f"g{i}", f"2026-09-{2 + i:02d}T00:00:00Z", keys=(f"k{i}",), cluster=f"game{i}",
+                 outer="week1" if i < 4 else "week2", release=f"2026-09-{3 + i:02d}T00:00:00Z") for i in range(8)]
+    report = economic_screen(_inputs(games, min_independent_clusters=Labeled(D(5), Basis.OWNER_INPUT),
+                                     minimum_useful_annual=Labeled(D(1), Basis.OWNER_INPUT)))
+    assert report.cluster_level == "outer" and report.clusters == 2 and report.verdict == "INSUFFICIENT_EVIDENCE"
+
+
+def test_inverted_fill_modes_are_insufficient():
+    # Capital for one entry. Conservative takes A at detection (0.10); less-conservative waits for A's
+    # best observation, so the weaker B enters first (0.03) and A is vetoed: the modes invert.
+    a1 = obs("a1", "2026-09-02T00:00:00Z", keys=("A",), cluster="d1", ladder=(pt(1, "0.10"),))
+    a2 = obs("a2", "2026-09-02T00:30:00Z", keys=("A",), cluster="d1", ladder=(pt(1, "0.12"),))
+    b = obs("b", "2026-09-02T00:10:00Z", keys=("B",), cluster="d2", ladder=(pt(1, "0.03"),))
+    report = economic_screen(_inputs([a1, a2, b], scenario=scen(capital="0.50"), primary_size=D(1), sizes=(D(1),),
+                                     minimum_useful_annual=Labeled(D("0.01"), Basis.OWNER_INPUT)))
+    assert report.capital["fill_mode_inversion"] and report.verdict == "INSUFFICIENT_EVIDENCE"
+    assert any("fill modes invert" in r for r in report.verdict_reasons)
+
+
+def test_a_mixed_cluster_level_is_insufficient_not_silently_finer():
+    mixed = [obs(f"g{i}", f"2026-09-{2 + i:02d}T00:00:00Z", keys=(f"k{i}",), cluster=f"game{i}",
+                 outer="week1" if i < 3 else None, release=f"2026-09-{3 + i:02d}T00:00:00Z") for i in range(4)]
+    report = economic_screen(_inputs(mixed))
+    assert report.cluster_level == "mixed" and report.verdict == "INSUFFICIENT_EVIDENCE"

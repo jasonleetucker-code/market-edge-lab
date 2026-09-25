@@ -139,7 +139,14 @@ def test_an_extra_family_needs_an_existing_owner_exception_document(tmp_path):
     (outside / "README.md").write_text("x", encoding="utf-8")
     root3 = _registry_with_families(outside, ["A", "B", "C"], exception=("C", "README.md"))
     problems = [p for ps in validate_all(root3).values() for p in ps]
-    assert any("under docs/owner/" in p for p in problems) and any("active family #3" in p for p in problems)
+    assert any("inside docs/owner/" in p for p in problems) and any("active family #3" in p for p in problems)
+    escape = tmp_path / "fourth"
+    escape.mkdir()
+    (escape / "docs" / "owner").mkdir(parents=True)
+    (escape / "README.md").write_text("x", encoding="utf-8")
+    root4 = _registry_with_families(escape, ["A", "B", "C"], exception=("C", "docs/owner/../../README.md"))
+    problems4 = [p for ps in validate_all(root4).values() for p in ps]
+    assert any("inside docs/owner/" in p for p in problems4) and any("active family #3" in p for p in problems4)
     missing = tmp_path / "second"
     missing.mkdir()
     root2 = _registry_with_families(missing, ["A", "B", "C"], exception=("C", "no_such_file.md"))
@@ -206,3 +213,17 @@ def test_preregistered_rejects_unsettled_tokens_anywhere_in_a_value(tmp_path):
                            'review_date = "2026-10-22"', 'review_date = "2026-10-22"').replace(
                            'futility = "settled concrete value"', f'futility = "{bad}"'))
         assert any("stopping.futility" in p for p in _problems(target)), bad
+
+
+
+def test_prohibited_fields_must_be_field_names():
+    from edge_lab.experiments import prohibited_fields
+
+    assert "result" in prohibited_fields(load(EXP3 / "experiment.toml"))
+    assert prohibited_fields(load(EXP1 / "experiment.toml")) == ()
+
+
+def test_prohibited_fields_reject_non_field_entries(tmp_path):
+    exp = _copy(tmp_path, source=EXP3, edit_protocol=lambda s: s.replace(
+        '"settlement_ts"]', '"settlement_ts", "last price after close"]'))
+    assert any("prohibited_fields must be a list of record field names" in p for p in _problems(exp))

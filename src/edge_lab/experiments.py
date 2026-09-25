@@ -393,7 +393,8 @@ PROTOCOL_TABLES: dict[str, tuple[str, ...]] = {
     "evaluation": ("chronological", "untouched_future_window", "exposure_history", "controls"),
     "budget": ("research_cash_usd", "owner_hours", "data_costs", "review_date"),
     "stopping": ("futility", "stop", "continue_rule", "verdicts"),
-    "economics": ("minimum_useful_effect", "power_analysis"),
+    "economics": ("minimum_useful_effect", "power_analysis", "min_episodes_for_scenario",
+                  "min_independent_clusters"),
     "readiness": ("product", "strategy", "permitted_uses", "remaining_blockers"),
     "episode": ("definition", "start_threshold", "end_merge_gap", "minimum_size"),
     "knowledge": ("source_independence", "annual_episode_count", "fill_probability"),
@@ -508,8 +509,14 @@ def protocol_problems(exp: Experiment) -> list[str]:
                                          and all(isinstance(s, str) and s.strip() for s in label_scopes)):
         problems.append(f"{PROTOCOL_NAME} [data_roles] prohibited_label_scopes must be a list of outcome scopes")
     exception = protocol.get("owner_exception")
-    if exception is not None and not (isinstance(exception, str) and exception.startswith(OWNER_EXCEPTION_DIR)):
-        problems.append(f"{PROTOCOL_NAME} owner_exception must name an owner decision under {OWNER_EXCEPTION_DIR}")
+    if exception is not None and not owner_exception_ok(exception, repo=exp.path.resolve().parents[2]):
+        problems.append(f"{PROTOCOL_NAME} owner_exception must name an existing owner decision file inside "
+                        f"{OWNER_EXCEPTION_DIR}")
+    fields = roles.get("prohibited_fields") if isinstance(roles, dict) else None
+    if fields is not None and not (isinstance(fields, list)
+                                   and all(isinstance(f, str) and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", f)
+                                           for f in fields)):
+        problems.append(f"{PROTOCOL_NAME} [data_roles] prohibited_fields must be a list of record field names")
     budget = protocol.get("budget")
     review = budget.get("review_date") if isinstance(budget, dict) else None
     if isinstance(review, str) and not _unsettled(review):
@@ -530,6 +537,26 @@ def protocol_problems(exp: Experiment) -> list[str]:
             for label in _unsettled_paths(protocol.get(key, ""), key):
                 problems.append(f"{exp.status} experiment has unsettled protocol field '{label}'")
     return problems
+
+
+def owner_exception_ok(exception: Any, *, repo: Path) -> bool:
+    """An owner exception is an existing file that resolves inside <repo>/docs/owner/ (no `..` escape)."""
+    if not isinstance(exception, str) or not exception.strip():
+        return False
+    owner_dir = (repo / OWNER_EXCEPTION_DIR).resolve()
+    target = (repo / exception).resolve()
+    return target.is_file() and owner_dir in target.parents
+
+
+def prohibited_fields(exp: Experiment) -> tuple[str, ...]:
+    """Record fields this experiment's readers must drop (enforced by the readers that consume it)."""
+    try:
+        protocol = load_protocol(exp)
+    except (OSError, tomllib.TOMLDecodeError):
+        return ()
+    roles = (protocol or {}).get("data_roles")
+    values = roles.get("prohibited_fields") if isinstance(roles, dict) else None
+    return tuple(v for v in values if isinstance(v, str) and v.strip()) if isinstance(values, list) else ()
 
 
 def prohibited_label_scopes(exp: Experiment) -> tuple[str, ...]:
@@ -574,8 +601,7 @@ def family_slot_problems(loaded: list[tuple[str, Experiment]], *, repo: Path) ->
             continue
         family = protocol["family"]
         active.setdefault(family, []).append(key)
-        exception = protocol.get("owner_exception")
-        if isinstance(exception, str) and exception.startswith(OWNER_EXCEPTION_DIR) and (repo / exception).is_file():
+        if owner_exception_ok(protocol.get("owner_exception"), repo=repo):
             exceptions.add(family)
     unexcepted = [f for f in sorted(active) if f not in exceptions]
     problems: list[tuple[str, str]] = []

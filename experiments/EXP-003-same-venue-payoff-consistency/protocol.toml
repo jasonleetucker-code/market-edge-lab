@@ -62,10 +62,12 @@ prohibited_inputs = [
 ]
 # Labels reach this family through non-prohibited datasets too: the market records inside
 # kalshi_public snapshots carry settled fields. No use may view labels/outcomes in these scopes
-# (research_evidence.record_use refuses it), and the payoff scan never reads the fields below
-# nor any snapshot received after the market's close.
+# (research_evidence.record_use refuses it). prohibited_fields are market-record fields that this
+# family's readers must drop; they are enforced by the readers that consume this protocol (the
+# payoff scan in EE v1 PR B) and are declarative until then. Snapshots received at or after a
+# market's close are excluded by the same readers.
 prohibited_label_scopes = ["kalshi:KXHIGHNY"]
-prohibited_fields = ["result", "expiration_value", "settlement_value", "settlement_value_dollars", "settlement_ts", "last_price_dollars after close"]
+prohibited_fields = ["result", "expiration_value", "settlement_value", "settlement_value_dollars", "settlement_ts"]
 
 [variants]
 allowed = [
@@ -110,6 +112,8 @@ verdicts = ["ACCESS_BLOCKED", "ECONOMICALLY_UNVIABLE", "STATISTICAL_FUTILITY", "
 [economics]
 minimum_useful_effect = "MISSING_OWNER_INPUT: the minimum useful annual after-cost contribution for this family."
 power_analysis = "MISSING_POWER_ANALYSIS: a deterministic bound has no sampling error per instant, but episode frequency and size do; requires development-window counts."
+min_episodes_for_scenario = "MISSING_POWER_ANALYSIS: the minimum number of distinct in-window episodes before any annual scenario is computed (research_economics.ScreenInputs)."
+min_independent_clusters = "MISSING_POWER_ANALYSIS: the minimum number of independent clusters, at the coarsest level used, before any screen verdict other than INSUFFICIENT_EVIDENCE."
 
 [readiness]
 product = "Depth, grid, fee and settlement-identity contracts exist; the payoff evaluator is PR B."
