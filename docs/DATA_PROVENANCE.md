@@ -312,7 +312,7 @@ review. Their stored rows are not rewritten, and missing fields stay UNKNOWN.
 - **Units.** Native quantity and granularity, the price convention, payout per native unit,
   currency and multiplier are preserved as the source states them. Conversion is explicit and
   versioned: a one-cent contract is never multiplied as a $1 contract, and a fractional quantity
-  is never truncated to an integer. The shared metadata contract lands with EE v1 PR B (semantic
+  is never truncated to an integer. The shared metadata contract is `opportunity.ContractSemantics` (EE v1 PR B, ADR 0036; semantic
   conformance).
 - **Outcome finality.** Labels are pending, preliminary, corrected or final, with the source and
   the time each state became known. A correction appends a new label and never rewrites a settled

@@ -27,8 +27,7 @@ Under the 2026-09-24 (evening) Freshness Fabric and sports directive:
 
 Under the 2026-09-25 Economic Evidence v1 directive (#96):
 - 0034: research-protocol sidecar, evidence consumption, attrition and the economic screen (EE v1 PR A).
-- 0035: reserved for the next execution package (durable intent journal, reservation, fencing,
-  reconciliation). Design only (EE v1 PR B).
-- 0036: reserved for EE v1 semantic conformance, if a separate record is needed.
+- 0035: the next execution package: durable intent journal, reservation, fencing and reconciliation. DESIGN ONLY (EE v1 PR B).
+- 0036: semantic conformance metadata and the same-venue payoff evaluator (EE v1 PR B).
 
 New decisions start at 0037.
