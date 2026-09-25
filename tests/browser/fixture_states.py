@@ -316,5 +316,88 @@ def freshness_deferred() -> tuple[Config, Path]:
                            window=guard), root
 
 
+
+# ----------------------------------------------------------------------------- Polymarket US NFL pilot
+# The real recorded gateway bytes (tests/fixtures/polymarket_us, captured 2026-09-24) replayed through
+# the pilot's own public entry points (`run_discover`, `run_capture`): no network.
+PM_FIX = REPO / "tests" / "fixtures" / "polymarket_us"
+PM_ACCESS = "fixture: the owner's recorded risk decision"
+
+
+class _Recorded:
+    """An opener that replays recorded response bodies in order."""
+
+    def __init__(self, *bodies: bytes) -> None:
+        self.bodies = list(bodies)
+
+    def __call__(self, request, timeout):
+        body, url = self.bodies.pop(0), request.full_url
+
+        class _Response:
+            status = 200
+            headers = {"Content-Type": "application/json"}
+
+            def read(self) -> bytes:
+                return body
+
+            def geturl(self) -> str:
+                return url
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+        return _Response()
+
+
+def polymarket(root: Path | None = None, *, issues: bool = False) -> tuple[Config, Path]:
+    """The odds fixture plus the Polymarket US pilot: a discovery of the recorded NFL listing at 14:00
+    ET and the ATL@GB T-6h research book capture at 14:15 ET. `issues` makes the scan partial (the
+    second listing page failed) and records a failed book call."""
+    from edge_lab import polymarket_sports as ps
+
+    cfg, root = odds_pilot(root)
+    pages = [(PM_FIX / "nfl_events_moneyline_p0_2026-09-24T205921Z.json").read_bytes()]
+    if not issues:
+        pages.append((PM_FIX / "nfl_events_moneyline_p1_2026-09-24T205942Z.json").read_bytes())
+    discover_at = datetime(2026, 9, 24, 18, 0, tzinfo=timezone.utc)
+    opener = _Recorded(*pages) if not issues else _FailAfter(*pages)
+    ps.run_discover(cfg.db, clock=lambda: discover_at, sleep=lambda s: None, opener=opener,
+                    access_decision=PM_ACCESS)
+    book = (PM_FIX / "book_aec-nfl-atl-gb-2026-09-24_2026-09-24T205959Z.json").read_bytes()
+    capture_at = datetime(2026, 9, 24, 18, 15, 30, tzinfo=timezone.utc)
+    from edge_lab import http as pm_http
+
+    class _At(datetime):  # the fetch layer stamps receipt with the wall clock: pin it to the fixture's time
+        @classmethod
+        def now(cls, tz=None):
+            return capture_at + timedelta(seconds=0.4)
+    wall, pm_http.datetime = pm_http.datetime, _At
+    try:
+        ps.run_capture(cfg.db, clock=lambda: capture_at, sleep=lambda s: None,
+                       opener=_Recorded(book) if not issues else _FailAfter(), access_decision=PM_ACCESS)
+    finally:
+        pm_http.datetime = wall
+    return cfg, root
+
+
+class _FailAfter(_Recorded):
+    """Replays the given bodies, then answers every further request with HTTP 503."""
+
+    def __call__(self, request, timeout):
+        if self.bodies:
+            return super().__call__(request, timeout)
+        from urllib.error import HTTPError
+
+        raise HTTPError(request.full_url, 503, "Service Unavailable", {}, None)
+
+
+def polymarket_issues() -> tuple[Config, Path]:
+    return polymarket(issues=True)
+
+
+
 BUILDERS = {"early": early, "demo": demo, "broken": broken, "odds": odds_pilot, "odds_issues": odds_issues,
-            "freshness": freshness, "freshness_deferred": freshness_deferred}
+            "freshness": freshness, "freshness_deferred": freshness_deferred,
+            "polymarket": polymarket, "polymarket_issues": polymarket_issues}

@@ -257,7 +257,15 @@ offered prices as received and each book's de-vig in a separate nested disclosur
 tables, never in the consensus table; unsupported groups with their reason codes. States: populated,
 insufficient books, unsupported, stale/unknown freshness, this capture unusable with an earlier one
 shown and newer unusable captures listed (`newer_unusable`), failed closed, no consensus, not
-installed, read error. Venues (Tested ≠ connected), collected sources with freshness,
+installed, read error. After it, "Polymarket US related markets" (Lane B's
+`polymarket_sports.terminal_view`, pm-sports-status/1): the access gate (an owner risk decision, never a
+terms clearance; blocked when none is recorded), the catalog state (a filtered listing, never a full catalog;
+partial, stale, failed or no scan), then per Odds API event of the target rows shown the relationship
+("RELATED MARKET — NOT ECONOMICALLY EQUIVALENT", ambiguous, or none) with reasons and every rule check, the
+latest research book capture (YES bid / ask, sizes, receipt, freshness at capture) with the
+"Polymarket US (gateway.polymarket.us public API)" attribution on the figures, and the capture targets'
+states; every event in a disclosure; each Odds capture target row names its event's relationship. Never
+ranked, never "cheaper", nothing green; a partial, stale or missing scan never reads as "no market". Venues (Tested ≠ connected), collected sources with freshness,
 fee verification, venue registry and full receipt in disclosures.
 
 **Alerts `/alerts`** — Needs attention, Standing conditions, Recent notifications, Tests,
@@ -437,4 +445,22 @@ directive), and the screenshots that justify it.
   Screenshots: fixture states `freshness` and `freshness_deferred` and `/gallery` at 360x800, 1440x900,
   720x450 and 180x400 (200% zoom) (`tests/browser/capture.py`), reviewed locally by the author and
   described in the PR (not attached).
+- **2026-09-24 — Polymarket US related markets.** Approved by the owner directive of 2026-09-24 evening
+  ("Terminal v1": a related Polymarket US market labelled "RELATED MARKET — NOT ECONOMICALLY
+  EQUIVALENT" and never ranked as cheaper; contract C4) and the coordinator's phase-4 assignment after
+  Lane B's #84 merged. §8 Research & Data: Data sources gains "Polymarket US related markets" after the
+  Odds capture targets, and each target row gains a "Polymarket US" fact (no new navigation). Composed in
+  `views/research.py` (`pm_related_section`, `pm_related_body`, `pm_event_row`, `pm_market_block`) from
+  the existing section, facts, row, badge, state-text, empty/blocked/error/unavailable, disclosure, kv
+  and table components; no new component, token or CSS. New namespaced state words (PM_EVENT_*,
+  PM_CATALOG_*, PM_ACCESS_*, PM_CHECK_*, PM_TARGET_*), none green. After the independent review of #94:
+  only a filtered listing read in full may say "no related market in the listing read" (any other or
+  unknown catalog state reads "not checked" or "partial or stale"); capture history is read for exactly
+  the events rendered, and one that was not read says so (never "no capture target planned"); an open
+  target past its deadline reads "Overdue · not captured" (the pilot's own rule); every Polymarket table
+  carries the attribution, the research label and freshness at capture; a malformed view is an error
+  state; an unusable latest scan attempt beside an older usable listing is said. Screenshots: fixture states
+  `polymarket` and `polymarket_issues` (the recorded gateway bytes replayed through the pilot's own
+  entry points) and `/gallery` at 360x800, 1440x900, 720x450 and 180x400 (200% zoom)
+  (`tests/browser/capture.py`), reviewed locally by the author and described in the PR (not attached).
 
