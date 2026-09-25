@@ -16,7 +16,11 @@
    pending events only, through the collector's existing write path. This step is
    bounded: a limited number of events, pacing, bounded retries and a deadline.
 5. Settles every position with conclusive, compatible evidence. Missing or conflicting
-   evidence leaves it pending.
+   evidence leaves it pending. Evidence counts up to the run's start, extended to the
+   latest receipt of the settlement evidence this run's own refresh stored (its run id), so
+   a run settles on what it fetched. The extension never applies while settlement is held
+   for an unfinished capture day, nor to a receipt later than `now + deadline_s` plus a
+   small slack.
 6. Computes the account, risk and Outcome Board summaries with the canonical functions.
 7. Writes a receipt atomically and returns an explicit exit code.
 
@@ -57,6 +61,9 @@ from .storage import SnapshotStore
 
 RECEIPT_SCHEMA = "edge-lab-shadow-daily-receipt/1"
 RECEIPT_NAME = "shadow_daily.json"
+# How far past `now + deadline_s` a refresh's own evidence receipt may be and still extend the
+# settlement cutoff (pacing and the final request can finish slightly after the deadline).
+REFRESH_RECEIPT_SLACK = timedelta(seconds=60)
 # Every receipt is also appended here, one JSON line per run, before the latest receipt is
 # replaced: the per-run provenance (code_version, refresh status and errors, missing days,
 # problems) survives. Never truncated or rotated by code; a receipt is a few KB, so about 3
@@ -176,6 +183,7 @@ def _refresh(db: Path, ledger: ShadowLedger, now: datetime, *, max_events: int, 
                 "reason": "no open position is due for settlement"}
     store = SnapshotStore(db)  # the authorized evidence write path (collection), not analysis
     run_id = f"settlement-refresh-{uuid.uuid4()}"
+    before_id = store.max_row_id("snapshots")
     store.start_run(run_id)
     outcome: dict[str, Any] = {}
     try:
@@ -188,9 +196,40 @@ def _refresh(db: Path, ledger: ShadowLedger, now: datetime, *, max_events: int, 
         store.finish_run(run_id, status={"ok": "succeeded", "partial": "partial"}.get(status, "failed"),
                          error=None if status == "ok" else (outcome.get("error") or "see source_health"))
     counts = outcome.get("counts") or {}
+    errors = [e for e in [outcome.get("error")] if e] + list(outcome.get("anomalies") or [])
+    try:
+        through = _settlement_evidence_received_by_run(store, run_id, before_id)
+    except Exception as exc:  # noqa: BLE001 - never fail a collected refresh on this read; the cutoff stays at now
+        through = None
+        errors.append(f"evidence receipt time unreadable ({type(exc).__name__}); cutoff not extended")
     return {"status": status or "failed", "run_id": run_id, "events_requested": counts.get("events_requested", 0),
             "markets_stored": counts.get("markets", 0), "settled_markets": counts.get("settled_markets", 0),
-            "errors": [e for e in [outcome.get("error")] if e] + list(outcome.get("anomalies") or [])}
+            "evidence_received_through_utc": _iso(through) if through is not None else None,
+            "errors": errors}
+
+
+def _settlement_evidence_received_by_run(store: SnapshotStore, run_id: str, after_id: int | None) -> datetime | None:
+    """The latest receipt time of settlement evidence stored by refresh `run_id` (None if none).
+
+    Only snapshots after `after_id` (the pre-refresh maximum) are read, and only those of the
+    settlement kinds whose run id is `run_id` count: another writer (e.g. a manual
+    `settlement collect`, which takes no lock) can never widen how far a run extends its own
+    evidence cutoff."""
+    latest: datetime | None = None
+    cursor = after_id
+    while True:
+        rows = store.snapshot_metadata(source=shadow.SETTLEMENT_SOURCE.legacy_name, kinds=shadow.SETTLEMENT_KINDS,
+                                       after_id=cursor, limit=500)
+        full = store.snapshots_by_id(int(r["id"]) for r in rows)
+        for row in full.values():
+            if row["run_id"] != run_id:
+                continue
+            fetched = parse_utc(row["fetched_at_utc"])
+            if fetched is not None and (latest is None or fetched > latest):
+                latest = fetched
+        if len(rows) < 500:
+            return latest
+        cursor = int(rows[-1]["id"])
 
 
 def _summaries(ledger: ShadowLedger, now: datetime) -> dict[str, Any]:
@@ -414,6 +453,20 @@ def _run_locked(db: Path, ledger_path: Path, now: datetime, receipt: dict[str, A
     if cutoff < now:
         receipt["problems"].append(f"settlement held at evidence received by {_iso(cutoff)} until the earliest "
                                    "unfinished capture day is processed")
+    else:
+        # Not held: the evidence this run's refresh just stored counts too. Its receipt time is
+        # after every fill recorded above (all at or before `now`), so it can never fund an
+        # earlier fill; without this a run could never settle on what it fetched (2026-09-25).
+        through = parse_utc((receipt["settlement"]["refresh"] or {}).get("evidence_received_through_utc"))
+        bound = now + timedelta(seconds=deadline_s) + REFRESH_RECEIPT_SLACK if through is not None else None
+        if through is not None and through > bound:
+            # A receipt later than the refresh could have finished (a clock step, or a run whose
+            # `now` is behind the wall clock) would book settlements "known" in the future and
+            # wedge later fills out of knowledge-time order (ADR 0016): not extended.
+            receipt["problems"].append(f"refresh evidence received {_iso(through)} is after the refresh bound "
+                                       f"{_iso(bound)}; settlement cutoff not extended")
+        elif through is not None and through > cutoff:
+            cutoff = through
     receipt["settlement"]["evidence_cutoff_utc"] = _iso(cutoff)
     report = shadow.settle_open_positions(store, ledger, known_by=cutoff)
     receipt["settlement"]["settled"] = len(report["settled"])
