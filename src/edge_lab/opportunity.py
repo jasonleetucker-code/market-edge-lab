@@ -762,7 +762,9 @@ class UnitSemantics:
     multiplier: Decimal | None
     normalization_version: str
     evidence: str = ""
-    verification: str = "UNVERIFIED"  # VERIFIED_FROM_DOCS (dated fixture) | UNVERIFIED
+    # DOCUMENTED_UNVERIFIED_BYTES: read from dated official documentation (fixture notes), but no raw
+    # bytes or hashes of the pages were kept. UNVERIFIED: not documented from a primary source.
+    verification: str = "UNVERIFIED"
 
     @property
     def known(self) -> bool:
@@ -801,14 +803,14 @@ KALSHI_BINARY_UNITS = UnitSemantics(
     currency="USD", multiplier=Decimal("1"), normalization_version="kalshi-fixed-point-v1",
     evidence="docs.kalshi.com/getting_started/fixed_point_migration (last updated 2026-08-20): minimum "
              "granularity 0.01 contracts; fractional values appear in fills",
-    verification="VERIFIED_FROM_DOCS")
+    verification="DOCUMENTED_UNVERIFIED_BYTES")
 NOVIG_V3_UNITS = UnitSemantics(
     quantity_step=Decimal("1"), price_convention="DECIMAL_PROBABILITY_PER_CENT_CONTRACT",
     payout_per_unit=Decimal("0.01"), currency="USD", multiplier=Decimal("1"),
     normalization_version="novig-v3-cent-contract-v1",
     evidence="docs.novig.com api-reference execution/place-an-order and public/get-the-order-book (API 3.0.0): "
              "a winning contract pays 1 cent; integer contract counts",
-    verification="VERIFIED_FROM_DOCS")
+    verification="DOCUMENTED_UNVERIFIED_BYTES")
 
 
 @dataclass(frozen=True)

@@ -1,6 +1,7 @@
 """Pure same-venue payoff evaluator (EXP-003): a valid complete set, and every required counterexample."""
 
 import json
+import re
 import sqlite3
 from dataclasses import replace
 from datetime import timedelta
@@ -275,7 +276,7 @@ def test_complement_under_fallback_relies_on_a_recorded_assumption():
     cells_no = dict(numeric_cells(CONTRACTS[code], "NO", normal), fallback_fair_price=fallback_cell(
         market(code).market_id, "NO"))
     yes = Leg(EVENT, market(code), "YES", ladder(code, "YES", ("0.40", 10)), FEES, KALSHI_BINARY_UNITS, cells_yes,
-              settlement_cost=zero_cost)
+              structured_contract=CONTRACTS[code], rules_contract=CONTRACTS[code], settlement_cost=zero_cost)
     no = replace(yes, side="NO", ladder=ladder(code, "NO", ("0.50", 10)), payouts=cells_no)
     proof = StateProof({k: "fixture" for k in StateKind if k not in (StateKind.NORMAL, StateKind.FALLBACK)},
                        assumptions=("a Kalshi NO position receives 1 - v under a fair-price settlement",))
@@ -345,14 +346,35 @@ def test_scan_reads_market_side_books_only_and_skips_post_close(tmp_path):
     books = [(m["ticker"], "2026-09-23T21:58:00Z", [["0.8500", "5.00"]]) for m in markets]  # YES ask 0.15
     books += [(m["ticker"], "2026-09-24T05:30:00Z", [["0.9900", "5.00"]]) for m in markets]  # after the close
     report = scan_kalshi_store(str(_store(tmp_path, markets, books)), series="KXHIGHNY", sizes=[D(1)],
-                               max_quote_age=AGE, max_leg_skew=SKEW)
+                               max_quote_age=AGE, max_leg_skew=SKEW, **WINDOW)
     assert report["sets_evaluated"] == 1 and report["relationship_counts"] == {"INCOMPLETE": 1}
     assert report["claim_counts_by_size_row"] == {"NO_SURPLUS_EVEN_BEFORE_FEES": 1}
     assert any("post-close" in s["reason"] for s in report["sets_skipped"])
-    assert set(PROHIBITED_MARKET_FIELDS) >= {"result", "expiration_value"}  # ...but never read
     again = scan_kalshi_store(str(tmp_path / "evidence.sqlite3"), series="KXHIGHNY", sizes=[D(1)],
-                              max_quote_age=AGE, max_leg_skew=SKEW)
+                              max_quote_age=AGE, max_leg_skew=SKEW, **WINDOW)
     assert again["report_sha256"] == report["report_sha256"]  # deterministic replay
+    clean_dir = tmp_path / "clean"
+    clean_dir.mkdir()
+    without = scan_kalshi_store(str(_store(clean_dir, _markets(), books)), series="KXHIGHNY", sizes=[D(1)],
+                                max_quote_age=AGE, max_leg_skew=SKEW, **WINDOW)
+    assert without["report_sha256"] == report["report_sha256"]  # settled fields change nothing: never read
+
+
+def test_scan_refuses_unverified_series_and_filters_by_event_window(tmp_path):
+    markets = _markets()
+    books = [(m["ticker"], "2026-09-23T21:58:00Z", [["0.8500", "5.00"]]) for m in markets]
+    db = str(_store(tmp_path, markets, books))
+    with pytest.raises(ValueError, match="verified integer-strike"):
+        scan_kalshi_store(db, series="KXNFLGAME", sizes=[D(1)], max_quote_age=AGE, max_leg_skew=SKEW, **WINDOW)
+    with pytest.raises(ValueError, match="YYYY-MM-DD"):
+        scan_kalshi_store(db, series="KXHIGHNY", sizes=[D(1)], max_quote_age=AGE, max_leg_skew=SKEW,
+                          event_from="2026-09-30", event_to="2026-09-01")
+    outside = scan_kalshi_store(db, series="KXHIGHNY", sizes=[D(1)], max_quote_age=AGE, max_leg_skew=SKEW,
+                                event_from="2026-10-01", event_to="2026-10-31")
+    assert outside["sets_evaluated"] == 0 and "outside the requested window" in outside["sets_skipped"][0]["reason"]
+
+
+WINDOW = {"event_from": "2026-09-01", "event_to": "2026-09-30"}
 
 
 def test_exp003_prohibited_fields_are_dropped_before_use():
@@ -366,17 +388,147 @@ def test_exp003_prohibited_fields_are_dropped_before_use():
     assert not set(fields) & set(clean) and "custom_label" not in clean and "rules_primary" in clean
 
 
-def test_cli_payoff_scan_needs_explicit_windows_and_writes_a_report(tmp_path, capsys):
+def _cli_registry(tmp_path, protocol_edit=None):
+    import shutil
+
+    root = tmp_path / "experiments"
+    target = root / "EXP-003-same-venue-payoff-consistency"
+    shutil.copytree(Path(__file__).resolve().parents[1] / "experiments" / target.name, target)
+    if protocol_edit:
+        proto = target / "protocol.toml"
+        proto.write_text(protocol_edit(proto.read_text(encoding="utf-8")), encoding="utf-8")
+    return root, target / "evidence_use.jsonl"
+
+
+def _cli_args(db, root, *extra):
+    return ["research", "payoff-scan", "--db", str(db), "--sizes", "1", "--max-quote-age-seconds", "300",
+            "--max-leg-skew-seconds", "60", "--event-from", "2026-09-01", "--event-to", "2026-09-30",
+            "--root", str(root), "--code-version", "test", *extra]
+
+
+def test_cli_payoff_scan_logs_its_evidence_use_before_output(tmp_path, capsys):
     from edge_lab.cli import main
+    from edge_lab.research_evidence import read_log
 
     markets = _markets()
-    books = [(m["ticker"], "2026-09-23T21:58:00Z", [["0.8500", "5.00"]]) for m in markets]
-    db = _store(tmp_path, markets, books)
+    db = _store(tmp_path, markets, [(m["ticker"], "2026-09-23T21:58:00Z", [["0.8500", "5.00"]]) for m in markets])
+    root, log = _cli_registry(tmp_path)
+    before = len(read_log(log).uses)
     out = tmp_path / "report.json"
     with pytest.raises(SystemExit):
         main(["research", "payoff-scan", "--db", str(db), "--sizes", "1"])  # windows are never defaulted
-    assert main(["research", "payoff-scan", "--db", str(db), "--sizes", "1", "--max-quote-age-seconds", "300",
-                 "--max-leg-skew-seconds", "60", "--out", str(out)]) == 0
+    assert main(_cli_args(db, root, "--out", str(out))) == 0
     report = json.loads(out.read_text(encoding="utf-8"))
+    uses = read_log(log).uses
+    assert len(uses) == before + 1 and uses[-1].event_id == report["evidence_use_event_id"]
+    assert uses[-1].viewed_labels is False and uses[-1].window.scope == "kalshi:KXHIGHNY"
     assert report["sets_evaluated"] == 1 and "result" in report["prohibited_fields_never_read"]
     assert '"relationship_counts"' in capsys.readouterr().out
+
+
+def test_cli_payoff_scan_fails_closed(tmp_path, capsys):
+    from edge_lab.cli import main
+
+    markets = _markets()
+    db = _store(tmp_path, markets, [(m["ticker"], "2026-09-23T21:58:00Z", [["0.8500", "5.00"]]) for m in markets])
+    root, log = _cli_registry(tmp_path)
+    assert main(_cli_args(db, tmp_path / "nowhere")) == 2  # no EXP-003 protocol: hard error, never a fallback
+    assert main(_cli_args(db, root, "--series", "KXNFLGAME")) == 2  # not a verified integer-strike series
+    held, _ = _cli_registry(tmp_path / "held", protocol_edit=lambda s: s.replace(
+        "[evaluation]\n", '[evaluation]\nholdout_windows = [{scope = "kalshi:KXHIGHNY", start_utc = '
+                         '"2026-09-20T00:00:00Z", end_utc = "2026-10-31T23:59:59Z"}]\n'))
+    assert main(_cli_args(db, held)) == 2  # overlaps a declared holdout
+    prose, _ = _cli_registry(tmp_path / "prose", protocol_edit=lambda s: re.sub(
+        r'untouched_future_window = "[^"]*"', 'untouched_future_window = "Event days from 2026-11-01 on."', s))
+    assert main(_cli_args(db, prose)) == 2  # an untouched window only in prose is refused, never guessed
+    broken, broken_log = _cli_registry(tmp_path / "broken")
+    broken_log.write_text("not json\n", encoding="utf-8")
+    capsys.readouterr()
+    out = tmp_path / "never.json"
+    assert main(_cli_args(db, broken, "--out", str(out))) == 1  # the event cannot be logged: no output at all
+    assert not out.exists() and capsys.readouterr().out == ""
+    missing, missing_log = _cli_registry(tmp_path / "missing")
+    missing_log.unlink()
+    assert main(_cli_args(db, missing)) == 2
+
+
+# --------------------------------------------------------------------------- review regressions (#102)
+
+
+def _void_proof():
+    return StateProof({k: "fixture" for k in StateKind if k not in (StateKind.NORMAL, StateKind.VOID)})
+
+
+def test_a_refund_that_returns_unknown_blocks_every_positive_claim():
+    void = SettlementState("void", StateKind.VOID, "void")
+    ev = run(partition(states_extra=(void,), proof=_void_proof(),
+                       legs_over=lambda code, leg: replace(leg, refunds={"void": lambda s, f: None})))
+    (row,) = ev.sizes
+    assert ev.relationship == "INCOMPLETE" and row.states_skipped == ("void",) and row.worst_state_surplus is None
+    assert row.claim != Claim.CONDITIONAL_FULL_FILL_SURPLUS.value and row.claim == Claim.SURPLUS_NOT_CLAIMABLE.value
+    assert any("could not be valued" in r for r in ev.relationship_reasons)
+
+
+def test_a_refund_state_cell_with_a_payout_is_a_double_count():
+    void = SettlementState("void", StateKind.VOID, "void")
+
+    def double(code, leg):
+        payouts = dict(leg.payouts)
+        payouts["void"] = Cell(D(1))
+        return replace(leg, payouts=payouts, refunds={"void": refund_purchase_price})
+
+    ev = run(partition(states_extra=(void,), proof=_void_proof(), legs_over=double))
+    assert ev.relationship == "UNSUPPORTED" and ev.sizes == ()
+    assert any("counted once" in r for r in ev.relationship_reasons)
+
+
+def test_negative_costs_are_invalid():
+    rel = partition(prices={c: "0.26" for c in CONTRACTS}, state_independent_costs=D("-1"))
+    ev = run(rel)
+    assert ev.relationship == "UNSUPPORTED" and ev.sizes == ()
+    assert any("state_independent_costs" in r for r in ev.relationship_reasons)
+    rebate = replace(partition(prices={c: "0.26" for c in CONTRACTS}), basket_settlement_cost=lambda s, f: D("-1"))
+    ev2 = run(rebate)
+    assert ev2.relationship == "UNSUPPORTED" and all(not r.evaluated for r in ev2.sizes)
+    assert all(r.worst_state_surplus is None for r in ev2.sizes)  # no 0.88 beside a NO_SURPLUS any more
+    leg_rebate = partition(prices={c: "0.26" for c in CONTRACTS},
+                           legs_over=lambda code, leg: replace(leg, settlement_cost=lambda s, f: D("-0.5")))
+    assert run(leg_rebate).relationship == "UNSUPPORTED"
+
+
+def test_normal_cells_must_match_what_the_contracts_pay():
+    def all_one(code, leg):
+        return replace(leg, payouts={k: Cell(D(1)) for k in leg.payouts})
+
+    rel = partition(legs_over=all_one)
+    rel = replace(rel, kind="NESTED_THRESHOLD",
+                  legs=tuple(leg for leg in rel.legs if leg.structured_contract.kind in ("greater", "less")))
+    ev = run(rel)
+    assert ev.relationship == "UNSUPPORTED" and ev.sizes == ()
+    assert any("is not what its contract pays" in r for r in ev.relationship_reasons)
+
+
+def test_normal_state_exhaustiveness_is_derived_not_asserted():
+    contracts = {k: v for k, v in CONTRACTS.items() if k != "T68"}
+    normal = tuple(s for s in integer_value_states(CONTRACTS.values()) if s.state_id != "v69")
+    legs = tuple(Leg(EVENT, market(c), "YES", ladder(c, "YES", ("0.20", 50)), FEES, KALSHI_BINARY_UNITS,
+                     numeric_cells(k, "YES", normal), structured_contract=k, rules_contract=k,
+                     settlement_cost=zero_cost) for c, k in contracts.items())
+    ev = run(RelationshipSet("s", "PARTITION", legs, normal, ALL_EXCLUDED, basket_settlement_cost=lambda s, f: D(0)))
+    assert ev.relationship == "UNSUPPORTED" and ev.sizes == ()
+    hand_made = tuple(SettlementState(s.state_id, s.kind, s.description) for s in integer_value_states(
+        CONTRACTS.values()))  # right ids, but not from the verified enumerator
+    with pytest.raises(ValueError):
+        numeric_cells(CONTRACTS["T65"], "YES", hand_made)
+    bare = replace(partition(), states=hand_made)
+    assert run(bare).relationship == "UNSUPPORTED"
+
+
+def test_variables_need_ordered_finite_bounds():
+    from edge_lab.payoff_constraints import Variable
+
+    with pytest.raises(ValueError):
+        Variable("v", D(1), D(0))
+    with pytest.raises(ValueError):
+        Variable("v", D("NaN"), D(1))
+    assert Variable("v", D(0), D(1)).high == 1

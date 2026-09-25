@@ -663,7 +663,13 @@
       "version": "payoff-constraints-v1"
     }
   ],
+  "event_window": [
+    "2026-09-22",
+    "2026-09-23"
+  ],
   "events": 2,
+  "evidence_use_event_id": "eu-1252b03466882d648c95b9345eec0ce6",
+  "evidence_use_record": "APPENDED",
   "input_snapshot_sha256": "8df9573118f6914af612c2dd463b6844b36d0bc535e245e454fb38be8fb8b911",
   "max_leg_skew_seconds": 60.0,
   "max_quote_age_seconds": 300.0,
@@ -684,7 +690,7 @@
   "relationship_counts": {
     "INCOMPLETE": 2
   },
-  "report_sha256": "446cb6644e2091decec83ddffbd32aacdf3ea3c2eb9f2e6e62c71bc22b41b3a4",
+  "report_sha256": "17d3069ec551840e1f433a75c7ba1f92ea66278daab66b8ea2d279a37c1e6201",
   "series": "KXHIGHNY",
   "sets_evaluated": 2,
   "sets_skipped": [],

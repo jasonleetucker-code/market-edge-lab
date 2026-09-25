@@ -59,6 +59,19 @@ relationship, and what it would cost at a given size after fees and states.
    - It opens the store read-only and reads market-side books and rules only.
    - It drops the EXP-003 `prohibited_fields` (settled fields) and skips post-close snapshots.
    - The windows are required arguments: the protocol values are UNKNOWN, and nothing defaults them.
+   - It accepts only verified integer-strike series (`VERIFIED_INTEGER_SERIES`: KXHIGHNY) and an
+     explicit event-date window. It refuses a window that overlaps a declared holdout
+     (`[evaluation] holdout_windows`), and it also refuses an untouched window that is settled only
+     in prose.
+   - It needs the EXP-003 protocol and evidence log, with no fallback. It appends its own
+     evidence-use event before any output, and returns non-zero with no output when it cannot.
+6. **Review hardening (#102):**
+   - The NORMAL states must be exactly the verified integer enumeration of the legs' contracts, and
+     every NORMAL cell must equal what its contract pays. Exhaustiveness is derived, never asserted.
+   - A state that cannot be valued, because a refund or cost is UNKNOWN, makes the result
+     INCOMPLETE and blocks every positive claim.
+   - A payout cell in a state that also has a refund rule is refused as a double count.
+   - Negative costs or refunds are refused as INVALID.
 5. **`storage.SnapshotStore.snapshot_metadata` and `max_row_id`:** public, bounded, payload-free
    reads, so research readers never use the private connection.
 

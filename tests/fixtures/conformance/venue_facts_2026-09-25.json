@@ -8,7 +8,7 @@
       "venue": "kalshi",
       "url": "https://docs.kalshi.com/getting_started/fixed_point_migration",
       "page_date": "Last Updated: August 20, 2026",
-      "status": "VERIFIED_FROM_DOCS",
+      "status": "DOCUMENTED_UNVERIFIED_BYTES",
       "finding": "Contract counts are fixed point: minimum granularity 0.01 contracts; *_fp fields are strings with 0-2 decimals on input and 2 in responses; fractional values appear elsewhere in the API, for example in fills, even without fractional orders.",
       "quotes": ["Minimum granularity is 0.01 contracts"],
       "conformance_rule": "Never truncate a Kalshi quantity to an integer; preserve the native 0.01 step (opportunity.KALSHI_BINARY_UNITS.quantity_step). The fee model does not price fractional fills (opportunity.price_depth_fill refuses them)."
@@ -18,7 +18,7 @@
       "venue": "novig",
       "url": "https://docs.novig.com/api-reference/execution/place-an-order",
       "page_date": "not shown (OpenAPI 3.1.0, API version 3.0.0)",
-      "status": "VERIFIED_FROM_DOCS",
+      "status": "DOCUMENTED_UNVERIFIED_BYTES",
       "finding": "A winning Novig contract pays 1 cent. Prices are decimal probabilities on a banded grid (0.001-0.050 step 0.001; 0.055-0.945 step 0.005; 0.950-0.999 step 0.001).",
       "quotes": ["A winning contract pays full value, 1¢."],
       "conformance_rule": "A Novig native count is never reused as a count of $1 contracts (opportunity.NOVIG_V3_UNITS.payout_per_unit = 0.01; UnitSemantics.incompatibility refuses mixing)."
@@ -28,7 +28,7 @@
       "venue": "novig",
       "url": "https://docs.novig.com/api-reference/execution/place-an-order",
       "page_date": "not shown (API version 3.0.0)",
-      "status": "VERIFIED_FROM_DOCS",
+      "status": "DOCUMENTED_UNVERIFIED_BYTES",
       "finding": "Order placement is documented as not idempotent. clientId is a label the exchange never checks for uniqueness, so a replay places a second order. HTTP 201 means queued, not resting; the private stream's open event confirms resting.",
       "quotes": ["The exchange never checks it for uniqueness, so a replay places a second order.", "201 means queued, not resting."],
       "conformance_rule": "An execution design must never retry a Novig placement blindly or treat clientId as an exactly-once key, and must never treat 201 as resting (docs/decisions/0035-execution-package-design.md)."
@@ -38,7 +38,7 @@
       "venue": "novig",
       "url": "https://docs.novig.com/api-reference/public/get-the-order-book",
       "page_date": "not shown (API version 3.0.0)",
-      "status": "VERIFIED_FROM_DOCS for the documentation text; production availability UNVERIFIED",
+      "status": "DOCUMENTED_UNVERIFIED_BYTES for the documentation text; production availability UNVERIFIED",
       "finding": "The order-book endpoint is documented as unauthenticated, with no signature, throttled per IP, with a seq field and ETag / If-None-Match (304) support. Prices are decimal probabilities and quantities are integer counts of 1-cent contracts. The examples use the QA host https://api.qa.novig.com.",
       "quotes": ["Unauthenticated. No signature. Throttled per IP at the edge."],
       "conformance_rule": "Do not claim production public access, and do not widen collection, from QA examples. The repository's older NEEDS_ACCESS assumption stays until production host access and terms are verified."
@@ -48,7 +48,7 @@
       "venue": "novig",
       "url": "https://docs.novig.com/api/environments",
       "page_date": "not shown",
-      "status": "VERIFIED_FROM_DOCS for the hostnames; public-book availability in production UNVERIFIED",
+      "status": "DOCUMENTED_UNVERIFIED_BYTES for the hostnames; public-book availability in production UNVERIFIED",
       "finding": "QA https://api.qa.novig.com (wss://api.qa.novig.com); production https://api.novig.com. A key works only in the environment where it was created, and production rejects a QA key. The environments page does not say whether the unauthenticated public book is available in production.",
       "quotes": ["A key works only in the environment where you created it."],
       "conformance_rule": "Treat QA and production as separate evidence. Production public-book access stays UNVERIFIED until a separately authorized, bounded check."

@@ -102,8 +102,8 @@ def test_probability_meaning_and_relation_tier_are_separate_vocabularies():
 def test_the_dated_venue_facts_match_the_code_constants():
     facts = {f["id"]: f for f in FACTS["facts"]}
     assert "No venue endpoint" in FACTS["method"]
-    assert facts["kalshi_fixed_point_quantities"]["status"] == "VERIFIED_FROM_DOCS"
-    assert KALSHI_BINARY_UNITS.quantity_step == D("0.01") and KALSHI_BINARY_UNITS.verification == "VERIFIED_FROM_DOCS"
+    assert facts["kalshi_fixed_point_quantities"]["status"] == "DOCUMENTED_UNVERIFIED_BYTES"
+    assert KALSHI_BINARY_UNITS.quantity_step == D("0.01") and KALSHI_BINARY_UNITS.verification == "DOCUMENTED_UNVERIFIED_BYTES"
     assert NOVIG_V3_UNITS.payout_per_unit == D("0.01")
     assert "never checks it for uniqueness" in " ".join(facts["novig_placement_not_idempotent"]["quotes"])
     assert "UNVERIFIED" in facts["novig_public_book_qa_examples"]["status"]

@@ -519,6 +519,13 @@ def protocol_problems(exp: Experiment) -> list[str]:
     if exception is not None and not owner_exception_ok(exception, repo=exp.path.resolve().parents[2]):
         problems.append(f"{PROTOCOL_NAME} owner_exception must name an existing owner decision file inside "
                         f"{OWNER_EXCEPTION_DIR}")
+    evaluation_table = protocol.get("evaluation") if isinstance(protocol.get("evaluation"), dict) else {}
+    windows = evaluation_table.get("holdout_windows")
+    if windows is not None and not (isinstance(windows, list) and all(
+            isinstance(w, dict) and all(isinstance(w.get(k), str) and w.get(k).strip()
+                                        for k in ("scope", "start_utc", "end_utc")) for w in windows)):
+        problems.append(f"{PROTOCOL_NAME} [evaluation] holdout_windows must be a list of "
+                        "{scope, start_utc, end_utc} tables")
     open_decisions = protocol.get("open_decisions")
     if open_decisions is not None and not (isinstance(open_decisions, list)
                                            and all(isinstance(d, str) and d.strip() for d in open_decisions)):
@@ -583,6 +590,32 @@ def prohibited_fields(exp: Experiment) -> tuple[str, ...]:
     roles = (protocol or {}).get("data_roles")
     values = roles.get("prohibited_fields") if isinstance(roles, dict) else None
     return tuple(v for v in values if isinstance(v, str) and v.strip()) if isinstance(values, list) else ()
+
+
+def holdout_windows(exp: Experiment) -> list[tuple[str, str, str]] | None:
+    """Declared holdout / untouched windows as (scope, start_utc, end_utc).
+
+    Returns None when the protocol settles an untouched window only in prose (no machine-readable
+    `[evaluation] holdout_windows`): a reader must then refuse rather than guess. An experiment
+    whose untouched window is still UNKNOWN and declares none returns []."""
+    try:
+        protocol = load_protocol(exp)
+    except (OSError, tomllib.TOMLDecodeError):
+        return None
+    evaluation = (protocol or {}).get("evaluation")
+    evaluation = evaluation if isinstance(evaluation, dict) else {}
+    declared = evaluation.get("holdout_windows")
+    if isinstance(declared, list):
+        out = []
+        for w in declared:
+            if not (isinstance(w, dict) and all(isinstance(w.get(k), str) for k in ("scope", "start_utc", "end_utc"))):
+                return None
+            out.append((w["scope"], w["start_utc"], w["end_utc"]))
+        return out
+    prose = evaluation.get("untouched_future_window")
+    if isinstance(prose, str) and not _unsettled(prose):
+        return None
+    return []
 
 
 def prohibited_label_scopes(exp: Experiment) -> tuple[str, ...]:

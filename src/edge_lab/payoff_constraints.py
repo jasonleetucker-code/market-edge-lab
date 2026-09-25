@@ -118,6 +118,13 @@ class Variable:
     low: Decimal
     high: Decimal
 
+    def __post_init__(self) -> None:
+        for bound in (self.low, self.high):
+            if not isinstance(bound, Decimal) or not bound.is_finite():
+                raise ValueError(f"variable {self.name}: bounds must be finite Decimals")
+        if self.low > self.high:
+            raise ValueError(f"variable {self.name}: low {self.low} > high {self.high}")
+
 
 @dataclass(frozen=True)
 class SettlementState:
@@ -125,6 +132,9 @@ class SettlementState:
     kind: StateKind
     description: str
     variables: tuple[Variable, ...] = ()
+    # The integer settlement value a NORMAL state stands for, set only by `integer_value_states`
+    # (the verified enumerator). A NORMAL state without it cannot be checked against a contract.
+    value: Decimal | None = None
 
 
 @dataclass(frozen=True)
@@ -327,12 +337,15 @@ def integer_value_states(contracts: Iterable[NumericContract], *, prefix: str = 
     states = []
     for v in range(low, high + 1):
         label = f"<= {v}" if v == low else (f">= {v}" if v == high else f"= {v}")
-        states.append(SettlementState(f"{prefix}{v}", StateKind.NORMAL, f"settlement value {label} (integer)"))
+        states.append(SettlementState(f"{prefix}{v}", StateKind.NORMAL, f"settlement value {label} (integer)",
+                                      value=Decimal(v)))
     return tuple(states)
 
 
 def state_value(state: SettlementState) -> Decimal:
-    return Decimal(re.sub(r"^[a-z_]+", "", state.state_id))
+    if state.value is None:
+        raise ValueError(f"state {state.state_id} has no verified settlement value (use integer_value_states)")
+    return state.value
 
 
 def numeric_cells(contract: NumericContract, side: str, normal_states: Sequence[SettlementState]) -> dict[str, Cell]:
@@ -423,12 +436,45 @@ def _structure(rel: RelationshipSet) -> tuple[list[str], list[str]]:
     if len(books) != len(set(books)):
         unsupported.append("duplicate synthetic liquidity: two legs read the same captured book side")
 
+    if not (isinstance(rel.state_independent_costs, Decimal) and rel.state_independent_costs.is_finite()
+            and rel.state_independent_costs >= 0):
+        unsupported.append(f"INVALID: state_independent_costs {rel.state_independent_costs!r} must be a finite, "
+                           "non-negative cost")
     state_ids = [s.state_id for s in rel.states]
     if len(state_ids) != len(set(state_ids)):
         unsupported.append("duplicate state ids")
     normal = [s for s in rel.states if s.kind is StateKind.NORMAL]
     if not normal:
         unsupported.append("no NORMAL settlement states")
+    # Exhaustiveness is derived, never asserted: every leg needs a verified numeric contract, and the
+    # NORMAL states must be exactly the verified integer enumeration of those contracts (tails
+    # included). Every NORMAL cell must then equal what the contract pays in that state.
+    contracts = [leg.structured_contract for leg in legs]
+    if any(c is None for c in contracts):
+        unsupported.append("every leg needs a verified numeric contract: the NORMAL states and cells cannot be "
+                           "derived or checked otherwise")
+    else:
+        try:
+            expected = {s.value for s in integer_value_states(contracts)}
+        except ValueError as exc:
+            expected = None
+            unsupported.append(f"cannot enumerate the NORMAL states: {exc}")
+        given = [s.value for s in normal]
+        if expected is not None and (None in given or set(given) != expected or len(given) != len(set(given))):
+            missing = sorted(expected - {g for g in given if g is not None})
+            unsupported.append(f"NORMAL states are not the verified integer enumeration of the legs' contracts "
+                               f"(missing values {missing}); exhaustiveness is derived, never asserted")
+        elif expected is not None:
+            for leg in legs:
+                for state in normal:
+                    cell = leg.payouts.get(state.state_id)
+                    if cell is None:
+                        continue
+                    hit = leg.structured_contract.pays(state.value)
+                    want = (ONE if hit else ZERO) if leg.side == "YES" else (ZERO if hit else ONE)
+                    if cell.variable is not None or cell.constant != want:
+                        unsupported.append(f"{leg.market.market_id}/{leg.side}: cell {cell.constant} in "
+                                           f"{state.state_id} is not what its contract pays ({want})")
     for kind in ABNORMAL_KINDS:
         present = any(s.kind is kind for s in rel.states)
         if not present and kind not in rel.proof.excluded_kinds:
@@ -449,6 +495,10 @@ def _structure(rel: RelationshipSet) -> tuple[list[str], list[str]]:
             if state.kind in (StateKind.VOID, StateKind.REFUND, StateKind.CANCELLATION) and \
                     state.state_id not in leg.refunds:
                 incomplete.append(f"{leg.market.market_id}/{leg.side}: refund rule for {state.state_id} UNKNOWN")
+            if state.state_id in leg.refunds and (cell.constant != ZERO or cell.variable is not None):
+                unsupported.append(f"INVALID: {leg.market.market_id}/{leg.side} in {state.state_id} has both a "
+                                   f"non-zero payout cell and a refund rule: a refund is counted once, in the "
+                                   f"refund only")
     if unsupported:
         return unsupported, incomplete
 
@@ -520,6 +570,18 @@ def _leg_fill(leg: Leg, quantity: Decimal) -> tuple[LegFill, DepthCost | None]:
                    fill.limit_price, why if cost is None else fill.detail), cost
 
 
+class InvalidCost(ValueError):
+    """A settlement or basket cost callable returned a negative or non-finite value."""
+
+
+def _cost(value: Any, what: str) -> Decimal | None:
+    if value is None:
+        return None
+    if not isinstance(value, Decimal) or not value.is_finite() or value < 0:
+        raise InvalidCost(f"INVALID: {what} {value!r} must be a finite, non-negative cost")
+    return value
+
+
 def _state_value(rel: RelationshipSet, state: SettlementState, legs: Sequence[Leg], costs: Sequence[DepthCost],
                  quantities: Sequence[Decimal], *, include_settlement: bool) -> tuple[Decimal | None, Decimal, str]:
     """(worst value in this state after settlement costs and refunds or None, worst payout, why)."""
@@ -538,19 +600,22 @@ def _state_value(rel: RelationshipSet, state: SettlementState, legs: Sequence[Le
         refund_fn = leg.refunds.get(state.state_id, refund_none if state.kind not in (
             StateKind.VOID, StateKind.REFUND, StateKind.CANCELLATION) else None)
         refund = None if refund_fn is None else refund_fn(state.state_id, cost)
+        if refund is not None and (not isinstance(refund, Decimal) or not refund.is_finite() or refund < 0):
+            raise InvalidCost(f"INVALID: refund {refund!r} in {state.state_id} must be a finite, non-negative amount")
         if refund is None:
             return None, ZERO, f"refund UNKNOWN in {state.state_id}"
         constant += refund
         if include_settlement:
-            settle = None if leg.settlement_cost is None else leg.settlement_cost(state.state_id, cost)
+            settle = None if leg.settlement_cost is None else _cost(
+                leg.settlement_cost(state.state_id, cost), f"settlement cost in {state.state_id}")
             if settle is None:
                 unknown = True
                 why = "settlement cost UNKNOWN"
             else:
                 constant -= settle
     if include_settlement:
-        basket = None if rel.basket_settlement_cost is None else rel.basket_settlement_cost(state.state_id,
-                                                                                             tuple(costs))
+        basket = None if rel.basket_settlement_cost is None else _cost(
+            rel.basket_settlement_cost(state.state_id, tuple(costs)), f"basket settlement cost in {state.state_id}")
         if basket is None:
             unknown = True
             why = why or "basket settlement cost UNKNOWN"
@@ -595,8 +660,13 @@ def _size(rel: RelationshipSet, relationship: Relationship, basket_q: Decimal, a
     skipped: list[str] = []
     reasons: list[str] = []
     for state in rel.states:
-        value, payout, why = _state_value(rel, state, legs, costs, quantities, include_settlement=True)
-        upper, _, why_upper = _state_value(rel, state, legs, costs, quantities, include_settlement=False)
+        try:
+            value, payout, why = _state_value(rel, state, legs, costs, quantities, include_settlement=True)
+            upper, _, why_upper = _state_value(rel, state, legs, costs, quantities, include_settlement=False)
+        except InvalidCost as exc:
+            return SizeResult(basket_q, False, limiting, tuple(fills), acquisition, gross, fees, None, None, None,
+                              None, None, None, acquisition, expected, latest, {}, (), (),
+                              Claim.NOT_EVALUATED.value, (str(exc),))
         if upper is None:  # refund unknown: the state cannot be valued at all
             skipped.append(state.state_id)
             reasons.append(f"state {state.state_id} skipped: {why_upper}")
@@ -606,6 +676,11 @@ def _size(rel: RelationshipSet, relationship: Relationship, basket_q: Decimal, a
         payouts[state.state_id] = payout
         if why and why not in reasons:
             reasons.append(why)
+    if skipped and relationship is Relationship.PROVEN:
+        # A state that cannot be valued makes the proof incomplete: no positive claim may rest on
+        # the remaining states (a "no surplus" conclusion over them is still sound).
+        relationship = Relationship.INCOMPLETE
+        reasons.append(f"INCOMPLETE: state(s) {skipped} could not be valued")
     if not upper_values:
         return SizeResult(basket_q, False, limiting, tuple(fills), acquisition, gross, fees, None, None, None, None,
                           None, None, acquisition, expected, latest, {}, (), tuple(skipped),
@@ -623,7 +698,8 @@ def _size(rel: RelationshipSet, relationship: Relationship, basket_q: Decimal, a
         if v is not None:
             free_values.append(v)
     before_fees = min(free_values) - gross
-    known = all(v is not None for v in net_values.values())
+    # A minimum over only some states is an upper bound on the true worst state, never a surplus.
+    known = all(v is not None for v in net_values.values()) and not skipped
     surplus = (min(v for v in net_values.values()) - acquisition) if known else None
     if known:
         worst_state = min(net_values, key=lambda s: (net_values[s], s))
@@ -702,6 +778,14 @@ def evaluate(rel: RelationshipSet, *, sizes: Sequence[Decimal], as_of_utc: str, 
     rows: tuple[SizeResult, ...] = ()
     if relationship is not Relationship.UNSUPPORTED and validity is QuoteValidity.VALID:
         rows = tuple(_size(rel, relationship, Decimal(q), as_of) for q in sorted(set(sizes)))
+    unvalued = sorted({s for row in rows for s in row.states_skipped})
+    invalid = sorted({r for row in rows for r in row.claim_reasons if r.startswith("INVALID:")})
+    if unvalued and relationship is Relationship.PROVEN:
+        relationship = Relationship.INCOMPLETE
+        incomplete.append(f"state(s) {unvalued} could not be valued (a refund or cost is UNKNOWN)")
+    if invalid:
+        relationship = Relationship.UNSUPPORTED
+        unsupported.extend(invalid)
     result = PayoffEvaluation(
         PAYOFF_VERSION, rel.set_id, rel.kind, as_of.isoformat(), relationship.value,
         tuple(unsupported + incomplete), tuple(rel.proof.assumptions), validity.value, tuple(quote_problems), skew,
@@ -841,16 +925,44 @@ def _depth_limit(url: str | None) -> int | None:
     return int(match.group(1)) if match else None
 
 
+# Series whose markets are verified integer-strike brackets with the Kalshi strike semantics
+# above (docs/SETTLEMENT.md). Any other series is refused, not guessed.
+VERIFIED_INTEGER_SERIES = frozenset({"KXHIGHNY"})
+_EVENT_DATE = re.compile(r"-(\d{2})([A-Z]{3})(\d{2})$")
+_MONTHS = {m: i for i, m in enumerate(("JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV",
+                                       "DEC"), start=1)}
+
+
+def event_date(event_ticker: str) -> str | None:
+    """The event date encoded in a Kalshi event ticker (…-26SEP23 -> 2026-09-23), or None."""
+    from datetime import date
+
+    match = _EVENT_DATE.search(event_ticker)
+    if not match or match.group(2) not in _MONTHS:
+        return None
+    try:
+        return date(2000 + int(match.group(1)), _MONTHS[match.group(2)], int(match.group(3))).isoformat()
+    except ValueError:
+        return None
+
+
 def scan_kalshi_store(db_path: str, *, series: str, sizes: Sequence[Decimal], max_quote_age: timedelta,
-                      max_leg_skew: timedelta, prohibited_fields: Sequence[str] = PROHIBITED_MARKET_FIELDS
-                      ) -> dict[str, Any]:
+                      max_leg_skew: timedelta, event_from: str, event_to: str,
+                      prohibited_fields: Sequence[str] = PROHIBITED_MARKET_FIELDS) -> dict[str, Any]:
     """Evaluate every complete, time-overlapping YES-partition book set of `series` in an evidence
     store, which is opened read-only (SQLite mode=ro and query_only; any schema version, because
     only `snapshots` columns present since v2 are read).
     - Market-side books and rules only.
     - Settled fields (`prohibited_fields`, always including PROHIBITED_MARKET_FIELDS; the CLI passes
       EXP-003's protocol list) are dropped before any use.
-    - A set is skipped when any leg's book was received at or after the market's close time."""
+    - A set is skipped when any leg's book was received at or after the market's close time.
+    - Only `series` in VERIFIED_INTEGER_SERIES, and only events dated within [event_from, event_to]
+      (YYYY-MM-DD, from the event ticker) are evaluated; other events are listed as skipped."""
+    if series not in VERIFIED_INTEGER_SERIES:
+        raise ValueError(f"series {series!r} is not a verified integer-strike series {sorted(VERIFIED_INTEGER_SERIES)}")
+    if not (re.fullmatch(r"\d{4}-\d{2}-\d{2}", event_from or "") and re.fullmatch(r"\d{4}-\d{2}-\d{2}", event_to or "")
+            and event_from <= event_to):
+        raise ValueError("event_from and event_to must be YYYY-MM-DD with event_from <= event_to")
     import json
     import sqlite3
     from contextlib import closing
@@ -863,8 +975,8 @@ def scan_kalshi_store(db_path: str, *, series: str, sizes: Sequence[Decimal], ma
         con.execute("PRAGMA query_only = ON")
         rows = con.execute(
             "SELECT id, kind, entity_id, fetched_at_utc, url, payload_json, payload_sha256 FROM snapshots "
-            "WHERE source = 'kalshi' AND kind IN ('markets', 'orderbook') AND entity_id LIKE ? ORDER BY id",
-            (series + "%",)).fetchall()
+            "WHERE source = 'kalshi' AND kind IN ('markets', 'orderbook') AND substr(entity_id, 1, ?) = ? ORDER BY id",
+            (len(series), series)).fetchall()
     market_snaps = []  # (fetched, id, sha, [raw markets])
     books: dict[str, list[tuple[str, int, str, dict, str | None]]] = {}
     for sid, kind, entity, fetched, url, payload, sha in rows:
@@ -882,6 +994,11 @@ def scan_kalshi_store(db_path: str, *, series: str, sizes: Sequence[Decimal], ma
     skipped: list[dict[str, str]] = []
     inputs: list[str] = []
     for event_ticker in sorted(by_event):
+        day = event_date(event_ticker)
+        if day is None or not (event_from <= day <= event_to):
+            skipped.append({"event": event_ticker, "as_of": "",
+                            "reason": f"event date {day} outside the requested window {event_from}..{event_to}"})
+            continue
         tickers = sorted(by_event[event_ticker])
         anchors = sorted({b[0] for t in tickers for b in books.get(t, [])})
         seen_sets: set[tuple[int, ...]] = set()
@@ -936,6 +1053,7 @@ def scan_kalshi_store(db_path: str, *, series: str, sizes: Sequence[Decimal], ma
     report = {
         "version": PAYOFF_VERSION,
         "series": series,
+        "event_window": [event_from, event_to],
         "sizes": [str(s) for s in sorted(set(sizes))],
         "max_quote_age_seconds": max_quote_age.total_seconds(),
         "max_leg_skew_seconds": max_leg_skew.total_seconds(),

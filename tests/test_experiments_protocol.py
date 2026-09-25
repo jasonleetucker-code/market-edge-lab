@@ -263,3 +263,18 @@ def test_the_screen_test_ids_are_reserved(tmp_path):
     target = _copy(tmp_path, name="EXP-900-real", edit_manifest=lambda s: s.replace('id = "EXP-002"', 'id = "EXP-900"'),
                    edit_protocol=lambda s: s.replace('experiment_id = "EXP-002"', 'experiment_id = "EXP-900"'))
     assert any("reserved for unit tests" in p for p in _problems(target))
+
+
+def test_holdout_windows_are_machine_readable(tmp_path):
+    from edge_lab.experiments import holdout_windows
+
+    assert holdout_windows(load(EXP3 / "experiment.toml")) == []  # untouched window still UNKNOWN: none declared
+    bad = _copy(tmp_path, source=EXP3, edit_protocol=lambda s: s.replace(
+        "[evaluation]\n", '[evaluation]\nholdout_windows = ["2026-11"]\n'))
+    assert any("holdout_windows must be a list" in p for p in _problems(bad))
+    good = _copy(tmp_path, source=EXP3, name="EXP-003-good", edit_protocol=lambda s: s.replace(
+        "[evaluation]\n", '[evaluation]\nholdout_windows = [{scope = "kalshi:KXHIGHNY", start_utc = '
+                          '"2026-11-01T00:00:00Z", end_utc = "2026-12-31T23:59:59Z"}]\n'))
+    assert _problems(good) == []
+    assert holdout_windows(load(good / "experiment.toml")) == [
+        ("kalshi:KXHIGHNY", "2026-11-01T00:00:00Z", "2026-12-31T23:59:59Z")]
