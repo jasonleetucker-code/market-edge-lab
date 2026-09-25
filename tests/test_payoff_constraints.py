@@ -29,6 +29,10 @@ AGE, SKEW = timedelta(minutes=5), timedelta(seconds=60)
 FEES = get_fee_schedule("kalshi-quadratic-taker-v1")
 EVENT = Event("weather", "kalshi:KXHIGHNY-26SEP24", "2026-09-24", None, "KXHIGHNY-26SEP24", "twc-central-park-v1")
 ALL_EXCLUDED = StateProof({k: "fixture: excluded by construction" for k in StateKind if k is not StateKind.NORMAL})
+# A fixture contract whose terms guarantee a whole-number settlement value. Real KXHIGHNY evidence has
+# no such guarantee (integer settlement is only observed), so it can never be PROVEN.
+GUARANTEE = "fixture: the contract terms guarantee a whole-number settlement value"
+GUARANTEED = replace(ALL_EXCLUDED, integer_settlement_guarantee=GUARANTEE)
 CONTRACTS = {  # a complete integer partition: <65, 65-66, 67-68, >68
     "T65": numeric_contract("less", None, 65),
     "B65.5": numeric_contract("between", 65, 66),
@@ -51,7 +55,7 @@ def ladder(code, side, *levels, t=T, truncated=False):
                        None, f"snap:{code}:{side}")
 
 
-def partition(prices=None, contracts=None, states_extra=(), proof=ALL_EXCLUDED, legs_over=None, **kw):
+def partition(prices=None, contracts=None, states_extra=(), proof=GUARANTEED, legs_over=None, **kw):
     contracts = contracts or CONTRACTS
     prices = prices or {c: "0.20" for c in contracts}
     normal = integer_value_states(contracts.values())
@@ -208,7 +212,8 @@ def test_duplicated_synthetic_liquidity_is_refused():
 
 def test_a_refund_state_breaks_the_naive_proof():
     void = SettlementState("void", StateKind.VOID, "market voided: purchase price refunded")
-    proof = StateProof({k: "fixture" for k in StateKind if k not in (StateKind.NORMAL, StateKind.VOID)})
+    proof = StateProof({k: "fixture" for k in StateKind if k not in (StateKind.NORMAL, StateKind.VOID)},
+                      integer_settlement_guarantee=GUARANTEE)
 
     def refunds(fn):
         return lambda code, leg: replace(leg, refunds={"void": fn})
@@ -226,7 +231,8 @@ def test_a_refund_state_breaks_the_naive_proof():
 
 def test_a_discretionary_fair_price_fallback_leaves_no_guaranteed_surplus():
     fallback = fair_price_fallback([market(c).market_id for c in CONTRACTS], description="last fair price")
-    proof = StateProof({k: "fixture" for k in StateKind if k not in (StateKind.NORMAL, StateKind.FALLBACK)})
+    proof = StateProof({k: "fixture" for k in StateKind if k not in (StateKind.NORMAL, StateKind.FALLBACK)},
+                       integer_settlement_guarantee=GUARANTEE)
     ev = run(partition(states_extra=(fallback,), proof=proof))
     (row,) = ev.sizes
     assert ev.relationship == "PROVEN" and row.worst_state == "fallback_fair_price"
@@ -261,7 +267,7 @@ def test_complement_on_kalshi_cannot_beat_the_spread():
               rules_contract=CONTRACTS[code], settlement_cost=zero_cost)
     no = replace(yes, side="NO", ladder=ladder(code, "NO", ("0.56", 10)),
                  payouts=numeric_cells(CONTRACTS[code], "NO", normal))
-    rel = RelationshipSet("c", "COMPLEMENT", (yes, no), tuple(normal), ALL_EXCLUDED,
+    rel = RelationshipSet("c", "COMPLEMENT", (yes, no), tuple(normal), GUARANTEED,
                           basket_settlement_cost=lambda s, f: D(0))
     ev = run(rel)
     assert ev.relationship == "PROVEN" and ev.observed_quote_inconsistency == D("-0.01")
@@ -296,7 +302,7 @@ def test_nested_thresholds_pay_at_least_one_unit_everywhere():
     b = Leg(EVENT, market("T72"), "NO", ladder("T72", "NO", ("0.60", 10)), FEES, KALSHI_BINARY_UNITS,
             numeric_cells(above72, "NO", normal), structured_contract=above72, rules_contract=above72,
             settlement_cost=zero_cost)
-    ev = run(RelationshipSet("n", "NESTED_THRESHOLD", (a, b), tuple(normal), ALL_EXCLUDED,
+    ev = run(RelationshipSet("n", "NESTED_THRESHOLD", (a, b), tuple(normal), GUARANTEED,
                              basket_settlement_cost=lambda s, f: D(0)))
     assert ev.relationship == "PROVEN" and ev.sizes[0].min_full_fill_payout == 1
     reversed_nest = replace(b, payouts=numeric_cells(above72, "YES", normal), side="YES",
@@ -463,7 +469,8 @@ def test_cli_payoff_scan_fails_closed(tmp_path, capsys):
 
 
 def _void_proof():
-    return StateProof({k: "fixture" for k in StateKind if k not in (StateKind.NORMAL, StateKind.VOID)})
+    return StateProof({k: "fixture" for k in StateKind if k not in (StateKind.NORMAL, StateKind.VOID)},
+                      integer_settlement_guarantee=GUARANTEE)
 
 
 def test_a_refund_that_returns_unknown_blocks_every_positive_claim():
@@ -631,8 +638,12 @@ def test_non_integer_strikes_are_refused_even_for_a_verified_series():
 def test_a_kxhighny_partition_missing_a_middle_bracket_fails():
     ev = run(_custom_partition({k: v for k, v in GAP.items() if k != "BB"}))
     assert ev.relationship == "UNSUPPORTED" and any("not exhaustive" in r for r in ev.relationship_reasons)
-    whole = run(_custom_partition(GAP))  # on proven integer settlement, 2.5 cannot occur: the set is complete
-    assert whole.relationship == "PROVEN"
+    whole = run(_custom_partition(GAP))  # KXHIGHNY: integer settlement is only observed, so 2.5 is not excluded
+    assert whole.relationship == "INCOMPLETE"
+    assert any("integer settlement observed, not guaranteed" in r for r in whole.relationship_reasons)
+    assert all(row.claim != Claim.CONDITIONAL_FULL_FILL_SURPLUS.value for row in whole.sizes)
+    guaranteed = run(replace(_custom_partition(GAP), proof=GUARANTEED))
+    assert guaranteed.relationship == "PROVEN"  # only an explicit guarantee lifts the premise
 
 
 def _committed():
@@ -687,3 +698,58 @@ def test_provenance_ties_the_result_to_the_append_only_log():
     assert not verify_result_provenance(_rehash(other), log)[0]
     assert not verify_result_provenance(obj, log.parent / "missing.jsonl")[0]
     assert verify_result_provenance([], log)[0] is False
+
+
+
+def test_real_kxhighny_proofs_are_incomplete_on_the_integer_premise_alone():
+    from edge_lab.payoff_constraints import KXHIGHNY_PROOF
+
+    assert KXHIGHNY_PROOF.integer_settlement_guarantee is None
+    ev = run(replace(partition(), proof=ALL_EXCLUDED))
+    assert ev.relationship == "INCOMPLETE" and ev.sizes[0].claim == Claim.SURPLUS_NOT_CLAIMABLE.value
+    assert any("TWC precision unverified" in r for r in ev.relationship_reasons)
+
+
+def _log_with(tmp_path, *, experiment_id, note_for):
+    """A copy of the committed log (or a new one for another experiment) with one appended event."""
+    import shutil
+
+    from edge_lab.research_evidence import EvidenceUse, init_log, read_log, record_use
+
+    obj, log = _committed()
+    target = tmp_path / "evidence_use.jsonl"
+    if experiment_id == "EXP-003":
+        shutil.copy(log, target)
+        original = next(u for u in read_log(log).uses if u.event_id == obj["provenance"]["evidence_use_event_id"])
+    else:
+        original = next(u for u in read_log(log).uses if u.event_id == obj["provenance"]["evidence_use_event_id"])
+        init_log(target, experiment_id=experiment_id, started_at_utc="2026-09-25T00:00:00Z",
+                 covered_scopes=["kalshi:KXHIGHNY"])
+        original = replace(original, experiment_id=experiment_id, family="X")
+    appended = replace(original, note=note_for(obj), sequence=7)
+    record_use(target, appended)
+    return obj, target, appended.event_id
+
+
+def test_the_report_hash_must_be_an_exact_token(tmp_path):
+    from edge_lab.payoff_constraints import verify_result_provenance
+
+    forged, target, event_id = _log_with(
+        tmp_path, experiment_id="EXP-003",
+        note_for=lambda o: "zz" + o["report"]["report_sha256"] + "zz")
+    forged = json.loads(json.dumps(forged))
+    forged["provenance"]["evidence_use_event_id"] = event_id
+    ok, reasons = verify_result_provenance(_rehash(forged), target)
+    assert not ok and any("report_sha256=<sha>" in r for r in reasons)
+
+
+def test_the_log_must_belong_to_exp003(tmp_path):
+    from edge_lab.payoff_constraints import verify_result_provenance
+
+    obj, target, event_id = _log_with(
+        tmp_path, experiment_id="EXP-002",
+        note_for=lambda o: "report_sha256=" + o["report"]["report_sha256"])
+    obj = json.loads(json.dumps(obj))
+    obj["provenance"]["evidence_use_event_id"] = event_id
+    ok, reasons = verify_result_provenance(_rehash(obj), target)
+    assert not ok and any("not EXP-003" in r for r in reasons)

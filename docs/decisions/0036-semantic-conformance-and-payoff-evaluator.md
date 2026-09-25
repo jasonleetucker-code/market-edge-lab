@@ -72,18 +72,25 @@ relationship, and what it would cost at a given size after fees and states.
      INCOMPLETE and blocks every positive claim.
    - A payout cell in a state that also has a refund rule is refused as a double count.
    - Negative costs or refunds are refused as INVALID.
-   - Integer settlement is a proven premise inside the evaluator itself, not only in the CLI. Every
-     leg's series must be in `VERIFIED_INTEGER_SERIES` (KXHIGHNY, whose value is whole degrees F),
-     and every strike must be an integer. Otherwise the set is UNSUPPORTED.
+   - Integer settlement is an OBSERVED premise, checked inside the evaluator itself, not only in
+     the CLI:
+     - every leg's series must be in `VERIFIED_INTEGER_SERIES` (KXHIGHNY) and every strike must be
+       an integer, otherwise the set is UNSUPPORTED;
+     - even then the premise is only observed: 39 of 39 TWC-era expiration values equal the
+       whole-degree NWS CLI value. The rules settle on the Source Agency's full precision, and The
+       Weather Company's precision has never been observed. So the relationship is INCOMPLETE
+       ("integer settlement observed, not guaranteed") unless a proof supplies
+       `integer_settlement_guarantee`, the same way an unexcluded VOID state makes it INCOMPLETE.
 7. **Result files.**
    - `verify_result_file` checks versions, hashes and provenance, and never raises. Its hashes are
      self-contained, so they detect accidental edits, not forgery.
-   - `verify_result_provenance(obj, log_path)` also requires that the file's evidence-use event
-     exists in the append-only EXP-003 log. That logged event must also carry the report's input
-     dataset hash, its event window, and its `report_sha256`, which the CLI writes before output.
-   - A forger would therefore have to rewrite the log too, and the CI append-only check catches that.
-5. **`storage.SnapshotStore.snapshot_metadata` and `max_row_id`:** public, bounded, payload-free
-   reads, so research readers never use the private connection.
+   - `verify_result_provenance(obj, log_path)` also requires that the log's header belongs to
+     EXP-003, and that the file's evidence-use event exists in that log. The event must carry the
+     report's input dataset hash and event window, and the exact token `report_sha256=<sha>`, which
+     the CLI writes before output.
+   - This proves that a matching event was logged, **not that the event is genuine**. The log is
+     self-declared and accepts appends, so anyone who can append can log a matching event. The tie
+     makes a quiet edit visible; it is not forgery-proof.
 
 ## Alternatives considered
 

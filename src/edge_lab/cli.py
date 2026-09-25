@@ -983,8 +983,8 @@ def _payoff_scan(args: argparse.Namespace) -> int:
         action=rev.Action.FEATURE_INSPECTION, code_version=code_version,
         model_version=None, prompt_version=None, viewed_features=True, viewed_labels=False, viewed_results=True,
         influenced_tuning=False,
-        note=f"Logged by the CLI before output. Market-side books and rules only; settled fields dropped. Report "
-             f"{report['report_sha256']}.")
+        note=f"Logged by the CLI before output. Market-side books and rules only; settled fields dropped. "
+             f"report_sha256={report['report_sha256']}")
     try:
         result = rev.record_use(log_path, use, prohibited_prefixes=experiments.prohibited_inputs(exp),
                                 prohibited_label_scopes=experiments.prohibited_label_scopes(exp))

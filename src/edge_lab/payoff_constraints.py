@@ -158,6 +158,9 @@ class StateProof:
     excluded_kinds: Mapping[StateKind, str]
     evidence_hashes: tuple[str, ...] = ()
     assumptions: tuple[str, ...] = ()  # documented but UNVERIFIED premises; they block PROVEN
+    # Evidence that the contract *guarantees* an integer settlement value. Without it, integer
+    # settlement is only an observed premise (see INTEGER_SETTLEMENT_OBSERVED) and blocks PROVEN.
+    integer_settlement_guarantee: str | None = None
 
 
 @dataclass(frozen=True)
@@ -187,10 +190,19 @@ VERIFIED_STRIKE_SEMANTICS: dict[str, dict[str, tuple[bool | None, bool | None]]]
 }
 
 
-# Series whose settlement value is a proven integer (whole degrees F: docs/SETTLEMENT.md section 3)
-# and whose markets are integer-strike brackets with the Kalshi strike semantics above. Integer
-# enumeration of states is sound only for these; any other series is refused, not guessed.
-VERIFIED_INTEGER_SERIES = frozenset({"KXHIGHNY"})
+# Series whose markets are integer-strike brackets with the Kalshi strike semantics above and whose
+# settlement value has been OBSERVED to be a whole number. Integer enumeration of states is
+# considered only for these; any other series is refused, not guessed. Observed is not guaranteed:
+# the rules settle on "the full precision reported by the Source Agency", The Weather Company is
+# named since 2026-08-14 and its precision has never been observed, and settlement.resolve treats
+# a non-integer value as unverified. So the premise is an explicit assumption that blocks PROVEN
+# unless a proof supplies `integer_settlement_guarantee`.
+INTEGER_SETTLEMENT_OBSERVED: dict[str, str] = {
+    "KXHIGHNY": "integer settlement observed, not guaranteed (TWC precision unverified): 39 of 39 TWC-era "
+                "expiration values equal the whole-degree NWS CLI value (docs/SETTLEMENT.md sections 2 and 7); the "
+                "rules settle on the Source Agency's full precision",
+}
+VERIFIED_INTEGER_SERIES = frozenset(INTEGER_SETTLEMENT_OBSERVED)
 
 
 def integer_settlement_series(leg_venue: str, native_id: str) -> str | None:
@@ -501,6 +513,10 @@ def _structure(rel: RelationshipSet) -> tuple[list[str], list[str]]:
         present = any(s.kind is kind for s in rel.states)
         if not present and kind not in rel.proof.excluded_kinds:
             incomplete.append(f"state kind {kind.value} is neither enumerated nor excluded with evidence")
+    if rel.proof.integer_settlement_guarantee is None:
+        for series in sorted({integer_settlement_series(leg.market.venue, leg.market.native_id) for leg in legs}
+                             - {None}):
+            incomplete.append(f"relies on an OBSERVED premise ({series}): {INTEGER_SETTLEMENT_OBSERVED[series]}")
     for assumption in rel.proof.assumptions:
         incomplete.append(f"relies on an UNVERIFIED assumption: {assumption}")
     for state in rel.states:
@@ -1198,11 +1214,14 @@ def verify_result_provenance(obj: Any, log_path: Any) -> tuple[bool, tuple[str, 
     - the provenance's `evidence_use_event_id` exists in that log, logged for EXP-003;
     - that event's dataset hash equals the report's `input_snapshot_sha256`;
     - its window covers exactly the report's event window, in the series' scope;
-    - its note names the report's `report_sha256` (the CLI writes it before any output), so the
-      report's contents are bound to the append-only log.
+    - its note names the report's hash as the exact token `report_sha256=<sha>`, which the CLI writes
+      before any output;
+    - the log's header belongs to EXP-003.
 
-    A file whose hashes were recomputed after an edit fails here unless the log itself was also
-    rewritten, which the append-only CI check (`check-frozen`) catches. Never raises."""
+    This proves that a matching event was logged, not that the event is genuine: the log is
+    self-declared and accepts appends, so anyone who can append can log a matching event.
+
+    Never raises."""
     ok, reasons = verify_result_file(obj)
     reasons = list(reasons)
     try:
@@ -1211,6 +1230,8 @@ def verify_result_provenance(obj: Any, log_path: Any) -> tuple[bool, tuple[str, 
         from .research_evidence import read_log
 
         log = read_log(_Path(log_path))
+        if log.experiment_id != "EXP-003":
+            reasons.append(f"the evidence-use log belongs to {log.experiment_id!r}, not EXP-003")
         provenance, report = obj["provenance"], obj["report"]
         event = next((u for u in log.uses if u.event_id == provenance.get("evidence_use_event_id")), None)
         if event is None:
@@ -1220,8 +1241,10 @@ def verify_result_provenance(obj: Any, log_path: Any) -> tuple[bool, tuple[str, 
                 reasons.append(f"the logged event belongs to {event.experiment_id}, not EXP-003")
             if event.dataset_sha256 != report.get("input_snapshot_sha256"):
                 reasons.append("the logged dataset hash differs from the report's input_snapshot_sha256")
-            if not (isinstance(report.get("report_sha256"), str) and report["report_sha256"] in event.note):
-                reasons.append("the logged event does not name this report's report_sha256 (edited report?)")
+            named = re.findall(r"(?:^|[\s;(])report_sha256=([0-9a-f]{64})(?=$|[\s;.,)])", event.note)
+            if report.get("report_sha256") not in named:
+                reasons.append("the logged event does not name this report's report_sha256 as a "
+                               "`report_sha256=<sha>` token (edited report?)")
             window = report.get("event_window") or [None, None]
             if (event.window.start_utc[:10], event.window.end_utc[:10]) != (window[0], window[1]) or \
                     event.window.scope.strip().lower() != f"kalshi:{str(report.get('series', '')).lower()}":
