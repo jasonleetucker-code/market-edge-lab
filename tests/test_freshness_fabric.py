@@ -155,12 +155,15 @@ def test_inside_the_close_guard_the_write_defers(tmp_path, monkeypatch):
 # =========================================================================== the supervisor unit
 
 
-def test_freshness_unit_is_network_free_small_and_writes_only_the_status_dir():
+def test_freshness_unit_is_network_free_small_and_writes_only_status_and_wal_side_files():
     s = unit("edgelab-freshness.service")
     assert s[("Service", "Type")] == ["oneshot"] and s[("Service", "User")] == ["edgelab"]
     assert s[("Service", "Slice")] == ["edgelab.slice"]
     assert s[("Service", "RestrictAddressFamilies")] == ["AF_UNIX"] and s[("Service", "IPAddressDeny")] == ["any"]
-    assert s[("Service", "ReadWritePaths")] == ["/var/lib/market-edge-lab-status"]
+    # freshness.json, plus the db directory for SQLite's WAL side files only (ADR 0016); the database
+    # file stays read-only at kernel level (the quota ledger is renamed by its writer: never pinned).
+    assert s[("Service", "ReadWritePaths")] == ["/var/lib/market-edge-lab-status /var/lib/market-edge-lab/db"]
+    assert s[("Service", "ReadOnlyPaths")] == ["-/var/lib/market-edge-lab/db/edge_lab.sqlite3"]
     assert s[("Service", "ProtectSystem")] == ["strict"] and s[("Service", "NoNewPrivileges")] == ["yes"]
     assert s[("Service", "MemoryMax")] == ["128M"] and s[("Service", "CPUQuota")] == ["10%"]
     assert s[("Service", "TimeoutStartSec")] == ["120s"] and s[("Service", "UMask")] == ["0022"]

@@ -301,3 +301,42 @@ this.
   would need its own review.
 - The owner wants crash alerts: add a rate-limited (once a day) alert path, not `OnFailure=` on a
   5-minute unit.
+
+## Amendment 2026-09-24 (night): read-only readers need the WAL side files
+
+**Observed on production.** The supervisor (and the dashboard) reported "evidence store unreadable
+(OperationalError)" for every store-backed source whenever no collector held the evidence DB open.
+- The evidence DB runs in WAL mode. SQLite opens `-wal`/`-shm` read-write and creates them if they
+  are absent, even on a `mode=ro` connection (ADR 0016).
+- On a read-only mount it falls back to a read-only open, which fails for a file that does not
+  exist.
+- While a collector held the DB, the side files existed and reads worked.
+
+**Decision.**
+- `edgelab-freshness.service` and `edgelab-dashboard.service` may write
+  `/var/lib/market-edge-lab/db` (the directory only).
+- `ReadOnlyPaths=` re-pins `edge_lab.sqlite3` read-only at kernel level in both units (the more
+  specific path wins). The odds quota ledger is pinned in neither: its writer replaces it by atomic
+  rename. A pin would not hold after that, and the budget guard's save must never be obstructed.
+- The shadow ledger uses a rollback journal. A read-only reader never creates a file for it, so its
+  directory stays read-only.
+- Connections remain `mode=ro` plus `query_only`.
+
+**What these units can now do at kernel level.** Inside `db/` they can create, write and delete
+every file except the pinned database file: the WAL side files, the `*.lock` files, the odds quota
+ledger and its pilot state file, and any leftover `-wal`. So a buggy or compromised dashboard could
+delete an uncheckpointed `-wal` left by a crashed collector, or the quota ledger. The odds runner
+fails closed (QUOTA_UNKNOWN) without that ledger and reconciles it again from the provider's quota
+headers. Neither unit can write the data root, the ledger directory or anything else.
+
+**Restore note.** A restore that replaces `edge_lab.sqlite3` by rename drops the read-only pin
+inside the long-running dashboard's sandbox. Restart the dashboard so the pin applies again; the
+rollback runbook already does. The supervisor is a oneshot and gets a fresh sandbox on each run.
+
+**Alternatives rejected:**
+- `immutable=1`: torn reads while a writer commits.
+- A rollback journal for the evidence DB: readers would block collector commits.
+- Persistent WAL: not settable from Python's sqlite3 module.
+- `nolock=1`: WAL still needs the shm and locks, and it is unsafe.
+- Per-file `ReadWritePaths` for `-wal`/`-shm`: systemd requires the path to exist at unit start, and
+  SQLite deletes and recreates these files.

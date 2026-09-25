@@ -57,3 +57,17 @@ Until now it ran only on a laptop, over copied files.
 - the dashboard gains any write path;
 - the owner wants access without the Tailscale app;
 - Tailscale changes Serve so that the Host header or the tailnet-only reachability differs.
+
+## Amendment 2026-09-24 (night): the dashboard gains a write path (reconsider trigger)
+
+This ADR lists "the dashboard gains any write path" as a reason to reconsider. It now has one:
+- `/var/lib/market-edge-lab/db` is writable, the directory only, so SQLite can create the evidence
+  DB's WAL side files when no writer holds them.
+- `ReadOnlyPaths=` keeps the database file read-only at kernel level. The odds quota ledger is not
+  pinned: it is replaced by atomic rename, and a long-running process would keep reading a stale
+  inode.
+
+Reconsidered, the tailnet-only exposure is unchanged (loopback bind, Tailscale Serve, no Funnel),
+and the added capability is bounded to files in `db/` other than the pinned database file. The decision
+stands. The full diagnosis, capability statement, restore note and rejected alternatives are in
+ADR 0031's amendment of the same date.
