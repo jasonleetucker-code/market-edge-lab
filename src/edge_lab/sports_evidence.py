@@ -1231,21 +1231,17 @@ def protocol_status(root: Path | None = None) -> dict[str, Any]:
             "protocol_sha256": registry.frozen_hash(proto), "frozen": exp.status in registry.LOCKED,
             "primary_endpoint": str(endpoints.get("primary") or "")[:200] or None,
             "episode": {k: episode.get(k) for k in ("start_threshold", "end_merge_gap", "minimum_size")},
-            "screen_minimums": {k: (proto.get("economics") or {}).get(k)
-                                for k in ("min_episodes_for_scenario", "min_independent_clusters")},
             "unsettled_fields": [p.lstrip(".") for p in unsettled],
             "detail": f"{exp.id} {exp.status}: {len(unsettled)} decision field(s) still UNKNOWN or MISSING"}
 
 
-def protocol_minimum(protocol: Mapping[str, Any], key: str) -> Any:
-    """A screen minimum exactly as the protocol states it ([economics]); never chosen here. UNKNOWN while the
-    protocol says MISSING_* / UNKNOWN. To be replaced by Writer 1's protocol helper once PR A exposes it."""
-    raw = (protocol.get("screen_minimums") or {}).get(key)
-    value = _settled_decimal(raw)
-    if value is None:
-        return rec.Labeled.unknown(f"{protocol.get('experiment_id') or 'protocol'} [economics] {key}: "
-                                   f"{str(raw or 'not stated')[:80]}")
-    return rec.Labeled(value, rec.Basis.OWNER_INPUT, f"{protocol.get('experiment_id')} [economics] {key}")
+def screen_minimums(protocol: Mapping[str, Any]) -> dict[str, Any]:
+    """The screen minimums from the canonical helper (`research_economics.protocol_minimums`, the committed
+    protocol); never chosen here. No registered protocol: both UNKNOWN."""
+    experiment_id = protocol.get("experiment_id")
+    if not experiment_id:
+        return {k: rec.Labeled.unknown("no Family A protocol registered") for k in rec.PROTOCOL_MINIMUMS}
+    return rec.protocol_minimums(str(experiment_id))
 
 
 def episode_definition(protocol: Mapping[str, Any]) -> Any:
@@ -1414,6 +1410,7 @@ def economics(rows: Sequence[Mapping[str, Any]], observations: Sequence[Any], pr
     with NO capital scenario supplied (the owner sets any amount; nothing here is a bankroll), fixed cash costs
     OBSERVED at zero, owner inputs UNKNOWN. With today's DRAFT protocol the verdict is INSUFFICIENT_EVIDENCE."""
     definition = episode_definition(protocol)
+    minimums = screen_minimums(protocol)
     episodes = rec.build_episodes(observations, definition)
     due = [parse_utc(r["cutoff_utc"]) for r in rows if r["status"] not in (SUPERSEDED, NOT_YET_DUE)]
     start = min((d for d in due if d is not None), default=None)
@@ -1432,8 +1429,8 @@ def economics(rows: Sequence[Mapping[str, Any]], observations: Sequence[Any], pr
             owner_hours_annual=rec.Labeled.unknown("MISSING_OWNER_INPUT (EXP-002 [budget] owner_hours)"),
             owner_hourly_cost=rec.Labeled.unknown("MISSING_OWNER_INPUT"),
             minimum_useful_annual=rec.Labeled.unknown("MISSING_OWNER_INPUT (EXP-002 [economics])"),
-            min_episodes_for_scenario=protocol_minimum(protocol, "min_episodes_for_scenario"),
-            min_independent_clusters=protocol_minimum(protocol, "min_independent_clusters"),
+            min_episodes_for_scenario=minimums["min_episodes_for_scenario"],
+            min_independent_clusters=minimums["min_independent_clusters"],
             stationarity_assumption="none: no annual scenario is produced from this evidence",
             data_gaps=tuple(gaps),
             assumptions=("value per unit is None: the consensus is a benchmark under a conditional mapping, so no "
