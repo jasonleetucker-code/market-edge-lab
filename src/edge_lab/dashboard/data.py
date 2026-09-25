@@ -247,6 +247,11 @@ class Context:
             return Loaded(ERROR, message=short_error(exc, self.config))
 
     @cached_property
+    def pm_sports(self) -> Loaded:
+        """Lane B's Polymarket US NFL pilot view (`pm_sports_view`)."""
+        return pm_sports_view(self)
+
+    @cached_property
     def odds_targets(self) -> Loaded:
         """The Odds API pilot's capture targets and their history (`odds_capture_targets`)."""
         return odds_capture_targets(self)
@@ -1188,3 +1193,54 @@ def odds_consensus_at_capture(ctx: Context, event_id: str, received_utc: Any) ->
         _CONSENSUS.popitem(last=False)
     return Loaded(OK, result)
 
+
+# --------------------------------------------------------------------------- Polymarket US NFL pilot (polymarket_sports, ADR 0032)
+
+PM_SPORTS_MODULE = "edge_lab.polymarket_sports"
+PM_EVENTS_SHOWN = 6  # events shown as rows; every event is in the "All events" table
+
+
+def pm_sports_view(ctx: Context) -> Loaded:
+    """Lane B's read-only Terminal view: `polymarket_sports.terminal_view(db, now=...)` (schema
+    pm-sports-status/1; network-free; never raises). OK carries the view as returned; NO_DATA when no
+    evidence database is configured or present, or the pilot is not installed; ERROR when the view
+    says the store or its reading failed. Free text is scrubbed of paths; nothing is recomputed."""
+    import importlib
+
+    if ctx.config.db is None:
+        return Loaded(NO_DATA, message="no evidence database configured (--db)")
+    try:
+        module = importlib.import_module(PM_SPORTS_MODULE)
+    except ModuleNotFoundError as exc:
+        if exc.name != PM_SPORTS_MODULE:
+            return Loaded(ERROR, message=short_error(exc, ctx.config))
+        return Loaded(NO_DATA, message="the Polymarket US NFL pilot (polymarket_sports) is not installed in this build")
+    except Exception as exc:  # noqa: BLE001
+        return Loaded(ERROR, message=short_error(exc, ctx.config))
+    try:
+        view = module.terminal_view(ctx.config.db, now=ctx.now)
+    except Exception as exc:  # noqa: BLE001 - the contract never raises; anything else is shown
+        return Loaded(ERROR, message=short_error(exc, ctx.config))
+    if not isinstance(view, dict):
+        return Loaded(ERROR, message="the Polymarket US view is not a mapping")
+    state = view.get("state")
+    detail = scrub_paths(str(view.get("detail") or ""), ctx.config)
+    if state == "NO_STORE":
+        return Loaded(NO_DATA, message=f"evidence database not readable here ({detail or 'missing'})")
+    if state == "ERROR":
+        return Loaded(ERROR, message=detail or "the Polymarket US view could not be read")
+    return Loaded(OK, view)
+
+
+def pm_market_history(ctx: Context, slugs: Any) -> Loaded:
+    """`polymarket_sports.market_history` (every target and attempt) for the markets a page shows only:
+    OK with slug -> list; the capture states (captured, missed, failed, not executable, skipped) come
+    from here. Bounded by the caller; read-only."""
+    from .. import polymarket_sports
+
+    if ctx.store.status != OK:
+        return ctx.store
+    try:
+        return Loaded(OK, {s: polymarket_sports.market_history(ctx.store.value, s) for s in slugs})
+    except Exception as exc:  # noqa: BLE001
+        return Loaded(ERROR, message=short_error(exc, ctx.config))

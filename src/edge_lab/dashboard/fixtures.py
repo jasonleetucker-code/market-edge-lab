@@ -419,6 +419,89 @@ def synthetic_consensus() -> dict[str, Any]:
     }
 
 
+# SYNTHETIC Polymarket US views in `polymarket_sports.terminal_view`'s shape (pm-sports-status/1). Every
+# relationship, reason and check is the real `polymarket_sports.relate` over SYNTHETIC markets and events.
+PM_NOW = "2026-09-24T21:00:00+00:00"
+
+
+def synthetic_pm_views() -> dict[str, Any]:
+    """name -> (a `data.Loaded` of `data.pm_sports_view`, histories by market): populated (related with a
+    capture, ambiguous, none in a complete listing), partial listing, no scan, stale, gate blocked,
+    capture failed and missed, error, source unavailable."""
+    from datetime import datetime, timezone
+
+    from .. import polymarket_sports as ps
+    from ..odds_schedule import ScheduledEvent
+    from . import data as d
+
+    kick = datetime(2026, 9, 27, 17, 0, tzinfo=timezone.utc)
+    events = [ScheduledEvent("DEMO-NFL-1", "SYNTHETIC_nfl", kick, "SYNTHETIC Home 1", "SYNTHETIC Away 1"),
+              ScheduledEvent("DEMO-NFL-2", "SYNTHETIC_nfl", kick, "SYNTHETIC Home 2", "SYNTHETIC Away 2"),
+              ScheduledEvent("DEMO-NFL-3", "SYNTHETIC_nfl", kick, "SYNTHETIC Home 3", "SYNTHETIC Away 3")]
+
+    def market(slug: str, teams: tuple[str, str]) -> Any:
+        return ps.NflMarket(market_slug=slug, pm_event_slug=slug, pm_event_id=None, game_id=None,
+                            title=f"SYNTHETIC {teams[0]} vs {teams[1]}", question=None, game_start_utc="2026-09-27T17:00:00Z",
+                            teams=teams, long_team=teams[0], short_team=teams[1], status_raw="active",
+                            rules_sha256="ab" * 32, payoff_kind="binary_alternative_settlement",
+                            payoff_why="SYNTHETIC: settles at a last fair market price in some cases", fee_scope=None,
+                            clauses={"overtime": "INCLUDED", "tie_settlement": "0.50"})
+    related = market("demo-nfl-1", ("SYNTHETIC Away 1", "SYNTHETIC Home 1"))
+    ambiguous = market("demo-nfl-2x", ("SYNTHETIC Away 2", "SYNTHETIC Other"))
+    capture = {"target_id": "nfl:demo-nfl-1:T-6h:2026-09-27T11:00:00Z", "received_at_utc": "2026-09-24T18:15:30Z",
+               "source_timestamp_utc": "2026-09-24T18:15:29Z", "yes_bid": "0.3050", "yes_bid_size": "3923059.53",
+               "yes_ask": "0.3100", "yes_ask_size": "3979153.44", "book_state": "MARKET_STATE_OPEN", "snapshot_id": 901,
+               "freshness": "fresh", "label": ps.RESEARCH_LABEL, "executable": False}
+
+    def entry(m: Any, cap: Any = None) -> dict:
+        rel = ps.relate(m, events)
+        return {"market_slug": m.market_slug, "title": m.title, "game_start_utc": m.game_start_utc,
+                "long_side": m.long_team, "short_side": m.short_team, "relationship": rel.status,
+                "reasons": list(rel.reasons), "flags": list(rel.flags), "checks": rel.checks, "payoff_kind": m.payoff_kind,
+                "rules_sha256": m.rules_sha256, "label": ps.LABEL, "equivalent": False, "latest_capture": cap}
+
+    def event(e: Any, state: str, markets: list) -> dict:
+        return {"odds_event_id": e.event_id, "commence_utc": "2026-09-27T17:00:00Z", "home_team": e.home_team,
+                "away_team": e.away_team, "state": state, "markets": markets}
+
+    def view(catalog: dict, *, access: str = ps.ACCESS_ALLOWED, cap: Any = capture) -> dict:
+        evs = {"DEMO-NFL-1": event(events[0], ps.RELATED, [entry(related, cap)]),
+               "DEMO-NFL-2": event(events[1], ps.AMBIGUOUS, [entry(ambiguous)]),
+               "DEMO-NFL-3": event(events[2], "NO_RELATED_MARKET", [])}
+        status = {"access": access, "access_decision": "SYNTHETIC risk decision" if access == ps.ACCESS_ALLOWED else None,
+                  "catalog": catalog, "discovery_next_due_utc": "2026-09-25T00:00:00Z"}
+        return {"schema": ps.DASHBOARD_SCHEMA, "as_of_utc": PM_NOW, "label": ps.LABEL, "source": ps.ATTRIBUTION,
+                "access": access, "executable": False, "state": catalog["state"], "status": status,
+                "related": {"label": ps.LABEL, "source": ps.ATTRIBUTION, "executable": False, "ranked": False,
+                            "absence_is_evidence": False, "catalog": catalog, "events": evs}}
+
+    def catalog(state: str, detail: str = "SYNTHETIC scan") -> dict:
+        usable = state not in ("NO_SCAN", "FAILED")
+        return {"state": state, "last_attempt_utc": "2026-09-24T18:00:00Z", "last_attempt_coverage": "PARTIAL",
+                "last_attempt_detail": detail, "usable_scan_utc": "2026-09-24T18:00:00Z" if usable else None,
+                "markets": 33 if usable else None, "detail": None if usable else "no discovery scan yet"}
+    history = {"demo-nfl-1": [
+        {"target_id": "nfl:demo-nfl-1:T-24h", "offset": "T-24h", "state": "MISSED",
+         "attempts": [{"target_id": "nfl:demo-nfl-1:T-24h", "status": "MISSED", "reason": "SYNTHETIC: expired while PLANNED"}]},
+        {"target_id": "nfl:demo-nfl-1:T-6h", "offset": "T-6h", "state": "CAPTURED",
+         "attempts": [{"target_id": "nfl:demo-nfl-1:T-6h", "status": "FAILED", "reason": "SYNTHETIC: BOOK_FAILED: HTTP 503"},
+                      {"target_id": "nfl:demo-nfl-1:T-6h", "status": "CAPTURED", **capture}]},
+        {"target_id": "nfl:demo-nfl-1:T-60m", "offset": "T-60m", "state": None, "attempts": []}]}
+    ok = d.OK
+    return {
+        "populated": (d.Loaded(ok, view(catalog("FILTER_COMPLETE"))), history),
+        "partial": (d.Loaded(ok, view(catalog("PARTIAL_CATALOG", "SYNTHETIC: page at offset 50 failed: HTTP 503"))),
+                    history),
+        "no_scan": (d.Loaded(ok, {**view(catalog("NO_SCAN")), "related": {
+            **view(catalog("NO_SCAN"))["related"], "events": {"DEMO-NFL-3": event(events[2], "NO_RELATED_MARKET", [])}}}),
+                    None),
+        "stale": (d.Loaded(ok, view(catalog("STALE"), cap={**capture, "freshness": "stale"})), history),
+        "blocked": (d.Loaded(ok, view(catalog("FILTER_COMPLETE"), access="BLOCKED_TERMS_REVIEW")), history),
+        "error": (d.Loaded(d.ERROR, message="OperationalError: database disk image is malformed"), None),
+        "unavailable": (d.Loaded(d.NO_DATA, message="no evidence database configured (--db)"), None),
+    }
+
+
 def synthetic_failure_record(unit: str, origin: str | None = None) -> dict:
     record = {"unit": unit, "failed_at_utc": T0, "invocation_id": "0123456789abcdef0123456789abcdef"}
     if origin is not None:
