@@ -1036,11 +1036,16 @@ def capture(store: SnapshotStore, *, clock: Clock | None = None, sleep: Sleep = 
     # A FAILED row stays evidence either way. The run fails (and alerts) only for a target that no later
     # scheduled tick can retry: a close target, or one with no unprotected tick left before its deadline.
     end = clock()
-    final = sorted(i for i, t in failed_targets.items()
-                   if t["phase"] == "close" or not _retry_tick_before(_t(t["deadline_utc"]), end)
-                   or (is_nfl_target(t) and (t["attempts"] or 0) + 1 >= _nfl_attempt_limit(t)))
+    # A failed NFL settled-markets read never fails the run (no page): it is recorded FAILED, then MISSED,
+    # and listed in `nfl_settlement_failed`. A request-shape mistake must not page every game day.
+    quiet = sorted(i for i, t in failed_targets.items() if is_nfl_target(t) and _nfl_role(t) == NFL_ROLE_SETTLEMENT)
+    if quiet:
+        report["nfl_settlement_failed"] = quiet
+    final = sorted(i for i, t in failed_targets.items() if i not in quiet and (
+                   t["phase"] == "close" or not _retry_tick_before(_t(t["deadline_utc"]), end)
+                   or (is_nfl_target(t) and (t["attempts"] or 0) + 1 >= _nfl_attempt_limit(t))))
     report["failed_final"] = final
-    report["failed_retrying"] = sorted(set(failed_targets) - set(final))
+    report["failed_retrying"] = sorted(set(failed_targets) - set(final) - set(quiet))
     report["state"] = ("PARTIAL" if final else "PARTIAL_RETRYING") if failed else (
         "CAPTURED" if report["attempted"] else "NOTHING_DUE")
     return (1 if final else 0), report
@@ -1217,9 +1222,10 @@ def market_history(store: SnapshotStore, market_id: str) -> list[dict[str, Any]]
 #   settled-markets reads: at most 288 + 7 GETs. The existing per-run caps (24 markets, 40 GETs), the
 #   protected windows, the shared Kalshi pacer and the collector lock apply unchanged.
 # - Zero Odds API calls: the Odds targets are read from the evidence store only.
-# - Off unless `NFL_SWITCH` is "on" in the unit's environment (/etc/market-edge-lab/env). Turning it
-#   off is the rollback: nothing new is planned and pending NFL targets are not attempted (they expire
-#   MISSED). No new unit, timer or schema.
+# - On by default: the owner approved the capture, so the reviewed, deployed code is the activation
+#   record. `NFL_SWITCH=off` in /etc/market-edge-lab/env (install.sh keeps it across installs) is the
+#   kill switch: nothing new is planned and pending NFL targets are not attempted (they expire MISSED).
+#   Any value other than on/off fails closed (off). No new unit, timer or schema.
 # Pair skew: the book is fetched at the first edgelab-observe tick (:05/:20/:35/:50) after the Odds
 # capture (edgelab-odds ticks :00/:15/:30/:45), so it follows the odds by about 5 min, or about 20 min
 # after a protected-window refusal, a busy lock or a retry. EXP-002 discloses the skew; pairs beyond its
@@ -1253,18 +1259,26 @@ _OBSERVE_TICK_MINUTE = 5  # edgelab-observe.timer: *:05/15 America/New_York (who
 assert NFL_WEEKLY_GET_CAP == 288 + 7 and NFL_SWITCH == "EDGE_LAB_KALSHI_NFL_CAPTURE"
 
 
-def nfl_capture_enabled(environ: Mapping[str, str] | None = None) -> bool:
-    """The switch: on only when `NFL_SWITCH` is exactly on/1/true/yes (any case). Unset means off."""
+def nfl_switch_value(environ: Mapping[str, str] | None = None) -> str:
+    """ON, OFF or INVALID. The owner approved the capture, so the reviewed, deployed code is the activation
+    record: unset (or "on") means ON. "off" is the kill switch. Any other value fails closed (INVALID = off)."""
     import os
 
     # A literal name (tests/invariants/test_no_execution_paths.py scans every environment read).
-    value = environ.get(NFL_SWITCH, "") if environ is not None else os.environ.get("EDGE_LAB_KALSHI_NFL_CAPTURE", "")
-    return value.strip().lower() in ("on", "1", "true", "yes")
+    value = environ.get(NFL_SWITCH) if environ is not None else os.environ.get("EDGE_LAB_KALSHI_NFL_CAPTURE")
+    text = (value or "").strip().lower()
+    return "ON" if text in ("", "on") else "OFF" if text == "off" else "INVALID"
 
 
-def nfl_disabled_report() -> dict[str, Any]:
-    return {"state": "OFF", "switch": NFL_SWITCH, "version": NFL_PLAN_VERSION,
-            "detail": f"{NFL_SWITCH} is not on: no Kalshi NFL target planned, pending ones are not attempted"}
+def nfl_capture_enabled(environ: Mapping[str, str] | None = None) -> bool:
+    return nfl_switch_value(environ) == "ON"
+
+
+def nfl_disabled_report(environ: Mapping[str, str] | None = None) -> dict[str, Any]:
+    state = nfl_switch_value(environ)
+    return {"state": state if state != "ON" else "OFF", "switch": NFL_SWITCH, "version": NFL_PLAN_VERSION,
+            "detail": f"{NFL_SWITCH}={'off' if state == 'OFF' else 'an invalid value (only on or off)'}: no Kalshi "
+                      "NFL target planned, pending ones are not attempted"}
 
 
 def _keys(t: Any) -> set[str]:
@@ -1450,7 +1464,7 @@ def plan_nfl_targets(store: SnapshotStore, now: datetime) -> tuple[list[dict[str
                   "decision_as_of_utc": None, "close_time_utc": None, "close_basis": CLOSE_SEMANTICS["kalshi"].basis,
                   "planned_rules_sha256": None,
                   "detail": {"nfl_role": NFL_ROLE_SETTLEMENT, "version": NFL_PLAN_VERSION, "game_date": game_date,
-                             "min_close_utc": _iso(start), "max_close_utc": _iso(tick),
+                             "min_settled_utc": _iso(start), "max_settled_utc": _iso(tick),
                              "last_kickoff_utc": _iso(max(day_kickoffs))}}
         if target["target_id"] not in known:
             known.add(target["target_id"])
@@ -1478,13 +1492,16 @@ def _capture_nfl_settlement_read(store: SnapshotStore, run_id: str, targets: lis
     deferred: list[str] = []
     for t in targets:
         d, attempt = _detail(t), _attempt_id(run_id, t["target_id"])
-        lo, hi = _t(d.get("min_close_utc")), _t(d.get("max_close_utc"))
+        lo, hi = _t(d.get("min_settled_utc")), _t(d.get("max_settled_utc"))
         if lo is None or hi is None:
             attempts.append([_base_row(run_id, attempt, t, status="FAILED",
-                                       reason="SETTLEMENT_READ_FAILED: the target has no close-time window")])
+                                       reason="SETTLEMENT_READ_FAILED: the target has no settled-time window")])
             continue
-        url = forward._url("/markets", series_ticker=NFL_SERIES, status="settled", min_close_ts=int(lo.timestamp()),
-                           max_close_ts=int(hi.timestamp()), limit=NFL_SETTLEMENT_PAGE_LIMIT)
+        # GET /markets filters, per https://docs.kalshi.com/api-reference/market/get-markets (read 2026-09-25):
+        # min_settled_ts / max_settled_ts ("Filter items that settled after/before this Unix timestamp") are the
+        # timestamp filters compatible with status=settled; min/max_close_ts are not (closed or empty status only).
+        url = forward._url("/markets", series_ticker=NFL_SERIES, status="settled", min_settled_ts=int(lo.timestamp()),
+                           max_settled_ts=int(hi.timestamp()), limit=NFL_SETTLEMENT_PAGE_LIMIT)
         try:
             payload, result = req.get(url, pacer=KALSHI_PACER, retries=0)
         except RequestBudgetExhausted:
@@ -1507,19 +1524,19 @@ def _capture_nfl_settlement_read(store: SnapshotStore, run_id: str, targets: lis
         n = sum(1 for m in rows if isinstance(m, dict))
         more = "; a further page exists and was not fetched (one GET per game day)" if payload.get("cursor") else ""
         attempts.append([_base_row(run_id, attempt, t, status="NOT_EXECUTABLE", **common,
-                                   reason=f"SETTLEMENT_METADATA_READ: {n} settled {NFL_SERIES} market(s) closing "
-                                          f"{d.get('min_close_utc')}..{d.get('max_close_utc')}; listing only, no book{more}")])
+                                   reason=f"SETTLEMENT_METADATA_READ: {n} {NFL_SERIES} market(s) settled "
+                                          f"{d.get('min_settled_utc')}..{d.get('max_settled_utc')}; listing only, no book{more}")])
     return attempts, deferred
 
 
 def nfl_dry_run(db: Path, *, now: datetime | None = None) -> dict[str, Any]:
     """What `observe plan` would plan for the NFL pairing now, from a read-only open of the store.
-    Writes nothing and sends nothing, whatever the switch says (the switch state is reported)."""
+    Writes nothing and sends nothing, whatever the switch says (`switch_state` reports it)."""
     now = now or _now()
     store = SnapshotStore.open_readonly(db)
     targets, report = plan_nfl_targets(store, now)
     return {"command": "nfl dry-run", "now_utc": _iso_exact(now), "writes": 0, "requests": 0,
-            "switch_on": nfl_capture_enabled(), "would_plan": targets, **report}
+            "switch_state": nfl_switch_value(), "would_plan": targets, **report}
 
 
 # --------------------------------------------------------------------------- CLI runners
@@ -1553,7 +1570,7 @@ def run_plan(db: Path, ledger_path: Path | None, *, now: datetime | None = None,
     nfl_on = nfl_capture_enabled(environ)
 
     def nfl(store: SnapshotStore) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-        return plan_nfl_targets(store, now) if nfl_on else ([], nfl_disabled_report())
+        return plan_nfl_targets(store, now) if nfl_on else ([], nfl_disabled_report(environ))
     hit = protected_window_at(now, now + timedelta(minutes=1))
     if hit is not None:  # plan takes the same collector lock: never inside a protected window
         return 0, {"command": "observe plan", "now_utc": _iso_exact(now), "state": "DEFERRED_PROTECTED_WINDOW",

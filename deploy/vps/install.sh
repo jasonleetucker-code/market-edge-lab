@@ -91,6 +91,10 @@ echo "== 5/7 environment file"
 existing() { [ -f "$ENV_FILE" ] && sed -n "s/^$1=//p" "$ENV_FILE" | tail -1 || true; }
 UA=${UA:-$(existing NWS_USER_AGENT)}
 ALERT_URL=${ALERT_URL:-$(existing EDGE_LAB_ALERT_URL)}
+# The Kalshi NFL pairing kill switch (price_observations.NFL_SWITCH): kept across installs, so a pause
+# (off) survives later deploys. Only on or off; unset means the code default (on).
+NFL_CAPTURE=$(existing EDGE_LAB_KALSHI_NFL_CAPTURE)
+case "$NFL_CAPTURE" in ""|on|off) ;; *) die "EDGE_LAB_KALSHI_NFL_CAPTURE must be on or off" ;; esac
 [ -n "$UA" ] || die "--user-agent is required on first install (NWS asks for contact information)"
 case "$UA$ALERT_URL" in *$'\n'*|*\"*|*\'*) die "values must be single-line without quotes" ;; esac
 tmp=$(mktemp "$ETC/env.XXXXXX")
@@ -99,6 +103,7 @@ tmp=$(mktemp "$ETC/env.XXXXXX")
   echo "NWS_USER_AGENT=$UA"
   echo "EDGE_LAB_CODE_VERSION=$SHA"
   [ -n "$ALERT_URL" ] && echo "EDGE_LAB_ALERT_URL=$ALERT_URL"
+  [ -n "$NFL_CAPTURE" ] && echo "EDGE_LAB_KALSHI_NFL_CAPTURE=$NFL_CAPTURE"
 } > "$tmp"
 chown root:edgelab "$tmp"; chmod 0640 "$tmp"; mv -f "$tmp" "$ENV_FILE"
 # The owner's secrets (ADR 0028: the Odds API key, the ntfy topic URL) live in their own file,

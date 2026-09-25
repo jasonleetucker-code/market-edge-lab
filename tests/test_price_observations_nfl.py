@@ -30,7 +30,7 @@ LISTING = json.loads((FIX / "kalshi_events_KXNFLGAME_open_2026-09-25T022444Z.jso
 EVENTS = {e["event_ticker"]: e for e in LISTING["events"]}
 BY_ABBR = {abbr: name for name, (abbr, _) in NFL_TEAMS.items()}
 ON = {po.NFL_SWITCH: "on"}
-OFF: dict[str, str] = {}
+OFF = {po.NFL_SWITCH: "off"}
 SPORT = po.NFL_SPORT
 
 
@@ -137,11 +137,25 @@ def setup_captured(store, *games, at=T24, offset="T-24h"):
 # --------------------------------------------------------------------------- the switch
 
 
-@pytest.mark.parametrize("value, on", [("on", True), ("ON", True), ("1", True), ("true", True), ("yes", True),
-                                       ("", False), ("off", False), ("0", False), ("enabled", False)])
-def test_the_switch_is_on_only_when_set_explicitly(value, on):
-    assert po.nfl_capture_enabled({po.NFL_SWITCH: value}) is on
-    assert po.nfl_capture_enabled({}) is False
+@pytest.mark.parametrize("value, state", [("on", "ON"), ("ON", "ON"), (" on ", "ON"), ("", "ON"), ("off", "OFF"),
+                                          ("OFF", "OFF"), ("0", "INVALID"), ("false", "INVALID"), ("maybe", "INVALID")])
+def test_the_switch_defaults_on_and_off_is_the_kill_switch(value, state):
+    """The owner approved the capture: the deployed code is the activation; off (or garbage) stops it."""
+    assert po.nfl_switch_value({po.NFL_SWITCH: value}) == state
+    assert po.nfl_capture_enabled({po.NFL_SWITCH: value}) is (state == "ON")
+    assert po.nfl_capture_enabled({}) is True
+
+
+def test_an_unset_switch_plans(store):
+    setup_captured(store, ARI_NYG)
+    report = plan(store, TICK, environ={})
+    assert report["nfl"]["state"] == "ON" and len(nfl_targets(store)) == 2
+
+
+def test_an_invalid_switch_value_plans_nothing(store):
+    setup_captured(store, ARI_NYG)
+    report = plan(store, TICK, environ={po.NFL_SWITCH: "maybe"})
+    assert report["nfl"]["state"] == "INVALID" and nfl_targets(store) == []
 
 
 def test_switch_off_plans_nothing(store):
@@ -439,14 +453,15 @@ def test_the_settlement_read_is_one_listing_only_get_and_never_retried(store, mo
     # The two game-day books expired long ago (MISSED); only the read is due.
     capture(store, clock)
     assert len(api.calls) == 1 and "status=settled" in api.calls[0] and "series_ticker=KXNFLGAME" in api.calls[0]
-    assert "min_close_ts=" in api.calls[0] and "limit=100" in api.calls[0] and api.retries == [0]
+    assert "min_settled_ts=" in api.calls[0] and "max_settled_ts=" in api.calls[0] and "close_ts" not in api.calls[0]
+    assert "limit=100" in api.calls[0] and api.retries == [0]
     row = [r for r in store.price_observations() if r["native_market_id"] == "KXNFLGAME"][-1]
     assert row["collection_status"] == "NOT_EXECUTABLE" and row["miss_reason"].startswith("SETTLEMENT_METADATA_READ: 2")
     snap = store.snapshots_by_id([row["snapshot_id"]])[row["snapshot_id"]]
     assert snap["kind"] == "settled_markets" and snap["entity_id"] == "KXNFLGAME"
 
 
-def test_a_failed_settlement_read_is_final(store, monkeypatch):
+def test_a_failed_settlement_read_is_final_but_never_pages(store, monkeypatch):
     _books_for_game_day(store)
     tick = datetime(2026, 10, 5, 3, 5, tzinfo=UTC)
     plan(store, tick - timedelta(minutes=10))
@@ -454,7 +469,8 @@ def test_a_failed_settlement_read_is_final(store, monkeypatch):
     api = Api(clock, routes(settled=HttpFetchError("HTTP 400", status=400, attempts=1)))
     monkeypatch.setattr(po, "fetch_json_result", api)
     code, report = capture(store, clock)
-    assert code == 1 and len(report["failed_final"]) == 1
+    assert code == 0 and report["failed_final"] == [] and report["failed_retrying"] == []
+    assert len(report["nfl_settlement_failed"]) == 1  # recorded FAILED, no OnFailure page
     clock.now = tick + timedelta(minutes=15, seconds=10)
     capture(store, clock)
     assert len(api.calls) == 1
