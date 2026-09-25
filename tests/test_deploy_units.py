@@ -63,11 +63,10 @@ def test_dashboard_is_read_only_loopback_only_and_tailnet_host_pinned():
     u = _parse("edgelab-dashboard.service")
     assert u[("Service", "User")] == ["edgelab"] and u[("Service", "Slice")] == ["edgelab.slice"]
     assert u[("Service", "ProtectSystem")] == ["strict"] and u[("Service", "NoNewPrivileges")] == ["yes"]
-    # The db directory is writable only for SQLite's WAL side files (ADR 0016); the database file and
-    # the odds quota ledger are re-pinned read-only by the kernel; never the data root or the ledger dir.
+    # The db directory is writable only for SQLite's WAL side files (ADR 0016); the database file is
+    # re-pinned read-only by the kernel; never the data root or the ledger dir.
     assert u[("Service", "ReadWritePaths")] == ["/var/lib/market-edge-lab/db"]
-    # Only the DB file is pinned: the odds quota ledger is replaced by atomic rename, and this long-running
-    # process would keep reading a bind-mounted stale inode (the oneshot supervisor may pin both).
+    # Only the DB file is pinned: the odds quota ledger is replaced by atomic rename (a pin would not hold).
     assert u[("Service", "ReadOnlyPaths")] == ["-/var/lib/market-edge-lab/db/edge_lab.sqlite3"]
     assert u[("Service", "IPAddressDeny")] == ["any"] and u[("Service", "IPAddressAllow")] == ["localhost"]
     assert u[("Service", "RestrictAddressFamilies")] == ["AF_INET AF_UNIX"]

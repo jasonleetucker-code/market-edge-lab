@@ -316,23 +316,22 @@ this.
 - `edgelab-freshness.service` and `edgelab-dashboard.service` may write
   `/var/lib/market-edge-lab/db` (the directory only).
 - `ReadOnlyPaths=` re-pins `edge_lab.sqlite3` read-only at kernel level in both units (the more
-  specific path wins). It pins `odds_quota_ledger.json` in the supervisor only. The odds runner
-  replaces that file by atomic rename, and the long-running dashboard would keep reading a
-  bind-mounted stale inode. The supervisor is a oneshot with a fresh mount namespace per run.
+  specific path wins). The odds quota ledger is pinned in neither: its writer replaces it by atomic
+  rename. A pin would not hold after that, and the budget guard's save must never be obstructed.
 - The shadow ledger uses a rollback journal. A read-only reader never creates a file for it, so its
   directory stays read-only.
 - Connections remain `mode=ro` plus `query_only`.
 
 **What these units can now do at kernel level.** Inside `db/` they can create, write and delete
-files other than the two re-pinned ones: the WAL side files, the `*.lock` files, and any leftover
-`-wal`. So a buggy or compromised dashboard could delete an uncheckpointed `-wal` left by a crashed
-collector. They cannot write or delete the database file. The supervisor also cannot touch the quota
-ledger; the dashboard, which does not pin it, can. Neither can write the data root, the ledger
-directory or anything else.
+every file except the pinned database file: the WAL side files, the `*.lock` files, the odds quota
+ledger and its pilot state file, and any leftover `-wal`. So a buggy or compromised dashboard could
+delete an uncheckpointed `-wal` left by a crashed collector, or the quota ledger. The odds runner
+fails closed (QUOTA_UNKNOWN) without that ledger and reconciles it again from the provider's quota
+headers. Neither unit can write the data root, the ledger directory or anything else.
 
-**Restore note.** A long-running dashboard keeps the bind-mounted inode of `edge_lab.sqlite3`. A
-restore that replaces the file by rename therefore needs a dashboard restart; the rollback runbook
-already restarts it. The supervisor is a oneshot and picks up the new inode on its next run.
+**Restore note.** A restore that replaces `edge_lab.sqlite3` by rename drops the read-only pin
+inside the long-running dashboard's sandbox. Restart the dashboard so the pin applies again; the
+rollback runbook already does. The supervisor is a oneshot and gets a fresh sandbox on each run.
 
 **Alternatives rejected:**
 - `immutable=1`: torn reads while a writer commits.

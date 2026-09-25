@@ -29,10 +29,10 @@ Nice=10
 # holds them (ADR 0016); without that, every read fails "unable to open database file" once the last
 # collector connection has closed (production 2026-09-24). So the db directory is writable, but the
 # database file is re-pinned read-only by the kernel (the more specific path wins). The odds quota
-# ledger is NOT pinned here: the odds runner replaces it by atomic rename, and this long-running
-# process would keep reading the bind-mounted old inode. The shadow ledger uses a rollback journal
-# and needs no write access. A restore that replaces edge_lab.sqlite3 by rename needs a dashboard
-# restart (bind-mounted inode). Loopback traffic only, enforced by the kernel.
+# ledger is NOT pinned: the odds runner replaces it by atomic rename, after which a pin no longer
+# holds in this long-running process. The shadow ledger uses a rollback journal and needs no write
+# access. After a restore that replaces edge_lab.sqlite3 by rename, restart the dashboard so the
+# read-only pin applies again. Loopback traffic only, enforced by the kernel.
 ReadWritePaths=/var/lib/market-edge-lab/db
 ReadOnlyPaths=-/var/lib/market-edge-lab/db/edge_lab.sqlite3
 NoNewPrivileges=yes

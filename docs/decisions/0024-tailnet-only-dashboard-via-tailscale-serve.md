@@ -68,6 +68,6 @@ This ADR lists "the dashboard gains any write path" as a reason to reconsider. I
   inode.
 
 Reconsidered, the tailnet-only exposure is unchanged (loopback bind, Tailscale Serve, no Funnel),
-and the added capability is bounded to files in `db/` other than the two pinned ones. The decision
+and the added capability is bounded to files in `db/` other than the pinned database file. The decision
 stands. The full diagnosis, capability statement, restore note and rejected alternatives are in
 ADR 0031's amendment of the same date.
