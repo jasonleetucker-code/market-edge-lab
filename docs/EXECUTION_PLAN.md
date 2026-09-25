@@ -480,6 +480,37 @@ be written here when they are made.
     automatic twelve-city Multi-City Weather rollout is no longer the next build
     (`docs/OWNER_IDEAS.md`, roadmap re-run 2026-09-25); its design (#90) is kept.
 
+- **2026-09-25 ~17:30 America/New_York, owner approval: Kalshi NFL capture.** During the Research
+  Unblocking session (directive: `docs/owner/2026-09-25-research-unblocking-directive.md`) the owner
+  wrote in chat, verbatim: "Approve Kalshi NFL capture." The coordinator records it bounded by the
+  only proposal on record, `docs/research/SPORTS_PAIRED_EVIDENCE_GAPS.md` §6 ("The smallest
+  justified capture extension"). Anything outside these bounds needs a new approval.
+  - **Scope:** Kalshi `KXNFLGAME` only. Both team markets of each NFL game the Odds pilot already
+    targets, at the pilot's existing T-24h / T-6h / T-60m target times. No NCAAF, no other market
+    type, no new horizon.
+  - **Requests:** Kalshi public, unauthenticated market data (`sources.kalshi_public`); no key,
+    account, order endpoint or redistribution. Per game-horizon at most 1 listing + 2 book GETs,
+    with at most one retry each (≤ 6). Settlement metadata: at most one settled-markets read per
+    game day (≤ 7 a week). Bound: about 144 GETs in a normal week, **at most 288 + 7 a week**, and
+    the existing per-run caps (24 markets, 40 GETs). **Zero Odds API credits**; the 450-credit cap
+    is unchanged.
+  - **Mechanism:** the existing `price_observations` collector and the existing `edgelab-observe`
+    timer. **No new timer, unit or schema.** The shared Kalshi pacer, the collector lock and the
+    protected windows (11:13–11:30, 16:13–16:30, 17:40–18:50 ET) apply. Pairing precision is a
+    technical choice inside these bounds (proposal §6 options (a) or (b)); either needs the usual
+    review.
+  - **Research use:** stored evidence for DRAFT EXP-002 is development data until a genuinely
+    future evaluation window is selected. Evidence use is logged; inspected outcomes are never
+    relabelled as untouched.
+  - **Review date:** 2026-10-22. **Pause/rollback:** stop planning NFL custom targets (proposal §6
+    Rollback). Planned targets expire as MISSED with their reason; stored evidence is kept.
+  - **Backup prerequisite:** `docs/OWNER_IDEAS.md` item 4 made backup retention a prerequisite
+    before any new collector. That was an agent recommendation. The owner's later explicit approval
+    governs this collector. The measured growth impact (proposal §6: about 0.7 MB a week) is
+    reported in `docs/deploy/CAPTURE_AND_BACKUP_APPROVAL_PLAN.md`. Backup deletion stays **not
+    authorized**.
+  - **Not changed:** every other prohibition above, and EXP-001.
+
 ## Standing merge rule: docs-only and test-only PRs
 
 Owner rule of 2026-09-22 (verbatim source: `docs/owner/2026-09-22-overnight-build-directive.md`).
