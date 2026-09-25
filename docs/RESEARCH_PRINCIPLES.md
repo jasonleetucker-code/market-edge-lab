@@ -51,8 +51,18 @@ work (`edge_lab.research_economics`):
   minimum size) is frozen in the protocol before any outcome is viewed.
 - **Net edge per unit is after variable costs**, and fees enter once. Never subtract a fee or a
   loss again, and never multiply bankroll × executable size × turnover.
-- **Observed depth is a ceiling, not a fill.** Report a conservative bound (fill at detection)
-  and a less-conservative bound (the best single observation), never a sum.
+- **Observed depth is a ceiling, not a fill.** Report two bounds, never a sum (fill-mode labels
+  v2, 2026-09-25, ADR 0037; the enum values `CONSERVATIVE` / `LESS_CONSERVATIVE` are unchanged):
+  - `FIRST_DETECTION_ZERO_LATENCY`: fill at the first qualifying observation, at its receipt
+    time. It ignores decision and submission delay, so the quote may already be gone. It is not
+    conservative about latency.
+  - `HINDSIGHT_UPPER_BOUND`: the best single observation, chosen after the whole episode was
+    seen. It is an oracle, not a policy anyone could follow. It may only rule a family out
+    (unviable, below the minimum) and never supports continuing.
+
+  Neither is executable performance. Earlier v1 wording ("conservative (fill at detection)",
+  "less-conservative (the best single observation)") is superseded; results already computed
+  under it are kept as recorded.
 - **Replay chronologically with finite capital:** per venue, with a reserve, settlement release,
   and one shared pool across simultaneous strategies. Report return on deployed capital and
   return on total capital separately, with capital-days and idle cash.

@@ -28,9 +28,12 @@ build these; they never re-implement the arithmetic):
     across simultaneous strategies.
   - A liquidity pool held by an open position is not taken again until release.
   - A release before entry is refused.
-- `capacity_ladder`: the replay at every rung, conservative (fill at detection) and less
-  conservative (the best single observation *at that size*). It reports marginal contribution
-  and marginal capital, and flags where more capital only adds idle balance.
+- `capacity_ladder`: the replay at every rung, in both fill modes (labels v2, ADR 0037):
+  FIRST_DETECTION_ZERO_LATENCY (enum CONSERVATIVE: the first qualifying observation, with no
+  decision or submission delay) and HINDSIGHT_UPPER_BOUND (enum LESS_CONSERVATIVE: the best
+  single observation *at that size*, chosen after the whole episode was seen). Neither is
+  executable performance (`FILL_MODE_SEMANTICS`). It reports marginal contribution and
+  marginal capital, and flags where more capital only adds idle balance.
 - `economic_screen` reports, each shown separately:
   - variable economics, fixed cash costs and owner-hour cost;
   - return on deployed versus total capital, and capital-days;
@@ -71,7 +74,9 @@ from .freshness import parse_utc
 from .opportunity import DepthLadder, DepthStatus, FeeSchedule, PriceGrid, price_depth_fill, walk_ladder
 from .provenance import canonical_json, sha256_hex
 
-ECONOMICS_VERSION = "research-economics-v1"
+# v2 (2026-09-25, ADR 0037): fill-mode labels only. The arithmetic, the enum values and the verdict
+# rules are unchanged from v1; reports now say what each fill mode is (FILL_MODE_SEMANTICS).
+ECONOMICS_VERSION = "research-economics-v2"
 REPO_EXPERIMENTS = Path(__file__).resolve().parents[2] / "experiments"
 PROTOCOL_MINIMUMS = ("min_episodes_for_scenario", "min_independent_clusters")
 # The only experiment ids whose screen minimums may come from the caller (unit tests). Every
@@ -126,8 +131,68 @@ class EdgeKind(str, Enum):
 
 
 class FillMode(str, Enum):
-    CONSERVATIVE = "CONSERVATIVE"  # the episode's first observation: what was there at detection
-    LESS_CONSERVATIVE = "LESS_CONSERVATIVE"  # the episode's best single observation (never a sum)
+    """The enum values are kept for compatibility (v1 reports, callers). What they mean, and what they
+    may be used for, is `FILL_MODE_SEMANTICS` (labels v2, ADR 0037); read the label, not the name."""
+
+    CONSERVATIVE = "CONSERVATIVE"  # label FIRST_DETECTION_ZERO_LATENCY: the first qualifying observation
+    LESS_CONSERVATIVE = "LESS_CONSERVATIVE"  # label HINDSIGHT_UPPER_BOUND: the best single observation, ex post
+
+
+FILL_MODE_LABELS_VERSION = "fill-mode-labels-v2"
+# What a replay under any fill mode is. There are no actual or delay-adjusted fills in this module.
+EXECUTABLE_PERFORMANCE = ("NONE: every fill mode replays captured books with no order, no queue, no decision or "
+                          "submission delay and no fill probability; no figure here is executable performance")
+
+
+@dataclass(frozen=True)
+class FillModeSemantics:
+    """The honest reading of one fill mode (labels v2, 2026-09-25, ADR 0037).
+
+    v1 called the two modes "conservative (fill at detection)" and "less conservative (the best single
+    observation)". Both names overstated what the evidence shows:
+    - the first detected quote was not shown to survive a realistic decision and submission delay, so
+      "conservative" is not conservative about latency;
+    - the best observation is chosen after the whole episode was seen, so it is an oracle (hindsight)
+      upper bound, not a policy anyone could have followed.
+    """
+
+    mode: FillMode
+    label: str
+    selection: str
+    prospective_selection: bool  # chosen with only information available at the entry time
+    delay_adjusted: bool  # accounts for decision and submission delay
+    executable_performance: bool  # always False: no fill here is executable performance
+    permitted_use: str
+    caveat: str
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"mode": self.mode.value, "label": self.label, "selection": self.selection,
+                "prospective_selection": self.prospective_selection, "delay_adjusted": self.delay_adjusted,
+                "executable_performance": self.executable_performance, "permitted_use": self.permitted_use,
+                "caveat": self.caveat, "labels_version": FILL_MODE_LABELS_VERSION}
+
+
+FILL_MODE_SEMANTICS: dict[FillMode, FillModeSemantics] = {
+    FillMode.CONSERVATIVE: FillModeSemantics(
+        FillMode.CONSERVATIVE, "FIRST_DETECTION_ZERO_LATENCY",
+        "the episode's first qualifying observation, taken at its receipt time",
+        prospective_selection=True, delay_adjusted=False, executable_performance=False,
+        permitted_use="the screen's lower-side band (the CONTINUE test); a research state, never an execution result",
+        caveat="assumes zero decision and submission delay: the first observed quote may already be gone by the time "
+               "an order could reach the venue, so this is not a conservative bound on latency"),
+    FillMode.LESS_CONSERVATIVE: FillModeSemantics(
+        FillMode.LESS_CONSERVATIVE, "HINDSIGHT_UPPER_BOUND",
+        "the episode's best single observation at the replayed size (never a sum), chosen after the whole episode "
+        "was seen",
+        prospective_selection=False, delay_adjusted=False, executable_performance=False,
+        permitted_use="an upper bound only: it may rule a family out (ECONOMICALLY_UNVIABLE, BELOW_MINIMUM_USEFUL) "
+                      "and never supports CONTINUE or any performance claim",
+        caveat="an oracle choice: no prospective policy could have known which observation would be best"),
+}
+
+
+def fill_mode_label(mode: FillMode) -> str:
+    return FILL_MODE_SEMANTICS[mode].label
 
 
 class Verdict(str, Enum):
@@ -246,12 +311,14 @@ class Episode:
 
     @property
     def entry(self) -> Observation:
-        """CONSERVATIVE: the first qualifying observation (what was there at detection)."""
+        """FIRST_DETECTION_ZERO_LATENCY (enum CONSERVATIVE): the first qualifying observation, as if an order
+        reached the venue at its receipt time with no decision or submission delay."""
         return self.observations[0]
 
     def best_at(self, size: Decimal, *, until: datetime | None = None) -> Observation:
-        """LESS_CONSERVATIVE: the single observation (never a sum) with the largest value at the
-        replayed `size`; ties go to the earliest. Observations after `until` are not eligible."""
+        """HINDSIGHT_UPPER_BOUND (enum LESS_CONSERVATIVE): the single observation (never a sum) with the
+        largest value at the replayed `size`, chosen after the whole episode was seen (an oracle choice, not a
+        prospective policy); ties go to the earliest. Observations after `until` are not eligible."""
         eligible = [o for o in self.observations if until is None or _time(o.observed_at_utc, "t") <= until]
         if not eligible:
             return self.entry
@@ -444,6 +511,7 @@ class ReplayResult:
     return_on_total: Decimal | None  # contribution / total capital, over the window
     counts: dict[str, int]
     problems: tuple[str, ...]
+    mode_label: str = ""  # FILL_MODE_SEMANTICS label (labels v2); never executable performance
 
 
 def _floor_to(value: Decimal, step: Decimal) -> Decimal:
@@ -458,8 +526,10 @@ def replay(episodes: Sequence[Episode], scenario: CapitalScenario, *, size: Deci
            window_start_utc: str, window_end_utc: str) -> ReplayResult:
     """Chronological, capital-constrained replay of the in-window episodes at one requested size.
 
-    Each episode is entered once, at the chosen observation (CONSERVATIVE: the first;
-    LESS_CONSERVATIVE: the best single observation at `size` inside the window). The entry
+    Each episode is entered once, at the chosen observation (CONSERVATIVE, labelled
+    FIRST_DETECTION_ZERO_LATENCY: the first, with no decision or submission delay; LESS_CONSERVATIVE,
+    labelled HINDSIGHT_UPPER_BOUND: the best single observation at `size` inside the window, chosen ex
+    post). Neither is executable performance (`EXECUTABLE_PERFORMANCE`). The entry
     takes the largest FILLABLE rung at or below `size`, cut to the venue cash left after the
     reserve and open commitments.
     - Commitments are released at `release_at_utc`. An unknown release keeps the cash committed
@@ -478,7 +548,7 @@ def replay(episodes: Sequence[Episode], scenario: CapitalScenario, *, size: Deci
     if problems:
         return ReplayResult(scenario.label, scenario.status, mode.value, size, window_start_utc, window_end_utc, (),
                             None, None, Decimal(0), Decimal(0), Decimal(0), total, None, None, None, counts,
-                            tuple(problems))
+                            tuple(problems), fill_mode_label(mode))
     open_positions: list[tuple[datetime, str, Decimal, tuple[str, ...]]] = []  # release, venue, cash, keys
     committed: dict[str, Decimal] = {v: Decimal(0) for v in scenario.capital_by_venue}
     fills: list[EpisodeFill] = []
@@ -561,7 +631,7 @@ def replay(episodes: Sequence[Episode], scenario: CapitalScenario, *, size: Deci
         extra_problems.append("contribution UNKNOWN: a filled episode has no net edge (no probability, no EV)")
     return ReplayResult(scenario.label, scenario.status, mode.value, size, window_start_utc, window_end_utc,
                         tuple(fills), contribution, gross, capital_days.quantize(_Q), average_deployed, max_deployed,
-                        total, idle, rod, rot, counts, tuple(extra_problems))
+                        total, idle, rod, rot, counts, tuple(extra_problems), fill_mode_label(mode))
 
 
 # --------------------------------------------------------------------------- capacity
@@ -582,6 +652,7 @@ class CapacityRow:
     marginal_capital: Decimal | None
     idle_capital_flag: bool  # more size/capital added nothing productive
     top_cluster_share: Decimal | None  # concentration: the largest cluster's share of contribution
+    mode_label: str = ""  # FILL_MODE_SEMANTICS label (labels v2); never executable performance
 
 
 def capacity_ladder(episodes: Sequence[Episode], scenario: CapitalScenario, sizes: Sequence[Decimal], *,
@@ -610,7 +681,8 @@ def capacity_ladder(episodes: Sequence[Episode], scenario: CapitalScenario, size
             rows.append(CapacityRow(size, mode.value, r.counts["FILLED"] + r.counts["DEPTH_LIMITED"]
                                     + r.counts["CAPITAL_LIMITED"], r.counts["DEPTH_LIMITED"],
                                     r.counts["CAPITAL_LIMITED"], r.counts["CAPITAL_VETO"], r.contribution,
-                                    r.max_deployed, r.capital_days, marginal, marginal_capital, idle, share))
+                                    r.max_deployed, r.capital_days, marginal, marginal_capital, idle, share,
+                                    fill_mode_label(mode)))
             previous = r
     return tuple(rows)
 
@@ -670,6 +742,10 @@ class ScreenReport:
     assumptions: tuple[str, ...]
     data_gaps: tuple[str, ...]
     scenario_status: str
+    # What each fill mode is (labels v2, ADR 0037), keyed like the report's figures (conservative /
+    # less_conservative), and the statement that none of them is executable performance.
+    fill_modes: dict[str, Any] = field(default_factory=dict)
+    executable_performance: str = EXECUTABLE_PERFORMANCE
     report_sha256: str = ""
 
     def to_dict(self) -> dict[str, Any]:
@@ -805,6 +881,7 @@ def economic_screen(inputs: ScreenInputs) -> ScreenReport:
     bands: dict[FillMode, tuple[Decimal, Decimal, Decimal] | None] = {}
     for mode, run in runs.items():
         key = mode.value.lower()
+        tag = f"{fill_mode_label(mode)}; not executable performance"
         per_cluster: dict[str, Decimal] = {c: Decimal(0) for c in clusters}
         if run.contribution is not None:
             for f in run.fills:
@@ -813,11 +890,13 @@ def economic_screen(inputs: ScreenInputs) -> ScreenReport:
                     per_cluster[k] = per_cluster.get(k, Decimal(0)) + f.contribution
         bands[mode] = cluster_bootstrap_mean(per_cluster) if run.contribution is not None else None
         variable[f"window_net_{key}"] = (Labeled(run.contribution, Basis.ESTIMATED,
-                                                 "window sum of filled qty x net edge per unit (after variable costs)")
-                                         if run.contribution is not None else Labeled.unknown("edge unknown"))
-        variable[f"window_gross_{key}"] = (Labeled(run.gross_contribution, Basis.ESTIMATED, "before variable costs")
-                                           if run.gross_contribution is not None else Labeled.unknown())
-        scenario_note = f"SIMPLIFIED SCENARIO under stationarity: {inputs.stationarity_assumption}"
+                                                 "window sum of filled qty x net edge per unit (after variable costs)"
+                                                 f"; {tag}")
+                                         if run.contribution is not None else Labeled.unknown(f"edge unknown; {tag}"))
+        variable[f"window_gross_{key}"] = (Labeled(run.gross_contribution, Basis.ESTIMATED,
+                                                   f"before variable costs; {tag}")
+                                           if run.gross_contribution is not None else Labeled.unknown(tag))
+        scenario_note = f"SIMPLIFIED SCENARIO under stationarity: {inputs.stationarity_assumption}; {tag}"
         if annual_ok and run.contribution is not None:
             annual = (run.contribution * scale).quantize(_Q)
             variable[f"annual_scenario_net_{key}"] = Labeled(annual, Basis.ESTIMATED, scenario_note)
@@ -833,7 +912,8 @@ def economic_screen(inputs: ScreenInputs) -> ScreenReport:
                                   ("upper", f"annual_band_upper_{key}")):
                 value = variable[source].value
                 net_after_fixed[f"{key}_{label}"] = (
-                    Labeled((value - fixed.value).quantize(_Q), Basis.ESTIMATED, f"{label} minus fixed cash costs")
+                    Labeled((value - fixed.value).quantize(_Q), Basis.ESTIMATED,
+                            f"{label} minus fixed cash costs; {tag}")
                     if value is not None and fixed.value is not None
                     else Labeled.unknown("fixed cash costs or the band UNKNOWN"))
         else:
@@ -855,8 +935,9 @@ def economic_screen(inputs: ScreenInputs) -> ScreenReport:
     inversion = (cons.contribution is not None and less.contribution is not None
                  and less.contribution < cons.contribution)
     if inversion:
-        reasons.append(f"fill-mode inversion: less-conservative {less.contribution} < conservative "
-                       f"{cons.contribution} (capital path dependence); the band check uses each mode as computed")
+        reasons.append(f"fill-mode inversion: {fill_mode_label(FillMode.LESS_CONSERVATIVE)} {less.contribution} < "
+                       f"{fill_mode_label(FillMode.CONSERVATIVE)} {cons.contribution} (capital path dependence); the "
+                       "band check uses each mode as computed")
     uncertainty = {
         "method": f"cluster bootstrap of per-cluster contribution (seed {BOOTSTRAP_SEED}, {BOOTSTRAP_RESAMPLES} "
                   "resamples, 95%), on the coarsest cluster level present on every episode",
@@ -904,7 +985,8 @@ def economic_screen(inputs: ScreenInputs) -> ScreenReport:
         tuple(inputs.assumptions) + (f"stationarity: {inputs.stationarity_assumption}",
                                      "observed depth is a ceiling, not a guaranteed fill",
                                      "fees are inside net edge per unit and are not subtracted again"),
-        tuple(inputs.data_gaps), inputs.scenario.status)
+        tuple(inputs.data_gaps), inputs.scenario.status,
+        {m.value.lower(): FILL_MODE_SEMANTICS[m].to_dict() for m in FillMode})
     body = report.to_dict()
     body.pop("report_sha256")
     return replace(report, report_sha256=sha256_hex(canonical_json(body)))
@@ -922,7 +1004,12 @@ def _verdict(inputs: ScreenInputs, net: Mapping[str, Labeled], estimable: bool, 
 
     Then UNVIABLE: even the less-conservative band's upper bound cannot clear the fixed costs.
     BELOW_MINIMUM_USEFUL: even that upper bound is below the owner's minimum. CONTINUE: the
-    conservative band's lower bound reaches the minimum. Anything else is INSUFFICIENT_EVIDENCE."""
+    conservative band's lower bound reaches the minimum. Anything else is INSUFFICIENT_EVIDENCE.
+
+    Labels v2 (ADR 0037): the less-conservative mode is a HINDSIGHT_UPPER_BOUND, so it is used only to rule
+    out (UNVIABLE, BELOW_MINIMUM_USEFUL) and never to support CONTINUE. The conservative mode is
+    FIRST_DETECTION_ZERO_LATENCY: not delay-adjusted, so even CONTINUE is a research state, not an
+    execution result."""
     reasons = list(reasons)
     cons_lower = net.get("conservative_lower")
     less_upper = net.get("less_conservative_upper")

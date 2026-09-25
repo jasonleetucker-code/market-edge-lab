@@ -170,3 +170,32 @@ below.
     results are under "Scan set construction" above.
 
   The exact run times are UNVERIFIED: each `action_time_utc` is an upper bound.
+- 2026-09-25 (RU Writer R, research-unblocking directive): **proof-obligation review**, in
+  `docs/research/RESEARCH_UNBLOCKING_DECISIONS.md` §B. The recommendation is PROPOSED:
+  - **Pause** the KXHIGHNY partition scope.
+  - Keep one bounded fact-verification task: 8 drafted Kalshi questions, **not sent**, which need
+    the owner's approval.
+  - **Reject** the scope if it is unresolved by 2026-11-15.
+
+  The findings:
+  - The discretionary fair-price fallback is admissible. Nothing constrains the fallback prices of
+    an event to sum to $1, so a worst-state payout of 0 cannot be excluded and the evaluator
+    assumes 0. This agrees with every scan so far.
+  - Integer settlement is observed, not guaranteed.
+  - Rulebook v1.29 Rule 2.8(d) emergency powers need an explicit scoping decision. They are reduction
+    of positions, cancellation with a return of the funds paid to enter trades (whether fees are
+    returned is unknown), and changed terms. PROPOSED: exclude them from the admissible states and
+    report them as residual venue risk. If they are admissible, no Kalshi payoff relation is
+    provable and the scope should be rejected (note B-1).
+  - The single-market YES+NO complement survives fallback, but it cannot show a surplus from one
+    consistent book (YES ask = 1 − NO bid).
+
+  No evaluator code was changed, and the proof requirements, prohibited inputs and label rules are
+  unchanged. The protocol's stale readiness wording ("the payoff evaluator is PR B") now names the
+  merged evaluator and these open obligations. The experiment stays DRAFT.
+- 2026-09-25 (RU Writer R): a read-only **inventory** of the laptop store, logged as
+  `eu-cec59b9ff46b667c3b98a09ccff3612d` (OPERATIONAL_ACCESS). It read table names, and snapshot
+  counts with min and max receipt times per source and kind. No book, price, market record,
+  result or label was read.
+- 2026-09-25 (RU Writer R): `research_economics` is now v2 (fill-mode labels v2, ADR 0037). The
+  change affects labels only; no EXP-003 result file used them, and none was regenerated.

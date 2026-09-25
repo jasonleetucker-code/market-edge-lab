@@ -64,8 +64,8 @@ prohibited_inputs = [
 # kalshi_public snapshots carry settled fields. No use may view labels/outcomes in these scopes
 # (research_evidence.record_use refuses it). prohibited_fields are market-record fields that this
 # family's readers must drop; they are enforced by the readers that consume this protocol (the
-# payoff scan in EE v1 PR B) and are declarative until then. Snapshots received at or after a
-# market's close are excluded by the same readers.
+# payoff scan, payoff_constraints.scan_kalshi_store, merged in EE v1 PR B #102). Snapshots received at
+# or after a market's close are excluded by the same readers.
 prohibited_label_scopes = ["kalshi:KXHIGHNY"]
 prohibited_fields = ["result", "expiration_value", "settlement_value", "settlement_value_dollars", "settlement_ts"]
 
@@ -78,7 +78,7 @@ multiple_testing = "UNKNOWN: the number of relationship sets and variants and th
 [costs_fills]
 fees = "Kalshi versioned fee schedule and claim basis at each capture (fee_schedules.py; ADR 0017), once per leg fill path at the documented rounding scope; state-dependent settlement costs and refunds inside the per-state minimum; UNKNOWN fees prevent a claim."
 fills = "Per-leg depth walk at the capture; full-fill bound reported separately from partial/orphan-leg exposure; no atomic multi-leg execution is assumed; duplicate synthetic liquidity is counted once."
-evidence_quality = "Kalshi fee evidence: CONSERVATIVE_BOUND for KXHIGHNY direct members from 2026-09-23 (ADR 0017); settlement/transfer fees not yet verified for this scope; fractional (0.01) native quantities UNVERIFIED until captured as fixtures (PR B)."
+evidence_quality = "Kalshi fee evidence: CONSERVATIVE_BOUND for KXHIGHNY direct members from 2026-09-23 (ADR 0017). The 0.01-contract native step is documented and captured as a dated fixture (tests/fixtures/conformance/venue_facts_2026-09-25.json, ADR 0036); no fee rule for fractional fills is modelled, so such walks are NOT_EVALUATED. Settlement fee: none per the fee schedule effective 2026-07-07, with balance-precision rounding documented; transfer costs are account-level. Proof obligations: docs/research/RESEARCH_UNBLOCKING_DECISIONS.md section B."
 
 [size_capital]
 size_ladder = "UNKNOWN: rungs to be frozen before preregistration (research_economics.capacity_ladder); no rung is an approved bankroll."
@@ -116,7 +116,7 @@ min_episodes_for_scenario = "MISSING_POWER_ANALYSIS: the minimum number of disti
 min_independent_clusters = "MISSING_POWER_ANALYSIS: the minimum number of independent clusters, at the coarsest level used, before any screen verdict other than INSUFFICIENT_EVIDENCE."
 
 [readiness]
-product = "Depth, grid, fee and settlement-identity contracts exist; the payoff evaluator is PR B."
+product = "Depth, grid, fee and settlement-identity contracts exist, and so does the payoff evaluator and stored-evidence scan (edge_lab.payoff_constraints, EE v1 PR B #102 and #105, ADR 0036). No allowlisted set currently meets the proof requirements."
 strategy = "None. A conditional bound is not captured arbitrage."
 permitted_uses = [
   "research on stored evidence and fixtures",
@@ -124,8 +124,9 @@ permitted_uses = [
   "economics/capacity screen",
 ]
 remaining_blockers = [
-  "Payoff evaluator and semantic conformance (PR B)",
-  "Kalshi settlement/transfer fee and fractional-quantity conformance evidence",
+  "Settlement-state proof (docs/research/RESEARCH_UNBLOCKING_DECISIONS.md section B): the discretionary fair-price fallback is admissible and nothing constrains the fallback prices of an event to sum to $1, so a worst-state payout of 0 cannot be excluded and the evaluator assumes 0 for a KXHIGHNY partition; integer settlement is observed, not guaranteed; whether a Rule 2.8 cancellation returns fees is unknown",
+  "Emergency powers (Rulebook v1.29 Rule 2.8(d): reduction of positions, cancellation with return of funds paid, changed terms) need an explicit scoping decision before any further scan. PROPOSED: exclude them from the admissible states and report them as residual venue risk; if they are admissible instead, no Kalshi payoff relation is provable and the scope should be rejected (docs/research/RESEARCH_UNBLOCKING_DECISIONS.md note B-1)",
+  "Fractional-fill fee rule not modelled (walks crossing fractional levels are NOT_EVALUATED)",
   "Minimum useful effect and owner hours are owner inputs",
 ]
 
