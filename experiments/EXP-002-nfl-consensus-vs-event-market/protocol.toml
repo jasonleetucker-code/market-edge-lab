@@ -12,14 +12,17 @@ mechanism = "Sportsbook lines aggregate many professional prices and may move be
 named_hypothesis = "H-A1 (consensus information): at a frozen pregame horizon, the odds-consensus-v1 probability for a payoff-equivalent NFL moneyline contract exceeds its executable all-in ask by more than a frozen threshold often enough, and at enough fillable size, to clear the owner's minimum useful economic effect."
 baseline = "odds-consensus-v1 exactly as implemented (edge_lab.odds_api pair_offers / group_propositions / median; proportional two-way de-vig; exact line; no weighting, no filters) versus the executable ask; plus the no-trade baseline (zero contribution, zero capital)."
 # OPEN DECISIONS (not settled values). Each must be decided, with evidence, before PREREGISTERED.
-# Items 1 and 2 were raised by EE Writer 2 (PR C, #101) from the captured market rules. The rules
-# facts they cite stay UNVERIFIED here until PR C's captured-rules evidence is merged.
+# Items 1 and 2 were raised by EE Writer 2 (PR C, #101). 2026-09-25 (RU Writer R): the rules facts are
+# now VERIFIED against the captured market rules (tests/fixtures/sports_evidence/) and the Kalshi
+# FOOTBALLGAMEWIN contract terms (rules_evidence/MANIFEST.md). Recommendations for every item are
+# PROPOSED, not settled, in docs/research/RESEARCH_UNBLOCKING_DECISIONS.md (section in brackets).
 open_decisions = [
-  "OPEN 1, tie and not-played treatment. PR C reports that KXNFLGAME rules pay $0.50 on a tie and resolve at a discretionary 'fair price' if the game is not played within 48 h (UNVERIFIED here). A sportsbook two-way moneyline de-vig is conditional on the book's own tie/void rules, so no pair is payoff-equivalent today: every pair is a CONDITIONAL mapping. Decide whether and how tie and not-played states are represented (payoff_constraints-style states) or excluded, and what that does to the equivalence claim.",
-  "OPEN 2, maximum pair skew between the odds snapshot and the event-market book. PR C suggests 10 minutes as a disclosed candidate. That is NOT frozen: freeze it with the capture-schedule resolution before any outcome is viewed.",
-  "OPEN 3, the size ladder rungs ([size_capital] size_ladder).",
-  "OPEN 4, the episode definition: start threshold, end/merge gap and minimum size ([episode]).",
-  "OPEN 5, the minimum number of independent clusters (game and NFL week) before a screen verdict ([economics] min_independent_clusters), and the minimum episode count for an annual scenario ([economics] min_episodes_for_scenario).",
+  "OPEN 1, tie and not-played treatment [A.D]. VERIFIED rules: a tie after overtime pays $1/(tied teams) rounded down ($0.50); a game not started within 48 h, suspended before 55 minutes and not resumed within 48 h, forfeited before kickoff, moved outside its week or with home/away reversed, or with a team disqualified before the game resolves at a discretionary last fair price; a team disqualified after the start resolves No. The sportsbook de-vig is conditional on the books' own tie/void rules (UNVERIFIED), so every pair is a CONDITIONAL mapping. PROPOSED: explicit payoff modelling with ex-ante bounds on tie and non-standard-resolution probabilities (sports_evidence.tie_adjusted_interval), every state kept in the sample.",
+  "OPEN 2, input ages and pair skew [A.C]. The source limits are CURRENT (odds 10 min, Kalshi book 5 min). PR C's 10-minute symmetric skew is a candidate only. PROPOSED provisional window: the book from 5 min before to 10 min after the odds receipt, calibrated on development-pilot timing data only, frozen before any outcome or markout is viewed.",
+  "OPEN 3, the size ladder rungs ([size_capital] size_ladder) [A.E]. PROPOSED: 1, 10, 50, 100, 250 contracts.",
+  "OPEN 4, the episode definition: start threshold, end/merge gap and minimum size ([episode]) [A.F].",
+  "OPEN 5, the minimum number of independent clusters (NFL weeks) before a screen verdict ([economics] min_independent_clusters), and the minimum episode count for an annual scenario ([economics] min_episodes_for_scenario) [A.G]; sensitivity ranges from scripts/research_power_sensitivity.py; the frozen values need a logged development pilot.",
+  "OPEN 6, the primary endpoint [A.A]. PROPOSED: predictive markout (T-6h consensus-vs-Kalshi-mid gap against the Kalshi mid change to T-60m), chosen on data design and power with no result viewed.",
 ]
 
 [universe]
@@ -39,7 +42,7 @@ clusters = [
 dependence = "Books are not independent (shared line sources); sides of one game are complements; repeated snapshots re-observe the same liquidity. Uncertainty is computed on game- and week-clustered units, never on book or snapshot counts: research_economics bootstraps on the coarsest level present on every episode (outer_cluster_id = NFL week)."
 
 [endpoints]
-primary = "UNKNOWN: exactly one of (a) calibration/outcome information at a frozen horizon (for example a log-score difference vs the executable-price-implied probability) or (b) predictive markout at a named later horizon; to be chosen and frozen before preregistration."
+primary = "UNKNOWN: exactly one of (a) calibration/outcome information at a frozen horizon (for example a log-score difference vs a market probability benchmark, never the executable ask) or (b) predictive markout at a named later horizon; to be chosen and frozen before preregistration. PROPOSED (not settled): (b), T-6h to T-60m (docs/research/RESEARCH_UNBLOCKING_DECISIONS.md A.A)."
 secondary = [
   "After-cost conditional contribution per game at each size-ladder rung (research_economics)",
   "Episode persistence bounds at capture-schedule resolution (never below it)",
@@ -80,7 +83,7 @@ multiple_testing = "UNKNOWN: the number of variants and the correction (for exam
 
 [costs_fills]
 fees = "The execution venue's versioned fee schedule and claim basis at the decision time (fee_schedules.py; ADR 0017); UNVERIFIED or UNSUPPORTED fees block a net claim. Fees enter once, inside the net edge per unit."
-fills = "Depth-walk of the captured ask ladder at the cutoff; conservative (fill at detection, first observation of an episode) and less-conservative (best single observation) bounds; observed depth is a ceiling, not a guaranteed fill; no fill probability is assumed."
+fills = "Depth-walk of the captured ask ladder at the cutoff; two bounds, never a sum (research_economics fill-mode labels v2, ADR 0037): FIRST_DETECTION_ZERO_LATENCY (enum CONSERVATIVE: the episode's first qualifying observation at its receipt time, with no decision or submission delay, so not delay-adjusted) and HINDSIGHT_UPPER_BOUND (enum LESS_CONSERVATIVE: the best single observation, chosen after the whole episode was seen: an oracle upper bound that may only rule the family out). Neither is executable performance. Observed depth is a ceiling, not a guaranteed fill; no fill probability is assumed. (Corrected 2026-09-25 while DRAFT; the v1 wording called these conservative and less-conservative.)"
 evidence_quality = "UNKNOWN: no paired Kalshi NFL book is stored yet; fee claim basis for Kalshi sports markets UNVERIFIED for this scope."
 
 [size_capital]
@@ -107,7 +110,7 @@ review_date = "2026-10-22"
 futility = "UNKNOWN: preregistered futility rule (for example: stop if the upper confidence bound of after-cost contribution per game at the smallest rung is below the minimum useful effect after a frozen number of evaluable games)."
 stop = [
   "ACCESS_BLOCKED: no payoff-equivalent executable route with captured rules exists",
-  "ECONOMICALLY_UNVIABLE: the less-conservative scenario cannot clear fixed cash costs",
+  "ECONOMICALLY_UNVIABLE: even the HINDSIGHT_UPPER_BOUND (less-conservative) scenario cannot clear fixed cash costs",
   "BUDGET_EXHAUSTED: the research budget or review date passes without the named missing observation",
 ]
 continue_rule = "UNKNOWN: continue only with a named missing observation and its marginal cost/value (no indefinite extension)."
@@ -115,7 +118,7 @@ verdicts = ["ACCESS_BLOCKED", "ECONOMICALLY_UNVIABLE", "STATISTICAL_FUTILITY", "
 
 [economics]
 minimum_useful_effect = "MISSING_OWNER_INPUT: the minimum useful annual after-cost contribution for this family (the $50k-100k aspiration is not a per-experiment minimum)."
-power_analysis = "MISSING_POWER_ANALYSIS: requires the primary endpoint, the minimum effect and a variance estimate from development data."
+power_analysis = "MISSING_POWER_ANALYSIS: requires the primary endpoint, the minimum effect and a variance estimate from development data. Sensitivity ranges under stated assumptions (not a power analysis): scripts/research_power_sensitivity.py; pilot-data requirement in docs/research/RESEARCH_UNBLOCKING_DECISIONS.md A.G."
 min_episodes_for_scenario = "MISSING_POWER_ANALYSIS: the minimum number of distinct in-window episodes before any annual scenario is computed (research_economics.ScreenInputs)."
 min_independent_clusters = "MISSING_POWER_ANALYSIS: the minimum number of independent clusters, at the coarsest level used, before any screen verdict other than INSUFFICIENT_EVIDENCE."
 

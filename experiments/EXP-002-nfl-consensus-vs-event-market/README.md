@@ -34,8 +34,30 @@ edge, and no sports model or strategy is operational or authorized.
   bounded capture plan. Activating a new collector needs explicit EXECUTION_PLAN authority and
   the owner's approval.
 - The payoff-equivalence mapping (ties, overtime, postponement, void and refund, units) is not
-  established.
+  established. The contract states are now verified (`rules_evidence/MANIFEST.md`). The proposed
+  treatment is explicit payoff modelling with ex-ante bounds
+  (`docs/research/RESEARCH_UNBLOCKING_DECISIONS.md` §A.D), which is not yet settled.
 
 ## Log
 
 - 2026-09-25: DRAFT registered (EE v1 PR A). No data viewed for this experiment.
+- 2026-09-25 (RU Writer R, research-unblocking directive): protocol recommendation, all
+  PROPOSED, in `docs/research/RESEARCH_UNBLOCKING_DECISIONS.md` §A. Nothing is settled or frozen,
+  and the experiment stays DRAFT.
+  - **Changed in the DRAFT protocol.** `open_decisions` now carries the verified rules facts and
+    points to the recommendations, with a new OPEN 6 for the primary endpoint. The `[costs_fills]
+    fills` text, the `[stopping]` UNVIABLE wording and `experiment.toml` `[execution] fill_model`
+    now use the fill-mode labels v2 (ADR 0037):
+    - FIRST_DETECTION_ZERO_LATENCY, which is not delay-adjusted;
+    - HINDSIGHT_UPPER_BOUND, an oracle bound that may only rule the family out.
+
+    Neither is executable performance. `[endpoints] primary` and `[economics] power_analysis`
+    carry pointers only. No result used the old labels.
+  - **Rules evidence.** The Kalshi FOOTBALLGAMEWIN contract terms and CFTC certification were read
+    from their public URLs and stored in `rules_evidence/` with hashes. The terms add fair-price
+    states the market rules text does not list: suspension before 55 minutes, a forfeit before
+    kickoff, a venue or home/away change, and a pre-game disqualification.
+  - **Data looked at.** None in this experiment's scope. The laptop store was inventoried
+    read-only to look for measured Odds/Kalshi timing. It holds no Odds API or KXNFLGAME rows, so
+    no `sports:nfl:moneyline` data was viewed and nothing is appended to `evidence_use.jsonl`. The
+    inventory itself is logged in EXP-003's log, because the store holds KXHIGHNY rows.

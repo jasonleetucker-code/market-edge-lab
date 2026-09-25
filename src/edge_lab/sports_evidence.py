@@ -117,7 +117,8 @@ MAX_LISTING_PARSES = 600
 PARSE_CACHE = 8
 STALE_AFTER = timedelta(days=8)  # no new evidence for longer than an NFL week while targets fell due
 
-# Relation tiers and probability meanings (to be mapped onto Writer 1's shared contract, PR B).
+# Relation tiers and probability meanings. PR B's shared contract now exists (opportunity.ContractSemantics,
+# RelationTier incl. CONDITIONAL_EQUIVALENT; ADR 0036); mapping these local labels onto it is not done yet.
 REL_CONDITIONAL = "CONDITIONAL_MAPPING"
 REL_RULES_UNRESOLVED = "RULES_UNRESOLVED"
 REL_PAYOFF_UNSUPPORTED = "PAYOFF_UNSUPPORTED"
@@ -240,13 +241,19 @@ class JoinPolicy:
                 "kalshi_book_max_age_seconds": int(KALSHI_BOOK_MAX_AGE.total_seconds())}
 
 
-# Fill modes are research_economics.FillMode, applied to episodes (never to single observations here).
+# Fill modes are research_economics.FillMode, applied to episodes (never to single observations here). The ids
+# stay the enum values; each text starts with its research_economics label (labels v2, ADR 0037). Neither mode
+# is executable performance.
 FILL_MODES = (
     {"id": rec.FillMode.CONSERVATIVE.value, "basis": ESTIMATED,
-     "text": "an episode fills from its first qualifying observation: what was there at detection"},
+     "text":"FIRST_DETECTION_ZERO_LATENCY: an episode fills from its first qualifying observation at its receipt "
+             "time, with no decision or submission delay (not delay-adjusted; the quote may be gone by then); "
+             "not executable performance"},
     {"id": rec.FillMode.LESS_CONSERVATIVE.value, "basis": ESTIMATED,
-     "text": "an episode fills from its best single observation (never a sum of observations); captured depth is "
-             "an instantaneous ceiling, not capacity"},
+     "text":"HINDSIGHT_UPPER_BOUND: an episode fills from its best single observation (never a sum), chosen after "
+             "the whole episode was seen: an oracle upper bound that may only rule a family out, never an "
+             "achievable policy or executable performance; captured depth is an instantaneous ceiling, not "
+             "capacity"},
 )
 
 
@@ -1480,7 +1487,8 @@ def economics(rows: Sequence[Mapping[str, Any]], observations: Sequence[Any], pr
             {"name": "reserve and per-venue cash", "value": None, "basis": OWNER_INPUT, "detail": "not supplied"},
             {"name": "variable fees", "value": None, "basis": UNKNOWN, "detail": "KXNFLGAME fee schedule unsupported"},
             {"name": "fill modes", "value": [m["id"] for m in FILL_MODES], "basis": ESTIMATED,
-             "detail": "research_economics.FillMode, applied to episodes; no fill is claimed"},
+             "detail": "research_economics.FillMode, applied to episodes: FIRST_DETECTION_ZERO_LATENCY and "
+                       "HINDSIGHT_UPPER_BOUND (labels v2); no fill is claimed and neither is executable performance"},
             {"name": "lockup", "value": "per paired side", "basis": OBSERVED,
              "detail": "listing expected / latest expiration minus decision time"},
             {"name": "minimum useful annual contribution", "value": None, "basis": OWNER_INPUT,
