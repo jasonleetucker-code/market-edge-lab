@@ -225,7 +225,22 @@ rule; withdrawal **Not enabled**; policy details disclosure.
 
 **Research & Data `/experiments`** — tabs Research | Data sources. Research: title, ID,
 research stage, historical result, forward valid days, next preregistered look, progress
-labelled "Observations toward the next scheduled evaluation", limitations, details. Data
+labelled "Observations toward the next scheduled evaluation", limitations, details; then one
+"Economic evidence · A" and one "Economic evidence · B" section (the two research families at most; no
+new navigation). Family A renders `sports_evidence.terminal_view` (schema sports-evidence-view/1; EXP-002
+outcome labels hidden: no resolution state, result or count, "Hidden · holdout protection"): the contract's label "PAIRED RESEARCH EVIDENCE — NOT AN EDGE CLAIM", the family state,
+protocol state (from the experiment registry), as-of and evidence window, due horizons with games, NFL
+weeks, not-yet-due and superseded, paired horizons, largest exclusion, outcome labels (hidden),
+probability / relation (CONDITIONAL_MAPPING, never equivalent), edge at a size ("Not defensible" with its
+first reason), protocol-eligible opportunities (research_evidence attrition), the economic-screen verdict
+(research_economics), next action and blocker; in disclosures the join diagnostics, missing evidence (the
+report's gaps), protocol attrition (None reads unavailable, never 0), the screen's reasons, the size ladder
+of the latest paired book (depth status, all-in cost or its absence, fee state) with the fill modes, costs
+and inputs with their evidence class, and provenance. Family B shows "Not yet available" until the payoff
+evaluator installs a Terminal view, then that view's state, as-of and detail. Never profit for missing
+outcomes, never "arbitrage", never a funded or approved-bankroll state, no edge score, nothing green.
+States: populated, partial, stale, empty, unsupported, unknown (not configured or not readable), error,
+malformed; Family B not available, error, installed. Data
 sources: first the Source freshness section (the Freshness Fabric supervisor's `freshness.json`,
 schema `freshness-fabric-status/1`, read as written: what is fresh, what is due next and why; the sources needing attention
 (missed, blocked, failing or degraded, disagreeing) as rows and every source by domain in a disclosure; every
@@ -335,7 +350,8 @@ and URL-encoded.
 
 ## 13. Evidence tooling
 
-`tests/browser/fixture_states.py` (early, demo, broken, odds, odds_issues), `tests/browser/serve_fixture.py`,
+`tests/browser/fixture_states.py` (early, demo, broken, odds, odds_issues, freshness, freshness_deferred, polymarket,
+polymarket_issues, economics, economics_issues), `tests/browser/serve_fixture.py`,
 `tests/browser/capture.py` (Playwright, dev-only; blocks non-loopback requests; audits
 overflow, targets, fonts, first-row position). Emulated WebKit is not a physical iPhone.
 
@@ -463,4 +479,23 @@ directive), and the screenshots that justify it.
   `polymarket` and `polymarket_issues` (the recorded gateway bytes replayed through the pilot's own
   entry points) and `/gallery` at 360x800, 1440x900, 720x450 and 180x400 (200% zoom)
   (`tests/browser/capture.py`), reviewed locally by the author and described in the PR (not attached).
+- **2026-09-25 — Economic evidence on the Research tab.** Approved by the owner's Economic Evidence v1
+  directive of 2026-09-25 (section 15: a compact evidence/economics section in the existing Terminal for the
+  two families, no new navigation, no asset-class dashboards), recorded in `docs/EXECUTION_PLAN.md` by PR A
+  (#100); strategy handoff `docs/strategy/CLAUDE_ECONOMIC_EVIDENCE_V1.md` section 9. §8 Research & Data:
+  the Research tab gains "Economic evidence · A" and "Economic evidence · B" after the experiment cards.
+  Composed in `views/research.py` (`economics_section`, `economics_body`, `family_a_body`, `family_b_body`,
+  `_ev_family_a`, `_ev_capacity`, `_ev_protocol_attrition`, `_ev_screen`) from the existing section, facts,
+  badge, state-text, empty/blocked/error/unavailable, disclosure, kv, list and table components; no new
+  component, token, CSS or navigation. New namespaced state words (EV_STATE_*, EV_PROTOCOL_*, EV_REL_*,
+  EV_EDGE_*, EV_SCREEN_*, EV_GAP_*, EV_FILL_*, EV_FEE_*, EV_KIND_*, EV_BASIS_*), none green; a screen
+  "Continue" reads "Continue research · not an edge". Each family is a section body, not a row: a row's
+  aside capsule narrowed its body to one grid column at 360 px (reviewed and changed before merge). Short
+  capsule labels ("Paired evidence", "Partial evidence") and plain numbers in facts keep the section inside
+  180 px; the shell's pre-existing 180 px overflow is unchanged (measured the same on main with details
+  open). `tests/browser/capture.py` gains `--open-details` (dev-only) to review the tables inside
+  disclosures. Screenshots: fixture states `economics`, `economics_issues`, `odds` and `early` at 360x800,
+  1440x900, 720x450 and 180x400 (zoom-equivalent), and 360x800 and 1440x900 with 200% root text, details
+  closed and open; `/gallery` at the same sizes (Chromium emulation, not a physical phone), reviewed locally
+  by the author and described in the PR (not attached).
 

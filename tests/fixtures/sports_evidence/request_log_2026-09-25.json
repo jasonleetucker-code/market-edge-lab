@@ -1,0 +1,40 @@
+{
+  "purpose": "Economic Evidence v1, EE Writer 2: verify that Kalshi KXNFLGAME exists and read its rules and fee type (owner allowance: at most 20 bounded public GETs, paced >= 1 s, logged; no collection)",
+  "client": "edge_lab.http.fetch from the owner's laptop (unauthenticated, public)",
+  "pacing_seconds": 1.1,
+  "requests_sent": 2,
+  "attempts": [
+    {
+      "name": "series_KXNFLGAME (first attempt)",
+      "url": "https://external-api.kalshi.com/trade-api/v2C:/Program Files/Git/series/KXNFLGAME",
+      "started_utc": "2026-09-25T02:24:38.403574+00:00",
+      "sent": false,
+      "error": "InvalidURL raised locally before any connection: the Git Bash shell rewrote the path argument (MSYS path conversion). No request left the laptop."
+    },
+    {
+      "name": "events_KXNFLGAME_open",
+      "sent": true,
+      "url": "https://external-api.kalshi.com/trade-api/v2/events?series_ticker=KXNFLGAME&status=open&limit=50&with_nested_markets=true",
+      "started_utc": "2026-09-25T02:24:43.786473+00:00",
+      "received_utc": "2026-09-25T02:24:44.009906+00:00",
+      "http_status": 200,
+      "bytes": 158491,
+      "sha256": "53b83b84f07ddd23e7eb9ca51b7c47bec1fac8e727ec555177f9f76b48dfb9b5",
+      "attempts": 1,
+      "file": "kalshi_events_KXNFLGAME_open_2026-09-25T022444Z.json"
+    },
+    {
+      "name": "series_KXNFLGAME",
+      "sent": true,
+      "url": "https://external-api.kalshi.com/trade-api/v2/series/KXNFLGAME",
+      "started_utc": "2026-09-25T02:24:48.452519+00:00",
+      "received_utc": "2026-09-25T02:24:48.588808+00:00",
+      "http_status": 200,
+      "bytes": 1554,
+      "sha256": "d2ec6e7db2b70feea6054737ba97640f52ccb01ae95a0fc99773ce72d58319ee",
+      "attempts": 1,
+      "file": "kalshi_series_KXNFLGAME_2026-09-25T022448Z.json"
+    }
+  ],
+  "not_done": "no order book, no settlement read, nothing written to any evidence store, no repeat"
+}

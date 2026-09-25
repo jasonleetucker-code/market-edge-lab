@@ -1,0 +1,1827 @@
+"""Family A paired evidence: sportsbook consensus vs Kalshi NFL moneyline books (Economic Evidence v1).
+
+PAIRED RESEARCH EVIDENCE — NOT AN EDGE CLAIM. Read-only, network-free and bounded. Nothing here makes a
+request, spends an Odds credit, writes to a store, models a winner or recommends a trade.
+
+**What it joins.** For every NFL Odds capture target (`odds_capture_targets`, ADR 0029: T-24h / T-6h /
+T-60m before kickoff) it pairs:
+
+- the sportsbook side: the stored Odds API snapshot the runner recorded for *that* target, read through
+  the canonical consensus (`odds_consensus.build_snapshot_consensus`: exact-line two-way proportional
+  de-vig, median across books). Only the h2h (moneyline) proposition is used. It is a RESEARCH BENCHMARK:
+  a two-way de-vig whose books' tie/void rules are not in the data, so it is read as a probability
+  conditional on a decided game (tie treatment UNVERIFIED), never as an unconditional team-win probability;
+- the exchange side: stored Kalshi `KXNFLGAME` listings (rules, tickers, status, result) and order books
+  (`snapshots`, source `kalshi`, kinds `markets` / `event` / `events` / `settled_markets` / `orderbook`,
+  the shapes `forward._save` and `price_observations` already write). None exist in production today;
+  the report then says exactly what is missing (`gaps`) instead of inventing a dataset;
+- related, never equivalent: Polymarket US captures of markets `polymarket_sports` related to the same
+  Odds event are listed with their relationship (RELATED_NOT_EQUIVALENT) and are excluded from every
+  comparison.
+
+**Point in time.** A horizon's decision cutoff is the pilot's own canonical capture deadline
+(`odds_schedule.deadline`: effective due + 30 min, never later than kickoff - 5 min). Only evidence
+received at or before the cutoff (and at or before the report's `as_of`) is used. The Kalshi book is the
+one received closest to the odds receipt within `max_pair_skew` (ties: the earlier one); a book outside
+that window is PAIR_SKEW_EXCEEDED and a book after the cutoff is never substituted for a missing one. The
+pair's decision time is the later of the two receipts; both inputs' freshness is judged there
+(`freshness.assess` / `combine`, the rule `odds_consensus` uses). Source update times (book
+`last_update` bounds) are kept apart from receipt times and from the pair skew.
+
+**Mapping and rules.** An Odds event maps to a Kalshi event only when the exact team set (a versioned
+32-team table) and the America/New_York game date in the ticker agree; anything else is UNMATCHED,
+AMBIGUOUS or NOT_IN_LISTINGS_READ (a partial listing never implies "no market"). Kalshi's rules text is
+matched literally (tie payout, postponement window, fair-price fallback, official final result). With
+those clauses the relation is CONDITIONAL_MAPPING: the same game and team, but the payoffs differ in the
+tie and not-played states, so it supports calibration / markout research with an explicit declared bound
+and never an equivalent-payoff edge claim. Missing clauses are RULES_UNRESOLVED.
+
+**Denominators and attrition.** Events, Kalshi markets, horizon targets and snapshots are counted
+separately. Each due target falls in exactly one primary bucket (a fixed stage order), and keeps every
+raw reason. Targets whose cutoff is after `as_of` are NOT_YET_DUE, never missed; superseded (rescheduled)
+targets are their own bucket. No signal rule is registered, so signal / fill counts are NOT_EVALUATED
+(None), not zero.
+
+**Outcomes** are labels attached at `as_of` from stored Kalshi listings: PENDING, PRELIMINARY
+(determined), FINAL (settled / finalized), CORRECTED (a later capture disagrees), UNKNOWN. A final winner
+never says whether an order would have filled.
+
+**Attrition and economics** are a thin adapter over the shared contracts (PR A, ADR 0034): the protocol
+waterfalls come from `research_evidence.attrition_report` (EVENT / MARKET / HORIZON / OPPORTUNITY levels
+with separate denominators; SIGNAL, FILL and CAPITAL are NOT_APPLICABLE while no rule or capital is
+registered, so they are None, never 0); each paired side's size ladder is
+`research_economics.size_ladder_from_depth` (complete vs truncated depth; KXNFLGAME fees are on Kalshi's
+non-standard list, so FEE_UNSUPPORTED and no all-in cost; no value per unit, so no EV); episodes and the
+screen are `research_economics.build_episodes` / `economic_screen` under EXP-002's episode definition
+(UNKNOWN today, so no episode and INSUFFICIENT_EVIDENCE). Nothing is annualised; visible depth is never
+capacity. This module's own join-stage table stays as a diagnostic of where the join failed.
+
+Clusters for later statistics: the game (Odds event id) and the NFL week (Tuesday-anchored ET week).
+Delayed-signal and placebo control references are listed per row for the protocol to use; this module
+computes no statistic from them.
+
+CLI (read-only): `python -m edge_lab.sports_evidence report --db <path> [--as-of ISO] [--out FILE]`.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import re
+import sys
+import uuid
+from collections import OrderedDict
+from contextlib import closing
+from dataclasses import dataclass, field, fields, is_dataclass
+from datetime import date, datetime, timedelta, timezone
+from decimal import Decimal, InvalidOperation
+from enum import Enum
+from pathlib import Path
+from typing import Any, Mapping, Sequence
+from urllib.parse import parse_qs, urlsplit
+
+from . import experiments as registry
+from . import fee_schedules, kalshi_quotes, odds_consensus
+from . import research_economics as rec
+from . import research_evidence as rev
+from .forward import eastern_offset
+from .freshness import Freshness, assess, combine, parse_utc
+from .odds_schedule import CaptureTarget, PilotConfig, deadline, effective_due
+from .provenance import canonical_json, sha256_hex
+from .sources import get_source
+
+UTC = timezone.utc
+SCHEMA = "sports-paired-evidence/1"
+VIEW_SCHEMA = "sports-evidence-view/1"
+JOIN_VERSION = "sports-paired-join-v1"
+MAPPING_VERSION = "kalshi-nfl-mapping-v1"
+RULES_PARSER_VERSION = "kalshi-nfl-rules-v1"
+LABEL = "PAIRED RESEARCH EVIDENCE — NOT AN EDGE CLAIM"
+FAMILY_ID = "A"
+FAMILY_TITLE = "Sportsbook consensus vs Kalshi NFL moneyline (pregame)"
+SPORT = "americanfootball_nfl"
+ODDS_MARKET = "h2h"
+KALSHI_SERIES = "KXNFLGAME"
+KALSHI_SOURCE = get_source("kalshi_public")
+KALSHI = KALSHI_SOURCE.legacy_name
+KALSHI_BOOK_MAX_AGE = KALSHI_SOURCE.max_age["orderbook"]
+ODDS_SOURCE = odds_consensus.SOURCE
+LISTING_KINDS = ("markets", "event", "events", "settled_markets")
+PILOT_CONFIG = PilotConfig()  # the runner's defaults (odds_pilot.RunnerSettings().config)
+
+# Bounds: a whole NFL season is about 285 games x 3 horizons.
+MAX_TARGETS = 1500
+MAX_KALSHI_ROWS = 50_000
+MAX_KALSHI_META = 200_000  # metadata rows read (newest first) before filtering by as_of
+MAX_LISTING_PARSES = 600
+PARSE_CACHE = 8
+STALE_AFTER = timedelta(days=8)  # no new evidence for longer than an NFL week while targets fell due
+
+# Relation tiers and probability meanings (to be mapped onto Writer 1's shared contract, PR B).
+REL_CONDITIONAL = "CONDITIONAL_MAPPING"
+REL_RULES_UNRESOLVED = "RULES_UNRESOLVED"
+REL_PAYOFF_UNSUPPORTED = "PAYOFF_UNSUPPORTED"
+REL_RELATED = "RELATED_NOT_EQUIVALENT"
+PROB_CONSENSUS = "SPORTSBOOK_CONSENSUS_TWO_WAY_DEVIG"
+PROB_MARKET = "MARKET_EXECUTABLE_ASK"
+
+# Evidence classes for every economics input (strategy §6).
+OBSERVED, ESTIMATED, OWNER_INPUT, UNKNOWN = "OBSERVED", "ESTIMATED", "OWNER_INPUT", "UNKNOWN"
+
+
+class Stage(str, Enum):
+    """Primary exclusion order for a due target (the first failing stage wins; every reason is kept)."""
+
+    ODDS_NOT_CAPTURED = "ODDS_NOT_CAPTURED"
+    ODDS_CAPTURE_UNUSABLE = "ODDS_CAPTURE_UNUSABLE"
+    CONSENSUS_NOT_SUPPORTED = "CONSENSUS_NOT_SUPPORTED"
+    ODDS_NOT_FRESH = "ODDS_NOT_FRESH"
+    KALSHI_NOT_MAPPED = "KALSHI_NOT_MAPPED"
+    KALSHI_RULES_UNRESOLVED = "KALSHI_RULES_UNRESOLVED"
+    KALSHI_BOOK_MISSING = "KALSHI_BOOK_MISSING"
+    PAIR_SKEW_EXCEEDED = "PAIR_SKEW_EXCEEDED"
+    KALSHI_BOOK_UNUSABLE = "KALSHI_BOOK_UNUSABLE"
+
+
+STAGE_ORDER = tuple(Stage)
+DATA_GAP_STAGES = (Stage.ODDS_NOT_CAPTURED, Stage.KALSHI_NOT_MAPPED, Stage.KALSHI_BOOK_MISSING)
+PAIRED, PARTIAL_PAIR = "PAIRED", "PARTIAL_PAIR"
+NOT_YET_DUE, SUPERSEDED = "NOT_YET_DUE", "SUPERSEDED"
+STAGE_TEXT = {
+    Stage.ODDS_NOT_CAPTURED: "no Odds capture recorded for this horizon",
+    Stage.ODDS_CAPTURE_UNUSABLE: "the recorded Odds capture cannot be used (hash, format, absent game or late)",
+    Stage.CONSENSUS_NOT_SUPPORTED: "no two-book moneyline consensus at this capture",
+    Stage.ODDS_NOT_FRESH: "a contributing book was stale or undated at receipt",
+    Stage.KALSHI_NOT_MAPPED: "no Kalshi KXNFLGAME event mapped from listings known by the cutoff",
+    Stage.KALSHI_RULES_UNRESOLVED: "the Kalshi rules text lacks a recognised tie / postponement clause",
+    Stage.KALSHI_BOOK_MISSING: "no Kalshi book received by the cutoff for this game",
+    Stage.PAIR_SKEW_EXCEEDED: "Kalshi books exist, but none within the pair-skew limit of the odds receipt",
+    Stage.KALSHI_BOOK_UNUSABLE: "the paired Kalshi book is malformed, crossed, empty or stale at decision time",
+}
+
+
+class Outcome(str, Enum):
+    PENDING = "OUTCOME_PENDING"
+    PRELIMINARY = "OUTCOME_PRELIMINARY"
+    FINAL = "OUTCOME_FINAL"
+    CORRECTED = "OUTCOME_CORRECTED"
+    UNKNOWN = "OUTCOME_UNKNOWN"
+
+
+FINAL_OUTCOMES = (Outcome.FINAL, Outcome.CORRECTED)
+
+# The 32 NFL teams: The Odds API full name -> (Kalshi ticker abbreviation, Kalshi market label).
+# Abbreviations and labels as Kalshi's KXNFLGAME listing showed them on 2026-09-25 (docs/research/
+# SPORTS_PAIRED_EVIDENCE_GAPS.md, "Verification reads"). A name not in this table never maps.
+NFL_TEAMS: dict[str, tuple[str, str]] = {
+    "Arizona Cardinals": ("ARI", "Arizona"), "Atlanta Falcons": ("ATL", "Atlanta"),
+    "Baltimore Ravens": ("BAL", "Baltimore"), "Buffalo Bills": ("BUF", "Buffalo"),
+    "Carolina Panthers": ("CAR", "Carolina"), "Chicago Bears": ("CHI", "Chicago"),
+    "Cincinnati Bengals": ("CIN", "Cincinnati"), "Cleveland Browns": ("CLE", "Cleveland"),
+    "Dallas Cowboys": ("DAL", "Dallas"), "Denver Broncos": ("DEN", "Denver"),
+    "Detroit Lions": ("DET", "Detroit"), "Green Bay Packers": ("GB", "Green Bay"),
+    "Houston Texans": ("HOU", "Houston"), "Indianapolis Colts": ("IND", "Indianapolis"),
+    "Jacksonville Jaguars": ("JAC", "Jacksonville"), "Kansas City Chiefs": ("KC", "Kansas City"),
+    "Las Vegas Raiders": ("LV", "Las Vegas"), "Los Angeles Chargers": ("LAC", "Los Angeles C"),
+    "Los Angeles Rams": ("LAR", "Los Angeles R"), "Miami Dolphins": ("MIA", "Miami"),
+    "Minnesota Vikings": ("MIN", "Minnesota"), "New England Patriots": ("NE", "New England"),
+    "New Orleans Saints": ("NO", "New Orleans"), "New York Giants": ("NYG", "New York G"),
+    "New York Jets": ("NYJ", "New York J"), "Philadelphia Eagles": ("PHI", "Philadelphia"),
+    "Pittsburgh Steelers": ("PIT", "Pittsburgh"), "San Francisco 49ers": ("SF", "San Francisco"),
+    "Seattle Seahawks": ("SEA", "Seattle"), "Tampa Bay Buccaneers": ("TB", "Tampa Bay"),
+    "Tennessee Titans": ("TEN", "Tennessee"), "Washington Commanders": ("WAS", "Washington"),
+}
+_BY_ABBR = {abbr: name for name, (abbr, _) in NFL_TEAMS.items()}
+_MONTHS = {m: i + 1 for i, m in enumerate(("JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT",
+                                           "NOV", "DEC"))}
+_TICKER = re.compile(r"^KXNFLGAME-(\d{2})([A-Z]{3})(\d{2})([A-Z]{4,6})-([A-Z]{2,3})$")
+
+
+# --------------------------------------------------------------------------- policy
+
+
+@dataclass(frozen=True)
+class JoinPolicy:
+    """Every parameter of the join; a change is a registered variant, never a quiet improvement."""
+
+    max_pair_skew: timedelta = KALSHI_BOOK_MAX_AGE  # the stricter of the two sources' max ages (5 min)
+    # Declared protocol inputs, UNKNOWN (None) by default: the probability bounds of a tie and of a game
+    # not started within Kalshi's postponement window. Without both, no tie-adjusted comparison exists.
+    tie_probability_bound: Decimal | None = None
+    postponement_probability_bound: Decimal | None = None
+    # Size ladder in contracts: scenario rungs (EXP-002 [size_capital] size_ladder is UNKNOWN), never a
+    # recommendation or a bankroll.
+    size_ladder: tuple[Decimal, ...] = (Decimal(1), Decimal(10), Decimal(25), Decimal(100), Decimal(250))
+    # EXP-002 [universe] excludes a two-way de-vig whose tie / void state is unmapped. The KXNFLGAME contract
+    # pays $0.50 on a tie and a fair price when not played, while the books' tie rules are unverified, so a
+    # CONDITIONAL_MAPPING pair is excluded (RULES_UNRESOLVED) from the protocol's attrition unless the
+    # protocol explicitly accepts the conditional mapping. The paired evidence is kept either way.
+    conditional_mapping_accepted: bool = False
+    version: str = JOIN_VERSION
+
+    def __post_init__(self) -> None:
+        if self.max_pair_skew <= timedelta(0):
+            raise ValueError("max_pair_skew must be positive")
+        for name in ("tie_probability_bound", "postponement_probability_bound"):
+            v = getattr(self, name)
+            if v is not None and not (isinstance(v, Decimal) and Decimal(0) <= v <= Decimal(1)):
+                raise ValueError(f"{name} must be a Decimal in [0, 1] or None")
+        if not self.size_ladder or any(not isinstance(q, Decimal) or q <= 0 for q in self.size_ladder):
+            raise ValueError("size_ladder needs positive Decimal sizes")
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"version": self.version, "max_pair_skew_seconds": int(self.max_pair_skew.total_seconds()),
+                "tie_probability_bound": _s(self.tie_probability_bound),
+                "postponement_probability_bound": _s(self.postponement_probability_bound),
+                "size_ladder": [_s(q) for q in self.size_ladder],
+                "conditional_mapping_accepted": self.conditional_mapping_accepted,
+                "cutoff_rule": "odds_schedule.deadline (effective due + late tolerance, <= kickoff - min lead)",
+                "odds_max_age_seconds": int(odds_consensus.ODDS_MAX_AGE.total_seconds()),
+                "kalshi_book_max_age_seconds": int(KALSHI_BOOK_MAX_AGE.total_seconds())}
+
+
+# Fill modes are research_economics.FillMode, applied to episodes (never to single observations here).
+FILL_MODES = (
+    {"id": rec.FillMode.CONSERVATIVE.value, "basis": ESTIMATED,
+     "text": "an episode fills from its first qualifying observation: what was there at detection"},
+    {"id": rec.FillMode.LESS_CONSERVATIVE.value, "basis": ESTIMATED,
+     "text": "an episode fills from its best single observation (never a sum of observations); captured depth is "
+             "an instantaneous ceiling, not capacity"},
+)
+
+
+# --------------------------------------------------------------------------- small helpers
+
+
+def _s(value: Any) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, Decimal):
+        return "0" if value == 0 else format(value.normalize() if value == value.to_integral_value() else value, "f")
+    return str(value)
+
+
+def _iso(value: Any) -> str | None:
+    parsed = value if isinstance(value, datetime) else parse_utc(value)
+    return None if parsed is None else parsed.astimezone(UTC).isoformat().replace("+00:00", "Z")
+
+
+def _plain(value: Any) -> Any:
+    if isinstance(value, Enum):
+        return value.value
+    if isinstance(value, Decimal):
+        return _s(value)
+    if isinstance(value, datetime):
+        return _iso(value)
+    if isinstance(value, date):
+        return value.isoformat()
+    if isinstance(value, timedelta):
+        return int(value.total_seconds())
+    if is_dataclass(value) and not isinstance(value, type):
+        return {f.name: _plain(getattr(value, f.name)) for f in fields(value)}
+    if isinstance(value, Mapping):
+        return {str(k): _plain(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple, set, frozenset)):
+        items = [_plain(v) for v in value]
+        return sorted(items, key=lambda x: json.dumps(x, sort_keys=True)) if isinstance(value, (set, frozenset)) \
+            else items
+    return value
+
+
+def _dec(value: Any) -> Decimal | None:
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        out = Decimal(str(value))
+    except (InvalidOperation, ValueError):
+        return None
+    return out if out.is_finite() else None
+
+
+def et_date(instant: datetime) -> date:
+    return (instant + eastern_offset(instant)).date()
+
+
+def week_cluster(commence: datetime) -> str:
+    """The NFL week a kickoff belongs to: the America/New_York week starting on Tuesday (Thursday to
+    Monday games, plus any Tuesday/Wednesday game, share one week)."""
+    d = et_date(commence)
+    return f"nfl-week-of-{(d - timedelta(days=(d.weekday() - 1) % 7)).isoformat()}"
+
+
+def parse_ticker(ticker: str) -> dict[str, Any] | None:
+    """KXNFLGAME-26SEP24ATLGB-GB -> event ticker, ticker date, team letters and this market's team."""
+    m = _TICKER.match(ticker or "")
+    if not m or m.group(2) not in _MONTHS:
+        return None
+    try:
+        day = date(2000 + int(m.group(1)), _MONTHS[m.group(2)], int(m.group(3)))
+    except ValueError:
+        return None
+    return {"event_ticker": ticker.rsplit("-", 1)[0], "date": day, "letters": m.group(4), "team": m.group(5)}
+
+
+# --------------------------------------------------------------------------- Kalshi rules (literal)
+
+_TIE = re.compile(r"ends\s+in\s+a\s+tie[^.]*?resolve\s+to\s+\$?\s*(\d*\.\d+|\d+)", re.IGNORECASE)
+_POSTPONE = re.compile(r"postponed\s+but\s+begins\s+within\s+(\d+)\s+hours", re.IGNORECASE)
+_FALLBACK = re.compile(r"not\s+started\s+within\s+(\d+)\s+hours[^.]*?resolve\s+to\s+a\s+fair\s+price", re.IGNORECASE)
+_FINAL = re.compile(r"official\s+final\s+result", re.IGNORECASE)
+_OVERTIME = re.compile(r"overtime", re.IGNORECASE)
+_ORIGINAL = re.compile(r"originally\s+scheduled\s+for\s+([A-Z][a-z]{2}\s+\d{1,2},\s+\d{4})")
+_WINS = re.compile(r"\bwins\b", re.IGNORECASE)
+
+
+def rules_clauses(primary: str | None, secondary: str | None) -> dict[str, Any]:
+    """What a KXNFLGAME market's rules text states, matched literally (never interpreted further). A
+    clause not found stays None; `resolved` needs the win condition, the tie payout, the postponement
+    window and the not-started fallback."""
+    text = f"{primary or ''}\n{secondary or ''}"
+    tie, post, fb = _TIE.search(text), _POSTPONE.search(text), _FALLBACK.search(text)
+    orig = _ORIGINAL.search(text)
+    clauses = {
+        "win_condition": "TEAM_WINS_GAME" if primary and _WINS.search(primary) else None,
+        "tie_payout": _s(_dec(tie.group(1))) if tie else None,
+        "postponement_window_hours": int(post.group(1)) if post else None,
+        "not_started_fallback": f"FAIR_PRICE_AFTER_{fb.group(1)}H" if fb else None,
+        "official_final_result": bool(_FINAL.search(text)),
+        "overtime": "MENTIONED" if _OVERTIME.search(text) else "UNSTATED",
+        "originally_scheduled": orig.group(1) if orig else None,
+        "parser_version": RULES_PARSER_VERSION,
+    }
+    missing = [k for k in ("win_condition", "tie_payout", "postponement_window_hours", "not_started_fallback")
+               if clauses[k] is None]
+    clauses["missing"] = missing
+    clauses["resolved"] = not missing
+    return clauses
+
+
+def relation_for(market: Mapping[str, Any] | None, clauses: Mapping[str, Any] | None) -> dict[str, Any]:
+    """How a KXNFLGAME YES contract relates to the sportsbook moneyline consensus for the same team."""
+    if market is None:
+        return {"tier": None, "equivalent": False, "reasons": ["no Kalshi market mapped"]}
+    notional = _dec(market.get("notional_value_dollars"))
+    if str(market.get("market_type") or "").lower() != "binary" or (notional is not None and notional != 1):
+        return {"tier": REL_PAYOFF_UNSUPPORTED, "equivalent": False,
+                "reasons": [f"market_type {market.get('market_type')!r}, notional {market.get('notional_value_dollars')!r}: "
+                            "not a $1 binary contract"]}
+    if not clauses or not clauses.get("resolved"):
+        return {"tier": REL_RULES_UNRESOLVED, "equivalent": False,
+                "reasons": ["rules clauses not found: " + ", ".join((clauses or {}).get("missing") or ["rules text"])]}
+    return {
+        "tier": REL_CONDITIONAL, "equivalent": False,
+        "consensus_meaning": PROB_CONSENSUS + " (tie/void treatment of the books UNVERIFIED: read as P(win | game "
+                                              "decided))",
+        "market_meaning": PROB_MARKET + f" (YES pays $1 on a win, ${clauses['tie_payout']} on a tie, a fair price if "
+                                        f"not started within {clauses['postponement_window_hours']} h)",
+        "reasons": ["same game and team; payoffs differ in the tie and not-played states, so the consensus is not the "
+                    "contract's fair value without declared tie and postponement bounds",
+                    "supports calibration / markout research only; never an equivalent-payoff edge claim"]}
+
+
+def tie_adjusted_interval(p: Decimal | None, tie_payout: Decimal | None, tie_bound: Decimal | None,
+                          post_bound: Decimal | None) -> tuple[Decimal, Decimal] | None:
+    """The contract fair value implied by consensus p under declared bounds, exactly: YES pays 1 on a win
+    (probability (1 - t - u) p), `tie_payout` on a tie (t), an unknown fair price F in [0, 1] if not played
+    (u). Linear in t, u and F, so the corners give the interval. None when any input is unknown."""
+    if p is None or tie_payout is None or tie_bound is None or post_bound is None:
+        return None
+    if tie_bound + post_bound > 1:
+        return None
+    values = [(1 - t - u) * p + tie_payout * t + u * f
+              for t in (Decimal(0), tie_bound) for u in (Decimal(0), post_bound) for f in (Decimal(0), Decimal(1))]
+    return min(values), max(values)
+
+
+# --------------------------------------------------------------------------- store reads (metadata first)
+
+
+def _meta_rows(store: Any, sql: str, params: Sequence[Any]) -> list[Any]:
+    """Metadata-only reads over the store's own read-only connection (`open_readonly`: mode=ro,
+    query_only), as `odds_consensus._index` does: the store has no public metadata read and storage.py is
+    another writer's file (a shared-contract request is recorded in the PR)."""
+    with closing(store._connect()) as conn:
+        return conn.execute(sql, list(params)).fetchall()
+
+
+@dataclass
+class _Payloads:
+    """One payload in memory at a time per lookup; a small LRU of parsed payloads by snapshot id."""
+
+    store: Any
+    cache: "OrderedDict[int, Any]" = field(default_factory=OrderedDict)
+    loads: int = 0
+
+    def row(self, sid: int) -> Any:
+        return self.store.snapshots_by_id([sid]).get(sid)
+
+    def payload(self, sid: int) -> tuple[Any, str | None]:
+        """(parsed payload or None, problem). The stored hash is checked; a mismatch is never used."""
+        if sid in self.cache:
+            self.cache.move_to_end(sid)
+            return self.cache[sid]
+        row = self.row(sid)
+        self.loads += 1
+        if row is None:
+            out: tuple[Any, str | None] = (None, f"SNAPSHOT_MISSING: snapshot {sid} not found")
+        elif sha256_hex(row["payload_json"]) != row["payload_sha256"]:
+            out = (None, f"PAYLOAD_HASH_MISMATCH: snapshot {sid} does not match its stored sha256; not used")
+        else:
+            try:
+                out = (json.loads(row["payload_json"]), None)
+            except ValueError:
+                out = (None, f"PAYLOAD_UNPARSEABLE: snapshot {sid}")
+        self.cache[sid] = out
+        while len(self.cache) > PARSE_CACHE:
+            self.cache.popitem(last=False)
+        return out
+
+
+@dataclass(frozen=True)
+class KalshiMarketObs:
+    """One KXNFLGAME market as one stored listing snapshot saw it (only the fields the join reads)."""
+
+    ticker: str
+    event_ticker: str
+    received: datetime
+    snapshot_id: int
+    payload_sha256: str
+    kind: str
+    complete_series_listing: bool
+    fields: dict[str, Any]
+    settlement_sources: tuple[str, ...]
+
+
+_MARKET_FIELDS = ("status", "result", "market_type", "notional_value_dollars", "rules_primary", "rules_secondary",
+                  "yes_sub_title", "no_sub_title", "expected_expiration_time", "latest_expiration_time",
+                  "close_time", "can_close_early", "price_ranges", "price_level_structure", "settlement_value_dollars",
+                  "expiration_value", "occurrence_datetime")
+
+
+@dataclass
+class KalshiCatalog:
+    listings: dict[str, list[KalshiMarketObs]]  # ticker -> observations, oldest first
+    books: dict[str, list[tuple[datetime, int, str, str]]]  # ticker -> (received, id, url, sha), oldest first
+    listing_snapshots: int
+    book_snapshots: int
+    parsed_listings: int
+    truncated: bool
+    problems: list[str]
+
+    def known(self, ticker: str, by: datetime) -> list[KalshiMarketObs]:
+        return [o for o in self.listings.get(ticker, []) if o.received <= by]
+
+    def latest(self, ticker: str, by: datetime) -> KalshiMarketObs | None:
+        known = self.known(ticker, by)
+        return known[-1] if known else None
+
+    def events_known(self, by: datetime) -> dict[str, dict[str, KalshiMarketObs]]:
+        out: dict[str, dict[str, KalshiMarketObs]] = {}
+        for ticker in sorted(self.listings):
+            obs = self.latest(ticker, by)
+            if obs is not None:
+                out.setdefault(obs.event_ticker, {})[ticker] = obs
+        return out
+
+    def complete_listing_known(self, by: datetime) -> bool:
+        return any(o.complete_series_listing and o.received <= by for obs in self.listings.values() for o in obs)
+
+
+def _markets_in(payload: Any) -> tuple[list[tuple[Mapping[str, Any], tuple[str, ...]]], bool]:
+    """(markets with their event's settlement-source names, cursor exhausted) from any listing shape."""
+    out: list[tuple[Mapping[str, Any], tuple[str, ...]]] = []
+    if not isinstance(payload, Mapping):
+        return out, False
+
+    def sources(ev: Any) -> tuple[str, ...]:
+        rows = ev.get("settlement_sources") if isinstance(ev, Mapping) else None
+        return tuple(str(s.get("name")) for s in rows or [] if isinstance(s, Mapping) and s.get("name"))
+    top = sources(payload.get("event"))
+    for m in payload.get("markets") or []:
+        if isinstance(m, Mapping):
+            out.append((m, top))
+    for ev in payload.get("events") or []:
+        if isinstance(ev, Mapping):
+            for m in ev.get("markets") or []:
+                if isinstance(m, Mapping):
+                    out.append((m, sources(ev)))
+    return out, not payload.get("cursor")
+
+
+def kalshi_catalog(store: Any, as_of: datetime, payloads: _Payloads) -> KalshiCatalog:
+    """Every stored KXNFLGAME listing and book received by `as_of`: metadata by SQL, listings parsed
+    (bounded), books left unparsed until the join selects one."""
+    kinds = ",".join("?" * len(LISTING_KINDS))
+    meta = _meta_rows(store, f"""
+        SELECT id, kind, entity_id, fetched_at_utc, url, payload_sha256 FROM snapshots
+        WHERE source = ? AND ((kind = 'orderbook' AND entity_id LIKE ?) OR (kind IN ({kinds}) AND entity_id LIKE ?))
+        ORDER BY id DESC LIMIT ?""", [KALSHI, f"{KALSHI_SERIES}-%", *LISTING_KINDS, f"{KALSHI_SERIES}%",
+                                      MAX_KALSHI_META + 1])
+    listings: dict[str, list[KalshiMarketObs]] = {}
+    books: dict[str, list[tuple[datetime, int, str, str]]] = {}
+    problems: list[str] = []
+    if len(meta) > MAX_KALSHI_META:
+        problems.append(f"KALSHI_META_TRUNCATED: only the newest {MAX_KALSHI_META} KXNFLGAME rows were read")
+    known = [(received, r) for r in meta[:MAX_KALSHI_META] if (received := parse_utc(r["fetched_at_utc"])) is not None
+             and received <= as_of]  # rows received after as_of are neither used nor counted
+    known.sort(key=lambda x: (x[0], int(x[1]["id"])))
+    truncated = len(known) > MAX_KALSHI_ROWS or len(meta) > MAX_KALSHI_META
+    if len(known) > MAX_KALSHI_ROWS:
+        problems.append(f"KALSHI_ROWS_TRUNCATED: only the newest {MAX_KALSHI_ROWS} of {len(known)} KXNFLGAME rows "
+                        "received by as_of were read")
+    listing_rows = []
+    for received, r in known[-MAX_KALSHI_ROWS:]:
+        if r["kind"] == "orderbook":
+            books.setdefault(str(r["entity_id"]), []).append((received, int(r["id"]), str(r["url"] or ""),
+                                                              str(r["payload_sha256"])))
+        else:
+            listing_rows.append((received, r))
+    parsed = 0
+    for received, r in sorted(listing_rows, key=lambda x: (x[0], int(x[1]["id"])))[-MAX_LISTING_PARSES:]:
+        payload, problem = payloads.payload(int(r["id"]))
+        parsed += 1
+        if problem:
+            problems.append(problem)
+            continue
+        markets, exhausted = _markets_in(payload)
+        complete = str(r["entity_id"]) == KALSHI_SERIES and exhausted and r["kind"] in ("events", "markets")
+        for m, srcs in markets:
+            ticker = m.get("ticker")
+            parsed_ticker = parse_ticker(ticker) if isinstance(ticker, str) else None
+            if parsed_ticker is None:
+                continue
+            listings.setdefault(ticker, []).append(KalshiMarketObs(
+                ticker, parsed_ticker["event_ticker"], received, int(r["id"]), str(r["payload_sha256"]), str(r["kind"]),
+                complete, {k: m.get(k) for k in _MARKET_FIELDS if k in m}, srcs))
+    if len(listing_rows) > MAX_LISTING_PARSES:
+        truncated = True
+        problems.append(f"LISTINGS_TRUNCATED: only the newest {MAX_LISTING_PARSES} of {len(listing_rows)} listing "
+                        "snapshots were parsed")
+    for obs in listings.values():
+        obs.sort(key=lambda o: (o.received, o.snapshot_id))
+    for b in books.values():
+        b.sort()
+    return KalshiCatalog(listings, books, len(listing_rows), sum(len(b) for b in books.values()), parsed, truncated,
+                         problems)
+
+
+# --------------------------------------------------------------------------- mapping
+
+
+def map_event(home: str | None, away: str | None, commence: datetime, catalog: KalshiCatalog,
+              known_by: datetime) -> dict[str, Any]:
+    """Map one Odds API event to a Kalshi KXNFLGAME event from listings received at or before `known_by`
+    (the join passes the pair's decision time). Deterministic."""
+    base: dict[str, Any] = {"version": MAPPING_VERSION, "event_ticker": None, "markets": {}, "checks": {},
+                            "candidates": []}
+    names = [n for n in (home, away) if n]
+    unknown = [n for n in names if n not in NFL_TEAMS]
+    if len(names) != 2 or unknown:
+        return {**base, "state": "UNMATCHED", "reasons": [f"team name(s) not in the NFL table: {unknown or names}"]}
+    want = {NFL_TEAMS[home][0]: home, NFL_TEAMS[away][0]: away}  # type: ignore[index]
+    events = catalog.events_known(known_by)
+    if not events:
+        return {**base, "state": "NO_LISTING", "reasons": ["no KXNFLGAME listing was received by the decision time"]}
+    game_day = et_date(commence)
+    exact, near = [], []
+    for ev_ticker, markets in sorted(events.items()):
+        sides = {parse_ticker(t)["team"]: o for t, o in markets.items()}  # type: ignore[index]
+        if set(sides) != set(want):
+            continue
+        ticker_day = parse_ticker(next(iter(markets)))["date"]  # type: ignore[index]
+        if ticker_day == game_day:
+            exact.append((ev_ticker, sides))
+        elif abs((ticker_day - game_day).days) <= 7:
+            near.append((ev_ticker, sides))
+    if len(exact) > 1:
+        return {**base, "state": "AMBIGUOUS", "candidates": [e for e, _ in exact],
+                "reasons": [f"{len(exact)} Kalshi events list both teams on {game_day}"]}
+    if not exact:
+        if near:
+            return {**base, "state": "AMBIGUOUS", "candidates": [e for e, _ in near],
+                    "reasons": ["Kalshi lists both teams within 7 days but not on the game's New York date "
+                                "(rescheduled or a different game)"]}
+        complete = catalog.complete_listing_known(known_by)
+        return {**base, "state": "UNMATCHED" if complete else "NOT_IN_LISTINGS_READ",
+                "reasons": ["no Kalshi event lists both teams in a complete series listing" if complete else
+                            "no listing read by the decision time names this game (the listings read were partial: this is "
+                            "not evidence that no market exists)"]}
+    ev_ticker, sides = exact[0]
+    letters = parse_ticker(next(iter(sides.values())).ticker)["letters"]  # type: ignore[index]
+    home_abbr, away_abbr = NFL_TEAMS[home][0], NFL_TEAMS[away][0]  # type: ignore[index]
+    checks = {
+        "teams": {"state": "MATCH", "detail": f"ticker teams {sorted(sides)} = Odds API {sorted(want)}"},
+        "date": {"state": "MATCH", "detail": f"ticker date {game_day} = kickoff New York date"},
+        "home_away": {"state": "MATCH" if letters == away_abbr + home_abbr else
+                      "DIFFERS" if letters == home_abbr + away_abbr else "UNKNOWN",
+                      "detail": f"ticker lists {letters}; Odds API away {away_abbr}, home {home_abbr}"},
+    }
+    markets = {}
+    for abbr, obs in sorted(sides.items()):
+        label = obs.fields.get("yes_sub_title")
+        expected = NFL_TEAMS[want[abbr]][1]
+        checks[f"label_{abbr}"] = {"state": "MATCH" if label == expected else "UNKNOWN" if label is None else "DIFFERS",
+                                   "detail": f"yes_sub_title {label!r}, expected {expected!r}"}
+        markets[want[abbr]] = obs
+    bad = [k for k, v in checks.items() if v["state"] == "DIFFERS" and k.startswith("label_")]
+    if bad:
+        return {**base, "state": "AMBIGUOUS", "event_ticker": ev_ticker, "checks": checks,
+                "reasons": [f"market labels differ from the team table: {bad}"]}
+    return {**base, "state": "MAPPED", "event_ticker": ev_ticker, "markets": markets, "checks": checks,
+            "reasons": ["exact team set and New York game date"]}
+
+
+# --------------------------------------------------------------------------- consensus
+
+
+@dataclass
+class _Consensus:
+    payloads: _Payloads
+    cache: "OrderedDict[int, Any]" = field(default_factory=OrderedDict)
+
+    def snapshot(self, sid: int) -> Any:
+        """The canonical benchmark for one stored odds snapshot (every event), memoized per report."""
+        if sid in self.cache:
+            self.cache.move_to_end(sid)
+            return self.cache[sid]
+        row = self.payloads.row(sid)
+        result = None
+        if row is not None and row["source"] == ODDS_SOURCE and row["kind"] == odds_consensus.KIND:
+            result = odds_consensus.build_snapshot_consensus(row)
+        self.cache[sid] = result
+        while len(self.cache) > PARSE_CACHE:
+            self.cache.popitem(last=False)
+        return result
+
+
+def _h2h(event: Any, home: str | None, away: str | None) -> tuple[Any, list[str]]:
+    props = [p for p in event.propositions if p.market_key == ODDS_MARKET]
+    names = {home, away}
+    exact = [p for p in props if {o[0] for o in p.outcomes} == names]
+    if exact:
+        return exact[0], []
+    reasons = [f"UNSUPPORTED {g.status}: {', '.join(g.reasons)}" for g in event.unsupported if g.market_key == ODDS_MARKET]
+    if props:
+        reasons.append("the moneyline outcome names differ from the target's teams")
+    return None, reasons or ["NO_MONEYLINE: no h2h offers for this game in the capture"]
+
+
+def odds_side(target: Mapping[str, Any], consensus: _Consensus, cutoff: datetime) -> dict[str, Any]:
+    """The sportsbook observation of one horizon: the capture the runner recorded for this target."""
+    state = target.get("state")
+    out: dict[str, Any] = {"target_state": state, "snapshot_id": target.get("snapshot_id"), "reasons": []}
+    if state != "CAPTURED" or target.get("snapshot_id") is None:
+        out["stage"] = Stage.ODDS_NOT_CAPTURED
+        out["reasons"].append(f"target state {state}" + (f": {target.get('reason')}" if target.get("reason") else ""))
+        return out
+    sid = int(target["snapshot_id"])
+    result = consensus.snapshot(sid)
+    if result is None:
+        out.update(stage=Stage.ODDS_CAPTURE_UNUSABLE, reasons=[f"snapshot {sid} is missing or is not an odds snapshot"])
+        return out
+    received = parse_utc(result.received_at_utc)
+    out.update(received_utc=result.received_at_utc, payload_sha256=result.payload_sha256,
+               input_sha256=result.input_sha256, output_sha256=result.output_sha256,
+               consensus_version=result.consensus_version)
+    if result.failed_closed:
+        out.update(stage=Stage.ODDS_CAPTURE_UNUSABLE, reasons=list(result.problems))
+        return out
+    if received is None or received > cutoff:
+        out.update(stage=Stage.ODDS_CAPTURE_UNUSABLE,
+                   reasons=[f"RECEIVED_AFTER_CUTOFF: received {result.received_at_utc}, cutoff {_iso(cutoff)}"])
+        return out
+    event = next((e for e in result.events if e.event_id == target["event_id"]), None)
+    if event is None:
+        out.update(stage=Stage.ODDS_CAPTURE_UNUSABLE, reasons=["EVENT_ABSENT: the captured response lacks this game"])
+        return out
+    prop, why = _h2h(event, target.get("home_team"), target.get("away_team"))
+    if prop is None:
+        out.update(stage=Stage.CONSENSUS_NOT_SUPPORTED, reasons=why)
+        return out
+    out.update(status=prop.status.value, contributing_books=prop.contributing_book_count,
+               quoting_books=prop.market_bookmaker_count, freshness_at_receipt=prop.freshness_at_receipt.value,
+               market_update=_plain(prop.market_update),
+               probabilities={c.outcome_name: c.consensus_probability for c in prop.consensus},
+               dispersion={c.outcome_name: {"range": c.range, "mad": c.mad} for c in prop.consensus})
+    if prop.status is not odds_consensus.ConsensusStatus.SUPPORTED:
+        out.update(stage=Stage.CONSENSUS_NOT_SUPPORTED, reasons=[prop.reason or prop.status.value])
+        return out
+    if prop.freshness_at_receipt is not Freshness.FRESH:
+        out["stage"] = Stage.ODDS_NOT_FRESH
+        out["reasons"].append(f"freshness at receipt {prop.freshness_at_receipt.value}: a contributing book was stale "
+                              "or undated")
+        return out
+    out["_prop_freshness"] = prop.freshness_at_receipt
+    out["_received"] = received
+    out["stage"] = None
+    return out
+
+
+# --------------------------------------------------------------------------- Kalshi side
+
+
+def _depth_limit(url: str) -> int | None:
+    values = parse_qs(urlsplit(url or "").query).get("depth") or []
+    try:
+        return int(values[0]) if len(values) == 1 else None
+    except ValueError:
+        return None
+
+
+def pick_book(books: Sequence[tuple[datetime, int, str, str]], odds_received: datetime, window_start: datetime,
+              cutoff: datetime, skew: timedelta) -> tuple[tuple[datetime, int, str, str] | None, str | None, int]:
+    """(book, problem, later books not used). The book closest to the odds receipt within `skew`, never
+    after the cutoff; ties go to the earlier book. A book of this horizon (received from `window_start` to
+    the cutoff) that is too far from the odds receipt is PAIR_SKEW_EXCEEDED; a book of another horizon is
+    never substituted, so without one of this horizon the book is missing."""
+    admissible = [b for b in books if b[0] <= cutoff]
+    later = len(books) - len(admissible)
+    window = [b for b in admissible if abs(b[0] - odds_received) <= skew]
+    if window:
+        return min(window, key=lambda b: (abs(b[0] - odds_received), b[0], b[1])), None, later
+    horizon = [b for b in admissible if b[0] >= window_start]
+    if horizon:
+        nearest = min(horizon, key=lambda b: abs(b[0] - odds_received))
+        gap = int(abs(nearest[0] - odds_received).total_seconds())
+        return None, f"PAIR_SKEW_EXCEEDED: this horizon's nearest book is {gap} s from the odds receipt (limit " \
+                     f"{int(skew.total_seconds())} s)", later
+    notes = []
+    if admissible:
+        notes.append(f"{len(admissible)} earlier book(s) of other horizons are not substituted")
+    if later:
+        notes.append(f"{later} later book(s) are never substituted")
+    return None, "KALSHI_BOOK_MISSING: no book of this horizon received by the cutoff" + (
+        f" ({'; '.join(notes)})" if notes else ""), later
+
+
+def capacity(ladder: Any, grid: Any, policy: JoinPolicy) -> tuple[Any, ...]:
+    """The size ladder over one captured YES ladder: `research_economics.size_ladder_from_depth` (the canonical
+    depth walk and fee schedule; fees counted once). The value per unit is None: the consensus is a benchmark
+    under a conditional mapping, not a probability of this contract's payoff, so no EV is estimated. KXNFLGAME
+    fees are unsupported, so no rung has an all-in cost; the depth status is still stated."""
+    return rec.size_ladder_from_depth(ladder, policy.size_ladder, fee_schedule(),
+                                      value_per_unit=None, price_grid=grid)
+
+
+def fee_schedule() -> Any:
+    return fee_schedules.schedule_for(KALSHI, KALSHI_SERIES)
+
+
+def _rung(point: Any, schedule: Any) -> dict[str, Any]:
+    if isinstance(schedule, fee_schedules.UnsupportedFeeSchedule):
+        fee_status = "FEE_UNSUPPORTED"
+    else:
+        fee_status = "PRICED" if point.all_in_cost_per_unit is not None else "NOT_PRICED"
+    return {"size": point.quantity, "depth_status": point.depth_status,
+            "all_in_cost_per_unit": point.all_in_cost_per_unit, "gross_edge_per_unit": point.gross_edge_per_unit,
+            "net_edge_per_unit": point.net_edge_per_unit, "fillable": point.fillable, "detail": point.detail,
+            "fee_status": fee_status}
+
+
+def _listing(out: dict[str, Any], obs: KalshiMarketObs, known_by: str) -> None:
+    clauses = rules_clauses(obs.fields.get("rules_primary"), obs.fields.get("rules_secondary"))
+    out.update(listing_snapshot_id=obs.snapshot_id, listing_sha256=obs.payload_sha256,
+               listing_received_utc=_iso(obs.received), listing_known_by=known_by,
+               status_at_listing=obs.fields.get("status"), rules_sha256=kalshi_quotes.rules_sha256(obs.fields),
+               rules=clauses, settlement_sources=list(obs.settlement_sources), relation=relation_for(obs.fields, clauses))
+
+
+def kalshi_side(team: str, ticker: str, game: tuple[str | None, str | None, datetime], catalog: KalshiCatalog,
+                payloads: _Payloads, odds_received: datetime, window_start: datetime, cutoff: datetime,
+                as_of: datetime, policy: JoinPolicy) -> dict[str, Any]:
+    """One team's market at one horizon. The book is chosen first (it fixes the pair's decision time); the
+    mapping and the rules are then judged only from listings received at or before that decision time, so a
+    listing captured after the decision is never used. Without a book there is no decision time: the rules
+    read by the cutoff are reported as a diagnostic only."""
+    out: dict[str, Any] = {"team": team, "ticker": ticker, "market_id": kalshi_quotes.market_id(ticker),
+                           "reasons": []}
+    book, problem, later = pick_book(catalog.books.get(ticker, []), odds_received, window_start, cutoff,
+                                     policy.max_pair_skew)
+    out["later_books_not_used"] = later
+    if book is None:
+        obs = catalog.latest(ticker, cutoff)
+        if obs is not None:
+            _listing(out, obs, "CUTOFF (diagnostic: no book, so no decision time)")
+        if obs is not None and out["relation"]["tier"] in (REL_RULES_UNRESOLVED, REL_PAYOFF_UNSUPPORTED):
+            out.update(stage=Stage.KALSHI_RULES_UNRESOLVED, reasons=list(out["relation"]["reasons"]) + [problem])
+            return out
+        out["stage"] = Stage.PAIR_SKEW_EXCEEDED if problem and problem.startswith("PAIR_SKEW") else Stage.KALSHI_BOOK_MISSING
+        out["reasons"].append(problem)
+        return out
+    received, sid, url, sha = book
+    decision = max(received, odds_received)
+    out.update(book_snapshot_id=sid, book_sha256=sha, book_received_utc=_iso(received),
+               pair_skew_seconds=int((received - odds_received).total_seconds()), decision_utc=_iso(decision),
+               depth_limit=_depth_limit(url))
+    mapping = map_event(game[0], game[1], game[2], catalog, decision)
+    obs = mapping["markets"].get(team) if mapping["state"] == "MAPPED" else None
+    if obs is None or obs.ticker != ticker:
+        out.update(stage=Stage.KALSHI_NOT_MAPPED, reasons=[
+            f"NOT_MAPPED_AT_DECISION ({mapping['state']}): the listings received by the decision time "
+            f"{_iso(decision)} do not map this market; a later listing is never used"])
+        return out
+    _listing(out, obs, "DECISION")
+    if out["relation"]["tier"] in (REL_RULES_UNRESOLVED, REL_PAYOFF_UNSUPPORTED):
+        out["stage"] = Stage.KALSHI_RULES_UNRESOLVED
+        out["reasons"] += out["relation"]["reasons"]
+        return out
+    payload, bad = payloads.payload(sid)
+    if bad:
+        out.update(stage=Stage.KALSHI_BOOK_UNUSABLE, reasons=[bad])
+        return out
+    evidence = f"snapshot:{sid}"
+    quotes = kalshi_quotes.quotes_from_orderbook(ticker, payload, received_at_utc=_iso(received), evidence_id=evidence)
+    ladders = kalshi_quotes.ladders_from_orderbook(ticker, payload, received_at_utc=_iso(received), evidence_id=evidence,
+                                                   depth_limit=out["depth_limit"])
+    yes = quotes.get("YES")
+    fresh = assess(_iso(received), max_age=KALSHI_BOOK_MAX_AGE, now=decision)
+    out["book_freshness_at_decision"] = fresh.value
+    if yes is None:
+        out.update(stage=Stage.KALSHI_BOOK_UNUSABLE, reasons=["BOOK_ABSENT: the payload holds no order book"])
+        return out
+    ladder = ladders.get("YES")
+    out.update(yes_bid=yes.best_bid, yes_ask=yes.best_ask, yes_ask_size=yes.displayed_size, anomaly=yes.anomaly,
+               depth_levels=len(ladder.asks) if ladder else None, depth_truncated=bool(ladder and ladder.truncated),
+               visible_depth=sum((lv.size for lv in ladder.asks), Decimal(0)) if ladder else None)
+    if yes.anomaly:
+        out.update(stage=Stage.KALSHI_BOOK_UNUSABLE, reasons=[yes.anomaly])
+        return out
+    if yes.best_ask is None:
+        out.update(stage=Stage.KALSHI_BOOK_UNUSABLE, reasons=["NO_ASK: nobody offered YES in the captured book"])
+        return out
+    if fresh is not Freshness.FRESH:
+        out.update(stage=Stage.KALSHI_BOOK_UNUSABLE, reasons=[f"book {fresh.value} at the pair's decision time"])
+        return out
+    grid = kalshi_quotes.price_grid_from_kalshi(obs.fields)
+    points = capacity(ladder, grid, policy)
+    out["_points"] = points
+    out["_release"] = obs.fields.get("latest_expiration_time")  # the latest cash release the listing states
+    schedule = fee_schedule()
+    out["capacity"] = [_rung(p, schedule) for p in points]
+    exp, latest = parse_utc(obs.fields.get("expected_expiration_time")), parse_utc(obs.fields.get("latest_expiration_time"))
+    out["lockup_hours"] = {"expected": None if exp is None else round((exp - decision).total_seconds() / 3600, 2),
+                           "latest": None if latest is None else round((latest - decision).total_seconds() / 3600, 2),
+                           "basis": OBSERVED if exp is not None or latest is not None else UNKNOWN,
+                           "detail": "listing expiration times minus the decision time; expected is not guaranteed"}
+    nxt = [b for b in catalog.books.get(ticker, []) if decision < b[0] <= as_of]
+    out["markout_label_ref"] = None if not nxt else {
+        "book_snapshot_id": nxt[0][1], "received_utc": _iso(nxt[0][0]),
+        "seconds_after_decision": int((nxt[0][0] - decision).total_seconds()),
+        "use": "LABEL_ONLY: a later book is an outcome label, never an entry feature; its resolution is the sampling "
+               "gap, not seconds-level latency"}
+    out["stage"] = None
+    return out
+
+
+# --------------------------------------------------------------------------- outcomes
+
+
+def outcome_for(ticker: str, catalog: KalshiCatalog, as_of: datetime) -> dict[str, Any]:
+    """The contract resolution a stored listing shows at `as_of` (a label, attached after the fact)."""
+    known = catalog.known(ticker, as_of)
+    if not known:
+        return {"state": Outcome.UNKNOWN.value, "detail": "no listing of this market stored"}
+    results = [(o, str(o.fields.get("result") or "").lower()) for o in known]
+    stated = [(o, r) for o, r in results if r in ("yes", "no")]
+    latest, status = known[-1], str(known[-1].fields.get("status") or "").lower()
+    ref = {"listing_snapshot_id": latest.snapshot_id, "received_utc": _iso(latest.received), "status": status or None}
+    if len({r for _, r in stated}) > 1:
+        return {"state": Outcome.CORRECTED.value, "result": stated[-1][1].upper(), **ref,
+                "detail": "stored listings disagree over time: " + ", ".join(f"{_iso(o.received)} {r}" for o, r in stated)}
+    result = str(latest.fields.get("result") or "").lower()
+    if status in ("settled", "finalized") and result in ("yes", "no"):
+        return {"state": Outcome.FINAL.value, "result": result.upper(), **ref}
+    if status == "determined" and result in ("yes", "no"):
+        return {"state": Outcome.PRELIMINARY.value, "result": result.upper(), **ref}
+    if status in ("settled", "finalized", "determined"):
+        return {"state": Outcome.UNKNOWN.value, **ref,
+                "detail": f"status {status} with result {latest.fields.get('result')!r} (a tie at $0.50 or a fair-price "
+                          "resolution is not parsed): not a win/loss label"}
+    return {"state": Outcome.PENDING.value, **ref}
+
+
+# --------------------------------------------------------------------------- targets
+
+
+def _targets(store: Any, as_of: datetime) -> tuple[list[dict[str, Any]], bool]:
+    # Targets planned after as_of are not knowable then and are neither used nor counted; beyond the bound the
+    # newest (by intended time) are kept.
+    rows = [dict(r) for r in store.odds_targets(sport=SPORT)
+            if (parse_utc(r["planned_at_utc"]) or as_of) <= as_of]
+    truncated = len(rows) > MAX_TARGETS
+    rows = rows[-MAX_TARGETS:]
+    out = []
+    for r in rows:
+        at = parse_utc(r.get("state_at_utc"))
+        if at is not None and at > as_of:  # replay: the state as it stood at as_of
+            known = [dict(x) for x in store.odds_transitions(r["target_id"]) if (parse_utc(x["at_utc"]) or as_of) <= as_of]
+            last = known[-1] if known else {}
+            r.update(state=last.get("state"), reason=last.get("reason"), snapshot_id=last.get("snapshot_id"),
+                     captured_at_utc=last.get("captured_at_utc"), state_at_utc=last.get("at_utc"))
+        out.append(r)
+    return out, truncated
+
+
+def _capture_target(r: Mapping[str, Any]) -> CaptureTarget:
+    return CaptureTarget(r["target_id"], r["sport"], r["event_id"], r["offset_label"], int(r["priority"]),
+                         parse_utc(r["commence_time_utc"]), parse_utc(r["target_utc"]),  # type: ignore[arg-type]
+                         r.get("home_team"), r.get("away_team"))
+
+
+def _pm_related(store: Any, as_of: datetime) -> dict[str, list[dict[str, Any]]]:
+    """Polymarket US captures of markets related (never equivalent) to each Odds event, by event."""
+    by_target = {}
+    for t in store.pm_sports_targets():
+        t = dict(t)
+        if t.get("odds_event_id"):
+            by_target[t["target_id"]] = t
+    out: dict[str, list[dict[str, Any]]] = {}
+    for o in store.pm_sports_observations():
+        o = dict(o)
+        t = by_target.get(o["target_id"])
+        received = parse_utc(o.get("received_at_utc"))
+        if t is None or o.get("status") != "CAPTURED" or received is None or received > as_of:
+            continue
+        native = str(t["odds_event_id"]).split(":", 1)[-1]
+        out.setdefault(native, []).append({
+            "market_slug": t["market_slug"], "observation_id": o["id"], "received_utc": _iso(received),
+            "snapshot_id": o.get("snapshot_id"), "yes_ask": o.get("yes_ask"), "relation": REL_RELATED,
+            "use": "stored, listed, never compared: a related market cannot support an equivalent-payoff claim"})
+    return out
+
+
+# --------------------------------------------------------------------------- report
+
+
+def _week_placebo(rows: list[dict[str, Any]]) -> None:
+    """Control references for the protocol: the previous horizon of the same game (delayed signal) and the
+    same horizon of the next game in the same NFL week (placebo). References only; nothing is computed."""
+    by_event: dict[str, dict[str, dict[str, Any]]] = {}
+    for r in rows:
+        by_event.setdefault(r["event_id"], {})[r["horizon"]] = r
+    order = {"T-24h": 0, "T-6h": 1, "T-60m": 2}
+    weeks: dict[str, list[str]] = {}
+    for r in rows:
+        if r["event_id"] not in weeks.setdefault(r["week_cluster"], []):
+            weeks[r["week_cluster"]].append(r["event_id"])
+    for r in rows:
+        earlier = [h for h in by_event[r["event_id"]] if order.get(h, 9) < order.get(r["horizon"], 9)]
+        prev = max(earlier, key=lambda h: order.get(h, 9)) if earlier else None
+        prev_row = by_event[r["event_id"]].get(prev) if prev else None
+        events = sorted(weeks[r["week_cluster"]])
+        other = events[(events.index(r["event_id"]) + 1) % len(events)] if len(events) > 1 else None
+        placebo = by_event.get(other, {}).get(r["horizon"]) if other else None
+        r["controls"] = {
+            "delayed_signal_target": prev_row["target_id"] if prev_row and prev_row["odds"].get("snapshot_id") else None,
+            "placebo_target": placebo["target_id"] if placebo else None,
+            "use": "references for the protocol's delayed-signal and placebo controls; no statistic is computed here"}
+
+
+OUTCOMES_HIDDEN = "HIDDEN (holdout protection: outcome labels are shown only by a logged --with-results run)"
+
+
+def _row(r: Mapping[str, Any], catalog: KalshiCatalog, payloads: _Payloads, consensus: _Consensus,
+         pm: Mapping[str, list], as_of: datetime, policy: JoinPolicy, results: bool = False) -> dict[str, Any]:
+    t = _capture_target(r)
+    cutoff = deadline(t, PILOT_CONFIG)
+    row: dict[str, Any] = {
+        "target_id": t.target_id, "event_id": t.event_id, "horizon": t.offset_label, "home_team": t.home_team,
+        "away_team": t.away_team, "commence_utc": _iso(t.commence_utc), "nominal_utc": _iso(effective_due(t, PILOT_CONFIG)),
+        "cutoff_utc": _iso(cutoff), "game_cluster": t.event_id, "week_cluster": week_cluster(t.commence_utc),
+        "reasons": [], "sides": {}, "related_not_equivalent": [
+            x for x in pm.get(t.event_id, []) if (parse_utc(x["received_utc"]) or as_of) <= cutoff]}
+    if r.get("state") == "SUPERSEDED":
+        row.update(status=SUPERSEDED, primary=SUPERSEDED, odds={"target_state": "SUPERSEDED"},
+                   reasons=[r.get("reason") or "superseded"])
+        return row
+    if cutoff > as_of:
+        row.update(status=NOT_YET_DUE, primary=NOT_YET_DUE, odds={"target_state": r.get("state")},
+                   reasons=[f"cutoff {_iso(cutoff)} is after as_of: not missed, not yet due"])
+        return row
+    odds = odds_side(r, consensus, cutoff)
+    row["odds"] = {k: v for k, v in odds.items() if not k.startswith("_")}
+    stages: list[Stage] = []
+    if odds.get("stage") is not None:
+        stages.append(odds["stage"])
+        row["reasons"] += [f"{odds['stage'].value}: {x}" for x in odds["reasons"]]
+    # Candidate mapping from listings known by the cutoff; each side is re-mapped at its own decision time.
+    mapping = map_event(t.home_team, t.away_team, t.commence_utc, catalog, cutoff)
+    row["kalshi"] = {k: v for k, v in mapping.items() if k != "markets"}
+    row["kalshi"]["tickers"] = {team: o.ticker for team, o in mapping["markets"].items()}
+    row["kalshi"]["known_by"] = "cutoff (candidate); every side is confirmed from listings known by its decision time"
+    if mapping["state"] != "MAPPED":
+        stages.append(Stage.KALSHI_NOT_MAPPED)
+        row["reasons"] += [f"KALSHI_NOT_MAPPED ({mapping['state']}): {x}" for x in mapping["reasons"]]
+    elif odds.get("_received") is not None:
+        for team, obs in mapping["markets"].items():
+            side = kalshi_side(team, obs.ticker, (t.home_team, t.away_team, t.commence_utc), catalog, payloads,
+                               odds["_received"], effective_due(t, PILOT_CONFIG) - PILOT_CONFIG.early_tolerance,
+                               cutoff, as_of, policy)
+            if not results and "markout_label_ref" in side:
+                side["markout_label_ref"] = OUTCOMES_HIDDEN  # a later price is a label too (EXP-002 labels)
+            p = (odds.get("probabilities") or {}).get(team)
+            side["consensus_probability"] = p
+            tie = _dec((side.get("rules") or {}).get("tie_payout"))
+            if side.get("stage") is None:
+                side["decision_freshness_odds"] = combine(
+                    assess(_iso(odds["_received"]), max_age=odds_consensus.ODDS_MAX_AGE, now=parse_utc(side["decision_utc"])),
+                    odds["_prop_freshness"]).value
+                side["observed_gap_unadjusted"] = None if p is None else side["yes_ask"] - p  # a fraction, not pp
+                interval = tie_adjusted_interval(p, tie, policy.tie_probability_bound, policy.postponement_probability_bound)
+                side["tie_adjusted_fair_interval"] = None if interval is None else list(interval)
+                side["comparison_claim"] = ("NONE: the unadjusted gap mixes a conditional benchmark with a tie-paying "
+                                            "contract; it is research data, not an edge" if interval is None else
+                                            "NONE: a bounded research comparison, not an edge (fees unsupported)")
+            else:
+                row["reasons"] += [f"{side['stage'].value} [{team}]: {x}" for x in side["reasons"]]
+            row["sides"][team] = side
+        rules_stage = [s["stage"] for s in row["sides"].values() if s.get("stage") is Stage.KALSHI_RULES_UNRESOLVED]
+        if rules_stage:
+            stages.append(Stage.KALSHI_RULES_UNRESOLVED)
+    side_stages = [s.get("stage") for s in row["sides"].values()]
+    paired = [s for s in side_stages if s is None]
+    if not stages and row["sides"] and len(paired) == len(side_stages):
+        row.update(status=PAIRED, primary=PAIRED)
+    elif not stages and paired:
+        row.update(status=PARTIAL_PAIR, primary=PARTIAL_PAIR)
+        row["all_stages"] = sorted({s.value for s in side_stages if s is not None},
+                                   key=lambda v: STAGE_ORDER.index(Stage(v)))  # the failing side's stage is kept
+    else:
+        failing = stages + [s for s in side_stages if s is not None]
+        primary = min(failing, key=STAGE_ORDER.index) if failing else Stage.KALSHI_NOT_MAPPED
+        row.update(status="EXCLUDED", primary=primary.value)
+        row["all_stages"] = sorted({s.value for s in failing}, key=lambda v: STAGE_ORDER.index(Stage(v)))
+    if mapping["state"] == "MAPPED":
+        row["outcome"] = ({team: outcome_for(o.ticker, catalog, as_of) for team, o in mapping["markets"].items()}
+                          if results else OUTCOMES_HIDDEN)
+    return row
+
+
+def _attrition(rows: list[dict[str, Any]], results: bool = False) -> dict[str, Any]:
+    planned = len(rows)
+    superseded = sum(r["status"] == SUPERSEDED for r in rows)
+    future = sum(r["status"] == NOT_YET_DUE for r in rows)
+    due = [r for r in rows if r["status"] not in (SUPERSEDED, NOT_YET_DUE)]
+    buckets: dict[str, int] = {s.value: 0 for s in STAGE_ORDER}
+    buckets[PARTIAL_PAIR] = buckets[PAIRED] = 0
+    raw: dict[str, int] = {s.value: 0 for s in STAGE_ORDER}
+    for r in due:
+        buckets[r["primary"]] += 1
+        for s in r.get("all_stages") or []:
+            raw[s] += 1
+    waterfall, remaining = [], len(due)
+    for s in STAGE_ORDER:
+        n = buckets[s.value]
+        waterfall.append({"stage": s.value, "excluded": n, "remaining_after": remaining - n, "of": remaining,
+                          "kind": "DATA_GAP" if s in DATA_GAP_STAGES else "QUALITY", "text": STAGE_TEXT[s]})
+        remaining -= n
+    paired_rows = [r for r in due if r["status"] in (PAIRED, PARTIAL_PAIR)]
+    outcomes: dict[str, int] | None = None
+    final_evaluable: int | None = None
+    if results:  # outcome states are labels: counted only in a logged --with-results run
+        outcomes, final_evaluable = {o.value: 0 for o in Outcome}, 0
+        for r in paired_rows:
+            recorded = r.get("outcome") if isinstance(r.get("outcome"), dict) else {}
+            states = {v["state"] for v in recorded.values()}
+            worst = next((o.value for o in (Outcome.UNKNOWN, Outcome.PENDING, Outcome.PRELIMINARY, Outcome.CORRECTED,
+                                            Outcome.FINAL) if o.value in states), Outcome.UNKNOWN.value)
+            outcomes[worst] += 1
+            final_evaluable += worst in (Outcome.FINAL.value, Outcome.CORRECTED.value)
+    assert sum(buckets.values()) == len(due), "attrition does not reconcile"  # invariant, tested
+    sides = [s for r in due for s in r["sides"].values()]
+    return {
+        "denominators": {
+            "targets_planned": planned, "targets_superseded": superseded, "targets_not_yet_due": future,
+            "targets_due": len(due), "events": len({r["event_id"] for r in rows}),
+            "events_due": len({r["event_id"] for r in due}), "weeks_due": len({r["week_cluster"] for r in due}),
+            "kalshi_markets_mapped": len({s["ticker"] for s in sides}),
+            "sides_evaluated": len(sides), "sides_paired": sum(s.get("stage") is None for s in sides),
+            "odds_snapshots_used": len({r["odds"].get("snapshot_id") for r in due if r["odds"].get("snapshot_id")}),
+            "kalshi_books_used": len({s["book_snapshot_id"] for s in sides if s.get("book_snapshot_id")}),
+        },
+        "primary": buckets, "raw_reasons": raw, "waterfall": waterfall,
+        "paired_targets": buckets[PAIRED], "partial_targets": buckets[PARTIAL_PAIR],
+        "paired_games": len({r["event_id"] for r in paired_rows}),
+        "paired_weeks": len({r["week_cluster"] for r in paired_rows}),
+        "outcomes": outcomes if results else OUTCOMES_HIDDEN, "final_evaluable_targets": final_evaluable,
+        # No signal rule is registered (the protocol owns it): these are NOT_EVALUATED, never 0.
+        "signal": None, "no_signal": None, "fill": None, "no_fill": None,
+        "signal_note": "no Family A signal or episode rule is registered, so signal, fill and episode counts are "
+                       "not evaluated (None), not zero; a paired observation is not an episode",
+        "reconciles": True,
+    }
+
+
+def _gaps(catalog: KalshiCatalog, attrition: Mapping[str, Any], rows: list[dict[str, Any]], policy: JoinPolicy,
+          protocol: Mapping[str, Any], results: bool = False) -> list[dict[str, Any]]:
+    due = [r for r in rows if r["status"] not in (SUPERSEDED, NOT_YET_DUE)]
+    by_h: dict[str, int] = {}
+    for r in due:
+        if r["primary"] in (Stage.KALSHI_NOT_MAPPED.value, Stage.KALSHI_BOOK_MISSING.value):
+            by_h[r["horizon"]] = by_h.get(r["horizon"], 0) + 1
+    schedule = fee_schedule()
+    out = []
+
+    def gap(gid: str, stream: str, state: str, why: str, fix: str, **counts: Any) -> None:
+        out.append({"id": gid, "stream": stream, "state": state, "why": why, "smallest_fix": fix, **counts})
+    if catalog.listing_snapshots == 0:
+        gap("G1", "Kalshi KXNFLGAME listings (tickers, rules, status, result)", "MISSING",
+            "no KXNFLGAME listing is stored: no market can be mapped and no rule version is on record",
+            "bounded listing read per capture slot through price_observations (docs/research/SPORTS_PAIRED_EVIDENCE_GAPS.md)",
+            stored=0)
+    if catalog.book_snapshots == 0:
+        gap("G2", "Kalshi KXNFLGAME order books at the Odds horizons", "MISSING",
+            "no exchange price exists at any sportsbook capture time; a later book is never substituted",
+            "two book GETs per game per horizon at the existing Odds target times (custom observation targets)",
+            stored=0, due_targets_without_book=sum(by_h.values()), by_horizon=dict(sorted(by_h.items())))
+    elif by_h:
+        gap("G2", "Kalshi KXNFLGAME order books at the Odds horizons", "PARTIAL",
+            "some due horizons have no mapped market or book by their cutoff",
+            "complete the custom observation targets for the missing horizons (never back-filled)",
+            stored=catalog.book_snapshots, due_targets_without_book=sum(by_h.values()), by_horizon=dict(sorted(by_h.items())))
+    if not results:
+        # Whether any resolution is stored would itself hint at outcomes: always the same neutral entry.
+        gap("G3", "Kalshi KXNFLGAME resolutions (outcome labels)", "WITHHELD",
+            "outcome labels are withheld (holdout protection); whether resolutions are stored is shown only by a "
+            "logged --with-results run",
+            "one settled-markets listing read per game day after expected expiration (existing settlement path)")
+    elif not any(str(o.fields.get("status") or "").lower() in ("settled", "finalized", "determined")
+                 for obs in catalog.listings.values() for o in obs):
+        gap("G3", "Kalshi KXNFLGAME resolutions (outcome labels)", "MISSING",
+            "no settled / determined KXNFLGAME listing is stored, so no outcome label exists",
+            "one settled-markets listing read per game day after expected expiration (existing settlement path)",
+            stored=0)
+    if isinstance(schedule, fee_schedules.UnsupportedFeeSchedule):
+        gap("G4", "KXNFLGAME fee schedule", "UNSUPPORTED",
+            schedule.reason + "; the series listing read on 2026-09-25 reported fee_type quadratic_with_maker_fees, "
+            "multiplier 1, which conflicts with the registry and is UNVERIFIED",
+            "re-verify against Kalshi's current fee PDF and record it in fee_schedules (Writer 1's file)")
+    if policy.tie_probability_bound is None or policy.postponement_probability_bound is None:
+        gap("G5", "Tie and not-played probability bounds (protocol inputs)", "UNKNOWN",
+            "the consensus is conditional on a decided game; the contract pays $0.50 on a tie and a fair price if not "
+            "played, so no fair-value comparison exists without declared bounds",
+            "declare both bounds in the Family A protocol before any outcome is viewed")
+    gap("G6", "Sportsbook rules for ties and voids", "UNVERIFIED",
+        "The Odds API carries no rules text; each book's tie/void treatment is assumed, not evidenced",
+        "document the assumption in the protocol; do not treat the consensus as unconditional")
+    state = protocol.get("state")
+    if state == "NOT_REGISTERED" or state == "UNKNOWN":
+        gap("G7", "Family A protocol (signal, episode, horizons, controls, futility)",
+            "NOT_REGISTERED" if state == "NOT_REGISTERED" else "UNKNOWN",
+            str(protocol.get("detail") or "no registered protocol") + ": signal, fill and episode counts cannot be "
+            "evaluated", "a Family A protocol in the experiment registry, frozen before outcomes are viewed")
+    elif not protocol.get("frozen"):
+        unsettled = protocol.get("unsettled_fields") or []
+        gap("G7", f"{protocol.get('experiment_id')} protocol decisions (endpoint, cutoffs, episode, size ladder, "
+            "futility)", "DRAFT",
+            f"{len(unsettled)} decision field(s) are UNKNOWN or MISSING (for example "
+            f"{', '.join(unsettled[:4]) or 'none listed'}): no signal, episode or screen can be evaluated",
+            "settle and freeze them before any outcome is viewed (the protocol is Writer 1's file; via the coordinator)",
+            unsettled=len(unsettled))
+    if not policy.conditional_mapping_accepted:
+        gap("G8", "Payoff mapping for ties and not-played games (EXP-002 universe)", "UNRESOLVED",
+            "KXNFLGAME pays $0.50 on a tie and a fair price if not started within 48 h (rules read 2026-09-25); "
+            "EXP-002 excludes a two-way de-vig whose tie / void state is unmapped, so every paired horizon is "
+            "RULES_UNRESOLVED in the protocol attrition",
+            "the protocol decides the treatment (declared bounds and acceptance of the conditional mapping, or "
+            "exclusion) before outcomes are viewed")
+    return out
+
+
+REPO_EXPERIMENTS = Path(__file__).resolve().parents[2] / "experiments"
+
+
+def _settled_decimal(value: Any) -> Decimal | None:
+    """A protocol value as a number, or None while it is an honest placeholder ("UNKNOWN: ...")."""
+    if isinstance(value, bool) or value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return _dec(value)
+    return None if not isinstance(value, str) or registry._unsettled(value) else _dec(value.strip())
+
+
+def protocol_status(root: Path | None = None) -> dict[str, Any]:
+    """The Family A protocol as the experiment registry holds it (PR A: `experiments.load_protocol`): the
+    experiment whose `protocol.toml` says `family = "A"`. NOT_REGISTERED when there is none; UNKNOWN when
+    the registry cannot be read or holds more than one. Nothing is inferred from a file name."""
+    root = root or REPO_EXPERIMENTS
+    found = []
+    try:
+        for path in registry.discover(root):
+            exp = registry.load(path)
+            if registry.protocol_state(exp) != "PRESENT":
+                continue
+            proto = registry.load_protocol(exp)
+            if isinstance(proto, dict) and proto.get("family") == FAMILY_ID:
+                found.append((exp, proto))
+    except Exception as exc:  # noqa: BLE001 - an unreadable registry is unknown, never "not registered"
+        return {"state": "UNKNOWN", "detail": f"experiment registry unreadable: {type(exc).__name__}"}
+    if not found:
+        return {"state": "NOT_REGISTERED", "detail": "no experiment declares a Family A protocol"}
+    if len(found) > 1:
+        return {"state": "UNKNOWN", "detail": f"{len(found)} experiments declare Family A: " +
+                ", ".join(sorted(e.id for e, _ in found))}
+    exp, proto = found[0]
+    episode = proto.get("episode") if isinstance(proto.get("episode"), dict) else {}
+    endpoints = proto.get("endpoints") if isinstance(proto.get("endpoints"), dict) else {}
+    unsettled = sorted(p for p in registry._unsettled_paths({k: v for k, v in proto.items() if k != "knowledge"}, "")
+                       if p)
+    return {"state": exp.status or "UNKNOWN", "experiment_id": exp.id, "slot_status": proto.get("slot_status"),
+            "protocol_sha256": registry.frozen_hash(proto), "frozen": exp.status in registry.LOCKED,
+            "primary_endpoint": str(endpoints.get("primary") or "")[:200] or None,
+            "episode": {k: episode.get(k) for k in ("start_threshold", "end_merge_gap", "minimum_size")},
+            "unsettled_fields": [p.lstrip(".") for p in unsettled],
+            "detail": f"{exp.id} {exp.status}: {len(unsettled)} decision field(s) still UNKNOWN or MISSING"}
+
+
+def screen_minimums(protocol: Mapping[str, Any]) -> dict[str, Any]:
+    """The screen minimums from the canonical helper (`research_economics.protocol_minimums`, the committed
+    protocol); never chosen here. No registered protocol: both UNKNOWN."""
+    experiment_id = protocol.get("experiment_id")
+    if not experiment_id:
+        return {k: rec.Labeled.unknown("no Family A protocol registered") for k in rec.PROTOCOL_MINIMUMS}
+    return rec.protocol_minimums(str(experiment_id))
+
+
+def episode_definition(protocol: Mapping[str, Any]) -> Any:
+    """EXP-002's episode definition for `research_economics.build_episodes`: every field None while the
+    protocol says UNKNOWN, and frozen only once the experiment is locked (PREREGISTERED or later)."""
+    ep = protocol.get("episode") if isinstance(protocol.get("episode"), dict) else {}
+    gap = _settled_decimal(ep.get("end_merge_gap"))
+    return rec.EpisodeDefinition(version=f"{protocol.get('experiment_id') or 'UNREGISTERED'}-episode",
+                                 start_threshold=_settled_decimal(ep.get("start_threshold")),
+                                 end_merge_gap_seconds=None if gap is None else int(gap),
+                                 minimum_size=_settled_decimal(ep.get("minimum_size")),
+                                 frozen=bool(protocol.get("frozen")))
+
+
+def _row_reasons(row: Mapping[str, Any]) -> list[str]:
+    """Row-level join failures as `research_evidence.Exclusion` values."""
+    out = []
+    for stage in row.get("all_stages") or []:
+        if stage == Stage.ODDS_NOT_CAPTURED.value:
+            out.append("COLLECTION_FAILURE" if row["odds"].get("target_state") == "FAILED" else "MISSED_TARGET")
+        elif stage in (Stage.ODDS_CAPTURE_UNUSABLE.value, Stage.CONSENSUS_NOT_SUPPORTED.value):
+            out.append("PARTIAL_EVIDENCE")
+        elif stage == Stage.ODDS_NOT_FRESH.value:
+            out.append("STALE")
+        elif stage == Stage.KALSHI_NOT_MAPPED.value and (row.get("kalshi") or {}).get("state") != "MAPPED":
+            # Row-level only when the game itself did not map. A side that failed to map at its own decision time
+            # (NOT_MAPPED_AT_DECISION) is that side's reason (_side_reasons), never a reason for the other side.
+            out.append("RULES_UNRESOLVED" if row["kalshi"].get("state") == "AMBIGUOUS" else "MISSING_SOURCE")
+    return out
+
+
+def _side_reasons(side: Mapping[str, Any], policy: JoinPolicy) -> list[str]:
+    stage = side.get("stage")
+    tier = (side.get("relation") or {}).get("tier")
+    if stage == Stage.KALSHI_RULES_UNRESOLVED:
+        return ["UNSUPPORTED_PAYOFF" if tier == REL_PAYOFF_UNSUPPORTED else "RULES_UNRESOLVED"]
+    if stage in (Stage.KALSHI_BOOK_MISSING, Stage.KALSHI_NOT_MAPPED):
+        return ["MISSING_SOURCE"]
+    if stage == Stage.PAIR_SKEW_EXCEEDED:
+        return ["STALE"]
+    if stage == Stage.KALSHI_BOOK_UNUSABLE:
+        return ["STALE" if any("stale" in str(r).lower() for r in side.get("reasons") or []) else "PARTIAL_EVIDENCE"]
+    out = []
+    if tier == REL_CONDITIONAL and not policy.conditional_mapping_accepted:
+        out.append("RULES_UNRESOLVED")  # EXP-002 [universe]: tie / not-played states unmapped
+    first = (side.get("capacity") or [{}])[0]
+    if first.get("depth_status") in ("DEPTH_UNKNOWN", "INSUFFICIENT_DEPTH"):
+        out.append(first["depth_status"])
+    return out
+
+
+def _outcome_reason(outcome: Mapping[str, Any] | None) -> list[str]:
+    state = (outcome or {}).get("state")
+    if state in (Outcome.FINAL.value, Outcome.CORRECTED.value):
+        return []
+    if state == Outcome.UNKNOWN.value and (outcome or {}).get("status") in ("settled", "finalized", "determined"):
+        return ["OUTCOME_VOID"]  # resolved, but not as a win / loss (a tie at $0.50 or a fair price)
+    return ["OUTCOME_PENDING"]
+
+
+PROTOCOL_NOT_APPLICABLE = (rev.Stage.SIGNAL, rev.Stage.FILL, rev.Stage.CAPITAL)
+
+
+def _market_units(rows: Sequence[Mapping[str, Any]], catalog: KalshiCatalog, as_of: datetime,
+                  policy: JoinPolicy) -> list[Any]:
+    """MARKET units: every KXNFLGAME market listed by `as_of` (not only the sides the join evaluated). A market
+    whose game has no Odds capture target has no sportsbook side (MISSING_SOURCE); one whose targets are all
+    still ahead is PENDING_TARGET until its first cutoff; otherwise its latest listing's rules decide."""
+    games: dict[str, list[Mapping[str, Any]]] = {}
+    for r in rows:
+        if r["status"] != SUPERSEDED:
+            games.setdefault(r["event_id"], []).append(r)
+    targeting: dict[str, list[Mapping[str, Any]]] = {}
+    for event_rows in games.values():  # every targeted game, due or not, mapped from listings known by as_of
+        first = event_rows[0]
+        mapped = map_event(first.get("home_team"), first.get("away_team"), parse_utc(first["commence_utc"]),
+                           catalog, as_of)
+        for obs in mapped["markets"].values():
+            targeting.setdefault(obs.ticker, []).extend(event_rows)
+    units = []
+    for ticker in sorted(catalog.listings):
+        obs = catalog.latest(ticker, as_of)
+        if obs is None:
+            continue
+        mine = targeting.get(ticker, [])
+        deadline_utc = None
+        if not mine:
+            reasons = ["MISSING_SOURCE"]
+        elif all(r["status"] == NOT_YET_DUE for r in mine):
+            reasons = ["PENDING_TARGET"]
+            deadline_utc = min(r["cutoff_utc"] for r in mine)
+        else:
+            clauses = rules_clauses(obs.fields.get("rules_primary"), obs.fields.get("rules_secondary"))
+            tier = relation_for(obs.fields, clauses)["tier"]
+            reasons = (["UNSUPPORTED_PAYOFF"] if tier == REL_PAYOFF_UNSUPPORTED else
+                       ["RULES_UNRESOLVED"] if tier == REL_RULES_UNRESOLVED or (
+                           tier == REL_CONDITIONAL and not policy.conditional_mapping_accepted) else [])
+        units.append(rev.AttritionUnit(rev.Level.MARKET, ticker, tuple(reasons), deadline_utc, obs.event_ticker))
+    return units
+
+
+def protocol_attrition(rows: Sequence[Mapping[str, Any]], *, as_of: datetime, policy: JoinPolicy,
+                       catalog: KalshiCatalog, results: bool = False) -> dict[str, Any]:
+    """`research_evidence.attrition_report` over the join: EVENT (games), MARKET (every listed KXNFLGAME market;
+    not enumerated, so None, when no listing is stored), HORIZON (capture targets) and OPPORTUNITY (target x
+    team side). SIGNAL, FILL and CAPITAL are NOT_APPLICABLE while no rule or capital scenario is registered, and
+    OUTCOME is withheld unless outcome results were asked for (a logged run): None, never 0. Superseded
+    (rescheduled) targets are left out of every level and counted in the join's own table."""
+    units: list[Any] = []
+    by_event: dict[str, list[list[str]]] = {}
+    week: dict[str, str] = {}
+    for r in rows:
+        if r["status"] == SUPERSEDED:
+            continue
+        week[r["event_id"]] = r["week_cluster"]
+        base = ["PENDING_TARGET"] if r["status"] == NOT_YET_DUE else _row_reasons(r)
+        teams = sorted(r["sides"]) or sorted(t for t in (r.get("home_team"), r.get("away_team")) if t)
+        horizon_reasons: list[str] = list(base)
+        outcomes = r.get("outcome") if isinstance(r.get("outcome"), dict) else {}
+        for team in teams:
+            side = r["sides"].get(team)
+            reasons = list(base)
+            if side is not None and r["status"] != NOT_YET_DUE:
+                reasons += _side_reasons(side, policy)
+                if results:
+                    reasons += _outcome_reason(outcomes.get(team))
+            elif r["status"] != NOT_YET_DUE and not base:
+                reasons.append("MISSING_SOURCE")
+            units.append(rev.AttritionUnit(rev.Level.OPPORTUNITY, f"{r['target_id']}|{team}",
+                                           tuple(dict.fromkeys(reasons)), r["cutoff_utc"], r["event_id"]))
+            horizon_reasons += reasons
+            by_event.setdefault(r["event_id"], []).append(reasons)
+        if not teams:
+            by_event.setdefault(r["event_id"], []).append(base or ["MISSING_SOURCE"])
+        units.append(rev.AttritionUnit(rev.Level.HORIZON, r["target_id"], tuple(dict.fromkeys(horizon_reasons)),
+                                       r["cutoff_utc"], r["event_id"]))
+    for event, reason_sets in sorted(by_event.items()):
+        survived = any(not rs for rs in reason_sets)
+        merged = () if survived else tuple(dict.fromkeys(x for rs in reason_sets for x in rs))
+        units.append(rev.AttritionUnit(rev.Level.EVENT, event, merged, None, week.get(event)))
+    markets_enumerated = catalog.listing_snapshots > 0
+    if markets_enumerated:
+        units += _market_units(rows, catalog, as_of, policy)
+    levels = [rev.Level.EVENT, rev.Level.HORIZON, rev.Level.OPPORTUNITY] + ([rev.Level.MARKET] if markets_enumerated
+                                                                            else [])
+    not_applicable = PROTOCOL_NOT_APPLICABLE + (() if results else (rev.Stage.OUTCOME,))
+    report = rev.attrition_report(units, as_of_utc=_iso(as_of), levels_enumerated=levels,
+                                  not_applicable_stages=not_applicable)
+    out = report.to_dict()
+    out["notes"] = [
+        "SIGNAL, FILL and CAPITAL are NOT_APPLICABLE until the protocol registers a signal rule and a capital "
+        "scenario: they read None, never 0",
+        "OUTCOME is " + ("included (a logged --with-results run)" if results else
+                         "withheld for holdout protection: outcome states are labels, so final-evaluable reads None"),
+        "SNAPSHOT is not enumerated here (None): books and odds responses are inputs, counted in the join table",
+        "MARKET counts every KXNFLGAME market listed by as_of, including games no Odds target covers",
+        "a CONDITIONAL_MAPPING pair is RULES_UNRESOLVED under EXP-002's universe unless the protocol accepts it",
+        "LIQUIDITY is judged at the smallest size-ladder rung only (DEPTH_UNKNOWN / INSUFFICIENT_DEPTH)",
+    ]
+    return out
+
+
+def economics(rows: Sequence[Mapping[str, Any]], observations: Sequence[Any], protocol: Mapping[str, Any],
+              join: Mapping[str, Any], policy: JoinPolicy, as_of: datetime, gaps: Sequence[str]) -> dict[str, Any]:
+    """The shared screen (`research_economics`): episodes under the protocol's episode definition, a replay
+    with NO capital scenario supplied (the owner sets any amount; nothing here is a bankroll), fixed cash costs
+    OBSERVED at zero, owner inputs UNKNOWN. With today's DRAFT protocol the verdict is INSUFFICIENT_EVIDENCE."""
+    definition = episode_definition(protocol)
+    minimums = screen_minimums(protocol)
+    episodes = rec.build_episodes(observations, definition)
+    due = [parse_utc(r["cutoff_utc"]) for r in rows if r["status"] not in (SUPERSEDED, NOT_YET_DUE)]
+    start = min((d for d in due if d is not None), default=None)
+    screen = None
+    screen_problem = None
+    if start is None or start >= as_of:
+        screen_problem = "no due horizon, so there is no replay window"
+    else:
+        screen = rec.economic_screen(rec.ScreenInputs(
+            family=FAMILY_ID, experiment_id=str(protocol.get("experiment_id") or "UNREGISTERED"), episodes=episodes,
+            scenario=rec.CapitalScenario(label="no capital scenario supplied", capital_by_venue={}, reserve_by_venue={}),
+            primary_size=policy.size_ladder[0], sizes=tuple(policy.size_ladder),
+            window_start_utc=_iso(start), window_end_utc=_iso(as_of),
+            fixed_cash_costs_annual=rec.Labeled(Decimal(0), rec.Basis.OBSERVED,
+                                                "The Odds API free tier and Kalshi public data: no incremental cash"),
+            owner_hours_annual=rec.Labeled.unknown("MISSING_OWNER_INPUT (EXP-002 [budget] owner_hours)"),
+            owner_hourly_cost=rec.Labeled.unknown("MISSING_OWNER_INPUT"),
+            minimum_useful_annual=rec.Labeled.unknown("MISSING_OWNER_INPUT (EXP-002 [economics])"),
+            min_episodes_for_scenario=minimums["min_episodes_for_scenario"],
+            min_independent_clusters=minimums["min_independent_clusters"],
+            stationarity_assumption="none: no annual scenario is produced from this evidence",
+            data_gaps=tuple(gaps),
+            assumptions=("value per unit is None: the consensus is a benchmark under a conditional mapping, so no "
+                         "EV is estimated", "KXNFLGAME fees are unsupported: no rung has an all-in cost")))
+    reasons = []
+    if join["paired_targets"] + join["partial_targets"] == 0:
+        reasons.append("NO_PAIRED_EVIDENCE: no horizon has both a usable consensus and a Kalshi book")
+    reasons += ["FEE_UNSUPPORTED: KXNFLGAME is on Kalshi's non-standard fee list; no all-in cost",
+                "RELATION_CONDITIONAL: tie and not-played states differ; bounds are " +
+                ("declared" if policy.tie_probability_bound is not None and policy.postponement_probability_bound
+                 is not None else "not declared"),
+                "NO_EPISODE_DEFINITION: " + ("; ".join(definition.problems()) or "defined"),
+                "BENCHMARK_NOT_TRUTH: the consensus is a research benchmark, not a calibrated probability"]
+    screen_dict = None if screen is None else screen.to_dict()
+    return {
+        "state": screen_dict["verdict"] if screen_dict else rec.Verdict.INSUFFICIENT_EVIDENCE.value,
+        "contract": {"module": "edge_lab.research_economics", "state": "WIRED", "version": rec.ECONOMICS_VERSION,
+                     "detail": "size ladder, episodes and screen from the shared contract (PR A)"},
+        "edge_at_size": {"state": "NOT_DEFENSIBLE", "reasons": reasons},
+        "episodes": {"definition": _plain(definition), "problems": list(episodes.problems),
+                     "observations": episodes.observations,
+                     # an undefined episode rule makes episodes NOT EVALUABLE (None), never "0 episodes"
+                     "qualifying": None if episodes.problems else episodes.qualifying_observations,
+                     "episodes": None if episodes.problems else len(episodes.episodes),
+                     "note": "a paired observation is not an episode; repeated looks at one book are one episode"},
+        "screen": screen_dict, "screen_problem": screen_problem,
+        "inputs": [
+            {"name": "eligible episodes per year", "value": None, "basis": UNKNOWN,
+             "detail": "EXP-002's episode definition is UNKNOWN; never annualised from a few observations"},
+            {"name": "capital scenario", "value": None, "basis": OWNER_INPUT,
+             "detail": "none supplied: no bankroll is assumed (an illustrative scenario is never an approved bankroll)"},
+            {"name": "reserve and per-venue cash", "value": None, "basis": OWNER_INPUT, "detail": "not supplied"},
+            {"name": "variable fees", "value": None, "basis": UNKNOWN, "detail": "KXNFLGAME fee schedule unsupported"},
+            {"name": "fill modes", "value": [m["id"] for m in FILL_MODES], "basis": ESTIMATED,
+             "detail": "research_economics.FillMode, applied to episodes; no fill is claimed"},
+            {"name": "lockup", "value": "per paired side", "basis": OBSERVED,
+             "detail": "listing expected / latest expiration minus decision time"},
+            {"name": "minimum useful annual contribution", "value": None, "basis": OWNER_INPUT,
+             "detail": "MISSING_OWNER_INPUT; the long-term aspiration is not a per-experiment minimum"},
+        ],
+        "fill_modes": list(FILL_MODES),
+        "fixed_costs": [
+            {"item": "The Odds API free tier (450-credit project cap)", "cash_per_month": "0", "basis": OBSERVED,
+             "detail": "free plan; the cap is unchanged by this work"},
+            {"item": "Kalshi public market data", "cash_per_month": "0", "basis": OBSERVED, "detail": "keyless"},
+            {"item": "owner hours", "cash_per_month": None, "basis": UNKNOWN, "detail": "shown separately from cash"},
+        ],
+        "notes": ["visible depth is an instantaneous ceiling, never capacity; a small fill is never extrapolated",
+                  "no-signal and no-fill observations stay in every denominator",
+                  "the EXP-001 fill model is not used or changed"],
+    }
+
+
+def _observations(rows: Sequence[dict[str, Any]]) -> list[Any]:
+    """One `research_economics.Observation` per paired side (its size ladder, decision time, game cluster,
+    release at the listing's latest expiration). The private ladder objects are removed from the rows."""
+    out = []
+    for r in rows:
+        for team, side in sorted(r["sides"].items()):
+            points = side.pop("_points", None)
+            release = side.pop("_release", None)
+            if side.get("stage") is not None or points is None:
+                continue
+            out.append(rec.Observation(
+                observation_id=f"{r['target_id']}|{side['ticker']}", liquidity_keys=(f"{side['market_id']}:YES",),
+                venue=KALSHI, observed_at_utc=side["decision_utc"], cluster_id=r["event_id"],
+                edge_kind=rec.EdgeKind.EXPECTED_VALUE, ladder=points, release_at_utc=release,
+                outer_cluster_id=r["week_cluster"],
+                evidence_ids=tuple(x for x in (f"snapshot:{r['odds'].get('snapshot_id')}",
+                                               f"snapshot:{side.get('book_snapshot_id')}") if x)))
+    return out
+
+
+def build_report(store: Any, *, as_of: datetime, policy: JoinPolicy = JoinPolicy(),
+                 experiments_root: Path | None = None, results: bool = False) -> dict[str, Any]:
+    """The Family A paired-evidence report over one read-only store. Deterministic for the same stored
+    inputs, `as_of`, policy and registry. Never writes; never touches the network.
+
+    Outcome states and results are labels (EXP-002 [data_roles]), so by default they are hidden everywhere:
+    rows, join counts and the protocol OUTCOME stage. `results=True` is for a run whose viewing is logged in
+    the experiment's evidence-use log (the CLI's `--with-results` records it before printing)."""
+    if not isinstance(as_of, datetime) or as_of.tzinfo is None:
+        raise ValueError("as_of must be a timezone-aware datetime")
+    as_of = as_of.astimezone(UTC)
+    payloads = _Payloads(store)
+    consensus = _Consensus(payloads)
+    catalog = kalshi_catalog(store, as_of, payloads)
+    targets, targets_truncated = _targets(store, as_of)
+    pm = _pm_related(store, as_of)
+    rows = [_row(r, catalog, payloads, consensus, pm, as_of, policy, results) for r in targets]
+    rows.sort(key=lambda r: (r["commence_utc"] or "", r["event_id"], r["nominal_utc"] or ""))
+    _week_placebo(rows)
+    observations = _observations(rows)  # also removes the private ladder objects from the rows
+    join = _attrition(rows, results)
+    protocol = protocol_status(experiments_root)
+    receipts = sorted([x for r in rows for x in (r["odds"].get("received_utc"),) if x]
+                      + [s.get("book_received_utc") for r in rows for s in r["sides"].values() if s.get("book_received_utc")])
+    gaps = _gaps(catalog, join, rows, policy, protocol, results)
+    body = {
+        "schema": SCHEMA, "label": LABEL, "family": FAMILY_ID, "title": FAMILY_TITLE,
+        "join_version": JOIN_VERSION, "mapping_version": MAPPING_VERSION, "rules_parser_version": RULES_PARSER_VERSION,
+        "consensus_version": odds_consensus.CONSENSUS_VERSION, "policy": policy.to_dict(), "as_of_utc": _iso(as_of),
+        "window": {"first_receipt_utc": receipts[0] if receipts else None,
+                   "last_receipt_utc": receipts[-1] if receipts else None},
+        "protocol": protocol,
+        "outcome_labels": "INCLUDED (a logged --with-results run)" if results else OUTCOMES_HIDDEN,
+        "bounds": {"targets_truncated": targets_truncated, "kalshi_truncated": catalog.truncated,
+                   "listing_snapshots": catalog.listing_snapshots, "listing_parsed": catalog.parsed_listings,
+                   "book_snapshots": catalog.book_snapshots, "payload_loads": payloads.loads,
+                   "problems": catalog.problems[:20]},
+        "sampling": {"horizons": [o.label for o in PILOT_CONFIG.offsets],
+                     "resolution": "defined pregame horizons (T-24h / T-6h / T-60m) with a pair skew of at most "
+                                   f"{int(policy.max_pair_skew.total_seconds())} s; Kalshi books carry no source "
+                                   "timestamp (receipt only); nothing here can establish seconds-level lag"},
+        "clusters": {"game": "Odds API event id", "week": "Tuesday-anchored America/New_York NFL week",
+                     "note": "books, sides and snapshots are not independent observations"},
+        "attrition": protocol_attrition(rows, as_of=as_of, policy=policy, catalog=catalog, results=results),
+        "join": join, "gaps": gaps,
+        "economics": economics(rows, observations, protocol, join, policy, as_of, [g["stream"] for g in gaps]),
+        "rows": rows,
+    }
+    plain = _plain(body)
+    plain["output_sha256"] = sha256_hex(canonical_json(plain))
+    return plain
+
+
+# --------------------------------------------------------------------------- Terminal view
+
+_VIEW_CACHE: "OrderedDict[tuple, dict[str, Any]]" = OrderedDict()
+VIEW_CACHE_MAX = 8
+
+
+def _registry_key(root: Path | None) -> tuple:
+    root = root or REPO_EXPERIMENTS
+    try:
+        return tuple((str(p), p.stat().st_mtime_ns) for p in sorted(root.glob("*/protocol.toml")))
+    except OSError:
+        return ("unreadable",)
+
+
+def _view_key(store: Any, now: datetime, root: Path | None) -> tuple:
+    """Everything a report depends on grows monotonically: a new NFL odds snapshot, KXNFLGAME listing or book,
+    odds transition or Polymarket observation changes its max id; newly due targets change the due count; a
+    protocol edit changes its file time. Writes by other collectors (KXHIGHNY, NWS, ...) never invalidate it."""
+    odds = _meta_rows(store, "SELECT MAX(id) FROM snapshots WHERE source = ? AND kind = ?",
+                      [ODDS_SOURCE, odds_consensus.KIND])[0][0]
+    kalshi = _meta_rows(store, "SELECT MAX(id) FROM snapshots WHERE source = ? AND entity_id LIKE ?",
+                        [KALSHI, f"{KALSHI_SERIES}%"])[0][0]
+    trans = _meta_rows(store, "SELECT MAX(id) FROM odds_capture_transitions", [])[0][0]
+    pm = _meta_rows(store, "SELECT MAX(id) FROM pm_sports_observations", [])[0][0]
+    due = sum(1 for r in store.odds_targets(sport=SPORT)
+              if deadline(_capture_target(dict(r)), PILOT_CONFIG) <= now)
+    return (str(store.path), odds, kalshi, trans, pm, due, _registry_key(root))
+
+
+def _family_state(report: Mapping[str, Any], now: datetime) -> str:
+    a = report["join"]
+    den = a["denominators"]
+    if den["targets_planned"] == 0:
+        return "EMPTY"
+    sides = [s for r in report["rows"] for s in r["sides"].values()]
+    tiers = {s.get("relation", {}).get("tier") for s in sides}
+    if sides and tiers <= {REL_PAYOFF_UNSUPPORTED}:
+        return "UNSUPPORTED"
+    last = parse_utc(report["window"]["last_receipt_utc"])
+    if den["targets_due"] and (last is None or now - last > STALE_AFTER):
+        return "STALE"
+    if den["targets_due"] == 0:
+        return "EMPTY"
+    if a["paired_targets"] and a["paired_targets"] == den["targets_due"]:
+        return "POPULATED"
+    if not a["paired_targets"] and not a["partial_targets"]:
+        return "UNPAIRED"  # horizons fell due and none paired: not "partial"
+    return "PARTIAL"
+
+
+def _next_action(report: Mapping[str, Any]) -> tuple[str, str | None]:
+    gaps = {g["id"]: g for g in report["gaps"]}
+    if gaps.get("G2", {}).get("state") == "MISSING":
+        return ("Owner decision: authorize the bounded Kalshi KXNFLGAME capture at the Odds horizons "
+                "(docs/research/SPORTS_PAIRED_EVIDENCE_GAPS.md); no new timer is authorized today",
+                "no Kalshi NFL books are stored")
+    if "G7" in gaps:
+        pid = report["protocol"].get("experiment_id") or "the Family A protocol"
+        return (f"Settle and freeze {pid}'s endpoint, cutoffs, episode definition and tie treatment before any "
+                "outcome is viewed", f"{pid} is {report['protocol'].get('state')}")
+    if "G8" in gaps:
+        return "Decide the tie / not-played treatment in the protocol", "payoff mapping unresolved"
+    if "G4" in gaps:
+        return "Re-verify the KXNFLGAME fee schedule", "fees unsupported"
+    return "Continue stored-evidence research under the protocol", None
+
+
+def view_from_report(report: Mapping[str, Any], now: datetime) -> dict[str, Any]:
+    """A compact, display-ready summary: every figure is the report's own; nothing is recomputed."""
+    rows = report["rows"]
+    join = report["join"]
+    paired = [(r, t, s) for r in rows for t, s in r["sides"].items() if s.get("stage") is None]
+    latest = max(paired, key=lambda x: (x[2]["decision_utc"], x[2]["ticker"]), default=None)
+    sides = [s for r in rows for s in r["sides"].values()]
+    rel = next((s["relation"] for s in sides if s.get("relation", {}).get("tier")), None)
+    books = [s for s in sides if s.get("book_snapshot_id")]
+    action, blocker = _next_action(report)
+    econ = report["economics"]
+    screen = econ.get("screen") or {}
+    return {
+        "state": _family_state(report, now), "family": report["family"], "title": report["title"],
+        "label": report["label"], "protocol": report["protocol"], "as_of_utc": report["as_of_utc"],
+        "window": report["window"], "denominators": join["denominators"],
+        "join_stages": join["waterfall"], "paired_targets": join["paired_targets"],
+        "partial_targets": join["partial_targets"], "paired_games": join["paired_games"],
+        "paired_weeks": join["paired_weeks"], "outcome_labels": report["outcome_labels"],
+        "protocol_attrition": {"denominators": report["attrition"]["denominators"],
+                               "waterfalls": report["attrition"]["waterfalls"],
+                               "not_applicable_stages": report["attrition"]["not_applicable_stages"],
+                               "notes": report["attrition"]["notes"]},
+        "relation": rel or {"tier": None, "reasons": ["no Kalshi market mapped yet: the relation is not established"]},
+        "provenance": {
+            "odds": f"The Odds API h2h · consensus {report['consensus_version']} (median of two-way de-vig)",
+            "kalshi_rules": sorted({s["rules_sha256"] for s in sides if s.get("rules_sha256")}),
+            "fee": next((g["why"] for g in report["gaps"] if g["id"] == "G4"), "priced by the registry"),
+            "join": f"{report['join_version']} · {report['mapping_version']} · {report['rules_parser_version']}",
+            "policy": report["policy"]},
+        "edge_at_size": econ["edge_at_size"],
+        "screen": {"verdict": econ["state"], "reasons": list(screen.get("verdict_reasons") or
+                                                            ([econ["screen_problem"]] if econ.get("screen_problem")
+                                                             else [])),
+                   "episodes": econ["episodes"], "not_an_edge_claim": screen.get("not_an_edge_claim"),
+                   "report_sha256": screen.get("report_sha256")},
+        "capacity": {"sides_with_book": len(books), "truncated": sum(bool(s.get("depth_truncated")) for s in books),
+                     "latest": None if latest is None else {
+                         "team": latest[1], "ticker": latest[2]["ticker"], "decision_utc": latest[2]["decision_utc"],
+                         "horizon": latest[0]["horizon"], "ladder": latest[2].get("capacity") or [],
+                         "depth_truncated": latest[2].get("depth_truncated"),
+                         "visible_depth": latest[2].get("visible_depth"),
+                         "lockup_hours": latest[2].get("lockup_hours")},
+                     "fill_modes": econ["fill_modes"]},
+        "economics_contract": econ["contract"], "fixed_costs": econ["fixed_costs"],
+        "inputs": econ["inputs"], "gaps": report["gaps"], "sampling": report["sampling"],
+        "next_action": action, "blocker": blocker, "report_sha256": report["output_sha256"],
+    }
+
+
+def terminal_view(db_path: str | Path, *, now: datetime, experiments_root: Path | None = None) -> dict[str, Any]:
+    """Family A for the Terminal: the store opened read-only, outcome labels hidden (no state, no result, no
+    count: the Terminal is not a logged consumer of EXP-002 labels), the report memoized until the evidence, the due set or a protocol changes. Never raises: NO_STORE / ERROR
+    carry a short detail."""
+    from .storage import ReadOnlyStoreError, SnapshotStore
+
+    base = {"schema": VIEW_SCHEMA, "label": LABEL}
+    path = Path(db_path)
+    if not path.exists():
+        return {**base, "state": "NO_STORE", "detail": f"{path.name} does not exist"}
+    try:
+        store = SnapshotStore.open_readonly(path)
+        key = _view_key(store, now, experiments_root)
+        report = _VIEW_CACHE.get(key)
+        if report is None:
+            report = build_report(store, as_of=now, experiments_root=experiments_root, results=False)
+            _VIEW_CACHE[key] = report
+            while len(_VIEW_CACHE) > VIEW_CACHE_MAX:
+                _VIEW_CACHE.popitem(last=False)
+        else:
+            _VIEW_CACHE.move_to_end(key)
+        return {**base, "state": "OK", "family_a": view_from_report(report, now)}
+    except ReadOnlyStoreError as exc:
+        return {**base, "state": "NO_STORE", "detail": str(exc).splitlines()[0][:200] if str(exc) else "unreadable"}
+    except Exception as exc:  # noqa: BLE001 - shown as an error state, never raised into the page
+        return {**base, "state": "ERROR", "detail": f"{type(exc).__name__}: {str(exc).splitlines()[0][:160] if str(exc) else ''}"}
+
+
+# --------------------------------------------------------------------------- CLI
+
+
+def _write_atomic(path: Path, text: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f"{path.name}.{uuid.uuid4().hex}.tmp")
+    tmp.write_text(text, encoding="utf-8")
+    os.replace(tmp, path)
+
+
+OUTCOME_SCOPE = "sports:nfl:moneyline"  # EXP-002's outcome scope (its evidence log covers it)
+
+
+def _clock() -> datetime:
+    """The wall clock (tests replace it: fixture stores live in the future)."""
+    return datetime.now(UTC)
+
+
+def record_results_view(report: Mapping[str, Any], *, log: Path, actor: str, code_version: str,
+                        experiments_root: Path | None = None, now: datetime | None = None) -> str:
+    """Log a report run that shows outcome labels, before anything is printed: one LABEL_RESULT_INSPECTION
+    event in the given evidence-use log (`research_evidence.record_use`), with the protocol's prohibited
+    inputs and label scopes enforced. Raises `research_evidence.EvidenceError` (ProhibitedInput included)
+    when it cannot be logged; the caller then shows nothing."""
+    protocol = report.get("protocol") or {}
+    experiment_id = protocol.get("experiment_id")
+    if not experiment_id:
+        raise rev.EvidenceError("no Family A protocol is registered, so there is no evidence log to record in")
+    shown = sorted(r["commence_utc"] for r in report["rows"]
+                   if isinstance(r.get("outcome"), dict) and r.get("commence_utc"))
+    start, end = (shown[0], shown[-1]) if shown else (report["as_of_utc"], report["as_of_utc"])
+    exp = None
+    for path in registry.discover(experiments_root or REPO_EXPERIMENTS):
+        candidate = registry.load(path)
+        if candidate.id == experiment_id:
+            exp = candidate
+    if exp is None:
+        raise rev.EvidenceError(f"{experiment_id} is not in the experiment registry, so its evidence log is unknown")
+    own = (exp.path.parent / rev.LOG_NAME).resolve()
+    if Path(log).resolve() != own:
+        raise rev.EvidenceError(f"the view must be recorded in {experiment_id}'s own log ({own.parent.name}/"
+                                f"{rev.LOG_NAME}), not in {Path(log).name}")
+    use = rev.EvidenceUse(
+        experiment_id=experiment_id, family=FAMILY_ID, dataset_id="sports_evidence:nfl_paired_report",
+        dataset_version=JOIN_VERSION, dataset_sha256=report["output_sha256"], role=rev.DatasetRole.UNASSIGNED,
+        window=rev.InformationWindow(OUTCOME_SCOPE, start, end), actor=actor,
+        tool="python -m edge_lab.sports_evidence report --with-results",
+        action_time_utc=_iso(now or _clock()), action=rev.Action.LABEL_RESULT_INSPECTION,
+        code_version=code_version, model_version=None, prompt_version=None, viewed_features=True,
+        viewed_labels=True, viewed_results=True, influenced_tuning=None,
+        note=f"paired-evidence report as of {report['as_of_utc']}; outcome states and results shown")
+    return rev.record_use(own, use, prohibited_prefixes=registry.prohibited_inputs(exp),
+                          prohibited_label_scopes=registry.prohibited_label_scopes(exp))
+
+
+def main(argv: list[str] | None = None) -> int:
+    """`python -m edge_lab.sports_evidence report --db PATH`: read-only, network-free, bounded. Outcome labels
+    are hidden unless `--with-results`, which first records the view in an explicit evidence-use log."""
+    from .storage import ReadOnlyStoreError, SnapshotStore
+
+    parser = argparse.ArgumentParser(prog="python -m edge_lab.sports_evidence",
+                                     description=f"{LABEL}. Family A paired evidence from stored data only.")
+    sub = parser.add_subparsers(dest="command", required=True)
+    rep = sub.add_parser("report", help="the paired-evidence report (JSON); opens the store read-only")
+    rep.add_argument("--db", default="data/edge_lab.sqlite3")
+    rep.add_argument("--as-of", help="point in time (ISO-8601 with zone); default and maximum: now")
+    rep.add_argument("--out", help="write the JSON artifact here (atomically) instead of stdout")
+    rep.add_argument("--summary", action="store_true", help="print denominators, attrition and gaps only")
+    rep.add_argument("--with-results", action="store_true",
+                     help="show outcome states and results (EXP-002 labels); requires --evidence-log, --actor and "
+                          "a code version, and records the view there before anything is printed")
+    rep.add_argument("--evidence-log", help="the experiment's evidence_use.jsonl to record a --with-results view in")
+    rep.add_argument("--actor", help="who views the results (recorded in the evidence-use event)")
+    rep.add_argument("--code-version", default=os.getenv("EDGE_LAB_CODE_VERSION"),
+                     help="git commit of the code that runs (default: $EDGE_LAB_CODE_VERSION)")
+    rep.add_argument("--experiments", help="experiment registry root (default: the repository's experiments/)")
+    args = parser.parse_args(argv)
+    if args.with_results and not (args.evidence_log and args.actor and args.code_version):
+        print(json.dumps({"command": "sports_evidence report", "state": "REFUSED",
+                          "detail": "--with-results shows EXP-002 outcome labels: give --evidence-log, --actor and "
+                                    "--code-version (or $EDGE_LAB_CODE_VERSION) so the view is recorded first"}))
+        return 2
+    now = _clock()
+    as_of = now
+    if args.as_of:
+        as_of = parse_utc(args.as_of)  # type: ignore[assignment]
+        if as_of is None:
+            parser.error("--as-of must be an ISO-8601 time with a zone")
+        if as_of > now:
+            print(f"--as-of {args.as_of} is in the future; clamped to now ({_iso(now)})", file=sys.stderr)
+            as_of = now
+    try:
+        store = SnapshotStore.open_readonly(args.db)
+    except ReadOnlyStoreError as exc:
+        print(json.dumps({"command": "sports_evidence report", "state": "NO_STORE", "detail": str(exc)}))
+        return 1
+    root = Path(args.experiments) if args.experiments else None
+    report = build_report(store, as_of=as_of, results=args.with_results, experiments_root=root)
+    if args.with_results:
+        try:
+            logged = record_results_view(report, log=Path(args.evidence_log), actor=args.actor,
+                                         code_version=args.code_version, experiments_root=root)
+        except (rev.EvidenceError, OSError) as exc:
+            print(json.dumps({"command": "sports_evidence report", "state": "REFUSED",
+                              "detail": f"the results view could not be recorded, so nothing is shown: {exc}"}))
+            return 2
+        report = {**report, "evidence_use": logged}
+    if args.summary:
+        report = {k: report[k] for k in ("schema", "label", "as_of_utc", "window", "protocol", "outcome_labels",
+                                          "bounds", "sampling", "attrition", "join", "gaps", "economics",
+                                          "output_sha256", "evidence_use") if k in report}
+    text = json.dumps(report, sort_keys=True, indent=2, ensure_ascii=False)
+    if args.out:
+        _write_atomic(Path(args.out), text + "\n")
+        print(json.dumps({"command": "sports_evidence report", "state": "WRITTEN", "out": args.out,
+                          "output_sha256": report["output_sha256"]}))
+    else:
+        sys.stdout.write(text + "\n")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

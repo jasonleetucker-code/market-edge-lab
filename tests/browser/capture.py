@@ -5,7 +5,7 @@ Serves fixture states from `fixture_states.py` on loopback threads, blocks every
 does not go to that loopback server, and writes full-page PNGs plus a JSON audit per shot:
 
     python tests/browser/capture.py --out <dir> [--states early demo] [--pages / /opportunities]
-        [--viewports 390x844 1440x900] [--engines chromium webkit] [--text-scale 1.0]
+        [--viewports 390x844 1440x900] [--engines chromium webkit] [--text-scale 1.0] [--open-details]
 
 The audit records body-level horizontal overflow, clipped or undersized interactive targets,
 whether the IBM Plex faces actually loaded, the top of the first market row, and any request
@@ -129,6 +129,8 @@ def main() -> int:
     ap.add_argument("--engines", nargs="+", default=["chromium"])
     ap.add_argument("--text-scale", type=float, default=1.0, help="root font-size multiplier (enlarged text)")
     ap.add_argument("--no-shots", action="store_true", help="audit only")
+    ap.add_argument("--open-details", action="store_true",
+                    help="open every <details> disclosure before the audit and screenshot (reviews the tables inside)")
     ap.add_argument("--src", help="source tree to import edge_lab from (default: this checkout)")
     ap.add_argument("--jpeg", action="store_true", help="write JPEG (quality 82) instead of PNG")
     ap.add_argument("--color-scheme", choices=("light", "dark"), default="dark",
@@ -163,6 +165,8 @@ def main() -> int:
                                 page.goto(base + path, wait_until="networkidle")
                                 if args.text_scale != 1.0:
                                     page.add_style_tag(content=f"html{{font-size:{args.text_scale * 100}%}}")
+                                if args.open_details:
+                                    page.evaluate("document.querySelectorAll('details').forEach(d => d.open = true)")
                                 page.evaluate("document.fonts.ready")
                                 audit = page.evaluate(AUDIT_JS)
                                 name = f"{state}_{engine}_{vp}_{slug(path)}"
