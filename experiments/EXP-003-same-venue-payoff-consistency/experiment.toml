@@ -1,0 +1,82 @@
+id = "EXP-003"
+title = "Family B: same-venue payoff consistency (complements, exhaustive partitions, nested thresholds) (DRAFT)"
+status = "DRAFT"
+owner = "jasonleetucker-code"
+created = "2026-09-25"
+
+hypothesis = """
+DRAFT, not preregistered. On one venue, sets of contracts whose settlement states are
+completely enumerated and proven (verified complements, mutually exclusive and exhaustive
+partitions, verified nested thresholds) are sometimes offered at executable asks whose all-in
+acquisition cost is below the worst-state payout net of state-dependent settlement costs and
+refunds, at a fillable size, often enough and for long enough to matter in dollars. The null
+hypothesis is that after fees, depth and quote timing no worst-state full-fill surplus exists.
+"""
+
+economic_rationale = """
+Order books for related contracts are quoted by different participants and may not be kept
+mutually consistent at every instant. A mathematical relationship needs no outcome-probability
+model. It still needs complete settlement-state proofs, native units, fees at the correct
+rounding scope, overlapping quote-validity times, depth, and a plan for partial or orphan legs.
+A conditional full-fill surplus is not captured arbitrage, and same-venue legs are not atomic.
+"""
+
+market = "TBD: an allowlist of same-venue relationship sets. First candidate: Kalshi KXHIGHNY daily bracket partitions and YES/NO complements from stored market-side books only (protocol.toml [universe])"
+decision_time = "TBD: every stored book-capture instant at which all legs have quotes with overlapping validity intervals; frozen before preregistration"
+model = "No probability model. Deterministic proof and pricing by the pure payoff evaluator (edge_lab.payoff_constraints, PR B): payout matrix over admissible settlement states, worst-state full-fill surplus at size"
+
+data_sources = [
+  "kalshi_public order books and market records already stored in the evidence store (market side only)",
+  "Captured market rules text and hashes for every leg; settlement identity (source, station, window, rounding, void provisions)",
+  "Versioned Kalshi fee schedule records (fee_schedules.py, ADR 0017)",
+  "Never: EXP-001 forecasts, EXP-001 outcomes or labels, the shadow ledger (protocol.toml [data_roles] prohibited_inputs)",
+]
+
+features = [
+  "TBD: per leg, the captured ask ladder, receipt time and source time; per set, the settlement-state proof and payout matrix",
+]
+
+success_criteria = [
+  "TBD: settled with a power/cost rationale before preregistration (protocol.toml [economics] minimum_useful_effect is MISSING owner/power input)",
+]
+
+failure_criteria = [
+  "TBD: preregistered futility rule (protocol.toml [stopping]); no worst-state surplus after fees is a valid, expected result",
+  "Any result that omits a settlement state, mixes native units, uses non-overlapping quote times, a mid or last price, or assumes atomic multi-leg execution is void",
+]
+
+risk_constraints = [
+  "Research on stored evidence and fixtures only: no orders, no credentials, no funded account (EXECUTION_NOT_AUTHORIZED)",
+  "Long legs only (nonnegative quantities); no short, sell or collateral economics in v1",
+  "Does not read EXP-001 forecasts, outcomes or ledger, and changes nothing about EXP-001",
+]
+
+limitations = [
+  "Stored KXHIGHNY books are captured only around the EXP-001 decision/recheck times and ADR 0030 observation targets; they are not a continuous record",
+  "Observed depth is an instantaneous ceiling; fill probability, queue position and leg timing are unknown",
+  "A worst-state surplus conditional on full fill ignores entry, counterparty, settlement and funding risk",
+]
+
+gates_required = [
+  "PREREGISTERED only after every protocol.toml decision field is settled and frozen before outcomes are viewed",
+  "Owner-set minimum useful economic effect or a documented power analysis",
+  "Complete settlement-state proof (including tie, void, refund, cancellation, correction and fallback states) for every allowlisted set",
+]
+
+[periods]
+train = "TBD: development window of stored books (chronologically first)"
+validation = "TBD: chronological validation window"
+test = "TBD: untouched future window of book captures, identified by event-day window as well as dataset hash (research_evidence)"
+
+[costs]
+fee_model = "TBD: Kalshi versioned fee schedule and claim basis at each capture time, applied once per leg fill path at the documented rounding scope"
+spread = "Crossed in full at captured asks; never mid or last price"
+
+[execution]
+fill_model = "TBD: per-leg depth walk; full-fill surplus reported separately from partial/orphan-leg exposure; legs are never assumed to fill together"
+latency = "TBD: leg quote-validity intervals must overlap; no sub-capture latency claim"
+
+[artifacts]
+spec = "experiments/EXP-003-same-venue-payoff-consistency/experiment.toml"
+protocol = "experiments/EXP-003-same-venue-payoff-consistency/protocol.toml"
+log = "experiments/EXP-003-same-venue-payoff-consistency/README.md"
