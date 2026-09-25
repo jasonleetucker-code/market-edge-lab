@@ -12,8 +12,9 @@ and status-file shapes, and returns a dashboard Config with a fixed clock:
   exhausted quota;
 - economics / economics_issues: SYNTHETIC NFL Odds captures and Kalshi KXNFLGAME books (Economic
   Evidence v1 Family A), complete or with a missed capture and skewed, missing and crossed books;
-- payoff / payoff_laptop: Family B over a copied EXP-003 registry, with a newer SYNTHETIC production result
-  (one conditional surplus) or only the committed laptop result (not production evidence);
+- payoff / payoff_production / payoff_laptop: Family B over a copied EXP-003 registry: a newer SYNTHETIC
+  production result (one conditional surplus), the committed production result, or only the committed laptop
+  result (not production evidence);
 - freshness / freshness_deferred: the Freshness Fabric artifact over the odds fixture, current or
   carried through the Kalshi close-tick guard.
 """
@@ -429,7 +430,17 @@ def payoff() -> tuple[Config, Path]:
 
 
 def payoff_laptop() -> tuple[Config, Path]:
-    """Family B as production shows it today: only the committed laptop result (not production evidence)."""
+    """Family B with only the committed laptop result (not production evidence)."""
+    from edge_lab.dashboard import sports_fixtures
+
+    cfg, root = odds_pilot()
+    registry = sports_fixtures.payoff_registry(root / "experiments", keep="payoff_scan_laptop_*")
+    now = sports_fixtures.PAYOFF_NOW
+    return replace(cfg, experiments_root=registry, clock=lambda: now), root
+
+
+def payoff_production() -> tuple[Config, Path]:
+    """Family B as production shows it after #103: the committed production result (and its sidecar)."""
     from edge_lab.dashboard import sports_fixtures
 
     cfg, root = odds_pilot()
@@ -443,4 +454,4 @@ BUILDERS = {"early": early, "demo": demo, "broken": broken, "odds": odds_pilot, 
             "freshness": freshness, "freshness_deferred": freshness_deferred,
             "polymarket": polymarket, "polymarket_issues": polymarket_issues,
             "economics": economics, "economics_issues": economics_issues,
-            "payoff": payoff, "payoff_laptop": payoff_laptop}
+            "payoff": payoff, "payoff_laptop": payoff_laptop, "payoff_production": payoff_production}

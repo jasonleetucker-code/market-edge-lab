@@ -517,8 +517,13 @@ directive), and the screenshots that justify it.
   components; no new component, token, CSS or navigation. New namespaced state words (EV_BSTATE_*, EV_SOURCE_*,
   EV_PROOF_*, EV_QUOTES_*, EV_CLAIM_*, EV_SETTLE_*, EV_STATE_BLOCKED), none green; the one positive claim reads
   "Conditional full-fill surplus · not captured". Page views write no evidence-use event: the producing CLI run
-  logs its own, and the display is registered in `research_evidence.KNOWN_UNLOGGED_CONSUMERS`. Screenshots:
-  fixture states `payoff` (a SYNTHETIC production result with one conditional surplus) and `payoff_laptop` (the
-  committed laptop result, as production shows it today) at 360x800 and 1440x900, closed and with every
-  disclosure open, and at 200% root text (Chromium emulation, not a physical phone), reviewed locally by the
-  author and described in the PR (not attached).
+  logs its own, and the display is registered in `research_evidence.KNOWN_UNLOGGED_CONSUMERS`. A
+  `<result>.source.json` sidecar is store-provenance metadata: it is skipped as a result and named in the
+  provenance disclosure. A set with no size evaluated says why (its quote validity and reasons). The set-construction
+  method is in the provenance (`payoff_constraints.set_construction_of` once #105 lands; until then the report's field,
+  and a file without one is legacy-every-anchor); a legacy result carries a note that its INVALID set counts include
+  mid-round anchor artifacts and are not comparable with per-round results. Screenshots:
+  fixture states `payoff_production` (the committed production result of #103), `payoff` (a SYNTHETIC production
+  result with one conditional surplus) and `payoff_laptop` (the committed laptop result, not production evidence)
+  at 360x800 and 1440x900, closed and with every disclosure open, and at 200% root text (Chromium emulation, not a
+  physical phone), reviewed locally by the author and described in the PR (not attached).

@@ -1237,6 +1237,9 @@ PAYOFF_LABEL = "PAYOFF RESEARCH — NOT A CAPTURED RESULT"
 PAYOFF_NOTE = ("A proof is about contract payoffs; a claim is about stored books at one size. Nothing here was "
                "executed: legs are never assumed atomic and no fill is simulated. A conditional full-fill surplus is "
                "not captured arbitrage, and no other claim ever shows a positive figure.")
+PAYOFF_LEGACY_NOTE = ("Set construction: legacy (every anchor). This scan built a set at every book receipt, so its "
+                      "INVALID set counts include mid-round anchor artifacts; they are not comparable with per-round "
+                      "results.")
 PAYOFF_ROWS_SHOWN = 4  # newest evaluated sets shown as rows; every set is in the disclosure table
 POSITIVE_CLAIM = "CONDITIONAL_FULL_FILL_SURPLUS"  # payoff_constraints.Claim: the only claim with a positive figure
 
@@ -1280,7 +1283,10 @@ def _payoff_set(e: dict) -> str:
              _payoff_settlement(s), _payoff_surplus(s)] for s in sizes]
     table = c.table(["basket", "claim", "reasons (NOT_EVALUATED included)", "all-in acquisition cost",
                      "settlement costs", "surplus"], rows, wrap=(1, 2, 4, 5), right=(0, 3),
-                    caption=f"Claims per size for {e.get('set_id')}")
+                    caption=f"Claims per size for {e.get('set_id')}") if sizes else c.empty_state(
+        "No size evaluated for this set", "The evaluator made no claim at any size: quotes "
+        + str(e.get("quote_validity") or "not recorded").lower() + " ("
+        + ("; ".join(str(r) for r in e.get("quote_reasons") or []) or "no reason recorded") + ").", kind="nd")
     orphans = c.table(["basket", "orphan-leg exposure (a leg that fills alone: worst-state value minus its cost)"],
                       [[c.num(pr.quantity(s.get("basket_quantity"))), _payoff_orphans(s)] for s in sizes],
                       wrap=(1,), right=(0,), caption=f"Orphan-leg exposure for {e.get('set_id')}")
@@ -1326,6 +1332,8 @@ def _payoff_view(v: dict, now: Any) -> str:
     if state == "STALE":
         out.append(c.empty_state("Result is stale", f"The newest evaluation is older than {v.get('stale_after_days')} "
                                  "days. Nothing here is current.", kind="warn"))
+    if v.get("set_construction") == d.PAYOFF_LEGACY_SET_CONSTRUCTION:
+        out.append(f'<p class="note">{esc(PAYOFF_LEGACY_NOTE)}</p>')
     counts = report.get("relationship_counts") if isinstance(report.get("relationship_counts"), dict) else {}
     claims = report.get("claim_counts_by_size_row") if isinstance(report.get("claim_counts_by_size_row"), dict) else {}
     out.append(c.facts([
@@ -1364,6 +1372,9 @@ def _payoff_view(v: dict, now: Any) -> str:
     identity = prov.get("store_identity") if isinstance(prov.get("store_identity"), dict) else {}
     out.append(c.disclosure("Provenance and verification", c.kv([
         ("file", c.code(v.get("file"))), ("verification", esc(v.get("verification"))),
+        ("store-provenance sidecar", c.code(v.get("sidecar")) if v.get("sidecar") else c.na("no sidecar beside "
+                                                                                             "this result")),
+        ("set construction", c.code(v.get("set_construction"))),
         ("source store", _source_badge(source)),
         ("store identity", esc(", ".join(f"{k} {val}" for k, val in sorted(identity.items())) or "—")),
         ("code version", c.code(prov.get("code_version"))), ("generated", esc(prov.get("generated_at_utc"))),

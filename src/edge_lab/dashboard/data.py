@@ -1369,9 +1369,24 @@ def economic_evidence_a(ctx: Context) -> Loaded:
 
 PAYOFF_EXPERIMENT = "EXP-003"
 PAYOFF_RESULT_GLOB = "payoff_scan_*.json"
+PAYOFF_SIDECAR_SUFFIX = ".source.json"  # metadata beside a result (how the scanned store was obtained): skipped
 PAYOFF_RESULT_MAX_BYTES = 8_000_000  # one result file (the committed laptop scan is ~40 KB)
 PAYOFF_RESULT_MAX_FILES = 64
 PAYOFF_STALE_AFTER = timedelta(days=8)  # coordinator decision (EE v1 Section B)
+
+
+PAYOFF_LEGACY_SET_CONSTRUCTION = "legacy-every-anchor"
+
+
+def payoff_set_construction(module: Any, obj: Any) -> str:
+    """How the scan built its book sets: `payoff_constraints.set_construction_of(obj)` when installed (PR 105);
+    until then the report's own `set_construction` field, and a file without one is legacy (every anchor)."""
+    helper = getattr(module, "set_construction_of", None)
+    if callable(helper):
+        return str(helper(obj))
+    report = obj.get("report") if isinstance(obj, dict) else None
+    value = report.get("set_construction") if isinstance(report, dict) else None
+    return value if isinstance(value, str) and value else PAYOFF_LEGACY_SET_CONSTRUCTION
 
 
 def _result_as_of(obj: Any) -> datetime | None:
@@ -1413,9 +1428,12 @@ def economic_evidence_b(ctx: Context) -> Loaded:
         return Loaded(ERROR, message=f"{exp.id} protocol unreadable: {short_error(exc, ctx.config)}")
     base["slot_status"] = protocol.get("slot_status")
     log = exp.path.parent / "evidence_use.jsonl"
-    files = sorted((exp.path.parent / "results").glob(PAYOFF_RESULT_GLOB)) if (exp.path.parent / "results").is_dir() \
-        else []
+    results_dir = exp.path.parent / "results"
+    listed = sorted(results_dir.glob(PAYOFF_RESULT_GLOB)) if results_dir.is_dir() else []
+    # `<result>.source.json` sidecars are provenance metadata beside a result, never a result envelope.
+    files = [f for f in listed if not f.name.endswith(PAYOFF_SIDECAR_SUFFIX)]
     base["files_seen"] = len(files)
+    base["sidecars"] = sorted(f.name for f in listed if f.name.endswith(PAYOFF_SIDECAR_SUFFIX))
     if len(files) > PAYOFF_RESULT_MAX_FILES:
         return Loaded(ERROR, message=f"{len(files)} result files exceed the Terminal's bound of "
                                      f"{PAYOFF_RESULT_MAX_FILES}; archive older results")
@@ -1450,6 +1468,9 @@ def economic_evidence_b(ctx: Context) -> Loaded:
     if not ok:
         return Loaded(ERROR, message=f"the newest result ({name}) does not verify: " + "; ".join(reasons)[:400])
     state = "STALE" if ctx.now - as_of > PAYOFF_STALE_AFTER else "POPULATED"
+    sidecar = name[: -len(".json")] + PAYOFF_SIDECAR_SUFFIX
+    base["sidecar"] = sidecar if sidecar in base["sidecars"] else None
+    base["set_construction"] = payoff_set_construction(module, obj)
     return Loaded(OK, {**base, "state": state, "file": name, "as_of_utc": as_of.isoformat().replace("+00:00", "Z"),
                        "stale_after_days": PAYOFF_STALE_AFTER.days, "result": obj,
                        "verification": "verify_result_provenance: passed"})

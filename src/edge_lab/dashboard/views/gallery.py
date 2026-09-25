@@ -169,6 +169,8 @@ def view(ctx: d.Context, p: pr.Params) -> cm.Page:
     pnow = sports_fixtures.PAYOFF_NOW
     parts.append(c.section("Economic evidence · B (SYNTHETIC production result with one conditional surplus)",
                            research.family_b_body(pv["production"], pnow), sid="g-evb-production"))
+    parts.append(c.section("Economic evidence · B (the committed production result)",
+                           research.family_b_body(pv["committed"], pnow), sid="g-evb-committed"))
     parts.append(c.section("Economic evidence · B (the committed laptop result: not production evidence)",
                            research.family_b_body(pv["laptop"], pnow), sid="g-evb-laptop"))
     parts.append(c.section("Economic evidence · B (stale / empty / blocked / error / unavailable)",

@@ -51,8 +51,24 @@ def body(root: Path, now=NOW) -> str:
     return research.family_b_body(load(root, now), now)
 
 
+def test_the_committed_production_result_is_shown_and_its_sidecar_skipped(tmp_path):
+    root = sf.payoff_registry(tmp_path)  # every committed file, as the repository holds them
+    loaded = load(root)
+    assert loaded.status == d.OK and loaded.value["state"] == "POPULATED"
+    assert loaded.value["file"] == "payoff_scan_production_edge-backup-5q41yg5u.json"
+    assert loaded.value["sidecar"] == "payoff_scan_production_edge-backup-5q41yg5u.source.json"
+    assert loaded.value["unreadable"] == []  # the .source.json sidecar is metadata, never read as a result
+    text = plain(body(root))
+    for needle in ("Production store", "Sets 38", "incomplete 38", "Quotes invalid",
+                   "store-provenance sidecar", "payoff_scan_production_edge-backup-5q41yg5u.source.json",
+                   "eu-20c877aea7e2500aa5037daee75a8cd8", "As of Sep 25, 12:59 AM EDT",
+                   "No size evaluated for this set", "exceeds 0:05:00 (stale)"):
+        assert needle in text, needle
+    assert "Not production evidence" not in text and "Positive claims 0" in text
+
+
 def test_the_committed_laptop_result_is_shown_and_labelled_not_production(tmp_path):
-    root = sf.payoff_registry(tmp_path)
+    root = sf.payoff_registry(tmp_path, keep="payoff_scan_laptop_*")
     loaded = load(root)
     assert loaded.status == d.OK and loaded.value["state"] == "POPULATED"
     assert loaded.value["file"] == "payoff_scan_laptop_store_2026-09-22.json"
@@ -72,7 +88,7 @@ def test_the_committed_laptop_result_is_shown_and_labelled_not_production(tmp_pa
 def test_the_newest_result_by_evaluation_as_of_wins_and_only_its_positive_claim_shows_a_figure(tmp_path):
     root = sf.payoff_registry(tmp_path, production=True, positive=True)
     loaded = load(root)
-    assert loaded.status == d.OK and loaded.value["file"] == "payoff_scan_SYNTHETIC_production_2026-09-24.json"
+    assert loaded.status == d.OK and loaded.value["file"] == "payoff_scan_SYNTHETIC_production_2026-09-25.json"
     html = body(root)
     text = plain(html)
     assert "Production store" in text and "Not production evidence" not in text
@@ -80,12 +96,14 @@ def test_the_newest_result_by_evaluation_as_of_wins_and_only_its_positive_claim_
     assert "$0.03" in text and "conditional on every leg filling · not captured arbitrage" in text
     assert html.count("conditional on every leg filling") == 1  # one positive claim, one figure (claim-adjusted)
     # every other claim shows no figure: the surplus column is unavailable with its reason
+    evaluations = sorted(loaded.value["result"]["report"]["evaluations"], key=lambda e: e["as_of_utc"], reverse=True)
+    shown_rows = sum(len(e["sizes"]) for e in evaluations[:research.PAYOFF_ROWS_SHOWN])
     # (the unavailable marker carries its reason twice: title and aria-label)
-    assert html.count("no positive claim: the evaluator made none at this size") == 2 * 5
+    assert html.count("no positive claim: the evaluator made none at this size") == 2 * (shown_rows - 1)
 
 
 def test_no_positive_figure_without_a_positive_claim(tmp_path):
-    text = plain(body(sf.payoff_registry(tmp_path)))
+    text = plain(body(sf.payoff_registry(tmp_path, keep="payoff_scan_laptop_*")))
     assert "Positive claims 0" in text and "Conditional full-fill surplus · not captured" not in text
     assert "−$1.06" not in text and "−$1.14" not in text  # before-fees and upper-bound surpluses never shown
 
@@ -93,7 +111,7 @@ def test_no_positive_figure_without_a_positive_claim(tmp_path):
 def test_stale_empty_blocked_error_and_unavailable_states(tmp_path):
     stale = plain(body(sf.payoff_registry(tmp_path / "s"), NOW + timedelta(days=10)))
     assert "Result is stale" in stale and "older than 8 days" in stale and "Stale · not current" in stale
-    fresh = load(sf.payoff_registry(tmp_path / "f"), NOW + timedelta(days=5))  # 7.6 days after its books
+    fresh = load(sf.payoff_registry(tmp_path / "f"), NOW + timedelta(days=5))  # 5.3 days after its books
     assert fresh.value["state"] == "POPULATED"  # 8 days is the threshold
     empty = plain(body(sf.payoff_registry(tmp_path / "e", results=False)))
     assert "No EXP-003 result recorded yet" in empty
@@ -108,7 +126,7 @@ def test_stale_empty_blocked_error_and_unavailable_states(tmp_path):
 
 def test_a_newer_file_that_does_not_verify_is_an_error_not_a_silent_fallback(tmp_path):
     root = sf.payoff_registry(tmp_path, production=True)
-    newest = next(root.glob("EXP-003-*/results/payoff_scan_SYNTHETIC_production_*.json"))
+    newest = next(root.glob("EXP-003-*/results/payoff_scan_SYNTHETIC_production_*.json"))  # the newest
     obj = json.loads(newest.read_text(encoding="utf-8"))
     obj["provenance"]["source_store"] = "production"
     obj["provenance"]["evidence_use_event_id"] = "eu-" + "0" * 32  # not in the log
@@ -128,6 +146,22 @@ def test_unreadable_files_and_the_file_bound(tmp_path, monkeypatch):
     assert load(root).status == d.ERROR
 
 
+def test_set_construction_is_shown_and_legacy_files_carry_the_comparability_note(tmp_path, monkeypatch):
+    legacy = sf.payoff_registry(tmp_path / "legacy")  # the committed files predate `set_construction`
+    loaded = load(legacy)
+    assert loaded.value["set_construction"] == d.PAYOFF_LEGACY_SET_CONSTRUCTION
+    text = plain(body(legacy))
+    assert "set construction legacy-every-anchor" in text and plain(research.PAYOFF_LEGACY_NOTE) in text
+    per_round = sf.payoff_registry(tmp_path / "round", production=True)
+    assert load(per_round).value["set_construction"] == "one-set-per-capture-round-v1"
+    text = plain(body(per_round))
+    assert "set construction one-set-per-capture-round-v1" in text and "mid-round anchor artifacts" not in text
+    # once PR 105's helper is installed it is the only source
+    from edge_lab import payoff_constraints
+    monkeypatch.setattr(payoff_constraints, "set_construction_of", lambda obj: "HELPER-SAYS", raising=False)
+    assert load(legacy).value["set_construction"] == "HELPER-SAYS"
+
+
 def test_page_views_write_nothing_and_never_touch_the_repository(tmp_path):
     root = sf.payoff_registry(tmp_path)
     log = next(root.glob("EXP-003-*/evidence_use.jsonl"))
@@ -140,7 +174,7 @@ def test_page_views_write_nothing_and_never_touch_the_repository(tmp_path):
     assert hashlib.sha256(repo_log.read_bytes()).hexdigest() == repo_before
 
 
-@pytest.mark.parametrize("name", ["payoff", "payoff_laptop"])
+@pytest.mark.parametrize("name", ["payoff", "payoff_laptop", "payoff_production"])
 def test_the_research_tab_renders_section_b(name):
     cfg, root = fixture_states.BUILDERS[name]()
     try:
@@ -150,7 +184,7 @@ def test_the_research_tab_renders_section_b(name):
         assert out["s"] == "200 OK"
         part = page[page.index('aria-labelledby="ev-b-h"'):]
         text = plain(part[:part.index("</section>")])
-        assert ("Production store" in text) == (name == "payoff")
+        assert ("Production store" in text) == (name != "payoff_laptop")
         assert ("Not production evidence" in text) == (name == "payoff_laptop")
     finally:
         shutil.rmtree(root, ignore_errors=True)
@@ -162,7 +196,7 @@ def test_the_gallery_shows_every_family_b_state():
     page = b"".join(make_app(cfg)({"REQUEST_METHOD": "GET", "PATH_INFO": "/gallery", "QUERY_STRING": "",
                                    "HTTP_HOST": "127.0.0.1:8765"}, lambda s, h: out.setdefault("s", s))).decode()
     assert out["s"] == "200 OK"
-    for sid in ("g-evb-production", "g-evb-laptop", "g-evb-states"):
+    for sid in ("g-evb-production", "g-evb-committed", "g-evb-laptop", "g-evb-states"):
         assert f'aria-labelledby="{sid}"' in page
     part = page[page.index('aria-labelledby="g-evb-states"'):]
     text = plain(part[:part.index("</section>")])

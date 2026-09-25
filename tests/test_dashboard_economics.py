@@ -89,7 +89,7 @@ def test_populated_section_sits_in_the_research_tab_after_the_experiments(state)
                    "Hidden · holdout protection", "episodes not evaluable", "Conditional mapping · not equivalent",
                    "YES pays $0.50 on a tie", "Not defensible", "FEE_UNSUPPORTED", "signals and fills not evaluated",
                    "Settle and freeze EXP-002", "Draft",
-                   "Economic evidence · B", "Laptop store · not production evidence", "Not production evidence",
+                   "Economic evidence · B", "Production store", "payoff_scan_production_edge-backup-5q41yg5u.json",
                    "PAYOFF RESEARCH — NOT A CAPTURED RESULT",
                    "Size ladder over the latest paired book", "Fee unsupported", "Insufficient evidence", "Protocol-eligible", "Protocol attrition (EXP-002)",
                    "Visible depth is an instantaneous ceiling, not capacity"):

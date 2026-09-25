@@ -253,12 +253,14 @@ PAYOFF_NOW = datetime(2026, 9, 25, 12, 0, tzinfo=UTC)  # three days after the co
 
 
 def payoff_registry(root: Path | None = None, *, production: bool = False, positive: bool = False,
-                    slot_status: str | None = None, results: bool = True, tamper: bool = False) -> Path:
-    """A throwaway experiment registry holding a copy of the repository's EXP-003 (protocol, evidence-use log
-    and the committed laptop scan). `production` adds a newer SYNTHETIC production-labelled result, logged in
-    the copy's own log exactly as the payoff-scan CLI logs one; `positive` gives it one conditional full-fill
-    surplus row; `slot_status` rewrites the protocol's slot; `results=False` removes every result file;
-    `tamper` edits the newest result after it was hashed. The repository's files are never written."""
+                    slot_status: str | None = None, results: bool = True, tamper: bool = False,
+                    keep: str | None = None) -> Path:
+    """A throwaway experiment registry holding a copy of the repository's EXP-003 (protocol, evidence-use log,
+    the committed result files and their `.source.json` sidecars). `keep` (a glob) removes every other result
+    file; `production` adds a newer SYNTHETIC production-labelled result, logged in the copy's own log exactly
+    as the payoff-scan CLI logs one; `positive` gives it one conditional full-fill surplus row; `slot_status`
+    rewrites the protocol's slot; `results=False` removes every result file; `tamper` edits the newest result
+    (by evaluation as-of) after it was hashed. The repository's files are never written."""
     import copy
     import json
     import shutil
@@ -280,14 +282,23 @@ def payoff_registry(root: Path | None = None, *, production: bool = False, posit
     if not results:
         shutil.rmtree(results_dir)
         return root
-    newest = next(results_dir.glob("payoff_scan_*.json"))
+    if keep is not None:
+        for f in results_dir.glob("payoff_scan_*"):
+            if not f.match(keep):
+                f.unlink()
+
+    def as_of(f: Path) -> str:
+        return max(str(e.get("as_of_utc")) for e in json.loads(f.read_text(encoding="utf-8"))["report"]["evaluations"])
+    newest = max((f for f in results_dir.glob("payoff_scan_*.json") if not f.name.endswith(".source.json")), key=as_of)
     if production:
         base = json.loads(newest.read_text(encoding="utf-8"))
         report = copy.deepcopy(base["report"])
         report.pop("report_sha256", None)
+        report["set_construction"] = "one-set-per-capture-round-v1"  # the per-round format (PR 105)
         for i, e in enumerate(report["evaluations"]):
             e["set_id"] = f"SYNTHETIC-{e['set_id']}"
-            e["as_of_utc"] = f"2026-09-24T22:3{i}:00+00:00"
+            # newer than every committed result; the last set is the newest (and carries any positive claim)
+            e["as_of_utc"] = (datetime(2026, 9, 25, 10, 0, tzinfo=UTC) + timedelta(minutes=i)).isoformat()
         if positive:
             row = report["evaluations"][-1]["sizes"][0]
             row.update(claim="CONDITIONAL_FULL_FILL_SURPLUS", claim_adjusted_surplus="0.0300",
@@ -306,7 +317,7 @@ def payoff_registry(root: Path | None = None, *, production: bool = False, posit
         rev.record_use(exp / "evidence_use.jsonl", use)
         envelope = pc.result_envelope(report, generated_at_utc="2026-09-25T00:00:00+00:00", source_store="production",
                                       code_version="SYNTHETIC", evidence_use_event_id=use.event_id)
-        newest = results_dir / "payoff_scan_SYNTHETIC_production_2026-09-24.json"
+        newest = results_dir / "payoff_scan_SYNTHETIC_production_2026-09-25.json"
         newest.write_text(json.dumps(envelope, indent=2, sort_keys=True) + "\n", encoding="utf-8", newline="\n")
     if tamper:
         obj = json.loads(newest.read_text(encoding="utf-8"))
@@ -329,7 +340,8 @@ def synthetic_payoff_views() -> dict[str, Any]:
     def load(root: Path, now: datetime = PAYOFF_NOW) -> Any:
         return Context(Config(experiments_root=root, clock=lambda: now)).economic_b
     _PAYOFF_VIEWS.update({
-        "laptop": load(payoff_registry()),
+        "committed": load(payoff_registry()),
+        "laptop": load(payoff_registry(keep="payoff_scan_laptop_*")),
         "production": load(payoff_registry(production=True, positive=True)),
         "stale": load(payoff_registry(), PAYOFF_NOW + timedelta(days=10)),
         "empty": load(payoff_registry(results=False)),
