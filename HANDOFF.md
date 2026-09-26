@@ -156,9 +156,9 @@ remains MANUAL EMERGENCY FALLBACK ONLY.
 - **Production evidence:** deployed and verified; the first valid day and the first real
   shadow bookkeeping are recorded; the first real settlement is recorded and verified
   (2026-09-25, KXHIGHNY-26SEP24), with an F09 checkpoint.
-- **Research evidence:** 2 valid Stage B days (2026-09-24, 2026-09-25; `verify_production.sh`
-  COLLECTOR_HEALTH, 2026-09-25 01:57Z, as recorded above). The EXP-001 180/365-valid-day looks
-  are far off, and nothing here is evidence of an edge.
+- **Research evidence:** 3 valid Stage B days (`latest.json` valid_days = 3, `verify_production.sh`
+  VALID_DAY_OBSERVED at 86e528b, 2026-09-26 01:40Z). The EXP-001 180/365-valid-day looks are far off,
+  and nothing here is evidence of an edge.
 - **Gate 7 is NOT PASSED.** No Gate 8 or real-money work was done.
 
 ## 30-day plan (issue #11, target 2026-10-22)

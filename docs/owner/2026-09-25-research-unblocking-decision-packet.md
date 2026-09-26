@@ -32,7 +32,7 @@ Supporting documents, each independently reviewed before merge:
 | Stale "evaluator planned" references | **Fixed** (#111, #115, and OWNER_IDEAS in this PR) | Stale documentation | Done | — | — | — |
 | Backup retention | **PROPOSED** `proposed-v1`; dry-run planner merged; deletes nothing | **Owner authorization** | Owner (Decision 2) | Decide by about **2026-10-08** (disk arithmetic in #113 B3) | #113 B2–B3 | Backups keep accumulating; 67 GB free |
 | Off-host copy | **None exists** | Owner authorization | Owner (Decision 2) | Option O1: a manual weekly pull to the laptop, $0 | — | — |
-| "Backup retention before any new collector" (OWNER_IDEAS item 4) | Premises partly stale (#113 §C) | Stale documentation | Coordinator records; the owner may overrule | Amended to byte-based triggers (PROPOSED, recorded in OWNER_IDEAS) | #113 §C | — |
+| "Backup retention before any new collector" (OWNER_IDEAS item 4) | Premises partly stale (#113 §C) | Stale documentation | Coordinator records; the owner may overrule | Amendment to byte-based triggers PROPOSED (recorded in OWNER_IDEAS); the prerequisite stands until the owner decides | #113 §C | — |
 | #107 same-run settlement | Deployed; **not yet observed** in production | Time-based observation | Coordinator | Verify at the run that first fetches the KXHIGHNY-26SEP25 result (from 2026-09-26 11:15 ET) | Settlement entries whose evidence receipt falls inside the same run, with a cutoff equal to the refresh receipt | — |
 | KXHIGHNY-26SEP25 positions (2 per account) | Pending | Time-based observation | Coordinator | Same check as #107 | Event, outcome, payout, fees, equity, duplicates, hash chain | — |
 | First Polymarket US research capture | Due 2026-09-26 16:53Z | Time-based observation | Coordinator | Verify from stored rows per runbook §5e | Target time, receipt, book count, misses, freshness, RELATED_NOT_EQUIVALENT | — |
@@ -56,9 +56,13 @@ remain. Everything technical is already recommended and reviewed.
   scenarios run from $1.70 to $382.50 a season, so reaching it needs verified capacity beyond
   250 contracts. Option B is a bar for continuing *beyond research*, not for doing the research.
 - **Owner hours:** **6 h to 2026-10-22** (pilot report 2 h, freeze review 2 h, buffer 2 h).
-  - **Extension:** +8 h to 2027-01-13, only if pairing yield ≥ 50% and the pilot shows the test fits
-    weeks 7–18.
-  - **Stop:** yield < 50% after fixes, or the pessimistic detectable effect is out of reach.
+  - **Extension:** +8 h to 2027-01-13, only if pairing yield ≥ 50% and the pilot-based sensitivity
+    shows the markout test fits weeks 7–18 at the pessimistic ICC.
+  - **Stop:** any of these (#111 C.4):
+    - yield < 50% after fixes;
+    - the pessimistic detectable effect over the remaining weeks is above 1 cent;
+    - interim futility (#111 A.H);
+    - the hours are spent.
 - **Capital:** none approved and none requested. Every amount is ILLUSTRATIVE.
 
 **Family B (EXP-003, same-venue payoffs).**
@@ -76,15 +80,18 @@ Suggested wording:
 
 ### Decision 2: backup retention and off-host copy
 
-**Retention: `proposed-v1`, for evidence-store local backups only.**
+**Retention: `proposed-v1`, for evidence-store local backups only.** A bundle counts as **good**
+only when a recorded VERIFIED_BACKUP_AND_RESTORE report matches it.
 - **Keep:**
-  - every valid bundle younger than 48 h;
-  - the 3 newest valid bundles;
-  - the newest bundle per UTC day for 7 days, per ISO week for 8 weeks, and per month for 12 months.
+  - every good bundle younger than 48 h;
+  - the 3 newest good bundles;
+  - the newest good bundle per UTC day for 7 days, per ISO week for 8 weeks, and per month for 12
+    months.
 - **Keep forever:** the first bundle, both bundles around every schema change, the bundles linked to
   F09 checkpoints, pinned baselines, and **every ledger bundle**.
-- **Never delete** a quarantined, active or not-covered bundle. Delete nothing while the newest
-  valid bundle is older than 36 h.
+- **Never delete** a quarantined, active, **unverified** or not-covered bundle. Covered means a newer
+  good copy of the **same store** holds all its rows. Delete nothing while the newest **good**
+  bundle is older than 36 h.
 - **How deletion would happen:** manual only, from a reviewed dry-run report, by a reviewed apply
   step that restore-verifies what it relies on first. No timer deletes.
 - **Effect:**
@@ -105,14 +112,15 @@ unbounded. **Recommended O1 ($0):** a manual weekly pull of the newest verified 
 laptop, verified there, keeping the last 4. The paid option O2 (object storage) is not recommended
 yet.
 
-Suggested wording (#113 B8):
+Suggested wording (abridged; the full terms are `docs/deploy/CAPTURE_AND_BACKUP_APPROVAL_PLAN.md`
+B8, and approving this approves those terms):
 
 > I approve backup retention policy proposed-v1 for the evidence store's local backups (manual,
 > reviewed apply only; no timer deletes; review after 30 days), and I [approve / decline] a manual
 > weekly off-host pull to the laptop (O1).
 
-**Smaller alternative:** approve no deletion yet, only O1. That buys about 3–6 weeks before this
-returns.
+**Smaller alternative:** approve no deletion yet, only O1 and the size-aware timeout. That buys
+about 3–6 weeks before this returns.
 
 ### Not a decision now
 

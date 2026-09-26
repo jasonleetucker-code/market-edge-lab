@@ -115,9 +115,10 @@ review/stop date. Existing authorized collectors continue until an explicit revi
      ADR (design only);
    - PR C: paired sports evidence from stored data, a data-gap report, economics/capacity and a
      compact Terminal view.
-3. Backup growth and retention (item 4 below). **2026-09-25 update:** the blanket "before any
-   new collector" prerequisite is AMENDED (PROPOSED, `docs/deploy/CAPTURE_AND_BACKUP_APPROVAL_PLAN.md`
-   §C) to byte-based triggers. The owner decision on retention `proposed-v1` and an off-host copy is
+3. Backup growth and retention (item 4 below). **2026-09-25 update:** an amendment of the
+   blanket "before any new collector" prerequisite to byte-based triggers is PROPOSED
+   (`docs/deploy/CAPTURE_AND_BACKUP_APPROVAL_PLAN.md` §C, #113). The prerequisite stands until the
+   owner decides; the owner's explicit NFL approval governs that stream. The owner decision on retention `proposed-v1` and an off-host copy is
    due by about 2026-10-08 (decision packet Decision 2).
 4. W0 operating verification (coordinator lane).
 
