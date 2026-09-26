@@ -350,10 +350,14 @@ Applies to **evidence bundles only**, per store directory.
 | F09 checkpoints | **forever**: the ledger bundle whose chain heads equal a checkpoint's, or else the bundles either side of it; and the evidence bundles either side of each checkpoint |
 | Known-good baselines | **forever**: the first bundle of each store, and any pinned bundle |
 
-**Proposed initial pins:**
+**Initial pins.** These are committed in code as `backup.RETENTION_PINS_PROPOSED_V1`. They always apply, and an apply refuses a report without them:
 - `edge-backup-eqfiomf5` (first production activation);
 - `ledger/edge-backup-lqs5j63_` and `ledger/edge-backup-sdi31qqw`. Ad-hoc copies of these were taken to the laptop at F09 and checked there. That is not an off-host backup policy (B2, B6).
-- the bundles around the first real settlement (2026-09-25).
+- the bundles around the first real settlement (2026-09-25; the settlement ran at 11:15 ET, 15:15Z):
+  - the last evidence bundles before it: `edge-backup-iu9x5w73` (08:02Z) and `edge-backup-gci308lm` (08:03Z);
+  - the first after it: `edge-backup-lgw9jmww` (20:16Z) and `edge-backup-wu3982g7` (20:17Z).
+
+**F09-linked bundles are protected only through the canonical checkpoints.** An apply requires that the dry run used the deployed code's committed checkpoint directory, and that it is non-empty. So every F09 checkpoint must be committed and deployed before an apply (runbook §7).
 
 **Never auto-deleted:**
 - **ledger bundles** (0.26 MB each; revisit above 10 MB);
@@ -438,7 +442,7 @@ python -m edge_lab.backup retention-plan --root /var/lib/market-edge-lab/backups
 - `newest-verified` on the server picks the newest restore-verified bundles.
 - `scp` pulls them to `C:\Users\jason\market-edge-offhost\<date>\`.
 - `offhost-verify` on the laptop checks each bundle's bytes against its manifest, then restores it into a disposable database.
-- Only the last 4 verified pulls are kept.
+- Only the last 4 **verified** pulls are kept. `offhost-verify` writes `VERIFIED.json` only when every bundle passes, and `offhost-prune` keeps the 4 newest pulls that carry it. A failed pull is never counted and never removed by the tool, so it cannot displace a verified one.
 
 The text below is the original proposal.
 

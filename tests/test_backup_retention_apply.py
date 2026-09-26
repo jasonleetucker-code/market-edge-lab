@@ -74,10 +74,18 @@ def site(tmp_path):
         (root / name / backup.MANIFEST_NAME).write_text(json.dumps(manifest), encoding="utf-8")
         names.append(name)
     reports = _journal(tmp_path / "backup-reports.txt", root)
-    return {"tmp": tmp_path, "live": live, "root": root, "real": real, "names": names, "reports": reports}
+    # The canonical F09 checkpoint directory (in production the deployed app's committed set). One checkpoint,
+    # taken between d010 and d011, so both are F09-linked (the evidence bracket).
+    cps = tmp_path / "app" / "docs" / "engineering" / "ledger_checkpoints"
+    cps.mkdir(parents=True)
+    (cps / "2026-11-10T100000Z.json").write_text(json.dumps({
+        "schema": "edge-lab-ledger-checkpoint/1", "created_at_utc": (NOW - timedelta(days=50, hours=1)).isoformat(),
+        "accounts": {"acct": {"head_entry_hash": "h", "entries": 1, "head_seq": 1}}}), encoding="utf-8")
+    return {"tmp": tmp_path, "live": live, "root": root, "real": real, "names": names, "reports": reports, "cps": cps}
 
 
 def dry_run(site, now=NOW, **kw) -> tuple[Path, str, dict]:
+    kw.setdefault("checkpoints_dir", site["cps"])
     report = backup.build_plan(site["root"], now=now, policy=POLICY, verify_reports=site["reports"], **kw)
     path = site["tmp"] / f"plan-{now:%Y%m%dT%H%M%S}.json"
     path.write_text(json.dumps(report, indent=2, sort_keys=True), encoding="utf-8")
@@ -94,6 +102,7 @@ def state(path: Path) -> list[tuple]:
 
 
 def apply(site, path, confirm, now=NOW + timedelta(minutes=5), **kw):
+    kw.setdefault("canonical_checkpoints", site["cps"])
     return backup.retention_apply(site["root"], path, confirm, now=now, **kw)
 
 
@@ -213,7 +222,7 @@ def _first_candidate(report):
     (lambda r: _first_candidate(r).update(reasons=["ACTIVE_OR_IN_PROGRESS: no manifest yet"]), "PROTECTED"),
     (lambda r: r["checkpoints"].append({"checkpoint": "x.json", "kind": "evidence", "match": "EVIDENCE_BRACKET",
                                         "bundles": [_first_candidate(r)["name"]]}), "PROTECTED"),
-    (lambda r: r["inputs"].update(pins=[_first_candidate(r)["name"]]), "PROTECTED"),
+    (lambda r: r["inputs"].update(pins=sorted([*POLICY.pins, _first_candidate(r)["name"]])), "PROTECTED"),
     (lambda r: _first_candidate(r).update(covered_by=None), "PROTECTED"),
     (lambda r: r["flags"].append("NEWEST_GOOD_STALE:evidence"), "STALE_FREEZE"),
 ])
@@ -234,7 +243,7 @@ def test_a_report_for_another_root_refuses(site, tmp_path):
     shutil.copytree(site["root"], other)
     before = state(other)
     with pytest.raises(backup.ApplyRefused, match="ROOT_MISMATCH"):
-        backup.retention_apply(other, path, digest, now=NOW + timedelta(minutes=5))
+        backup.retention_apply(other, path, digest, now=NOW + timedelta(minutes=5), canonical_checkpoints=site["cps"])
     assert state(other) == before
 
 
@@ -252,6 +261,74 @@ def test_the_planner_never_reaches_the_apply_step():
     reachable = set(_reachable_planner_functions())
     assert "build_plan" in reachable
     assert not {"retention_apply", "_apply_main", "_log", "verify_backup", "offhost_verify"} & reachable
+
+
+# --------------------------------------------------------------------------- F09 checkpoints and pins (review BLOCKER)
+
+
+def test_f09_linked_bundles_survive_because_apply_requires_the_canonical_checkpoints(site):
+    """The reviewer's repro: a dry run without --checkpoints made d010 a candidate. The apply refuses it."""
+    with_cps = dry_run(site)[2]
+    rows = {r["name"]: r for r in with_cps["bundles"]}
+    assert rows["edge-backup-d010"]["decision"] == "KEEP"
+    assert any(x.startswith("CHECKPOINT_EVIDENCE_BRACKET") for x in rows["edge-backup-d010"]["reasons"])
+    path, digest, report = dry_run(site, checkpoints_dir=None)
+    assert "edge-backup-d010" in candidates(report)  # what an unguarded apply would have deleted
+    assert_refused(site, "CHECKPOINTS_NOT_CANONICAL", lambda: apply(site, path, digest))
+    assert (site["root"] / "edge-backup-d010").is_dir()
+
+
+def test_a_non_canonical_or_empty_checkpoint_directory_refuses(site):
+    other = site["tmp"] / "other-checkpoints"
+    shutil.copytree(site["cps"], other)
+    path, digest, _ = dry_run(site, checkpoints_dir=other)  # same files, but not the committed directory
+    assert_refused(site, "CHECKPOINTS_NOT_CANONICAL", lambda: apply(site, path, digest))
+    empty = site["tmp"] / "empty-cps"
+    empty.mkdir()
+    path2, digest2, _ = dry_run(site, checkpoints_dir=empty)
+    assert_refused(site, "CHECKPOINTS_NOT_CANONICAL",
+                   lambda: apply(site, path2, digest2, canonical_checkpoints=empty))
+
+
+def test_changed_committed_checkpoints_refuse(site):
+    path, digest, _ = dry_run(site)
+    (site["cps"] / "2026-12-01T000000Z.json").write_text(json.dumps({
+        "created_at_utc": "2026-12-01T00:00:00+00:00", "accounts": {"acct": {"head_entry_hash": "h2"}}}))
+    assert_refused(site, "INPUTS_CHANGED", lambda: apply(site, path, digest))
+
+
+def test_the_canonical_checkpoint_directory_is_the_running_codes_committed_set():
+    assert backup.CANONICAL_CHECKPOINTS.parts[-3:] == ("docs", "engineering", "ledger_checkpoints")
+    assert sorted(backup.CANONICAL_CHECKPOINTS.glob("*.json"))  # this checkout commits the F09 checkpoints
+
+
+def test_the_policy_pins_are_committed_and_always_applied(site):
+    assert set(POLICY.pins) >= {"edge-backup-eqfiomf5", "edge-backup-iu9x5w73", "edge-backup-gci308lm"}
+    victim = site["names"][20]
+    pinned = site["root"] / "edge-backup-iu9x5w73"
+    (site["root"] / victim).rename(pinned)  # a real baseline name in the history
+    _journal(site["reports"], site["root"])
+    report = dry_run(site)[2]  # no --pin at all
+    row = {r["name"]: r for r in report["bundles"]}["edge-backup-iu9x5w73"]
+    assert row["decision"] == "KEEP" and any(x.startswith("PINNED_BASELINE") for x in row["reasons"])
+    assert "edge-backup-iu9x5w73" in report["policy_pins_found"] and report["pins_not_found"] == []
+    assert set(report["inputs"]["pins"]) >= set(POLICY.pins)
+
+
+def test_a_report_without_the_policy_pins_refuses(site):
+    path, _, report = dry_run(site)
+    report["inputs"]["pins"] = []
+    path.write_text(json.dumps(report, indent=2, sort_keys=True), encoding="utf-8")
+    digest = hashlib.sha256(path.read_bytes()).hexdigest()
+    assert_refused(site, "PINS_MISSING", lambda: apply(site, path, digest))
+
+
+def test_the_report_age_limit_cannot_be_raised_above_30_minutes(site, capsys):
+    path, digest, _ = dry_run(site)
+    assert_refused(site, "MAX_AGE_INVALID", lambda: apply(site, path, digest, max_age=timedelta(minutes=31)))
+    code = backup.main(["retention-apply", "--root", str(site["root"]), "--report", str(path), "--confirm", digest,
+                        "--max-report-age-min", "60"])
+    assert code == 2 and "MAX_AGE_INVALID" in json.loads(capsys.readouterr().out)["reason"]
 
 
 # --------------------------------------------------------------------------- O1 helpers
@@ -286,13 +363,46 @@ def test_offhost_verify_checks_copied_bundles_locally(site, capsys):
     assert backup.main(["offhost-verify", "--dir", str(pull)]) == 0
     out = json.loads(capsys.readouterr().out)
     assert out["state"] == "VERIFIED" and {b["store_kind"] for b in out["bundles"]} == {"evidence", "ledger"}
-    # A damaged copy fails; a pull missing the ledger is incomplete.
+    marker = json.loads((pull / backup.OFFHOST_MARKER).read_text())
+    assert marker["state"] == "VERIFIED" and len(marker["bundles"]) == 2
+    # A damaged copy fails, and its pull no longer counts as verified; a pull missing the ledger is incomplete.
     db = pull / site["real"].name / backup.DB_NAME
     data = bytearray(db.read_bytes())
     data[-1] ^= 0xFF
     db.write_bytes(bytes(data))
     assert backup.offhost_verify(pull)["state"] == "FAILED"
+    assert not (pull / backup.OFFHOST_MARKER).exists()
     only = site["tmp"] / "only-evidence"
     shutil.copytree(site["real"], only / site["real"].name)
-    assert backup.offhost_verify(only)["state"] == "INCOMPLETE"
+    assert backup.offhost_verify(only)["state"] == "INCOMPLETE" and not (only / backup.OFFHOST_MARKER).exists()
     assert backup.offhost_verify(site["tmp"] / "empty-dir-not-there")["state"] == "FAILED"
+
+
+def _pull(base: Path, name: str, verified: bool) -> Path:
+    d = base / name
+    (d / "edge-backup-x").mkdir(parents=True)
+    (d / "edge-backup-x" / backup.DB_NAME).write_bytes(b"copy")
+    if verified:
+        (d / backup.OFFHOST_MARKER).write_text(json.dumps({"state": "VERIFIED", "bundles": [{"bundle": "x"}]}))
+    return d
+
+
+def test_offhost_prune_keeps_the_four_newest_verified_pulls_and_never_counts_a_failed_one(tmp_path, capsys):
+    base = tmp_path / "market-edge-offhost"
+    for day in ("2026-09-27", "2026-10-04", "2026-10-11", "2026-10-18", "2026-10-25"):
+        _pull(base, day, verified=True)
+    _pull(base, "2026-11-01", verified=False)  # the newest pull failed verification
+    (base / "2026-10-26").mkdir()
+    (base / "2026-10-26" / backup.OFFHOST_MARKER).write_text('{"state": "FAILED"}')  # not a VERIFIED marker
+    (base / "notes").mkdir()  # not a dated pull: never touched
+    listed = backup.offhost_prune(base, keep=4)
+    assert listed["kept_verified"] == ["2026-10-25", "2026-10-18", "2026-10-11", "2026-10-04"]
+    assert listed["remove"] == ["2026-09-27"] and not listed["applied"]
+    assert sorted(listed["not_verified_left_alone"]) == ["2026-10-26", "2026-11-01"]
+    assert (base / "2026-09-27").is_dir()  # listing only
+    assert backup.main(["offhost-prune", "--base", str(base), "--keep", "4", "--apply"]) == 0
+    assert json.loads(capsys.readouterr().out)["remove"] == ["2026-09-27"]
+    assert sorted(p.name for p in base.iterdir()) == ["2026-10-04", "2026-10-11", "2026-10-18", "2026-10-25",
+                                                     "2026-10-26", "2026-11-01", "notes"]
+    with pytest.raises(ValueError):
+        backup.offhost_prune(base, keep=0)

@@ -153,8 +153,10 @@ def test_the_planner_has_no_deletion_code_path():
                     modes = [a for a in node.args if isinstance(a, ast.Constant) and isinstance(a.value, str)]
                     modes += [k.value for k in node.keywords if k.arg == "mode" and isinstance(k.value, ast.Constant)]
                     assert all(not set(str(m.value)) & set("wax+") for m in modes), f"{fname} opens for writing"
-    parser_source = inspect.getsource(backup.main)
-    assert "--apply" not in parser_source and "--delete" not in parser_source
+    # retention-plan accepts no apply/delete option (deletion is only the separate retention-apply command).
+    for option in ("--apply", "--delete", "--confirm"):
+        with pytest.raises(SystemExit):
+            backup.main(["retention-plan", "--root", ".", option])
 
 
 def test_the_cli_changes_nothing_even_when_every_deletion_api_would_work(tmp_path, monkeypatch, capsys):

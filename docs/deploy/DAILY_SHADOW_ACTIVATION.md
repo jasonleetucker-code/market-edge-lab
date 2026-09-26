@@ -598,9 +598,22 @@ and keep the data: `sudo systemctl disable --now edgelab-pfm.timer edgelab-decis
 
 **When:** as root (a reviewed runbook step). Never inside 17:40–18:50 ET or 11:13–11:30 / 16:13–16:30 ET, and never near the 04:40 UTC daily backup.
 
+**Before any apply, deploy the F09 checkpoints.**
+- Every F09 checkpoint (`docs/engineering/ledger_checkpoints/*.json`) must be committed on main *and deployed*.
+- The apply refuses unless the dry run used the running code's own committed directory, `/opt/market-edge-lab/app/docs/engineering/ledger_checkpoints`, and that directory is non-empty. This is what protects the F09-linked bundles.
+- If a checkpoint was taken since the last deploy, commit and deploy it first.
+
+**Baselines are pinned in code.** The policy's pins (`backup.RETENTION_PINS_PROPOSED_V1`, from plan B4) always apply; no `--pin` is needed:
+- the first production activation;
+- the two F09 ledger bundles;
+- the bundles either side of the first real settlement.
+
+The apply refuses a report that lacks any of them.
+
 ```bash
-# 0. Nothing may be writing a backup now.
+# 0. Nothing may be writing a backup now, and the deployed checkpoints are the committed set.
 systemctl is-active edgelab-backup.service          # expect: inactive
+cat /opt/market-edge-lab/app/REVISION; ls /opt/market-edge-lab/app/docs/engineering/ledger_checkpoints   # expect every F09 checkpoint on main
 install -d -o edgelab -g edgelab -m 0700 /var/lib/market-edge-lab/retention
 R=/var/lib/market-edge-lab/retention; STAMP=$(date -u +%Y%m%dT%H%M%SZ)
 PY=/opt/market-edge-lab/venv/bin/python; B=/var/lib/market-edge-lab/backups
@@ -612,7 +625,7 @@ journalctl -u edgelab-backup.service -o cat --no-pager | runuser -u edgelab -- t
 # 2. The dry run (read-only), saved, then reviewed.
 runuser -u edgelab -- $PY -m edge_lab.backup retention-plan --root $B --policy proposed-v1 \
   --checkpoints /opt/market-edge-lab/app/docs/engineering/ledger_checkpoints \
-  --verify-reports "$R/$STAMP-backup-reports.txt" --pin edge-backup-eqfiomf5 --verify-hashes \
+  --verify-reports "$R/$STAMP-backup-reports.txt" --verify-hashes \
   | runuser -u edgelab -- tee "$R/$STAMP-plan.json" >/dev/null
 $PY -c 'import json,sys; r=json.load(open(sys.argv[1])); print(r["state"], r["flags"], r["summary"]); [print(b["name"], b["completed_at_utc"], b["database_bytes"], "covered_by", b["covered_by"]) for b in r["bundles"] if b["decision"]=="DELETE-CANDIDATE"]' "$R/$STAMP-plan.json"
 sha256sum "$R/$STAMP-plan.json"                     # this hash is the confirmation
@@ -640,6 +653,23 @@ After the apply:
 - A fresh dry run (steps 1–2) should show no candidates.
 - Exit 2 is `REFUSED`: nothing was deleted, and the reason is printed. Fix the cause, then start again at step 1.
 - `CANDIDATES_CHANGED` or `STALE_REPORT` only mean the dry run must be repeated.
+- `CHECKPOINTS_NOT_CANONICAL` or `PINS_MISSING` mean the dry run was not made as above: deploy the checkpoints and repeat.
+
+**If an apply was interrupted** (killed, host restart) partway through deleting a bundle:
+- **What it looks like:**
+  - the log's last `apply_start` has no `apply_end` or `apply_aborted`;
+  - one of its candidates has no `deleted` line;
+  - that directory is still there, partly deleted. The next dry run shows it as **QUARANTINE** (`DATABASE_MISSING` or `INCOMPLETE_NO_MANIFEST`).
+- **What to do:** remove it by hand only if its name is in that `apply_start`'s candidate list. That list is the reviewed record, including its `database_sha256`. Then append a note to the log, and run a fresh dry run (steps 1–2).
+
+```bash
+tail -n 50 $B/retention-apply-log.jsonl             # find the last apply_start and the candidates without a "deleted" line
+ls -la $B/<name>                                    # the partial directory
+rm -rf -- "$B/<name>"                               # only if <name> is in that apply_start's candidates
+printf '%s\n' "{\"event\": \"debris_removed\", \"name\": \"<name>\", \"at_utc\": \"$(date -u +%FT%TZ)\", \"by\": \"operator\"}" | runuser -u edgelab -- tee -a $B/retention-apply-log.jsonl
+```
+
+Never remove a QUARANTINE bundle that is not in such a list. A quarantined bundle is otherwise preserved.
 
 ## 8. O1: the weekly off-host pull to the laptop (owner-approved 2026-09-26)
 
@@ -675,11 +705,13 @@ $env:PYTHONPATH = "src"; python -m edge_lab.backup offhost-verify --dir $Dest
 #    Cross-check: each bundle's database_sha256 in the output equals the value step 1 printed.
 Get-FileHash "$Dest\<evidence.name>\database.sqlite3" -Algorithm SHA256
 
-# 4. Keep the last 4 verified pulls. This is part of O1's approved "keep last four".
-#    Run it only after step 3 said VERIFIED.
-Get-ChildItem C:\Users\jason\market-edge-offhost -Directory |
-  Where-Object Name -match '^\d{4}-\d{2}-\d{2}$' | Sort-Object Name -Descending |
-  Select-Object -Skip 4 | ForEach-Object { Remove-Item -Recurse -Force $_.FullName }
+# 4. Keep the last 4 VERIFIED pulls. This is part of O1's approved "keep last four".
+#    Step 3 writes VERIFIED.json into the pull only when every bundle passes, and removes a stale one.
+#    offhost-prune keeps the 4 newest pulls that have VERIFIED.json. It removes only older verified pulls,
+#    and never removes (or counts) a pull that is not verified, so a failed pull cannot displace a
+#    verified one. Inspect or fix a failed pull by hand. List first, then apply.
+python -m edge_lab.backup offhost-prune --base C:\Users\jason\market-edge-offhost --keep 4
+python -m edge_lab.backup offhost-prune --base C:\Users\jason\market-edge-offhost --keep 4 --apply
 ```
 
 Record each pull in `HANDOFF.md` or with the F09 notes: the date, the bundle names, their sha256 and `VERIFIED`.
@@ -712,6 +744,10 @@ runuser -u edgelab -- $PY -m edge_lab.backup verify --bundle "$BUNDLE"   # expec
 install -d -o edgelab -g edgelab -m 0700 "$DB/pre-restore-$STAMP"
 for f in edge_lab.sqlite3 edge_lab.sqlite3-wal edge_lab.sqlite3-shm; do [ -e "$DB/$f" ] && mv "$DB/$f" "$DB/pre-restore-$STAMP/"; done
 install -o edgelab -g edgelab -m 0600 "$BUNDLE/database.sqlite3" "$DB/edge_lab.sqlite3"
+#    A backup copy is in DELETE journal mode; the live evidence store runs in WAL. Set it back before anything
+#    else opens it (SnapshotStore also re-enables WAL on every write connection). The shadow ledger does
+#    not use WAL: skip this for a ledger restore.
+runuser -u edgelab -- $PY -c 'import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); print(c.execute("PRAGMA journal_mode=WAL").fetchone()); c.close()' "$DB/edge_lab.sqlite3"   # expect ('wal',)
 
 # 4. Check, then restart.
 runuser -u edgelab -- $PY -m edge_lab.cli forward status --db "$DB/edge_lab.sqlite3" --status-file /var/lib/market-edge-lab-status/latest.json

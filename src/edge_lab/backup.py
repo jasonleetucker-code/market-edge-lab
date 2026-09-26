@@ -13,6 +13,7 @@ import hashlib
 import json
 import math
 import os
+import re
 import shutil
 import sqlite3
 import tempfile
@@ -329,6 +330,8 @@ class RetentionPolicy:
     max_newest_good_age: timedelta  # older newest-good bundle: nothing may become a candidate
     candidate_kinds: tuple[str, ...]  # stores whose bundles may become candidates at all
     future_tolerance: timedelta = timedelta(minutes=5)
+    # Known-good baselines this policy always keeps, whatever --pin says (committed, reviewed).
+    pins: tuple[str, ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
         return {"name": self.name, "status": RETENTION_STATUS,
@@ -337,19 +340,34 @@ class RetentionPolicy:
                 "monthly_months": self.monthly_months,
                 "active_grace_minutes": self.active_grace.total_seconds() / 60,
                 "max_newest_good_age_hours": self.max_newest_good_age.total_seconds() / 3600,
-                "candidate_kinds": list(self.candidate_kinds),
+                "candidate_kinds": list(self.candidate_kinds), "pins": list(self.pins),
                 "never_candidates": ["QUARANTINE", "ACTIVE", "no recorded restore verification",
                                      "newest good", "first bundle", "schema boundary",
                                      "checkpoint-linked", "pinned baseline", "forensic ledger state",
                                      "not covered by a newer kept bundle", "any bundle of a store not in candidate_kinds"]}
 
 
+# The known-good baselines of CAPTURE_AND_BACKUP_APPROVAL_PLAN.md B4 ("Proposed initial pins"), always kept:
+# - edge-backup-eqfiomf5: the first production activation (2026-09-23 17:29Z);
+# - lqs5j63_ and sdi31qqw: the ledger bundles copied to the laptop and checked at F09 (ledger bundles are never
+#   candidates anyway; pinned so the baseline set is explicit);
+# - "the bundles around the first real settlement (2026-09-25)": the settlement ran at 11:15 ET (15:15Z), so
+#   the last evidence bundles before it (08:02Z iu9x5w73, 08:03Z gci308lm) and the first after it
+#   (20:16Z lgw9jmww, 20:17Z wu3982g7).
+RETENTION_PINS_PROPOSED_V1 = ("edge-backup-eqfiomf5", "edge-backup-lqs5j63_", "edge-backup-sdi31qqw",
+                              "edge-backup-iu9x5w73", "edge-backup-gci308lm", "edge-backup-lgw9jmww",
+                              "edge-backup-wu3982g7")
+
 RETENTION_POLICIES = {
     "proposed-v1": RetentionPolicy(
         name="proposed-v1", keep_all_younger_than=timedelta(hours=48), newest_good=3, daily_days=7,
         weekly_weeks=8, monthly_months=12, active_grace=timedelta(minutes=30),
-        max_newest_good_age=timedelta(hours=36), candidate_kinds=("evidence",)),
+        max_newest_good_age=timedelta(hours=36), candidate_kinds=("evidence",), pins=RETENTION_PINS_PROPOSED_V1),
 }
+
+# The canonical F09 checkpoint directory: the running code's own committed set (in production
+# /opt/market-edge-lab/app/docs/engineering/ledger_checkpoints, the root-owned checkout at REVISION).
+CANONICAL_CHECKPOINTS = Path(__file__).resolve().parents[2] / "docs" / "engineering" / "ledger_checkpoints"
 
 
 @dataclass
@@ -544,7 +562,7 @@ def retention_plan(bundles: Sequence[BundleInfo], *, now: datetime, policy: Rete
     decision: dict[tuple[str, str], str] = {}
     flags: list[str] = []
     linked: list[dict[str, Any]] = []
-    pinned = set(pins)
+    pinned = set(pins) | set(policy.pins)  # the policy's committed pins apply with or without --pin
     covered_by: dict[tuple[str, str], str] = {}
     newest_good: dict[str, str] = {}
     found_pins: set[str] = set()
@@ -676,7 +694,8 @@ def retention_plan(bundles: Sequence[BundleInfo], *, now: datetime, policy: Rete
             "policy": policy.to_dict(), "now_utc": now.isoformat(), "state": "REVIEW" if flags else "OK",
             "flags": sorted(flags), "summary": dict(sorted(summary.items())), "bundles": rows,
             "newest_good": dict(sorted(newest_good.items())),
-            "checkpoints": linked, "pins_not_found": sorted(pinned - found_pins),
+            "checkpoints": linked, "pins_not_found": sorted(set(pins) - found_pins),
+            "policy_pins_found": sorted(set(policy.pins) & found_pins),
             "limitations": [
                 "a backup copy is not original evidence: the live store is the original, and no candidate is the "
                 "only copy of its rows (a newer kept bundle covers it)",
@@ -708,7 +727,8 @@ def main(argv: list[str] | None = None) -> int:
     plan.add_argument("--root", type=Path, required=True, help="the backups directory (ledger bundles in root/ledger)")
     plan.add_argument("--policy", choices=sorted(RETENTION_POLICIES), default="proposed-v1")
     plan.add_argument("--now", help="ISO-8601 time with zone (default: now)")
-    plan.add_argument("--checkpoints", type=Path, help="directory of F09 ledger checkpoint JSON files")
+    plan.add_argument("--checkpoints", type=Path, help="directory of F09 ledger checkpoint JSON files; an apply "
+                                                       f"requires the canonical {CANONICAL_CHECKPOINTS}")
     plan.add_argument("--pin", action="append", default=[], help="bundle name kept as a known-good baseline")
     plan.add_argument("--verify-hashes", action="store_true", help="also check every database's SHA-256 (reads it)")
     plan.add_argument("--verify-reports", type=Path,
@@ -721,7 +741,8 @@ def main(argv: list[str] | None = None) -> int:
     apply.add_argument("--root", type=Path, required=True, help="the backups directory the report was made for")
     apply.add_argument("--report", type=Path, required=True, help="the reviewed retention-plan JSON report (file)")
     apply.add_argument("--confirm", required=True, help="the SHA-256 of the report file (sha256sum REPORT)")
-    apply.add_argument("--max-report-age-min", type=float, default=APPLY_MAX_REPORT_AGE.total_seconds() / 60)
+    apply.add_argument("--max-report-age-min", type=float, default=APPLY_MAX_REPORT_AGE.total_seconds() / 60,
+                       help="at most 30 (larger values are refused)")
     apply.add_argument("--timeout", type=float, default=APPLY_VERIFY_TIMEOUT_S,
                        help="per-bundle budget for the restore verification of the bundles relied on")
     newest = subs.add_parser("newest-verified", help="read-only: the newest restore-verified evidence and ledger "
@@ -732,6 +753,11 @@ def main(argv: list[str] | None = None) -> int:
                                                      "(bytes against the manifest, then a restore check)")
     offhost.add_argument("--dir", type=Path, required=True)
     offhost.add_argument("--timeout", type=float, default=120)
+    prune = subs.add_parser("offhost-prune", help="O1, on the laptop: keep the newest --keep VERIFIED pulls (dated "
+                                                  "dirs with VERIFIED.json); lists only unless --apply")
+    prune.add_argument("--base", type=Path, required=True)
+    prune.add_argument("--keep", type=int, default=4)
+    prune.add_argument("--apply", action="store_true", help="remove the older verified pulls listed")
     args = parser.parse_args(argv)
     if args.command == "retention-plan":
         return _retention_main(args)
@@ -739,6 +765,8 @@ def main(argv: list[str] | None = None) -> int:
         return _apply_main(args)
     if args.command == "newest-verified":
         return _newest_verified_main(args)
+    if args.command == "offhost-prune":
+        return _offhost_prune_main(args)
     if args.command == "offhost-verify":
         return _offhost_verify_main(args)
     try:
@@ -784,7 +812,7 @@ def build_plan(root: Path, *, now: datetime, policy: RetentionPolicy, checkpoint
         hashes_verified=bool(verify_hashes),
         verify_reports={"file": str(verify_reports) if verify_reports else None, "reports_read": n_reports,
                         "verified_database_sha256s": len(verified)},
-        inputs={"policy": policy.name, "pins": sorted(pins), "verify_hashes": bool(verify_hashes),
+        inputs={"policy": policy.name, "pins": sorted(set(pins) | set(policy.pins)), "verify_hashes": bool(verify_hashes),
                 "checkpoints_dir": str(checkpoints_dir.resolve()) if checkpoints_dir else None,
                 "checkpoint_files": _checkpoint_files(checkpoints_dir) if checkpoints_dir else [],
                 "verify_reports_file": str(verify_reports.resolve()) if verify_reports else None,
@@ -832,7 +860,9 @@ def offhost_verify(directory: Path, *, timeout: float = 120) -> dict[str, Any]:
     """O1: verify every bundle copied off-host under `directory` (bundles directly in it or one level down,
     e.g. <date>/edge-backup-… and <date>/ledger/edge-backup-…). For each: the database bytes against the
     manifest's length and SHA-256, then `verify_backup` (a restore into a disposable database). Read-only
-    for the bundles; nothing is written next to them."""
+    for the bundles. On VERIFIED (every bundle passes, at least one evidence and one ledger bundle) it writes
+    `VERIFIED.json` in `directory`; otherwise it removes a stale one, so only verified pulls count for
+    `offhost-prune`."""
     found = sorted({p for p in list(directory.glob(f"{BUNDLE_PREFIX}*")) + list(directory.glob(f"*/{BUNDLE_PREFIX}*"))
                     if p.is_dir()})
     results = []
@@ -848,7 +878,57 @@ def offhost_verify(directory: Path, *, timeout: float = 120) -> dict[str, Any]:
     ok = bool(results) and all(r["status"] == "VERIFIED_BACKUP_AND_RESTORE" for r in results)
     kinds = {r.get("store_kind") for r in results if r["status"] == "VERIFIED_BACKUP_AND_RESTORE"}
     state = "VERIFIED" if ok and {"evidence", "ledger"} <= kinds else "INCOMPLETE" if ok else "FAILED"
-    return {"command": "backup offhost-verify", "directory": str(directory), "bundles": results, "state": state}
+    report = {"command": "backup offhost-verify", "directory": str(directory), "bundles": results, "state": state,
+              "verified_at_utc": datetime.now(timezone.utc).isoformat()}
+    marker = directory / OFFHOST_MARKER
+    if state == "VERIFIED":
+        # The marker is what makes a pull count toward "keep the last 4" (offhost-prune).
+        with marker.open("w", encoding="utf-8", newline="\n") as stream:
+            json.dump(report, stream, indent=2, sort_keys=True)
+            stream.write("\n")
+    elif marker.is_file() and not marker.is_symlink():
+        marker.unlink()  # our own marker, never a backup: a pull that no longer verifies no longer counts
+    return report
+
+
+OFFHOST_MARKER = "VERIFIED.json"
+_PULL_NAME = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+
+def _verified_pull(directory: Path) -> bool:
+    marker = directory / OFFHOST_MARKER
+    if marker.is_symlink() or not marker.is_file():
+        return False
+    try:
+        data = json.loads(marker.read_text(encoding="utf-8"))
+    except (ValueError, OSError):
+        return False
+    return isinstance(data, dict) and data.get("state") == "VERIFIED" and bool(data.get("bundles"))
+
+
+def offhost_prune(base: Path, *, keep: int = 4, apply: bool = False) -> dict[str, Any]:
+    """O1 "keep the last 4": among the dated pull directories (YYYY-MM-DD) under `base`, keep the `keep`
+    newest VERIFIED ones (with a valid VERIFIED.json from offhost-verify) and remove older VERIFIED ones.
+    A pull that is not VERIFIED is never counted toward the 4 and never removed here (inspect it by hand),
+    so a failed pull can never displace a verified one. Lists only, unless `apply`."""
+    if keep < 1:
+        raise ValueError("keep must be at least 1")
+    dated = sorted((p for p in base.iterdir() if p.is_dir() and not p.is_symlink() and _PULL_NAME.match(p.name)),
+                   key=lambda p: p.name, reverse=True) if base.is_dir() else []
+    verified = [p for p in dated if _verified_pull(p)]
+    remove = verified[keep:]
+    report = {"command": "backup offhost-prune", "base": str(base), "keep": keep, "applied": apply,
+              "kept_verified": [p.name for p in verified[:keep]], "remove": [p.name for p in remove],
+              "not_verified_left_alone": [p.name for p in dated if p not in verified]}
+    if apply:
+        for p in remove:
+            shutil.rmtree(p)
+    return report
+
+
+def _offhost_prune_main(args: argparse.Namespace) -> int:
+    print(json.dumps(offhost_prune(args.base, keep=args.keep, apply=args.apply), indent=2, sort_keys=True))
+    return 0
 
 
 def _offhost_verify_main(args: argparse.Namespace) -> int:
@@ -902,14 +982,16 @@ def _check_backups_root(root: Path) -> None:
 
 
 def retention_apply(root: Path, report_path: Path, confirm: str, *, now: datetime | None = None,
-                    max_age: timedelta = APPLY_MAX_REPORT_AGE, timeout: float = APPLY_VERIFY_TIMEOUT_S) -> dict[str, Any]:
+                    max_age: timedelta = APPLY_MAX_REPORT_AGE, timeout: float = APPLY_VERIFY_TIMEOUT_S,
+                    canonical_checkpoints: Path = CANONICAL_CHECKPOINTS) -> dict[str, Any]:
     """Delete exactly the DELETE-CANDIDATE bundles of a reviewed `retention-plan` report, or nothing.
 
     Refuses (ApplyRefused, nothing deleted) unless all of these hold:
     - `confirm` is the SHA-256 of the report file's bytes (the operator confirms the exact report reviewed);
     - the report is a `retention-plan` report of an approved policy, for this root, at most `max_age` old;
-    - the recorded inputs (verify-reports file, checkpoint files) are unchanged, and re-running the plan now
-      with them gives exactly the same DELETE-CANDIDATE set (names and database hashes);
+    - the report used the canonical F09 checkpoint directory (the running code's committed set, non-empty)
+      and every pin of the policy; the recorded inputs (verify-reports file, checkpoint files) are unchanged,
+      and re-running the plan now with them gives exactly the same DELETE-CANDIDATE set (names and hashes);
     - the root is a backups directory; no stale freeze; every candidate is an evidence bundle directly in the
       root, directory without symlinks, with only SUPERSEDED as its reason (so never ledger, ACTIVE,
       QUARANTINE, unverified, pinned, checkpoint-linked, schema-boundary or otherwise kept) and a covering bundle;
@@ -918,6 +1000,9 @@ def retention_apply(root: Path, report_path: Path, confirm: str, *, now: datetim
     Then it deletes the candidate directories one at a time, logging each (name, hash, bytes, reason) to
     `APPLY_LOG_NAME` in the root. It never touches anything else."""
     now = now or datetime.now(timezone.utc)
+    if not timedelta(0) < max_age <= APPLY_MAX_REPORT_AGE:
+        raise ApplyRefused(f"MAX_AGE_INVALID: the report age limit must be > 0 and at most "
+                           f"{int(APPLY_MAX_REPORT_AGE.total_seconds() // 60)} min")
     root = root.resolve()
     raw = report_path.read_bytes()
     digest = hashlib.sha256(raw).hexdigest()
@@ -946,9 +1031,20 @@ def retention_apply(root: Path, report_path: Path, confirm: str, *, now: datetim
         raise ApplyRefused("INPUTS_CHANGED: the report was made without --verify-reports")
     if not reports_file.is_file() or file_hash(reports_file) != inputs.get("verify_reports_sha256"):
         raise ApplyRefused(f"INPUTS_CHANGED: {reports_file} is missing or differs from the reviewed dry run")
+    # F09-linked bundles are protected only if the plan saw the F09 checkpoints: the canonical, committed set.
     cp_dir = Path(inputs["checkpoints_dir"]) if inputs.get("checkpoints_dir") else None
-    if cp_dir is not None and _checkpoint_files(cp_dir) != inputs.get("checkpoint_files"):
-        raise ApplyRefused(f"INPUTS_CHANGED: the checkpoint files in {cp_dir} differ from the reviewed dry run")
+    canonical = canonical_checkpoints.resolve()
+    if cp_dir is None or cp_dir.resolve() != canonical:
+        raise ApplyRefused(f"CHECKPOINTS_NOT_CANONICAL: the dry run must use --checkpoints {canonical} "
+                           f"(it used {inputs.get('checkpoints_dir')!r})")
+    committed = _checkpoint_files(canonical) if canonical.is_dir() else []
+    if not committed:
+        raise ApplyRefused(f"CHECKPOINTS_NOT_CANONICAL: {canonical} holds no F09 checkpoint; deploy them first")
+    if committed != inputs.get("checkpoint_files"):
+        raise ApplyRefused(f"INPUTS_CHANGED: the checkpoint files in {canonical} differ from the reviewed dry run")
+    missing_pins = sorted(set(policy.pins) - set(inputs.get("pins") or ()))
+    if missing_pins:
+        raise ApplyRefused(f"PINS_MISSING: the dry run did not keep the policy's baselines {missing_pins}")
     fresh = build_plan(root, now=now, policy=policy, checkpoints_dir=cp_dir, verify_reports=reports_file,
                        pins=inputs.get("pins") or (), verify_hashes=bool(inputs.get("verify_hashes")))
     reviewed, current = _candidates(report), _candidates(fresh)
@@ -959,7 +1055,7 @@ def retention_apply(root: Path, report_path: Path, confirm: str, *, now: datetim
     if frozen:
         raise ApplyRefused(f"STALE_FREEZE: {frozen}")
     linked = {b for c in fresh.get("checkpoints") or [] for b in c.get("bundles") or []}
-    pins = set(inputs.get("pins") or ())
+    pins = set(inputs.get("pins") or ()) | set(policy.pins)
     for name, row in sorted(current.items()):
         reasons = row.get("reasons") or []
         bundle = root / name
