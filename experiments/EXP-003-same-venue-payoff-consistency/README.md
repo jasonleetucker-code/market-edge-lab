@@ -202,4 +202,4 @@ below.
 
 ## Owner decisions
 
-- 2026-09-26: owner decision: **PAUSED**. 2 owner hours; the 8 venue-fact questions (`docs/research/KALSHI_QUESTIONS_2026-09-26.md`) are sent only after the owner confirms the final text; reject the current scope on 2026-11-15 if unresolved; economics first if answered. Status stays DRAFT.
+- 2026-09-26: owner decision: **PAUSED** (hours not stated; the packet's 2 h awaits confirmation); the 8 venue-fact questions (`docs/research/KALSHI_QUESTIONS_2026-09-26.md`) are sent only after the owner confirms the final text; reject the current scope on 2026-11-15 if either Q1 or Q4 is unresolved or unfavourable; economics first if answered. Status stays DRAFT.

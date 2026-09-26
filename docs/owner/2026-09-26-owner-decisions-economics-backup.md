@@ -49,13 +49,17 @@ An agent records a grant; it never creates one.
 
 - **EXP-002:**
   - `[economics] minimum_useful_effect` and `[budget] owner_hours` are set from items 1.1–1.2.
+    The $2,500 capital cap and the first-detection test band come from packet option B, which the
+    owner's $1,000 answers; they are attributed there.
   - The protocol stays DRAFT.
   - The +8 h extension is **not** pre-approved: it returns to the owner.
 - **EXP-003:**
   - Stays paused and DRAFT. Its slot state is unchanged, because the registry has no PAUSED
     state; "paused" is recorded in the protocol and README.
-  - Budget: 2 owner hours.
-  - Rejection on 2026-11-15 if unresolved.
+  - **Hours: not stated by the owner.** The packet's recommended 2 h awaits confirmation, so
+    `owner_hours` stays MISSING_OWNER_INPUT.
+  - Rejection on 2026-11-15 if either Q1 or Q4 is unresolved or unfavourable. That relies on the
+    PROPOSED emergency-power scoping (#111 note B-1); without it, Q3 also matters.
   - The questions are sent only after the owner confirms the exact final message
     (`docs/research/KALSHI_QUESTIONS_2026-09-26.md`).
 - **Backups:**

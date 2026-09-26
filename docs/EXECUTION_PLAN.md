@@ -522,11 +522,12 @@ be written here when they are made.
     - the +8 h extension returns to the owner;
     - stays DRAFT.
   - **EXP-003:**
-    - PAUSED; 2 owner hours; stays DRAFT;
+    - PAUSED; stays DRAFT. The owner stated no hours budget; the packet's 2 h awaits confirmation;
     - **sending the 8 drafted Kalshi questions is approved, but only after the owner confirms the
       exact final message** (`docs/research/KALSHI_QUESTIONS_2026-09-26.md`). The answers are
       shared venue-fact verification, including EXP-002 fees and fallbacks;
-    - reject the current scope on 2026-11-15 if unresolved;
+    - reject the current scope on 2026-11-15 if the relevant facts are unresolved (either Q1 or Q4
+      unresolved or unfavourable, relying on the PROPOSED emergency-power scoping);
     - if answered earlier, economics first; no major development resumes merely because the
       questions were sent.
   - **Backup retention `proposed-v1`** for evidence-store local backups, **APPROVED** under the

@@ -6,7 +6,7 @@ confirms the exact final message first
 (`docs/owner/2026-09-26-owner-decisions-economics-backup.md`, item 2).
 
 The questions are shared venue-fact verification:
-- Q1 and Q3–Q6 serve EXP-003 (paused).
+- Q1–Q6 and Q8 serve EXP-003 (paused).
 - Q2, Q5, Q6 and Q7 also serve EXP-002's fee and fallback correctness.
 
 The owner's account identity is not included here. Kalshi support may need it, and the owner adds
@@ -69,6 +69,7 @@ Thank you,
 - The answer is recorded here verbatim with its date and channel, and evaluated as venue evidence
   (explicit / documented / inference).
 - **EXP-003** is re-evaluated on economics first. It resumes only if the answers materially change
-  its usefulness. It is rejected if Q1 and Q4 are unresolved on 2026-11-15.
+  its usefulness. It is rejected on 2026-11-15 if either Q1 or Q4 is unresolved or unfavourable.
+  This relies on the PROPOSED emergency-power scoping (#111 note B-1); without it, Q3 also matters.
 - **EXP-002** uses the Q2, Q5, Q6 and Q7 answers for its fee and fallback modelling (the
   `fee_schedules` KXNFLGAME verification record).

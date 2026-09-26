@@ -95,7 +95,7 @@ controls = [
 
 [budget]
 research_cash_usd = "0 incremental: no paid data or services are authorized (owner directive of 2026-09-24 ET / 2026-09-25 UTC)."
-owner_hours = "OWNER_INPUT 2026-09-26: PAUSED. 2 owner hours for the Kalshi venue-fact questions (docs/research/KALSHI_QUESTIONS_2026-09-26.md). Reject the current scope on 2026-11-15 if Q1/Q4 are unresolved; if answered earlier, re-evaluate economics first and resume only if the answers materially change usefulness. No major development resumes because the questions were sent."
+owner_hours = "MISSING_OWNER_INPUT: the owner decided (2026-09-26) to keep EXP-003 PAUSED and approved sending the Kalshi venue-fact questions, but did not state an hours budget; the decision packet recommended 2 owner hours (awaiting confirmation). Reject the current scope on 2026-11-15 if either Q1 or Q4 is unresolved or unfavourable (this Q1/Q4 limit relies on the PROPOSED emergency-power scoping, #111 note B-1; without it Q3 also matters); if answered earlier, re-evaluate economics first and resume only if the answers materially change usefulness."
 data_costs = "0: stored evidence only; no new collector or timer."
 review_date = "2026-10-22"
 
