@@ -821,3 +821,58 @@ def test_module_makes_no_network_import_at_runtime():
     src = Path(se.__file__).read_text(encoding="utf-8")
     for banned in ("import urllib.request", "from .http", "import http", "fetch_json", "requests"):
         assert banned not in src
+
+
+def test_an_ad_hoc_book_of_another_horizon_is_never_picked_even_within_five_minutes():
+    # The horizon window starts 2 min before the odds receipt; an ad-hoc capture 4 min before the odds is within
+    # max_book_before_odds but belongs to no book of this horizon, so it is never picked.
+    start = T0 - timedelta(minutes=2)
+    ad_hoc = _b(-4 * 60, 1)
+    none, why, _ = se.pick_book([ad_hoc], T0, start, CUTOFF)
+    assert none is None and why.startswith("KALSHI_BOOK_MISSING") and "other horizons" in why
+    assert se.pick_book([ad_hoc, _b(60, 2)], T0, start, CUTOFF)[0][1] == 2  # the first book after the odds instead
+    assert se.pick_book([ad_hoc, _b(-60, 3)], T0, start, CUTOFF)[0][1] == 3  # an earlier book of this horizon
+
+
+def before_odds_store(tmp_path) -> Path:
+    """The SYNTHETIC pairing fixture, but every Kalshi book lands 60 s BEFORE its odds receipt."""
+    store = SnapshotStore(tmp_path / "before.sqlite3")
+    sf.write_pairing_fixture(store, books=False)
+    rows = report(store.path, sf.NOW)["rows"]
+    store.start_run("SYNTHETIC-books-before-odds")
+    written = 0
+    for r in rows:
+        received = r["odds"].get("received_utc")
+        tickers = (r.get("kalshi") or {}).get("tickers") or {}
+        if not received or not tickers:
+            continue
+        at = datetime.fromisoformat(received.replace("Z", "+00:00")) - timedelta(seconds=60)
+        for team, ticker in sorted(tickers.items()):
+            store.save_snapshot(run_id="SYNTHETIC-books-before-odds", source=se.KALSHI, kind="orderbook",
+                                entity_id=ticker, url=f"{sf.KALSHI_API}/markets/{ticker}/orderbook?depth=100",
+                                payload=sf._book(Decimal("0.55")), fetched_at_utc=iso_z(at),
+                                source_id="kalshi_public")
+            written += 1
+    store.finish_run("SYNTHETIC-books-before-odds", status="succeeded")
+    assert written
+    return store.path
+
+
+def test_only_book_at_or_after_odds_pairs_feed_the_ladder_and_the_economics(populated, tmp_path):
+    path, now = populated
+    after = report(path, now)
+    paired = [s for r in after["rows"] for s in r["sides"].values() if s.get("stage") is None]
+    assert paired and all(s["book_timing"] == se.BOOK_AT_OR_AFTER_ODDS and s["capacity"] for s in paired)
+    assert all(s["pair_use"].startswith("EXECUTABLE_PRICE_CANDIDATE") for s in paired)
+    assert after["economics"]["episodes"]["observations"] == len(paired)
+
+    before = report(before_odds_store(tmp_path), sf.NOW)
+    sides = [s for r in before["rows"] for s in r["sides"].values() if s.get("stage") is None]
+    # still paired (comparability-only pairs count for markout and calibration) ...
+    assert sides and all(s["book_timing"] == se.BOOK_BEFORE_ODDS for s in sides)
+    assert all(s["pair_use"].startswith("COMPARABILITY_ONLY") for s in sides)
+    # ... but never an executable price: no size ladder and no economics observation
+    assert all(s["capacity"] is None for s in sides)
+    assert before["economics"]["episodes"]["observations"] == 0
+    view = se.view_from_report(before, sf.NOW)
+    assert view["capacity"]["latest"]["book_timing"] == se.BOOK_BEFORE_ODDS and view["capacity"]["latest"]["ladder"] == []

@@ -206,3 +206,21 @@ def test_fill_mode_line_leads_with_the_v2_label_and_keeps_unknown_ids_as_recorde
     old_text = research._fill_mode_line({"id": "CONSERVATIVE", "basis": "ESTIMATED", "text": "what was there at detection"})
     assert old_text.startswith("FIRST_DETECTION_ZERO_LATENCY (ESTIMATED; legacy id CONSERVATIVE): what was there")
     assert research._fill_mode_line({"id": "SOMETHING_NEW", "basis": "UNKNOWN", "text": "t"}) == "SOMETHING_NEW (UNKNOWN): t"
+
+
+def test_the_latest_paired_book_states_its_timing_and_a_comparability_only_pair_has_no_ladder(tmp_path):
+    path, now = sf.fixture_store(tmp_path / "after")
+    after = research._ev_capacity(se.view_from_report(se.build_report(
+        sf.SnapshotStore.open_readonly(path), as_of=now,
+        results=True), now)["capacity"])
+    assert "book at or after the odds (executable-price candidate)" in plain(after)
+    assert "Size ladder over the latest paired book" in plain(after)
+    latest = {"ticker": "KXNFLGAME-26SEP27XXXYYY-XXX", "horizon": "T-6h", "decision_utc": "2026-09-27T11:01:00Z",
+              "ladder": [], "book_timing": "BEFORE_ODDS", "visible_depth": "120", "depth_truncated": False,
+              "lockup_hours": {"expected": 6, "latest": 60}}
+    before = plain(research._ev_capacity({"sides_with_book": 2, "truncated": 0, "latest": latest, "fill_modes": []}))
+    assert "book before the odds (comparability only)" in before and "Comparability-only pair" in before
+    assert "Size ladder over the latest paired book" not in before
+    unknown = plain(research._ev_capacity({"sides_with_book": 1, "truncated": 0,
+                                           "latest": {**latest, "book_timing": None, "ladder": []}, "fill_modes": []}))
+    assert "book timing not recorded" in unknown

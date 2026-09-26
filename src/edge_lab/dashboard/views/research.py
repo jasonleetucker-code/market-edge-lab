@@ -1077,6 +1077,12 @@ def _fill_mode_line(mode: dict) -> str:
     return f"{label} ({basis}; legacy id {mid}): {text}"
 
 
+def _book_timing_text(timing: Any) -> str:
+    """Plain text for the paired book's timing (sports_evidence join v2); no new state word or style."""
+    return {"AT_OR_AFTER_ODDS": "book at or after the odds (executable-price candidate)",
+            "BEFORE_ODDS": "book before the odds (comparability only)"}.get(timing, "book timing not recorded")
+
+
 def _ev_capacity(cap: Any) -> str:
     """The latest paired book's size ladder (research_economics.size_ladder_from_depth), as the report gives it."""
     latest = _ev(cap, "latest")
@@ -1091,7 +1097,8 @@ def _ev_capacity(cap: Any) -> str:
         meta = (f"Latest paired book: {_ev(latest, 'ticker')} · {_ev(latest, 'horizon')} · decision "
                 f"{pr.datetime_et(_ev(latest, 'decision_utc')) or 'time not recorded'} · captured depth "
                 f"{pr.quantity(_ev(latest, 'visible_depth')) or '—'} contracts, "
-                f"{'truncated' if _ev(latest, 'depth_truncated') else 'complete as requested'} · lockup to expected "
+                f"{'truncated' if _ev(latest, 'depth_truncated') else 'complete as requested'} · "
+                f"{_book_timing_text(_ev(latest, 'book_timing'))} · lockup to expected "
                 f"expiration {_ev(lock, 'expected') if _ev(lock, 'expected') is not None else '—'} h (latest "
                 f"{_ev(lock, 'latest') if _ev(lock, 'latest') is not None else '—'} h)")
         rows = [[c.num(pr.quantity(_ev(r, "size"))), _pm_state("EV_FILL", _ev(r, "depth_status")),
@@ -1099,9 +1106,16 @@ def _ev_capacity(cap: Any) -> str:
                  c.state_text("EV_GAP_UNSUPPORTED", label="Fee unsupported") if _ev(r, "fee_status") == "FEE_UNSUPPORTED"
                  else _pm_state("EV_FEE", _ev(r, "fee_status"))]
                 for r in (_ev(latest, "ladder") or []) if isinstance(r, dict)]
-        body = (f'<p class="meta">{esc(meta)}</p>'
-                + c.table(["contracts", "captured depth", "all-in cost / contract", "fee"], rows, wrap=(1, 3),
-                          right=(0, 2), caption="Size ladder over the latest paired book (research_economics)"))
+        if _ev(latest, "book_timing") == "BEFORE_ODDS":
+            ladder_html = c.empty_state("Comparability-only pair", "This book was received before the odds, so it is "
+                                                                   "older than the decision time and is not an "
+                                                                   "executable price. It counts for markout and "
+                                                                   "calibration; no size ladder is walked and no "
+                                                                   "economics episode is formed.")
+        else:
+            ladder_html = c.table(["contracts", "captured depth", "all-in cost / contract", "fee"], rows, wrap=(1, 3),
+                                  right=(0, 2), caption="Size ladder over the latest paired book (research_economics)")
+        body = f'<p class="meta">{esc(meta)}</p>' + ladder_html
     return head + body + '<p class="meta">Fill modes (applied to episodes, never to one look):</p>' + c.ul(
         modes, empty="no fill mode recorded") + (
         '<p class="note">Visible depth is an instantaneous ceiling, not capacity; a small fill is never extrapolated '

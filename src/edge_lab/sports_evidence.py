@@ -26,8 +26,10 @@ prospectively (join v2, `pick_book`): the latest book received at or before the 
 `max_book_before_odds` (5 min) before it; if there is none, the first book received after the odds receipt and
 no more than `max_book_after_odds` (10 min) after it. A later book never displaces a qualifying earlier choice.
 A book of the horizon outside that window is PAIR_SKEW_EXCEEDED, and a book after the cutoff is never
-substituted for a missing one. Each side records `book_timing` (AT_OR_BEFORE_ODDS / AFTER_ODDS). The pair's
-decision time is the later of the two receipts; both inputs' freshness is judged there
+substituted for a missing one. Each side records `book_timing`: AT_OR_AFTER_ODDS pairs are executable-price
+candidates; BEFORE_ODDS pairs are comparability-only (markout and calibration), and they get no size ladder and
+no economics episode, because their book is older than the decision time. The pair's decision time is the later
+of the two receipts; both inputs' freshness is judged there
 (`freshness.assess` / `combine`, the rule `odds_consensus` uses). Source update times (book
 `last_update` bounds) are kept apart from receipt times and from the pair skew.
 
@@ -100,8 +102,16 @@ VIEW_SCHEMA = "sports-evidence-view/1"
 # A.C). v1 took the book closest to the odds receipt within a symmetric 5-minute skew, which compares distances
 # to books received after the odds (a mild look-ahead).
 JOIN_VERSION = "sports-paired-join-v2"
-BOOK_CHOICE = ("prospective-v2: the latest book at or before the odds receipt within max_book_before_odds, else "
-               "the first book after it within max_book_after_odds")
+BOOK_CHOICE = ("prospective-v2: the latest book of this horizon at or before the odds receipt within "
+               "max_book_before_odds, else the first book after it within max_book_after_odds")
+# Pair use by book timing (docs/research/RESEARCH_UNBLOCKING_DECISIONS.md A.C "Pair use").
+BOOK_BEFORE_ODDS, BOOK_AT_OR_AFTER_ODDS = "BEFORE_ODDS", "AT_OR_AFTER_ODDS"
+PAIR_USE = {
+    BOOK_AT_OR_AFTER_ODDS: "EXECUTABLE_PRICE_CANDIDATE: the book is fresh at the decision time; size ladder and "
+                           "economics inputs allowed",
+    BOOK_BEFORE_ODDS: "COMPARABILITY_ONLY: the book was received before the odds, so it is older than the decision "
+                      "time; markout and calibration only, no size ladder and no economics episode",
+}
 MAPPING_VERSION = "kalshi-nfl-mapping-v1"
 RULES_PARSER_VERSION = "kalshi-nfl-rules-v1"
 LABEL = "PAIRED RESEARCH EVIDENCE — NOT AN EDGE CLAIM"
@@ -781,7 +791,9 @@ def pick_book(books: Sequence[tuple[datetime, int, str, str]], odds_received: da
       horizon the book is missing."""
     admissible = [b for b in books if b[0] <= cutoff]
     later = len(books) - len(admissible)
-    earlier = [b for b in admissible if odds_received - before <= b[0] <= odds_received]
+    # Only books of this horizon (received from `window_start`): an ad-hoc capture of another horizon that happens
+    # to land within `before` of the odds receipt is never picked.
+    earlier = [b for b in admissible if max(odds_received - before, window_start) <= b[0] <= odds_received]
     if earlier:
         return max(earlier, key=lambda b: (b[0], b[1])), None, later
     following = [b for b in admissible if odds_received < b[0] <= odds_received + after]
@@ -860,7 +872,7 @@ def kalshi_side(team: str, ticker: str, game: tuple[str | None, str | None, date
     decision = max(received, odds_received)
     out.update(book_snapshot_id=sid, book_sha256=sha, book_received_utc=_iso(received),
                pair_skew_seconds=int((received - odds_received).total_seconds()), decision_utc=_iso(decision),
-               book_timing="AT_OR_BEFORE_ODDS" if received <= odds_received else "AFTER_ODDS",
+               book_timing=BOOK_BEFORE_ODDS if received < odds_received else BOOK_AT_OR_AFTER_ODDS,
                depth_limit=_depth_limit(url))
     mapping = map_event(game[0], game[1], game[2], catalog, decision)
     obs = mapping["markets"].get(team) if mapping["state"] == "MAPPED" else None
@@ -901,17 +913,24 @@ def kalshi_side(team: str, ticker: str, game: tuple[str | None, str | None, date
     if fresh is not Freshness.FRESH:
         out.update(stage=Stage.KALSHI_BOOK_UNUSABLE, reasons=[f"book {fresh.value} at the pair's decision time"])
         return out
-    grid = kalshi_quotes.price_grid_from_kalshi(obs.fields)
-    points = capacity(ladder, grid, policy)
-    out["_points"] = points
-    out["_release"] = obs.fields.get("latest_expiration_time")  # the latest cash release the listing states
-    schedule = fee_schedule()
-    out["capacity"] = [_rung(p, schedule) for p in points]
+    out["pair_use"] = PAIR_USE[out["book_timing"]]
+    if out["book_timing"] == BOOK_AT_OR_AFTER_ODDS:
+        # Only an executable-price candidate feeds the size ladder and the economics episodes (`_observations`).
+        grid = kalshi_quotes.price_grid_from_kalshi(obs.fields)
+        points = capacity(ladder, grid, policy)
+        out["_points"] = points
+        out["_release"] = obs.fields.get("latest_expiration_time")  # the latest cash release the listing states
+        schedule = fee_schedule()
+        out["capacity"] = [_rung(p, schedule) for p in points]
+    else:
+        out["capacity"] = None  # comparability-only: never an executable price, so no ladder (None, not empty)
     exp, latest = parse_utc(obs.fields.get("expected_expiration_time")), parse_utc(obs.fields.get("latest_expiration_time"))
     out["lockup_hours"] = {"expected": None if exp is None else round((exp - decision).total_seconds() / 3600, 2),
                            "latest": None if latest is None else round((latest - decision).total_seconds() / 3600, 2),
                            "basis": OBSERVED if exp is not None or latest is not None else UNKNOWN,
                            "detail": "listing expiration times minus the decision time; expected is not guaranteed"}
+    # The next book at ANY horizon after the decision (a label reference, not an endpoint). The A.B / A.A markout
+    # endpoint, when implemented, uses the first book of the T-60m horizon instead; this field is not changed here.
     nxt = [b for b in catalog.books.get(ticker, []) if decision < b[0] <= as_of]
     out["markout_label_ref"] = None if not nxt else {
         "book_snapshot_id": nxt[0][1], "received_utc": _iso(nxt[0][0]),
@@ -1739,6 +1758,7 @@ def view_from_report(report: Mapping[str, Any], now: datetime) -> dict[str, Any]
                          "team": latest[1], "ticker": latest[2]["ticker"], "decision_utc": latest[2]["decision_utc"],
                          "horizon": latest[0]["horizon"], "ladder": latest[2].get("capacity") or [],
                          "depth_truncated": latest[2].get("depth_truncated"),
+                         "book_timing": latest[2].get("book_timing"), "pair_use": latest[2].get("pair_use"),
                          "visible_depth": latest[2].get("visible_depth"),
                          "lockup_hours": latest[2].get("lockup_hours")},
                      "fill_modes": econ["fill_modes"]},
