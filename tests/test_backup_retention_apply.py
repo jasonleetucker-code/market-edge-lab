@@ -11,6 +11,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import os
 import shutil
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -387,7 +388,11 @@ def _pull(base: Path, name: str, verified: bool) -> Path:
     return d
 
 
-def test_offhost_prune_keeps_the_four_newest_verified_pulls_and_never_counts_a_failed_one(tmp_path, capsys):
+def test_offhost_prune_keeps_the_four_newest_verified_pulls_and_never_counts_a_failed_one(tmp_path, capsys,
+                                                                                         monkeypatch):
+    reverified = []
+    monkeypatch.setattr(backup, "offhost_verify",  # the synthetic pulls hold no restorable bundle
+                        lambda p, timeout=120: reverified.append(p.name) or {"state": "VERIFIED"})
     base = tmp_path / "market-edge-offhost"
     for day in ("2026-09-27", "2026-10-04", "2026-10-11", "2026-10-18", "2026-10-25"):
         _pull(base, day, verified=True)
@@ -400,9 +405,125 @@ def test_offhost_prune_keeps_the_four_newest_verified_pulls_and_never_counts_a_f
     assert listed["remove"] == ["2026-09-27"] and not listed["applied"]
     assert sorted(listed["not_verified_left_alone"]) == ["2026-10-26", "2026-11-01"]
     assert (base / "2026-09-27").is_dir()  # listing only
+    assert reverified == []  # a listing re-verifies nothing
     assert backup.main(["offhost-prune", "--base", str(base), "--keep", "4", "--apply"]) == 0
-    assert json.loads(capsys.readouterr().out)["remove"] == ["2026-09-27"]
+    out = json.loads(capsys.readouterr().out)
+    assert out["remove"] == ["2026-09-27"] and out["state"] == "REMOVED"
+    assert sorted(reverified) == ["2026-10-04", "2026-10-11", "2026-10-18", "2026-10-25"]  # the kept ones, first
     assert sorted(p.name for p in base.iterdir()) == ["2026-10-04", "2026-10-11", "2026-10-18", "2026-10-25",
                                                      "2026-10-26", "2026-11-01", "notes"]
     with pytest.raises(ValueError):
         backup.offhost_prune(base, keep=0)
+
+
+# --------------------------------------------------------------------------- follow-ups (2026-09-26)
+
+
+def _real_pull(site, base: Path, day: str) -> Path:
+    """A pull holding a real evidence bundle and a real ledger bundle, verified (marker written)."""
+    ledger_db = site["tmp"] / "ledger-src" / "shadow_ledger.sqlite3"
+    if not ledger_db.exists():
+        ledger_db.parent.mkdir()
+        ShadowLedger(ledger_db)
+    ledger_bundle = backup.create_backup(ledger_db, site["tmp"] / f"staging-{day}", kind="ledger")
+    pull = base / day
+    shutil.copytree(site["real"], pull / site["real"].name)
+    shutil.copytree(ledger_bundle, pull / "ledger" / ledger_bundle.name)
+    assert backup.offhost_verify(pull)["state"] == "VERIFIED"
+    return pull
+
+
+def test_prune_apply_re_verifies_the_kept_pulls_and_refuses_if_one_is_stale(site, capsys):
+    base = site["tmp"] / "market-edge-offhost"
+    old = _real_pull(site, base, "2026-09-26")
+    new = _real_pull(site, base, "2026-10-03")
+    db = new / site["real"].name / backup.DB_NAME  # the marker still says VERIFIED, but the bytes changed
+    data = bytearray(db.read_bytes())
+    data[-1] ^= 0xFF
+    db.write_bytes(bytes(data))
+    assert backup.offhost_prune(base, keep=1)["remove"] == ["2026-09-26"]  # the listing trusts the marker
+    code = backup.main(["offhost-prune", "--base", str(base), "--keep", "1", "--apply"])
+    out = json.loads(capsys.readouterr().out)
+    assert code == 2 and out["state"] == "REFUSED" and out["reverified"] == {"2026-10-03": "FAILED"}
+    assert old.is_dir()  # nothing removed
+    assert not (new / backup.OFFHOST_MARKER).exists()  # the stale marker is gone: the pull no longer counts
+    # With the damaged pull no longer counted, the older verified one is kept, not removed.
+    assert backup.offhost_prune(base, keep=1)["kept_verified"] == ["2026-09-26"]
+
+
+def test_prune_apply_removes_after_a_successful_re_verification(site):
+    base = site["tmp"] / "market-edge-offhost"
+    _real_pull(site, base, "2026-09-26")
+    _real_pull(site, base, "2026-10-03")
+    out = backup.offhost_prune(base, keep=1, apply=True)
+    assert out["state"] == "REMOVED" and out["reverified"] == {"2026-10-03": "VERIFIED"}
+    assert sorted(p.name for p in base.iterdir()) == ["2026-10-03"]
+
+
+def test_prune_never_counts_follows_or_removes_links(tmp_path, monkeypatch):
+    monkeypatch.setattr(backup, "offhost_verify", lambda p, timeout=120: {"state": "VERIFIED"})
+    base = tmp_path / "market-edge-offhost"
+    target = _pull(tmp_path / "elsewhere", "2026-09-01", verified=True)  # a verified pull outside the base
+    for day in ("2026-10-04", "2026-10-11"):
+        _pull(base, day, verified=True)
+    link = base / "2026-12-31"
+    made = False
+    if hasattr(os, "name") and os.name == "nt":
+        import _winapi
+        _winapi.CreateJunction(str(target), str(link))  # a Windows junction, not a symlink
+        made = True
+        assert not link.is_symlink() and backup._is_link(link)
+    else:
+        try:
+            link.symlink_to(target, target_is_directory=True)
+            made = True
+        except OSError:
+            pytest.skip("cannot create a directory link here")
+    assert made
+    listed = backup.offhost_prune(base, keep=1)
+    assert listed["links_ignored"] == ["2026-12-31"] and "2026-12-31" not in listed["kept_verified"]
+    assert listed["kept_verified"] == ["2026-10-11"] and listed["remove"] == ["2026-10-04"]
+    assert backup.offhost_prune(base, keep=1, apply=True)["state"] == "REMOVED"
+    assert link.exists() and (target / backup.OFFHOST_MARKER).is_file()  # the link and its target are untouched
+
+
+def test_is_link_falls_back_to_the_reparse_point_attribute(tmp_path, monkeypatch):
+    d = tmp_path / "d"
+    d.mkdir()
+    assert backup._is_link(d) is False
+
+    class Stat:
+        st_file_attributes = backup._FILE_ATTRIBUTE_REPARSE_POINT
+    monkeypatch.delattr(Path, "is_junction", raising=False)  # as on Python < 3.12
+    monkeypatch.setattr(backup.os, "lstat", lambda p: Stat())
+    assert backup._is_link(d) is True
+
+
+def _ledger_bundle(site, completed: datetime) -> None:
+    template = json.loads((site["real"] / backup.MANIFEST_NAME).read_text())
+    d = site["root"] / "ledger" / "edge-backup-ledger-synthetic"
+    d.mkdir(parents=True)
+    data = b"ledger-bytes" * 10
+    (d / backup.DB_NAME).write_bytes(data)
+    manifest = {**template, "store_kind": "ledger", "database_bytes": len(data),
+                "database_sha256": hashlib.sha256(data).hexdigest(), "row_counts": {"ledger_entries": 2},
+                "chain_heads": {"acct": "h"}, "started_at_utc": (completed - timedelta(seconds=1)).isoformat(),
+                "completed_at_utc": completed.isoformat()}
+    (d / backup.MANIFEST_NAME).write_text(json.dumps(manifest), encoding="utf-8")
+
+
+def test_apply_refuses_when_f09_is_overdue(site):
+    """The newest committed checkpoint is 50 days older than the newest ledger bundle: an F09 is missing."""
+    _ledger_bundle(site, NOW - timedelta(hours=2))
+    path, digest, _ = dry_run(site)
+    assert_refused(site, "F09_OVERDUE", lambda: apply(site, path, digest))
+    # After an F09 is taken, committed and deployed (a checkpoint within the cadence), the apply proceeds.
+    (site["cps"] / "2026-12-30T000000Z.json").write_text(json.dumps({
+        "created_at_utc": (NOW - timedelta(days=1, hours=12)).isoformat(),
+        "accounts": {"acct": {"head_entry_hash": "h"}}}), encoding="utf-8")
+    path2, digest2, _ = dry_run(site)
+    assert apply(site, path2, digest2)["state"] == "DELETED"
+
+
+def test_the_f09_cadence_is_eight_days():
+    assert backup.F09_MAX_GAP == timedelta(days=8)
