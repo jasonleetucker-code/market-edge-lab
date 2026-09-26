@@ -9,6 +9,7 @@ from typing import Any
 
 from ... import sources, venues
 from ...freshness import parse_utc
+from ...research_economics import FILL_MODE_SEMANTICS, FillMode
 from .. import components as c
 from .. import data as d
 from .. import presentation as pr
@@ -1061,11 +1062,25 @@ def _ev_count(v: Any, *keys: str) -> str | None:
     return pr.count(_ev(v, *keys))
 
 
+def _fill_mode_line(mode: dict) -> str:
+    """One fill mode, led by its research_economics v2 label (ADR 0037), not the legacy enum id.
+
+    The label comes from `research_economics.FILL_MODE_SEMANTICS`; the report text already starts with it,
+    so that prefix is not repeated. An unknown id is shown as recorded."""
+    mid, basis, text = _ev(mode, "id"), _ev(mode, "basis"), str(_ev(mode, "text") or "")
+    try:
+        label = FILL_MODE_SEMANTICS[FillMode(mid)].label
+    except (ValueError, KeyError):
+        return f"{mid} ({basis}): {text}"
+    if text.startswith(label + ":"):
+        text = text[len(label) + 1:].strip()
+    return f"{label} ({basis}; legacy id {mid}): {text}"
+
+
 def _ev_capacity(cap: Any) -> str:
     """The latest paired book's size ladder (research_economics.size_ladder_from_depth), as the report gives it."""
     latest = _ev(cap, "latest")
-    modes = [f"{_ev(a, 'id')} ({_ev(a, 'basis')}): {_ev(a, 'text')}"
-             for a in (_ev(cap, "fill_modes") or []) if isinstance(a, dict)]
+    modes = [_fill_mode_line(a) for a in (_ev(cap, "fill_modes") or []) if isinstance(a, dict)]
     head = (f'<p class="meta">{esc(_ev_count(cap, "sides_with_book") or "—")} paired side(s) with a book · '
             f'{esc(_ev_count(cap, "truncated") or "—")} truncated capture(s)</p>')
     if not isinstance(latest, dict):

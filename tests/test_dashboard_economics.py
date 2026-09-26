@@ -1,7 +1,8 @@
 """Economic evidence on Research & Data -> Research (Economic Evidence v1, PR C; UI_CONTRACT §8 and §14).
 
 One compact section in the existing Terminal for the two research families: Family A from
-`sports_evidence.terminal_view`, Family B "not yet available" until PR B's evaluator lands. No new
+`sports_evidence.terminal_view`; Family B from the merged payoff evaluator (PR B, #102), shown as unavailable
+when it cannot be loaded. No new
 navigation, no edge score, no profit shown for missing outcomes, no "arbitrage captured", no funded state.
 States: populated, partial, stale, empty, unsupported, unknown, error, malformed; Family B unavailable.
 """
@@ -103,6 +104,11 @@ def test_populated_section_sits_in_the_research_tab_after_the_experiments(state)
     for label in ("final 3", "pending 6", "Outcome final", "OUTCOME_FINAL", "OUTCOME_PENDING", "final-evaluable 3"):
         assert label not in text, label
     assert "0 episodes" not in text
+    # Fill modes lead with their research_economics v2 labels (ADR 0037), the legacy enum id after them.
+    for label, legacy in (("FIRST_DETECTION_ZERO_LATENCY", "CONSERVATIVE"), ("HINDSIGHT_UPPER_BOUND", "LESS_CONSERVATIVE")):
+        line = f"{label} (ESTIMATED; legacy id {legacy}):"
+        assert line in text, line
+        assert f"{legacy} (ESTIMATED)" not in text
 
 
 @pytest.mark.parametrize("state", ["economics_issues"], indirect=True)
@@ -175,7 +181,8 @@ def test_loaders_report_absence_honestly(tmp_path, monkeypatch):
     assert tampered.status == d.ERROR and "does not verify" in tampered.message
     monkeypatch.setitem(sys.modules, d.PAYOFF_EVIDENCE_MODULE, None)  # the evaluator is not installed
     absent = d.Context(Config(experiments_root=sf.payoff_registry(tmp_path / "r3"))).economic_b
-    assert absent.status == d.NO_DATA and "PR B" in absent.message
+    assert absent.status == d.NO_DATA and "payoff_constraints" in absent.message
+    assert "not in this build" in absent.message
 
 
 def test_gallery_renders_every_state():
@@ -190,3 +197,12 @@ def test_gallery_renders_every_state():
     for needle in ("Stale · not current", "Unsupported payoff", "No targets yet", "Family A evidence unknown",
                    "Family A unavailable (read error)"):
         assert needle in text, needle
+
+
+def test_fill_mode_line_leads_with_the_v2_label_and_keeps_unknown_ids_as_recorded():
+    line = research._fill_mode_line({"id": "LESS_CONSERVATIVE", "basis": "ESTIMATED",
+                                     "text": "HINDSIGHT_UPPER_BOUND: chosen after the whole episode was seen"})
+    assert line == "HINDSIGHT_UPPER_BOUND (ESTIMATED; legacy id LESS_CONSERVATIVE): chosen after the whole episode was seen"
+    old_text = research._fill_mode_line({"id": "CONSERVATIVE", "basis": "ESTIMATED", "text": "what was there at detection"})
+    assert old_text.startswith("FIRST_DETECTION_ZERO_LATENCY (ESTIMATED; legacy id CONSERVATIVE): what was there")
+    assert research._fill_mode_line({"id": "SOMETHING_NEW", "basis": "UNKNOWN", "text": "t"}) == "SOMETHING_NEW (UNKNOWN): t"

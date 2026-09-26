@@ -1331,7 +1331,7 @@ def pm_market_history(ctx: Context, slugs: Any) -> Loaded:
 # --------------------------------------------------------------------------- Economic Evidence v1 (two research families)
 
 SPORTS_EVIDENCE_MODULE = "edge_lab.sports_evidence"
-PAYOFF_EVIDENCE_MODULE = "edge_lab.payoff_constraints"  # Writer 1's PR B evaluator (absent until it lands)
+PAYOFF_EVIDENCE_MODULE = "edge_lab.payoff_constraints"  # the same-venue payoff evaluator (EE v1 PR B, merged; ADR 0036)
 
 
 def _optional_module(name: str, absent: str, ctx: Context) -> tuple[Any, Loaded | None]:
@@ -1441,8 +1441,8 @@ def economic_evidence_b(ctx: Context) -> Loaded:
 
     OK carries {"state": POPULATED | STALE | BLOCKED | EMPTY, ...}; NO_DATA when the evaluator or the registry
     is unavailable; ERROR when the newest result cannot be read or does not verify (never an older fallback)."""
-    module, missing = _optional_module(PAYOFF_EVIDENCE_MODULE, "the same-venue payoff evaluator (payoff_constraints, "
-                                                               "PR B) is not in this build", ctx)
+    module, missing = _optional_module(PAYOFF_EVIDENCE_MODULE, "the same-venue payoff evaluator (payoff_constraints) "
+                                                               "could not be imported: not in this build", ctx)
     if missing is not None:
         return missing
     root = ctx.config.experiments_root
