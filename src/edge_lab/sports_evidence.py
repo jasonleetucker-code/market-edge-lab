@@ -65,15 +65,24 @@ Clusters for later statistics: the game (Odds event id) and the NFL week (Tuesda
 Delayed-signal and placebo control references are listed per row for the protocol to use; this module
 computes no statistic from them.
 
-CLI (read-only): `python -m edge_lab.sports_evidence report --db <path> [--as-of ISO] [--out FILE]`.
+**EXP-002 measurement** (`measure_exp002`, `exp002-measurement-v1`): the label-free pre-freeze noise gate (it
+never loads a T-60m book) and the cross-book markout endpoint (it reads the first T-60m book of each market, a
+label, so it runs only in a logged results path). See the section "EXP-002 measurement" below.
+
+CLI (read-only): `python -m edge_lab.sports_evidence report --db <path> [--as-of ISO] [--out FILE]` and
+`python -m edge_lab.sports_evidence exp002 --db <path> [--as-of ISO] [--min-effect D] [--with-results
+--evidence-log <EXP-002 evidence_use.jsonl> --actor NAME --code-version SHA] [--out FILE]`.
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
+import random
 import re
+import statistics
 import sys
 import uuid
 from collections import OrderedDict, deque
@@ -82,7 +91,7 @@ from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 from enum import Enum
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any, Callable, Mapping, Sequence
 from urllib.parse import parse_qs, urlsplit
 
 from . import experiments as registry
@@ -560,7 +569,11 @@ def _markets_in(payload: Any) -> tuple[list[tuple[Mapping[str, Any], tuple[str, 
     return out, not payload.get("cursor")
 
 
-def kalshi_catalog(store: Any, as_of: datetime, payloads: _Payloads) -> KalshiCatalog:
+SETTLED_LISTING_FIELDS = ("result", "settlement_value_dollars", "expiration_value")
+
+
+def kalshi_catalog(store: Any, as_of: datetime, payloads: _Payloads,
+                   drop_fields: Sequence[str] = ()) -> KalshiCatalog:
     """Every stored KXNFLGAME listing and book received by `as_of`: metadata by SQL, listings parsed
     (bounded), books left unparsed until the join selects one."""
     meta, meta_truncated = _nfl_metadata(store, keep=MAX_KALSHI_META)
@@ -599,7 +612,7 @@ def kalshi_catalog(store: Any, as_of: datetime, payloads: _Payloads) -> KalshiCa
                 continue
             listings.setdefault(ticker, []).append(KalshiMarketObs(
                 ticker, parsed_ticker["event_ticker"], received, int(r["id"]), str(r["payload_sha256"]), str(r["kind"]),
-                complete, {k: m.get(k) for k in _MARKET_FIELDS if k in m}, srcs))
+                complete, {k: m.get(k) for k in _MARKET_FIELDS if k in m and k not in drop_fields}, srcs))
     if len(listing_rows) > MAX_LISTING_PARSES:
         truncated = True
         problems.append(f"LISTINGS_TRUNCATED: only the newest {MAX_LISTING_PARSES} of {len(listing_rows)} listing "
@@ -1589,6 +1602,24 @@ def _observations(rows: Sequence[dict[str, Any]]) -> list[Any]:
     return out
 
 
+def _join(store: Any, as_of: datetime, policy: JoinPolicy, results: bool,
+          horizons: Sequence[str] | None = None, drop_settled: bool = False
+          ) -> tuple[list[dict[str, Any]], KalshiCatalog, _Payloads, list[dict[str, Any]], bool]:
+    """(rows, catalog, payloads, targets, targets truncated): the join rows, optionally for some horizons only
+    (the gate builds T-24h and T-6h rows only, so no T-60m book is loaded for it) and with the settled listing
+    fields dropped from the catalog (`drop_settled`, the gate path: no settlement label is held in memory)."""
+    payloads = _Payloads(store)
+    consensus = _Consensus(payloads)
+    catalog = kalshi_catalog(store, as_of, payloads, SETTLED_LISTING_FIELDS if drop_settled else ())
+    targets, targets_truncated = _targets(store, as_of)
+    pm = _pm_related(store, as_of)
+    chosen = [r for r in targets if horizons is None or r["offset_label"] in horizons]
+    rows = [_row(r, catalog, payloads, consensus, pm, as_of, policy, results) for r in chosen]
+    rows.sort(key=lambda r: (r["commence_utc"] or "", r["event_id"], r["nominal_utc"] or ""))
+    _week_placebo(rows)
+    return rows, catalog, payloads, targets, targets_truncated
+
+
 def build_report(store: Any, *, as_of: datetime, policy: JoinPolicy = JoinPolicy(),
                  experiments_root: Path | None = None, results: bool = False) -> dict[str, Any]:
     """The Family A paired-evidence report over one read-only store. Deterministic for the same stored
@@ -1600,14 +1631,7 @@ def build_report(store: Any, *, as_of: datetime, policy: JoinPolicy = JoinPolicy
     if not isinstance(as_of, datetime) or as_of.tzinfo is None:
         raise ValueError("as_of must be a timezone-aware datetime")
     as_of = as_of.astimezone(UTC)
-    payloads = _Payloads(store)
-    consensus = _Consensus(payloads)
-    catalog = kalshi_catalog(store, as_of, payloads)
-    targets, targets_truncated = _targets(store, as_of)
-    pm = _pm_related(store, as_of)
-    rows = [_row(r, catalog, payloads, consensus, pm, as_of, policy, results) for r in targets]
-    rows.sort(key=lambda r: (r["commence_utc"] or "", r["event_id"], r["nominal_utc"] or ""))
-    _week_placebo(rows)
+    rows, catalog, payloads, _, targets_truncated = _join(store, as_of, policy, results)
     observations = _observations(rows)  # also removes the private ladder objects from the rows
     join = _attrition(rows, results)
     protocol = protocol_status(experiments_root)
@@ -1639,6 +1663,547 @@ def build_report(store: Any, *, as_of: datetime, policy: JoinPolicy = JoinPolicy
         "economics": economics(rows, observations, protocol, join, policy, as_of, [g["stream"] for g in gaps]),
         "rows": rows,
     }
+    plain = _plain(body)
+    plain["output_sha256"] = sha256_hex(canonical_json(plain))
+    return plain
+
+
+# --------------------------------------------------------------------------- EXP-002 measurement
+#
+# docs/research/RESEARCH_UNBLOCKING_DECISIONS.md A.A-A.C and A.G. Two parts, kept apart on purpose:
+#
+# - The label-free pre-freeze gate (`noise_gate`). It reads only the T-24h and T-6h paired books and repeat
+#   books of the same market received within 15 min after them (inside the same horizon). It never loads a
+#   T-60m book, which is a label for the T-6h markout. From same-capture cross-book dispersion and repeat-book
+#   noise it estimates the book-noise correlation rho, bounds it with a week-cluster bootstrap, and compares the
+#   upper bound with rho_max = (1/4 * delta_min) / b_hat. delta_min stays UNKNOWN until the protocol freezes it,
+#   so the verdict is given per candidate delta_min, or for one supplied by the caller.
+# - The cross-book markout endpoint (`markout_endpoint`). It reads the first T-60m book of each team market, a
+#   label, so it runs only in a logged results path (`measure_exp002(results=True)`; the CLI's
+#   `exp002 --with-results` records the view first). Nothing here is an edge claim or a frozen statistic.
+
+MEASUREMENT_VERSION = "exp002-measurement-v1"
+GATE_VERSION = "exp002-noise-gate-v2"
+MARKOUT_VERSION = "exp002-cross-book-markout-v1"
+GATE_HORIZONS = ("T-24h", "T-6h")
+PRIOR_HORIZON, SIGNAL_HORIZON, TARGET_HORIZON = "T-24h", "T-6h", "T-60m"
+SAME_CAPTURE_MAX = timedelta(seconds=120)  # both team books of one capture run
+REPEAT_WINDOW = timedelta(minutes=15)
+# Sufficiency floors of the gate's estimator (implementation parameters, not research thresholds): below them
+# the verdict is INSUFFICIENT_DATA, never PASS.
+# v2 (review of #119): four weeks (two gave only three distinct week resamples), and a game-cluster bound too.
+GATE_MIN_PAIRS, GATE_MIN_REPEATS, GATE_MIN_WEEKS, GATE_MIN_GAPS = 20, 10, 4, 10
+CANDIDATE_MIN_EFFECTS = (0.0025, 0.005, 0.01)  # candidates for display only; the protocol freezes delta_min
+TOLERABLE_FRACTION = 0.25
+GATE_BOOTSTRAP_SEED, GATE_BOOTSTRAP_RESAMPLES = 20260926, 2000
+MIRROR_VARIANCE = 1e-10  # a cross-book dispersion variance at or below this is mirror quoting (rho = 1)
+MEASUREMENT_LABEL = "EXP-002 MEASUREMENT (DEVELOPMENT) — NOT AN EDGE CLAIM, NOT A FROZEN STATISTIC"
+# Gate v2 never authorizes a freeze (review of #119): with repeat books, moderate stickiness still biases rho_hat
+# and b_hat low without a misfit, so a v2 PASS is named for what it is and carries freeze_eligible = False.
+PASS, FAIL, INSUFFICIENT = "PASS_REPEAT_ONLY_NOT_FREEZE_ELIGIBLE", "FAIL", "INSUFFICIENT_DATA"
+FREEZE_INELIGIBLE_REASON = ("gate v2 cannot bound moderate stickiness; freeze requires reviewed gate v3 "
+                            "(docs/research/RESEARCH_UNBLOCKING_DECISIONS.md A.I)")
+
+
+def _sign(x: float) -> int:
+    return (x > 0) - (x < 0)
+
+
+def _mid(bid: Any, ask: Any) -> float | None:
+    b, a = _dec(bid), _dec(ask)
+    if b is None or a is None or b >= a:
+        return None
+    return float((b + a) / 2)
+
+
+def _spread(bid: Any, ask: Any) -> float | None:
+    b, a = _dec(bid), _dec(ask)
+    return None if b is None or a is None else float(a - b)
+
+
+class BookMids:
+    """Reads one stored Kalshi book and returns its YES mid (None when it has no two-sided book). Every snapshot
+    id read is recorded in `read`, so a caller (and a test) can prove which books a computation touched."""
+
+    def __init__(self, payloads: _Payloads) -> None:
+        self.payloads = payloads
+        self.read: list[int] = []
+
+    def __call__(self, ticker: str, sid: int, received: datetime) -> tuple[float | None, float | None]:
+        self.read.append(sid)
+        payload, bad = self.payloads.payload(sid)
+        if bad:
+            return None, None
+        yes = kalshi_quotes.quotes_from_orderbook(ticker, payload, received_at_utc=_iso(received),
+                                                  evidence_id=f"snapshot:{sid}").get("YES")
+        if yes is None or yes.anomaly:
+            return None, None
+        return _mid(yes.best_bid, yes.best_ask), _spread(yes.best_bid, yes.best_ask)
+
+
+@dataclass(frozen=True)
+class GateObservations:
+    """Label-free inputs of the gate: (week, game, value) triples."""
+
+    dispersions: tuple[tuple[str, str, float], ...]  # d = H - (1 - away mid), same capture, T-24h and T-6h
+    repeats_home: tuple[tuple[str, str, float], ...]  # home market: repeat mid - paired mid, within 15 min
+    repeats_away: tuple[tuple[str, str, float], ...]
+    gaps: tuple[tuple[str, str, float], ...]  # T-6h: consensus home probability - H
+    repeat_gap_seconds: tuple[int, ...]
+    counts: dict[str, int]
+    books_read: tuple[int, ...]
+    # Bid-ask spreads of the paired books (both roles): the PROPOSED single-capture noise scale, diagnostic only.
+    spreads: tuple[tuple[str, str, float], ...] = ()
+
+
+def gate_observations(rows: Sequence[Mapping[str, Any]], catalog: KalshiCatalog,
+                      mids: Callable[[str, int, datetime], tuple[float | None, float | None]]) -> GateObservations:
+    """Collect the gate's inputs from T-24h / T-6h rows only. Paired books' mids come from the rows (already read
+    as features); `mids` is called only for repeat books of those markets, received after the paired book, within
+    `REPEAT_WINDOW` and at or before the row's cutoff (so inside the same horizon)."""
+    counts = {"rows_seen": 0, "rows_other_horizon_ignored": 0, "rows_not_fully_paired": 0, "no_two_sided_book": 0,
+              "not_same_capture": 0, "dispersion_pairs": 0, "repeat_candidates": 0, "repeat_home": 0,
+              "repeat_away": 0, "repeat_without_mid": 0, "gaps": 0}
+    disp, rep_h, rep_a, gaps, gap_s, spreads = [], [], [], [], [], []
+    read: list[int] = []
+
+    def reader(ticker: str, sid: int, received: datetime) -> tuple[float | None, float | None]:
+        read.append(sid)
+        return mids(ticker, sid, received)
+
+    for r in rows:
+        if r.get("horizon") not in GATE_HORIZONS:
+            counts["rows_other_horizon_ignored"] += 1
+            continue
+        counts["rows_seen"] += 1
+        sides = r.get("sides") or {}
+        home, away = sides.get(r.get("home_team")), sides.get(r.get("away_team"))
+        if r.get("status") != PAIRED or home is None or away is None:
+            counts["rows_not_fully_paired"] += 1
+            continue
+        h, am = _mid(home.get("yes_bid"), home.get("yes_ask")), _mid(away.get("yes_bid"), away.get("yes_ask"))
+        if h is None or am is None:
+            counts["no_two_sided_book"] += 1
+            continue
+        week, game = r["week_cluster"], r["event_id"]
+        rh, ra = parse_utc(home.get("book_received_utc")), parse_utc(away.get("book_received_utc"))
+        if rh is None or ra is None or abs(rh - ra) > SAME_CAPTURE_MAX:
+            counts["not_same_capture"] += 1
+        else:
+            disp.append((week, game, h - (1 - am)))
+            counts["dispersion_pairs"] += 1
+            for s in (home, away):
+                sp = _spread(s.get("yes_bid"), s.get("yes_ask"))
+                if sp is not None:
+                    spreads.append((week, game, sp))
+        cutoff = parse_utc(r.get("cutoff_utc"))
+        for role, side, paired_mid, out in (("home", home, h, rep_h), ("away", away, am, rep_a)):
+            received = parse_utc(side.get("book_received_utc"))
+            if received is None or cutoff is None:
+                continue
+            later = [b for b in catalog.books.get(side["ticker"], [])
+                     if received < b[0] <= min(received + REPEAT_WINDOW, cutoff) and b[1] != side.get("book_snapshot_id")]
+            if not later:
+                continue
+            counts["repeat_candidates"] += 1
+            first = min(later, key=lambda b: (b[0], b[1]))
+            m, _ = reader(side["ticker"], first[1], first[0])
+            if m is None:
+                counts["repeat_without_mid"] += 1
+                continue
+            out.append((week, game, m - paired_mid))
+            counts[f"repeat_{role}"] += 1
+            gap_s.append(int((first[0] - received).total_seconds()))
+        p = _dec(home.get("consensus_probability"))
+        if r["horizon"] == SIGNAL_HORIZON and p is not None:
+            gaps.append((week, game, float(p) - h))
+            counts["gaps"] += 1
+    return GateObservations(tuple(disp), tuple(rep_h), tuple(rep_a), tuple(gaps), tuple(gap_s), counts, tuple(read),
+                            tuple(spreads))
+
+
+def _noise_components(disp: Sequence[float], rep_h: Sequence[float],
+                      rep_a: Sequence[float]) -> tuple[float | None, float | None, float | None, float | None]:
+    """(rho_hat, var_d, sigma2_home, sigma2_away). sigma2 = 1/2 * mean(repeat difference^2): latent drift inside
+    the repeat gap inflates it, which errs toward failing."""
+    var_d = statistics.variance(disp) if len(disp) >= 2 else None
+    s2h = 0.5 * sum(x * x for x in rep_h) / len(rep_h) if rep_h else None
+    s2a = 0.5 * sum(x * x for x in rep_a) / len(rep_a) if rep_a else None
+    if var_d is None or not s2h or not s2a:
+        return None, var_d, s2h, s2a
+    rho = (s2h + s2a - var_d) / (2 * math.sqrt(s2h * s2a))
+    return max(-1.0, min(1.0, rho)), var_d, s2h, s2a
+
+
+def naive_bias(sigma2: float, gap_sd: float) -> float:
+    """The v1 same-book markout bias, sigma^2 * sqrt(2/pi) / sd(gap) (scripts/research_power_sensitivity.py)."""
+    return sigma2 * math.sqrt(2 / math.pi) / gap_sd
+
+
+def rho_max(min_effect: float, b_hat: float | None) -> float | None:
+    """(TOLERABLE_FRACTION * min_effect) / b_hat, capped at 1; None when b_hat is unknown."""
+    if b_hat is None:
+        return None
+    return 1.0 if b_hat <= 0 else min(1.0, TOLERABLE_FRACTION * min_effect / b_hat)
+
+
+def _cluster_upper(obs: GateObservations, *, key: int, seed: int, resamples: int, q: float = 0.9) -> float | None:
+    """One-sided upper `q` bound of rho_hat, resampling whole clusters (`key` 0: NFL weeks, 1: games), each with
+    all of its dispersions and repeats. None with fewer than two clusters or when no resample is estimable."""
+    clusters = sorted({x[key] for x in obs.dispersions} | {x[key] for x in obs.repeats_home}
+                      | {x[key] for x in obs.repeats_away})
+    if len(clusters) < 2:
+        return None
+    by = {c: ([x[2] for x in obs.dispersions if x[key] == c], [x[2] for x in obs.repeats_home if x[key] == c],
+              [x[2] for x in obs.repeats_away if x[key] == c]) for c in clusters}
+    rng = random.Random(seed)
+    values = []
+    for _ in range(resamples):
+        d, h, a = [], [], []
+        for _ in clusters:
+            wd, wh, wa = by[clusters[rng.randrange(len(clusters))]]
+            d += wd
+            h += wh
+            a += wa
+        rho, *_ = _noise_components(d, h, a)
+        if rho is not None:
+            values.append(rho)
+    if not values:
+        return None
+    values.sort()
+    return values[min(len(values) - 1, max(0, math.ceil(q * len(values)) - 1))]
+
+
+def noise_gate(obs: GateObservations, *, min_effect: float | None = None,
+               candidates: Sequence[float] = CANDIDATE_MIN_EFFECTS, seed: int = GATE_BOOTSTRAP_SEED,
+               resamples: int = GATE_BOOTSTRAP_RESAMPLES) -> dict[str, Any]:
+    """The label-free pre-freeze gate (A.A): PASS only when the week-cluster bootstrap upper 90% bound of the
+    book-noise correlation is below rho_max for delta_min; FAIL on mirror quoting or a bound at or above
+    rho_max; INSUFFICIENT_DATA otherwise. delta_min UNKNOWN (None): the verdict is given per candidate only."""
+    disp = [x[2] for x in obs.dispersions]
+    rep_h = [x[2] for x in obs.repeats_home]
+    rep_a = [x[2] for x in obs.repeats_away]
+    gaps = [x[2] for x in obs.gaps]
+    weeks = sorted({x[0] for x in obs.dispersions})
+    rho, var_d, s2h, s2a = _noise_components(disp, rep_h, rep_a)
+    upper_week = _cluster_upper(obs, key=0, seed=seed, resamples=resamples)
+    upper_game = _cluster_upper(obs, key=1, seed=seed, resamples=resamples)
+    # The gate uses the larger (more conservative) of the two bounds.
+    upper = None if upper_week is None or upper_game is None else max(upper_week, upper_game)
+    gap_sd = statistics.stdev(gaps) if len(gaps) >= 2 else None
+    # The noise scale behind b_hat is floored at var(d)/2: sticky quotes make repeat books understate the noise,
+    # while the same-capture dispersion carries it (sigma2 >= var(d)/2 whenever rho >= 0).
+    sigma2_repeat = None if s2h is None or s2a is None else (s2h + s2a) / 2
+    sigma2 = None if sigma2_repeat is None else max(sigma2_repeat, (var_d or 0.0) / 2)
+    b_hat = None if sigma2 is None or not gap_sd else naive_bias(sigma2, gap_sd)
+    spreads = [x[2] for x in obs.spreads]
+    sigma2_spread = sum(s * s for s in spreads) / len(spreads) / 12 if spreads else None
+    rho_spread = (None if not sigma2_spread or var_d is None
+                  else max(-1.0, min(1.0, 1 - var_d / (2 * sigma2_spread))))
+    mirror = var_d is not None and len(disp) >= GATE_MIN_PAIRS and var_d <= MIRROR_VARIANCE
+    insufficient = []
+    if len(disp) < GATE_MIN_PAIRS:
+        insufficient.append(f"{len(disp)} same-capture cross-book pairs < {GATE_MIN_PAIRS}")
+    if min(len(rep_h), len(rep_a)) < GATE_MIN_REPEATS:
+        insufficient.append(f"repeat pairs home {len(rep_h)} / away {len(rep_a)} < {GATE_MIN_REPEATS} each")
+    if len(weeks) < GATE_MIN_WEEKS:
+        insufficient.append(f"{len(weeks)} NFL week(s) < {GATE_MIN_WEEKS}: no week-cluster bound")
+    if len(gaps) < GATE_MIN_GAPS:
+        insufficient.append(f"{len(gaps)} T-6h consensus gaps < {GATE_MIN_GAPS}: no b_hat")
+    if (s2h == 0 or s2a == 0) and rep_h and rep_a:
+        insufficient.append("REPEAT_NOISE_ZERO: repeat books never changed within 15 min, so the repeat estimator "
+                            "cannot scale the noise (persistent quotes); the gate cannot certify")
+    if rho is not None and (rho < 0 or (upper is not None and upper < 0)):
+        insufficient.append(f"MODEL_MISFIT: repeat noise inconsistent with dispersion (rho_hat {rho:.3f}, upper "
+                            f"{'n/a' if upper is None else f'{upper:.3f}'}): repeat books understate the noise "
+                            "(sticky quotes), so rho cannot be bounded from them")
+    if upper is None and not insufficient:
+        insufficient.append("the week- or game-cluster bound is not estimable")
+
+    def verdict(delta: float) -> dict[str, Any]:
+        limit = rho_max(delta, b_hat)
+        if mirror:
+            return {"min_effect": delta, "rho_max": limit, "verdict": FAIL, "freeze_eligible": False,
+                    "why": "MIRROR_QUOTING: same-capture cross-book dispersion is zero (rho = 1)"}
+        if insufficient or limit is None or upper is None:
+            return {"min_effect": delta, "rho_max": limit, "verdict": INSUFFICIENT, "freeze_eligible": False,
+                    "why": "; ".join(insufficient)}
+        ok = upper < limit
+        return {"min_effect": delta, "rho_max": limit, "verdict": PASS if ok else FAIL, "freeze_eligible": False,
+                "why": f"upper 90% bound {upper:.4f} {'<' if ok else '>='} rho_max {limit:.4f}"
+                       + (f"; {FREEZE_INELIGIBLE_REASON}" if ok else "")}
+
+    table = [verdict(d) for d in candidates]
+    chosen = verdict(min_effect) if min_effect is not None else None
+    if chosen is not None:
+        overall = chosen["verdict"]
+    elif mirror:
+        overall = FAIL
+    elif insufficient:
+        overall = INSUFFICIENT
+    else:
+        overall = "BY_MIN_EFFECT"  # delta_min is UNKNOWN until the freeze: read the candidate table
+    gap_sorted = sorted(obs.repeat_gap_seconds)
+    return {
+        "version": GATE_VERSION, "label_free": True,
+        "reads": "only the T-24h and T-6h paired books and repeat books of the same market within 15 min inside "
+                 "that horizon; never a T-60m book (a label for the markout); the catalog it runs on carries no "
+                 "settled listing field (result, settlement value, expiration value)",
+        "verdict": overall, "min_effect": min_effect,
+        # Nothing in gate v2 authorizes a freeze, whatever the verdict.
+        "freeze_eligible": False, "freeze_ineligible_reason": FREEZE_INELIGIBLE_REASON,
+        "min_effect_state": "SUPPLIED" if min_effect is not None else "UNKNOWN: frozen only at preregistration",
+        "verdict_for_min_effect": chosen, "by_candidate_min_effect": table,
+        "estimates": {"rho_hat": rho, "rho_upper_90": upper, "rho_upper_90_week": upper_week,
+                      "rho_upper_90_game": upper_game, "var_dispersion": var_d, "sigma2_home": s2h,
+                      "sigma2_away": s2a, "sigma2_repeat": sigma2_repeat, "sigma2_for_b_hat": sigma2,
+                      "gap_sd": gap_sd, "b_hat": b_hat, "mirror_quoting": mirror},
+        "diagnostic_spread_estimator": {
+            "state": "DIAGNOSTIC ONLY: the PROPOSED single-capture noise scale (docs/research/"
+                     "RESEARCH_UNBLOCKING_DECISIONS.md A.I); not used for the verdict",
+            "sigma2_spread_uniform": sigma2_spread, "rho_hat_spread": rho_spread, "books": len(spreads),
+            "model": "the fair value lies uniformly inside the quoted spread: sigma2 = mean(spread^2) / 12"},
+        "counts": {**obs.counts, "weeks": len(weeks), "books_read": len(obs.books_read)},
+        "repeat_gap_seconds": {"n": len(gap_sorted), "median": statistics.median(gap_sorted) if gap_sorted else None,
+                               "max": gap_sorted[-1] if gap_sorted else None},
+        "insufficient": insufficient,
+        "method": {"rho_hat": "(sigma2_home + sigma2_away - var(d)) / (2 sqrt(sigma2_home sigma2_away)), clipped to "
+                              "[-1, 1]; sigma2 = 1/2 mean(repeat difference^2); a negative rho_hat or bound is "
+                              "MODEL_MISFIT (INSUFFICIENT_DATA), so the gate prefers a false INSUFFICIENT_DATA to a "
+                              "false PASS",
+                   "bound": f"one-sided 90% percentile of a week-cluster and a game-cluster bootstrap (seed {seed}, "
+                            f"{resamples} resamples each); the larger is used",
+                   "rho_max": "(1/4 * delta_min) / b_hat, b_hat = sigma2 * sqrt(2/pi) / sd(consensus - H at T-6h), "
+                              "sigma2 = max(repeat sigma2, var(d)/2)",
+                   "floors": {"pairs": GATE_MIN_PAIRS, "repeats_each": GATE_MIN_REPEATS, "weeks": GATE_MIN_WEEKS,
+                              "gaps": GATE_MIN_GAPS},
+                   "limitation": "noise that persists across the repeat gap understates sigma2 and rho_hat. Severe "
+                                 "stickiness shows as MODEL_MISFIT; moderate stickiness still biases rho_hat and b_hat "
+                                 "low, so read the repeat-gap and repeat counts with the verdict"},
+    }
+
+
+def cross_book_markout(c: float, c_prime: float, h6: float, a6: float, h1: float, a1: float) -> float:
+    """y = 1/2 [sign(c - H6)(A1 - A6) + sign(c' - A6)(H1 - H6)], all in home-team units (A = 1 - away mid):
+    each half takes its sign from one book and its markout from the other."""
+    return 0.5 * (_sign(c - h6) * (a1 - a6) + _sign(c_prime - a6) * (h1 - h6))
+
+
+def kalshi_only_placebo(h24: float, a24: float, h6: float, a6: float, h1: float, a1: float) -> float:
+    """The same statistic with the consensus replaced by each signal book's own T-24h mid (no consensus
+    information). Supplementary: it also reacts to Kalshi's own momentum or reversal."""
+    return 0.5 * (_sign(h24 - h6) * (a1 - a6) + _sign(a24 - a6) * (h1 - h6))
+
+
+def _contract_value(side: Mapping[str, Any], policy: JoinPolicy) -> tuple[float | None, str]:
+    """The consensus value of this side's YES contract for the sign: the tie-adjusted interval midpoint when the
+    protocol's tie and non-standard-resolution bounds are declared, else the unadjusted consensus (flagged)."""
+    p = _dec(side.get("consensus_probability"))
+    if p is None:
+        return None, "NO_CONSENSUS"
+    interval = tie_adjusted_interval(p, _dec((side.get("rules") or {}).get("tie_payout")),
+                                     policy.tie_probability_bound, policy.postponement_probability_bound)
+    if interval is None:
+        return float(p), "UNADJUSTED: tie and non-standard-resolution bounds are not declared (sign only)"
+    return float((interval[0] + interval[1]) / 2), "TIE_ADJUSTED_MIDPOINT"
+
+
+def _first_book(catalog: KalshiCatalog, ticker: str, start: datetime, end: datetime) -> tuple[datetime, int, str, str] | None:
+    books = [b for b in catalog.books.get(ticker, []) if start <= b[0] <= end]
+    return min(books, key=lambda b: (b[0], b[1])) if books else None
+
+
+def _cluster_interval(values_by_week: Mapping[str, list[float]], *, seed: int, resamples: int) -> list[float] | None:
+    weeks = sorted(values_by_week)
+    if len(weeks) < 2:
+        return None
+    rng = random.Random(seed)
+    means = []
+    for _ in range(resamples):
+        pooled = [v for _ in weeks for v in values_by_week[weeks[rng.randrange(len(weeks))]]]
+        if pooled:
+            means.append(sum(pooled) / len(pooled))
+    means.sort()
+    return [means[int(0.05 * (len(means) - 1))], means[int(0.95 * (len(means) - 1))]] if means else None
+
+
+def markout_endpoint(rows: Sequence[Mapping[str, Any]], targets: Sequence[Mapping[str, Any]], catalog: KalshiCatalog,
+                     mids: Callable[[str, int, datetime], tuple[float | None, float | None]], *, as_of: datetime,
+                     policy: JoinPolicy, seed: int = GATE_BOOTSTRAP_SEED,
+                     resamples: int = GATE_BOOTSTRAP_RESAMPLES) -> dict[str, Any]:
+    """Per game: the cross-book markout from the T-6h pair to the FIRST T-60m book of each team market, the
+    Kalshi-only placebo from the T-24h pair, week summaries and the A.G pilot outputs. Reads labels (the T-60m
+    books): call it only from a logged results path."""
+    by_game: dict[str, dict[str, Mapping[str, Any]]] = {}
+    for r in rows:
+        by_game.setdefault(r["event_id"], {})[r["horizon"]] = r
+    target_of: dict[tuple[str, str], Mapping[str, Any]] = {}
+    for t in targets:
+        if t.get("state") != "SUPERSEDED":
+            target_of[(t["event_id"], t["offset_label"])] = t
+    counts = {"games": 0, "t6_due": 0, "t6_paired": 0, "t60_due": 0, "t60_pending": 0, "t60_books_found": 0,
+              "no_t6_pair": 0, "no_t6_mid": 0, "no_t60_target": 0, "no_t60_book": 0, "no_t60_mid": 0,
+              "no_consensus": 0, "evaluated": 0, "with_placebo": 0}
+    games, by_timing = [], {BOOK_BEFORE_ODDS: 0, BOOK_AT_OR_AFTER_ODDS: 0, "UNKNOWN": 0}
+    for event_id in sorted(by_game):
+        horizons = by_game[event_id]
+        r6 = horizons.get(SIGNAL_HORIZON)
+        if r6 is None or r6.get("status") in (SUPERSEDED, NOT_YET_DUE):
+            continue
+        counts["games"] += 1
+        counts["t6_due"] += 1
+        home_team, away_team = r6.get("home_team"), r6.get("away_team")
+        sides = r6.get("sides") or {}
+        hs, as_ = sides.get(home_team), sides.get(away_team)
+        if r6.get("status") != PAIRED or hs is None or as_ is None:
+            counts["no_t6_pair"] += 1
+            continue
+        counts["t6_paired"] += 1
+        h6, am6 = _mid(hs.get("yes_bid"), hs.get("yes_ask")), _mid(as_.get("yes_bid"), as_.get("yes_ask"))
+        if h6 is None or am6 is None:
+            counts["no_t6_mid"] += 1
+            continue
+        a6 = 1 - am6
+        c, c_basis = _contract_value(hs, policy)
+        c_away, _ = _contract_value(as_, policy)
+        if c is None or c_away is None:
+            counts["no_consensus"] += 1
+            continue
+        c_prime = 1 - c_away
+        t60 = target_of.get((event_id, TARGET_HORIZON))
+        if t60 is None:
+            counts["no_t60_target"] += 1
+            continue
+        target = _capture_target(t60)
+        start, end = effective_due(target, PILOT_CONFIG) - PILOT_CONFIG.early_tolerance, deadline(target, PILOT_CONFIG)
+        if end > as_of:
+            counts["t60_pending"] += 1
+            continue
+        counts["t60_due"] += 1
+        books = {role: _first_book(catalog, s["ticker"], start, end) for role, s in (("home", hs), ("away", as_))}
+        if books["home"] is None or books["away"] is None:
+            counts["no_t60_book"] += 1
+            continue
+        counts["t60_books_found"] += 1
+        h1, sp_h1 = mids(hs["ticker"], books["home"][1], books["home"][0])
+        am1, sp_a1 = mids(as_["ticker"], books["away"][1], books["away"][0])
+        if h1 is None or am1 is None:
+            counts["no_t60_mid"] += 1
+            continue
+        a1 = 1 - am1
+        y = cross_book_markout(c, c_prime, h6, a6, h1, a1)
+        counts["evaluated"] += 1
+        for s in (hs, as_):
+            timing = s.get("book_timing")
+            by_timing[timing if timing in by_timing else "UNKNOWN"] += 1
+        game = {"event_id": event_id, "week": r6["week_cluster"], "commence_utc": r6.get("commence_utc"),
+                "home_team": home_team, "consensus_value_home": c, "consensus_value_home_from_away": c_prime,
+                "consensus_basis": c_basis, "H6": h6, "A6": a6, "H1": h1, "A1": a1,
+                "spreads": {"H6": _spread(hs.get("yes_bid"), hs.get("yes_ask")),
+                            "A6": _spread(as_.get("yes_bid"), as_.get("yes_ask")), "H1": sp_h1, "A1": sp_a1},
+                "t6_book_timing": {"home": hs.get("book_timing"), "away": as_.get("book_timing")},
+                "t6_decision_utc": max(hs.get("decision_utc") or "", as_.get("decision_utc") or ""),
+                "t60_books": {"home": {"snapshot_id": books["home"][1], "received_utc": _iso(books["home"][0])},
+                              "away": {"snapshot_id": books["away"][1], "received_utc": _iso(books["away"][0])}},
+                "y": y, "y_placebo": None, "H24": None, "A24": None}
+        # The placebo needs only the Kalshi books: the first book of each market in the T-24h window, whether or
+        # not the T-24h odds capture paired.
+        t24 = target_of.get((event_id, PRIOR_HORIZON))
+        if t24 is not None:
+            prior = _capture_target(t24)
+            p_start = effective_due(prior, PILOT_CONFIG) - PILOT_CONFIG.early_tolerance
+            p_end = min(deadline(prior, PILOT_CONFIG), as_of)
+            b24 = {role: _first_book(catalog, s["ticker"], p_start, p_end) for role, s in (("home", hs), ("away", as_))}
+            if b24["home"] is not None and b24["away"] is not None:
+                h24, _ = mids(hs["ticker"], b24["home"][1], b24["home"][0])
+                am24, _ = mids(as_["ticker"], b24["away"][1], b24["away"][0])
+                if h24 is not None and am24 is not None:
+                    game.update(H24=h24, A24=1 - am24, y_placebo=kalshi_only_placebo(h24, 1 - am24, h6, a6, h1, a1))
+                    counts["with_placebo"] += 1
+        games.append(game)
+    ys = [g["y"] for g in games]
+    pls = [g for g in games if g["y_placebo"] is not None]
+    weeks: dict[str, list[float]] = {}
+    diffs: dict[str, list[float]] = {}
+    for g in games:
+        weeks.setdefault(g["week"], []).append(g["y"])
+        if g["y_placebo"] is not None:
+            diffs.setdefault(g["week"], []).append(g["y"] - g["y_placebo"])
+    pl_by_week: dict[str, list[float]] = {}
+    for g in pls:
+        pl_by_week.setdefault(g["week"], []).append(g["y_placebo"])
+    week_rows = [{"week": w, "games": len(v), "mean_y": sum(v) / len(v),
+                  "mean_y_placebo": sum(pl_by_week[w]) / len(pl_by_week[w]) if w in pl_by_week else None}
+                 for w, v in sorted(weeks.items())]
+    roll = _roll_sensitivity(games)
+    return {
+        "version": MARKOUT_VERSION, "label_reads": "the FIRST book of each team market in the T-60m horizon window "
+                                                   "(a label for the T-6h decision); logged results path only",
+        "statistic": "y = 1/2 [sign(c - H6)(A1 - A6) + sign(c' - A6)(H1 - H6)], home-team units, A = 1 - away mid",
+        "placebo": "y_pl = 1/2 [sign(H24 - H6)(A1 - A6) + sign(A24 - A6)(H1 - H6)] (supplementary)",
+        "games": games, "counts": counts, "t6_book_timing": by_timing,
+        "summary": {
+            "state": "PILOT DESCRIPTIVE — NOT A TEST (development data; no frozen endpoint, no inference)",
+            "games": len(games), "weeks": len(weeks), "mean_y": sum(ys) / len(ys) if ys else None,
+            "sd_y": statistics.stdev(ys) if len(ys) >= 2 else None,
+            "mean_y_placebo": sum(g["y_placebo"] for g in pls) / len(pls) if pls else None,
+            "mean_y_minus_placebo": (sum(g["y"] - g["y_placebo"] for g in pls) / len(pls)) if pls else None,
+            "week_cluster_90_interval_mean_y": _cluster_interval(weeks, seed=seed, resamples=resamples),
+            "week_cluster_90_interval_mean_y_minus_placebo": _cluster_interval(diffs, seed=seed, resamples=resamples),
+            "by_week": week_rows},
+        "pilot_outputs": {
+            "t6_pairing_yield": None if not counts["t6_due"] else counts["t6_paired"] / counts["t6_due"],
+            "t60_book_yield": None if not counts["t60_due"] else counts["t60_books_found"] / counts["t60_due"],
+            "markout_sd": statistics.stdev(ys) if len(ys) >= 2 else None,
+            "post_label_roll_sensitivity": roll},
+    }
+
+
+def _roll_sensitivity(games: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    """POST-LABEL sensitivity only (it needs the T-60m book), never the gate: sigma2 = -cov(X6 - X24, X1 - X6)
+    per market role, and rho from the T-6h cross-book dispersion. Biased toward passing under Kalshi momentum."""
+    full = [g for g in games if g["H24"] is not None]
+    if len(full) < 3:
+        return {"state": "INSUFFICIENT_DATA", "games": len(full)}
+
+    def neg_cov(a: list[float], b: list[float]) -> float:
+        return -statistics.covariance(a, b)
+
+    s2h = neg_cov([g["H6"] - g["H24"] for g in full], [g["H1"] - g["H6"] for g in full])
+    s2a = neg_cov([g["A6"] - g["A24"] for g in full], [g["A1"] - g["A6"] for g in full])
+    var_d = statistics.variance([g["H6"] - g["A6"] for g in full])
+    rho = None if s2h <= 0 or s2a <= 0 else max(-1.0, min(1.0, (s2h + s2a - var_d) / (2 * math.sqrt(s2h * s2a))))
+    return {"state": "POST_LABEL_SENSITIVITY (not the gate; logged DEVELOPMENT data)", "games": len(full),
+            "sigma2_home": s2h, "sigma2_away": s2a, "var_dispersion_t6": var_d, "rho_hat": rho}
+
+
+def measure_exp002(store: Any, *, as_of: datetime, results: bool = False, min_effect: float | None = None,
+                   policy: JoinPolicy = JoinPolicy(), experiments_root: Path | None = None) -> dict[str, Any]:
+    """The EXP-002 measurement over one read-only store. The gate always runs and is label-free: the join is
+    built for the T-24h and T-6h horizons only, so no T-60m book is loaded for it. The markout endpoint runs only
+    with `results=True` (its T-60m books are labels): the CLI records the view in EXP-002's evidence log first."""
+    if not isinstance(as_of, datetime) or as_of.tzinfo is None:
+        raise ValueError("as_of must be a timezone-aware datetime")
+    as_of = as_of.astimezone(UTC)
+    rows, catalog, payloads, targets, _ = _join(store, as_of, policy, results=False, horizons=GATE_HORIZONS,
+                                                drop_settled=True)
+    reader = BookMids(payloads)
+    gate = noise_gate(gate_observations(rows, catalog, reader), min_effect=min_effect)
+    gate_reads = list(reader.read)
+    markout: dict[str, Any]
+    if results:
+        markout = markout_endpoint(rows, targets, catalog, reader, as_of=as_of, policy=policy)
+    else:
+        markout = {"state": "HIDDEN", "detail": "the markout reads the first T-60m book (an EXP-002 label); it is "
+                                                "shown only by a logged run (exp002 --with-results)"}
+    protocol = protocol_status(experiments_root)
+    body = {"schema": "exp002-measurement/1", "label": MEASUREMENT_LABEL, "version": MEASUREMENT_VERSION,
+            "join_version": JOIN_VERSION, "consensus_version": odds_consensus.CONSENSUS_VERSION,
+            "policy": policy.to_dict(), "as_of_utc": _iso(as_of), "protocol": protocol,
+            "labels": "INCLUDED (a logged --with-results run)" if results else "HIDDEN",
+            "gate": gate, "gate_books_read": gate_reads, "markout": markout,
+            "economics_note": "economics inputs are unchanged: only book-at-or-after-odds pairs feed them "
+                              "(build_report); BEFORE_ODDS pairs are comparability-only and counted"}
     plain = _plain(body)
     plain["output_sha256"] = sha256_hex(canonical_json(plain))
     return plain
@@ -1837,13 +2402,39 @@ def record_results_view(report: Mapping[str, Any], *, log: Path, actor: str, cod
     event in the given evidence-use log (`research_evidence.record_use`), with the protocol's prohibited
     inputs and label scopes enforced. Raises `research_evidence.EvidenceError` (ProhibitedInput included)
     when it cannot be logged; the caller then shows nothing."""
-    protocol = report.get("protocol") or {}
+    shown = sorted(r["commence_utc"] for r in report["rows"]
+                   if isinstance(r.get("outcome"), dict) and r.get("commence_utc"))
+    return _record_label_view(
+        report.get("protocol") or {}, shown, as_of_utc=report["as_of_utc"], sha=report["output_sha256"], log=log,
+        actor=actor, code_version=code_version, experiments_root=experiments_root, now=now,
+        dataset_id="sports_evidence:nfl_paired_report", dataset_version=JOIN_VERSION,
+        tool="python -m edge_lab.sports_evidence report --with-results",
+        note=f"paired-evidence report as of {report['as_of_utc']}; outcome states and results shown")
+
+
+def record_markout_view(measurement: Mapping[str, Any], *, log: Path, actor: str, code_version: str,
+                        experiments_root: Path | None = None, now: datetime | None = None) -> str:
+    """Log an `exp002 --with-results` run before anything is printed: its markout reads the first T-60m book of
+    each market (a label). Same checks as `record_results_view`."""
+    games = (measurement.get("markout") or {}).get("games") or []
+    shown = sorted(g["commence_utc"] for g in games if g.get("commence_utc"))
+    return _record_label_view(
+        measurement.get("protocol") or {}, shown, as_of_utc=measurement["as_of_utc"], sha=measurement["output_sha256"],
+        log=log, actor=actor, code_version=code_version, experiments_root=experiments_root, now=now,
+        dataset_id="sports_evidence:exp002_markout", dataset_version=f"{MEASUREMENT_VERSION}/{JOIN_VERSION}",
+        tool="python -m edge_lab.sports_evidence exp002 --with-results",
+        note=f"EXP-002 measurement as of {measurement['as_of_utc']}; cross-book markout (first T-60m books) and "
+             "placebo shown; development data", role=rev.DatasetRole.DEVELOPMENT)
+
+
+def _record_label_view(protocol: Mapping[str, Any], shown: Sequence[str], *, as_of_utc: str, sha: str, log: Path,
+                       actor: str, code_version: str, experiments_root: Path | None, now: datetime | None,
+                       dataset_id: str, dataset_version: str, tool: str, note: str,
+                       role: "rev.DatasetRole" = rev.DatasetRole.UNASSIGNED) -> str:
     experiment_id = protocol.get("experiment_id")
     if not experiment_id:
         raise rev.EvidenceError("no Family A protocol is registered, so there is no evidence log to record in")
-    shown = sorted(r["commence_utc"] for r in report["rows"]
-                   if isinstance(r.get("outcome"), dict) and r.get("commence_utc"))
-    start, end = (shown[0], shown[-1]) if shown else (report["as_of_utc"], report["as_of_utc"])
+    start, end = (shown[0], shown[-1]) if shown else (as_of_utc, as_of_utc)
     exp = None
     for path in registry.discover(experiments_root or REPO_EXPERIMENTS):
         candidate = registry.load(path)
@@ -1856,14 +2447,12 @@ def record_results_view(report: Mapping[str, Any], *, log: Path, actor: str, cod
         raise rev.EvidenceError(f"the view must be recorded in {experiment_id}'s own log ({own.parent.name}/"
                                 f"{rev.LOG_NAME}), not in {Path(log).name}")
     use = rev.EvidenceUse(
-        experiment_id=experiment_id, family=FAMILY_ID, dataset_id="sports_evidence:nfl_paired_report",
-        dataset_version=JOIN_VERSION, dataset_sha256=report["output_sha256"], role=rev.DatasetRole.UNASSIGNED,
-        window=rev.InformationWindow(OUTCOME_SCOPE, start, end), actor=actor,
-        tool="python -m edge_lab.sports_evidence report --with-results",
+        experiment_id=experiment_id, family=FAMILY_ID, dataset_id=dataset_id,
+        dataset_version=dataset_version, dataset_sha256=sha, role=role,
+        window=rev.InformationWindow(OUTCOME_SCOPE, start, end), actor=actor, tool=tool,
         action_time_utc=_iso(now or _clock()), action=rev.Action.LABEL_RESULT_INSPECTION,
         code_version=code_version, model_version=None, prompt_version=None, viewed_features=True,
-        viewed_labels=True, viewed_results=True, influenced_tuning=None,
-        note=f"paired-evidence report as of {report['as_of_utc']}; outcome states and results shown")
+        viewed_labels=True, viewed_results=True, influenced_tuning=None, note=note)
     return rev.record_use(own, use, prohibited_prefixes=registry.prohibited_inputs(exp),
                           prohibited_label_scopes=registry.prohibited_label_scopes(exp))
 
@@ -1889,7 +2478,25 @@ def main(argv: list[str] | None = None) -> int:
     rep.add_argument("--code-version", default=os.getenv("EDGE_LAB_CODE_VERSION"),
                      help="git commit of the code that runs (default: $EDGE_LAB_CODE_VERSION)")
     rep.add_argument("--experiments", help="experiment registry root (default: the repository's experiments/)")
+    ms = sub.add_parser("exp002", help="EXP-002 measurement: the label-free noise gate (always) and the cross-book "
+                                       "markout (labels: only with --with-results, logged first)")
+    ms.add_argument("--db", default="data/edge_lab.sqlite3")
+    ms.add_argument("--as-of", help="point in time (ISO-8601 with zone); default and maximum: now")
+    ms.add_argument("--min-effect", type=float,
+                    help="a candidate delta_min (probability units, e.g. 0.005) for the gate verdict; UNKNOWN until "
+                         "the protocol freezes it, so without it the verdict is given per candidate")
+    ms.add_argument("--out", help="write the JSON artifact here (atomically) instead of stdout")
+    ms.add_argument("--with-results", action="store_true",
+                    help="also compute the markout (it reads the first T-60m book, an EXP-002 label); requires "
+                         "--evidence-log, --actor and a code version, and records the view there before printing")
+    ms.add_argument("--evidence-log", help="EXP-002's evidence_use.jsonl to record a --with-results view in")
+    ms.add_argument("--actor", help="who views the results (recorded in the evidence-use event)")
+    ms.add_argument("--code-version", default=os.getenv("EDGE_LAB_CODE_VERSION"),
+                    help="git commit of the code that runs (default: $EDGE_LAB_CODE_VERSION)")
+    ms.add_argument("--experiments", help="experiment registry root (default: the repository's experiments/)")
     args = parser.parse_args(argv)
+    if args.command == "exp002":
+        return _main_exp002(args, parser)
     if args.with_results and not (args.evidence_log and args.actor and args.code_version):
         print(json.dumps({"command": "sports_evidence report", "state": "REFUSED",
                           "detail": "--with-results shows EXP-002 outcome labels: give --evidence-log, --actor and "
@@ -1929,6 +2536,52 @@ def main(argv: list[str] | None = None) -> int:
         _write_atomic(Path(args.out), text + "\n")
         print(json.dumps({"command": "sports_evidence report", "state": "WRITTEN", "out": args.out,
                           "output_sha256": report["output_sha256"]}))
+    else:
+        sys.stdout.write(text + "\n")
+    return 0
+
+
+def _main_exp002(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
+    from .storage import ReadOnlyStoreError, SnapshotStore
+
+    name = "sports_evidence exp002"
+    if args.with_results and not (args.evidence_log and args.actor and args.code_version):
+        print(json.dumps({"command": name, "state": "REFUSED",
+                          "detail": "--with-results reads EXP-002 labels (the first T-60m books): give --evidence-log, "
+                                    "--actor and --code-version (or $EDGE_LAB_CODE_VERSION) so the view is recorded "
+                                    "first"}))
+        return 2
+    now = _clock()
+    as_of = now
+    if args.as_of:
+        as_of = parse_utc(args.as_of)  # type: ignore[assignment]
+        if as_of is None:
+            parser.error("--as-of must be an ISO-8601 time with a zone")
+        if as_of > now:
+            print(f"--as-of {args.as_of} is in the future; clamped to now ({_iso(now)})", file=sys.stderr)
+            as_of = now
+    try:
+        store = SnapshotStore.open_readonly(args.db)
+    except ReadOnlyStoreError as exc:
+        print(json.dumps({"command": name, "state": "NO_STORE", "detail": str(exc)}))
+        return 1
+    root = Path(args.experiments) if args.experiments else None
+    out = measure_exp002(store, as_of=as_of, results=args.with_results, min_effect=args.min_effect,
+                         experiments_root=root)
+    if args.with_results:
+        try:
+            logged = record_markout_view(out, log=Path(args.evidence_log), actor=args.actor,
+                                         code_version=args.code_version, experiments_root=root)
+        except (rev.EvidenceError, OSError) as exc:
+            print(json.dumps({"command": name, "state": "REFUSED",
+                              "detail": f"the results view could not be recorded, so nothing is shown: {exc}"}))
+            return 2
+        out = {**out, "evidence_use": logged}
+    text = json.dumps(out, sort_keys=True, indent=2, ensure_ascii=False)
+    if args.out:
+        _write_atomic(Path(args.out), text + "\n")
+        print(json.dumps({"command": name, "state": "WRITTEN", "out": args.out, "output_sha256": out["output_sha256"],
+                          "gate_verdict": out["gate"]["verdict"]}))
     else:
         sys.stdout.write(text + "\n")
     return 0
