@@ -1,0 +1,1630 @@
+{
+  "bundles": [
+    {
+      "completed_at_utc": "2026-09-23T02:20:48.718962+00:00",
+      "covered_by": null,
+      "database_bytes": 73728,
+      "database_sha256": "5d32b86e4363b425e974dc069c07d5b3f34a022cdf84c7ac61c52505f60f110a",
+      "decision": "KEEP",
+      "kind": "evidence",
+      "name": "edge-backup-6vox5osh",
+      "path": "edge-backup-6vox5osh",
+      "reasons": [
+        "UNVERIFIED_RESTORE: no recorded VERIFIED_BACKUP_AND_RESTORE report for its database_sha256 (pass --verify-reports; or run `backup verify --bundle` and add it)"
+      ],
+      "schema_version": 4
+    },
+    {
+      "completed_at_utc": "2026-09-23T04:40:04.151478+00:00",
+      "covered_by": null,
+      "database_bytes": 73728,
+      "database_sha256": "5d32b86e4363b425e974dc069c07d5b3f34a022cdf84c7ac61c52505f60f110a",
+      "decision": "KEEP",
+      "kind": "evidence",
+      "name": "edge-backup-tm8j_xvs",
+      "path": "edge-backup-tm8j_xvs",
+      "reasons": [
+        "UNVERIFIED_RESTORE: no recorded VERIFIED_BACKUP_AND_RESTORE report for its database_sha256 (pass --verify-reports; or run `backup verify --bundle` and add it)"
+      ],
+      "schema_version": 4
+    },
+    {
+      "completed_at_utc": "2026-09-23T17:28:05.822397+00:00",
+      "covered_by": null,
+      "database_bytes": 73728,
+      "database_sha256": "5d32b86e4363b425e974dc069c07d5b3f34a022cdf84c7ac61c52505f60f110a",
+      "decision": "KEEP",
+      "kind": "evidence",
+      "name": "edge-backup-o2bpi1h8",
+      "path": "edge-backup-o2bpi1h8",
+      "reasons": [
+        "CHECKPOINT_EVIDENCE_BRACKET: F09 checkpoint 2026-09-23T173009Z.json",
+        "FIRST_BUNDLE_BASELINE: the oldest valid bundle of this store"
+      ],
+      "schema_version": 4
+    },
+    {
+      "completed_at_utc": "2026-09-23T17:29:01.651961+00:00",
+      "covered_by": null,
+      "database_bytes": 73728,
+      "database_sha256": "38a084425d107e6e2e666e138154b1596cd9007fdf57e5abfbff6df51760e377",
+      "decision": "KEEP",
+      "kind": "evidence",
+      "name": "edge-backup-eqfiomf5",
+      "path": "edge-backup-eqfiomf5",
+      "reasons": [
+        "UNVERIFIED_RESTORE: no recorded VERIFIED_BACKUP_AND_RESTORE report for its database_sha256 (pass --verify-reports; or run `backup verify --bundle` and add it)"
+      ],
+      "schema_version": 4
+    },
+    {
+      "completed_at_utc": "2026-09-23T17:56:42.042086+00:00",
+      "covered_by": null,
+      "database_bytes": 73728,
+      "database_sha256": "38a084425d107e6e2e666e138154b1596cd9007fdf57e5abfbff6df51760e377",
+      "decision": "KEEP",
+      "kind": "evidence",
+      "name": "edge-backup-krsk9s17",
+      "path": "edge-backup-krsk9s17",
+      "reasons": [
+        "CHECKPOINT_EVIDENCE_BRACKET: F09 checkpoint 2026-09-23T173009Z.json"
+      ],
+      "schema_version": 4
+    },
+    {
+      "completed_at_utc": "2026-09-23T17:57:10.797012+00:00",
+      "covered_by": "edge-backup-tlpycog1",
+      "database_bytes": 73728,
+      "database_sha256": "788f2cfe290de8c2f7bcb27ec1786808f0cf18cf38e540160d9ed34160d34f08",
+      "decision": "DELETE-CANDIDATE",
+      "kind": "evidence",
+      "name": "edge-backup-mlj3ys07",
+      "path": "edge-backup-mlj3ys07",
+      "reasons": [
+        "SUPERSEDED: outside every proposed-v1 keep rule; a newer kept valid bundle holds all of its rows"
+      ],
+      "schema_version": 4
+    },
+    {
+      "completed_at_utc": "2026-09-23T18:35:05.250327+00:00",
+      "covered_by": null,
+      "database_bytes": 73728,
+      "database_sha256": "04e947d4a6309f57a3052454231af40eed94d9a5eb27df026d3238eafaf06250",
+      "decision": "KEEP",
+      "kind": "evidence",
+      "name": "edge-backup-fx7f_vy4",
+      "path": "edge-backup-fx7f_vy4",
+      "reasons": [
+        "UNVERIFIED_RESTORE: no recorded VERIFIED_BACKUP_AND_RESTORE report for its database_sha256 (pass --verify-reports; or run `backup verify --bundle` and add it)"
+      ],
+      "schema_version": 4
+    },
+    {
+      "completed_at_utc": "2026-09-23T18:58:55.070524+00:00",
+      "covered_by": "edge-backup-tlpycog1",
+      "database_bytes": 73728,
+      "database_sha256": "04e947d4a6309f57a3052454231af40eed94d9a5eb27df026d3238eafaf06250",
+      "decision": "DELETE-CANDIDATE",
+      "kind": "evidence",
+      "name": "edge-backup-1q6ozcdh",
+      "path": "edge-backup-1q6ozcdh",
+      "reasons": [
+        "SUPERSEDED: outside every proposed-v1 keep rule; a newer kept valid bundle holds all of its rows"
+      ],
+      "schema_version": 4
+    },
+    {
+      "completed_at_utc": "2026-09-23T18:59:10.591914+00:00",
+      "covered_by": null,
+      "database_bytes": 73728,
+      "database_sha256": "0e1dddf5e41947a0367cfac0122713293d76140d036bc7a57d50be9f18e29f2e",
+      "decision": "KEEP",
+      "kind": "evidence",
+      "name": "edge-backup-60gum0bz",
+      "path": "edge-backup-60gum0bz",
+      "reasons": [
+        "CHECKPOINT_EVIDENCE_BRACKET: F09 checkpoint 2026-09-23T224720Z.json"
+      ],
+      "schema_version": 4
+    },
+    {
+      "completed_at_utc": "2026-09-23T22:47:18.916078+00:00",
+      "covered_by": null,
+      "database_bytes": 360448,
+      "database_sha256": "26cc21265c9329a5e541a84769545c732857d2ceb5a9dfc9f42136d56f54c779",
+      "decision": "KEEP",
+      "kind": "evidence",
+      "name": "edge-backup-h0wn8olk",
+      "path": "edge-backup-h0wn8olk",
+      "reasons": [
+        "UNVERIFIED_RESTORE: no recorded VERIFIED_BACKUP_AND_RESTORE report for its database_sha256 (pass --verify-reports; or run `backup verify --bundle` and add it)"
+      ],
+      "schema_version": 4
+    },
+    {
+      "completed_at_utc": "2026-09-23T22:51:50.399535+00:00",
+      "covered_by": null,
+      "database_bytes": 360448,
+      "database_sha256": "26cc21265c9329a5e541a84769545c732857d2ceb5a9dfc9f42136d56f54c779",
+      "decision": "KEEP",
+      "kind": "evidence",
+      "name": "edge-backup-36jle2zs",
+      "path": "edge-backup-36jle2zs",
+      "reasons": [
+        "CHECKPOINT_EVIDENCE_BRACKET: F09 checkpoint 2026-09-23T224720Z.json",
+        "DAILY: newest valid bundle of 2026-09-23"
+      ],
+      "schema_version": 4
+    },
+    {
+      "completed_at_utc": "2026-09-24T04:40:04.630519+00:00",
+      "covered_by": null,
+      "database_bytes": 360448,
+      "database_sha256": "8337d41b879379d89f833c37c48a5ea77fe416c4b8ded8498b30ea91f1de3c62",
+      "decision": "KEEP",
+      "kind": "evidence",
+      "name": "edge-backup-pdok7v_f",
+      "path": "edge-backup-pdok7v_f",
+      "reasons": [
+        "UNVERIFIED_RESTORE: no recorded VERIFIED_BACKUP_AND_RESTORE report for its database_sha256 (pass --verify-reports; or run `backup verify --bundle` and add it)"
+      ],
+      "schema_version": 4
+    },
+    {
+      "completed_at_utc": "2026-09-24T08:29:28.846055+00:00",
+      "covered_by": "edge-backup-tlpycog1",
+      "database_bytes": 360448,
+      "database_sha256": "8337d41b879379d89f833c37c48a5ea77fe416c4b8ded8498b30ea91f1de3c62",
+      "decision": "DELETE-CANDIDATE",
+      "kind": "evidence",
+      "name": "edge-backup-_m9y33hi",
+      "path": "edge-backup-_m9y33hi",
+      "reasons": [
+        "SUPERSEDED: outside every proposed-v1 keep rule; a newer kept valid bundle holds all of its rows"
+      ],
+      "schema_version": 4
+    },
+    {
+      "completed_at_utc": "2026-09-24T08:30:58.727069+00:00",
+      "covered_by": null,
+      "database_bytes": 360448,
+      "database_sha256": "9e14b1fb6e37b8a3341ff144c2d266caaeadb05b527fe4000d5bcc56a4529599",
+      "decision": "KEEP",
+      "kind": "evidence",
+      "name": "edge-backup-xfes34fp",
+      "path": "edge-backup-xfes34fp",
+      "reasons": [
+        "UNVERIFIED_RESTORE: no recorded VERIFIED_BACKUP_AND_RESTORE report for its database_sha256 (pass --verify-reports; or run `backup verify --bundle` and add it)"
+      ],
+      "schema_version": 4
+    },
+    {
+      "completed_at_utc": "2026-09-24T09:35:54.877924+00:00",
+      "covered_by": null,
+      "database_bytes": 360448,
+      "database_sha256": "9e14b1fb6e37b8a3341ff144c2d266caaeadb05b527fe4000d5bcc56a4529599",
+      "decision": "KEEP",
+      "kind": "evidence",
+      "name": "edge-backup-c9smzdjv",
+      "path": "edge-backup-c9smzdjv",
+      "reasons": [
+        "RECENT: younger than 48 h",
+        "SCHEMA_BOUNDARY: the last bundle before schema v5 (edge-backup-ru9glvsz)"
+      ],
+      "schema_version": 4
+    },
+    {
+      "completed_at_utc": "2026-09-24T09:36:43.457338+00:00",
+      "covered_by": null,
+      "database_bytes": 385024,
+      "database_sha256": "5dd60bb6b10e0335a8b0adb92beb97e96d3bf5abc7ab9771329d6ba0dff2a895",
+      "decision": "KEEP",
+      "kind": "evidence",
+      "name": "edge-backup-4utiox0r",
+      "path": "edge-backup-4utiox0r",
+      "reasons": [
+        "UNVERIFIED_RESTORE: no recorded VERIFIED_BACKUP_AND_RESTORE report for its database_sha256 (pass --verify-reports; or run `backup verify --bundle` and add it)"
+      ],
+      "schema_version": 5
+    },
+    {
+      "completed_at_utc": "2026-09-24T10:30:10.043680+00:00",
+      "covered_by": null,
+      "database_bytes": 385024,
+      "database_sha256": "5dd60bb6b10e0335a8b0adb92beb97e96d3bf5abc7ab9771329d6ba0dff2a895",
+      "decision": "KEEP",
+      "kind": "evidence",
+      "name": "edge-backup-ru9glvsz",
+      "path": "edge-backup-ru9glvsz",
+      "reasons": [
+        "RECENT: younger than 48 h",
+        "SCHEMA_BOUNDARY: the first bundle at schema v5 (after edge-backup-c9smzdjv)"
+      ],
+      "schema_version": 5
+    },
+    {
+      "completed_at_utc": "2026-09-24T10:30:50.853669+00:00",
+      "covered_by": null,
+      "database_bytes": 385024,
+      "database_sha256": "d8b8af1cba1b4c1ca553b349b089db371214815b1046ab78a83b3b70ba17c449",
+      "decision": "KEEP",
+      "kind": "evidence",
+      "name": "edge-backup-9o7ybxf4",
+      "path": "edge-backup-9o7ybxf4",
+      "reasons": [
+        "UNVERIFIED_RESTORE: no recorded VERIFIED_BACKUP_AND_RESTORE report for its database_sha256 (pass --verify-reports; or run `backup verify --bundle` and add it)"
+      ],
+      "schema_version": 5
+    },
+    {
+      "completed_at_utc": "2026-09-24T12:22:54.906189+00:00",
+      "covered_by": null,
+      "database_bytes": 385024,
+      "database_sha256": "d8b8af1cba1b4c1ca553b349b089db371214815b1046ab78a83b3b70ba17c449",
+      "decision": "KEEP",
+      "kind": "evidence",
+      "name": "edge-backup-9ozl3ivj",
+      "path": "edge-backup-9ozl3ivj",
+      "reasons": [
+        "RECENT: younger than 48 h",
+        "SCHEMA_BOUNDARY: the last bundle before schema v6 (edge-backup-w5w1qn7q)"
+      ],
+      "schema_version": 5
+    },
+    {
+      "completed_at_utc": "2026-09-24T12:23:20.761522+00:00",
+      "covered_by": null,
+      "database_bytes": 425984,
+      "database_sha256": "361ca74bd9e9926ab7007eb7b3f7179a847683adedc6871cdd997fca2a302ae9",
+      "decision": "KEEP",
+      "kind": "evidence",
+      "name": "edge-backup-wi9kutfp",
+      "path": "edge-backup-wi9kutfp",
+      "reasons": [
+        "UNVERIFIED_RESTORE: no recorded VERIFIED_BACKUP_AND_RESTORE report for its database_sha256 (pass --verify-reports; or run `backup verify --bundle` and add it)"
+      ],
+      "schema_version": 6
+    },
+    {
+      "completed_at_utc": "2026-09-24T13:16:38.030016+00:00",
+      "covered_by": null,
+      "database_bytes": 425984,
+      "database_sha256": "361ca74bd9e9926ab7007eb7b3f7179a847683adedc6871cdd997fca2a302ae9",
+      "decision": "KEEP",
+      "kind": "evidence",
+      "name": "edge-backup-w5w1qn7q",
+      "path": "edge-backup-w5w1qn7q",
+      "reasons": [
+        "RECENT: younger than 48 h",
+        "SCHEMA_BOUNDARY: the first bundle at schema v6 (after edge-backup-9ozl3ivj)"
+      ],
+      "schema_version": 6
+    },
+    {
+      "completed_at_utc": "2026-09-24T13:17:16.768959+00:00",
+      "covered_by": null,
+      "database_bytes": 425984,
+      "database_sha256": "188585015d577d4fd2a37971160864150aeb6edcf5c9f8defae9dd78ec4be81a",
+      "decision": "KEEP",
+      "kind": "evidence",
+      "name": "edge-backup-ij8zocuh",
+      "path": "edge-backup-ij8zocuh",
+      "reasons": [
+        "UNVERIFIED_RESTORE: no recorded VERIFIED_BACKUP_AND_RESTORE report for its database_sha256 (pass --verify-reports; or run `backup verify --bundle` and add it)"
+      ],
+      "schema_version": 6
+    },
+    {
+      "completed_at_utc": "2026-09-24T13:36:45.660298+00:00",
+      "covered_by": null,
+      "database_bytes": 425984,
+      "database_sha256": "188585015d577d4fd2a37971160864150aeb6edcf5c9f8defae9dd78ec4be81a",
+      "decision": "KEEP",
+      "kind": "evidence",
+      "name": "edge-backup-1nq4ahtf",
+      "path": "edge-backup-1nq4ahtf",
+      "reasons": [
+        "RECENT: younger than 48 h"
+      ],
+      "schema_version": 6
+    },
+    {
+      "completed_at_utc": "2026-09-24T13:38:27.530036+00:00",
+      "covered_by": null,
+      "database_bytes": 425984,
+      "database_sha256": "490c67376254593d32cf47e3e4588c5d179b662bdf86428e32027a1ff7e243d9",
+      "decision": "KEEP",
+      "kind": "evidence",
+      "name": "edge-backup-mn6geov8",
+      "path": "edge-backup-mn6geov8",
+      "reasons": [
+        "RECENT: younger than 48 h"
+      ],
+      "schema_version": 6
+    },
+    {
+      "completed_at_utc": "2026-09-24T13:57:37.043804+00:00",
+      "covered_by": null,
+      "database_bytes": 593920,
+      "database_sha256": "7927515ed4c0f0322f292808e1f50454f1c8f12a29cf3eb427d4a60b8766f5cc",
+      "decision": "KEEP",
+      "kind": "evidence",
+      "name": "edge-backup-0iajfpaj",
+      "path": "edge-backup-0iajfpaj",
+      "reasons": [
+        "RECENT: younger than 48 h"
+      ],
+      "schema_version": 6
+    },
+    {
+      "completed_at_utc": "2026-09-24T13:58:02.963999+00:00",
+      "covered_by": null,
+      "database_bytes": 593920,
+      "database_sha256": "adb829743958002772e59092ee3123f23154ad8caa61cf952db36c07a2da99b3",
+      "decision": "KEEP",
+      "kind": "evidence",
+      "name": "edge-backup-qdunou76",
+      "path": "edge-backup-qdunou76",
+      "reasons": [
+        "UNVERIFIED_RESTORE: no recorded VERIFIED_BACKUP_AND_RESTORE report for its database_sha256 (pass --verify-reports; or run `backup verify --bundle` and add it)"
+      ],
+      "schema_version": 6
+    },
+    {
+      "completed_at_utc": "2026-09-24T14:27:50.623993+00:00",
+      "covered_by": null,
+      "database_bytes": 593920,
+      "database_sha256": "adb829743958002772e59092ee3123f23154ad8caa61cf952db36c07a2da99b3",
+      "decision": "KEEP",
+      "kind": "evidence",
+      "name": "edge-backup-qtlp5851",
+      "path": "edge-backup-qtlp5851",
+      "reasons": [
+        "RECENT: younger than 48 h"
+      ],
+      "schema_version": 6
+    },
+    {
+      "completed_at_utc": "2026-09-24T14:28:16.434721+00:00",
+      "covered_by": null,
+      "database_bytes": 598016,
+      "database_sha256": "b6b6b24de1ebb89833b22463db25dfd05de9be509763947f8276a252ff0eedb2",
+      "decision": "KEEP",
+      "kind": "evidence",
+      "name": "edge-backup-a8qw5ddr",
+      "path": "edge-backup-a8qw5ddr",
+      "reasons": [
+        "RECENT: younger than 48 h"
+      ],
+      "schema_version": 6
+    },
+    {
+      "completed_at_utc": "2026-09-24T20:31:29.048637+00:00",
+      "covered_by": null,
+      "database_bytes": 626688,
+      "database_sha256": "4f8477c429c6433cc0c6308b9f24a0bae892be6d49ffc6f3d449f4f43256e33d",
+      "decision": "KEEP",
+      "kind": "evidence",
+      "name": "edge-backup-xbzsahp_",
+      "path": "edge-backup-xbzsahp_",
+      "reasons": [
+        "RECENT: younger than 48 h"
+      ],
+      "schema_version": 6
+    },
+    {
+      "completed_at_utc": "2026-09-24T20:31:54.136969+00:00",
+      "covered_by": null,
+      "database_bytes": 626688,
+      "database_sha256": "8790a5edd08758d5be32086040a906c3830f9da8d39e25f8fc7d3c34990fec70",
+      "decision": "KEEP",
+      "kind": "evidence",
+      "name": "edge-backup-rvlfy16h",
+      "path": "edge-backup-rvlfy16h",
+      "reasons": [
+        "RECENT: younger than 48 h"
+      ],
+      "schema_version": 6
+    },
+    {
+      "completed_at_utc": "2026-09-24T23:35:53.486246+00:00",
+      "covered_by": null,
+      "database_bytes": 1167360,
+      "database_sha256": "79edd092ca03794bbc35c9ce9aa530f21f48364ba25424a96eaf66b4f4c02430",
+      "decision": "KEEP",
+      "kind": "evidence",
+      "name": "edge-backup-6fo7_qhf",
+      "path": "edge-backup-6fo7_qhf",
+      "reasons": [
+        "DAILY: newest valid bundle of 2026-09-24",
+        "RECENT: younger than 48 h"
+      ],
+      "schema_version": 6
+    },
+    {
+      "completed_at_utc": "2026-09-24T23:36:21.642513+00:00",
+      "covered_by": null,
+      "database_bytes": 1167360,
+      "database_sha256": "7d39e491077d588f02b152a8bc121e18160440f7554a673b6196257716ed7c61",
+      "decision": "KEEP",
+      "kind": "evidence",
+      "name": "edge-backup-r6z57c2h",
+      "path": "edge-backup-r6z57c2h",
+      "reasons": [
+        "UNVERIFIED_RESTORE: no recorded VERIFIED_BACKUP_AND_RESTORE report for its database_sha256 (pass --verify-reports; or run `backup verify --bundle` and add it)"
+      ],
+      "schema_version": 6
+    },
+    {
+      "completed_at_utc": "2026-09-25T00:36:30.804940+00:00",
+      "covered_by": null,
+      "database_bytes": 1167360,
+      "database_sha256": "7d39e491077d588f02b152a8bc121e18160440f7554a673b6196257716ed7c61",
+      "decision": "KEEP",
+      "kind": "evidence",
+      "name": "edge-backup-c59pmcuk",
+      "path": "edge-backup-c59pmcuk",
+      "reasons": [
+        "RECENT: younger than 48 h",
+        "SCHEMA_BOUNDARY: the last bundle before schema v7 (edge-backup-gebchzc4)"
+      ],
+      "schema_version": 6
+    },
+    {
+      "completed_at_utc": "2026-09-25T00:36:57.532505+00:00",
+      "covered_by": null,
+      "database_bytes": 1216512,
+      "database_sha256": "2f13d80a4aa42d7f3dd071906d0989679369f92bd65eff2a7a68d24a66af2312",
+      "decision": "KEEP",
+      "kind": "evidence",
+      "name": "edge-backup-gebchzc4",
+      "path": "edge-backup-gebchzc4",
+      "reasons": [
+        "RECENT: younger than 48 h",
+        "SCHEMA_BOUNDARY: the first bundle at schema v7 (after edge-backup-c59pmcuk)"
+      ],
+      "schema_version": 7
+    },
+    {
+      "completed_at_utc": "2026-09-25T01:56:21.652188+00:00",
+      "covered_by": null,
+      "database_bytes": 1982464,
+      "database_sha256": "29ddfdd8b366b5c43151d2a845966497ff89ea6da472a8968bb2d08dd35e7cf2",
+      "decision": "KEEP",
+      "kind": "evidence",
+      "name": "edge-backup-3r9amlaq",
+      "path": "edge-backup-3r9amlaq",
+      "reasons": [
+        "RECENT: younger than 48 h"
+      ],
+      "schema_version": 7
+    },
+    {
+      "completed_at_utc": "2026-09-25T01:56:49.570245+00:00",
+      "covered_by": null,
+      "database_bytes": 1986560,
+      "database_sha256": "a903e3803009fc43f306d9813c163dce5f95143f35fe4de80bf88931539308aa",
+      "decision": "KEEP",
+      "kind": "evidence",
+      "name": "edge-backup-gtp_zrbu",
+      "path": "edge-backup-gtp_zrbu",
+      "reasons": [
+        "RECENT: younger than 48 h"
+      ],
+      "schema_version": 7
+    },
+    {
+      "completed_at_utc": "2026-09-25T04:40:05.835963+00:00",
+      "covered_by": null,
+      "database_bytes": 2056192,
+      "database_sha256": "1756246804e4354650403e0b328f0856a56259a218d4b28f2277b029050a9b91",
+      "decision": "KEEP",
+      "kind": "evidence",
+      "name": "edge-backup-r13_ligb",
+      "path": "edge-backup-r13_ligb",
+      "reasons": [
+        "RECENT: younger than 48 h"
+      ],
+      "schema_version": 7
+    },
+    {
+      "completed_at_utc": "2026-09-25T05:04:15.637687+00:00",
+      "covered_by": null,
+      "database_bytes": 2187264,
+      "database_sha256": "08a4095f2f8b49d31c37869f0b6ff452852bded5baf25350e22dc1ee875476c4",
+      "decision": "KEEP",
+      "kind": "evidence",
+      "name": "edge-backup-9y8pb_1l",
+      "path": "edge-backup-9y8pb_1l",
+      "reasons": [
+        "RECENT: younger than 48 h"
+      ],
+      "schema_version": 7
+    },
+    {
+      "completed_at_utc": "2026-09-25T05:04:42.633032+00:00",
+      "covered_by": null,
+      "database_bytes": 2187264,
+      "database_sha256": "03834ee933f7707b92f80b1602d4320081125e382702cd5b9cfc90d07df80058",
+      "decision": "KEEP",
+      "kind": "evidence",
+      "name": "edge-backup-kh2ditbr",
+      "path": "edge-backup-kh2ditbr",
+      "reasons": [
+        "UNVERIFIED_RESTORE: no recorded VERIFIED_BACKUP_AND_RESTORE report for its database_sha256 (pass --verify-reports; or run `backup verify --bundle` and add it)"
+      ],
+      "schema_version": 7
+    },
+    {
+      "completed_at_utc": "2026-09-25T06:18:57.232199+00:00",
+      "covered_by": null,
+      "database_bytes": 2187264,
+      "database_sha256": "03834ee933f7707b92f80b1602d4320081125e382702cd5b9cfc90d07df80058",
+      "decision": "KEEP",
+      "kind": "evidence",
+      "name": "edge-backup-q45vnxaq",
+      "path": "edge-backup-q45vnxaq",
+      "reasons": [
+        "RECENT: younger than 48 h"
+      ],
+      "schema_version": 7
+    },
+    {
+      "completed_at_utc": "2026-09-25T06:19:24.928815+00:00",
+      "covered_by": null,
+      "database_bytes": 2187264,
+      "database_sha256": "5ad68c034e2f6274c89b363d92eabf16170f5683152f3f77b9b6b5c3c997552a",
+      "decision": "KEEP",
+      "kind": "evidence",
+      "name": "edge-backup-5q41yg5u",
+      "path": "edge-backup-5q41yg5u",
+      "reasons": [
+        "RECENT: younger than 48 h"
+      ],
+      "schema_version": 7
+    },
+    {
+      "completed_at_utc": "2026-09-25T08:02:46.927986+00:00",
+      "covered_by": null,
+      "database_bytes": 2551808,
+      "database_sha256": "6e3caa74a21e02eaa566fa57b6e01d662f8be1892dedba768c7263ba7a98300f",
+      "decision": "KEEP",
+      "kind": "evidence",
+      "name": "edge-backup-iu9x5w73",
+      "path": "edge-backup-iu9x5w73",
+      "reasons": [
+        "PINNED_BASELINE: a known-good recovery baseline",
+        "RECENT: younger than 48 h"
+      ],
+      "schema_version": 7
+    },
+    {
+      "completed_at_utc": "2026-09-25T08:03:14.733037+00:00",
+      "covered_by": null,
+      "database_bytes": 2551808,
+      "database_sha256": "955a97a7bf2ea80a6ff13f4452f922019e4e1d83214116d84945e398ad0bfa38",
+      "decision": "KEEP",
+      "kind": "evidence",
+      "name": "edge-backup-gci308lm",
+      "path": "edge-backup-gci308lm",
+      "reasons": [
+        "PINNED_BASELINE: a known-good recovery baseline",
+        "RECENT: younger than 48 h"
+      ],
+      "schema_version": 7
+    },
+    {
+      "completed_at_utc": "2026-09-25T20:16:59.432635+00:00",
+      "covered_by": null,
+      "database_bytes": 3375104,
+      "database_sha256": "bb7e3fc739acbe29976b0e87a9b35ae2da599790d622a51eac141d7e6f82f13e",
+      "decision": "KEEP",
+      "kind": "evidence",
+      "name": "edge-backup-lgw9jmww",
+      "path": "edge-backup-lgw9jmww",
+      "reasons": [
+        "PINNED_BASELINE: a known-good recovery baseline",
+        "RECENT: younger than 48 h"
+      ],
+      "schema_version": 7
+    },
+    {
+      "completed_at_utc": "2026-09-25T20:17:33.147563+00:00",
+      "covered_by": null,
+      "database_bytes": 3375104,
+      "database_sha256": "558b3343a3b3d2b5a452cf7b99a670fa991fa3c7487baa4303c2ec3f6e8036d6",
+      "decision": "KEEP",
+      "kind": "evidence",
+      "name": "edge-backup-wu3982g7",
+      "path": "edge-backup-wu3982g7",
+      "reasons": [
+        "CHECKPOINT_EVIDENCE_BRACKET: F09 checkpoint 2026-09-25T201836Z.json",
+        "PINNED_BASELINE: a known-good recovery baseline",
+        "RECENT: younger than 48 h"
+      ],
+      "schema_version": 7
+    },
+    {
+      "completed_at_utc": "2026-09-25T23:23:31.226298+00:00",
+      "covered_by": null,
+      "database_bytes": 3833856,
+      "database_sha256": "a665fa1afd7735c1165a80a0c9c82c22a307604cc2c2a2c153f32134ce61dc53",
+      "decision": "KEEP",
+      "kind": "evidence",
+      "name": "edge-backup-2o5id_jp",
+      "path": "edge-backup-2o5id_jp",
+      "reasons": [
+        "CHECKPOINT_EVIDENCE_BRACKET: F09 checkpoint 2026-09-25T201836Z.json",
+        "RECENT: younger than 48 h"
+      ],
+      "schema_version": 7
+    },
+    {
+      "completed_at_utc": "2026-09-25T23:24:02.529291+00:00",
+      "covered_by": null,
+      "database_bytes": 3833856,
+      "database_sha256": "7407010a46a6040d9c6a30fdd1f9556116322538da64e25b576dc9b9a1b3c225",
+      "decision": "KEEP",
+      "kind": "evidence",
+      "name": "edge-backup-azw44lh4",
+      "path": "edge-backup-azw44lh4",
+      "reasons": [
+        "DAILY: newest valid bundle of 2026-09-25",
+        "RECENT: younger than 48 h"
+      ],
+      "schema_version": 7
+    },
+    {
+      "completed_at_utc": "2026-09-26T01:31:16.150497+00:00",
+      "covered_by": null,
+      "database_bytes": 4194304,
+      "database_sha256": "d540d0131551640f0670f8f4536186733a651c0b26fbcba7302c20e935eacd41",
+      "decision": "KEEP",
+      "kind": "evidence",
+      "name": "edge-backup-y102iswg",
+      "path": "edge-backup-y102iswg",
+      "reasons": [
+        "RECENT: younger than 48 h"
+      ],
+      "schema_version": 7
+    },
+    {
+      "completed_at_utc": "2026-09-26T01:31:52.738920+00:00",
+      "covered_by": null,
+      "database_bytes": 4194304,
+      "database_sha256": "de9b887cc78ada28ea4b27d49b5a198b7482452642d43256f2e74358245632dd",
+      "decision": "KEEP",
+      "kind": "evidence",
+      "name": "edge-backup-6az62901",
+      "path": "edge-backup-6az62901",
+      "reasons": [
+        "RECENT: younger than 48 h"
+      ],
+      "schema_version": 7
+    },
+    {
+      "completed_at_utc": "2026-09-26T04:40:07.932587+00:00",
+      "covered_by": null,
+      "database_bytes": 4263936,
+      "database_sha256": "32d25075cca83b020fa0d14739db99b889cc57a0adaf37dd22617bb3d2d4d440",
+      "decision": "KEEP",
+      "kind": "evidence",
+      "name": "edge-backup-2ckmhbqr",
+      "path": "edge-backup-2ckmhbqr",
+      "reasons": [
+        "NEWEST_GOOD: one of the newest 3 valid bundles",
+        "RECENT: younger than 48 h"
+      ],
+      "schema_version": 7
+    },
+    {
+      "completed_at_utc": "2026-09-26T08:52:30.182922+00:00",
+      "covered_by": null,
+      "database_bytes": 4755456,
+      "database_sha256": "6e80cc21794b0f89e1639ebb01fa55430c27641d69800d7032d584026976bc1f",
+      "decision": "KEEP",
+      "kind": "evidence",
+      "name": "edge-backup-93dydqap",
+      "path": "edge-backup-93dydqap",
+      "reasons": [
+        "NEWEST_GOOD: one of the newest 3 valid bundles",
+        "RECENT: younger than 48 h"
+      ],
+      "schema_version": 7
+    },
+    {
+      "completed_at_utc": "2026-09-26T08:52:58.832235+00:00",
+      "covered_by": null,
+      "database_bytes": 4755456,
+      "database_sha256": "cb16996b048e409faa6b1e4d0ee16422e166f95c9ac365b3a26022c342ca8b54",
+      "decision": "KEEP",
+      "kind": "evidence",
+      "name": "edge-backup-tlpycog1",
+      "path": "edge-backup-tlpycog1",
+      "reasons": [
+        "DAILY: newest valid bundle of 2026-09-26",
+        "MONTHLY: newest valid bundle of 2026-09",
+        "NEWEST_GOOD: one of the newest 3 valid bundles",
+        "RECENT: younger than 48 h",
+        "WEEKLY: newest valid bundle of the week of 2026-09-21"
+      ],
+      "schema_version": 7
+    },
+    {
+      "completed_at_utc": "2026-09-23T17:29:03.107472+00:00",
+      "covered_by": null,
+      "database_bytes": 24576,
+      "database_sha256": "3bca10d39eea4715bf874215483bbd68c57c266885428766ac269aa30b6a7758",
+      "decision": "KEEP",
+      "kind": "ledger",
+      "name": "edge-backup-lqs5j63_",
+      "path": "ledger/edge-backup-lqs5j63_",
+      "reasons": [
+        "UNVERIFIED_RESTORE: no recorded VERIFIED_BACKUP_AND_RESTORE report for its database_sha256 (pass --verify-reports; or run `backup verify --bundle` and add it)"
+      ],
+      "schema_version": 1
+    },
+    {
+      "completed_at_utc": "2026-09-23T17:56:43.380184+00:00",
+      "covered_by": null,
+      "database_bytes": 24576,
+      "database_sha256": "3bca10d39eea4715bf874215483bbd68c57c266885428766ac269aa30b6a7758",
+      "decision": "KEEP",
+      "kind": "ledger",
+      "name": "edge-backup-fil1f16s",
+      "path": "ledger/edge-backup-fil1f16s",
+      "reasons": [
+        "UNVERIFIED_RESTORE: no recorded VERIFIED_BACKUP_AND_RESTORE report for its database_sha256 (pass --verify-reports; or run `backup verify --bundle` and add it)"
+      ],
+      "schema_version": 1
+    },
+    {
+      "completed_at_utc": "2026-09-23T17:57:11.910303+00:00",
+      "covered_by": null,
+      "database_bytes": 24576,
+      "database_sha256": "3bca10d39eea4715bf874215483bbd68c57c266885428766ac269aa30b6a7758",
+      "decision": "KEEP",
+      "kind": "ledger",
+      "name": "edge-backup-al5aeq08",
+      "path": "ledger/edge-backup-al5aeq08",
+      "reasons": [
+        "UNVERIFIED_RESTORE: no recorded VERIFIED_BACKUP_AND_RESTORE report for its database_sha256 (pass --verify-reports; or run `backup verify --bundle` and add it)"
+      ],
+      "schema_version": 1
+    },
+    {
+      "completed_at_utc": "2026-09-23T18:35:07.214463+00:00",
+      "covered_by": null,
+      "database_bytes": 24576,
+      "database_sha256": "3bca10d39eea4715bf874215483bbd68c57c266885428766ac269aa30b6a7758",
+      "decision": "KEEP",
+      "kind": "ledger",
+      "name": "edge-backup-w1vi57wj",
+      "path": "ledger/edge-backup-w1vi57wj",
+      "reasons": [
+        "UNVERIFIED_RESTORE: no recorded VERIFIED_BACKUP_AND_RESTORE report for its database_sha256 (pass --verify-reports; or run `backup verify --bundle` and add it)"
+      ],
+      "schema_version": 1
+    },
+    {
+      "completed_at_utc": "2026-09-23T18:58:56.286602+00:00",
+      "covered_by": null,
+      "database_bytes": 24576,
+      "database_sha256": "3bca10d39eea4715bf874215483bbd68c57c266885428766ac269aa30b6a7758",
+      "decision": "KEEP",
+      "kind": "ledger",
+      "name": "edge-backup-yfp8r63p",
+      "path": "ledger/edge-backup-yfp8r63p",
+      "reasons": [
+        "UNVERIFIED_RESTORE: no recorded VERIFIED_BACKUP_AND_RESTORE report for its database_sha256 (pass --verify-reports; or run `backup verify --bundle` and add it)"
+      ],
+      "schema_version": 1
+    },
+    {
+      "completed_at_utc": "2026-09-23T18:59:11.835632+00:00",
+      "covered_by": null,
+      "database_bytes": 24576,
+      "database_sha256": "3bca10d39eea4715bf874215483bbd68c57c266885428766ac269aa30b6a7758",
+      "decision": "KEEP",
+      "kind": "ledger",
+      "name": "edge-backup-_rpjz1bo",
+      "path": "ledger/edge-backup-_rpjz1bo",
+      "reasons": [
+        "CHECKPOINT_EXACT: F09 checkpoint 2026-09-23T173009Z.json",
+        "DAILY: newest valid bundle of 2026-09-23",
+        "FIRST_BUNDLE_BASELINE: the oldest valid bundle of this store",
+        "NOT_ELIGIBLE_KIND: ledger bundles are never candidates under proposed-v1"
+      ],
+      "schema_version": 1
+    },
+    {
+      "completed_at_utc": "2026-09-23T22:47:19.726982+00:00",
+      "covered_by": null,
+      "database_bytes": 131072,
+      "database_sha256": "1facc7a8359079edf03de0becee13c2f900e4396d34949bfad7c42b40373772f",
+      "decision": "KEEP",
+      "kind": "ledger",
+      "name": "edge-backup-sdi31qqw",
+      "path": "ledger/edge-backup-sdi31qqw",
+      "reasons": [
+        "UNVERIFIED_RESTORE: no recorded VERIFIED_BACKUP_AND_RESTORE report for its database_sha256 (pass --verify-reports; or run `backup verify --bundle` and add it)"
+      ],
+      "schema_version": 1
+    },
+    {
+      "completed_at_utc": "2026-09-23T22:51:51.444158+00:00",
+      "covered_by": null,
+      "database_bytes": 131072,
+      "database_sha256": "1facc7a8359079edf03de0becee13c2f900e4396d34949bfad7c42b40373772f",
+      "decision": "KEEP",
+      "kind": "ledger",
+      "name": "edge-backup-b37xdtvk",
+      "path": "ledger/edge-backup-b37xdtvk",
+      "reasons": [
+        "UNVERIFIED_RESTORE: no recorded VERIFIED_BACKUP_AND_RESTORE report for its database_sha256 (pass --verify-reports; or run `backup verify --bundle` and add it)"
+      ],
+      "schema_version": 1
+    },
+    {
+      "completed_at_utc": "2026-09-24T04:40:07.937478+00:00",
+      "covered_by": null,
+      "database_bytes": 131072,
+      "database_sha256": "1facc7a8359079edf03de0becee13c2f900e4396d34949bfad7c42b40373772f",
+      "decision": "KEEP",
+      "kind": "ledger",
+      "name": "edge-backup-90_vo47u",
+      "path": "ledger/edge-backup-90_vo47u",
+      "reasons": [
+        "UNVERIFIED_RESTORE: no recorded VERIFIED_BACKUP_AND_RESTORE report for its database_sha256 (pass --verify-reports; or run `backup verify --bundle` and add it)"
+      ],
+      "schema_version": 1
+    },
+    {
+      "completed_at_utc": "2026-09-24T08:29:30.061270+00:00",
+      "covered_by": null,
+      "database_bytes": 131072,
+      "database_sha256": "1facc7a8359079edf03de0becee13c2f900e4396d34949bfad7c42b40373772f",
+      "decision": "KEEP",
+      "kind": "ledger",
+      "name": "edge-backup-8k72vshi",
+      "path": "ledger/edge-backup-8k72vshi",
+      "reasons": [
+        "UNVERIFIED_RESTORE: no recorded VERIFIED_BACKUP_AND_RESTORE report for its database_sha256 (pass --verify-reports; or run `backup verify --bundle` and add it)"
+      ],
+      "schema_version": 1
+    },
+    {
+      "completed_at_utc": "2026-09-24T08:31:00.550421+00:00",
+      "covered_by": null,
+      "database_bytes": 131072,
+      "database_sha256": "1facc7a8359079edf03de0becee13c2f900e4396d34949bfad7c42b40373772f",
+      "decision": "KEEP",
+      "kind": "ledger",
+      "name": "edge-backup-7r22mzf8",
+      "path": "ledger/edge-backup-7r22mzf8",
+      "reasons": [
+        "UNVERIFIED_RESTORE: no recorded VERIFIED_BACKUP_AND_RESTORE report for its database_sha256 (pass --verify-reports; or run `backup verify --bundle` and add it)"
+      ],
+      "schema_version": 1
+    },
+    {
+      "completed_at_utc": "2026-09-24T09:35:55.913813+00:00",
+      "covered_by": null,
+      "database_bytes": 131072,
+      "database_sha256": "1facc7a8359079edf03de0becee13c2f900e4396d34949bfad7c42b40373772f",
+      "decision": "KEEP",
+      "kind": "ledger",
+      "name": "edge-backup-3348wvb6",
+      "path": "ledger/edge-backup-3348wvb6",
+      "reasons": [
+        "UNVERIFIED_RESTORE: no recorded VERIFIED_BACKUP_AND_RESTORE report for its database_sha256 (pass --verify-reports; or run `backup verify --bundle` and add it)"
+      ],
+      "schema_version": 1
+    },
+    {
+      "completed_at_utc": "2026-09-24T09:36:44.958623+00:00",
+      "covered_by": null,
+      "database_bytes": 131072,
+      "database_sha256": "1facc7a8359079edf03de0becee13c2f900e4396d34949bfad7c42b40373772f",
+      "decision": "KEEP",
+      "kind": "ledger",
+      "name": "edge-backup-dju9p6lw",
+      "path": "ledger/edge-backup-dju9p6lw",
+      "reasons": [
+        "UNVERIFIED_RESTORE: no recorded VERIFIED_BACKUP_AND_RESTORE report for its database_sha256 (pass --verify-reports; or run `backup verify --bundle` and add it)"
+      ],
+      "schema_version": 1
+    },
+    {
+      "completed_at_utc": "2026-09-24T10:30:12.335155+00:00",
+      "covered_by": null,
+      "database_bytes": 131072,
+      "database_sha256": "1facc7a8359079edf03de0becee13c2f900e4396d34949bfad7c42b40373772f",
+      "decision": "KEEP",
+      "kind": "ledger",
+      "name": "edge-backup-v_hu4ruz",
+      "path": "ledger/edge-backup-v_hu4ruz",
+      "reasons": [
+        "UNVERIFIED_RESTORE: no recorded VERIFIED_BACKUP_AND_RESTORE report for its database_sha256 (pass --verify-reports; or run `backup verify --bundle` and add it)"
+      ],
+      "schema_version": 1
+    },
+    {
+      "completed_at_utc": "2026-09-24T10:30:52.633577+00:00",
+      "covered_by": null,
+      "database_bytes": 131072,
+      "database_sha256": "1facc7a8359079edf03de0becee13c2f900e4396d34949bfad7c42b40373772f",
+      "decision": "KEEP",
+      "kind": "ledger",
+      "name": "edge-backup-inji6u74",
+      "path": "ledger/edge-backup-inji6u74",
+      "reasons": [
+        "UNVERIFIED_RESTORE: no recorded VERIFIED_BACKUP_AND_RESTORE report for its database_sha256 (pass --verify-reports; or run `backup verify --bundle` and add it)"
+      ],
+      "schema_version": 1
+    },
+    {
+      "completed_at_utc": "2026-09-24T12:22:56.048459+00:00",
+      "covered_by": null,
+      "database_bytes": 131072,
+      "database_sha256": "1facc7a8359079edf03de0becee13c2f900e4396d34949bfad7c42b40373772f",
+      "decision": "KEEP",
+      "kind": "ledger",
+      "name": "edge-backup-nqbzc8wb",
+      "path": "ledger/edge-backup-nqbzc8wb",
+      "reasons": [
+        "UNVERIFIED_RESTORE: no recorded VERIFIED_BACKUP_AND_RESTORE report for its database_sha256 (pass --verify-reports; or run `backup verify --bundle` and add it)"
+      ],
+      "schema_version": 1
+    },
+    {
+      "completed_at_utc": "2026-09-24T12:23:22.631523+00:00",
+      "covered_by": null,
+      "database_bytes": 131072,
+      "database_sha256": "1facc7a8359079edf03de0becee13c2f900e4396d34949bfad7c42b40373772f",
+      "decision": "KEEP",
+      "kind": "ledger",
+      "name": "edge-backup-l67sx2cy",
+      "path": "ledger/edge-backup-l67sx2cy",
+      "reasons": [
+        "UNVERIFIED_RESTORE: no recorded VERIFIED_BACKUP_AND_RESTORE report for its database_sha256 (pass --verify-reports; or run `backup verify --bundle` and add it)"
+      ],
+      "schema_version": 1
+    },
+    {
+      "completed_at_utc": "2026-09-24T13:16:39.057828+00:00",
+      "covered_by": null,
+      "database_bytes": 131072,
+      "database_sha256": "1facc7a8359079edf03de0becee13c2f900e4396d34949bfad7c42b40373772f",
+      "decision": "KEEP",
+      "kind": "ledger",
+      "name": "edge-backup-p_j4w50i",
+      "path": "ledger/edge-backup-p_j4w50i",
+      "reasons": [
+        "UNVERIFIED_RESTORE: no recorded VERIFIED_BACKUP_AND_RESTORE report for its database_sha256 (pass --verify-reports; or run `backup verify --bundle` and add it)"
+      ],
+      "schema_version": 1
+    },
+    {
+      "completed_at_utc": "2026-09-24T13:17:19.439634+00:00",
+      "covered_by": null,
+      "database_bytes": 131072,
+      "database_sha256": "1facc7a8359079edf03de0becee13c2f900e4396d34949bfad7c42b40373772f",
+      "decision": "KEEP",
+      "kind": "ledger",
+      "name": "edge-backup-ya92rdfr",
+      "path": "ledger/edge-backup-ya92rdfr",
+      "reasons": [
+        "UNVERIFIED_RESTORE: no recorded VERIFIED_BACKUP_AND_RESTORE report for its database_sha256 (pass --verify-reports; or run `backup verify --bundle` and add it)"
+      ],
+      "schema_version": 1
+    },
+    {
+      "completed_at_utc": "2026-09-24T13:36:46.814479+00:00",
+      "covered_by": null,
+      "database_bytes": 131072,
+      "database_sha256": "1facc7a8359079edf03de0becee13c2f900e4396d34949bfad7c42b40373772f",
+      "decision": "KEEP",
+      "kind": "ledger",
+      "name": "edge-backup-lk9r142e",
+      "path": "ledger/edge-backup-lk9r142e",
+      "reasons": [
+        "UNVERIFIED_RESTORE: no recorded VERIFIED_BACKUP_AND_RESTORE report for its database_sha256 (pass --verify-reports; or run `backup verify --bundle` and add it)"
+      ],
+      "schema_version": 1
+    },
+    {
+      "completed_at_utc": "2026-09-24T13:38:28.612953+00:00",
+      "covered_by": null,
+      "database_bytes": 131072,
+      "database_sha256": "1facc7a8359079edf03de0becee13c2f900e4396d34949bfad7c42b40373772f",
+      "decision": "KEEP",
+      "kind": "ledger",
+      "name": "edge-backup-wcsssu77",
+      "path": "ledger/edge-backup-wcsssu77",
+      "reasons": [
+        "UNVERIFIED_RESTORE: no recorded VERIFIED_BACKUP_AND_RESTORE report for its database_sha256 (pass --verify-reports; or run `backup verify --bundle` and add it)"
+      ],
+      "schema_version": 1
+    },
+    {
+      "completed_at_utc": "2026-09-24T13:57:38.196178+00:00",
+      "covered_by": null,
+      "database_bytes": 131072,
+      "database_sha256": "1facc7a8359079edf03de0becee13c2f900e4396d34949bfad7c42b40373772f",
+      "decision": "KEEP",
+      "kind": "ledger",
+      "name": "edge-backup-fk6ih189",
+      "path": "ledger/edge-backup-fk6ih189",
+      "reasons": [
+        "UNVERIFIED_RESTORE: no recorded VERIFIED_BACKUP_AND_RESTORE report for its database_sha256 (pass --verify-reports; or run `backup verify --bundle` and add it)"
+      ],
+      "schema_version": 1
+    },
+    {
+      "completed_at_utc": "2026-09-24T13:58:05.730565+00:00",
+      "covered_by": null,
+      "database_bytes": 131072,
+      "database_sha256": "1facc7a8359079edf03de0becee13c2f900e4396d34949bfad7c42b40373772f",
+      "decision": "KEEP",
+      "kind": "ledger",
+      "name": "edge-backup-liygrqqx",
+      "path": "ledger/edge-backup-liygrqqx",
+      "reasons": [
+        "UNVERIFIED_RESTORE: no recorded VERIFIED_BACKUP_AND_RESTORE report for its database_sha256 (pass --verify-reports; or run `backup verify --bundle` and add it)"
+      ],
+      "schema_version": 1
+    },
+    {
+      "completed_at_utc": "2026-09-24T14:27:51.664368+00:00",
+      "covered_by": null,
+      "database_bytes": 131072,
+      "database_sha256": "1facc7a8359079edf03de0becee13c2f900e4396d34949bfad7c42b40373772f",
+      "decision": "KEEP",
+      "kind": "ledger",
+      "name": "edge-backup-ptastv1z",
+      "path": "ledger/edge-backup-ptastv1z",
+      "reasons": [
+        "UNVERIFIED_RESTORE: no recorded VERIFIED_BACKUP_AND_RESTORE report for its database_sha256 (pass --verify-reports; or run `backup verify --bundle` and add it)"
+      ],
+      "schema_version": 1
+    },
+    {
+      "completed_at_utc": "2026-09-24T14:28:17.923936+00:00",
+      "covered_by": null,
+      "database_bytes": 131072,
+      "database_sha256": "1facc7a8359079edf03de0becee13c2f900e4396d34949bfad7c42b40373772f",
+      "decision": "KEEP",
+      "kind": "ledger",
+      "name": "edge-backup-6_r493u7",
+      "path": "ledger/edge-backup-6_r493u7",
+      "reasons": [
+        "UNVERIFIED_RESTORE: no recorded VERIFIED_BACKUP_AND_RESTORE report for its database_sha256 (pass --verify-reports; or run `backup verify --bundle` and add it)"
+      ],
+      "schema_version": 1
+    },
+    {
+      "completed_at_utc": "2026-09-24T20:31:30.129212+00:00",
+      "covered_by": null,
+      "database_bytes": 131072,
+      "database_sha256": "1facc7a8359079edf03de0becee13c2f900e4396d34949bfad7c42b40373772f",
+      "decision": "KEEP",
+      "kind": "ledger",
+      "name": "edge-backup-pvem462f",
+      "path": "ledger/edge-backup-pvem462f",
+      "reasons": [
+        "UNVERIFIED_RESTORE: no recorded VERIFIED_BACKUP_AND_RESTORE report for its database_sha256 (pass --verify-reports; or run `backup verify --bundle` and add it)"
+      ],
+      "schema_version": 1
+    },
+    {
+      "completed_at_utc": "2026-09-24T20:31:55.648015+00:00",
+      "covered_by": null,
+      "database_bytes": 131072,
+      "database_sha256": "1facc7a8359079edf03de0becee13c2f900e4396d34949bfad7c42b40373772f",
+      "decision": "KEEP",
+      "kind": "ledger",
+      "name": "edge-backup-4bqoty5b",
+      "path": "ledger/edge-backup-4bqoty5b",
+      "reasons": [
+        "CHECKPOINT_EXACT: F09 checkpoint 2026-09-23T224720Z.json",
+        "DAILY: newest valid bundle of 2026-09-24",
+        "NOT_ELIGIBLE_KIND: ledger bundles are never candidates under proposed-v1",
+        "RECENT: younger than 48 h"
+      ],
+      "schema_version": 1
+    },
+    {
+      "completed_at_utc": "2026-09-24T23:35:54.466266+00:00",
+      "covered_by": null,
+      "database_bytes": 253952,
+      "database_sha256": "6cae5d408c46264cd079af11d1f2d2a0828842b9639e72024251e0097a776e2f",
+      "decision": "KEEP",
+      "kind": "ledger",
+      "name": "edge-backup-c265w96_",
+      "path": "ledger/edge-backup-c265w96_",
+      "reasons": [
+        "UNVERIFIED_RESTORE: no recorded VERIFIED_BACKUP_AND_RESTORE report for its database_sha256 (pass --verify-reports; or run `backup verify --bundle` and add it)"
+      ],
+      "schema_version": 1
+    },
+    {
+      "completed_at_utc": "2026-09-24T23:36:23.146161+00:00",
+      "covered_by": null,
+      "database_bytes": 253952,
+      "database_sha256": "6cae5d408c46264cd079af11d1f2d2a0828842b9639e72024251e0097a776e2f",
+      "decision": "KEEP",
+      "kind": "ledger",
+      "name": "edge-backup-6mztsixy",
+      "path": "ledger/edge-backup-6mztsixy",
+      "reasons": [
+        "UNVERIFIED_RESTORE: no recorded VERIFIED_BACKUP_AND_RESTORE report for its database_sha256 (pass --verify-reports; or run `backup verify --bundle` and add it)"
+      ],
+      "schema_version": 1
+    },
+    {
+      "completed_at_utc": "2026-09-25T00:36:32.029337+00:00",
+      "covered_by": null,
+      "database_bytes": 253952,
+      "database_sha256": "6cae5d408c46264cd079af11d1f2d2a0828842b9639e72024251e0097a776e2f",
+      "decision": "KEEP",
+      "kind": "ledger",
+      "name": "edge-backup-hrtu0u23",
+      "path": "ledger/edge-backup-hrtu0u23",
+      "reasons": [
+        "UNVERIFIED_RESTORE: no recorded VERIFIED_BACKUP_AND_RESTORE report for its database_sha256 (pass --verify-reports; or run `backup verify --bundle` and add it)"
+      ],
+      "schema_version": 1
+    },
+    {
+      "completed_at_utc": "2026-09-25T00:36:58.932749+00:00",
+      "covered_by": null,
+      "database_bytes": 253952,
+      "database_sha256": "6cae5d408c46264cd079af11d1f2d2a0828842b9639e72024251e0097a776e2f",
+      "decision": "KEEP",
+      "kind": "ledger",
+      "name": "edge-backup-dukcfm7i",
+      "path": "ledger/edge-backup-dukcfm7i",
+      "reasons": [
+        "UNVERIFIED_RESTORE: no recorded VERIFIED_BACKUP_AND_RESTORE report for its database_sha256 (pass --verify-reports; or run `backup verify --bundle` and add it)"
+      ],
+      "schema_version": 1
+    },
+    {
+      "completed_at_utc": "2026-09-25T01:56:22.964837+00:00",
+      "covered_by": null,
+      "database_bytes": 253952,
+      "database_sha256": "6cae5d408c46264cd079af11d1f2d2a0828842b9639e72024251e0097a776e2f",
+      "decision": "KEEP",
+      "kind": "ledger",
+      "name": "edge-backup-zf97kptn",
+      "path": "ledger/edge-backup-zf97kptn",
+      "reasons": [
+        "UNVERIFIED_RESTORE: no recorded VERIFIED_BACKUP_AND_RESTORE report for its database_sha256 (pass --verify-reports; or run `backup verify --bundle` and add it)"
+      ],
+      "schema_version": 1
+    },
+    {
+      "completed_at_utc": "2026-09-25T01:56:51.155318+00:00",
+      "covered_by": null,
+      "database_bytes": 253952,
+      "database_sha256": "6cae5d408c46264cd079af11d1f2d2a0828842b9639e72024251e0097a776e2f",
+      "decision": "KEEP",
+      "kind": "ledger",
+      "name": "edge-backup-jnjowi5u",
+      "path": "ledger/edge-backup-jnjowi5u",
+      "reasons": [
+        "UNVERIFIED_RESTORE: no recorded VERIFIED_BACKUP_AND_RESTORE report for its database_sha256 (pass --verify-reports; or run `backup verify --bundle` and add it)"
+      ],
+      "schema_version": 1
+    },
+    {
+      "completed_at_utc": "2026-09-25T04:40:09.658955+00:00",
+      "covered_by": null,
+      "database_bytes": 253952,
+      "database_sha256": "6cae5d408c46264cd079af11d1f2d2a0828842b9639e72024251e0097a776e2f",
+      "decision": "KEEP",
+      "kind": "ledger",
+      "name": "edge-backup-cqxwqm_4",
+      "path": "ledger/edge-backup-cqxwqm_4",
+      "reasons": [
+        "UNVERIFIED_RESTORE: no recorded VERIFIED_BACKUP_AND_RESTORE report for its database_sha256 (pass --verify-reports; or run `backup verify --bundle` and add it)"
+      ],
+      "schema_version": 1
+    },
+    {
+      "completed_at_utc": "2026-09-25T05:04:16.732056+00:00",
+      "covered_by": null,
+      "database_bytes": 253952,
+      "database_sha256": "6cae5d408c46264cd079af11d1f2d2a0828842b9639e72024251e0097a776e2f",
+      "decision": "KEEP",
+      "kind": "ledger",
+      "name": "edge-backup-2p0g6mz5",
+      "path": "ledger/edge-backup-2p0g6mz5",
+      "reasons": [
+        "UNVERIFIED_RESTORE: no recorded VERIFIED_BACKUP_AND_RESTORE report for its database_sha256 (pass --verify-reports; or run `backup verify --bundle` and add it)"
+      ],
+      "schema_version": 1
+    },
+    {
+      "completed_at_utc": "2026-09-25T05:04:44.635912+00:00",
+      "covered_by": null,
+      "database_bytes": 253952,
+      "database_sha256": "6cae5d408c46264cd079af11d1f2d2a0828842b9639e72024251e0097a776e2f",
+      "decision": "KEEP",
+      "kind": "ledger",
+      "name": "edge-backup-n8s90zy5",
+      "path": "ledger/edge-backup-n8s90zy5",
+      "reasons": [
+        "UNVERIFIED_RESTORE: no recorded VERIFIED_BACKUP_AND_RESTORE report for its database_sha256 (pass --verify-reports; or run `backup verify --bundle` and add it)"
+      ],
+      "schema_version": 1
+    },
+    {
+      "completed_at_utc": "2026-09-25T06:18:58.178502+00:00",
+      "covered_by": null,
+      "database_bytes": 253952,
+      "database_sha256": "6cae5d408c46264cd079af11d1f2d2a0828842b9639e72024251e0097a776e2f",
+      "decision": "KEEP",
+      "kind": "ledger",
+      "name": "edge-backup-4t9b84nt",
+      "path": "ledger/edge-backup-4t9b84nt",
+      "reasons": [
+        "UNVERIFIED_RESTORE: no recorded VERIFIED_BACKUP_AND_RESTORE report for its database_sha256 (pass --verify-reports; or run `backup verify --bundle` and add it)"
+      ],
+      "schema_version": 1
+    },
+    {
+      "completed_at_utc": "2026-09-25T06:19:26.749533+00:00",
+      "covered_by": null,
+      "database_bytes": 253952,
+      "database_sha256": "6cae5d408c46264cd079af11d1f2d2a0828842b9639e72024251e0097a776e2f",
+      "decision": "KEEP",
+      "kind": "ledger",
+      "name": "edge-backup-my4_h1dr",
+      "path": "ledger/edge-backup-my4_h1dr",
+      "reasons": [
+        "UNVERIFIED_RESTORE: no recorded VERIFIED_BACKUP_AND_RESTORE report for its database_sha256 (pass --verify-reports; or run `backup verify --bundle` and add it)"
+      ],
+      "schema_version": 1
+    },
+    {
+      "completed_at_utc": "2026-09-25T08:02:47.856459+00:00",
+      "covered_by": null,
+      "database_bytes": 253952,
+      "database_sha256": "6cae5d408c46264cd079af11d1f2d2a0828842b9639e72024251e0097a776e2f",
+      "decision": "KEEP",
+      "kind": "ledger",
+      "name": "edge-backup-_y809n40",
+      "path": "ledger/edge-backup-_y809n40",
+      "reasons": [
+        "UNVERIFIED_RESTORE: no recorded VERIFIED_BACKUP_AND_RESTORE report for its database_sha256 (pass --verify-reports; or run `backup verify --bundle` and add it)"
+      ],
+      "schema_version": 1
+    },
+    {
+      "completed_at_utc": "2026-09-25T08:03:16.639884+00:00",
+      "covered_by": null,
+      "database_bytes": 253952,
+      "database_sha256": "6cae5d408c46264cd079af11d1f2d2a0828842b9639e72024251e0097a776e2f",
+      "decision": "KEEP",
+      "kind": "ledger",
+      "name": "edge-backup-88rydy1u",
+      "path": "ledger/edge-backup-88rydy1u",
+      "reasons": [
+        "NEWEST_GOOD: one of the newest 3 valid bundles",
+        "NOT_ELIGIBLE_KIND: ledger bundles are never candidates under proposed-v1",
+        "RECENT: younger than 48 h"
+      ],
+      "schema_version": 1
+    },
+    {
+      "completed_at_utc": "2026-09-25T20:17:00.945424+00:00",
+      "covered_by": null,
+      "database_bytes": 258048,
+      "database_sha256": "1c9079759c4b8695b685690222724b7f975064c7942eb414dcd562b4b4056818",
+      "decision": "KEEP",
+      "kind": "ledger",
+      "name": "edge-backup-2ec3oplk",
+      "path": "ledger/edge-backup-2ec3oplk",
+      "reasons": [
+        "UNVERIFIED_RESTORE: no recorded VERIFIED_BACKUP_AND_RESTORE report for its database_sha256 (pass --verify-reports; or run `backup verify --bundle` and add it)"
+      ],
+      "schema_version": 1
+    },
+    {
+      "completed_at_utc": "2026-09-25T20:17:35.131513+00:00",
+      "covered_by": null,
+      "database_bytes": 258048,
+      "database_sha256": "1c9079759c4b8695b685690222724b7f975064c7942eb414dcd562b4b4056818",
+      "decision": "KEEP",
+      "kind": "ledger",
+      "name": "edge-backup-lqgw4n2c",
+      "path": "ledger/edge-backup-lqgw4n2c",
+      "reasons": [
+        "CHECKPOINT_EXACT: F09 checkpoint 2026-09-25T201836Z.json",
+        "DAILY: newest valid bundle of 2026-09-25",
+        "NEWEST_GOOD: one of the newest 3 valid bundles",
+        "NOT_ELIGIBLE_KIND: ledger bundles are never candidates under proposed-v1",
+        "RECENT: younger than 48 h"
+      ],
+      "schema_version": 1
+    },
+    {
+      "completed_at_utc": "2026-09-25T23:23:32.452968+00:00",
+      "covered_by": null,
+      "database_bytes": 368640,
+      "database_sha256": "eb7ef1e1647b7dc7891241d9f6c18bfbf542726e32bd811ff76162eb89c0c468",
+      "decision": "KEEP",
+      "kind": "ledger",
+      "name": "edge-backup-i5x91mjo",
+      "path": "ledger/edge-backup-i5x91mjo",
+      "reasons": [
+        "UNVERIFIED_RESTORE: no recorded VERIFIED_BACKUP_AND_RESTORE report for its database_sha256 (pass --verify-reports; or run `backup verify --bundle` and add it)"
+      ],
+      "schema_version": 1
+    },
+    {
+      "completed_at_utc": "2026-09-25T23:24:05.037419+00:00",
+      "covered_by": null,
+      "database_bytes": 368640,
+      "database_sha256": "eb7ef1e1647b7dc7891241d9f6c18bfbf542726e32bd811ff76162eb89c0c468",
+      "decision": "KEEP",
+      "kind": "ledger",
+      "name": "edge-backup-gkbqsej6",
+      "path": "ledger/edge-backup-gkbqsej6",
+      "reasons": [
+        "UNVERIFIED_RESTORE: no recorded VERIFIED_BACKUP_AND_RESTORE report for its database_sha256 (pass --verify-reports; or run `backup verify --bundle` and add it)"
+      ],
+      "schema_version": 1
+    },
+    {
+      "completed_at_utc": "2026-09-26T01:31:18.159660+00:00",
+      "covered_by": null,
+      "database_bytes": 368640,
+      "database_sha256": "eb7ef1e1647b7dc7891241d9f6c18bfbf542726e32bd811ff76162eb89c0c468",
+      "decision": "KEEP",
+      "kind": "ledger",
+      "name": "edge-backup-xl91ib_o",
+      "path": "ledger/edge-backup-xl91ib_o",
+      "reasons": [
+        "UNVERIFIED_RESTORE: no recorded VERIFIED_BACKUP_AND_RESTORE report for its database_sha256 (pass --verify-reports; or run `backup verify --bundle` and add it)"
+      ],
+      "schema_version": 1
+    },
+    {
+      "completed_at_utc": "2026-09-26T01:31:54.952982+00:00",
+      "covered_by": null,
+      "database_bytes": 368640,
+      "database_sha256": "eb7ef1e1647b7dc7891241d9f6c18bfbf542726e32bd811ff76162eb89c0c468",
+      "decision": "KEEP",
+      "kind": "ledger",
+      "name": "edge-backup-fhey07uh",
+      "path": "ledger/edge-backup-fhey07uh",
+      "reasons": [
+        "UNVERIFIED_RESTORE: no recorded VERIFIED_BACKUP_AND_RESTORE report for its database_sha256 (pass --verify-reports; or run `backup verify --bundle` and add it)"
+      ],
+      "schema_version": 1
+    },
+    {
+      "completed_at_utc": "2026-09-26T04:40:13.524059+00:00",
+      "covered_by": null,
+      "database_bytes": 368640,
+      "database_sha256": "eb7ef1e1647b7dc7891241d9f6c18bfbf542726e32bd811ff76162eb89c0c468",
+      "decision": "KEEP",
+      "kind": "ledger",
+      "name": "edge-backup-whl8e874",
+      "path": "ledger/edge-backup-whl8e874",
+      "reasons": [
+        "UNVERIFIED_RESTORE: no recorded VERIFIED_BACKUP_AND_RESTORE report for its database_sha256 (pass --verify-reports; or run `backup verify --bundle` and add it)"
+      ],
+      "schema_version": 1
+    },
+    {
+      "completed_at_utc": "2026-09-26T08:52:31.534363+00:00",
+      "covered_by": null,
+      "database_bytes": 368640,
+      "database_sha256": "eb7ef1e1647b7dc7891241d9f6c18bfbf542726e32bd811ff76162eb89c0c468",
+      "decision": "KEEP",
+      "kind": "ledger",
+      "name": "edge-backup-mfneanz3",
+      "path": "ledger/edge-backup-mfneanz3",
+      "reasons": [
+        "UNVERIFIED_RESTORE: no recorded VERIFIED_BACKUP_AND_RESTORE report for its database_sha256 (pass --verify-reports; or run `backup verify --bundle` and add it)"
+      ],
+      "schema_version": 1
+    },
+    {
+      "completed_at_utc": "2026-09-26T08:53:01.043479+00:00",
+      "covered_by": null,
+      "database_bytes": 368640,
+      "database_sha256": "eb7ef1e1647b7dc7891241d9f6c18bfbf542726e32bd811ff76162eb89c0c468",
+      "decision": "KEEP",
+      "kind": "ledger",
+      "name": "edge-backup-ui_qahf5",
+      "path": "ledger/edge-backup-ui_qahf5",
+      "reasons": [
+        "DAILY: newest valid bundle of 2026-09-26",
+        "MONTHLY: newest valid bundle of 2026-09",
+        "NEWEST_GOOD: one of the newest 3 valid bundles",
+        "NOT_ELIGIBLE_KIND: ledger bundles are never candidates under proposed-v1",
+        "RECENT: younger than 48 h",
+        "WEEKLY: newest valid bundle of the week of 2026-09-21"
+      ],
+      "schema_version": 1
+    }
+  ],
+  "checkpoint_problems": [],
+  "checkpoints": [
+    {
+      "bundles": [
+        "edge-backup-krsk9s17",
+        "edge-backup-o2bpi1h8"
+      ],
+      "checkpoint": "2026-09-23T173009Z.json",
+      "kind": "evidence",
+      "match": "EVIDENCE_BRACKET"
+    },
+    {
+      "bundles": [
+        "edge-backup-36jle2zs",
+        "edge-backup-60gum0bz"
+      ],
+      "checkpoint": "2026-09-23T224720Z.json",
+      "kind": "evidence",
+      "match": "EVIDENCE_BRACKET"
+    },
+    {
+      "bundles": [
+        "edge-backup-2o5id_jp",
+        "edge-backup-wu3982g7"
+      ],
+      "checkpoint": "2026-09-25T201836Z.json",
+      "kind": "evidence",
+      "match": "EVIDENCE_BRACKET"
+    },
+    {
+      "bundles": [
+        "edge-backup-_rpjz1bo"
+      ],
+      "checkpoint": "2026-09-23T173009Z.json",
+      "kind": "ledger",
+      "match": "EXACT"
+    },
+    {
+      "bundles": [
+        "edge-backup-4bqoty5b"
+      ],
+      "checkpoint": "2026-09-23T224720Z.json",
+      "kind": "ledger",
+      "match": "EXACT"
+    },
+    {
+      "bundles": [
+        "edge-backup-lqgw4n2c"
+      ],
+      "checkpoint": "2026-09-25T201836Z.json",
+      "kind": "ledger",
+      "match": "EXACT"
+    }
+  ],
+  "command": "backup retention-plan",
+  "deletes_performed": 0,
+  "flags": [
+    "UNVERIFIED_PRESENT:evidence",
+    "UNVERIFIED_PRESENT:ledger"
+  ],
+  "hashes_verified": true,
+  "ignored_entries": [],
+  "inputs": {
+    "checkpoint_files": [
+      {
+        "name": "2026-09-23T173009Z.json",
+        "sha256": "47fd56647805101cdd90d34b63192e130355fab89e32f8e40fd270dde803b115"
+      },
+      {
+        "name": "2026-09-23T224720Z.json",
+        "sha256": "9e97230ab8dd43a48c37ed267891bdb84eb116be2f18a9b25c8085d822f3e9db"
+      },
+      {
+        "name": "2026-09-25T201836Z.json",
+        "sha256": "2efa40359d2030823d68d80ba4f7303d7c16416f98ba81c75801a6e1eb760509"
+      }
+    ],
+    "checkpoints_dir": "/opt/market-edge-lab/app/docs/engineering/ledger_checkpoints",
+    "pins": [
+      "edge-backup-eqfiomf5",
+      "edge-backup-gci308lm",
+      "edge-backup-iu9x5w73",
+      "edge-backup-lgw9jmww",
+      "edge-backup-lqs5j63_",
+      "edge-backup-sdi31qqw",
+      "edge-backup-wu3982g7"
+    ],
+    "policy": "proposed-v1",
+    "verify_hashes": true,
+    "verify_reports_file": "/var/lib/market-edge-lab/retention/20260926T085314Z-backup-reports.txt",
+    "verify_reports_sha256": "f931e9fa3d64f9cb3236274987cb781f5be375c33f25b642cad1221418757b0e"
+  },
+  "limitations": [
+    "a backup copy is not original evidence: the live store is the original, and no candidate is the only copy of its rows (a newer kept bundle covers it)",
+    "a checkpoint hash is not a restorable backup; no verified off-host backup exists",
+    "a bundle is good only with a recorded VERIFIED_BACKUP_AND_RESTORE report (--verify-reports); the planner does not restore anything itself. Any future apply step must restore-verify every bundle it relies on (for coverage and for freshness) immediately before deleting anything",
+    "hashes are checked only with --verify-hashes",
+    "nothing is deleted: this planner has no deletion code path; deletion is only the separate, manual `retention-apply` of a reviewed report of this plan"
+  ],
+  "mode": "DRY_RUN_ONLY",
+  "newest_good": {
+    "evidence": "edge-backup-tlpycog1",
+    "ledger": "edge-backup-ui_qahf5"
+  },
+  "now_utc": "2026-09-26T08:53:14.619136+00:00",
+  "pins_not_found": [],
+  "policy": {
+    "active_grace_minutes": 30.0,
+    "candidate_kinds": [
+      "evidence"
+    ],
+    "daily_days": 7,
+    "keep_all_younger_than_hours": 48.0,
+    "max_newest_good_age_hours": 36.0,
+    "monthly_months": 12,
+    "name": "proposed-v1",
+    "never_candidates": [
+      "QUARANTINE",
+      "ACTIVE",
+      "no recorded restore verification",
+      "newest good",
+      "first bundle",
+      "schema boundary",
+      "checkpoint-linked",
+      "pinned baseline",
+      "forensic ledger state",
+      "not covered by a newer kept bundle",
+      "any bundle of a store not in candidate_kinds"
+    ],
+    "newest_good": 3,
+    "pins": [
+      "edge-backup-eqfiomf5",
+      "edge-backup-lqs5j63_",
+      "edge-backup-sdi31qqw",
+      "edge-backup-iu9x5w73",
+      "edge-backup-gci308lm",
+      "edge-backup-lgw9jmww",
+      "edge-backup-wu3982g7"
+    ],
+    "status": "APPROVED 2026-09-26 (owner; manual, reviewed apply only)",
+    "weekly_weeks": 8
+  },
+  "policy_pins_found": [
+    "edge-backup-gci308lm",
+    "edge-backup-iu9x5w73",
+    "edge-backup-lgw9jmww",
+    "edge-backup-wu3982g7"
+  ],
+  "root": "/var/lib/market-edge-lab/backups",
+  "state": "REVIEW",
+  "summary": {
+    "evidence": {
+      "DELETE-CANDIDATE": 3,
+      "KEEP": 49,
+      "QUARANTINE": 0,
+      "bytes_delete_candidate": 507904,
+      "bytes_keep": 70799360,
+      "bytes_quarantine": 0
+    },
+    "ledger": {
+      "DELETE-CANDIDATE": 0,
+      "KEEP": 49,
+      "QUARANTINE": 0,
+      "bytes_delete_candidate": 0,
+      "bytes_keep": 9297920,
+      "bytes_quarantine": 0
+    }
+  },
+  "verify_reports": {
+    "file": "/var/lib/market-edge-lab/retention/20260926T085314Z-backup-reports.txt",
+    "reports_read": 101,
+    "verified_database_sha256s": 43
+  }
+}

@@ -339,6 +339,43 @@ Related owner records that are not ideas:
 
 ## Review log
 
+- **2026-09-26: owner decisions and first real NFL paired evidence: next batch.**
+  - **Decided (owner):**
+    - EXP-002: $1,000/yr continuation bar, 6 h to 2026-10-22;
+    - EXP-003: paused; the Kalshi questions approved subject to the final text;
+    - retention proposed-v1 with manual apply (first cycle done: 3 bundles, 507,904 B);
+    - O1 laptop pulls (first pull VERIFIED).
+  - **Observed:**
+    - #107 same-run settlement verified;
+    - the first Polymarket US capture (9/9);
+    - the first Kalshi NFL pairs (9 games, 18 sides, all book-at-or-after-odds, about 5 min skew,
+      1¢ spreads).
+  - **Next implementation batch (dependency order; all within existing authority):**
+    1. **NOW:** EXP-002 gate v3.
+       - A spread-based noise floor from single captures, which need no new requests. The first
+         real books all show 1¢ spreads, a σ floor of about 0.29¢.
+       - Combine it into the correlation bound, re-simulate the stickiness grid (false-pass ≤ 10%
+         at bias > tolerable), and get an independent review.
+       - Needed before any freeze.
+    2. **NOW:** EXP-002 freeze inputs, as PROPOSED protocol values for review:
+       - tie/not-played bounds (A.D), which clears RULES_UNRESOLVED for the paired events;
+       - the episode definition (A.F);
+       - the δ_min candidates.
+       Freeze only by 2026-10-21 with holdout windows, after the pilot report (owner hours).
+    3. **NEXT:** KXNFLGAME fee verification record (G4; `fee_schedules`), from the fee PDF
+       re-check and/or Kalshi Q7. Until then economics stay FEE_UNSUPPORTED.
+    4. **NEXT:** a Terminal line for the EXP-002 gate state (UI_CONTRACT; small).
+    5. **ROUTINE:**
+       - O1 weekly (about 2026-10-03);
+       - F09 weekly (an apply refuses after 8 days);
+       - the next retention dry run and apply at the owner's cadence;
+       - settle and verify the 26SEP26 positions.
+  - **Classification:**
+    - NOW: 1, 2;
+    - NEXT: 3, 4;
+    - BLOCKED (owner): CI billing, the Kalshi send;
+    - BLOCKED (facts): EXP-003 until Kalshi answers or 2026-11-15.
+
 - **2026-09-25 (evening): Research Unblocking directive re-plan** (`docs/owner/2026-09-25-research-unblocking-directive.md`;
   decision packet `docs/owner/2026-09-25-research-unblocking-decision-packet.md`).
   - **Priority:** NOW. Unblock EXP-002/EXP-003 evidence; no new family, subsystem or migration.
