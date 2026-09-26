@@ -1,4 +1,4 @@
-"""The backup retention planner is a DRY RUN only (PROPOSED policy, docs/deploy/CAPTURE_AND_BACKUP_APPROVAL_PLAN.md).
+"""The backup retention planner is a DRY RUN only (policy proposed-v1, owner-approved 2026-09-26; deletion is the separate retention-apply).
 
 Synthetic bundle directories (a manifest plus database bytes of the stated length); no real
 database is needed because the planner reads manifests and sizes only (hashes with --verify-hashes).
@@ -153,8 +153,10 @@ def test_the_planner_has_no_deletion_code_path():
                     modes = [a for a in node.args if isinstance(a, ast.Constant) and isinstance(a.value, str)]
                     modes += [k.value for k in node.keywords if k.arg == "mode" and isinstance(k.value, ast.Constant)]
                     assert all(not set(str(m.value)) & set("wax+") for m in modes), f"{fname} opens for writing"
-    parser_source = inspect.getsource(backup.main)
-    assert "--apply" not in parser_source and "--delete" not in parser_source
+    # retention-plan accepts no apply/delete option (deletion is only the separate retention-apply command).
+    for option in ("--apply", "--delete", "--confirm"):
+        with pytest.raises(SystemExit):
+            backup.main(["retention-plan", "--root", ".", option])
 
 
 def test_the_cli_changes_nothing_even_when_every_deletion_api_would_work(tmp_path, monkeypatch, capsys):
@@ -176,7 +178,7 @@ def test_the_cli_changes_nothing_even_when_every_deletion_api_would_work(tmp_pat
     assert code == 0
     report = json.loads(capsys.readouterr().out)
     assert report["mode"] == "DRY_RUN_ONLY" and report["deletes_performed"] == 0
-    assert report["policy"]["status"] == "PROPOSED"
+    assert report["policy"]["status"].startswith("APPROVED 2026-09-26")
     assert report["verify_reports"]["verified_database_sha256s"] == 120
     assert report["summary"]["evidence"]["DELETE-CANDIDATE"] > 0  # candidates are reported, never acted on
     assert snapshot(tmp_path) == before  # same paths, sizes, modification times and contents
