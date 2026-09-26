@@ -876,3 +876,23 @@ def test_only_book_at_or_after_odds_pairs_feed_the_ladder_and_the_economics(popu
     assert before["economics"]["episodes"]["observations"] == 0
     view = se.view_from_report(before, sf.NOW)
     assert view["capacity"]["latest"]["book_timing"] == se.BOOK_BEFORE_ODDS and view["capacity"]["latest"]["ladder"] == []
+
+
+def _paired_sides(rep):
+    return [s for r in rep["rows"] for s in r["sides"].values() if s.get("stage") is None]
+
+
+def test_economics_observations_plus_excluded_comparability_only_sides_equal_the_paired_sides(populated, tmp_path):
+    for rep in (report(populated[0], populated[1]), report(before_odds_store(tmp_path), sf.NOW)):
+        paired = _paired_sides(rep)
+        episodes = rep["economics"]["episodes"]
+        excluded = episodes["excluded_from_economics"]
+        assert excluded["reason"] == "BEFORE_ODDS: comparability-only"
+        assert episodes["observations"] + excluded["count"] == len(paired) > 0
+        by_timing = rep["join"]["denominators"]["sides_paired_by_book_timing"]
+        assert sum(by_timing.values()) == rep["join"]["denominators"]["sides_paired"] == len(paired)
+        assert by_timing["BEFORE_ODDS"] == excluded["count"] and by_timing["UNKNOWN"] == 0
+    # comparability-only pairs are never removed from the attrition denominators (no attrition reason)
+    before = report(before_odds_store(tmp_path / "again"), sf.NOW)
+    assert before["join"]["paired_targets"] > 0 and before["economics"]["episodes"]["observations"] == 0
+    assert not any("BEFORE_ODDS" in str(w) for w in before["attrition"]["waterfalls"])

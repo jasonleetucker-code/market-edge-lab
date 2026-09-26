@@ -1125,6 +1125,14 @@ def _row(r: Mapping[str, Any], catalog: KalshiCatalog, payloads: _Payloads, cons
     return row
 
 
+def _by_book_timing(paired_sides: Sequence[Mapping[str, Any]]) -> dict[str, int]:
+    out = {BOOK_BEFORE_ODDS: 0, BOOK_AT_OR_AFTER_ODDS: 0, "UNKNOWN": 0}
+    for s in paired_sides:
+        timing = s.get("book_timing")
+        out[timing if timing in (BOOK_BEFORE_ODDS, BOOK_AT_OR_AFTER_ODDS) else "UNKNOWN"] += 1
+    return out
+
+
 def _attrition(rows: list[dict[str, Any]], results: bool = False) -> dict[str, Any]:
     planned = len(rows)
     superseded = sum(r["status"] == SUPERSEDED for r in rows)
@@ -1164,6 +1172,9 @@ def _attrition(rows: list[dict[str, Any]], results: bool = False) -> dict[str, A
             "events_due": len({r["event_id"] for r in due}), "weeks_due": len({r["week_cluster"] for r in due}),
             "kalshi_markets_mapped": len({s["ticker"] for s in sides}),
             "sides_evaluated": len(sides), "sides_paired": sum(s.get("stage") is None for s in sides),
+            # Paired sides by book timing (join v2). BEFORE_ODDS pairs stay in every denominator (markout and
+            # calibration); they are only kept out of the economics (economics.episodes.excluded_from_economics).
+            "sides_paired_by_book_timing": _by_book_timing([s for s in sides if s.get("stage") is None]),
             "odds_snapshots_used": len({r["odds"].get("snapshot_id") for r in due if r["odds"].get("snapshot_id")}),
             "kalshi_books_used": len({s["book_snapshot_id"] for s in sides if s.get("book_snapshot_id")}),
         },
@@ -1478,6 +1489,10 @@ def economics(rows: Sequence[Mapping[str, Any]], observations: Sequence[Any], pr
     OBSERVED at zero, owner inputs UNKNOWN. With today's DRAFT protocol the verdict is INSUFFICIENT_EVIDENCE."""
     definition = episode_definition(protocol)
     minimums = screen_minimums(protocol)
+    # Comparability-only pairs are paired evidence but never economics inputs; count them so that
+    # observations + excluded == paired sides (nothing drops out silently).
+    comparability_only = sum(1 for r in rows for s in r["sides"].values()
+                             if s.get("stage") is None and s.get("book_timing") == BOOK_BEFORE_ODDS)
     episodes = rec.build_episodes(observations, definition)
     due = [parse_utc(r["cutoff_utc"]) for r in rows if r["status"] not in (SUPERSEDED, NOT_YET_DUE)]
     start = min((d for d in due if d is not None), default=None)
@@ -1519,6 +1534,8 @@ def economics(rows: Sequence[Mapping[str, Any]], observations: Sequence[Any], pr
         "edge_at_size": {"state": "NOT_DEFENSIBLE", "reasons": reasons},
         "episodes": {"definition": _plain(definition), "problems": list(episodes.problems),
                      "observations": episodes.observations,
+                     "excluded_from_economics": {"count": comparability_only,
+                                                 "reason": f"{BOOK_BEFORE_ODDS}: comparability-only"},
                      # an undefined episode rule makes episodes NOT EVALUABLE (None), never "0 episodes"
                      "qualifying": None if episodes.problems else episodes.qualifying_observations,
                      "episodes": None if episodes.problems else len(episodes.episodes),
