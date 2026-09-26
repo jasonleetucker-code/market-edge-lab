@@ -3,144 +3,111 @@
 This is the live state of the repository. Each session overwrites it; it is not a history
 (git log is the history). Format: `AI_INSTRUCTIONS.md` → Handoff format.
 
-_Last updated: 2026-09-25 ~16:25 America/New_York (VPS clock) by the laptop Claude coordinator
-session. It covered the owner's Economic Evidence v1 directive (docs/owner/2026-09-25-economic-
-evidence-v1-directive.md; strategy reset #96), the first real settlement, the F09 checkpoint and
-#107._
+_Last updated: 2026-09-25 ~21:45 America/New_York (VPS clock) by the laptop Claude coordinator
+session. It covered the owner's Research Unblocking directive
+(`docs/owner/2026-09-25-research-unblocking-directive.md`) and the owner's approval of Kalshi NFL
+capture. The earlier state (Economic Evidence v1, first real settlement, F09 2026-09-25) is in git
+history (#106, #108)._
 
 ```
-STATUS: DONE for the build scope. Every Economic Evidence v1 PR is merged, DEPLOYED and
-  PRODUCTION_VERIFIED; #107 is merged and DEPLOYED with deploy checks passing (production
-  dee5805), and its same-run settlement is not yet observed in production. The first real settlement is recorded and verified,
-  and the manual F09 checkpoint is taken. Pending, time-based:
-  - the 26SEP25 positions (due once Kalshi finalizes that event);
-  - the first Polymarket US research capture (2026-09-26 16:53Z).
-  No edge is claimed. Both new research families are DRAFT and cannot be preregistered without
-  owner inputs (BLOCKERS 1).
-ACCEPTANCE: the Economic Evidence v1 directive, sections 6-20: W0 operating verification; PR A
-  (protocols, evidence consumption, attrition, economic screen, #96 canonical integration); PR B
-  (semantic conformance, pure same-venue payoff evaluator, execution-package design); PR C (NFL
-  paired evidence, gaps, capacity, Terminal); review, tests and exact-head CI before merge;
-  deploy only reviewed merged code. Also: #107, and verification of the first real settlement
-  plus the F09 checkpoint. Not authorized and not done: orders of any kind, credentials,
-  paid data, new timers, backup deletion, public exposure, any gate advance.
+STATUS: DONE for the directive's build scope. Every PR is merged. Production is 86e528b, DEPLOYED
+  and PRODUCTION_VERIFIED 2026-09-26 01:31Z. Pending, time-based: the first Kalshi NFL captures,
+  #107's first same-run settlement (KXHIGHNY-26SEP25) and the first Polymarket US capture. Two
+  owner decisions remain (docs/owner/2026-09-25-research-unblocking-decision-packet.md).
+ACCEPTANCE: the Research Unblocking directive §5–§16:
+  - reclassified blockers;
+  - a reviewed EXP-002 protocol recommendation;
+  - the shadow-fill language review;
+  - the Kalshi NFL capture plan (then the owner's approval, implementation and deployment);
+  - the EXP-003 proof-obligation table;
+  - economics and effort scenarios;
+  - a backup retention proposal with a dry-run planner;
+  - the owner decision packet.
+  Not authorized and not done: backup deletion, off-host storage, sending messages to Kalshi, paid
+  data, new timers, orders, gate advances, EXP-001 changes.
 EVIDENCE:
-  - W0 (PRODUCTION_VERIFIED 2026-09-25 02:13Z, before any EV1 change):
-    - f5bfa6e deployed; evidence DB schema v7, WAL, quick_check ok; ledger v1 ok; 13 timers;
-      no failed units.
-    - #95 WAL fix proven on a DISPOSABLE clone forced into WAL: the pre-#95 sandbox fails "unable
-      to open database file"; the #95 sandbox opens and creates -wal/-shm; a write to the pinned
-      DB file is refused; clone sha unchanged. Production was never write-probed.
-    - Quota visibility after atomic replacement: the dashboard showed the ledger's 9 used /
-      491 remaining without a restart.
-    - Backups 23 MB total (36 evidence, 33 ledger bundles). Restore verified: evidence schema 7
-      in 0.63 s; ledger 60 entries in 0.25 s. Anchor verify vs 2026-09-23T224720Z EXTENDED
-      (history intact, 15 entries appended per account).
-  - MERGED, each with an independent review and re-reviews until READY, exact-head CI green on
-    3.11/3.12 and reconciled with main (merge helper with --match-head-commit):
-    - #97 (db44858) reconciliation; #98 (b19d28a) #96 strategy docs with the corrected Family B
-      surplus formula and post-audit corrections; #99 (d4498fc) EV1 claims.
-    - #100 (b654b13) PR A: directive record; OWNER_IDEAS/EXECUTION_PLAN/RESEARCH_PRINCIPLES/
-      experiments README/DATA_PROVENANCE §6d/ADR 0034; HANDOFF Gate 7 = 2 valid days; DRAFT
-      EXP-002 (Family A) and EXP-003 (Family B); research_evidence (append-only evidence-use log,
-      holdout by window + hash, reconciling attrition waterfalls); research_economics (episodes,
-      replay, size ladder, cluster-bootstrap economic screen; minimums only from the protocol,
-      unknown -> INSUFFICIENT_EVIDENCE). 4 review rounds.
-    - #101 (f8adf4f) PR C: sports_evidence (read-only, network-free, bounded); gaps G1-G8;
-      Terminal "Economic evidence · A"; outcome labels hidden unless a logged --with-results run.
-    - #102 (5e8b07f) PR B: ContractSemantics/RelationTier incl. CONDITIONAL_EQUIVALENT (additive,
-      legacy = UNKNOWN); dated venue facts DOCUMENTED_UNVERIFIED_BYTES (no endpoint called);
-      KXNFLGAME fees UNSUPPORTED (sources conflict); payoff_constraints with the corrected formula;
-      research payoff-scan CLI; ADR 0035 (execution package, design only, no transport) and
-      ADR 0036. 4 review rounds. The round-2 blocker restricted integer-state enumeration to
-      KXHIGHNY with integer strikes. Round 3 made integer settlement an OBSERVED premise (39/39
-      TWC-era values) that blocks PROVEN, so no KXHIGHNY set from stored evidence can be PROVEN.
-    - #103 (f5dec06) first production payoff scan; test_agent_context ignores .git lock files.
-    - #105 (9f9bce8) one set per capture round; every anchor, and every event with a market
-      record, accounted for; the dataset
-      hash covers every snapshot read in the window; legacy files are labelled.
-    - #104 (efe86e3) Terminal Section B from the verified EXP-003 result file (verify_result_file +
-      verify_result_provenance against the repository log); sports_evidence on the store's public
-      metadata API.
-  - DEPLOYED via DAILY_SHADOW_ACTIVATION.md with /root/deploy.sh (preflight PASS required),
-    verified backups before and after, fail-closed PASS (held, not pushed), no failed units,
-    13 timers:
-    - f8adf4f at 05:04Z (01:04 ET): #100, #101;
-    - 5e8b07f at 06:19Z (02:19 ET): #102;
-    - efe86e3 at 08:02-08:03Z (04:02 ET; backups edge-backup-iu9x5w73 before, 08:02:46Z, and
-      edge-backup-gci308lm after, 08:03:14Z): #103, #105, #104.
-    - Each: verify_production.sh -> DEPLOYED_SHA matches; COLLECTOR_HEALTH VALID (valid_days 2);
-      FRESHNESS CURRENT, 0 disagreements; both restores VERIFIED (ledger 60 entries); Chase
-      Upside HEALTHY; 63 GB free.
-  - Close capture 2026-09-25: 24 rows CAPTURED in stored rows (12 pre_close from the 04:50Z
-    edgelab-observe round, 12 close). The edgelab-observe-close run (04:57:45Z timer) reported
-    6 targets attempted, 8 requests, state CAPTURED, no failures; freshness 0 unreadable.
-  - Family A coverage on production (read-only report, as of 2026-09-25 05:05Z): 32 events,
-    95 horizons, 190 opportunities; 93 horizons not yet due, 2 due; 0 paired: no KXNFLGAME
-    listing or book is stored (G1). Waterfalls reconcile (EVENT, HORIZON, OPPORTUNITY);
-    MARKET/SNAPSHOT are not enumerated (None, never 0). Screen: INSUFFICIENT_EVIDENCE.
-  - Family B on production (backup edge-backup-5q41yg5u, sha 5ad68c03…552a = manifest, read
-    locally): 2 events, 8 valid capture rounds, 24 size rows: 13 NO_SURPLUS_EVEN_BEFORE_FEES
-    (asks sum 1.06-1.09 per $1 basket; worst state the fair-price fallback, pays 0), 11
-    NOT_EVALUATED (fractional depth with no fee rule; a bracket with no ask). Every set is
-    INCOMPLETE (VOID/REFUND/CANCELLATION not excluded; integer settlement only observed).
-    No positive claim. Evidence-use: every known scan run of this data is in EXP-003's log
-    (CLI-logged, plus two reviewer re-runs recorded by hand with upper-bound times). The
-    Terminal's display of the result file is a registered unlogged consumer. The log records
-    declared access only.
-  - Terminal on production (efe86e3): Section A "No paired evidence yet"; Section B shows the
-    production result, "Production store", both legacy notes, Settlement costs Unknown, Positive
-    claims 0; no absolute path on the page.
-  - First real settlement (PRODUCTION_VERIFIED, 2026-09-25 16:15 ET run):
-    - The 11:15 ET run fetched the finalized KXHIGHNY-26SEP24 markets (snapshot 85, received
-      15:15:09Z) but settled nothing: its evidence cutoff was the run start, 15:15:04Z. Fixed by
-      #107 (below). The 16:15 run settled 4 positions from snapshot 85.
-    - Event KXHIGHNY-26SEP24: expiration value 66.00; B66.5 YES, the other 5 brackets NO; Kalshi
-      result and the frozen resolver ("between rule applied to 66.00") agree (all 6 brackets read
-      from snapshot 85 in the evidence DB).
-    - Per account (research and operational alike): B66.5 NO, 1 contract, cost 0.58 incl. 0.02
-      fee -> payout 0, net -0.58; B70.5 YES, 1 contract, cost 0.09 incl. 0.01 fee -> payout 0,
-      net -0.09. Equity 1000.00 -> 999.33 (operational) and 100000.00 -> 99999.33 (research);
-      committed capital 0.90 -> 0.23 (the two open 26SEP25 positions). Fees
-      CONSERVATIVE_BOUND, schedule kalshi-quadratic-taker-v1, PARTIALLY_VERIFIED.
-    - Ledger 64 entries (4 settlements); no duplicate settlement per (account, fill); both
-      accounts replay (hash chain, knowledge-time order, equity = bankroll + realized P&L).
-  - F09 checkpoint 2026-09-25T201836Z (docs/engineering/ledger_checkpoints/, and the laptop's
-    market-edge-anchors/2026-09-25/; exported over SSH, never written on the VPS): heads research
-    seq 62 e7a0ae88..., operational seq 64 59912807.... The ledger backup edge-backup-lqgw4n2c
-    (sha 1c907975... = manifest), verified from a clean checkout at dee5805: VERIFIED against the
-    new checkpoint, EXTENDED against 2026-09-23T224720Z and 2026-09-23T173009Z.
-  - #107 (dee5805): a settlement run counts the evidence its own refresh received (bounded by
-    now + deadline + 60 s, the refresh's own run id only; the catch-up hold unchanged).
-    Independent review READY; its findings were fixed at 3414dd8 and re-reviewed READY; 9ee25a5
-    (the reviewer's one-line NIT) was merged with exact-head CI green. DEPLOYED 2026-09-25 20:16Z
-    (16:16 ET, after the 16:15 run): preflight PASS, backups verified before and after,
-    fail-closed PASS, no failed units, 13 timers, COLLECTOR_HEALTH VALID, ledger restore
-    VERIFIED (64 entries), Chase Upside HEALTHY.
+  - Owner decision recorded: "Approve Kalshi NFL capture." (chat, 2026-09-25 ~17:30 ET) →
+    docs/EXECUTION_PLAN.md (#110, 886fbff). It is bounded by SPORTS_PAIRED_EVIDENCE_GAPS §6:
+    - KXNFLGAME only, at the Odds T-24h/T-6h/T-60m horizons;
+    - ≤ 288 + 7 GETs a week, zero Odds credits;
+    - the existing edgelab-observe timer, no new timer, unit or schema;
+    - review 2026-10-22.
+  - MERGED, each with an independent review, re-reviews until READY, exact-head CI green on
+    3.11/3.12, and reconciled with main:
+    - #109 (706a340) claims and the directive record.
+    - #110 (886fbff) the approval record.
+    - #111 (ce48e29) docs/research/RESEARCH_UNBLOCKING_DECISIONS.md: EXP-002 protocol
+      recommendation, EXP-003 proof obligations, economics scenarios, and ADR 0037 fill-mode
+      labels v2. Three review rounds; the first found the primary endpoint biased under the null.
+    - #112 (c05bd8a) Kalshi NFL pairing in price_observations:
+      - on by default; EDGE_LAB_KALSHI_NFL_CAPTURE=off is the kill switch, preserved by
+        install.sh;
+      - hard bounds;
+      - EXP-001 priority;
+      - no paging for NFL;
+      - Fabric isolation.
+      Two review rounds.
+    - #113 (c800e02) docs/deploy/CAPTURE_AND_BACKUP_APPROVAL_PLAN.md plus the dry-run
+      `backup retention-plan`: no delete path; only restore-verified bundles count as good. Two
+      review rounds.
+    - #114 (e41404b) claims; #115 (86e528b) join v2 (prospective book choice, book_timing,
+      BEFORE_ODDS pairs comparability-only and counted), v2 labels in the Terminal, and the ADR
+      0037 index line. Three review rounds.
+  - DEPLOYED via DAILY_SHADOW_ACTIVATION.md (/root/deploy.sh: preflight PASS required; verified
+    backups before and after; fail-closed PASS; no failed units; 13 timers):
+    - c05bd8a at 23:23Z. The first attempt at 23:21Z stopped on preflight FAIL (host load 4.79
+      on 4 CPUs from another tenant), and nothing was installed. The retry waited for load < 3.
+    - 86e528b at 01:31Z. verify_production:
+      - DEPLOYED_SHA 86e528b; COLLECTOR_HEALTH VALID;
+      - FRESHNESS CURRENT; restores VERIFIED (ledger 92 entries);
+      - Chase Upside HEALTHY.
+  - Production read-only checks (2026-09-26 ~01:33Z):
+    - `nfl-dry-run`: switch ON, version kalshi-nfl-pairing-v1, 0 planned (no NFL Odds capture yet
+      this week), 0 Odds calls, weekly cap 295.
+    - `backup retention-plan --verify-reports <edgelab-backup journal> --checkpoints …`:
+      - DRY_RUN_ONLY, deletes_performed 0;
+      - 95 bundles; 40 restore-verified by recorded reports;
+      - evidence: KEEP 47, DELETE-CANDIDATE 2 (147,456 B); ledger: KEEP 46.
+  - Measured backup inventory (2026-09-25 ~21:15Z): evidence DB 3,383,296 B; ledger 258,048 B;
+    backups 48,305,019 B (45 evidence + 42 ledger bundles); 67.1 GB free; **no off-host database
+    backup exists**.
 UNRESOLVED:
-  - The 26SEP25 positions (2 per account): verify their settlement the same way when due; the
-    first settlement under #107 should happen in the run that fetches the evidence.
-  - The first Polymarket US research capture (T-24h, 2026-09-26 16:53Z): verify per runbook §5e.
-  - Family A has no paired evidence until Kalshi KXNFLGAME listings and books are captured (G1);
-    that needs an owner approval (BLOCKERS 2). About 15 regular-season weeks remain.
-  - Unverified venue facts: Kalshi settlement/transfer fees; a fee rule for fractional fills;
-    what a NO position receives under the fair-price fallback; KXNFLGAME fee semantics; TWC
-    settlement precision; Novig production public book.
-  - Section B shows stale after 2026-10-03 unless a newer EXP-003 result is recorded.
-  - Backup growth is quadratic (full daily copies, never deleted); ntfy subscription mismatch;
-    close_tick_alignment after the 2026-11-01 DST change; fee re-checks (Kalshi by
-    2026-10-23T13:39:48Z, Polymarket US by 2026-10-24T01:39Z).
-  - Brisket PRs #1406/#1407 have merge conflicts; outside this repository and mission.
-BLOCKERS (owner-only):
-  1. EXP-002 and EXP-003 inputs: minimum useful annual effect and owner-hour budget per family;
-     cluster and episode minimums; EXP-002 tie/not-played treatment, pair skew, size ladder and
-     episode definition.
-  2. Kalshi NFL capture re-scope of edgelab-observe (about 144 GETs a week, worst 288; no new
-     timer): approve or decline in docs/EXECUTION_PLAN.md with a review date.
-  3. The backup retention/deletion policy.
-  4. The ntfy phone subscription.
-NEXT ACTION: the owner sets BLOCKERS 1-2 so the families can be preregistered and Family A can
-  collect paired evidence. Operationally: verify the 26SEP25 settlement (same-run under #107).
+  - First Kalshi NFL captures: expected after the Saturday 2026-09-26 T-24h Odds captures for
+    Sunday games. Verify from stored rows:
+    - price_observations KXNFLGAME rows and receipt skew;
+    - `sports_evidence report --summary` G1/G2 → PARTIAL;
+    - join v2 timing split;
+    - Fabric: NFL not counted in EXP-001's observe source.
+    The first settled-markets read will be the first real use of the min/max_settled_ts filters.
+  - #107 same-run settlement: not yet observed. Verify at the run that first fetches the
+    KXHIGHNY-26SEP25 result (from 2026-09-26 11:15 ET):
+    - the evidence receipt falls inside the same run, and the cutoff equals the refresh receipt;
+    - payout, fees, equity, duplicates and the hash chain.
+  - First Polymarket US research capture (T-24h, 2026-09-26 16:53Z): verify per runbook §5e.
+  - Unverified external facts:
+    - Kalshi settlement/transfer fees;
+    - fractional-fill fee rule;
+    - NO-side fallback payout;
+    - KXNFLGAME fee semantics;
+    - TWC settlement precision;
+    - the Feb-vs-Sep conflict for a game suspended after 55 min.
+    Drafted questions await owner approval to send.
+  - Not built: the EXP-002 markout endpoint that uses the first T-60m book (#111 A.B), and the
+    label-free correlation gate calculation. Both are needed before the 2026-10-21 freeze.
+  - Section B shows stale after 2026-10-03 unless a newer EXP-003 result is recorded. EXP-003 is
+    recommended paused.
+  - Backup: decide retention by about 2026-10-08 (10 GB around 2026-10-14 at build-out pace).
+    The restore-over-live runbook section is PROPOSED, not written.
+  - ntfy deferred by the owner; DST re-check after 2026-11-01; fee re-checks (Kalshi by
+    2026-10-23, Polymarket US by 2026-10-24); Brisket PRs #1406/#1407 are outside this repo.
+BLOCKERS (owner-only; see the decision packet):
+  1. Research economics and effort: the EXP-002 minimum useful contribution (recommended $1,000/yr,
+     option B) and owner hours (6 h to 2026-10-22); EXP-003: approve or decline sending the
+     drafted Kalshi questions (recommended pause; reject 2026-11-15 if unresolved).
+  2. Backup retention proposed-v1 and a manual weekly off-host pull to the laptop (O1, $0).
+NEXT ACTION: on 2026-09-26, verify the first Kalshi NFL captures, #107's same-run settlement and
+  the first Polymarket US capture from stored rows; then build the EXP-002 markout endpoint and
+  correlation gate for the pilot.
 ```
 
 ## Daily operation (what runs by itself)
@@ -157,7 +124,7 @@ NEXT ACTION: the owner sets BLOCKERS 1-2 so the families can be preregistered an
 | always | edgelab-dashboard | read-only dashboard, tailnet-only (Tailscale Serve) |
 | after shadow/settlement/any failure alert | edgelab-notify | relays new outbox events and unit failures to ntfy (fixed headlines) |
 | every 15 min | edgelab-odds | game-relative NFL odds capture (T-24h/T-6h/T-60m) under the 450-credit budget; enabled 2026-09-24 13:40Z; a paid call only for an admitted slot |
-| :05, :20, :35, :50 | edgelab-observe | ADR 0030 Option A: plan later/closing-price targets, then bounded capture only when due; deferred in protected windows; enabled 2026-09-24 20:32Z |
+| :05, :20, :35, :50 | edgelab-observe | ADR 0030 Option A: plan later/closing-price targets, then bounded capture only when due; deferred in protected windows; enabled 2026-09-24 20:32Z; since 2026-09-25 also Kalshi KXNFLGAME books after each Odds NFL capture (owner-approved #110, `EDGE_LAB_KALSHI_NFL_CAPTURE=off` pauses it) |
 | 04:57:45 UTC | edgelab-observe-close | the KXHIGHNY close-window capture (close 05:00:00Z; `observe status` → `close_tick_alignment`); enabled 2026-09-24 20:32Z |
 | every 5 min (:01, :06, ...) | edgelab-freshness | Freshness Fabric v1 supervisor (ADR 0031): network-free; writes `freshness.json`; supervises every schedule, controls none |
 | :10, :25, :40, :55 | edgelab-pm-sports | Polymarket US NFL research book captures at T-24h/T-6h/T-60m (ADR 0032; owner risk decision); related, never equivalent |
@@ -264,4 +231,4 @@ NEXT ACTION: the owner opens the tailnet URL on the iPhone and reviews Terminal,
 ```
 
 - Every user-visible change now follows docs/design/UI_CONTRACT.md (AI_INSTRUCTIONS.md, section User interface). New features use docs/design/FEATURE_INTEGRATION.md, and the PR template asks for the UI evidence.
-- Rollback: /opt/market-edge-lab/app.prev holds the previous release (efe86e3 as of the dee5805 deploy, 2026-09-25 20:16Z, confirmed on the VPS; install.sh keeps exactly one), per DAILY_SHADOW_ACTIVATION.md → Rollback. The previous bundles are also kept under ~dynasty/edgelab-release/prev-<sha>/. No store or schema changed in EV1 or #107.
+- Rollback: /opt/market-edge-lab/app.prev holds the previous release (c05bd8a as of the 86e528b deploy, 2026-09-26 01:31Z; install.sh keeps exactly one), per DAILY_SHADOW_ACTIVATION.md → Rollback. The previous bundles are also kept under ~dynasty/edgelab-release/prev-<sha>/. No store or schema changed in this session.

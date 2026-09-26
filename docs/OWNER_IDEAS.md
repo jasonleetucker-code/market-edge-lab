@@ -115,16 +115,22 @@ review/stop date. Existing authorized collectors continue until an explicit revi
      ADR (design only);
    - PR C: paired sports evidence from stored data, a data-gap report, economics/capacity and a
      compact Terminal view.
-3. Backup growth and retention (item 4 below): still the prerequisite before any **new**
-   production collector.
+3. Backup growth and retention (item 4 below). **2026-09-25 update:** the blanket "before any
+   new collector" prerequisite is AMENDED (PROPOSED, `docs/deploy/CAPTURE_AND_BACKUP_APPROVAL_PLAN.md`
+   §C) to byte-based triggers. The owner decision on retention `proposed-v1` and an off-host copy is
+   due by about 2026-10-08 (decision packet Decision 2).
 4. W0 operating verification (coordinator lane).
 
 **NEXT** (named prerequisite)
-5. **Kalshi NFL game-market books** (old item 12). Family A's data-gap report defines the exact
-   bounded capture. Activation needs explicit EXECUTION_PLAN authority, the owner's approval and
-   item 3.
-6. **Preregistration of A and/or B.** Needs the owner's minimum useful effect and owner-hour
-   budget, a power analysis, and a frozen episode definition and untouched window.
+5. **Kalshi NFL game-market books** (old item 12): **APPROVED by the owner 2026-09-25** (#110,
+   bounded by SPORTS_PAIRED_EVIDENCE_GAPS §6), implemented (#112) and DEPLOYED (`c05bd8a`,
+   2026-09-25 23:23Z). The EXP-002 development pilot runs on kickoffs 2026-09-27 to 2026-10-19.
+6. **Preregistration of A and/or B.** Technical settings are PROPOSED and reviewed
+   (`docs/research/RESEARCH_UNBLOCKING_DECISIONS.md`, #111). Remaining owner inputs: the minimum
+   useful effect and owner hours (decision packet Decision 1). EXP-002 freezes after the pilot, by
+   2026-10-21. EXP-003 is recommended PAUSED: the KXHIGHNY partition cannot be proven under the
+   current rules. The recommendation is a bounded Kalshi fact-check if the owner approves sending the
+   drafted questions, with rejection on 2026-11-15 if unresolved.
 7. Sizing v2 evidence (old item 15), unchanged.
 
 **QUEUED (waits for a research slot; re-evaluated on economics and access, not sunk effort)**
@@ -176,6 +182,14 @@ operational live-readiness gate goes first. Research criteria are never weakened
    - Required before any new collector: compression, a size-aware timeout, and a retention or
      off-host policy.
    - **Deleting old backups is an owner decision.**
+   - **Re-measured 2026-09-25** (`docs/deploy/CAPTURE_AND_BACKUP_APPROVAL_PLAN.md` B2–B3, §C):
+     - backups total 48 MB and 67 GB is free;
+     - growth is driven by deploys, which write two full copies each;
+     - backups reach 10 GB around 2026-10-14 at the build-out pace;
+     - the binding limit is the code's 30 s per step, at about 600 MB, around April 2027.
+
+     The "about 400 days" premise is stale. PROPOSED amendment: byte-based triggers replace the
+     blanket prerequisite. A dry-run retention planner is merged (#113); it cannot delete.
 5. **#74 Freshness Fabric v1, live** (DEPLOYED 2026-09-24, c6e0dd9).
    - Watch the supervisor, disagreements and missed targets.
    - Terminal "Source freshness" view is live (#91). Read-only units may create SQLite WAL side
@@ -215,6 +229,7 @@ operational live-readiness gate goes first. Research criteria are never weakened
     - Every city starts as DATA_COLLECTION, never as an EXP-001 clone.
 12. **Kalshi NFL/NCAAF game-market books at the existing Odds capture times.** Lane F's
     recommended next stream: keyless, about 10 requests a day, and it completes the sports series.
+    **NFL part APPROVED and deployed 2026-09-25 (#110, #112); NCAAF is not approved.**
 13. **Macro release markets and vintages** (#86 Wave 3). Keyless BLS v1, release calendars and Fed
     RSS first; FRED/ALFRED, BEA and EIA need free owner keys. Kalshi macro markets close before the
     release (CPI 08:25 ET), so any reaction window exists only in other open markets.
@@ -255,7 +270,8 @@ operational live-readiness gate goes first. Research criteria are never weakened
   order-write credentials, live trading or paper orders. Gates 8–10.
 - **Free keys, owner-only** (READY_FOR_OWNER_KEY): FRED/ALFRED, BEA, EIA, Census, Alpaca/Tradier
   data. The broker keys also need the security ADR first.
-- **Backup deletion or retention:** owner decision (item 4).
+- **Backup deletion or retention:** owner decision (item 4; decision packet Decision 2, due about
+  2026-10-08).
 - **ntfy phone delivery:** the phone was subscribed to a different topic. Owner action; out of
   scope for the current mission.
 - **Polymarket US claim-grade totals:** settlement/transfer fees, debit rounding and account type
@@ -322,6 +338,35 @@ Related owner records that are not ideas:
 
 ## Review log
 
+- **2026-09-25 (evening): Research Unblocking directive re-plan** (`docs/owner/2026-09-25-research-unblocking-directive.md`;
+  decision packet `docs/owner/2026-09-25-research-unblocking-decision-packet.md`).
+  - **Priority:** NOW. Unblock EXP-002/EXP-003 evidence; no new family, subsystem or migration.
+  - **Owner decision in the session:** Kalshi NFL capture APPROVED (#110), then implemented and
+    deployed (#112, `c05bd8a`).
+  - **Recommended and reviewed (PROPOSED):**
+    - the EXP-002 protocol: a cross-book markout endpoint, prospective pairing (join v2), a
+      label-free correlation gate, and a pilot-based power analysis (#111, #115);
+    - EXP-003 paused, pending facts;
+    - economics and effort scenarios;
+    - backup retention `proposed-v1` with a dry-run planner (#113).
+  - **Shared infrastructure:** existing owners only:
+    - `price_observations` (NFL planner);
+    - `sports_evidence` (join v2);
+    - `research_economics` (fill-mode labels v2, ADR 0037);
+    - `backup` (dry-run retention plan).
+  - **Remaining owner decisions:**
+    - Decision 1, research economics and effort, including whether to send the Kalshi questions;
+    - Decision 2, backup retention and the off-host copy.
+
+    ntfy stays deferred.
+  - **Roadmap effect (2026-10-22 plan):** the EXP-002 pilot runs on kickoffs 2026-09-27 to
+    2026-10-19, with the freeze by 2026-10-21 and untouched evaluation from 2026-10-22.
+    Classification:
+    - NOW: EXP-002 pilot;
+    - NEXT: EXP-002 freeze;
+    - BLOCKED (on facts): EXP-003;
+    - BLOCKED (owner, by 2026-10-08): backup retention.
+
 - **2026-09-25: #96 evidence-to-economics reset and the Economic Evidence v1 directive
   (canonical integration, EE v1 PR A).**
   - **Priority:** NOW. Two DRAFT families (A: EXP-002, B: EXP-003) beside protected EXP-001.
@@ -340,7 +385,7 @@ Related owner records that are not ideas:
   - **Shared infrastructure:**
     - the registry is extended with a protocol sidecar and family slots;
     - new canonical owners: `research_evidence.py`, `research_economics.py`;
-    - `payoff_constraints.py` is planned (PR B).
+    - `payoff_constraints.py` (BUILT in PR B, #102; see the Shared primitives table).
 
     No second registry, ledger or memory store.
   - **Safe parallel lanes:**
