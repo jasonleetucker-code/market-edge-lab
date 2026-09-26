@@ -86,7 +86,7 @@ market type or venue is added to inflate the sample.
 | **Null check (simulation, VERIFIED by tests)** | Model: a martingale latent value; a consensus that knows only the current value; each book's mid = latent + noise. The cross-book primary and the placebo are centred at 0 under independent book noise, including 1¢ rounding (`tests/test_research_economics_power_sensitivity.py`). With book-noise correlation ρ, the cross-book bias is about **ρ × (the v1 same-book bias)**. `--null-check` shows this across ρ = 0–1: at ρ = 0.5 it is +0.10¢ with 0.5¢ of noise and +0.29¢ with 1¢, which exceeds the smallest grid effect. |
 | **Correlation threshold (derived, not fixed)** | `ρ_max = (¼ · δ_min) / b̂`, where:<br>- `δ_min` is the pre-registered minimum markout effect;<br>- `b̂ = σ̂² · √(2/π) / sd(g)` estimates the v1 same-book bias;<br>- `σ̂` is the book-noise SD (it must include price-grid rounding, about tick²/12 of variance, which the empirical estimates below already contain);<br>- `sd(g)` is the observed SD of the T-6h gap `c − H₆`.<br>So the remaining bias `ρ · b̂` is at most a quarter of the minimum effect (`research_power_sensitivity.rho_max`; the analytic `b̂` matches the simulation within its standard error, tested).<br>**Worked example:** δ_min = 0.5¢, σ̂ = 0.5¢, sd(g) = 1.12¢ gives b̂ = 0.18¢, and ρ_max = 0.125¢ / 0.18¢ ≈ **0.70**. With σ̂ = 1¢ and sd(g) = 1.41¢: b̂ = 0.56¢ and ρ_max ≈ 0.22. With δ_min = 0.25¢ and σ̂ = 0.5¢: ρ_max ≈ 0.35. `--null-check` prints the full table. |
 | **Pre-freeze check (label-free; the gate)** | It uses only same-capture books at T-24h and T-6h and repeat books of one horizon, all features. No T-60m book (a label) is read.<br>(a) **Cross-book dispersion:** `d_t = H_t − A_t`, which is `H_t − (1 − away mid_t)`, at the same capture. A dispersion near zero means mirror quoting (ρ ≈ 1), and the endpoint fails at once.<br>(b) **Noise scale** from repeat books of the same market and horizon received within 15 min (the A.C calibration already collects them): `σ̂² = ½ · var(H_t − H_t′)`, and the same for the away book. Latent drift inside the 15 min inflates `σ̂`, which errs toward failing.<br>(c) `ρ̂ = (σ̂_H² + σ̂_A² − var(d)) / (2 σ̂_H σ̂_A)`. The endpoint is frozen only if the one-sided 90% upper bound of `ρ̂` (week-cluster bootstrap) is below `ρ_max`. Otherwise it is **not frozen** and goes back to design. There is no silent fallback.<br>**Limitation:** noise that persists across the 15-min repeat understates `σ̂`, and therefore `ρ̂`. The check can then pass too easily, so the repeat-book gap and the count of repeat pairs are reported with it. |
-| **Gate as implemented (v2, #119)** | `sports_evidence.noise_gate`, run by `python -m edge_lab.sports_evidence exp002`. Changes after review: a negative `ρ̂` or bound is MODEL_MISFIT (INSUFFICIENT_DATA; sticky quotes make repeat books understate the noise and drove v1 to a false PASS); `b̂` uses `σ̂² = max(repeat σ̂², Var(d)/2)`; the bound is the larger of a week-cluster and a game-cluster bootstrap; at least 4 NFL weeks. The repeat estimator is not feasible under the approved capture (A.I). |
+| **Gate as implemented (v2, #119)** | `sports_evidence.noise_gate`, run by `python -m edge_lab.sports_evidence exp002`. Changes after review: a negative `ρ̂` or bound is MODEL_MISFIT (INSUFFICIENT_DATA; sticky quotes make repeat books understate the noise and drove v1 to a false PASS); `b̂` uses `σ̂² = max(repeat σ̂², Var(d)/2)`; the bound is the larger of a week-cluster and a game-cluster bootstrap; at least 4 NFL weeks. **No v2 verdict is freeze-eligible**: a v2 pass is named `PASS_REPEAT_ONLY_NOT_FREEZE_ELIGIBLE`, because moderate stickiness can still pass it. A freeze needs a reviewed gate v3 (A.I). The repeat estimator is not feasible under the approved capture (A.I). |
 | **Post-label sensitivity (not label-free)** | After the A.C limits and the gate above are settled, the Roll-type estimate is computed on the pilot as a DEVELOPMENT-data sensitivity check and logged as LABEL_RESULT_INSPECTION. That estimate is the negative covariance of successive mid changes, `−cov(H₆ − H₂₄, H₁ − H₆)`, and it needs the T-60m book. It is never used as the gate. It is biased toward passing when Kalshi has momentum. |
 | **Model limits** | Assumptions: (i) the two team books' mid noises are independent at a given capture; (ii) under the null the latent value is a martingale between captures; (iii) `A = 1 − away mid` measures the home contract. The last holds in win, loss and tie states; fair-price and post-start disqualification states break it (§B #11), but they are rare and shift the level, not the markout. |
 | **Probability benchmark vs execution price** | Kept separate. The markout uses **mids** (probability benchmarks, used only when the spread is at most a frozen width). All economics use the **executable all-in ask** at size (A.E, §C). An ask includes spread and fees, so it is a price to pay, not an unbiased estimate of probability. A YES ask on Kalshi is `1 − best NO bid` (documented orderbook behaviour, `kalshi_quotes`), so a mid is `(yes_bid + 1 − no_bid)/2`. |
@@ -352,8 +352,15 @@ pessimistic ICC, with a floor of 8 weeks so the wild cluster bootstrap is meanin
   exist.
 - The gate needs at least 10 repeats per side over at least 4 NFL weeks. Under the approved capture it will stay
   INSUFFICIENT_DATA through the planned 2026-10-21 freeze and after it. This is expected, not a fault.
-- Even with repeats, the review showed that sticky pregame quotes make 5–15-minute repeats understate the noise.
-  v2 then reports MODEL_MISFIT or REPEAT_NOISE_ZERO rather than PASS.
+- Even with repeats, sticky pregame quotes make 5–15-minute repeats understate the noise.
+  - Severe stickiness shows as MODEL_MISFIT or REPEAT_NOISE_ZERO.
+  - **Moderate stickiness can still PASS in v2.** The review simulated 4 weeks × 15 games × 2 horizons, a repeat
+    for every book and 20 seeds. At a true ρ of 0.5–0.6, with repeats carrying 50–60% of the noise variance,
+    v2 passed 12–19 runs in 20, while the true bias was 1.5–2 times the tolerable. `ρ̂ ≈ 1 − (1 − ρ)/f` stays
+    at or above 0, so the misfit guard never fires.
+  - **So a v2 PASS is never freeze-eligible.** v2 names it `PASS_REPEAT_ONLY_NOT_FREEZE_ELIGIBLE`, every verdict
+    carries `freeze_eligible: false`, and a test pins this with the review's parameters. Nothing in gate v2
+    authorizes a freeze.
 
 **Two ways forward (both PROPOSED; neither is implemented; no capture is added here).**
 
@@ -376,6 +383,15 @@ Why:
 v2 already reports the spread estimate as `diagnostic_spread_estimator` (not used for the verdict). The first real
 weeks will show how it compares with the dispersion before any change to the gate. Switching the gate to it is a
 versioned change (gate v3) that needs review.
+
+**What gate v3 must show before any verdict of it is freeze-eligible (PROPOSED requirements):**
+1. It combines the spread-based noise into both the noise floor for `b̂` and the correlation bound, so that
+   repeat stickiness cannot lower either.
+2. It is re-simulated on the review's grid (4 weeks × 15 games × 2 horizons, ρ 0.5–0.6, repeat variance fraction
+   0.5–0.6, 20 seeds), and on stale-quote cases where the fair value leaves the spread.
+3. It reports the false-PASS rate at a true bias above the tolerable. The rate must be at most the nominal 10% of
+   the one-sided 90% bound, or the gate stays not freeze-eligible.
+4. It gets an independent review.
 
 Option (i) is not recommended now: it needs a new approval, breaks the approved worst-case bound, cannot reach four
 weeks before the freeze, and is weak under sticky quotes. This is for the owner to decide; the coordinator brings

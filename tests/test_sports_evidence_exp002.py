@@ -98,7 +98,7 @@ def test_the_endpoint_detects_real_information():
 
 
 def _obs(*, n_weeks=8, per_week=25, rho=0.0, noise=0.005, gap_sd=0.03, mirror=False, repeat_zero=False,
-         repeat_noise=None, seed=11):
+         repeat_noise=None, seed=11, horizons_per_game=1):
     """Gate inputs. `repeat_noise` below `noise` models sticky quotes: repeat books change less within 15 min than
     the full noise that the same-capture dispersion carries."""
     rng = random.Random(seed)
@@ -107,7 +107,7 @@ def _obs(*, n_weeks=8, per_week=25, rho=0.0, noise=0.005, gap_sd=0.03, mirror=Fa
     for w in range(n_weeks):
         week = f"nfl-week-of-2026-10-{w + 1:02d}"
         for i in range(per_week):
-            game = f"g{w}-{i}"
+            game = f"g{w}-{i // horizons_per_game}"
             e = rng.gauss(0, noise)
             f = rho * e + math.sqrt(1 - rho * rho) * rng.gauss(0, noise)
             disp.append((week, game, 0.0 if mirror else e - f))
@@ -122,7 +122,9 @@ def test_the_gate_passes_nearly_independent_books_and_derives_rho_max():
     est = gate["estimates"]
     assert 0 <= est["rho_hat"] < 0.4 and est["rho_upper_90"] < gate["verdict_for_min_effect"]["rho_max"]
     assert est["rho_upper_90"] == max(est["rho_upper_90_week"], est["rho_upper_90_game"])  # the larger bound
-    assert gate["verdict"] == se.PASS
+    assert gate["verdict"] == se.PASS == "PASS_REPEAT_ONLY_NOT_FREEZE_ELIGIBLE"
+    assert gate["freeze_eligible"] is False and "gate v3" in gate["freeze_ineligible_reason"]
+    assert gate["verdict_for_min_effect"]["freeze_eligible"] is False
     sigma2 = max((est["sigma2_home"] + est["sigma2_away"]) / 2, est["var_dispersion"] / 2)
     assert est["sigma2_for_b_hat"] == pytest.approx(sigma2)
     expected_b = sigma2 * math.sqrt(2 / math.pi) / est["gap_sd"]
@@ -166,6 +168,24 @@ def test_sticky_correlated_noise_never_passes():
     est = gate["estimates"]
     assert est["sigma2_for_b_hat"] == pytest.approx(est["var_dispersion"] / 2)
     assert est["sigma2_for_b_hat"] > 10 * est["sigma2_repeat"]
+
+
+def test_moderate_stickiness_can_pass_v2_but_nothing_in_v2_is_freeze_eligible():
+    # The review's grid: 4 weeks x 15 games x 2 horizons, a repeat for every book, true rho 0.55, repeats carrying
+    # 55% of the noise variance; the true bias rho * b is about twice the tolerable 1/4 of delta_min. rho_hat stays
+    # >= 0, so no misfit fires and v2 can pass: that PASS must never be freeze-eligible.
+    noise, f, delta, gap_sd = 0.01, 0.55, 0.005, 0.015
+    true_bias = 0.55 * noise ** 2 * math.sqrt(2 / math.pi) / gap_sd
+    assert true_bias > 1.5 * 0.25 * delta
+    verdicts = []
+    for seed in range(1, 21):
+        gate = se.noise_gate(_obs(n_weeks=4, per_week=30, horizons_per_game=2, rho=0.55, noise=noise,
+                                  repeat_noise=noise * math.sqrt(f), gap_sd=gap_sd, seed=seed),
+                             min_effect=delta, resamples=200)
+        verdicts.append(gate["verdict"])
+        assert gate["freeze_eligible"] is False and gate["verdict"] != "PASS"
+        assert all(row["freeze_eligible"] is False for row in gate["by_candidate_min_effect"])
+    assert se.PASS in verdicts  # the documented v2 weakness is real on this grid
 
 
 def test_the_spread_estimator_is_reported_as_a_diagnostic_only():

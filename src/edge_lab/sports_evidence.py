@@ -1698,7 +1698,11 @@ TOLERABLE_FRACTION = 0.25
 GATE_BOOTSTRAP_SEED, GATE_BOOTSTRAP_RESAMPLES = 20260926, 2000
 MIRROR_VARIANCE = 1e-10  # a cross-book dispersion variance at or below this is mirror quoting (rho = 1)
 MEASUREMENT_LABEL = "EXP-002 MEASUREMENT (DEVELOPMENT) — NOT AN EDGE CLAIM, NOT A FROZEN STATISTIC"
-PASS, FAIL, INSUFFICIENT = "PASS", "FAIL", "INSUFFICIENT_DATA"
+# Gate v2 never authorizes a freeze (review of #119): with repeat books, moderate stickiness still biases rho_hat
+# and b_hat low without a misfit, so a v2 PASS is named for what it is and carries freeze_eligible = False.
+PASS, FAIL, INSUFFICIENT = "PASS_REPEAT_ONLY_NOT_FREEZE_ELIGIBLE", "FAIL", "INSUFFICIENT_DATA"
+FREEZE_INELIGIBLE_REASON = ("gate v2 cannot bound moderate stickiness; freeze requires reviewed gate v3 "
+                            "(docs/research/RESEARCH_UNBLOCKING_DECISIONS.md A.I)")
 
 
 def _sign(x: float) -> int:
@@ -1919,13 +1923,15 @@ def noise_gate(obs: GateObservations, *, min_effect: float | None = None,
     def verdict(delta: float) -> dict[str, Any]:
         limit = rho_max(delta, b_hat)
         if mirror:
-            return {"min_effect": delta, "rho_max": limit, "verdict": FAIL,
+            return {"min_effect": delta, "rho_max": limit, "verdict": FAIL, "freeze_eligible": False,
                     "why": "MIRROR_QUOTING: same-capture cross-book dispersion is zero (rho = 1)"}
         if insufficient or limit is None or upper is None:
-            return {"min_effect": delta, "rho_max": limit, "verdict": INSUFFICIENT, "why": "; ".join(insufficient)}
+            return {"min_effect": delta, "rho_max": limit, "verdict": INSUFFICIENT, "freeze_eligible": False,
+                    "why": "; ".join(insufficient)}
         ok = upper < limit
-        return {"min_effect": delta, "rho_max": limit, "verdict": PASS if ok else FAIL,
-                "why": f"upper 90% bound {upper:.4f} {'<' if ok else '>='} rho_max {limit:.4f}"}
+        return {"min_effect": delta, "rho_max": limit, "verdict": PASS if ok else FAIL, "freeze_eligible": False,
+                "why": f"upper 90% bound {upper:.4f} {'<' if ok else '>='} rho_max {limit:.4f}"
+                       + (f"; {FREEZE_INELIGIBLE_REASON}" if ok else "")}
 
     table = [verdict(d) for d in candidates]
     chosen = verdict(min_effect) if min_effect is not None else None
@@ -1944,6 +1950,8 @@ def noise_gate(obs: GateObservations, *, min_effect: float | None = None,
                  "that horizon; never a T-60m book (a label for the markout); the catalog it runs on carries no "
                  "settled listing field (result, settlement value, expiration value)",
         "verdict": overall, "min_effect": min_effect,
+        # Nothing in gate v2 authorizes a freeze, whatever the verdict.
+        "freeze_eligible": False, "freeze_ineligible_reason": FREEZE_INELIGIBLE_REASON,
         "min_effect_state": "SUPPLIED" if min_effect is not None else "UNKNOWN: frozen only at preregistration",
         "verdict_for_min_effect": chosen, "by_candidate_min_effect": table,
         "estimates": {"rho_hat": rho, "rho_upper_90": upper, "rho_upper_90_week": upper_week,
