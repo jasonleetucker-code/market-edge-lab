@@ -59,10 +59,12 @@ def test_draft_with_explicit_unknowns_is_valid_but_preregistered_requires_them_s
     problems = _problems(locked)
     unsettled = [p for p in problems if "unsettled protocol field" in p]
     labels = " ".join(unsettled)
-    for field in ("endpoints.primary", "episode.start_threshold", "economics.minimum_useful_effect",
-                  "stopping.futility", "evaluation.untouched_future_window", "size_capital.size_ladder",
-                  "budget.owner_hours"):
+    for field in ("endpoints.primary", "episode.start_threshold",
+                  "stopping.futility", "evaluation.untouched_future_window", "size_capital.size_ladder"):
         assert field in labels, (field, unsettled)
+    # The owner settled these on 2026-09-26 (docs/owner/2026-09-26-owner-decisions-economics-backup.md).
+    for field in ("economics.minimum_useful_effect", "budget.owner_hours"):
+        assert f"'{field}'" not in labels, (field, unsettled)
     # [knowledge] may honestly stay UNKNOWN after preregistration.
     assert "knowledge." not in labels
 

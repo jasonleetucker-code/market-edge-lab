@@ -511,6 +511,39 @@ be written here when they are made.
     authorized**.
   - **Not changed:** every other prohibition above, and EXP-001.
 
+- **2026-09-26 ~03:15 America/New_York, owner decisions: research economics, EXP-003, backup
+  retention, off-host copy.** Recorded verbatim in
+  `docs/owner/2026-09-26-owner-decisions-economics-backup.md`. These answer the 2026-09-25 decision
+  packet.
+  - **EXP-002:**
+    - minimum useful effect $1,000/year after-cost, as the bar for continued development beyond the
+      research/pilot stage; it is not a pilot requirement;
+    - 6 owner hours through 2026-10-22 under the proposed stop rules;
+    - the +8 h extension returns to the owner;
+    - stays DRAFT.
+  - **EXP-003:**
+    - PAUSED; 2 owner hours; stays DRAFT;
+    - **sending the 8 drafted Kalshi questions is approved, but only after the owner confirms the
+      exact final message** (`docs/research/KALSHI_QUESTIONS_2026-09-26.md`). The answers are
+      shared venue-fact verification, including EXP-002 fees and fallbacks;
+    - reject the current scope on 2026-11-15 if unresolved;
+    - if answered earlier, economics first; no major development resumes merely because the
+      questions were sent.
+  - **Backup retention `proposed-v1`** for evidence-store local backups, **APPROVED** under the
+    exact safeguards of `docs/deploy/CAPTURE_AND_BACKUP_APPROVAL_PLAN.md` B4–B8:
+    - deletion is manual and reviewed, with no timer-based deletion;
+    - only eligible restore-verified copies may be deleted;
+    - ledger, F09-linked, schema-change, baseline, unverified, quarantined and active copies are
+      preserved as the policy states;
+    - the reviewed dry-run is run immediately before any manual apply, and its actual candidate
+      list is attached to the record;
+    - original evidence is never deleted, and a checkpoint hash never replaces a restorable backup.
+  - **Off-host O1 APPROVED:** a free weekly manual pull of the newest verified bundles to the
+    owner's laptop, keeping the last 4, verified locally. The runbook and verification procedure
+    are to be documented. **No paid cloud or object storage.**
+  - **Not authorized by this:** live orders, paid data, new accounts, margin,
+    deposits/withdrawals, a gate advance. EXP-001 is not retuned.
+
 ## Standing merge rule: docs-only and test-only PRs
 
 Owner rule of 2026-09-22 (verbatim source: `docs/owner/2026-09-22-overnight-build-directive.md`).

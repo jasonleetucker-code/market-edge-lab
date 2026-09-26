@@ -66,3 +66,7 @@ edge, and no sports model or strategy is operational or authorized.
     read-only to look for measured Odds/Kalshi timing. It holds no Odds API or KXNFLGAME rows, so
     no `sports:nfl:moneyline` data was viewed and nothing is appended to `evidence_use.jsonl`. The
     inventory itself is logged in EXP-003's log, because the store holds KXHIGHNY rows.
+
+## Owner decisions
+
+- 2026-09-26: owner decisions recorded (`docs/owner/2026-09-26-owner-decisions-economics-backup.md`): minimum useful effect $1,000/year (continuation bar beyond the pilot, not a pilot requirement); 6 owner hours through 2026-10-22; the +8 h extension returns to the owner. Status stays DRAFT.
