@@ -184,23 +184,60 @@ def test_policy_validates_its_inputs():
     with pytest.raises(ValueError):
         se.JoinPolicy(size_ladder=(Decimal(0),))
     with pytest.raises(ValueError):
-        se.JoinPolicy(max_pair_skew=timedelta(0))
+        se.JoinPolicy(max_book_after_odds=timedelta(0))
+    with pytest.raises(ValueError):
+        se.JoinPolicy(max_book_before_odds=timedelta(seconds=-1))
     with pytest.raises(ValueError):
         se.build_report(None, as_of=datetime(2026, 9, 27))  # naive as_of refused
 
 
+T0 = datetime(2026, 9, 27, 11, 0, 40, tzinfo=UTC)
+START, CUTOFF = T0 - timedelta(minutes=8), T0 + timedelta(minutes=30)
+
+
+def _b(seconds, sid):
+    return (T0 + timedelta(seconds=seconds), sid, "u", "h")
+
+
+def _pick(books):
+    return se.pick_book(books, T0, START, CUTOFF)  # join v2 defaults: 5 min before, 10 min after
+
+
 def test_pick_book_is_point_in_time_and_never_substitutes():
-    t0 = datetime(2026, 9, 27, 11, 0, 40, tzinfo=UTC)
-    start, cutoff, skew = t0 - timedelta(minutes=8), t0 + timedelta(minutes=30), timedelta(minutes=5)
-    b = lambda s, i: (t0 + timedelta(seconds=s), i, "u", "h")  # noqa: E731
-    assert se.pick_book([b(-60, 1), b(60, 2)], t0, start, cutoff, skew)[0][1] == 1  # tie: the earlier one
-    assert se.pick_book([b(90, 1), b(-60, 2)], t0, start, cutoff, skew)[0][1] == 2  # closest
-    none, why, later = se.pick_book([b(40 * 60, 3)], t0, start, cutoff, skew)
+    assert se.JOIN_VERSION == "sports-paired-join-v2" and se.JoinPolicy().to_dict()["book_choice"] == se.BOOK_CHOICE
+    assert _pick([_b(-60, 1), _b(60, 2)])[0][1] == 1  # a book at or before the odds wins over a later one
+    assert _pick([_b(-240, 1), _b(-30, 2)])[0][1] == 2  # the latest of the earlier books
+    assert _pick([_b(0, 7)])[0][1] == 7  # a book received at the odds receipt counts as at-or-before
+    assert _pick([_b(9 * 60, 1), _b(90, 2)])[0][1] == 2  # else the first book after the odds
+    none, why, later = _pick([_b(40 * 60, 3)])
     assert none is None and later == 1 and why.startswith("KALSHI_BOOK_MISSING") and "never substituted" in why
-    none, why, _ = se.pick_book([b(-5 * 3600, 4)], t0, start, cutoff, skew)
+    none, why, _ = _pick([_b(-5 * 3600, 4)])
     assert none is None and why.startswith("KALSHI_BOOK_MISSING") and "other horizons" in why
-    none, why, _ = se.pick_book([b(12 * 60, 5)], t0, start, cutoff, skew)
+    none, why, _ = _pick([_b(12 * 60, 5)])  # after the +10 min window
+    assert none is None and why.startswith("PAIR_SKEW_EXCEEDED") and "+720 s" in why
+    none, why, _ = _pick([_b(-6 * 60, 6)])  # before the -5 min window
     assert none is None and why.startswith("PAIR_SKEW_EXCEEDED")
+
+
+def test_a_later_arriving_book_never_changes_a_qualifying_earlier_choice():
+    # A book at or before the odds is chosen; every book that arrives after the odds receipt, however close, is
+    # ignored. And once the first book after the odds qualifies, later ones never displace it.
+    earlier = [_b(-200, 1)]
+    for arrival in (1, 5, 60, 5 * 60, 9 * 60, 20 * 60, 29 * 60):
+        assert _pick(earlier + [_b(arrival, 100 + arrival)])[0][1] == 1
+    first_after = [_b(4 * 60, 2)]
+    for arrival in (4 * 60 + 1, 5 * 60, 9 * 60, 10 * 60, 25 * 60):
+        assert _pick(first_after + [_b(arrival, 200 + arrival)])[0][1] == 2
+    # The v1 rule ("closest") would have taken the later, closer book here; v2 keeps the earlier one.
+    assert _pick([_b(-240, 1), _b(10, 2)])[0][1] == 1
+
+
+def test_the_choice_depends_only_on_books_received_by_the_decision():
+    # Adding books after the chosen book's decision time (the later of the two receipts) never changes the pick.
+    base = [_b(-100, 1), _b(-4000, 9)]
+    choice = _pick(base)[0]
+    for extra in ([_b(30, 3)], [_b(30, 3), _b(300, 4)], [_b(45 * 60, 5)]):
+        assert _pick(base + extra)[0] == choice
 
 
 # ================================================================== the join over SYNTHETIC stores
@@ -335,7 +372,7 @@ def test_reports_are_deterministic_and_hash_their_content(populated):
     a, b = report(path, now), report(path, now)
     assert a == b and a["output_sha256"] == b["output_sha256"]
     assert report(path, now + timedelta(minutes=1))["output_sha256"] != a["output_sha256"]
-    assert report(path, now, max_pair_skew=timedelta(minutes=2))["output_sha256"] != a["output_sha256"]
+    assert report(path, now, max_book_after_odds=timedelta(minutes=2))["output_sha256"] != a["output_sha256"]
 
 
 def test_declared_bounds_give_a_bounded_comparison_but_never_an_edge(populated):
@@ -784,3 +821,78 @@ def test_module_makes_no_network_import_at_runtime():
     src = Path(se.__file__).read_text(encoding="utf-8")
     for banned in ("import urllib.request", "from .http", "import http", "fetch_json", "requests"):
         assert banned not in src
+
+
+def test_an_ad_hoc_book_of_another_horizon_is_never_picked_even_within_five_minutes():
+    # The horizon window starts 2 min before the odds receipt; an ad-hoc capture 4 min before the odds is within
+    # max_book_before_odds but belongs to no book of this horizon, so it is never picked.
+    start = T0 - timedelta(minutes=2)
+    ad_hoc = _b(-4 * 60, 1)
+    none, why, _ = se.pick_book([ad_hoc], T0, start, CUTOFF)
+    assert none is None and why.startswith("KALSHI_BOOK_MISSING") and "other horizons" in why
+    assert se.pick_book([ad_hoc, _b(60, 2)], T0, start, CUTOFF)[0][1] == 2  # the first book after the odds instead
+    assert se.pick_book([ad_hoc, _b(-60, 3)], T0, start, CUTOFF)[0][1] == 3  # an earlier book of this horizon
+
+
+def before_odds_store(tmp_path) -> Path:
+    """The SYNTHETIC pairing fixture, but every Kalshi book lands 60 s BEFORE its odds receipt."""
+    store = SnapshotStore(tmp_path / "before.sqlite3")
+    sf.write_pairing_fixture(store, books=False)
+    rows = report(store.path, sf.NOW)["rows"]
+    store.start_run("SYNTHETIC-books-before-odds")
+    written = 0
+    for r in rows:
+        received = r["odds"].get("received_utc")
+        tickers = (r.get("kalshi") or {}).get("tickers") or {}
+        if not received or not tickers:
+            continue
+        at = datetime.fromisoformat(received.replace("Z", "+00:00")) - timedelta(seconds=60)
+        for team, ticker in sorted(tickers.items()):
+            store.save_snapshot(run_id="SYNTHETIC-books-before-odds", source=se.KALSHI, kind="orderbook",
+                                entity_id=ticker, url=f"{sf.KALSHI_API}/markets/{ticker}/orderbook?depth=100",
+                                payload=sf._book(Decimal("0.55")), fetched_at_utc=iso_z(at),
+                                source_id="kalshi_public")
+            written += 1
+    store.finish_run("SYNTHETIC-books-before-odds", status="succeeded")
+    assert written
+    return store.path
+
+
+def test_only_book_at_or_after_odds_pairs_feed_the_ladder_and_the_economics(populated, tmp_path):
+    path, now = populated
+    after = report(path, now)
+    paired = [s for r in after["rows"] for s in r["sides"].values() if s.get("stage") is None]
+    assert paired and all(s["book_timing"] == se.BOOK_AT_OR_AFTER_ODDS and s["capacity"] for s in paired)
+    assert all(s["pair_use"].startswith("EXECUTABLE_PRICE_CANDIDATE") for s in paired)
+    assert after["economics"]["episodes"]["observations"] == len(paired)
+
+    before = report(before_odds_store(tmp_path), sf.NOW)
+    sides = [s for r in before["rows"] for s in r["sides"].values() if s.get("stage") is None]
+    # still paired (comparability-only pairs count for markout and calibration) ...
+    assert sides and all(s["book_timing"] == se.BOOK_BEFORE_ODDS for s in sides)
+    assert all(s["pair_use"].startswith("COMPARABILITY_ONLY") for s in sides)
+    # ... but never an executable price: no size ladder and no economics observation
+    assert all(s["capacity"] is None for s in sides)
+    assert before["economics"]["episodes"]["observations"] == 0
+    view = se.view_from_report(before, sf.NOW)
+    assert view["capacity"]["latest"]["book_timing"] == se.BOOK_BEFORE_ODDS and view["capacity"]["latest"]["ladder"] == []
+
+
+def _paired_sides(rep):
+    return [s for r in rep["rows"] for s in r["sides"].values() if s.get("stage") is None]
+
+
+def test_economics_observations_plus_excluded_comparability_only_sides_equal_the_paired_sides(populated, tmp_path):
+    for rep in (report(populated[0], populated[1]), report(before_odds_store(tmp_path), sf.NOW)):
+        paired = _paired_sides(rep)
+        episodes = rep["economics"]["episodes"]
+        excluded = episodes["excluded_from_economics"]
+        assert excluded["reason"] == "BEFORE_ODDS: comparability-only"
+        assert episodes["observations"] + excluded["count"] == len(paired) > 0
+        by_timing = rep["join"]["denominators"]["sides_paired_by_book_timing"]
+        assert sum(by_timing.values()) == rep["join"]["denominators"]["sides_paired"] == len(paired)
+        assert by_timing["BEFORE_ODDS"] == excluded["count"] and by_timing["UNKNOWN"] == 0
+    # comparability-only pairs are never removed from the attrition denominators (no attrition reason)
+    before = report(before_odds_store(tmp_path / "again"), sf.NOW)
+    assert before["join"]["paired_targets"] > 0 and before["economics"]["episodes"]["observations"] == 0
+    assert not any("BEFORE_ODDS" in str(w) for w in before["attrition"]["waterfalls"])

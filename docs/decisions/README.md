@@ -30,4 +30,7 @@ Under the 2026-09-25 Economic Evidence v1 directive (#96):
 - 0035: the next execution package: durable intent journal, reservation, fencing and reconciliation. DESIGN ONLY (EE v1 PR B).
 - 0036: semantic conformance metadata and the same-venue payoff evaluator (EE v1 PR B).
 
-New decisions start at 0037.
+Under the 2026-09-25 Research Unblocking directive:
+- 0037: fill-mode labels v2: first detection is zero-latency, the best observation is a hindsight upper bound (#111).
+
+New decisions start at 0038.

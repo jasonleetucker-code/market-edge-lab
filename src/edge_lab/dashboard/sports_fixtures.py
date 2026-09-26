@@ -221,8 +221,8 @@ def synthetic_economic_views() -> dict[str, Any]:
 
     if _VIEWS:
         return _VIEWS
-    b_missing = d.Loaded(d.NO_DATA, message="the same-venue payoff evaluator (payoff_constraints, PR B) is not in this "
-                                            "build")
+    b_missing = d.Loaded(d.NO_DATA, message="Family A fixture: the same-venue payoff evaluator (payoff_constraints) "
+                                            "is not loaded in this fixture")
 
     def a(path: Path, now: datetime) -> Any:
         view = se.terminal_view(path, now=now)

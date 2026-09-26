@@ -21,10 +21,15 @@ T-60m before kickoff) it pairs:
 
 **Point in time.** A horizon's decision cutoff is the pilot's own canonical capture deadline
 (`odds_schedule.deadline`: effective due + 30 min, never later than kickoff - 5 min). Only evidence
-received at or before the cutoff (and at or before the report's `as_of`) is used. The Kalshi book is the
-one received closest to the odds receipt within `max_pair_skew` (ties: the earlier one); a book outside
-that window is PAIR_SKEW_EXCEEDED and a book after the cutoff is never substituted for a missing one. The
-pair's decision time is the later of the two receipts; both inputs' freshness is judged there
+received at or before the cutoff (and at or before the report's `as_of`) is used. The Kalshi book is chosen
+prospectively (join v2, `pick_book`): the latest book received at or before the odds receipt and no more than
+`max_book_before_odds` (5 min) before it; if there is none, the first book received after the odds receipt and
+no more than `max_book_after_odds` (10 min) after it. A later book never displaces a qualifying earlier choice.
+A book of the horizon outside that window is PAIR_SKEW_EXCEEDED, and a book after the cutoff is never
+substituted for a missing one. Each side records `book_timing`: AT_OR_AFTER_ODDS pairs are executable-price
+candidates; BEFORE_ODDS pairs are comparability-only (markout and calibration), and they get no size ladder and
+no economics episode, because their book is older than the decision time. The pair's decision time is the later
+of the two receipts; both inputs' freshness is judged there
 (`freshness.assess` / `combine`, the rule `odds_consensus` uses). Source update times (book
 `last_update` bounds) are kept apart from receipt times and from the pair skew.
 
@@ -93,7 +98,20 @@ from .sources import get_source
 UTC = timezone.utc
 SCHEMA = "sports-paired-evidence/1"
 VIEW_SCHEMA = "sports-evidence-view/1"
-JOIN_VERSION = "sports-paired-join-v1"
+# v2 (2026-09-25): prospective book choice with an asymmetric window (docs/research/RESEARCH_UNBLOCKING_DECISIONS.md
+# A.C). v1 took the book closest to the odds receipt within a symmetric 5-minute skew, which compares distances
+# to books received after the odds (a mild look-ahead).
+JOIN_VERSION = "sports-paired-join-v2"
+BOOK_CHOICE = ("prospective-v2: the latest book of this horizon at or before the odds receipt within "
+               "max_book_before_odds, else the first book after it within max_book_after_odds")
+# Pair use by book timing (docs/research/RESEARCH_UNBLOCKING_DECISIONS.md A.C "Pair use").
+BOOK_BEFORE_ODDS, BOOK_AT_OR_AFTER_ODDS = "BEFORE_ODDS", "AT_OR_AFTER_ODDS"
+PAIR_USE = {
+    BOOK_AT_OR_AFTER_ODDS: "EXECUTABLE_PRICE_CANDIDATE: the book is fresh at the decision time; size ladder and "
+                           "economics inputs allowed",
+    BOOK_BEFORE_ODDS: "COMPARABILITY_ONLY: the book was received before the odds, so it is older than the decision "
+                      "time; markout and calibration only, no size ladder and no economics episode",
+}
 MAPPING_VERSION = "kalshi-nfl-mapping-v1"
 RULES_PARSER_VERSION = "kalshi-nfl-rules-v1"
 LABEL = "PAIRED RESEARCH EVIDENCE — NOT AN EDGE CLAIM"
@@ -205,7 +223,11 @@ _TICKER = re.compile(r"^KXNFLGAME-(\d{2})([A-Z]{3})(\d{2})([A-Z]{4,6})-([A-Z]{2,
 class JoinPolicy:
     """Every parameter of the join; a change is a registered variant, never a quiet improvement."""
 
-    max_pair_skew: timedelta = KALSHI_BOOK_MAX_AGE  # the stricter of the two sources' max ages (5 min)
+    # Join v2 pair window (asymmetric). A book before the odds is the stale input at the decision time, so it is
+    # bounded by the Kalshi book max age (5 min); a book after the odds makes the odds the older input, bounded by
+    # the odds max age (10 min).
+    max_book_before_odds: timedelta = KALSHI_BOOK_MAX_AGE
+    max_book_after_odds: timedelta = odds_consensus.ODDS_MAX_AGE
     # Declared protocol inputs, UNKNOWN (None) by default: the probability bounds of a tie and of a game
     # not started within Kalshi's postponement window. Without both, no tie-adjusted comparison exists.
     tie_probability_bound: Decimal | None = None
@@ -221,8 +243,8 @@ class JoinPolicy:
     version: str = JOIN_VERSION
 
     def __post_init__(self) -> None:
-        if self.max_pair_skew <= timedelta(0):
-            raise ValueError("max_pair_skew must be positive")
+        if self.max_book_before_odds < timedelta(0) or self.max_book_after_odds <= timedelta(0):
+            raise ValueError("max_book_before_odds must be >= 0 and max_book_after_odds positive")
         for name in ("tie_probability_bound", "postponement_probability_bound"):
             v = getattr(self, name)
             if v is not None and not (isinstance(v, Decimal) and Decimal(0) <= v <= Decimal(1)):
@@ -231,7 +253,9 @@ class JoinPolicy:
             raise ValueError("size_ladder needs positive Decimal sizes")
 
     def to_dict(self) -> dict[str, Any]:
-        return {"version": self.version, "max_pair_skew_seconds": int(self.max_pair_skew.total_seconds()),
+        return {"version": self.version, "book_choice": BOOK_CHOICE,
+                "max_book_before_odds_seconds": int(self.max_book_before_odds.total_seconds()),
+                "max_book_after_odds_seconds": int(self.max_book_after_odds.total_seconds()),
                 "tie_probability_bound": _s(self.tie_probability_bound),
                 "postponement_probability_bound": _s(self.postponement_probability_bound),
                 "size_ladder": [_s(q) for q in self.size_ladder],
@@ -752,22 +776,35 @@ def _depth_limit(url: str) -> int | None:
 
 
 def pick_book(books: Sequence[tuple[datetime, int, str, str]], odds_received: datetime, window_start: datetime,
-              cutoff: datetime, skew: timedelta) -> tuple[tuple[datetime, int, str, str] | None, str | None, int]:
-    """(book, problem, later books not used). The book closest to the odds receipt within `skew`, never
-    after the cutoff; ties go to the earlier book. A book of this horizon (received from `window_start` to
-    the cutoff) that is too far from the odds receipt is PAIR_SKEW_EXCEEDED; a book of another horizon is
-    never substituted, so without one of this horizon the book is missing."""
+              cutoff: datetime, before: timedelta = KALSHI_BOOK_MAX_AGE,
+              after: timedelta = odds_consensus.ODDS_MAX_AGE) -> tuple[tuple[datetime, int, str, str] | None,
+                                                                       str | None, int]:
+    """(book, problem, later books not used), by the prospective rule of join v2 (`BOOK_CHOICE`).
+
+    - The latest book received at or before the odds receipt and at most `before` earlier (ties: the higher
+      snapshot id, the one written last). A decision-maker at the odds receipt holds the latest book already
+      received, so no book received after the odds can displace it.
+    - Otherwise the first book received after the odds receipt and at most `after` later (ties: the lower
+      snapshot id). Waiting for the next book never looks past the first one that qualifies.
+    - Never a book after the cutoff. A book of this horizon (received from `window_start` to the cutoff) outside
+      the window is PAIR_SKEW_EXCEEDED; a book of another horizon is never substituted, so without one of this
+      horizon the book is missing."""
     admissible = [b for b in books if b[0] <= cutoff]
     later = len(books) - len(admissible)
-    window = [b for b in admissible if abs(b[0] - odds_received) <= skew]
-    if window:
-        return min(window, key=lambda b: (abs(b[0] - odds_received), b[0], b[1])), None, later
+    # Only books of this horizon (received from `window_start`): an ad-hoc capture of another horizon that happens
+    # to land within `before` of the odds receipt is never picked.
+    earlier = [b for b in admissible if max(odds_received - before, window_start) <= b[0] <= odds_received]
+    if earlier:
+        return max(earlier, key=lambda b: (b[0], b[1])), None, later
+    following = [b for b in admissible if odds_received < b[0] <= odds_received + after]
+    if following:
+        return min(following, key=lambda b: (b[0], b[1])), None, later
     horizon = [b for b in admissible if b[0] >= window_start]
     if horizon:
         nearest = min(horizon, key=lambda b: abs(b[0] - odds_received))
-        gap = int(abs(nearest[0] - odds_received).total_seconds())
-        return None, f"PAIR_SKEW_EXCEEDED: this horizon's nearest book is {gap} s from the odds receipt (limit " \
-                     f"{int(skew.total_seconds())} s)", later
+        gap = int((nearest[0] - odds_received).total_seconds())
+        return None, f"PAIR_SKEW_EXCEEDED: this horizon's nearest book is {gap:+d} s from the odds receipt " \
+                     f"(window -{int(before.total_seconds())} s to +{int(after.total_seconds())} s)", later
     notes = []
     if admissible:
         notes.append(f"{len(admissible)} earlier book(s) of other horizons are not substituted")
@@ -819,7 +856,7 @@ def kalshi_side(team: str, ticker: str, game: tuple[str | None, str | None, date
     out: dict[str, Any] = {"team": team, "ticker": ticker, "market_id": kalshi_quotes.market_id(ticker),
                            "reasons": []}
     book, problem, later = pick_book(catalog.books.get(ticker, []), odds_received, window_start, cutoff,
-                                     policy.max_pair_skew)
+                                     policy.max_book_before_odds, policy.max_book_after_odds)
     out["later_books_not_used"] = later
     if book is None:
         obs = catalog.latest(ticker, cutoff)
@@ -835,6 +872,7 @@ def kalshi_side(team: str, ticker: str, game: tuple[str | None, str | None, date
     decision = max(received, odds_received)
     out.update(book_snapshot_id=sid, book_sha256=sha, book_received_utc=_iso(received),
                pair_skew_seconds=int((received - odds_received).total_seconds()), decision_utc=_iso(decision),
+               book_timing=BOOK_BEFORE_ODDS if received < odds_received else BOOK_AT_OR_AFTER_ODDS,
                depth_limit=_depth_limit(url))
     mapping = map_event(game[0], game[1], game[2], catalog, decision)
     obs = mapping["markets"].get(team) if mapping["state"] == "MAPPED" else None
@@ -875,17 +913,24 @@ def kalshi_side(team: str, ticker: str, game: tuple[str | None, str | None, date
     if fresh is not Freshness.FRESH:
         out.update(stage=Stage.KALSHI_BOOK_UNUSABLE, reasons=[f"book {fresh.value} at the pair's decision time"])
         return out
-    grid = kalshi_quotes.price_grid_from_kalshi(obs.fields)
-    points = capacity(ladder, grid, policy)
-    out["_points"] = points
-    out["_release"] = obs.fields.get("latest_expiration_time")  # the latest cash release the listing states
-    schedule = fee_schedule()
-    out["capacity"] = [_rung(p, schedule) for p in points]
+    out["pair_use"] = PAIR_USE[out["book_timing"]]
+    if out["book_timing"] == BOOK_AT_OR_AFTER_ODDS:
+        # Only an executable-price candidate feeds the size ladder and the economics episodes (`_observations`).
+        grid = kalshi_quotes.price_grid_from_kalshi(obs.fields)
+        points = capacity(ladder, grid, policy)
+        out["_points"] = points
+        out["_release"] = obs.fields.get("latest_expiration_time")  # the latest cash release the listing states
+        schedule = fee_schedule()
+        out["capacity"] = [_rung(p, schedule) for p in points]
+    else:
+        out["capacity"] = None  # comparability-only: never an executable price, so no ladder (None, not empty)
     exp, latest = parse_utc(obs.fields.get("expected_expiration_time")), parse_utc(obs.fields.get("latest_expiration_time"))
     out["lockup_hours"] = {"expected": None if exp is None else round((exp - decision).total_seconds() / 3600, 2),
                            "latest": None if latest is None else round((latest - decision).total_seconds() / 3600, 2),
                            "basis": OBSERVED if exp is not None or latest is not None else UNKNOWN,
                            "detail": "listing expiration times minus the decision time; expected is not guaranteed"}
+    # The next book at ANY horizon after the decision (a label reference, not an endpoint). The A.B / A.A markout
+    # endpoint, when implemented, uses the first book of the T-60m horizon instead; this field is not changed here.
     nxt = [b for b in catalog.books.get(ticker, []) if decision < b[0] <= as_of]
     out["markout_label_ref"] = None if not nxt else {
         "book_snapshot_id": nxt[0][1], "received_utc": _iso(nxt[0][0]),
@@ -1080,6 +1125,14 @@ def _row(r: Mapping[str, Any], catalog: KalshiCatalog, payloads: _Payloads, cons
     return row
 
 
+def _by_book_timing(paired_sides: Sequence[Mapping[str, Any]]) -> dict[str, int]:
+    out = {BOOK_BEFORE_ODDS: 0, BOOK_AT_OR_AFTER_ODDS: 0, "UNKNOWN": 0}
+    for s in paired_sides:
+        timing = s.get("book_timing")
+        out[timing if timing in (BOOK_BEFORE_ODDS, BOOK_AT_OR_AFTER_ODDS) else "UNKNOWN"] += 1
+    return out
+
+
 def _attrition(rows: list[dict[str, Any]], results: bool = False) -> dict[str, Any]:
     planned = len(rows)
     superseded = sum(r["status"] == SUPERSEDED for r in rows)
@@ -1119,6 +1172,9 @@ def _attrition(rows: list[dict[str, Any]], results: bool = False) -> dict[str, A
             "events_due": len({r["event_id"] for r in due}), "weeks_due": len({r["week_cluster"] for r in due}),
             "kalshi_markets_mapped": len({s["ticker"] for s in sides}),
             "sides_evaluated": len(sides), "sides_paired": sum(s.get("stage") is None for s in sides),
+            # Paired sides by book timing (join v2). BEFORE_ODDS pairs stay in every denominator (markout and
+            # calibration); they are only kept out of the economics (economics.episodes.excluded_from_economics).
+            "sides_paired_by_book_timing": _by_book_timing([s for s in sides if s.get("stage") is None]),
             "odds_snapshots_used": len({r["odds"].get("snapshot_id") for r in due if r["odds"].get("snapshot_id")}),
             "kalshi_books_used": len({s["book_snapshot_id"] for s in sides if s.get("book_snapshot_id")}),
         },
@@ -1433,6 +1489,10 @@ def economics(rows: Sequence[Mapping[str, Any]], observations: Sequence[Any], pr
     OBSERVED at zero, owner inputs UNKNOWN. With today's DRAFT protocol the verdict is INSUFFICIENT_EVIDENCE."""
     definition = episode_definition(protocol)
     minimums = screen_minimums(protocol)
+    # Comparability-only pairs are paired evidence but never economics inputs; count them so that
+    # observations + excluded == paired sides (nothing drops out silently).
+    comparability_only = sum(1 for r in rows for s in r["sides"].values()
+                             if s.get("stage") is None and s.get("book_timing") == BOOK_BEFORE_ODDS)
     episodes = rec.build_episodes(observations, definition)
     due = [parse_utc(r["cutoff_utc"]) for r in rows if r["status"] not in (SUPERSEDED, NOT_YET_DUE)]
     start = min((d for d in due if d is not None), default=None)
@@ -1474,6 +1534,8 @@ def economics(rows: Sequence[Mapping[str, Any]], observations: Sequence[Any], pr
         "edge_at_size": {"state": "NOT_DEFENSIBLE", "reasons": reasons},
         "episodes": {"definition": _plain(definition), "problems": list(episodes.problems),
                      "observations": episodes.observations,
+                     "excluded_from_economics": {"count": comparability_only,
+                                                 "reason": f"{BOOK_BEFORE_ODDS}: comparability-only"},
                      # an undefined episode rule makes episodes NOT EVALUABLE (None), never "0 episodes"
                      "qualifying": None if episodes.problems else episodes.qualifying_observations,
                      "episodes": None if episodes.problems else len(episodes.episodes),
@@ -1565,9 +1627,11 @@ def build_report(store: Any, *, as_of: datetime, policy: JoinPolicy = JoinPolicy
                    "book_snapshots": catalog.book_snapshots, "payload_loads": payloads.loads,
                    "problems": catalog.problems[:20]},
         "sampling": {"horizons": [o.label for o in PILOT_CONFIG.offsets],
-                     "resolution": "defined pregame horizons (T-24h / T-6h / T-60m) with a pair skew of at most "
-                                   f"{int(policy.max_pair_skew.total_seconds())} s; Kalshi books carry no source "
-                                   "timestamp (receipt only); nothing here can establish seconds-level lag"},
+                     "resolution": "defined pregame horizons (T-24h / T-6h / T-60m) with the book from "
+                                   f"{int(policy.max_book_before_odds.total_seconds())} s before to "
+                                   f"{int(policy.max_book_after_odds.total_seconds())} s after the odds receipt "
+                                   "(prospective choice, join v2); Kalshi books carry no source timestamp (receipt "
+                                   "only); nothing here can establish seconds-level lag"},
         "clusters": {"game": "Odds API event id", "week": "Tuesday-anchored America/New_York NFL week",
                      "note": "books, sides and snapshots are not independent observations"},
         "attrition": protocol_attrition(rows, as_of=as_of, policy=policy, catalog=catalog, results=results),
@@ -1711,6 +1775,7 @@ def view_from_report(report: Mapping[str, Any], now: datetime) -> dict[str, Any]
                          "team": latest[1], "ticker": latest[2]["ticker"], "decision_utc": latest[2]["decision_utc"],
                          "horizon": latest[0]["horizon"], "ladder": latest[2].get("capacity") or [],
                          "depth_truncated": latest[2].get("depth_truncated"),
+                         "book_timing": latest[2].get("book_timing"), "pair_use": latest[2].get("pair_use"),
                          "visible_depth": latest[2].get("visible_depth"),
                          "lockup_hours": latest[2].get("lockup_hours")},
                      "fill_modes": econ["fill_modes"]},

@@ -143,7 +143,7 @@ executable. A book is an executable-price candidate only at its own receipt time
 | Local observation age of the odds at `D` (`D − R_o`) | ≤ 10 min | CURRENT (judged at `D` by `sports_evidence`) | the same registry limit |
 | Event-market book age at `D` (`D − R_k`) | ≤ 5 min | CURRENT (`kalshi_public` orderbook max age 5 min) | Kalshi books have no per-level source time, so receipt is the only clock. |
 | Odds/book receipt skew (`R_k − R_o`) | **from −5 min to +10 min**: a book up to 5 min before the odds, or up to 10 min after | PROPOSED (CURRENT is a symmetric 5 min, `JoinPolicy.max_pair_skew`) | The asymmetry follows from the two age limits. A book *before* the odds becomes the stale input at `D`, so it must be within the book limit (5 min). A book *after* the odds is fresh at `D` and makes the odds the older input, bounded by the odds limit (10 min). #112 plans the book about +5 min after the odds, exactly at today's symmetric limit, so ordinary jitter would fail pairs. PR C's symmetric 10-min candidate would admit a 10-min-old book as the executable side, which is not supported. |
-| Book choice within the window | **Prospective rule:** the latest book received at or before the odds receipt and within 5 min of it; if there is none, the first book received within 10 min after the odds. The choice never depends on how close a later book happens to be. | PROPOSED. CURRENT `sports_evidence.pick_book` (lines 754–765) picks the book *closest* to the odds receipt. Comparing distances to a later book is a mild look-ahead, so the rule change is a follow-up code change, not made here | A decision-maker at the odds receipt holds the latest book already received, or waits for the next one. |
+| Book choice within the window | **Prospective rule:** the latest book received at or before the odds receipt and within 5 min of it; if there is none, the first book received within 10 min after the odds. The choice never depends on how close a later book happens to be. | **Implemented in join v2** (`sports-paired-join-v2`, `sports_evidence.pick_book`, follow-up PR `fix/ru-research-followups`); join v1 picked the book *closest* to the odds receipt, a mild look-ahead. Each paired side now records `book_timing` (BEFORE_ODDS / AT_OR_AFTER_ODDS) and `pair_use`, and only AT_OR_AFTER_ODDS pairs get a size ladder and feed the economics episodes (Pair use, below), also implemented in that PR. The candidate books are limited to this horizon's window, so an ad-hoc capture of another horizon is never picked | A decision-maker at the odds receipt holds the latest book already received, or waits for the next one. |
 | Pair use | **Book-at-or-after-odds pairs** (`R_k ≥ R_o`) support executable-price and economics figures (A.E, §C, the episode screen). **Book-before-odds pairs** are comparability-only: they may enter the markout and calibration endpoints, but not an executable price or an economics figure, because their book is older than the decision time. | PROPOSED | An executable price exists only at the book's own receipt time. |
 
 **Fit with the owner's approval (#110).** The approval leaves pairing precision to "proposal §6
@@ -170,9 +170,10 @@ book in the same run, the skew would shrink to seconds and the window would not 
 4. Every limit tried is counted in the variant budget. Pairs lost to skew stay in the denominators
    (CURRENT attrition).
 
-**Needs:** technical review. The asymmetric window and the prospective book choice are
-`JoinPolicy` / `pick_book` changes and therefore a registered join variant. Neither is implemented
-here; they are a follow-up for the `sports_evidence` owner.
+**Needs:** technical review. The asymmetric window and the prospective book choice are implemented
+as join v2 (`JoinPolicy.max_book_before_odds` = 5 min, `max_book_after_odds` = 10 min; follow-up PR
+`fix/ru-research-followups`). They remain provisional until the A.C calibration freezes them, and any
+change is a registered join variant.
 
 ### A.D Ties, overtime, cancellations and not-played states
 
@@ -599,10 +600,11 @@ evaluator (#102, #105; ADR 0036) and the real open obligations (§B). The commen
 `prohibited_fields` are "declarative until" PR B now says the payoff scan enforces them. The proof
 requirements, prohibited inputs and label rules are unchanged.
 
-Stale references outside this writer's claim are reported to the coordinator, not edited:
-- `docs/OWNER_IDEAS.md:343` ("`payoff_constraints.py` is planned (PR B)");
-- `src/edge_lab/dashboard/data.py:1334` (comment: "absent until it lands");
-- `src/edge_lab/dashboard/sports_fixtures.py:224` (a fixture message saying the evaluator "is not in this build").
+Stale references outside the first PR's claim:
+- `src/edge_lab/dashboard/data.py` and `src/edge_lab/dashboard/sports_fixtures.py`: fixed in the
+  follow-up PR `fix/ru-research-followups` (wording only; behaviour unchanged).
+- `docs/OWNER_IDEAS.md:343` ("`payoff_constraints.py` is planned (PR B)"): coordinator-owned, still
+  open.
 
 ## F. Evidence use in this session
 
@@ -623,8 +625,7 @@ Stale references outside this writer's claim are reported to the coordinator, no
 | Item | Owner | Why |
 |---|---|---|
 | Deploy #112 (Kalshi NFL capture, APPROVED in #110) before the Saturday 2026-09-26 T-24h targets | coordinator / RU Writer O | Each NFL week not captured is lost for good. |
-| `sports_evidence.pick_book` (lines 754–765): the prospective book choice and the asymmetric window (A.C) | `sports_evidence` owner (a join variant) | the CURRENT "closest book" choice is a mild look-ahead |
-| `dashboard/views/research.py:1067` renders the fill-mode enum id before its text | Terminal owner | show the v2 label (`FIRST_DETECTION_ZERO_LATENCY` / `HINDSIGHT_UPPER_BOUND`) first; the text already leads with it |
+| The markout endpoint (A.A/A.B): use the first book of the T-60m horizon; `markout_label_ref` today is the next book at any horizon | `sports_evidence` owner | when the endpoint is implemented |
 | A KXNFLGAME fee-verification record (Q7 reading; event-level overrides) | `fee_schedules` owner | FEE_UNSUPPORTED blocks every all-in cost in Family A. |
-| The stale references in §E | coordinator / Terminal owner | stale documentation |
+| `docs/OWNER_IDEAS.md:343` (§E) | coordinator | stale documentation |
 | Owner packet Decision 2 (§C thresholds and hours) | coordinator | owner input |
