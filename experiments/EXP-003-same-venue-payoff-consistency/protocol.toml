@@ -95,7 +95,7 @@ controls = [
 
 [budget]
 research_cash_usd = "0 incremental: no paid data or services are authorized (owner directive of 2026-09-24 ET / 2026-09-25 UTC)."
-owner_hours = "MISSING_OWNER_INPUT: owner hours budget and the hourly opportunity cost used in the economic screen."
+owner_hours = "MISSING_OWNER_INPUT: the owner decided (2026-09-26) to keep EXP-003 PAUSED and approved sending the Kalshi venue-fact questions, but did not state an hours budget; the decision packet recommended 2 owner hours (awaiting confirmation). Reject the current scope on 2026-11-15 if either Q1 or Q4 is unresolved or unfavourable (this Q1/Q4 limit relies on the PROPOSED emergency-power scoping, #111 note B-1; without it Q3 also matters); if answered earlier, re-evaluate economics first and resume only if the answers materially change usefulness."
 data_costs = "0: stored evidence only; no new collector or timer."
 review_date = "2026-10-22"
 
@@ -110,7 +110,7 @@ continue_rule = "UNKNOWN: continue only with a named missing observation and its
 verdicts = ["ACCESS_BLOCKED", "ECONOMICALLY_UNVIABLE", "STATISTICAL_FUTILITY", "OPERATIONALLY_UNUSABLE", "BUDGET_EXHAUSTED", "INSUFFICIENT_EVIDENCE", "CONTINUE"]
 
 [economics]
-minimum_useful_effect = "MISSING_OWNER_INPUT: the minimum useful annual after-cost contribution for this family."
+minimum_useful_effect = "MISSING_OWNER_INPUT: not set; the family is PAUSED (owner decision 2026-09-26). Economics are re-evaluated first if Kalshi answers."
 power_analysis = "MISSING_POWER_ANALYSIS: a deterministic bound has no sampling error per instant, but episode frequency and size do; requires development-window counts."
 min_episodes_for_scenario = "MISSING_POWER_ANALYSIS: the minimum number of distinct in-window episodes before any annual scenario is computed (research_economics.ScreenInputs)."
 min_independent_clusters = "MISSING_POWER_ANALYSIS: the minimum number of independent clusters, at the coarsest level used, before any screen verdict other than INSUFFICIENT_EVIDENCE."

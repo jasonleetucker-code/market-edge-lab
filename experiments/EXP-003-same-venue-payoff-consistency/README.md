@@ -199,3 +199,7 @@ below.
   result or label was read.
 - 2026-09-25 (RU Writer R): `research_economics` is now v2 (fill-mode labels v2, ADR 0037). The
   change affects labels only; no EXP-003 result file used them, and none was regenerated.
+
+## Owner decisions
+
+- 2026-09-26: owner decision: **PAUSED** (hours not stated; the packet's 2 h awaits confirmation); the 8 venue-fact questions (`docs/research/KALSHI_QUESTIONS_2026-09-26.md`) are sent only after the owner confirms the final text; reject the current scope on 2026-11-15 if either Q1 or Q4 is unresolved or unfavourable; economics first if answered. Status stays DRAFT.

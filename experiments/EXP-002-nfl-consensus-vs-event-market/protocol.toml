@@ -102,7 +102,7 @@ controls = [
 
 [budget]
 research_cash_usd = "0 incremental: no paid data or services are authorized (owner directive of 2026-09-24 ET / 2026-09-25 UTC); existing VPS and free-tier quota only."
-owner_hours = "MISSING_OWNER_INPUT: owner hours budget and the hourly opportunity cost used in the economic screen."
+owner_hours = "OWNER_INPUT 2026-09-26 (docs/owner/2026-09-26-owner-decisions-economics-backup.md): 6 owner hours through 2026-10-22 (pilot report 2 h, freeze review 2 h, buffer 2 h), under the stop rules of docs/research/RESEARCH_UNBLOCKING_DECISIONS.md C.4. The +8 h extension to 2027-01-13 is NOT pre-approved: it returns to the owner. Owner hours are reported in hours, never priced: no hourly opportunity cost is assumed (owner directive 2026-09-25 §10)."
 data_costs = "0 additional Odds API credits; within the existing 450-credit monthly cap."
 review_date = "2026-10-22"
 
@@ -117,7 +117,7 @@ continue_rule = "UNKNOWN: continue only with a named missing observation and its
 verdicts = ["ACCESS_BLOCKED", "ECONOMICALLY_UNVIABLE", "STATISTICAL_FUTILITY", "OPERATIONALLY_UNUSABLE", "BUDGET_EXHAUSTED", "INSUFFICIENT_EVIDENCE", "CONTINUE"]
 
 [economics]
-minimum_useful_effect = "MISSING_OWNER_INPUT: the minimum useful annual after-cost contribution for this family (the $50k-100k aspiration is not a per-experiment minimum)."
+minimum_useful_effect = "OWNER_INPUT 2026-09-26: $1,000/year after-cost contribution. Per the decision packet option B it answers (not the owner's own words): at no more than $2,500 illustrative peak deployed capital, tested on the FIRST_DETECTION_ZERO_LATENCY lower band (never the hindsight bound). It decides continued development beyond the research/pilot stage; it is NOT a requirement for running the pilot and NOT a claim that the research size ladder can produce it (the ladder scenarios are $1.70-$382.50 a season)."
 power_analysis = "MISSING_POWER_ANALYSIS: requires the primary endpoint, the minimum effect and a variance estimate from development data. Sensitivity ranges under stated assumptions (not a power analysis): scripts/research_power_sensitivity.py; pilot-data requirement in docs/research/RESEARCH_UNBLOCKING_DECISIONS.md A.G."
 min_episodes_for_scenario = "MISSING_POWER_ANALYSIS: the minimum number of distinct in-window episodes before any annual scenario is computed (research_economics.ScreenInputs)."
 min_independent_clusters = "MISSING_POWER_ANALYSIS: the minimum number of independent clusters, at the coarsest level used, before any screen verdict other than INSUFFICIENT_EVIDENCE."
