@@ -13,7 +13,13 @@ of §14–15. Writer: RU Writer O (operations). Date: 2026-09-25 (America/New_Yo
 A recommendation is not an approval.
 
 **What is and is not approved:**
-- **APPROVED:** Kalshi NFL capture. The owner approved it on 2026-09-25 ("Approve Kalshi NFL capture"). The record is in `docs/EXECUTION_PLAN.md` via PR #110, bounded by `docs/research/SPORTS_PAIRED_EVIDENCE_GAPS.md` §6, review 2026-10-22. PR #110 is merged (886fbff), and the implementation, PR #112, is merged (c05bd8a). Deployment is the coordinator's step; this document does not claim it.
+- **APPROVED:** Kalshi NFL capture. The owner approved it on 2026-09-25 ("Approve Kalshi NFL capture"). The record is in `docs/EXECUTION_PLAN.md` via PR #110, bounded by `docs/research/SPORTS_PAIRED_EVIDENCE_GAPS.md` §6, review 2026-10-22. PR #110 is merged (886fbff), and the implementation, PR #112, is merged (c05bd8a).
+  - **c05bd8a is DEPLOYED and PRODUCTION_VERIFIED as of 2026-09-25 23:23Z.** The coordinator reports:
+    - preflight PASS;
+    - backups verified before and after the install;
+    - `verify_production`: DEPLOYED_SHA c05bd8a, COLLECTOR_HEALTH VALID, restores VERIFIED.
+  - The production `nfl-dry-run` showed switch ON, 0 targets planned (no Odds capture due) and `odds_api_calls` 0.
+  - No NFL capture had run yet at that point, so the capture itself is not yet verified in production.
 - **Not approved:** backup retention and deletion, an off-host copy, and any storage purchase. Part B is a proposal. The code shipped with it is a dry-run report that cannot delete.
 
 **Inputs.**
@@ -56,7 +62,7 @@ PR #112 implements this, as revised after independent review (head 5a5632b). Its
 - Point-in-time mapping.
 - The kill switch.
 
-### A2. How the capture works (CURRENT on main since #112; not yet verified in production)
+### A2. How the capture works (CURRENT: deployed c05bd8a, production-verified 2026-09-25 23:23Z; first NFL capture not yet observed)
 
 1. **Pairing is reactive.** It deviates from the wording of §6 ("at the Odds target's effective due time"), and the coordinator accepted the deviation on 2026-09-25.
    - A Kalshi target is planned only after its Odds target is `CAPTURED`. Its target time is the Odds receipt time.
@@ -145,10 +151,11 @@ Reusing the observe timer does **not** establish precision. What the two timers 
 
 ### A5. Bytes, database growth and backup impact (VERIFIED offline)
 
-**Measured.** The real capture path (`plan` + `capture`) ran against a temporary store, with a fake fetch serving the recorded KXNFLGAME listing and a Kalshi order book:
-- 96 game-horizons grew the database by **21.5 KB each** with a recorded 1.4 KB book;
-- **22.2 KB each** with a full-depth synthetic book (99 levels a side, 4.2 KB).
+**Measured, and reproducible from the repo:** `python -m pytest tests/test_price_observations_nfl_bytes.py -s`. The real capture path (`plan` + `capture`) runs against a temporary store, with a fake fetch serving the recorded KXNFLGAME listing and a Kalshi order book:
+- 96 game-horizons grow the database by **21.6 KB each** with a recorded 1.4 KB book;
+- **22.1 KB each** with a full-depth synthetic book (99 levels a side, 4.2 KB).
 - This includes the snapshots, observation rows, targets, runs and indexes.
+- The test asserts the 15–30 KB band.
 - The recorded listing is 4.95 KB per event in canonical JSON (158,491 B for 32 events).
 
 A settled read is about 2.2 KB per market (at most 26 markets a day), plus about 1 KB of rows.
@@ -259,18 +266,18 @@ Decision options: continue, cut to T-60m, pause, or move to option (b).
 - Restore is rehearsed on every create (verify) into a temporary database.
 - There is no scripted restore *over* the live store; it is a manual operator step with the timers stopped.
 
-### B2. Measured inventory (CURRENT; the coordinator's read-only scan, 2026-09-25 about 21:15Z)
+### B2. Measured inventory (CURRENT)
 
-| Item | Value |
-|---|---|
-| Evidence store | 3,383,296 B, schema v7, WAL |
-| Shadow ledger | 258,048 B |
-| Backups directory | 48,305,019 B: 45 evidence bundles and 42 ledger bundles, 2026-09-23 02:20Z → 09-25 20:17Z |
-| Evidence bundle size | 73,728 B → 3,375,104 B |
-| Cadence | 3 daily-timer runs; 42 manual/deploy evidence bundles in 2.75 days, about **7.6 deploys a day** during the build-out (two backups per deploy) |
-| Backup duration (create, from manifests) | 0.19–2.7 s per store; it does not grow measurably between 0.07 and 3.4 MB (fixed cost dominates) |
-| Restore check | about 0.6 s (evidence), about 0.25 s (ledger) |
-| Free disk | 67.1 GB of 102.9 GB (shared with Chase Upside) |
+| Item | Value | Source |
+|---|---|---|
+| Evidence store | 3,383,296 B, schema v7, WAL | coordinator's read-only measurement, 2026-09-25 about 21:15Z |
+| Shadow ledger | 258,048 B | same |
+| Backups directory | 48,305,019 B: 45 evidence bundles and 42 ledger bundles, 2026-09-23 02:20Z → 09-25 20:17Z | same (a per-bundle inventory of manifests) |
+| Evidence bundle size | 73,728 B → 3,375,104 B | same |
+| Cadence | 3 daily-timer runs; 42 manual/deploy evidence bundles in 2.75 days, about **7.6 deploys a day** during the build-out (two backups per deploy) | derived from the inventory's timestamps |
+| Backup duration (create) | 0.19–2.7 s per store; it does not grow measurably between 0.07 and 3.4 MB (fixed cost dominates) | the manifests' started/completed times |
+| Restore check | about 0.6 s (evidence), about 0.25 s (ledger) | `verify_production`'s RESTORE_* lines and the W0 verification |
+| Free disk | 67.1 GB of 102.9 GB (shared with Chase Upside) | coordinator's read-only measurement, 2026-09-25 about 21:15Z |
 | Verified off-host database backup | **none**. The laptop holds the F09 checkpoint JSONs (in git and `market-edge-anchors/`) and two ad-hoc copied bundles in a scratchpad. A checkpoint is not a restorable backup, and ad-hoc copies are not a policy. |
 
 **Three different things.**
@@ -287,6 +294,8 @@ Deleting a backup copy never deletes evidence, as long as a newer kept copy cont
 - A 5.0 MB/day stress case.
 - Every backup is a full, uncompressed copy of both stores.
 - With no retention, the directory holds the sum of all copies. It grows as copies/day × (S₀·d + G·d²/2): the square term is the "quadratic", in bytes.
+- **Only this project's growth is counted.** The disk is shared with Chase Upside, whose growth is not included. Every date below is therefore an upper bound on how long the free disk lasts.
+- The projections were computed with uncommitted scratch scripts. They are arithmetic on the inventory and the formula above, and can be recomputed from this section; they are not reproducible from a committed repo script.
 
 | Scenario (copies a day) | Backups after 30 d | 90 d | 180 d | Hits 10 GB | Free disk down to 20 % (about 46 GB used) | Disk full |
 |---|---|---|---|---|---|---|
@@ -307,7 +316,7 @@ Day 1 is 2026-09-26.
 
 **The 30 s timeout.**
 - The binding limit is the code's 30 s per step, not the unit's 20 min.
-- Measured on the laptop: create took 6 ms/MB and verify 5.4 ms/MB on a 102 MB store.
+- Measured on the laptop, with an uncommitted scratch benchmark (not reproducible from the repo): create took 6 ms/MB and verify 5.4 ms/MB on a 102 MB synthetic store.
 - Scaled ×4 for `CPUQuota=25%` and ×2 as a VPS margin, that is about 50 ms/MB, so 30 s is reached at about **600 MB** (the earlier estimate was 0.5–1 GB). At 3 MB/day that is about **day 200 (April 2027)**.
 - **PROPOSED:** re-measure on the VPS when the store passes 100 MB, and ship a size-aware timeout (for example `max(30 s, 10 s + 0.1 s/MB)`) before it passes 250 MB.
 
@@ -315,35 +324,49 @@ Day 1 is 2026-09-26.
 
 Applies to **evidence bundles only**, per store directory.
 
+**"Good" means restore-verified, not only a valid manifest.**
+- A valid manifest and a matching size prove only that the copy completed.
+- The unit's restore check (`verify`, run after every create) is not written into the bundle. It exists only as the JSON report in the `edgelab-backup` journal.
+- The planner therefore counts a bundle as **good** only when a recorded `VERIFIED_BACKUP_AND_RESTORE` report matches its `database_sha256`. The reports come in through `--verify-reports`, for example `journalctl -u edgelab-backup.service -o cat` saved to a file. A `create` report must also name the bundle.
+- A bundle without such a record is **UNVERIFIED_RESTORE**: always kept. It never counts as newest-good, never satisfies the 36 h freshness check, and never covers an older bundle.
+- **Limitation:** the journal is the only record, and it may not reach back to old bundles. An old bundle without a record stays kept until it is verified again (`backup verify --bundle`) and that report is added.
+- **PROPOSED requirement for any future apply step:** immediately before deleting anything, restore-verify **every bundle it relies on**: each bundle that covers a candidate, and the newest bundle used for the freshness check, not only the newest one. If any of those checks fails, delete nothing.
+
 **Keep:**
 
 | Rule | Keep |
 |---|---|
-| Recent | **every valid bundle younger than 48 h** (deploy pairs, quick rollback) |
-| Newest good | the **3 newest valid** bundles, always |
-| Daily | the newest valid bundle of each UTC day for **7 days** |
-| Weekly | the newest valid bundle of each ISO week for **8 weeks** |
-| Monthly | the newest valid bundle of each calendar month for **12 months** |
+| Recent | **every restore-verified bundle younger than 48 h** (deploy pairs, quick rollback) |
+| Newest good | the **3 newest restore-verified** bundles, always |
+| Daily | the newest restore-verified bundle of each UTC day for **7 days** |
+| Weekly | the newest restore-verified bundle of each ISO week for **8 weeks** |
+| Monthly | the newest restore-verified bundle of each calendar month for **12 months** |
+| Unverified | **every bundle without a recorded restore verification** |
 | Pre/post-migration | **forever**: both bundles around every schema change (the last before, the first after) |
 | F09 checkpoints | **forever**: the ledger bundle whose chain heads equal a checkpoint's, or else the bundles either side of it; and the evidence bundles either side of each checkpoint |
 | Known-good baselines | **forever**: the first bundle of each store, and any pinned bundle |
 
 **Proposed initial pins:**
 - `edge-backup-eqfiomf5` (first production activation);
-- `ledger/edge-backup-lqs5j63_` and `ledger/edge-backup-sdi31qqw` (verified off-host at F09);
+- `ledger/edge-backup-lqs5j63_` and `ledger/edge-backup-sdi31qqw`. Ad-hoc copies of these were taken to the laptop at F09 and checked there. That is not an off-host backup policy (B2, B6).
 - the bundles around the first real settlement (2026-09-25).
 
 **Never auto-deleted:**
 - **ledger bundles** (0.26 MB each; revisit above 10 MB);
 - **QUARANTINE** bundles;
 - **ACTIVE** (in-progress) bundles;
+- **UNVERIFIED_RESTORE** bundles (no recorded restore verification);
 - **forensic ledger states** (missing triggers or a broken chain);
-- any bundle whose rows **no newer kept bundle covers**;
-- every bundle while the **newest valid bundle is older than 36 h** (backups failing: keep everything).
+- any bundle whose rows **no newer kept, restore-verified copy of the same store covers**;
+- every bundle while the **newest restore-verified bundle is older than 36 h**. If backups are being created but failing their restore check, this freeze trips, and everything is kept.
 
-**What would be deleted:** only evidence bundles that the rules above do not keep, and whose every table's row count a newer kept valid bundle meets or exceeds. The store is append-only, so those rows exist there too. Deletions happen only after an approval (B8) and an apply step that does not exist yet.
+**What would be deleted:** only evidence bundles that meet all of these:
+- the rules above do not keep them;
+- a newer, kept, restore-verified copy of the **same store** meets or exceeds every one of their table row counts. Same store means the same store kind and database name, a schema no older than theirs, and the same schema fingerprint at the same version.
 
-**Simulated with the real planner code** (in memory, 365 days, candidates removed daily):
+The store is append-only, so those rows exist in that copy too. Deletions happen only after an approval (B8) and an apply step that does not exist yet (see the PROPOSED requirement above).
+
+**Simulated with the real planner code** (in memory, 365 days, candidates removed daily, every bundle assumed restore-verified; uncommitted scratch script):
 
 | Copies a day | Kept after 90 d | 180 d | 365 d (store about 1.1 GB) | No retention at 365 d |
 |---|---|---|---|---|
@@ -359,21 +382,26 @@ Applies to **evidence bundles only**, per store directory.
 
 **Next lever after retention (PROPOSED, not needed yet).** Compressing bundles (SQLite pages typically compress 3–5×) when the kept bytes pass 20 GB (about day 300 at 5 copies a day). Verify would then need to decompress, which is a reviewed change.
 
-**Today's result.** `proposed-v1` on the real 2026-09-25 inventory (replayed in memory, at 21:15Z):
-- **39 evidence bundles KEEP, 6 DELETE-CANDIDATE (442 KB), 0 QUARANTINE**;
-- all 42 ledger bundles KEEP.
-- The six candidates are schema-v4 deploy copies from 2026-09-23. Their rows are in the kept 2026-09-23 22:51Z bundle.
+**Today's result.** `proposed-v1` on the real 2026-09-25 inventory, replayed in memory at 21:15Z with an uncommitted scratch script:
+- **Inputs:** the 3 F09 checkpoints (`docs/engineering/ledger_checkpoints/`) as `--checkpoints`. Every bundle was *assumed* to have a recorded VERIFIED report; the unit's journal reports runs as VERIFIED, but this was not matched per bundle here.
+- **Result with the checkpoints:** **39 evidence bundles KEEP, 6 DELETE-CANDIDATE (442,368 B), 0 QUARANTINE**. All 42 ledger bundles KEEP.
+- **Result without `--checkpoints`:** 8 candidates, 589,824 B (the coordinator's run).
+- The candidates are schema-v4 deploy copies from 2026-09-23. Their rows are in the kept 2026-09-23 22:51Z bundle.
+- On production, without `--verify-reports`, every bundle is UNVERIFIED_RESTORE, so there are 0 candidates, by design.
 
 ### B5. The dry-run planner (CURRENT in this PR; it deletes nothing)
 
 ```
 python -m edge_lab.backup retention-plan --root /var/lib/market-edge-lab/backups \
     [--policy proposed-v1] [--now ISO] [--checkpoints docs/engineering/ledger_checkpoints] \
-    [--pin NAME]... [--verify-hashes]
+    [--pin NAME]... [--verify-hashes] [--verify-reports FILE]
+# FILE: the recorded restore checks, e.g. `journalctl -u edgelab-backup.service -o cat > FILE`
 ```
 
 - **Read-only.** It reads bundle directories and manifests, and hashes databases only with `--verify-hashes`. It prints JSON: KEEP / DELETE-CANDIDATE / QUARANTINE per bundle, with reasons, a per-store summary, the checkpoint links and flags.
-- **It has no deletion code path:** no `--apply`, no unlink, no rmtree. `tests/test_backup_retention.py` makes every deletion and rename API fail while the CLI runs, and checks the planner's syntax tree for such calls.
+- **It has no deletion code path:** no `--apply`, no unlink, no rmtree. `tests/test_backup_retention.py` covers this two ways:
+  - It checks the syntax tree of every function reachable from the CLI entry point for deletion, write and connect calls.
+  - It makes every deletion, rename and write API fail while the CLI runs. Paths, sizes, modification times and contents must be unchanged afterwards.
 - **Manifest validation.** The planner checks:
   - the format version and database name;
   - the store kind against its directory;
@@ -383,9 +411,13 @@ python -m edge_lab.backup retention-plan --root /var/lib/market-edge-lab/backups
 - **Corrupt or incomplete bundles are quarantined and reported, never deleted.**
   - A bundle without a manifest that was written within the last 30 min is **ACTIVE** (KEEP). The service's `TimeoutStartSec` is 20 min.
   - After 30 min it is **QUARANTINE: INCOMPLETE_NO_MANIFEST** (an interrupted backup).
-- **Newest-good protection.** The 3 newest valid bundles are always kept. A stale newest bundle (over 36 h) blocks every candidate.
+- **Restore verification comes from the record.** A bundle is good only with a recorded `VERIFIED_BACKUP_AND_RESTORE` report (`--verify-reports`). Without one it is kept as UNVERIFIED_RESTORE and relied on for nothing (tested).
+  - The planner itself restores nothing.
+  - Any bundle can be checked with `python -m edge_lab.backup verify --bundle …` (a hash plus a restore into a temporary database), and that report can then be added.
+- **Newest-good protection.** The 3 newest *restore-verified* bundles are always kept. If the newest restore-verified bundle is over 36 h old, every candidate is blocked. That includes the case where newer bundles exist but failed or lack their restore check (tested).
+- **Store identity.** Only a restore-verified copy of the same store and schema lineage can cover an older bundle. A foreign bundle placed in the directory covers nothing (tested).
 - **Deterministic.** The same inputs always give the same JSON, whatever the order (tested).
-- **Restore verification** stays `python -m edge_lab.backup verify --bundle …` per bundle (a hash plus a restore into a temporary database). **PROPOSED** for the apply step, when approved: re-verify the newest kept bundle of each store immediately before deleting anything, and delete nothing if that fails.
+- **PROPOSED for the apply step, when approved:** immediately before deleting anything, restore-verify every bundle the deletion relies on (each covering bundle and the freshness bundle). Delete nothing if any check fails.
 
 ### B6. Off-host (PROPOSED; an owner decision; nothing is bought or set up)
 
@@ -420,15 +452,18 @@ python -m edge_lab.backup retention-plan --root /var/lib/market-edge-lab/backups
 ### B8. Approval wording (PROPOSED; not approved)
 
 > I approve backup retention policy **proposed-v1** for the **evidence** store's local backups only:
-> - keep every valid bundle younger than 48 h, the 3 newest valid bundles, the newest per UTC day for 7 days, per ISO
->   week for 8 weeks and per month for 12 months;
+> - count a bundle as good only when a recorded VERIFIED_BACKUP_AND_RESTORE report matches it;
+> - keep every good bundle younger than 48 h, the 3 newest good bundles, the newest good bundle per UTC day for 7 days,
+>   per ISO week for 8 weeks and per month for 12 months;
 > - keep forever the first bundle, both bundles around every schema change, the bundles linked to each F09 checkpoint,
 >   pinned baselines, and every ledger bundle;
-> - never delete a QUARANTINE, ACTIVE or not-covered bundle, and delete nothing while the newest valid bundle is older
->   than 36 h.
+> - never delete a QUARANTINE, ACTIVE, unverified or not-covered bundle (covered means a newer, good copy of the same
+>   store holds all of its rows);
+> - delete nothing while the newest good bundle is older than 36 h.
 >
-> Deletion is manual: an operator reviews the dry-run report, then runs a reviewed apply step. The apply step
-> re-verifies the newest kept bundle first and deletes only that report's DELETE-CANDIDATE bundles.
+> Deletion is manual: an operator reviews the dry-run report, then runs a reviewed apply step. Immediately before
+> deleting, the apply step restore-verifies every bundle the deletion relies on: each covering bundle and the freshness
+> bundle. It deletes nothing if any check fails, and deletes only that report's DELETE-CANDIDATE bundles.
 > No timer deletes. Review after 30 days.
 > I also approve (or decline) a manual weekly off-host pull to the laptop (O1).
 
@@ -466,14 +501,19 @@ The rule (`docs/OWNER_IDEAS.md` item 4 and the NOW list) reads: backup growth an
 
 ## D. Evidence
 
-**Offline measurements** were made with scratch scripts that are not committed. Their inputs are the repository fixtures and the coordinator's inventory.
-- The NFL bytes came from the real capture path against a temporary store.
-- The backup create/verify benchmark used a 102 MB synthetic store on the laptop.
-- The growth projections and the retention simulations ran the real `retention_plan` in memory.
+**Offline measurements:**
+- **Reproducible from the repo:** the NFL bytes per game-horizon, via `tests/test_price_observations_nfl_bytes.py` (the real capture path against a temporary store).
+- **Measured with uncommitted scratch scripts, so not reproducible from the repo:**
+  - the backup create/verify benchmark (a 102 MB synthetic store on the laptop);
+  - the growth projections;
+  - the retention simulations (the real `retention_plan` in memory, every bundle assumed restore-verified);
+  - the replay of today's inventory.
+- Their inputs are the repository fixtures and the coordinator's inventory.
 
 **Tests:**
 - `tests/test_backup_retention.py`: the dry-run planner.
 - `tests/test_price_observations_nfl.py` (PR #112): the NFL capture guards.
+- `tests/test_price_observations_nfl_bytes.py`: the byte figure.
 
 **Documentation reads:**
 - The Kalshi GetMarkets page (https://docs.kalshi.com/api-reference/market/get-markets, 2026-09-25).

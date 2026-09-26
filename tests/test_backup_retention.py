@@ -47,9 +47,50 @@ def make_bundle(root: Path, name: str, completed: datetime, *, kind: str = "evid
     return directory
 
 
+def recorded_verifications(root: Path, *, skip: set[str] = frozenset()) -> dict[str, str]:
+    """{database_sha256: bundle name} as if every bundle's `backup create` report said VERIFIED_BACKUP_AND_RESTORE."""
+    out = {}
+    for manifest in sorted(root.rglob(backup.MANIFEST_NAME)):
+        try:
+            data = json.loads(manifest.read_text(encoding="utf-8"))
+        except ValueError:
+            continue
+        if isinstance(data, dict) and isinstance(data.get("database_sha256"), str) and manifest.parent.name not in skip:
+            out[data["database_sha256"]] = manifest.parent.name
+    return out
+
+
+def write_journal(path: Path, verified: dict[str, str], failed: dict[str, str] = {}) -> Path:
+    """The recorded reports as `journalctl -u edgelab-backup.service -o cat` prints them: pretty-printed JSON
+    interleaved with systemd's own lines."""
+    chunks = ["Starting edgelab-backup.service - Market Edge Lab: verified SQLite backups..."]
+    for sha, name in verified.items():
+        chunks.append(json.dumps({"status": "VERIFIED_BACKUP_AND_RESTORE", "database_sha256": sha,
+                                  "bundle": f"/var/lib/market-edge-lab/backups/{name}", "row_counts": {"x": 1}},
+                                 indent=2, sort_keys=True))
+    for sha, name in failed.items():
+        chunks.append(json.dumps({"status": "FAILED", "error": "restored schema or row counts differ",
+                                  "database_sha256": sha, "bundle": name}, indent=2))
+    chunks.append("Finished edgelab-backup.service.")
+    path.write_text("\n".join(chunks) + "\n", encoding="utf-8")
+    return path
+
+
 def plan(root: Path, now: datetime = NOW, **kw) -> dict:
-    bundles, _ = backup.scan_bundles(root, now=now, policy=POLICY, verify_hashes=kw.pop("verify_hashes", False))
+    verified = kw.pop("verified", None)
+    bundles, _ = backup.scan_bundles(root, now=now, policy=POLICY, verify_hashes=kw.pop("verify_hashes", False),
+                                     verified=recorded_verifications(root) if verified is None else verified)
     return backup.retention_plan(bundles, now=now, policy=POLICY, **kw)
+
+
+def snapshot(root: Path) -> list[tuple]:
+    """Every path with its size, modification time and content hash."""
+    out = []
+    for p in sorted(root.rglob("*")):
+        st = p.stat()
+        digest = hashlib.sha256(p.read_bytes()).hexdigest() if p.is_file() else None
+        out.append((p.as_posix(), p.is_file(), st.st_size if p.is_file() else None, st.st_mtime_ns, digest))
+    return out
 
 
 def by_name(report: dict) -> dict[str, dict]:
@@ -71,47 +112,147 @@ def daily_history(root: Path, days: int, *, per_day: int = 1, kind: str = "evide
 # --------------------------------------------------------------------------- never deletes
 
 
+def _reachable_planner_functions():
+    """Every module-level function of backup.py reachable (by name) from the retention CLI entry point."""
+    import ast
+
+    module = ast.parse(inspect.getsource(backup))
+    defs = {n.name: n for n in module.body if isinstance(n, ast.FunctionDef)}
+    todo, seen = ["_retention_main"], set()
+    while todo:
+        name = todo.pop()
+        if name in seen or name not in defs:
+            continue
+        seen.add(name)
+        for node in ast.walk(defs[name]):
+            if isinstance(node, ast.Name) and node.id in defs:
+                todo.append(node.id)
+    return {n: defs[n] for n in seen}
+
+
 def test_the_planner_has_no_deletion_code_path():
     import ast
-    import textwrap
 
+    reachable = _reachable_planner_functions()
+    # The walk really covers the planner, including the helpers it calls.
+    assert {"_retention_main", "scan_bundles", "inspect_bundle", "retention_plan", "_covers", "load_checkpoints",
+            "load_verify_reports", "_newest_mtime", "file_hash"} <= set(reachable)
+    assert not {"create_backup", "verify_backup", "copy_online"} & set(reachable)
     forbidden = {"unlink", "rmtree", "remove", "rmdir", "removedirs", "rename", "renames", "truncate",
-                 "write_text", "write_bytes", "chmod", "move", "copyfile"}
-    for f in (backup.inspect_bundle, backup.scan_bundles, backup.load_checkpoints, backup.retention_plan,
-              backup._covers, backup._retention_main, backup._newest_mtime):
-        tree = ast.parse(textwrap.dedent(inspect.getsource(f)))
-        for node in ast.walk(tree):
+                 "write_text", "write_bytes", "chmod", "chown", "move", "copyfile", "copy", "copy2", "mkdir",
+                 "makedirs", "touch", "utime", "symlink_to", "hardlink_to", "fsync", "connect", "backup"}
+    for fname, fn_def in reachable.items():
+        for node in ast.walk(fn_def):
             if isinstance(node, ast.Call):
                 fn = node.func
                 name = fn.attr if isinstance(fn, ast.Attribute) else getattr(fn, "id", "")
                 owner = getattr(getattr(fn, "value", None), "id", None)
-                assert name not in forbidden, f"{f.__name__} calls {name}"
-                assert not (owner in ("os", "shutil") and name == "replace"), f"{f.__name__} calls os.replace"
+                assert name not in forbidden, f"{fname} calls {name}"
+                assert not (owner in ("os", "shutil") and name == "replace"), f"{fname} calls os.replace"
                 if name == "open":  # only reads
-                    assert all(not (isinstance(a, ast.Constant) and set(str(a.value)) & set("wax+"))
-                               for a in node.args[1:]), f"{f.__name__} opens for writing"
+                    modes = [a for a in node.args if isinstance(a, ast.Constant) and isinstance(a.value, str)]
+                    modes += [k.value for k in node.keywords if k.arg == "mode" and isinstance(k.value, ast.Constant)]
+                    assert all(not set(str(m.value)) & set("wax+") for m in modes), f"{fname} opens for writing"
     parser_source = inspect.getsource(backup.main)
     assert "--apply" not in parser_source and "--delete" not in parser_source
 
 
-def test_the_cli_deletes_nothing_even_when_every_deletion_api_would_work(tmp_path, monkeypatch, capsys):
-    daily_history(tmp_path, 120)
-    make_bundle(tmp_path, "edge-backup-broken", NOW - timedelta(days=50), manifest="{not json")
-    before = sorted(p.as_posix() for p in tmp_path.rglob("*"))
+def test_the_cli_changes_nothing_even_when_every_deletion_api_would_work(tmp_path, monkeypatch, capsys):
+    root = tmp_path / "backups"
+    daily_history(root, 120)
+    make_bundle(root, "edge-backup-broken", NOW - timedelta(days=50), manifest="{not json")
+    journal = write_journal(tmp_path / "journal.txt", recorded_verifications(root))
+    before = snapshot(tmp_path)
 
     def refuse(*_a, **_k):
         raise AssertionError("the retention planner must never delete")
     for target, name in ((os, "remove"), (os, "unlink"), (os, "rmdir"), (os, "rename"), (os, "replace"),
-                         (shutil, "rmtree"), (shutil, "move"), (Path, "unlink"), (Path, "rmdir"),
-                         (Path, "rename"), (Path, "replace")):
+                         (os, "utime"), (os, "truncate"), (shutil, "rmtree"), (shutil, "move"), (Path, "unlink"),
+                         (Path, "rmdir"), (Path, "rename"), (Path, "replace"), (Path, "touch"),
+                         (Path, "write_text"), (Path, "write_bytes")):
         monkeypatch.setattr(target, name, refuse)
-    code = backup.main(["retention-plan", "--root", str(tmp_path), "--now", NOW.isoformat(), "--verify-hashes"])
+    code = backup.main(["retention-plan", "--root", str(root), "--now", NOW.isoformat(), "--verify-hashes",
+                        "--verify-reports", str(journal)])
     assert code == 0
     report = json.loads(capsys.readouterr().out)
     assert report["mode"] == "DRY_RUN_ONLY" and report["deletes_performed"] == 0
     assert report["policy"]["status"] == "PROPOSED"
+    assert report["verify_reports"]["verified_database_sha256s"] == 120
     assert report["summary"]["evidence"]["DELETE-CANDIDATE"] > 0  # candidates are reported, never acted on
-    assert sorted(p.as_posix() for p in tmp_path.rglob("*")) == before
+    assert snapshot(tmp_path) == before  # same paths, sizes, modification times and contents
+
+
+# --------------------------------------------------------------------------- restore verification
+
+
+def test_without_recorded_restore_verification_nothing_is_a_candidate(tmp_path, capsys):
+    daily_history(tmp_path, 120)
+    report = plan(tmp_path, verified={})
+    assert report["summary"]["evidence"]["DELETE-CANDIDATE"] == 0
+    assert "UNVERIFIED_PRESENT:evidence" in report["flags"] and "NO_GOOD_BUNDLE:evidence" in report["flags"]
+    assert all(any(r.startswith("UNVERIFIED_RESTORE") for r in b["reasons"]) for b in report["bundles"])
+    # The CLI without --verify-reports is the same: a manifest and a size are not a verified restore.
+    assert backup.main(["retention-plan", "--root", str(tmp_path), "--now", NOW.isoformat()]) == 0
+    assert json.loads(capsys.readouterr().out)["summary"]["evidence"]["DELETE-CANDIDATE"] == 0
+
+
+def test_backups_failing_verification_trip_the_freshness_freeze(tmp_path):
+    """The newest bundles exist and have valid manifests, but their restore checks failed: the newest
+    restore-verified bundle is 5 days old, so nothing may become a candidate."""
+    names = daily_history(tmp_path, 60)
+    report = plan(tmp_path, verified=recorded_verifications(tmp_path, skip=set(names[-5:])))
+    assert report["summary"]["evidence"]["DELETE-CANDIDATE"] == 0
+    assert "NEWEST_GOOD_STALE:evidence" in report["flags"]
+    rows = by_name(report)
+    assert all(rows[n]["decision"] == "KEEP" and any(r.startswith("UNVERIFIED_RESTORE") for r in rows[n]["reasons"])
+               for n in names[-5:])
+    assert not any(r.startswith("NEWEST_GOOD") for n in names[-5:] for r in rows[n]["reasons"])
+
+
+def test_a_bundle_that_failed_verification_never_covers_an_older_one(tmp_path):
+    names = daily_history(tmp_path, 60)
+    # Day 30 held more rows than any later verified bundle; only an UNVERIFIED later bundle would cover it.
+    manifest_path = tmp_path / names[30] / backup.MANIFEST_NAME
+    manifest = json.loads(manifest_path.read_text())
+    manifest["row_counts"] = {"snapshots": 10**9, "collection_runs": 1}
+    manifest_path.write_text(json.dumps(manifest))
+    big = make_bundle(tmp_path, "edge-backup-unverified-big", NOW - timedelta(days=10), rows=10**9 + 1)
+    verified = recorded_verifications(tmp_path, skip={big.name})
+    row = by_name(plan(tmp_path, verified=verified))[names[30]]
+    assert row["decision"] == "KEEP" and any(x.startswith("NOT_COVERED") for x in row["reasons"])
+
+
+def test_recorded_reports_are_read_from_journal_text(tmp_path):
+    daily_history(tmp_path / "b", 3)
+    all_verified = recorded_verifications(tmp_path / "b")
+    shas = sorted(all_verified)
+    journal = write_journal(tmp_path / "j.txt", {shas[0]: all_verified[shas[0]], shas[1]: "edge-backup-other"},
+                            failed={shas[2]: all_verified[shas[2]]})
+    verified, n = backup.load_verify_reports(journal)
+    assert n == 3 and set(verified) == {shas[0], shas[1]}
+    bundles, _ = backup.scan_bundles(tmp_path / "b", now=NOW, policy=POLICY, verified=verified)
+    flags = {b.name: b.restore_verified for b in bundles}
+    assert flags[all_verified[shas[0]]] is True
+    assert flags[all_verified[shas[1]]] is False  # a named report must name this bundle
+    assert flags[all_verified[shas[2]]] is False  # a FAILED report is not a verification
+
+
+def _info(name, *, rows, version=7, sha="s7", kind="evidence", verified=True, database=backup.DB_NAME):
+    return backup.BundleInfo(kind=kind, name=name, path=name, status="GOOD", restore_verified=verified,
+                             completed=NOW, database_bytes=1,
+                             manifest={"store_kind": kind, "database": database, "schema_version": version,
+                                       "schema_sha256": sha, "row_counts": {"snapshots": rows}})
+
+
+def test_only_a_verified_copy_of_the_same_store_covers():
+    old = _info("old", rows=10)
+    assert backup._covers(_info("new", rows=11), old)
+    assert not backup._covers(_info("new", rows=11, verified=False), old)
+    assert not backup._covers(_info("foreign", rows=10**6, sha="other-store"), old)  # same version, other schema
+    assert not backup._covers(_info("older-schema", rows=11, version=6, sha="s6"), old)
+    assert not backup._covers(_info("ledger", rows=11, kind="ledger"), old)
+    assert not backup._covers(_info("other-db", rows=11, database="other.sqlite3"), old)
+    assert backup._covers(_info("migrated", rows=11, version=8, sha="s8"), old)  # a later schema of the same store
 
 
 # --------------------------------------------------------------------------- keep rules
@@ -280,7 +421,7 @@ def test_the_plan_is_deterministic(tmp_path):
     daily_history(tmp_path, 120, per_day=2)
     daily_history(tmp_path, 40, kind="ledger")
     first = plan(tmp_path)
-    bundles, _ = backup.scan_bundles(tmp_path, now=NOW, policy=POLICY)
+    bundles, _ = backup.scan_bundles(tmp_path, now=NOW, policy=POLICY, verified=recorded_verifications(tmp_path))
     random.Random(7).shuffle(bundles)
     shuffled = backup.retention_plan(bundles, now=NOW, policy=POLICY)
     assert json.dumps(first, sort_keys=True) == json.dumps(shuffled, sort_keys=True)

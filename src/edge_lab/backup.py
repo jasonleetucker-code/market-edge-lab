@@ -333,7 +333,8 @@ class RetentionPolicy:
                 "active_grace_minutes": self.active_grace.total_seconds() / 60,
                 "max_newest_good_age_hours": self.max_newest_good_age.total_seconds() / 3600,
                 "candidate_kinds": list(self.candidate_kinds),
-                "never_candidates": ["QUARANTINE", "ACTIVE", "newest good", "first bundle", "schema boundary",
+                "never_candidates": ["QUARANTINE", "ACTIVE", "no recorded restore verification",
+                                     "newest good", "first bundle", "schema boundary",
                                      "checkpoint-linked", "pinned baseline", "forensic ledger state",
                                      "not covered by a newer kept bundle", "any bundle of a store not in candidate_kinds"]}
 
@@ -359,6 +360,10 @@ class BundleInfo:
     completed: datetime | None = None
     database_bytes: int | None = None
     forensic: bool = False
+    # A recorded VERIFIED_BACKUP_AND_RESTORE report exists for this bundle's database_sha256. A valid
+    # manifest and size only prove the copy completed; only a recorded restore check makes a bundle
+    # "good" (it may count as newest-good, keep the freshness check satisfied or cover older bundles).
+    restore_verified: bool = False
 
 
 def _aware(value: Any) -> datetime | None:
@@ -437,9 +442,38 @@ def inspect_bundle(path: Path, *, kind: str, root: Path, now: datetime, policy: 
     return info
 
 
-def scan_bundles(root: Path, *, now: datetime, policy: RetentionPolicy,
-                 verify_hashes: bool = False) -> tuple[list[BundleInfo], list[str]]:
-    """Every bundle under `root` (evidence) and `root/ledger` (ledger). Returns (bundles, ignored entries)."""
+def load_verify_reports(path: Path) -> tuple[dict[str, str], int]:
+    """Recorded `backup create` / `backup verify` reports: {database_sha256: bundle name or ""} for every
+    VERIFIED_BACKUP_AND_RESTORE report, and the number of JSON reports read.
+
+    Read-only. The input is text that contains the JSON reports the backup CLI prints (one per store and
+    run), for example `journalctl -u edgelab-backup.service -o cat` saved to a file: pretty-printed
+    reports and unrelated journal lines may be interleaved; every JSON object found is considered. A
+    `create` report names its bundle; a `verify` report is identified by its database_sha256 only."""
+    text = path.read_text(encoding="utf-8", errors="replace")
+    decoder = json.JSONDecoder()
+    verified: dict[str, str] = {}
+    reports, i = 0, text.find("{")
+    while i != -1:
+        try:
+            obj, end = decoder.raw_decode(text, i)
+        except ValueError:
+            i = text.find("{", i + 1)
+            continue
+        if isinstance(obj, dict) and "status" in obj:
+            reports += 1
+            sha = obj.get("database_sha256")
+            if obj.get("status") == "VERIFIED_BACKUP_AND_RESTORE" and isinstance(sha, str) and len(sha) == 64:
+                verified[sha] = Path(str(obj.get("bundle") or "")).name
+        i = text.find("{", end)
+    return verified, reports
+
+
+def scan_bundles(root: Path, *, now: datetime, policy: RetentionPolicy, verify_hashes: bool = False,
+                 verified: Mapping[str, str] | None = None) -> tuple[list[BundleInfo], list[str]]:
+    """Every bundle under `root` (evidence) and `root/ledger` (ledger). Returns (bundles, ignored entries).
+    `verified` ({database_sha256: bundle name or ""}, from `load_verify_reports`) marks the bundles whose
+    restore check is on record; a named report must name this bundle."""
     bundles: list[BundleInfo] = []
     ignored: list[str] = []
     for kind, directory in (("evidence", root), ("ledger", root / "ledger")):
@@ -451,8 +485,11 @@ def scan_bundles(root: Path, *, now: datetime, policy: RetentionPolicy,
             if not entry.name.startswith(BUNDLE_PREFIX):
                 ignored.append(entry.relative_to(root).as_posix())
                 continue
-            bundles.append(inspect_bundle(entry, kind=kind, root=root, now=now, policy=policy,
-                                          verify_hashes=verify_hashes))
+            info = inspect_bundle(entry, kind=kind, root=root, now=now, policy=policy, verify_hashes=verify_hashes)
+            sha = (info.manifest or {}).get("database_sha256")
+            if info.status == "GOOD" and verified and sha in verified and verified[sha] in ("", info.name):
+                info.restore_verified = True
+            bundles.append(info)
     return bundles, ignored
 
 
@@ -475,9 +512,21 @@ def load_checkpoints(directory: Path) -> tuple[list[dict[str, Any]], list[str]]:
 
 
 def _covers(newer: BundleInfo, older: BundleInfo) -> bool:
-    """Whether `newer` holds at least every table row count `older` holds (append-only stores)."""
-    a = (newer.manifest or {}).get("row_counts") or {}
-    b = (older.manifest or {}).get("row_counts") or {}
+    """Whether `newer` is a restore-verified copy of the same store that holds at least every table row count
+    `older` holds (append-only stores). Same store identity: the same store kind and database name, a schema
+    no older than the older bundle's, and, at the same schema version, the same schema fingerprint. A
+    foreign bundle (another store, another schema lineage) never covers one of ours."""
+    m_new, m_old = newer.manifest or {}, older.manifest or {}
+    if not newer.restore_verified or newer.kind != older.kind:
+        return False
+    if m_new.get("store_kind", "evidence") != m_old.get("store_kind", "evidence") or m_new.get("database") != m_old.get("database"):
+        return False
+    v_new, v_old = m_new.get("schema_version"), m_old.get("schema_version")
+    if not isinstance(v_new, int) or not isinstance(v_old, int) or v_new < v_old:
+        return False
+    if v_new == v_old and m_new.get("schema_sha256") != m_old.get("schema_sha256"):
+        return False
+    a, b = m_new.get("row_counts") or {}, m_old.get("row_counts") or {}
     if not isinstance(a, dict) or not isinstance(b, dict) or not b:
         return False
     return all(isinstance(a.get(t), int) and isinstance(n, int) and a[t] >= n for t, n in b.items())
@@ -499,11 +548,19 @@ def retention_plan(bundles: Sequence[BundleInfo], *, now: datetime, policy: Rete
             decision[key] = QUARANTINE
         elif b.status == "ACTIVE":
             decision[key] = KEEP
+        elif not b.restore_verified:
+            # A valid manifest and size prove only that the copy completed. Without a recorded restore check
+            # the bundle is kept, and never counts as newest-good, as fresh or as covering another bundle.
+            decision[key] = KEEP
+            reasons[key].append("UNVERIFIED_RESTORE: no recorded VERIFIED_BACKUP_AND_RESTORE report for its "
+                                "database_sha256 (pass --verify-reports; or run `backup verify --bundle` and add it)")
     good_by_kind: dict[str, list[BundleInfo]] = {}
     for b in bundles:
-        if b.status == "GOOD":
+        if b.status == "GOOD" and b.restore_verified:
             good_by_kind.setdefault(b.kind, []).append(b)
     for kind in KINDS:
+        if any(b.kind == kind and b.status == "GOOD" and not b.restore_verified for b in bundles):
+            flags.append(f"UNVERIFIED_PRESENT:{kind}")
         good = sorted(good_by_kind.get(kind, []), key=lambda b: (b.completed, b.name))
         if not good:
             if any(b.kind == kind for b in bundles):
@@ -610,7 +667,10 @@ def retention_plan(bundles: Sequence[BundleInfo], *, now: datetime, policy: Rete
                 "a backup copy is not original evidence: the live store is the original, and no candidate is the "
                 "only copy of its rows (a newer kept bundle covers it)",
                 "a checkpoint hash is not a restorable backup; no verified off-host backup exists",
-                "hashes are checked only with --verify-hashes; restore verification is `backup verify` per bundle",
+                "a bundle is good only with a recorded VERIFIED_BACKUP_AND_RESTORE report (--verify-reports); the "
+                "planner does not restore anything itself. Any future apply step must restore-verify every bundle "
+                "it relies on (for coverage and for freshness) immediately before deleting anything",
+                "hashes are checked only with --verify-hashes",
                 "nothing is deleted: this planner has no deletion code path; any deletion needs an approved policy"]}
 
 
@@ -636,6 +696,10 @@ def main(argv: list[str] | None = None) -> int:
     plan.add_argument("--checkpoints", type=Path, help="directory of F09 ledger checkpoint JSON files")
     plan.add_argument("--pin", action="append", default=[], help="bundle name kept as a known-good baseline")
     plan.add_argument("--verify-hashes", action="store_true", help="also check every database's SHA-256 (reads it)")
+    plan.add_argument("--verify-reports", type=Path,
+                      help="text holding the recorded backup create/verify JSON reports (e.g. `journalctl -u "
+                           "edgelab-backup.service -o cat` saved to a file); only bundles with a recorded "
+                           "VERIFIED_BACKUP_AND_RESTORE report are good, all others are kept")
     args = parser.parse_args(argv)
     if args.command == "retention-plan":
         return _retention_main(args)
@@ -674,11 +738,15 @@ def _retention_main(args: argparse.Namespace) -> int:
         print(json.dumps({"status": "FAILED", "error": f"{args.root} is not a directory"}))
         return 1
     policy = RETENTION_POLICIES[args.policy]
-    bundles, ignored = scan_bundles(args.root, now=now, policy=policy, verify_hashes=args.verify_hashes)
+    verified, n_reports = load_verify_reports(args.verify_reports) if args.verify_reports else ({}, 0)
+    bundles, ignored = scan_bundles(args.root, now=now, policy=policy, verify_hashes=args.verify_hashes,
+                                    verified=verified)
     checkpoints, problems = load_checkpoints(args.checkpoints) if args.checkpoints else ([], [])
     report = retention_plan(bundles, now=now, policy=policy, checkpoints=checkpoints, pins=args.pin)
     report.update(root=str(args.root), ignored_entries=ignored, checkpoint_problems=problems,
-                  hashes_verified=bool(args.verify_hashes))
+                  hashes_verified=bool(args.verify_hashes),
+                  verify_reports={"file": str(args.verify_reports) if args.verify_reports else None,
+                                  "reports_read": n_reports, "verified_database_sha256s": len(verified)})
     print(json.dumps(report, indent=2, sort_keys=True))
     return 0
 
