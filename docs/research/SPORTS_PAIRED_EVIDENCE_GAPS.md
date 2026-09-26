@@ -117,6 +117,24 @@ production numbers are not available to this session.
 
 ## 6. The smallest justified capture extension (a decision packet, NOT activated)
 
+> **Update 2026-09-25 (evening).** The owner approved this capture ("Approve Kalshi NFL capture"). The record is in
+> `docs/EXECUTION_PLAN.md` (PR #110), within the bounds of this section. Review 2026-10-22.
+>
+> PR #112 implements it with two changes from the text below:
+> - **Reactive pairing.** A book is planned after each Odds capture, at its receipt time, not at the Odds target's due
+>   time.
+>   - The book follows the odds by about 5 min (about 20 min after a protected window, a busy lock or a retry).
+>   - The "Sunday late kickoff" and "crowded slot" cases below mostly disappear. The largest recorded slot has 9 games,
+>     and a run fits 12.
+> - **Settlement reads.** They use the documented `min_settled_ts`/`max_settled_ts` filters.
+>
+> The recalculated figures are in `docs/deploy/CAPTURE_AND_BACKUP_APPROVAL_PLAN.md` (Part A):
+> - about 147 GETs expected in a 16-game week, 291 worst case, 295 hard bound;
+> - about 22 KB of database growth per game-horizon, measured;
+> - about 1.1 MB a week.
+>
+> The text below is kept as the original packet.
+
 **Scope.** KXNFLGAME only: both team markets of each game the Odds pilot already targets, at the
 pilot's existing T-24h / T-6h / T-60m target times. No NCAAF, no other market type, no new horizon.
 
