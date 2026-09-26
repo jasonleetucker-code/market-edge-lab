@@ -20,7 +20,11 @@ A recommendation is not an approval.
     - `verify_production`: DEPLOYED_SHA c05bd8a, COLLECTOR_HEALTH VALID, restores VERIFIED.
   - The production `nfl-dry-run` showed switch ON, 0 targets planned (no Odds capture due) and `odds_api_calls` 0.
   - No NFL capture had run yet at that point, so the capture itself is not yet verified in production.
-- **Not approved:** backup retention and deletion, an off-host copy, and any storage purchase. Part B is a proposal. The code shipped with it is a dry-run report that cannot delete.
+- **APPROVED on 2026-09-26:** backup retention policy `proposed-v1` (manual, reviewed deletion only) and O1 (the free weekly off-host pull). The owner's words are recorded verbatim in `docs/owner/2026-09-26-owner-decisions-economics-backup.md`, items 3–4.
+  - Paid storage is **not** approved.
+  - The apply step and the O1 tooling are implemented in `backup.py`: `retention-apply`, `newest-verified` and `offhost-verify`.
+  - The operator runbook is `docs/deploy/DAILY_SHADOW_ACTIVATION.md` §7–9.
+  - Nothing has been deleted until the coordinator records the first reviewed apply.
 
 **Inputs.**
 - Production figures were measured read-only by the coordinator on 2026-09-25 at about 21:15Z. This writer has no production access.
@@ -320,7 +324,7 @@ Day 1 is 2026-09-26.
 - Scaled ×4 for `CPUQuota=25%` and ×2 as a VPS margin, that is about 50 ms/MB, so 30 s is reached at about **600 MB** (the earlier estimate was 0.5–1 GB). At 3 MB/day that is about **day 200 (April 2027)**.
 - **PROPOSED:** re-measure on the VPS when the store passes 100 MB, and ship a size-aware timeout (for example `max(30 s, 10 s + 0.1 s/MB)`) before it passes 250 MB.
 
-### B4. The proposed retention schedule: `proposed-v1` (PROPOSED)
+### B4. The retention schedule: `proposed-v1` (APPROVED 2026-09-26, manual reviewed apply only)
 
 Applies to **evidence bundles only**, per store directory.
 
@@ -330,7 +334,7 @@ Applies to **evidence bundles only**, per store directory.
 - The planner therefore counts a bundle as **good** only when a recorded `VERIFIED_BACKUP_AND_RESTORE` report matches its `database_sha256`. The reports come in through `--verify-reports`, for example `journalctl -u edgelab-backup.service -o cat` saved to a file. A `create` report must also name the bundle.
 - A bundle without such a record is **UNVERIFIED_RESTORE**: always kept. It never counts as newest-good, never satisfies the 36 h freshness check, and never covers an older bundle.
 - **Limitation:** the journal is the only record, and it may not reach back to old bundles. An old bundle without a record stays kept until it is verified again (`backup verify --bundle`) and that report is added.
-- **PROPOSED requirement for any future apply step:** immediately before deleting anything, restore-verify **every bundle it relies on**: each bundle that covers a candidate, and the newest bundle used for the freshness check, not only the newest one. If any of those checks fails, delete nothing.
+- **The apply step's requirement (CURRENT in `retention-apply`):** immediately before deleting anything, restore-verify **every bundle it relies on**: each bundle that covers a candidate, and the newest bundle used for the freshness check, not only the newest one. If any of those checks fails, delete nothing.
 
 **Keep:**
 
@@ -389,7 +393,7 @@ The store is append-only, so those rows exist in that copy too. Deletions happen
 - The candidates are schema-v4 deploy copies from 2026-09-23. Their rows are in the kept 2026-09-23 22:51Z bundle.
 - On production, without `--verify-reports`, every bundle is UNVERIFIED_RESTORE, so there are 0 candidates, by design.
 
-### B5. The dry-run planner (CURRENT in this PR; it deletes nothing)
+### B5. The dry-run planner (CURRENT; it deletes nothing) and the separate apply step
 
 ```
 python -m edge_lab.backup retention-plan --root /var/lib/market-edge-lab/backups \
@@ -417,9 +421,26 @@ python -m edge_lab.backup retention-plan --root /var/lib/market-edge-lab/backups
 - **Newest-good protection.** The 3 newest *restore-verified* bundles are always kept. If the newest restore-verified bundle is over 36 h old, every candidate is blocked. That includes the case where newer bundles exist but failed or lack their restore check (tested).
 - **Store identity.** Only a restore-verified copy of the same store and schema lineage can cover an older bundle. A foreign bundle placed in the directory covers nothing (tested).
 - **Deterministic.** The same inputs always give the same JSON, whatever the order (tested).
-- **PROPOSED for the apply step, when approved:** immediately before deleting anything, restore-verify every bundle the deletion relies on (each covering bundle and the freshness bundle). Delete nothing if any check fails.
+- **The apply step (CURRENT: `python -m edge_lab.backup retention-apply`; runbook §7).** It is a separate command that deletes only after every check below passes. Otherwise it exits 2 (`REFUSED`) having deleted nothing.
+  - **Confirmation:** `--confirm` must equal the SHA-256 of the reviewed report file.
+  - **Report:** it must be a `retention-plan` report for this root, at most 30 min old.
+  - **Inputs:** the recorded verify-reports file and checkpoint files must be unchanged. Re-running the plan now must give the identical candidate set, by name and database hash.
+  - **Directory:** the root must be a backups directory with no database files in it.
+  - **Freshness:** no stale freeze may be on.
+  - **Candidates:** every candidate must be an evidence bundle directly in the root, a plain directory of regular files, whose only reason is `SUPERSEDED`, not pinned, not checkpoint-linked, and naming its covering bundle.
+  - **Restore checks:** every bundle the deletions rely on passes `verify_backup` now: each covering bundle and the newest good bundle.
 
-### B6. Off-host (PROPOSED; an owner decision; nothing is bought or set up)
+  It deletes the candidate directories one at a time. Each deletion is logged to `retention-apply-log.jsonl` in the backups directory (append-only, flushed): name, hash, bytes, covering bundle, reason. The run's start line carries the full candidate list and the report hash. No timer or unit runs it. The planner still has no deletion path; a test checks that it never reaches the apply code.
+
+### B6. Off-host (O1 APPROVED 2026-09-26; paid storage not approved)
+
+**The exact procedure is `docs/deploy/DAILY_SHADOW_ACTIVATION.md` §8.**
+- `newest-verified` on the server picks the newest restore-verified bundles.
+- `scp` pulls them to `C:\Users\jason\market-edge-offhost\<date>\`.
+- `offhost-verify` on the laptop checks each bundle's bytes against its manifest, then restores it into a disposable database.
+- Only the last 4 verified pulls are kept.
+
+The text below is the original proposal.
 
 - There is **no verified off-host database backup today**. A disk or VPS loss would lose the live store *and* every local backup.
 - The laptop checkpoints prove the ledger head, but they cannot restore it.
@@ -445,11 +466,11 @@ python -m edge_lab.backup retention-plan --root /var/lib/market-edge-lab/backups
 **RTO (time to restore).**
 - The planned sequence: stop the timers, copy the bundle's `database.sqlite3` into place, run `backup verify` on it, then restart.
 - Today this takes minutes of operator time. Verification is about 0.6 s at 3.4 MB, and about 30–50 s at 1 GB (estimate).
-- The restore-over-live procedure is not scripted. **PROPOSED:** add a runbook section. That is the coordinator's file.
+- The restore-over-live procedure is now written down as `docs/deploy/DAILY_SHADOW_ACTIVATION.md` §9 (PROPOSED: an incident step, not a routine one). It stops the timers, verifies the bundle, moves the live files aside (they are evidence, never deleted), copies the bundle in, checks, and restarts.
 
 **Effect of retention.** Retention removes *intermediate* restore points only. RPO is unchanged, because the newest copies are always kept. Restoring to an old logical state keeps weekly granularity for 8 weeks and monthly for 12 months.
 
-### B8. Approval wording (PROPOSED; not approved)
+### B8. Approval wording (as proposed; the owner approved retention and O1 on 2026-09-26, recorded verbatim in `docs/owner/2026-09-26-owner-decisions-economics-backup.md`)
 
 > I approve backup retention policy **proposed-v1** for the **evidence** store's local backups only:
 > - count a bundle as good only when a recorded VERIFIED_BACKUP_AND_RESTORE report matches it;

@@ -580,3 +580,145 @@ Re-installing the newer code later stamps it again: the migration is idempotent,
 written meanwhile is kept. The shadow
 ledger's schema did not change (v1), so the rolled-back code reads it. To stop all collection
 and keep the data: `sudo systemctl disable --now edgelab-pfm.timer edgelab-decision.timer edgelab-recheck.timer edgelab-status.timer edgelab-backup.timer edgelab-shadow.timer edgelab-settlement.timer edgelab-observe.timer edgelab-observe-close.timer edgelab-freshness.timer edgelab-odds.timer edgelab-pm-sports.timer edgelab-pm-sports-discover.timer` (named, not a glob).
+
+## 7. Backup retention: the manual, reviewed apply (owner-approved 2026-09-26)
+
+**Authority.** The owner approved policy `proposed-v1` for evidence-store local backups on
+2026-09-26, recorded verbatim in `docs/owner/2026-09-26-owner-decisions-economics-backup.md`
+(item 3). The policy and its safeguards are in `docs/deploy/CAPTURE_AND_BACKUP_APPROVAL_PLAN.md` B4.
+
+**Rules:**
+- Deletion is **manual and reviewed**. There is no timer and no unit.
+- Only eligible restore-verified evidence copies are deleted. Ledger bundles are never deleted.
+- The protected classes are always preserved:
+  - F09-linked bundles, schema-change bundles and baselines;
+  - unverified, quarantined and active bundles.
+- The dry run runs **immediately before** each apply, and its candidate list is attached to the record.
+- The live store is never touched. A checkpoint hash never replaces a restorable backup.
+
+**When:** as root (a reviewed runbook step). Never inside 17:40–18:50 ET or 11:13–11:30 / 16:13–16:30 ET, and never near the 04:40 UTC daily backup.
+
+```bash
+# 0. Nothing may be writing a backup now.
+systemctl is-active edgelab-backup.service          # expect: inactive
+install -d -o edgelab -g edgelab -m 0700 /var/lib/market-edge-lab/retention
+R=/var/lib/market-edge-lab/retention; STAMP=$(date -u +%Y%m%dT%H%M%SZ)
+PY=/opt/market-edge-lab/venv/bin/python; B=/var/lib/market-edge-lab/backups
+
+# 1. The recorded restore checks. Every create/verify report is in the backup unit's journal.
+#    A bundle without a VERIFIED report there is kept.
+journalctl -u edgelab-backup.service -o cat --no-pager | runuser -u edgelab -- tee "$R/$STAMP-backup-reports.txt" >/dev/null
+
+# 2. The dry run (read-only), saved, then reviewed.
+runuser -u edgelab -- $PY -m edge_lab.backup retention-plan --root $B --policy proposed-v1 \
+  --checkpoints /opt/market-edge-lab/app/docs/engineering/ledger_checkpoints \
+  --verify-reports "$R/$STAMP-backup-reports.txt" --pin edge-backup-eqfiomf5 --verify-hashes \
+  | runuser -u edgelab -- tee "$R/$STAMP-plan.json" >/dev/null
+$PY -c 'import json,sys; r=json.load(open(sys.argv[1])); print(r["state"], r["flags"], r["summary"]); [print(b["name"], b["completed_at_utc"], b["database_bytes"], "covered_by", b["covered_by"]) for b in r["bundles"] if b["decision"]=="DELETE-CANDIDATE"]' "$R/$STAMP-plan.json"
+sha256sum "$R/$STAMP-plan.json"                     # this hash is the confirmation
+```
+
+Review the printed candidate list:
+- Expect only schema-matching evidence copies older than 48 h, each covered by a newer kept bundle.
+- Stop if the flags show `NEWEST_GOOD_STALE`, `NO_GOOD_BUNDLE` or anything unexpected.
+- Attach the list, and the report's sha256, to the record: the PR or `HANDOFF.md` entry for this apply.
+
+```bash
+# 3. The apply, within 30 minutes of the dry run.
+#    It re-runs the plan from the same inputs and refuses unless the candidate set is identical.
+#    It restore-verifies the covering bundle(s) and the newest good bundle, then deletes the
+#    candidates one by one, logging each.
+runuser -u edgelab -- $PY -m edge_lab.backup retention-apply --root $B \
+  --report "$R/$STAMP-plan.json" --confirm <the sha256 from step 2>
+
+# 4. Check.
+tail -n 20 $B/retention-apply-log.jsonl             # apply_start, one "deleted" line per candidate, apply_end
+df -h /var/lib/market-edge-lab
+```
+
+After the apply:
+- A fresh dry run (steps 1–2) should show no candidates.
+- Exit 2 is `REFUSED`: nothing was deleted, and the reason is printed. Fix the cause, then start again at step 1.
+- `CANDIDATES_CHANGED` or `STALE_REPORT` only mean the dry run must be repeated.
+
+## 8. O1: the weekly off-host pull to the laptop (owner-approved 2026-09-26)
+
+**Authority.** O1, owner-approved 2026-09-26 (item 4 of the decision record): a **free, weekly,
+manual** pull of the newest restore-verified bundles to the owner's laptop. The last **4** pulls are
+kept and each is verified locally. There is no paid storage and no unattended job.
+
+**Cadence.** Weekly, and also at every F09.
+
+**Direction.** The pull is read-only on the server. It uses the reviewed root access (`root@chaseupside.com`, the existing key).
+
+From the laptop (PowerShell), with a clean checkout of **current main**. The laptop's code must know the production schema version:
+
+```powershell
+$D = Get-Date -Format yyyy-MM-dd
+$K = "$HOME\.ssh\id_ed25519_riskit"; $H = "root@chaseupside.com"
+$Dest = "C:\Users\jason\market-edge-offhost\$D"
+
+# 1. Which bundles: the newest restore-verified evidence and ledger bundle (read-only on the server).
+ssh -i $K $H "journalctl -u edgelab-backup.service -o cat --no-pager --since '-8 days' | runuser -u edgelab -- /opt/market-edge-lab/venv/bin/python -m edge_lab.backup newest-verified --root /var/lib/market-edge-lab/backups --verify-reports /dev/stdin"
+#    Note evidence.name, ledger.path and both database_sha256 values. state must be OK.
+
+# 2. Copy them.
+New-Item -ItemType Directory -Force "$Dest\ledger" | Out-Null
+scp -i $K -r "${H}:/var/lib/market-edge-lab/backups/<evidence.name>" "$Dest\"
+scp -i $K -r "${H}:/var/lib/market-edge-lab/backups/<ledger.path>" "$Dest\ledger\"
+
+# 3. Verify locally.
+#    For each bundle: its bytes against the manifest (length and SHA-256), then a restore into a
+#    disposable database. Expect "state": "VERIFIED".
+cd C:\Users\jason\market-edge-lab
+$env:PYTHONPATH = "src"; python -m edge_lab.backup offhost-verify --dir $Dest
+#    Cross-check: each bundle's database_sha256 in the output equals the value step 1 printed.
+Get-FileHash "$Dest\<evidence.name>\database.sqlite3" -Algorithm SHA256
+
+# 4. Keep the last 4 verified pulls. This is part of O1's approved "keep last four".
+#    Run it only after step 3 said VERIFIED.
+Get-ChildItem C:\Users\jason\market-edge-offhost -Directory |
+  Where-Object Name -match '^\d{4}-\d{2}-\d{2}$' | Sort-Object Name -Descending |
+  Select-Object -Skip 4 | ForEach-Object { Remove-Item -Recurse -Force $_.FullName }
+```
+
+Record each pull in `HANDOFF.md` or with the F09 notes: the date, the bundle names, their sha256 and `VERIFIED`.
+
+**Checked 2026-09-26 (laptop, Windows).** `python -m edge_lab.backup verify --bundle` returned `VERIFIED_BACKUP_AND_RESTORE` for two genuine production bundle copies: an evidence bundle of 2,187,264 B and the F09 ledger bundle. `tests/test_backup_retention_apply.py` covers `offhost-verify` on copied bundles.
+
+**What O1 is and is not.**
+- It is the only off-host restorable copy: at most one week old, on one laptop that is sometimes offline.
+- A checkpoint hash on the laptop is not a restorable backup.
+
+## 9. Restore over the live store (PROPOSED; an incident step, not approved as routine)
+
+Use this only after a decision that the live store (or the ledger) is lost or damaged. The **damaged
+live files are original evidence**: they are moved aside, never deleted. As root, outside the
+protected windows:
+
+```bash
+PY=/opt/market-edge-lab/venv/bin/python; DB=/var/lib/market-edge-lab/db; STAMP=$(date -u +%Y%m%dT%H%M%SZ)
+BUNDLE=/var/lib/market-edge-lab/backups/<the chosen VERIFIED bundle>   # or an O1 copy scp'd back
+
+# 1. Stop every timer (named, as in Rollback step 1) and the dashboard; nothing may be running.
+systemctl disable --now edgelab-pfm.timer edgelab-decision.timer edgelab-recheck.timer edgelab-status.timer edgelab-backup.timer edgelab-shadow.timer edgelab-settlement.timer edgelab-observe.timer edgelab-observe-close.timer edgelab-freshness.timer edgelab-odds.timer edgelab-pm-sports.timer edgelab-pm-sports-discover.timer
+systemctl stop edgelab-dashboard.service
+systemctl list-units 'edgelab-*' --state=running --no-legend    # expect nothing
+
+# 2. Verify the bundle first (a restore into a disposable database).
+runuser -u edgelab -- $PY -m edge_lab.backup verify --bundle "$BUNDLE"   # expect VERIFIED_BACKUP_AND_RESTORE
+
+# 3. Move the live files aside (kept as evidence), then copy the bundle's database into place.
+install -d -o edgelab -g edgelab -m 0700 "$DB/pre-restore-$STAMP"
+for f in edge_lab.sqlite3 edge_lab.sqlite3-wal edge_lab.sqlite3-shm; do [ -e "$DB/$f" ] && mv "$DB/$f" "$DB/pre-restore-$STAMP/"; done
+install -o edgelab -g edgelab -m 0600 "$BUNDLE/database.sqlite3" "$DB/edge_lab.sqlite3"
+
+# 4. Check, then restart.
+runuser -u edgelab -- $PY -m edge_lab.cli forward status --db "$DB/edge_lab.sqlite3" --status-file /var/lib/market-edge-lab-status/latest.json
+systemctl start edgelab-backup.service && journalctl -u edgelab-backup -n 20 --no-pager   # VERIFIED, with the bundle's row counts
+#    Re-enable the timers that were enabled before, restart the dashboard, and run verify_production.sh.
+```
+
+**Ledger restores.** A ledger restore is the same, using the ledger path and its lock. Before restarting, also verify the restored ledger against the newest F09 checkpoint (`shadow anchor verify`). An older copy reports TRUNCATED: that is the recorded loss.
+
+**What is lost.** Anything written after the bundle's completion time (the RPO) is missing from the restored store. It may still be in the moved-aside files; salvaging it is a separate, reviewed step.

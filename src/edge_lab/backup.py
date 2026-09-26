@@ -1,8 +1,10 @@
 """Manual, WAL-aware SQLite backup and isolated restore rehearsal.
 
-Adapted from Brisket's online-backup pattern; no scheduling, remote upload,
-retention deletion, source migration, or restoration over an existing database.
-`retention-plan` is a dry-run report only (PROPOSED policy; it cannot delete).
+Adapted from Brisket's online-backup pattern; no scheduling, remote upload, source migration,
+or restoration over an existing database.
+`retention-plan` is a dry-run report only (it cannot delete). `retention-apply` is the only
+deletion path: manual, reviewed, owner-approved policy proposed-v1 (2026-09-26), never on a timer.
+`newest-verified` and `offhost-verify` support the O1 weekly off-host pull (read-only).
 """
 from __future__ import annotations
 
@@ -299,15 +301,18 @@ def verify_backup(bundle: Path, *, timeout: float = 30) -> dict:
 
 # --------------------------------------------------------------------------- retention (DRY RUN ONLY)
 #
-# docs/deploy/CAPTURE_AND_BACKUP_APPROVAL_PLAN.md, section B. No retention policy is approved. This
-# planner only reads bundle directories and manifests and reports KEEP / DELETE-CANDIDATE / QUARANTINE
-# per bundle with its reasons. It has no deletion code path at all: no --apply, no unlink, no rmtree
-# (tests/test_backup_retention.py makes every deletion API fail while it runs). A backup copy is never
-# the original evidence (the live store is), and a DELETE-CANDIDATE is only ever a bundle whose rows a
-# newer kept, valid bundle of the same store also holds.
+# docs/deploy/CAPTURE_AND_BACKUP_APPROVAL_PLAN.md, section B. The owner approved policy proposed-v1 on
+# 2026-09-26 (docs/owner/2026-09-26-owner-decisions-economics-backup.md). This planner still only reads
+# bundle directories and manifests and reports KEEP / DELETE-CANDIDATE / QUARANTINE per bundle with its
+# reasons: it has no deletion code path (tests/test_backup_retention.py checks every function reachable
+# from its CLI entry point, and makes every deletion API fail while it runs). Deletion is only the
+# separate, manual `retention-apply` below. A backup copy is never the original evidence (the live store
+# is), and a DELETE-CANDIDATE is only ever a bundle whose rows a newer kept, restore-verified copy of the
+# same store also holds.
 
 KEEP, DELETE_CANDIDATE, QUARANTINE = "KEEP", "DELETE-CANDIDATE", "QUARANTINE"
-RETENTION_STATUS = "PROPOSED"  # never APPROVED in code: an approval is recorded in docs/EXECUTION_PLAN.md
+# The owner's approval is the record (docs/owner/2026-09-26-...); code never grants one.
+RETENTION_STATUS = "APPROVED 2026-09-26 (owner; manual, reviewed apply only)"
 BUNDLE_PREFIX = "edge-backup-"
 MANIFEST_MAX_BYTES = 1024 * 1024
 
@@ -540,6 +545,8 @@ def retention_plan(bundles: Sequence[BundleInfo], *, now: datetime, policy: Rete
     flags: list[str] = []
     linked: list[dict[str, Any]] = []
     pinned = set(pins)
+    covered_by: dict[tuple[str, str], str] = {}
+    newest_good: dict[str, str] = {}
     found_pins: set[str] = set()
     for b in bundles:
         key = (b.kind, b.name)
@@ -637,14 +644,18 @@ def retention_plan(bundles: Sequence[BundleInfo], *, now: datetime, policy: Rete
                                     f"{good[-1].completed.isoformat()}; no candidate until a fresh verified backup")
                 decision[key] = KEEP
                 continue
-            if not any(k.completed > b.completed and _covers(k, b) for k in kept):
+            coverers = [k for k in kept if k.completed > b.completed and _covers(k, b)]
+            if not coverers:
                 reasons[key].append("NOT_COVERED: no newer kept valid bundle holds at least its row counts")
                 decision[key] = KEEP
                 kept.append(b)
                 continue
+            # The newest covering bundle is the one a deletion relies on (the apply step restore-verifies it).
+            covered_by[key] = max(coverers, key=lambda k: (k.completed, k.name)).name
             reasons[key].append(f"SUPERSEDED: outside every {policy.name} keep rule; a newer kept valid bundle "
                                 "holds all of its rows")
             decision[key] = DELETE_CANDIDATE
+        newest_good[kind] = good[-1].name
     if any(b.status == QUARANTINE for b in bundles):
         flags.append("QUARANTINE_PRESENT")
     rows, summary = [], {}
@@ -654,6 +665,8 @@ def retention_plan(bundles: Sequence[BundleInfo], *, now: datetime, policy: Rete
                      "reasons": sorted(reasons[(b.kind, b.name)]),
                      "completed_at_utc": b.completed.isoformat() if b.completed else None,
                      "database_bytes": b.database_bytes,
+                     "database_sha256": (b.manifest or {}).get("database_sha256"),
+                     "covered_by": covered_by.get((b.kind, b.name)),
                      "schema_version": (b.manifest or {}).get("schema_version")})
         s = summary.setdefault(b.kind, {KEEP: 0, DELETE_CANDIDATE: 0, QUARANTINE: 0,
                                         "bytes_keep": 0, "bytes_delete_candidate": 0, "bytes_quarantine": 0})
@@ -662,6 +675,7 @@ def retention_plan(bundles: Sequence[BundleInfo], *, now: datetime, policy: Rete
     return {"command": "backup retention-plan", "mode": "DRY_RUN_ONLY", "deletes_performed": 0,
             "policy": policy.to_dict(), "now_utc": now.isoformat(), "state": "REVIEW" if flags else "OK",
             "flags": sorted(flags), "summary": dict(sorted(summary.items())), "bundles": rows,
+            "newest_good": dict(sorted(newest_good.items())),
             "checkpoints": linked, "pins_not_found": sorted(pinned - found_pins),
             "limitations": [
                 "a backup copy is not original evidence: the live store is the original, and no candidate is the "
@@ -671,7 +685,8 @@ def retention_plan(bundles: Sequence[BundleInfo], *, now: datetime, policy: Rete
                 "planner does not restore anything itself. Any future apply step must restore-verify every bundle "
                 "it relies on (for coverage and for freshness) immediately before deleting anything",
                 "hashes are checked only with --verify-hashes",
-                "nothing is deleted: this planner has no deletion code path; any deletion needs an approved policy"]}
+                "nothing is deleted: this planner has no deletion code path; deletion is only the separate, manual "
+                "`retention-apply` of a reviewed report of this plan"]}
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -689,7 +704,7 @@ def main(argv: list[str] | None = None) -> int:
     verify.add_argument("--bundle", type=Path, required=True)
     verify.add_argument("--timeout", type=float, default=30)
     plan = subs.add_parser("retention-plan", help="DRY RUN ONLY: KEEP / DELETE-CANDIDATE / QUARANTINE per bundle; "
-                                                  "deletes nothing (there is no apply option)")
+                                                  "deletes nothing (deletion is the separate retention-apply)")
     plan.add_argument("--root", type=Path, required=True, help="the backups directory (ledger bundles in root/ledger)")
     plan.add_argument("--policy", choices=sorted(RETENTION_POLICIES), default="proposed-v1")
     plan.add_argument("--now", help="ISO-8601 time with zone (default: now)")
@@ -700,9 +715,32 @@ def main(argv: list[str] | None = None) -> int:
                       help="text holding the recorded backup create/verify JSON reports (e.g. `journalctl -u "
                            "edgelab-backup.service -o cat` saved to a file); only bundles with a recorded "
                            "VERIFIED_BACKUP_AND_RESTORE report are good, all others are kept")
+    apply = subs.add_parser("retention-apply",
+                            help="MANUAL, REVIEWED deletion of exactly the DELETE-CANDIDATE bundles of a fresh "
+                                 "retention-plan report (owner-approved proposed-v1); refuses on any doubt")
+    apply.add_argument("--root", type=Path, required=True, help="the backups directory the report was made for")
+    apply.add_argument("--report", type=Path, required=True, help="the reviewed retention-plan JSON report (file)")
+    apply.add_argument("--confirm", required=True, help="the SHA-256 of the report file (sha256sum REPORT)")
+    apply.add_argument("--max-report-age-min", type=float, default=APPLY_MAX_REPORT_AGE.total_seconds() / 60)
+    apply.add_argument("--timeout", type=float, default=APPLY_VERIFY_TIMEOUT_S,
+                       help="per-bundle budget for the restore verification of the bundles relied on")
+    newest = subs.add_parser("newest-verified", help="read-only: the newest restore-verified evidence and ledger "
+                                                     "bundle (the O1 pull's source)")
+    newest.add_argument("--root", type=Path, required=True)
+    newest.add_argument("--verify-reports", type=Path, required=True)
+    offhost = subs.add_parser("offhost-verify", help="O1, on the laptop: verify every bundle copied under --dir "
+                                                     "(bytes against the manifest, then a restore check)")
+    offhost.add_argument("--dir", type=Path, required=True)
+    offhost.add_argument("--timeout", type=float, default=120)
     args = parser.parse_args(argv)
     if args.command == "retention-plan":
         return _retention_main(args)
+    if args.command == "retention-apply":
+        return _apply_main(args)
+    if args.command == "newest-verified":
+        return _newest_verified_main(args)
+    if args.command == "offhost-verify":
+        return _offhost_verify_main(args)
     try:
         if args.command == "create":
             if args.if_exists and not args.db.exists():
@@ -729,6 +767,31 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
 
+def _checkpoint_files(directory: Path) -> list[dict[str, str]]:
+    return [{"name": p.name, "sha256": file_hash(p)} for p in sorted(directory.glob("*.json"))]
+
+
+def build_plan(root: Path, *, now: datetime, policy: RetentionPolicy, checkpoints_dir: Path | None = None,
+               verify_reports: Path | None = None, pins: Sequence[str] = (), verify_hashes: bool = False) -> dict[str, Any]:
+    """The `retention-plan` report, with the inputs it used recorded (paths and content hashes), so the apply
+    step can re-run exactly the same plan. Read-only."""
+    verified, n_reports = load_verify_reports(verify_reports) if verify_reports else ({}, 0)
+    bundles, ignored = scan_bundles(root, now=now, policy=policy, verify_hashes=verify_hashes, verified=verified)
+    checkpoints, problems = load_checkpoints(checkpoints_dir) if checkpoints_dir else ([], [])
+    report = retention_plan(bundles, now=now, policy=policy, checkpoints=checkpoints, pins=pins)
+    report.update(
+        root=str(root.resolve()), ignored_entries=ignored, checkpoint_problems=problems,
+        hashes_verified=bool(verify_hashes),
+        verify_reports={"file": str(verify_reports) if verify_reports else None, "reports_read": n_reports,
+                        "verified_database_sha256s": len(verified)},
+        inputs={"policy": policy.name, "pins": sorted(pins), "verify_hashes": bool(verify_hashes),
+                "checkpoints_dir": str(checkpoints_dir.resolve()) if checkpoints_dir else None,
+                "checkpoint_files": _checkpoint_files(checkpoints_dir) if checkpoints_dir else [],
+                "verify_reports_file": str(verify_reports.resolve()) if verify_reports else None,
+                "verify_reports_sha256": file_hash(verify_reports) if verify_reports else None})
+    return report
+
+
 def _retention_main(args: argparse.Namespace) -> int:
     now = _aware(args.now) if args.now else datetime.now(timezone.utc)
     if now is None:
@@ -737,17 +800,231 @@ def _retention_main(args: argparse.Namespace) -> int:
     if not args.root.is_dir():
         print(json.dumps({"status": "FAILED", "error": f"{args.root} is not a directory"}))
         return 1
-    policy = RETENTION_POLICIES[args.policy]
-    verified, n_reports = load_verify_reports(args.verify_reports) if args.verify_reports else ({}, 0)
-    bundles, ignored = scan_bundles(args.root, now=now, policy=policy, verify_hashes=args.verify_hashes,
-                                    verified=verified)
-    checkpoints, problems = load_checkpoints(args.checkpoints) if args.checkpoints else ([], [])
-    report = retention_plan(bundles, now=now, policy=policy, checkpoints=checkpoints, pins=args.pin)
-    report.update(root=str(args.root), ignored_entries=ignored, checkpoint_problems=problems,
-                  hashes_verified=bool(args.verify_hashes),
-                  verify_reports={"file": str(args.verify_reports) if args.verify_reports else None,
-                                  "reports_read": n_reports, "verified_database_sha256s": len(verified)})
+    report = build_plan(args.root, now=now, policy=RETENTION_POLICIES[args.policy], checkpoints_dir=args.checkpoints,
+                        verify_reports=args.verify_reports, pins=args.pin, verify_hashes=args.verify_hashes)
     print(json.dumps(report, indent=2, sort_keys=True))
+    return 0
+
+
+def newest_verified(root: Path, *, verify_reports: Path, now: datetime) -> dict[str, Any]:
+    """The newest restore-verified bundle per store (the O1 weekly pull's source). Read-only."""
+    verified, n = load_verify_reports(verify_reports)
+    bundles, _ = scan_bundles(root, now=now, policy=RETENTION_POLICIES["proposed-v1"], verified=verified)
+    out: dict[str, Any] = {"command": "backup newest-verified", "root": str(root.resolve()), "reports_read": n}
+    for kind in KINDS:
+        good = sorted((b for b in bundles if b.kind == kind and b.status == "GOOD" and b.restore_verified),
+                      key=lambda b: (b.completed, b.name))
+        out[kind] = None if not good else {
+            "name": good[-1].name, "path": good[-1].path, "completed_at_utc": good[-1].completed.isoformat(),
+            "database_bytes": good[-1].database_bytes,
+            "database_sha256": (good[-1].manifest or {}).get("database_sha256")}
+    out["state"] = "OK" if out["evidence"] and out["ledger"] else "MISSING_VERIFIED_BUNDLE"
+    return out
+
+
+def _newest_verified_main(args: argparse.Namespace) -> int:
+    report = newest_verified(args.root, verify_reports=args.verify_reports, now=datetime.now(timezone.utc))
+    print(json.dumps(report, indent=2, sort_keys=True))
+    return 0 if report["state"] == "OK" else 1
+
+
+def offhost_verify(directory: Path, *, timeout: float = 120) -> dict[str, Any]:
+    """O1: verify every bundle copied off-host under `directory` (bundles directly in it or one level down,
+    e.g. <date>/edge-backup-… and <date>/ledger/edge-backup-…). For each: the database bytes against the
+    manifest's length and SHA-256, then `verify_backup` (a restore into a disposable database). Read-only
+    for the bundles; nothing is written next to them."""
+    found = sorted({p for p in list(directory.glob(f"{BUNDLE_PREFIX}*")) + list(directory.glob(f"*/{BUNDLE_PREFIX}*"))
+                    if p.is_dir()})
+    results = []
+    for bundle in found:
+        entry: dict[str, Any] = {"bundle": bundle.relative_to(directory).as_posix()}
+        try:
+            report = verify_backup(bundle, timeout=timeout)
+            entry.update(status=report["status"], store_kind=report.get("store_kind", "evidence"),
+                         database_sha256=report.get("database_sha256"))
+        except (BackupError, sqlite3.Error, OSError, ValueError) as exc:
+            entry.update(status="FAILED", error=str(exc))
+        results.append(entry)
+    ok = bool(results) and all(r["status"] == "VERIFIED_BACKUP_AND_RESTORE" for r in results)
+    kinds = {r.get("store_kind") for r in results if r["status"] == "VERIFIED_BACKUP_AND_RESTORE"}
+    state = "VERIFIED" if ok and {"evidence", "ledger"} <= kinds else "INCOMPLETE" if ok else "FAILED"
+    return {"command": "backup offhost-verify", "directory": str(directory), "bundles": results, "state": state}
+
+
+def _offhost_verify_main(args: argparse.Namespace) -> int:
+    report = offhost_verify(args.dir, timeout=args.timeout)
+    print(json.dumps(report, indent=2, sort_keys=True))
+    return 0 if report["state"] == "VERIFIED" else 1
+
+
+# --------------------------------------------------------------------------- retention APPLY (manual, reviewed)
+#
+# Owner approval 2026-09-26 (docs/owner/2026-09-26-owner-decisions-economics-backup.md, item 3): policy
+# proposed-v1 for evidence-store local backups; deletion stays manual and reviewed (no timer, no unit);
+# only eligible restore-verified copies; every protected class preserved; a reviewed dry run immediately
+# before any apply, its candidate list attached to the record. This is the ONLY deletion path, a separate
+# command that refuses unless every check below holds.
+
+APPLY_LOG_NAME = "retention-apply-log.jsonl"
+APPLY_MAX_REPORT_AGE = timedelta(minutes=30)
+APPLY_VERIFY_TIMEOUT_S = 120.0
+_PROTECTED_REASON_PREFIXES = ("NEWEST_GOOD", "FIRST_BUNDLE_BASELINE", "RECENT", "PINNED_BASELINE", "FORENSIC",
+                              "NOT_ELIGIBLE_KIND", "DAILY", "WEEKLY", "MONTHLY", "SCHEMA_BOUNDARY", "CHECKPOINT",
+                              "NOT_COVERED", "UNVERIFIED_RESTORE", "ACTIVE", "NEWEST_GOOD_STALE")
+
+
+class ApplyRefused(BackupError):
+    """The apply step found a reason not to delete anything."""
+
+
+def _candidates(report: Mapping[str, Any]) -> dict[str, Mapping[str, Any]]:
+    return {r["name"]: r for r in report.get("bundles") or [] if r.get("decision") == DELETE_CANDIDATE}
+
+
+def _log(root: Path, event: dict[str, Any]) -> None:
+    """Append one line to the apply log in the backups directory (append-only, flushed to disk)."""
+    with (root / APPLY_LOG_NAME).open("a", encoding="utf-8", newline="\n") as stream:
+        stream.write(json.dumps(event, sort_keys=True) + "\n")
+        stream.flush()
+        os.fsync(stream.fileno())
+
+
+def _check_backups_root(root: Path) -> None:
+    if root.is_symlink() or not root.is_dir():
+        raise ApplyRefused(f"NOT_A_BACKUPS_DIRECTORY: {root} is not a real directory")
+    bundles = [p for p in root.iterdir() if p.name.startswith(BUNDLE_PREFIX) and (p / MANIFEST_NAME).is_file()]
+    if not bundles:
+        raise ApplyRefused(f"NOT_A_BACKUPS_DIRECTORY: {root} holds no backup bundle")
+    live = [p.name for p in root.iterdir() if p.is_file() and p.name.endswith((".sqlite3", "-wal", "-shm", ".db"))]
+    if live:
+        raise ApplyRefused(f"NOT_A_BACKUPS_DIRECTORY: {root} holds database files {sorted(live)}; a live store "
+                           "is never inside the backups directory")
+
+
+def retention_apply(root: Path, report_path: Path, confirm: str, *, now: datetime | None = None,
+                    max_age: timedelta = APPLY_MAX_REPORT_AGE, timeout: float = APPLY_VERIFY_TIMEOUT_S) -> dict[str, Any]:
+    """Delete exactly the DELETE-CANDIDATE bundles of a reviewed `retention-plan` report, or nothing.
+
+    Refuses (ApplyRefused, nothing deleted) unless all of these hold:
+    - `confirm` is the SHA-256 of the report file's bytes (the operator confirms the exact report reviewed);
+    - the report is a `retention-plan` report of an approved policy, for this root, at most `max_age` old;
+    - the recorded inputs (verify-reports file, checkpoint files) are unchanged, and re-running the plan now
+      with them gives exactly the same DELETE-CANDIDATE set (names and database hashes);
+    - the root is a backups directory; no stale freeze; every candidate is an evidence bundle directly in the
+      root, directory without symlinks, with only SUPERSEDED as its reason (so never ledger, ACTIVE,
+      QUARANTINE, unverified, pinned, checkpoint-linked, schema-boundary or otherwise kept) and a covering bundle;
+    - every bundle the deletions rely on (each covering bundle and the newest-good bundle) passes `verify_backup`
+      (a restore into a disposable database) now.
+    Then it deletes the candidate directories one at a time, logging each (name, hash, bytes, reason) to
+    `APPLY_LOG_NAME` in the root. It never touches anything else."""
+    now = now or datetime.now(timezone.utc)
+    root = root.resolve()
+    raw = report_path.read_bytes()
+    digest = hashlib.sha256(raw).hexdigest()
+    if confirm != digest:
+        raise ApplyRefused(f"CONFIRM_MISMATCH: --confirm must be the SHA-256 of the reviewed report ({report_path})")
+    try:
+        report = json.loads(raw)
+    except ValueError as exc:
+        raise ApplyRefused("REPORT_INVALID: not JSON") from exc
+    if not isinstance(report, dict) or report.get("command") != "backup retention-plan" \
+            or report.get("mode") != "DRY_RUN_ONLY":
+        raise ApplyRefused("REPORT_INVALID: not a retention-plan report")
+    inputs = report.get("inputs") or {}
+    policy = RETENTION_POLICIES.get(str(inputs.get("policy")))
+    if policy is None or (report.get("policy") or {}).get("name") != policy.name:
+        raise ApplyRefused(f"REPORT_INVALID: unknown policy {inputs.get('policy')!r}")
+    if Path(str(report.get("root"))).resolve() != root:
+        raise ApplyRefused(f"ROOT_MISMATCH: the report is for {report.get('root')}, not {root}")
+    made = _aware(report.get("now_utc"))
+    if made is None or made > now + timedelta(minutes=1) or now - made > max_age:
+        raise ApplyRefused(f"STALE_REPORT: made {report.get('now_utc')}, now {now.isoformat()}; the dry run must be "
+                           f"at most {int(max_age.total_seconds() // 60)} min old (re-run it)")
+    _check_backups_root(root)
+    reports_file = Path(inputs["verify_reports_file"]) if inputs.get("verify_reports_file") else None
+    if reports_file is None:
+        raise ApplyRefused("INPUTS_CHANGED: the report was made without --verify-reports")
+    if not reports_file.is_file() or file_hash(reports_file) != inputs.get("verify_reports_sha256"):
+        raise ApplyRefused(f"INPUTS_CHANGED: {reports_file} is missing or differs from the reviewed dry run")
+    cp_dir = Path(inputs["checkpoints_dir"]) if inputs.get("checkpoints_dir") else None
+    if cp_dir is not None and _checkpoint_files(cp_dir) != inputs.get("checkpoint_files"):
+        raise ApplyRefused(f"INPUTS_CHANGED: the checkpoint files in {cp_dir} differ from the reviewed dry run")
+    fresh = build_plan(root, now=now, policy=policy, checkpoints_dir=cp_dir, verify_reports=reports_file,
+                       pins=inputs.get("pins") or (), verify_hashes=bool(inputs.get("verify_hashes")))
+    reviewed, current = _candidates(report), _candidates(fresh)
+    if {n: r.get("database_sha256") for n, r in reviewed.items()} != \
+            {n: r.get("database_sha256") for n, r in current.items()}:
+        raise ApplyRefused(f"CANDIDATES_CHANGED: reviewed {sorted(reviewed)}, now {sorted(current)}; re-run the dry run")
+    frozen = [f for f in fresh.get("flags") or [] if f.startswith(("NEWEST_GOOD_STALE", "NO_GOOD_BUNDLE:evidence"))]
+    if frozen:
+        raise ApplyRefused(f"STALE_FREEZE: {frozen}")
+    linked = {b for c in fresh.get("checkpoints") or [] for b in c.get("bundles") or []}
+    pins = set(inputs.get("pins") or ())
+    for name, row in sorted(current.items()):
+        reasons = row.get("reasons") or []
+        bundle = root / name
+        if row.get("kind") != "evidence" or row.get("path") != name or not name.startswith(BUNDLE_PREFIX):
+            raise ApplyRefused(f"PROTECTED: {name} is not an evidence bundle directly in the backups directory")
+        if name in pins or name in linked or not reasons or any(
+                not r.startswith("SUPERSEDED") or r.startswith(_PROTECTED_REASON_PREFIXES) for r in reasons):
+            raise ApplyRefused(f"PROTECTED: {name} carries a keep reason or is pinned or checkpoint-linked: {reasons}")
+        if not row.get("covered_by"):
+            raise ApplyRefused(f"PROTECTED: {name} names no covering bundle")
+        if bundle.is_symlink() or not bundle.is_dir() or bundle.resolve().parent != root \
+                or any(p.is_symlink() or not p.is_file() for p in bundle.iterdir()):
+            raise ApplyRefused(f"PROTECTED: {name} is not a plain bundle directory of regular files")
+    if not current:
+        _log(root, {"event": "apply_nothing", "at_utc": now.isoformat(), "report_sha256": digest})
+        return {"command": "backup retention-apply", "state": "NOTHING_TO_DELETE", "deleted": [], "report_sha256": digest}
+    relied = sorted({str(r["covered_by"]) for r in current.values()} | {str((fresh.get("newest_good") or {})["evidence"])})
+    verification = {}
+    for name in relied:
+        try:
+            result = verify_backup(root / name, timeout=timeout)
+        except (BackupError, sqlite3.Error, OSError, ValueError) as exc:
+            raise ApplyRefused(f"RELIED_BUNDLE_NOT_VERIFIED: {name}: {exc}") from exc
+        if result.get("status") != "VERIFIED_BACKUP_AND_RESTORE":
+            raise ApplyRefused(f"RELIED_BUNDLE_NOT_VERIFIED: {name}: {result.get('status')}")
+        verification[name] = result.get("database_sha256")
+    _log(root, {"event": "apply_start", "at_utc": now.isoformat(), "report_sha256": digest, "policy": policy.name,
+                "candidates": [{"name": n, "database_sha256": r.get("database_sha256"),
+                                "database_bytes": r.get("database_bytes"), "covered_by": r.get("covered_by")}
+                               for n, r in sorted(current.items())],
+                "restore_verified_now": verification})
+    deleted = []
+    try:
+        for name, row in sorted(current.items()):
+            manifest = json.loads((root / name / MANIFEST_NAME).read_text(encoding="utf-8"))
+            if manifest.get("database_sha256") != row.get("database_sha256"):
+                raise ApplyRefused(f"CANDIDATES_CHANGED: {name}'s manifest changed during the apply")
+            shutil.rmtree(root / name)
+            entry = {"event": "deleted", "at_utc": datetime.now(timezone.utc).isoformat(), "name": name,
+                     "database_sha256": row.get("database_sha256"), "database_bytes": row.get("database_bytes"),
+                     "covered_by": row.get("covered_by"), "reason": "; ".join(row.get("reasons") or []),
+                     "report_sha256": digest}
+            _log(root, entry)
+            deleted.append(entry)
+    except BaseException as exc:
+        _log(root, {"event": "apply_aborted", "at_utc": datetime.now(timezone.utc).isoformat(),
+                    "error": f"{type(exc).__name__}: {exc}", "deleted": [d["name"] for d in deleted]})
+        raise
+    _log(root, {"event": "apply_end", "at_utc": datetime.now(timezone.utc).isoformat(), "report_sha256": digest,
+                "deleted": len(deleted), "bytes": sum(d["database_bytes"] or 0 for d in deleted)})
+    return {"command": "backup retention-apply", "state": "DELETED", "report_sha256": digest, "deleted": deleted,
+            "restore_verified_now": verification, "log": str(root / APPLY_LOG_NAME)}
+
+
+def _apply_main(args: argparse.Namespace) -> int:
+    try:
+        result = retention_apply(args.root, args.report, args.confirm,
+                                 max_age=timedelta(minutes=args.max_report_age_min), timeout=args.timeout)
+    except ApplyRefused as exc:
+        print(json.dumps({"command": "backup retention-apply", "state": "REFUSED", "deleted": [], "reason": str(exc)}))
+        return 2
+    except (BackupError, sqlite3.Error, OSError, ValueError) as exc:
+        print(json.dumps({"command": "backup retention-apply", "state": "FAILED", "error": str(exc)}))
+        return 1
+    print(json.dumps(result, indent=2, sort_keys=True))
     return 0
 
 
