@@ -569,7 +569,11 @@ def _markets_in(payload: Any) -> tuple[list[tuple[Mapping[str, Any], tuple[str, 
     return out, not payload.get("cursor")
 
 
-def kalshi_catalog(store: Any, as_of: datetime, payloads: _Payloads) -> KalshiCatalog:
+SETTLED_LISTING_FIELDS = ("result", "settlement_value_dollars", "expiration_value")
+
+
+def kalshi_catalog(store: Any, as_of: datetime, payloads: _Payloads,
+                   drop_fields: Sequence[str] = ()) -> KalshiCatalog:
     """Every stored KXNFLGAME listing and book received by `as_of`: metadata by SQL, listings parsed
     (bounded), books left unparsed until the join selects one."""
     meta, meta_truncated = _nfl_metadata(store, keep=MAX_KALSHI_META)
@@ -608,7 +612,7 @@ def kalshi_catalog(store: Any, as_of: datetime, payloads: _Payloads) -> KalshiCa
                 continue
             listings.setdefault(ticker, []).append(KalshiMarketObs(
                 ticker, parsed_ticker["event_ticker"], received, int(r["id"]), str(r["payload_sha256"]), str(r["kind"]),
-                complete, {k: m.get(k) for k in _MARKET_FIELDS if k in m}, srcs))
+                complete, {k: m.get(k) for k in _MARKET_FIELDS if k in m and k not in drop_fields}, srcs))
     if len(listing_rows) > MAX_LISTING_PARSES:
         truncated = True
         problems.append(f"LISTINGS_TRUNCATED: only the newest {MAX_LISTING_PARSES} of {len(listing_rows)} listing "
@@ -1599,13 +1603,14 @@ def _observations(rows: Sequence[dict[str, Any]]) -> list[Any]:
 
 
 def _join(store: Any, as_of: datetime, policy: JoinPolicy, results: bool,
-          horizons: Sequence[str] | None = None) -> tuple[list[dict[str, Any]], KalshiCatalog, _Payloads,
-                                                           list[dict[str, Any]], bool]:
+          horizons: Sequence[str] | None = None, drop_settled: bool = False
+          ) -> tuple[list[dict[str, Any]], KalshiCatalog, _Payloads, list[dict[str, Any]], bool]:
     """(rows, catalog, payloads, targets, targets truncated): the join rows, optionally for some horizons only
-    (the gate builds T-24h and T-6h rows only, so no T-60m book is loaded for it)."""
+    (the gate builds T-24h and T-6h rows only, so no T-60m book is loaded for it) and with the settled listing
+    fields dropped from the catalog (`drop_settled`, the gate path: no settlement label is held in memory)."""
     payloads = _Payloads(store)
     consensus = _Consensus(payloads)
-    catalog = kalshi_catalog(store, as_of, payloads)
+    catalog = kalshi_catalog(store, as_of, payloads, SETTLED_LISTING_FIELDS if drop_settled else ())
     targets, targets_truncated = _targets(store, as_of)
     pm = _pm_related(store, as_of)
     chosen = [r for r in targets if horizons is None or r["offset_label"] in horizons]
@@ -1678,7 +1683,7 @@ def build_report(store: Any, *, as_of: datetime, policy: JoinPolicy = JoinPolicy
 #   `exp002 --with-results` records the view first). Nothing here is an edge claim or a frozen statistic.
 
 MEASUREMENT_VERSION = "exp002-measurement-v1"
-GATE_VERSION = "exp002-noise-gate-v1"
+GATE_VERSION = "exp002-noise-gate-v2"
 MARKOUT_VERSION = "exp002-cross-book-markout-v1"
 GATE_HORIZONS = ("T-24h", "T-6h")
 PRIOR_HORIZON, SIGNAL_HORIZON, TARGET_HORIZON = "T-24h", "T-6h", "T-60m"
@@ -1686,7 +1691,8 @@ SAME_CAPTURE_MAX = timedelta(seconds=120)  # both team books of one capture run
 REPEAT_WINDOW = timedelta(minutes=15)
 # Sufficiency floors of the gate's estimator (implementation parameters, not research thresholds): below them
 # the verdict is INSUFFICIENT_DATA, never PASS.
-GATE_MIN_PAIRS, GATE_MIN_REPEATS, GATE_MIN_WEEKS, GATE_MIN_GAPS = 20, 10, 2, 10
+# v2 (review of #119): four weeks (two gave only three distinct week resamples), and a game-cluster bound too.
+GATE_MIN_PAIRS, GATE_MIN_REPEATS, GATE_MIN_WEEKS, GATE_MIN_GAPS = 20, 10, 4, 10
 CANDIDATE_MIN_EFFECTS = (0.0025, 0.005, 0.01)  # candidates for display only; the protocol freezes delta_min
 TOLERABLE_FRACTION = 0.25
 GATE_BOOTSTRAP_SEED, GATE_BOOTSTRAP_RESAMPLES = 20260926, 2000
@@ -1733,15 +1739,17 @@ class BookMids:
 
 @dataclass(frozen=True)
 class GateObservations:
-    """Label-free inputs of the gate: (week, value) pairs."""
+    """Label-free inputs of the gate: (week, game, value) triples."""
 
-    dispersions: tuple[tuple[str, float], ...]  # d = H - (1 - away mid), same capture, T-24h and T-6h
-    repeats_home: tuple[tuple[str, float], ...]  # home market: repeat mid - paired mid, within 15 min
-    repeats_away: tuple[tuple[str, float], ...]
-    gaps: tuple[tuple[str, float], ...]  # T-6h: consensus home probability - H
+    dispersions: tuple[tuple[str, str, float], ...]  # d = H - (1 - away mid), same capture, T-24h and T-6h
+    repeats_home: tuple[tuple[str, str, float], ...]  # home market: repeat mid - paired mid, within 15 min
+    repeats_away: tuple[tuple[str, str, float], ...]
+    gaps: tuple[tuple[str, str, float], ...]  # T-6h: consensus home probability - H
     repeat_gap_seconds: tuple[int, ...]
     counts: dict[str, int]
     books_read: tuple[int, ...]
+    # Bid-ask spreads of the paired books (both roles): the PROPOSED single-capture noise scale, diagnostic only.
+    spreads: tuple[tuple[str, str, float], ...] = ()
 
 
 def gate_observations(rows: Sequence[Mapping[str, Any]], catalog: KalshiCatalog,
@@ -1752,7 +1760,7 @@ def gate_observations(rows: Sequence[Mapping[str, Any]], catalog: KalshiCatalog,
     counts = {"rows_seen": 0, "rows_other_horizon_ignored": 0, "rows_not_fully_paired": 0, "no_two_sided_book": 0,
               "not_same_capture": 0, "dispersion_pairs": 0, "repeat_candidates": 0, "repeat_home": 0,
               "repeat_away": 0, "repeat_without_mid": 0, "gaps": 0}
-    disp, rep_h, rep_a, gaps, gap_s = [], [], [], [], []
+    disp, rep_h, rep_a, gaps, gap_s, spreads = [], [], [], [], [], []
     read: list[int] = []
 
     def reader(ticker: str, sid: int, received: datetime) -> tuple[float | None, float | None]:
@@ -1773,13 +1781,17 @@ def gate_observations(rows: Sequence[Mapping[str, Any]], catalog: KalshiCatalog,
         if h is None or am is None:
             counts["no_two_sided_book"] += 1
             continue
-        week = r["week_cluster"]
+        week, game = r["week_cluster"], r["event_id"]
         rh, ra = parse_utc(home.get("book_received_utc")), parse_utc(away.get("book_received_utc"))
         if rh is None or ra is None or abs(rh - ra) > SAME_CAPTURE_MAX:
             counts["not_same_capture"] += 1
         else:
-            disp.append((week, h - (1 - am)))
+            disp.append((week, game, h - (1 - am)))
             counts["dispersion_pairs"] += 1
+            for s in (home, away):
+                sp = _spread(s.get("yes_bid"), s.get("yes_ask"))
+                if sp is not None:
+                    spreads.append((week, game, sp))
         cutoff = parse_utc(r.get("cutoff_utc"))
         for role, side, paired_mid, out in (("home", home, h, rep_h), ("away", away, am, rep_a)):
             received = parse_utc(side.get("book_received_utc"))
@@ -1795,14 +1807,15 @@ def gate_observations(rows: Sequence[Mapping[str, Any]], catalog: KalshiCatalog,
             if m is None:
                 counts["repeat_without_mid"] += 1
                 continue
-            out.append((week, m - paired_mid))
+            out.append((week, game, m - paired_mid))
             counts[f"repeat_{role}"] += 1
             gap_s.append(int((first[0] - received).total_seconds()))
         p = _dec(home.get("consensus_probability"))
         if r["horizon"] == SIGNAL_HORIZON and p is not None:
-            gaps.append((week, float(p) - h))
+            gaps.append((week, game, float(p) - h))
             counts["gaps"] += 1
-    return GateObservations(tuple(disp), tuple(rep_h), tuple(rep_a), tuple(gaps), tuple(gap_s), counts, tuple(read))
+    return GateObservations(tuple(disp), tuple(rep_h), tuple(rep_a), tuple(gaps), tuple(gap_s), counts, tuple(read),
+                            tuple(spreads))
 
 
 def _noise_components(disp: Sequence[float], rep_h: Sequence[float],
@@ -1830,20 +1843,21 @@ def rho_max(min_effect: float, b_hat: float | None) -> float | None:
     return 1.0 if b_hat <= 0 else min(1.0, TOLERABLE_FRACTION * min_effect / b_hat)
 
 
-def _cluster_upper(obs: GateObservations, *, seed: int, resamples: int, q: float = 0.9) -> float | None:
-    """One-sided upper `q` bound of rho_hat, resampling whole NFL weeks (all of a week's dispersions and repeats
-    together). None with fewer than two weeks or when no resample is estimable."""
-    weeks = sorted({w for w, _ in obs.dispersions} | {w for w, _ in obs.repeats_home} | {w for w, _ in obs.repeats_away})
-    if len(weeks) < 2:
+def _cluster_upper(obs: GateObservations, *, key: int, seed: int, resamples: int, q: float = 0.9) -> float | None:
+    """One-sided upper `q` bound of rho_hat, resampling whole clusters (`key` 0: NFL weeks, 1: games), each with
+    all of its dispersions and repeats. None with fewer than two clusters or when no resample is estimable."""
+    clusters = sorted({x[key] for x in obs.dispersions} | {x[key] for x in obs.repeats_home}
+                      | {x[key] for x in obs.repeats_away})
+    if len(clusters) < 2:
         return None
-    by = {w: ([v for x, v in obs.dispersions if x == w], [v for x, v in obs.repeats_home if x == w],
-              [v for x, v in obs.repeats_away if x == w]) for w in weeks}
+    by = {c: ([x[2] for x in obs.dispersions if x[key] == c], [x[2] for x in obs.repeats_home if x[key] == c],
+              [x[2] for x in obs.repeats_away if x[key] == c]) for c in clusters}
     rng = random.Random(seed)
     values = []
     for _ in range(resamples):
         d, h, a = [], [], []
-        for _ in weeks:
-            wd, wh, wa = by[weeks[rng.randrange(len(weeks))]]
+        for _ in clusters:
+            wd, wh, wa = by[clusters[rng.randrange(len(clusters))]]
             d += wd
             h += wh
             a += wa
@@ -1862,16 +1876,26 @@ def noise_gate(obs: GateObservations, *, min_effect: float | None = None,
     """The label-free pre-freeze gate (A.A): PASS only when the week-cluster bootstrap upper 90% bound of the
     book-noise correlation is below rho_max for delta_min; FAIL on mirror quoting or a bound at or above
     rho_max; INSUFFICIENT_DATA otherwise. delta_min UNKNOWN (None): the verdict is given per candidate only."""
-    disp = [v for _, v in obs.dispersions]
-    rep_h = [v for _, v in obs.repeats_home]
-    rep_a = [v for _, v in obs.repeats_away]
-    gaps = [v for _, v in obs.gaps]
-    weeks = sorted({w for w, _ in obs.dispersions})
+    disp = [x[2] for x in obs.dispersions]
+    rep_h = [x[2] for x in obs.repeats_home]
+    rep_a = [x[2] for x in obs.repeats_away]
+    gaps = [x[2] for x in obs.gaps]
+    weeks = sorted({x[0] for x in obs.dispersions})
     rho, var_d, s2h, s2a = _noise_components(disp, rep_h, rep_a)
-    upper = _cluster_upper(obs, seed=seed, resamples=resamples)
+    upper_week = _cluster_upper(obs, key=0, seed=seed, resamples=resamples)
+    upper_game = _cluster_upper(obs, key=1, seed=seed, resamples=resamples)
+    # The gate uses the larger (more conservative) of the two bounds.
+    upper = None if upper_week is None or upper_game is None else max(upper_week, upper_game)
     gap_sd = statistics.stdev(gaps) if len(gaps) >= 2 else None
-    sigma2 = None if s2h is None or s2a is None else (s2h + s2a) / 2
+    # The noise scale behind b_hat is floored at var(d)/2: sticky quotes make repeat books understate the noise,
+    # while the same-capture dispersion carries it (sigma2 >= var(d)/2 whenever rho >= 0).
+    sigma2_repeat = None if s2h is None or s2a is None else (s2h + s2a) / 2
+    sigma2 = None if sigma2_repeat is None else max(sigma2_repeat, (var_d or 0.0) / 2)
     b_hat = None if sigma2 is None or not gap_sd else naive_bias(sigma2, gap_sd)
+    spreads = [x[2] for x in obs.spreads]
+    sigma2_spread = sum(s * s for s in spreads) / len(spreads) / 12 if spreads else None
+    rho_spread = (None if not sigma2_spread or var_d is None
+                  else max(-1.0, min(1.0, 1 - var_d / (2 * sigma2_spread))))
     mirror = var_d is not None and len(disp) >= GATE_MIN_PAIRS and var_d <= MIRROR_VARIANCE
     insufficient = []
     if len(disp) < GATE_MIN_PAIRS:
@@ -1885,8 +1909,12 @@ def noise_gate(obs: GateObservations, *, min_effect: float | None = None,
     if (s2h == 0 or s2a == 0) and rep_h and rep_a:
         insufficient.append("REPEAT_NOISE_ZERO: repeat books never changed within 15 min, so the repeat estimator "
                             "cannot scale the noise (persistent quotes); the gate cannot certify")
+    if rho is not None and (rho < 0 or (upper is not None and upper < 0)):
+        insufficient.append(f"MODEL_MISFIT: repeat noise inconsistent with dispersion (rho_hat {rho:.3f}, upper "
+                            f"{'n/a' if upper is None else f'{upper:.3f}'}): repeat books understate the noise "
+                            "(sticky quotes), so rho cannot be bounded from them")
     if upper is None and not insufficient:
-        insufficient.append("the week-cluster bound is not estimable")
+        insufficient.append("the week- or game-cluster bound is not estimable")
 
     def verdict(delta: float) -> dict[str, Any]:
         limit = rho_max(delta, b_hat)
@@ -1913,24 +1941,37 @@ def noise_gate(obs: GateObservations, *, min_effect: float | None = None,
     return {
         "version": GATE_VERSION, "label_free": True,
         "reads": "only the T-24h and T-6h paired books and repeat books of the same market within 15 min inside "
-                 "that horizon; never a T-60m book (a label for the markout)",
+                 "that horizon; never a T-60m book (a label for the markout); the catalog it runs on carries no "
+                 "settled listing field (result, settlement value, expiration value)",
         "verdict": overall, "min_effect": min_effect,
         "min_effect_state": "SUPPLIED" if min_effect is not None else "UNKNOWN: frozen only at preregistration",
         "verdict_for_min_effect": chosen, "by_candidate_min_effect": table,
-        "estimates": {"rho_hat": rho, "rho_upper_90": upper, "var_dispersion": var_d, "sigma2_home": s2h,
-                      "sigma2_away": s2a, "gap_sd": gap_sd, "b_hat": b_hat, "mirror_quoting": mirror},
+        "estimates": {"rho_hat": rho, "rho_upper_90": upper, "rho_upper_90_week": upper_week,
+                      "rho_upper_90_game": upper_game, "var_dispersion": var_d, "sigma2_home": s2h,
+                      "sigma2_away": s2a, "sigma2_repeat": sigma2_repeat, "sigma2_for_b_hat": sigma2,
+                      "gap_sd": gap_sd, "b_hat": b_hat, "mirror_quoting": mirror},
+        "diagnostic_spread_estimator": {
+            "state": "DIAGNOSTIC ONLY: the PROPOSED single-capture noise scale (docs/research/"
+                     "RESEARCH_UNBLOCKING_DECISIONS.md A.I); not used for the verdict",
+            "sigma2_spread_uniform": sigma2_spread, "rho_hat_spread": rho_spread, "books": len(spreads),
+            "model": "the fair value lies uniformly inside the quoted spread: sigma2 = mean(spread^2) / 12"},
         "counts": {**obs.counts, "weeks": len(weeks), "books_read": len(obs.books_read)},
         "repeat_gap_seconds": {"n": len(gap_sorted), "median": statistics.median(gap_sorted) if gap_sorted else None,
                                "max": gap_sorted[-1] if gap_sorted else None},
         "insufficient": insufficient,
         "method": {"rho_hat": "(sigma2_home + sigma2_away - var(d)) / (2 sqrt(sigma2_home sigma2_away)), clipped to "
-                              "[-1, 1]; sigma2 = 1/2 mean(repeat difference^2)",
-                   "bound": f"one-sided 90% percentile, week-cluster bootstrap (seed {seed}, {resamples} resamples)",
-                   "rho_max": "(1/4 * delta_min) / b_hat, b_hat = sigma2 * sqrt(2/pi) / sd(consensus - H at T-6h)",
+                              "[-1, 1]; sigma2 = 1/2 mean(repeat difference^2); a negative rho_hat or bound is "
+                              "MODEL_MISFIT (INSUFFICIENT_DATA), so the gate prefers a false INSUFFICIENT_DATA to a "
+                              "false PASS",
+                   "bound": f"one-sided 90% percentile of a week-cluster and a game-cluster bootstrap (seed {seed}, "
+                            f"{resamples} resamples each); the larger is used",
+                   "rho_max": "(1/4 * delta_min) / b_hat, b_hat = sigma2 * sqrt(2/pi) / sd(consensus - H at T-6h), "
+                              "sigma2 = max(repeat sigma2, var(d)/2)",
                    "floors": {"pairs": GATE_MIN_PAIRS, "repeats_each": GATE_MIN_REPEATS, "weeks": GATE_MIN_WEEKS,
                               "gaps": GATE_MIN_GAPS},
-                   "limitation": "noise that persists across the repeat gap understates sigma2 and rho_hat, so the "
-                                 "gate can pass too easily; read the repeat-gap and repeat counts with the verdict"},
+                   "limitation": "noise that persists across the repeat gap understates sigma2 and rho_hat. Severe "
+                                 "stickiness shows as MODEL_MISFIT; moderate stickiness still biases rho_hat and b_hat "
+                                 "low, so read the repeat-gap and repeat counts with the verdict"},
     }
 
 
@@ -2057,12 +2098,17 @@ def markout_endpoint(rows: Sequence[Mapping[str, Any]], targets: Sequence[Mappin
                 "t60_books": {"home": {"snapshot_id": books["home"][1], "received_utc": _iso(books["home"][0])},
                               "away": {"snapshot_id": books["away"][1], "received_utc": _iso(books["away"][0])}},
                 "y": y, "y_placebo": None, "H24": None, "A24": None}
-        r24 = horizons.get(PRIOR_HORIZON)
-        if r24 is not None and r24.get("status") == PAIRED:
-            s24 = r24.get("sides") or {}
-            h24s, a24s = s24.get(home_team), s24.get(away_team)
-            if h24s is not None and a24s is not None:
-                h24, am24 = _mid(h24s.get("yes_bid"), h24s.get("yes_ask")), _mid(a24s.get("yes_bid"), a24s.get("yes_ask"))
+        # The placebo needs only the Kalshi books: the first book of each market in the T-24h window, whether or
+        # not the T-24h odds capture paired.
+        t24 = target_of.get((event_id, PRIOR_HORIZON))
+        if t24 is not None:
+            prior = _capture_target(t24)
+            p_start = effective_due(prior, PILOT_CONFIG) - PILOT_CONFIG.early_tolerance
+            p_end = min(deadline(prior, PILOT_CONFIG), as_of)
+            b24 = {role: _first_book(catalog, s["ticker"], p_start, p_end) for role, s in (("home", hs), ("away", as_))}
+            if b24["home"] is not None and b24["away"] is not None:
+                h24, _ = mids(hs["ticker"], b24["home"][1], b24["home"][0])
+                am24, _ = mids(as_["ticker"], b24["away"][1], b24["away"][0])
                 if h24 is not None and am24 is not None:
                     game.update(H24=h24, A24=1 - am24, y_placebo=kalshi_only_placebo(h24, 1 - am24, h6, a6, h1, a1))
                     counts["with_placebo"] += 1
@@ -2131,7 +2177,8 @@ def measure_exp002(store: Any, *, as_of: datetime, results: bool = False, min_ef
     if not isinstance(as_of, datetime) or as_of.tzinfo is None:
         raise ValueError("as_of must be a timezone-aware datetime")
     as_of = as_of.astimezone(UTC)
-    rows, catalog, payloads, targets, _ = _join(store, as_of, policy, results=False, horizons=GATE_HORIZONS)
+    rows, catalog, payloads, targets, _ = _join(store, as_of, policy, results=False, horizons=GATE_HORIZONS,
+                                                drop_settled=True)
     reader = BookMids(payloads)
     gate = noise_gate(gate_observations(rows, catalog, reader), min_effect=min_effect)
     gate_reads = list(reader.read)
@@ -2369,12 +2416,13 @@ def record_markout_view(measurement: Mapping[str, Any], *, log: Path, actor: str
         dataset_id="sports_evidence:exp002_markout", dataset_version=f"{MEASUREMENT_VERSION}/{JOIN_VERSION}",
         tool="python -m edge_lab.sports_evidence exp002 --with-results",
         note=f"EXP-002 measurement as of {measurement['as_of_utc']}; cross-book markout (first T-60m books) and "
-             "placebo shown; development data")
+             "placebo shown; development data", role=rev.DatasetRole.DEVELOPMENT)
 
 
 def _record_label_view(protocol: Mapping[str, Any], shown: Sequence[str], *, as_of_utc: str, sha: str, log: Path,
                        actor: str, code_version: str, experiments_root: Path | None, now: datetime | None,
-                       dataset_id: str, dataset_version: str, tool: str, note: str) -> str:
+                       dataset_id: str, dataset_version: str, tool: str, note: str,
+                       role: "rev.DatasetRole" = rev.DatasetRole.UNASSIGNED) -> str:
     experiment_id = protocol.get("experiment_id")
     if not experiment_id:
         raise rev.EvidenceError("no Family A protocol is registered, so there is no evidence log to record in")
@@ -2392,7 +2440,7 @@ def _record_label_view(protocol: Mapping[str, Any], shown: Sequence[str], *, as_
                                 f"{rev.LOG_NAME}), not in {Path(log).name}")
     use = rev.EvidenceUse(
         experiment_id=experiment_id, family=FAMILY_ID, dataset_id=dataset_id,
-        dataset_version=dataset_version, dataset_sha256=sha, role=rev.DatasetRole.UNASSIGNED,
+        dataset_version=dataset_version, dataset_sha256=sha, role=role,
         window=rev.InformationWindow(OUTCOME_SCOPE, start, end), actor=actor, tool=tool,
         action_time_utc=_iso(now or _clock()), action=rev.Action.LABEL_RESULT_INSPECTION,
         code_version=code_version, model_version=None, prompt_version=None, viewed_features=True,

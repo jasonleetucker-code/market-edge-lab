@@ -97,27 +97,35 @@ def test_the_endpoint_detects_real_information():
     assert mean > 20 * se_mean
 
 
-def _obs(*, n_weeks=8, per_week=25, rho=0.0, noise=0.005, gap_sd=0.03, mirror=False, repeat_zero=False, seed=11):
+def _obs(*, n_weeks=8, per_week=25, rho=0.0, noise=0.005, gap_sd=0.03, mirror=False, repeat_zero=False,
+         repeat_noise=None, seed=11):
+    """Gate inputs. `repeat_noise` below `noise` models sticky quotes: repeat books change less within 15 min than
+    the full noise that the same-capture dispersion carries."""
     rng = random.Random(seed)
+    rep_sd = noise if repeat_noise is None else repeat_noise
     disp, rh, ra, gaps = [], [], [], []
     for w in range(n_weeks):
         week = f"nfl-week-of-2026-10-{w + 1:02d}"
-        for _ in range(per_week):
+        for i in range(per_week):
+            game = f"g{w}-{i}"
             e = rng.gauss(0, noise)
             f = rho * e + math.sqrt(1 - rho * rho) * rng.gauss(0, noise)
-            disp.append((week, 0.0 if mirror else e - f))
-            rh.append((week, 0.0 if repeat_zero else rng.gauss(0, noise) - rng.gauss(0, noise)))
-            ra.append((week, 0.0 if repeat_zero else rng.gauss(0, noise) - rng.gauss(0, noise)))
-            gaps.append((week, rng.gauss(0, gap_sd)))
+            disp.append((week, game, 0.0 if mirror else e - f))
+            rh.append((week, game, 0.0 if repeat_zero else rng.gauss(0, rep_sd) - rng.gauss(0, rep_sd)))
+            ra.append((week, game, 0.0 if repeat_zero else rng.gauss(0, rep_sd) - rng.gauss(0, rep_sd)))
+            gaps.append((week, game, rng.gauss(0, gap_sd)))
     return se.GateObservations(tuple(disp), tuple(rh), tuple(ra), tuple(gaps), tuple([300] * len(rh)), {}, ())
 
 
-def test_the_gate_passes_independent_books_and_derives_rho_max():
-    gate = se.noise_gate(_obs(), min_effect=0.0025, resamples=400)
+def test_the_gate_passes_nearly_independent_books_and_derives_rho_max():
+    gate = se.noise_gate(_obs(rho=0.15), min_effect=0.0025, resamples=400)
     est = gate["estimates"]
-    assert abs(est["rho_hat"]) < 0.3 and est["rho_upper_90"] < gate["verdict_for_min_effect"]["rho_max"]
+    assert 0 <= est["rho_hat"] < 0.4 and est["rho_upper_90"] < gate["verdict_for_min_effect"]["rho_max"]
+    assert est["rho_upper_90"] == max(est["rho_upper_90_week"], est["rho_upper_90_game"])  # the larger bound
     assert gate["verdict"] == se.PASS
-    expected_b = (est["sigma2_home"] + est["sigma2_away"]) / 2 * math.sqrt(2 / math.pi) / est["gap_sd"]
+    sigma2 = max((est["sigma2_home"] + est["sigma2_away"]) / 2, est["var_dispersion"] / 2)
+    assert est["sigma2_for_b_hat"] == pytest.approx(sigma2)
+    expected_b = sigma2 * math.sqrt(2 / math.pi) / est["gap_sd"]
     assert est["b_hat"] == pytest.approx(expected_b)
     assert gate["verdict_for_min_effect"]["rho_max"] == pytest.approx(min(1.0, 0.25 * 0.0025 / expected_b))
 
@@ -136,10 +144,38 @@ def test_the_gate_never_invents_min_effect_and_says_when_data_are_insufficient()
     assert undecided["verdict"] == "BY_MIN_EFFECT" and undecided["verdict_for_min_effect"] is None
     assert [r["min_effect"] for r in undecided["by_candidate_min_effect"]] == list(se.CANDIDATE_MIN_EFFECTS)
     thin = se.noise_gate(_obs(n_weeks=1, per_week=5), min_effect=0.005, resamples=200)
+    three_weeks = se.noise_gate(_obs(n_weeks=3, rho=0.15), min_effect=0.0025, resamples=200)
+    assert three_weeks["verdict"] == se.INSUFFICIENT  # fewer than four NFL weeks: no week-cluster verdict
     assert thin["verdict"] == se.INSUFFICIENT and thin["insufficient"]
     frozen_quotes = se.noise_gate(_obs(repeat_zero=True), min_effect=0.005, resamples=200)
     assert frozen_quotes["verdict"] == se.INSUFFICIENT
     assert any("REPEAT_NOISE_ZERO" in x for x in frozen_quotes["insufficient"])
+
+
+def test_sticky_correlated_noise_never_passes():
+    # The review's case: rho 0.7, 1c noise, only 0.2c changing inside 15 min, delta_min 0.25c. True bias
+    # 0.7 * 1e-4 * sqrt(2/pi) / sd(gap) is far above the tolerable 1/4 of the effect; repeat books understate the
+    # noise, which drove v1's rho_hat negative and its PASS.
+    obs = _obs(rho=0.7, noise=0.01, repeat_noise=0.002 / math.sqrt(2), gap_sd=0.022)
+    for delta in (0.0025, 0.005, 0.01):
+        gate = se.noise_gate(obs, min_effect=delta, resamples=400)
+        assert gate["verdict"] != se.PASS, delta
+    gate = se.noise_gate(obs, min_effect=0.0025, resamples=400)
+    assert gate["verdict"] == se.INSUFFICIENT and any("MODEL_MISFIT" in x for x in gate["insufficient"])
+    # b_hat is floored at var(d)/2, so the sticky repeats cannot shrink it to nothing
+    est = gate["estimates"]
+    assert est["sigma2_for_b_hat"] == pytest.approx(est["var_dispersion"] / 2)
+    assert est["sigma2_for_b_hat"] > 10 * est["sigma2_repeat"]
+
+
+def test_the_spread_estimator_is_reported_as_a_diagnostic_only():
+    base = _obs(rho=0.15)
+    obs = se.GateObservations(base.dispersions, base.repeats_home, base.repeats_away, base.gaps,
+                              base.repeat_gap_seconds, {}, (), tuple((w, g, 0.02) for w, g, _ in base.dispersions))
+    gate = se.noise_gate(obs, min_effect=0.0025, resamples=200)
+    diag = gate["diagnostic_spread_estimator"]
+    assert diag["state"].startswith("DIAGNOSTIC ONLY") and diag["sigma2_spread_uniform"] == pytest.approx(0.02 ** 2 / 12)
+    assert gate["verdict"] == se.noise_gate(base, min_effect=0.0025, resamples=200)["verdict"]  # not used
 
 
 # ================================================================== SYNTHETIC store
@@ -218,7 +254,18 @@ def test_the_gate_never_loads_a_t60m_book(tmp_path, monkeypatch):
     assert gate["label_free"] and gate["counts"]["dispersion_pairs"] == 24  # 12 games x (T-24h, T-6h)
     assert gate["counts"]["repeat_home"] == gate["counts"]["repeat_away"] == 24
     assert gate["repeat_gap_seconds"]["median"] == 240 and gate["counts"]["weeks"] == 2
-    assert gate["min_effect_state"].startswith("UNKNOWN")
+    assert gate["min_effect_state"].startswith("UNKNOWN") and gate["verdict"] == se.INSUFFICIENT  # two weeks < 4
+
+
+def test_the_gate_catalog_holds_no_settled_listing_field(tmp_path):
+    path, now, _ = build_store(tmp_path)
+    store = SnapshotStore.open_readonly(path)
+    full = se._join(store, now, se.JoinPolicy(), results=False)[1]
+    assert any("result" in o.fields for obs in full.listings.values() for o in obs)  # the fixture settled a game
+    gate_catalog = se._join(store, now, se.JoinPolicy(), results=False, horizons=se.GATE_HORIZONS, drop_settled=True)[1]
+    for obs in gate_catalog.listings.values():
+        for o in obs:
+            assert not set(o.fields) & set(se.SETTLED_LISTING_FIELDS)
 
 
 def test_mirror_quoted_books_fail_the_gate_on_a_store(tmp_path):
@@ -245,6 +292,19 @@ def test_the_markout_uses_the_first_t60m_book_and_counts_every_game(tmp_path):
     assert m["pilot_outputs"]["t6_pairing_yield"] == 1.0 and m["pilot_outputs"]["t60_book_yield"] == 1.0
     assert m["summary"]["state"].startswith("PILOT DESCRIPTIVE")
     assert m["t6_book_timing"][se.BOOK_AT_OR_AFTER_ODDS] == 24
+
+
+def test_the_placebo_needs_only_the_kalshi_books_not_a_paired_t24h_row(tmp_path):
+    path, now, _ = build_store(tmp_path)
+    store = SnapshotStore.open_readonly(path)
+    rows, catalog, payloads, targets, _ = se._join(store, now, se.JoinPolicy(), results=False,
+                                                   horizons=se.GATE_HORIZONS)
+    for r in rows:
+        if r["horizon"] == "T-24h":
+            r["status"], r["sides"] = "EXCLUDED", {}  # as if the T-24h odds capture had failed
+    m = se.markout_endpoint(rows, targets, catalog, se.BookMids(payloads), as_of=now, policy=se.JoinPolicy())
+    assert m["counts"]["evaluated"] == 12 and m["counts"]["with_placebo"] == 12
+    assert all(g["H24"] is not None for g in m["games"])
 
 
 def test_declared_tie_bounds_move_the_sign_reference_to_the_interval_midpoint(tmp_path):
@@ -286,7 +346,7 @@ def test_cli_hides_labels_unless_the_view_is_logged_first(tmp_path):
     uses = rev.read_log(own).uses
     assert len(uses) == before + 1 and uses[-1].action is rev.Action.LABEL_RESULT_INSPECTION
     assert uses[-1].dataset_id == "sports_evidence:exp002_markout" and uses[-1].dataset_sha256 == shown["output_sha256"]
-    assert "exp002 --with-results" in uses[-1].tool
+    assert "exp002 --with-results" in uses[-1].tool and uses[-1].role is rev.DatasetRole.DEVELOPMENT
 
 
 def test_the_measurement_is_deterministic(tmp_path):

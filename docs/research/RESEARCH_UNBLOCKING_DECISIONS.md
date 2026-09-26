@@ -86,6 +86,7 @@ market type or venue is added to inflate the sample.
 | **Null check (simulation, VERIFIED by tests)** | Model: a martingale latent value; a consensus that knows only the current value; each book's mid = latent + noise. The cross-book primary and the placebo are centred at 0 under independent book noise, including 1¢ rounding (`tests/test_research_economics_power_sensitivity.py`). With book-noise correlation ρ, the cross-book bias is about **ρ × (the v1 same-book bias)**. `--null-check` shows this across ρ = 0–1: at ρ = 0.5 it is +0.10¢ with 0.5¢ of noise and +0.29¢ with 1¢, which exceeds the smallest grid effect. |
 | **Correlation threshold (derived, not fixed)** | `ρ_max = (¼ · δ_min) / b̂`, where:<br>- `δ_min` is the pre-registered minimum markout effect;<br>- `b̂ = σ̂² · √(2/π) / sd(g)` estimates the v1 same-book bias;<br>- `σ̂` is the book-noise SD (it must include price-grid rounding, about tick²/12 of variance, which the empirical estimates below already contain);<br>- `sd(g)` is the observed SD of the T-6h gap `c − H₆`.<br>So the remaining bias `ρ · b̂` is at most a quarter of the minimum effect (`research_power_sensitivity.rho_max`; the analytic `b̂` matches the simulation within its standard error, tested).<br>**Worked example:** δ_min = 0.5¢, σ̂ = 0.5¢, sd(g) = 1.12¢ gives b̂ = 0.18¢, and ρ_max = 0.125¢ / 0.18¢ ≈ **0.70**. With σ̂ = 1¢ and sd(g) = 1.41¢: b̂ = 0.56¢ and ρ_max ≈ 0.22. With δ_min = 0.25¢ and σ̂ = 0.5¢: ρ_max ≈ 0.35. `--null-check` prints the full table. |
 | **Pre-freeze check (label-free; the gate)** | It uses only same-capture books at T-24h and T-6h and repeat books of one horizon, all features. No T-60m book (a label) is read.<br>(a) **Cross-book dispersion:** `d_t = H_t − A_t`, which is `H_t − (1 − away mid_t)`, at the same capture. A dispersion near zero means mirror quoting (ρ ≈ 1), and the endpoint fails at once.<br>(b) **Noise scale** from repeat books of the same market and horizon received within 15 min (the A.C calibration already collects them): `σ̂² = ½ · var(H_t − H_t′)`, and the same for the away book. Latent drift inside the 15 min inflates `σ̂`, which errs toward failing.<br>(c) `ρ̂ = (σ̂_H² + σ̂_A² − var(d)) / (2 σ̂_H σ̂_A)`. The endpoint is frozen only if the one-sided 90% upper bound of `ρ̂` (week-cluster bootstrap) is below `ρ_max`. Otherwise it is **not frozen** and goes back to design. There is no silent fallback.<br>**Limitation:** noise that persists across the 15-min repeat understates `σ̂`, and therefore `ρ̂`. The check can then pass too easily, so the repeat-book gap and the count of repeat pairs are reported with it. |
+| **Gate as implemented (v2, #119)** | `sports_evidence.noise_gate`, run by `python -m edge_lab.sports_evidence exp002`. Changes after review: a negative `ρ̂` or bound is MODEL_MISFIT (INSUFFICIENT_DATA; sticky quotes make repeat books understate the noise and drove v1 to a false PASS); `b̂` uses `σ̂² = max(repeat σ̂², Var(d)/2)`; the bound is the larger of a week-cluster and a game-cluster bootstrap; at least 4 NFL weeks. The repeat estimator is not feasible under the approved capture (A.I). |
 | **Post-label sensitivity (not label-free)** | After the A.C limits and the gate above are settled, the Roll-type estimate is computed on the pilot as a DEVELOPMENT-data sensitivity check and logged as LABEL_RESULT_INSPECTION. That estimate is the negative covariance of successive mid changes, `−cov(H₆ − H₂₄, H₁ − H₆)`, and it needs the T-60m book. It is never used as the gate. It is biased toward passing when Kalshi has momentum. |
 | **Model limits** | Assumptions: (i) the two team books' mid noises are independent at a given capture; (ii) under the null the latent value is a martingale between captures; (iii) `A = 1 − away mid` measures the home contract. The last holds in win, loss and tie states; fair-price and post-start disqualification states break it (§B #11), but they are rare and shift the level, not the markout. |
 | **Probability benchmark vs execution price** | Kept separate. The markout uses **mids** (probability benchmarks, used only when the spread is at most a frozen width). All economics use the **executable all-in ask** at size (A.E, §C). An ask includes spread and fees, so it is a price to pay, not an unbiased estimate of probability. A YES ask on Kalshi is `1 − best NO bid` (documented orderbook behaviour, `kalshi_quotes`), so a mid is `(yes_bid + 1 − no_bid)/2`. |
@@ -122,7 +123,7 @@ kept as a sensitivity analysis, not as the primary endpoint.
 
 | | |
 |---|---|
-| **Recommended** | Decision horizon **T-6h**, markout target **T-60m**; T-24h → T-6h is a registered challenger (it counts against the variant budget, A.H). Record per pair: the intended target time (`target_utc`), the effective due time (`odds_schedule.effective_due`), the cutoff `C` (`odds_schedule.deadline`: effective due + 30 min, never later than kickoff − 5 min; CURRENT), the odds receipt `R_o`, the book receipt `R_k`, per-book market `last_update`, and the decision time **`D = max(R_o, R_k)`** with `R_o, R_k ≤ C` (CURRENT in `sports_evidence.kalshi_side`). The markout target book is the first book received at or after the T-60m effective due time and at or before its cutoff. The actual elapsed time `R_k(T-60m) − D` is recorded; the nominal "5 hours" is a label, not a measurement. |
+| **Recommended** | Decision horizon **T-6h**, markout target **T-60m**; T-24h → T-6h is a registered challenger (it counts against the variant budget, A.H). Record per pair: the intended target time (`target_utc`), the effective due time (`odds_schedule.effective_due`), the cutoff `C` (`odds_schedule.deadline`: effective due + 30 min, never later than kickoff − 5 min; CURRENT), the odds receipt `R_o`, the book receipt `R_k`, per-book market `last_update`, and the decision time **`D = max(R_o, R_k)`** with `R_o, R_k ≤ C` (CURRENT in `sports_evidence.kalshi_side`). The markout target book is the first book received in the T-60m horizon window: from the T-60m effective due time minus the capture schedule's 7-minute early tolerance (a slot may fire that early, and #112 books follow the odds capture) to its cutoff. This amendment (2026-09-26) matches the implementation (`sports_evidence.markout_endpoint`); the placebo's T-24h books use the same window form. The actual elapsed time `R_k(T-60m) − D` is recorded; the nominal "5 hours" is a label, not a measurement. |
 | **Information rule** | A feature at `D` uses only records received at or before `D`. The nominal horizon never stands for `D`: a pair whose book arrived 8 minutes after the target is a decision at `D`, not at the target time. A book received after `C` is never used for that horizon (CURRENT: `pick_book` counts it as `later_books_not_used`). Listings and rules are read as of `D` (CURRENT). A later capture is a label (the markout), never a feature. |
 | **Reason** | T-6h is the only decision horizon with a later captured horizon still pregame and at least 4.5 h away. T-60m as a decision horizon has no later pregame capture. T-24h is far from the close, and its Sunday late-game pairs are the worst for skew (PR C §6). |
 | **What each horizon can support** | T-24h: early information; lags of hours only. T-6h: the primary decision with markout to T-60m. T-60m: calibration against outcome (secondary) and a "near close" level. None supports seconds- or minutes-level lag claims, because the capture schedule resolution bounds every timing claim (CURRENT limitation). |
@@ -340,6 +341,45 @@ pessimistic ICC, with a floor of 8 weeks so the wild cluster bootstrap is meanin
 | Futility | **Operational** (at 2026-10-22): pairing yield below 50% of due T-6h horizons after fixes, or a median pregame spread above 2 × the start threshold, gives OPERATIONALLY_UNUSABLE. **Statistical** (one interim at 2026-11-30, about half the planned weeks): stop if the one-sided 90% upper confidence bound of the mean signed markout is below the minimum markout effect. **Economic**: the hindsight upper bound (§D) of after-cost contribution cannot clear fixed cash costs, giving ECONOMICALLY_UNVIABLE. | PROPOSED |
 | Continuation | Beyond 2027-01-13 only with a named missing observation (for example "playoffs" or "season 2027 weeks 1–6"), its marginal cash cost (0 today) and its owner hours, approved at the review. Never an open-ended extension. | PROPOSED |
 | Variant budget | V0 plus at most 2 registered challengers (candidates: T-24h decision; the symmetric 5-min skew), with Holm correction across primary and challengers. Every tried timing limit, filter or horizon counts. | PROPOSED |
+
+### A.I Gate feasibility under the approved capture (2026-09-26)
+
+**The repeat estimator will not have data.**
+- The approved capture (#110, SPORTS_PAIRED_EVIDENCE_GAPS §6) makes 1 listing + 2 book GETs per game-horizon, one
+  book per team market.
+- Retries happen only after a failure, and a failed GET stores no book.
+- So a second stored book of the same market inside one horizon, which is what a repeat is, should almost never
+  exist.
+- The gate needs at least 10 repeats per side over at least 4 NFL weeks. Under the approved capture it will stay
+  INSUFFICIENT_DATA through the planned 2026-10-21 freeze and after it. This is expected, not a fault.
+- Even with repeats, the review showed that sticky pregame quotes make 5–15-minute repeats understate the noise.
+  v2 then reports MODEL_MISFIT or REPEAT_NOISE_ZERO rather than PASS.
+
+**Two ways forward (both PROPOSED; neither is implemented; no capture is added here).**
+
+| Option | What | Cost and bound | Reaches 4 weeks by 10-21? | Weakness |
+|---|---|---|---|---|
+| (i) One extra book GET | One extra book per team market about 5 min after the T-6h capture | About 14–16 games a week: +28–32 GETs normally (about 144 → 176), and up to +64 with one retry each. The worst case becomes about 352 + 7, **above the approved 288 + 7 bound**, so it needs a new owner approval. About +64–192 KB a week | No. Approval and deployment take days, which leaves about 2–3 weeks of repeats before the freeze. The freeze would move to about 2026-11-04 | A 5-minute repeat of a sticky book may not change at all (REPEAT_NOISE_ZERO), or may change too little (MODEL_MISFIT) |
+| (ii) Single-capture spread estimator | `σ̂² = mean(spread²)/12`: the fair value is assumed uniform inside the quoted bid–ask spread. It is available for both books at every capture, label-free | No new GET, and within #110's bounds | Yes: the week clusters of 2026-09-22 (Sun/Mon), 09-29, 10-06 and 10-13, if capture runs from 2026-09-26 | Stale quotes, with the fair value outside the spread, **understate** the noise, which biases `ρ̂` low and so errs toward PASS. A fair value concentrated near the mid overstates the noise, which errs toward FAIL. It is a model assumption, not a measurement |
+
+**Recommendation (PROPOSED): option (ii) as the gate's primary noise scale, with guards.**
+- **Scale.** Use `σ̂² = max(spread σ̂², repeat σ̂² where it exists, Var(d)/2)` for `b̂`.
+- **Correlation.** Compute `ρ̂ = 1 − Var(d)/(2·σ̂²_spread)`.
+- **Misfit.** Keep the MODEL_MISFIT rule.
+- **Cross-check.** Treat the repeat estimator as a cross-check whenever repeats happen to exist.
+
+Why:
+- It needs no new approval and no extra requests.
+- It is the only option that can reach the four-week floor by the 2026-10-21 freeze.
+- Its anti-conservative case (stale quotes) is the same stickiness that defeats option (i).
+
+v2 already reports the spread estimate as `diagnostic_spread_estimator` (not used for the verdict). The first real
+weeks will show how it compares with the dispersion before any change to the gate. Switching the gate to it is a
+versioned change (gate v3) that needs review.
+
+Option (i) is not recommended now: it needs a new approval, breaks the approved worst-case bound, cannot reach four
+weeks before the freeze, and is weak under sticky quotes. This is for the owner to decide; the coordinator brings
+it.
 
 ---
 
