@@ -69,8 +69,8 @@ only to event-level overrides returned by the event fee-changes endpoint? In par
 (a) Do the "Maker Multiplier" / "Taker Multiplier" columns of the Non-Standard Fees table equal the
 multiplier in the general fee formulas, and does the API's `fee_multiplier` scale the taker fee,
 the maker fee, or both?
-(b) Is the July 7, 2026 schedule the one in force for KXNFLGAME since then? If it was revised, when
-and how?
+(b) Is the July 7, 2026 schedule the one in force for KXNFLGAME since then? If it was revised (the
+series record changed on 2026-09-16), when and how?
 (c) Does `fee_multiplier_override` apply to maker fees, taker fees or both, and what does
 `fee_waiver_expiration_time` waive?
 (d) Did KXNFLGAME maker fees apply from July 7 or from August 20, 2026?
@@ -102,5 +102,6 @@ Thank you,
 - **EXP-003** is re-evaluated on economics first. It resumes only if the answers materially change
   its usefulness. It is rejected on 2026-11-15 if either Q1 or Q4 is unresolved or unfavourable.
   This relies on the PROPOSED emergency-power scoping (#111 note B-1); without it, Q3 also matters.
-- **EXP-002** uses the Q2, Q5, Q6 and Q7 answers for its fee and fallback modelling (the
+- **EXP-002** uses the Q2, Q5, Q6, Q7 and Q9 answers for its fee and fallback modelling (the
   `fee_schedules` KXNFLGAME verification record).
+- **Q10** is recorded for the data-rights decision (decision packet 2026-09-29, item B).

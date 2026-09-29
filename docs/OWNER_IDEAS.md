@@ -360,6 +360,7 @@ Related owner records that are not ideas:
     new canonical owners for in-play; no second risk engine, executor or ledger. No research slot
     is claimed; EXP-002's budget is not #122's.
   - **Roadmap effect:** no silent deadline shift. No live in-game trading by 2026-10-22.
+  - **Supersedes:** in the 2026-09-26 entry, the "BLOCKED (owner): CI billing" item. The owner resolved CI billing on 2026-09-28.
 
 - **2026-09-26: owner decisions and first real NFL paired evidence: next batch.**
   - **Decided (owner):**

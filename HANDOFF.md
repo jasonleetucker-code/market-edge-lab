@@ -156,7 +156,7 @@ remains MANUAL EMERGENCY FALLBACK ONLY.
 
 ## 30-day plan (issue #11, target 2026-10-22)
 
-- **Remaining calendar days:** 27 (as of 2026-09-25).
+- **Remaining calendar days:** 23 (as of 2026-09-29).
 - The binding constraint is now the calendar (at most one valid day per day), not
   deployment. The ordered roadmap and the Domain Readiness matrix are in
   `docs/OWNER_IDEAS.md` → Roadmap (re-run 2026-09-24).

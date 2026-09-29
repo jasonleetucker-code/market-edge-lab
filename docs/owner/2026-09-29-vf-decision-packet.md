@@ -29,9 +29,11 @@ the Kalshi help-center form. Optionally set EXP-003's owner hours (2 h were reco
 ## B. Data rights (owner review; affects existing collection)
 
 `docs/research/INPLAY_SOURCE_FEASIBILITY.md` §1.9 summarizes the evidence:
-- **Data Terms of Use** (the PDF was read and hashed). They are written about website content, and
-  restrict collecting into databases, software development and any AI/ML use without written
-  consent.
+- **Data Terms of Use** (the PDF was read and hashed). They are written about website content.
+  They prohibit systematic collection into databases. Separately, they require prior written
+  consent for use in developing software, including training ML systems, and a further clause
+  prohibits use of the data "in any manner for any machine learning and/or artificial
+  intelligence".
 - **Developer Agreement**, which governs the API: unread, because it returned HTTP 429 twice.
 - **Which terms govern our API-collected data:** UNRESOLVED. If the website terms applied, they
   would bear on EXP-001, the pregame NFL capture and agent-assisted analysis.
@@ -64,7 +66,7 @@ Full specification: `INPLAY_SOURCE_FEASIBILITY.md` §6–§7.
   timer.
 - **Outputs:** a source-quality verdict only, with no edge or economic claim. The data role is
   OPERATIONAL, and nothing enters EXP-002.
-- **Cost:** $0 cash; 0 Odds credits; about 1 + 1 owner hours (approve and review).
+- **Cost:** $0 cash; 0 Odds credits; owner hours: 1 h for pilot approval and review, plus 1 h for a later protocol review (§7).
 - **Prerequisites:**
   - Rights (B) resolved.
   - A reviewed recorder built, with CI green (not built yet).
