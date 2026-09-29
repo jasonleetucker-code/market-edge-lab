@@ -1547,3 +1547,45 @@ def economic_evidence_b(ctx: Context) -> Loaded:
     return Loaded(OK, {**base, "state": state, "file": name, "as_of_utc": as_of.isoformat().replace("+00:00", "Z"),
                        "stale_after_days": PAYOFF_STALE_AFTER.days, "result": obj,
                        "verification": "verify_result_provenance: passed"})
+
+
+# --------------------------------------------------------------------------- in-play research (Owner Idea 122)
+
+INPLAY_VIEW_MODULE = "edge_lab.inplay_view"
+
+
+def _inplay_checked(module: Any, view: Any) -> Loaded:
+    if not isinstance(view, dict) or view.get("schema") != getattr(module, "VIEW_SCHEMA", None):
+        return Loaded(ERROR, message="the in-play view is not an inplay-view/1 mapping")
+    if view.get("mode") == "LIVE":  # the contract has no LIVE mode; refuse one rather than show it
+        return Loaded(ERROR, message="the in-play view claims a LIVE mode, which no source is authorized for")
+    return Loaded(OK, view)
+
+
+def inplay_view(ctx: Context) -> Loaded:
+    """The in-play research view (`inplay_view`, schema inplay-view/1). No in-play source is authorized, so
+    production reads NOT_AUTHORIZED; demo mode reads the FIXTURE replay. Network-free; nothing is written."""
+    module, missing = _optional_module(INPLAY_VIEW_MODULE, "the in-play research view (inplay_view) is not "
+                                                           "installed in this build", ctx)
+    if missing is not None:
+        return missing
+    try:
+        view = module.fixture_view("populated") if ctx.config.demo else module.not_authorized_view()
+    except Exception as exc:  # noqa: BLE001 - shown as an error state, never a failed page
+        return Loaded(ERROR, message=short_error(exc, ctx.config))
+    return _inplay_checked(module, view)
+
+
+def inplay_fixture_views(ctx: Context) -> Loaded:
+    """Every FIXTURE state of the in-play view, for the demo-only state gallery."""
+    if not ctx.config.demo:
+        return Loaded(NO_DATA, message="fixture states are shown in demo mode only")
+    module, missing = _optional_module(INPLAY_VIEW_MODULE, "the in-play research view is not installed", ctx)
+    if missing is not None:
+        return missing
+    try:
+        views = {k: module.fixture_view(k) for k in module.FIXTURE_VARIANTS}
+    except Exception as exc:  # noqa: BLE001
+        return Loaded(ERROR, message=short_error(exc, ctx.config))
+    checked = {k: _inplay_checked(module, v) for k, v in views.items()}
+    return Loaded(OK, checked)
