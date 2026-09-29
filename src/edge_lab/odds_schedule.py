@@ -40,6 +40,7 @@ from datetime import date, datetime, time, timedelta, timezone
 from typing import Iterable, Sequence
 
 from .forward import eastern_date, eastern_offset
+from .freshness import parse_utc
 
 POLICY_VERSION = "game_relative_v1"
 UTC = timezone.utc
@@ -222,19 +223,6 @@ DECISION_OFFSET = "T-6h"
 PRE_DECISION_OFFSETS = ("T-24h", "T-6h")  # every other horizon (T-60m, or one this code does not know) is withheld
 
 
-def _utc(value: object) -> datetime | None:
-    if isinstance(value, datetime):
-        return value.astimezone(UTC) if value.tzinfo is not None else None
-    if not isinstance(value, str) or not value.strip():
-        return None
-    text = value.strip()
-    try:
-        parsed = datetime.fromisoformat(text[:-1] + "+00:00" if text.endswith("Z") else text)
-    except ValueError:
-        return None
-    return parsed.astimezone(UTC) if parsed.tzinfo is not None else None
-
-
 def decision_cutoff(commence_utc: object, config: PilotConfig = PilotConfig(), *,
                     kickoff_tolerance: timedelta = timedelta(0)) -> datetime | None:
     """EXP-002's T-6h decision cutoff for a game: `deadline` of a T-6h target at its kickoff (under the Odds
@@ -242,7 +230,7 @@ def decision_cutoff(commence_utc: object, config: PilotConfig = PilotConfig(), *
     earlier first, for a source whose kickoff may differ from the Odds event's by up to that much; the deadline
     never decreases with the kickoff, so the result is then never later than the Odds event's own cutoff.
     None when the kickoff is unknown or naive."""
-    kick = _utc(commence_utc)
+    kick = parse_utc(commence_utc)
     if kick is None:
         return None
     kick -= kickoff_tolerance
@@ -254,7 +242,7 @@ def after_decision(commence_utc: object, received_utc: object, *,
                    kickoff_tolerance: timedelta = timedelta(0)) -> bool:
     """True when a receipt is after the game's T-6h decision cutoff, or when either time is unknown (fails
     closed)."""
-    cutoff, received = decision_cutoff(commence_utc, kickoff_tolerance=kickoff_tolerance), _utc(received_utc)
+    cutoff, received = decision_cutoff(commence_utc, kickoff_tolerance=kickoff_tolerance), parse_utc(received_utc)
     return cutoff is None or received is None or received > cutoff
 
 

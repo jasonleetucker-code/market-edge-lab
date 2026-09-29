@@ -96,3 +96,53 @@ def test_the_terminal_view_is_unaffected(built):
     assert view["capacity"]["latest"]["horizon"] != "T-60m"  # the Terminal shows pre-label books only (#124)
     rows = se.build_report(SnapshotStore.open_readonly(path), as_of=now)["rows"]
     assert any(r["horizon"] == "T-6h" and r["odds"].get("probabilities") for r in rows)
+
+
+def test_a_logged_run_records_the_sportsbook_proxy_games_it_shows(tmp_path, capsys):
+    """Review SHOULD-FIX 1 (the reviewer's repro): on the `odds_label_proxy` store, a logged run as of
+    2026-09-26T12:00Z prints the T-60m consensus of the game kicking off 2026-09-25T00:15Z, so the logged window
+    must cover that kickoff and the note must name the sportsbook consensus."""
+    import shutil
+    import sys
+    from pathlib import Path
+
+    sys.path.insert(0, str(Path(__file__).resolve().parent / "browser"))
+    import fixture_states
+
+    cfg, store_root = fixture_states.odds_label_proxy()
+    try:
+        root, own = t2._registry_copy(tmp_path)
+        as_of = "2026-09-26T12:00:00+00:00"
+        assert se.main(["report", "--db", str(cfg.db), "--as-of", as_of, "--experiments", str(root),
+                        "--with-results", "--evidence-log", str(own), "--actor", "test", "--code-version", "abc"]) == 0
+        logged = json.loads(capsys.readouterr().out)
+        shown = [r for r in logged["rows"] if r["commence_utc"] == "2026-09-25T00:15:00Z" and r["horizon"] == "T-60m"]
+        assert shown and shown[0]["odds"].get("probabilities")  # the logged run does show the figures ...
+        event = rev.read_log(own).uses[-1]
+        assert event.window.start_utc <= "2026-09-25T00:15:00Z"  # ... and records the game it showed them for
+        assert "post-cutoff sportsbook consensus" in event.note
+        assert se._odds_proxy_shown(shown[0]) is True
+        assert se._odds_proxy_shown({**shown[0], "odds": {**shown[0]["odds"], "probabilities": None}}) is False
+    finally:
+        shutil.rmtree(store_root, ignore_errors=True)
+
+
+@pytest.mark.parametrize("stage,reason", [
+    ("ODDS_NOT_CAPTURED", "target state MISSED: expired while PLANNED"),
+    ("ODDS_CAPTURE_UNUSABLE", "EVENT_ABSENT: the captured response lacks this game"),
+    ("ODDS_CAPTURE_UNUSABLE", "RECEIVED_AFTER_CUTOFF: received 2026-09-27T16:40:00Z, cutoff 2026-09-27T16:30:00Z"),
+])
+def test_reasons_without_a_figure_are_kept(stage, reason):
+    """Review NIT 3: only the stage whose reasons quote the capture's offers is reduced."""
+    row = {"horizon": "T-60m", "commence_utc": "2026-09-27T17:00:00Z", "reasons": [f"{stage}: {reason}"],
+           "odds": {"stage": se.Stage(stage), "reasons": [reason], "received_utc": None}, "sides": {}}
+    out = se._hide_odds_proxy(row)
+    assert out["odds"]["reasons"] == [reason] and out["reasons"] == [f"{stage}: {reason}"]
+
+
+def test_a_withheld_rows_hash_is_labelled(built):
+    path, now, _ = built
+    rows = se.build_report(SnapshotStore.open_readonly(path), as_of=now)["rows"]
+    t60 = [r for r in rows if r["horizon"] == "T-60m" and r["odds"].get("label_proxy")]
+    assert t60 and all(r["odds"]["output_sha256_note"] == se.ODDS_HASH_NOTE for r in t60)
+    assert all("output_sha256_note" not in r["odds"] for r in rows if r["horizon"] == "T-6h")

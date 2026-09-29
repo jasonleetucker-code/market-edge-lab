@@ -73,6 +73,17 @@ def _percents(event: oc.EventConsensus) -> set[str]:
     return {t for v in values if v is not None and (t := pr.percent(v))}
 
 
+def _leaves(value, path=""):
+    if isinstance(value, dict):
+        for k, v in value.items():
+            yield from _leaves(v, f"{path}/{k}")
+    elif isinstance(value, (list, tuple)):
+        for i, v in enumerate(value):
+            yield from _leaves(v, f"{path}[{i}]")
+    else:
+        yield path, value
+
+
 # --------------------------------------------------------------------------- the one rule
 
 
@@ -83,9 +94,14 @@ def test_the_decision_cutoff_is_the_odds_t6h_deadline():
     target = osch.CaptureTarget("x", "s", "e", "T-6h", 2, datetime(2026, 9, 25, 0, 15, tzinfo=UTC),
                                 datetime(2026, 9, 24, 18, 15, tzinfo=UTC))
     assert osch.decision_cutoff(KICK) == osch.deadline(target)
-    # Polymarket US uses the same rule with its kickoff tolerance, not a copy of it.
+    # Polymarket US uses the same rule with its kickoff tolerance, and the Kalshi NFL observations (#131) with
+    # none: neither keeps a copy of it.
+    from edge_lab import price_observations as po
+
+    assert po.NFL_PRE_DECISION_OFFSETS is osch.PRE_DECISION_OFFSETS and po.NFL_DECISION_OFFSET == osch.DECISION_OFFSET
     for start in ("2026-09-27T17:00:00Z", KICK, "2026-10-05T03:40:00Z"):
         assert ps.decision_cutoff(start) == osch.decision_cutoff(start, kickoff_tolerance=ps.START_TOLERANCE)
+        assert po.nfl_decision_cutoff(start) == osch.decision_cutoff(start)
 
 
 @pytest.mark.parametrize("offset,received,hidden", [
@@ -133,7 +149,7 @@ def _event(sport: str = "americanfootball_nfl", *, bad_price: bool = False) -> d
 def test_a_pre_decision_capture_is_returned_unchanged():
     result = oc.build_snapshot_consensus(_row(1, "2026-09-24T18:15:41Z", _event()))
     assert oc.withhold_label_proxies(result) is result
-    assert "label_proxy" not in json.dumps(result.to_dict())  # the field is omitted: hashes are unchanged
+    assert all("label_proxy" not in e for e in result.to_dict()["events"])  # omitted: hashes are unchanged
     assert oc.withhold_label_proxies(None) is None
 
 
@@ -150,9 +166,11 @@ def test_a_post_cutoff_capture_is_withheld_keeping_counts_and_times():
     assert shown.received_at_utc == full.received_at_utc and shown.input_sha256 == full.input_sha256
     assert any("-2.37x" in p for p in full.problems)  # the parser quotes an invalid price ...
     assert shown.problems == ("PARSE: g1: withheld (EXP-002 label proxy)",)  # ... the display keeps the code
-    text = json.dumps(shown.to_dict())
-    for figure in ("-237", "197", "6.5", "-2.37x"):
-        assert figure not in text, figure
+    figures = {"-237", "197", "+197", "6.5", "-6.5", "-2.37x"}
+    for path, value in _leaves(shown.to_dict()):  # parsed leaves; the sha256 hex fields are not searched
+        if path.endswith("sha256"):
+            continue
+        assert str(value) not in figures and "-2.37x" not in str(value), path
     assert shown.output_sha256 != full.output_sha256  # re-sealed: the hash of what is shown
 
 

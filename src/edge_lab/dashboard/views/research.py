@@ -238,7 +238,7 @@ DISPERSION_TEXT = "range (max − min) and MAD (median absolute deviation, unsca
 # cutoff (`label_proxy`); its probabilities, prices, lines and de-vigs are not shown and nothing here reveals them.
 ODDS_HIDDEN = "ODDS_CAPTURE_LABEL_PROXY"
 ODDS_HIDDEN_NOTE = ("probabilities, offered prices, lines and de-vigs withheld: a sportsbook capture at T-60m or after "
-                    "the T-6h decision is a proxy for EXP-002's labels and is never shown here")
+                    "the T-6h decision cutoff is a proxy for EXP-002's labels and is never shown here")
 
 
 def _side(name: Any, line: Any, market: Any = None) -> str:
