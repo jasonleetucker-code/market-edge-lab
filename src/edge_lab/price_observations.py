@@ -52,6 +52,7 @@ CLV-style metrics come later; a price move after a decision is not proof of prof
 from __future__ import annotations
 
 import json
+import re
 import time
 import uuid
 from contextvars import ContextVar
@@ -1135,7 +1136,10 @@ def status(store: SnapshotStore, *, now: datetime,
             upcoming.append({"target_id": t["target_id"], "due_from_utc": t["due_from_utc"],
                              "deadline_utc": t["deadline_utc"], "state": state})
         if state == "MISSED":
-            misses.append({"target_id": t["target_id"], "reason": t["state_reason"], "at_utc": t["state_at_utc"]})
+            reason = t["state_reason"]
+            if nfl_label_withheld(t, venue=t["venue"], native_market_id=t["native_market_id"], at_utc=None):
+                reason = _withheld_reason(reason)  # EXP-002 label: the code only, never the free text
+            misses.append({"target_id": t["target_id"], "reason": reason, "at_utc": t["state_at_utc"]})
     labels: dict[str, int] = {}
     for r in store.price_observations():
         if r["close_label"]:
@@ -1146,6 +1150,82 @@ def status(store: SnapshotStore, *, now: datetime,
             "targets": len(targets), "by_phase": dict(sorted(by_phase.items())), "close_labels": labels,
             "next_due": sorted(upcoming, key=lambda u: u["due_from_utc"])[:10],
             "recent_misses": sorted(misses, key=lambda m: m["at_utc"] or "")[-10:]}
+
+
+# --------------------------------------------------------------------------- EXP-002 labels (display only)
+#
+# EXP-002's labels are the Kalshi KXNFLGAME books after the T-6h decision (the T-60m pairing books) and the
+# settlements (docs/research/EXP002_FREEZE_PROPOSAL.md §4; `sports_evidence` withholds them unless a logged
+# --with-results run shows them). `observe status` is not a logged consumer of labels, so for an NFL pairing
+# observation at the T-60m horizon (or any horizon other than T-24h / T-6h, or an unknown one), for one received after
+# that game's T-6h decision cutoff, and for a settlement read, `market_history` withholds the bid, ask, ask size,
+# depth and price grid and reduces the reason to its code; `status` does the same to a missed target's reason.
+# Status, timing, snapshot ids and counts stay: they say whether a book was read, never what it priced. The horizon
+# and kickoff come from the planner's stored target detail (`plan_nfl_targets`: `nfl_role`, `odds_offset`,
+# `commence_utc`); any other Kalshi NFL row (a `KXNFL` series without that detail, e.g. a manual custom target on
+# KXNFLGAME or KXNFLSPREAD) has an unknown horizon and is withheld (fails closed). Every
+# other row (EXP-001 / KXHIGHNY, ADR 0030 observations) is unchanged. There is no reveal path here; the stored rows
+# are unchanged (raw evidence).
+NFL_PRE_DECISION_OFFSETS = ("T-24h", "T-6h")
+NFL_DECISION_OFFSET = "T-6h"
+NFL_LABEL_FIELDS = ("bid", "ask", "ask_size", "depth", "price_grid")
+NFL_LABEL_HIDDEN = ("HIDDEN (EXP-002 label: a Kalshi NFL book at T-60m, after the T-6h decision cutoff or at an "
+                    "unknown horizon, or a settlement read; its prices, sizes, depth and result are not shown here)")
+NFL_SERIES_PREFIX = "KXNFL"  # every Kalshi NFL series (KXNFLGAME, KXNFLSPREAD, ...): fail closed without detail
+NFL_LABEL_REASON = "withheld (EXP-002 label)"
+_REASON_CODE = re.compile(r"^([A-Z][A-Z0-9_]*):")
+
+
+def nfl_decision_cutoff(commence_utc: Any) -> datetime | None:
+    """EXP-002's T-6h decision cutoff of a game: `odds_schedule.deadline` of its T-6h Odds target under the Odds
+    runner's default `PilotConfig` (the cutoff `sports_evidence` uses). None when the kickoff is unknown.
+
+    The kickoff is the one stored in the book target's detail when it was planned. If a game were later moved much
+    earlier, its real cutoff would move earlier too and a book between the two cutoffs would be shown. That matters
+    only for a T-6h book near its cutoff; a T-24h book is received about 18 h before it, so a reschedule of that size
+    is needed before it could matter. Documented rather than handled."""
+    from .odds_schedule import DEFAULT_OFFSETS, CaptureTarget, PilotConfig, deadline
+
+    start = _t(commence_utc)
+    if start is None:
+        return None
+    off = next(o for o in DEFAULT_OFFSETS if o.label == NFL_DECISION_OFFSET)
+    return deadline(CaptureTarget("", NFL_SPORT, "", off.label, off.priority, start, start - off.before),
+                    PilotConfig())
+
+
+def nfl_label_withheld(target: Any, *, venue: Any, native_market_id: Any, at_utc: Any) -> bool:
+    """True when an observation's figures (received at `at_utc`) or a target's reason are EXP-002 labels for
+    display: an NFL pairing target whose role is not a book (a settlement read), whose horizon is not T-24h / T-6h
+    (T-60m or unknown), or whose receipt is after the game's T-6h decision cutoff (an unknown kickoff or receipt
+    fails closed; the cutoff uses the kickoff stored at planning, see `nfl_decision_cutoff`); and any other Kalshi
+    NFL row (`KXNFL` series, no stored horizon: fails closed). A row with no receipt holds no figure. False for every
+    other market (EXP-001 / KXHIGHNY and ADR 0030 rows are never touched)."""
+    nfl_origin = target is not None and is_nfl_target(target)
+    if not nfl_origin:
+        return str(venue or "") == "kalshi" and str(native_market_id or "").startswith(NFL_SERIES_PREFIX)
+    d = _detail(target)
+    if d.get("nfl_role") != NFL_ROLE_BOOK or d.get("odds_offset") not in NFL_PRE_DECISION_OFFSETS:
+        return True
+    if at_utc is None:
+        return False
+    cutoff, at = nfl_decision_cutoff(d.get("commence_utc")), _t(at_utc)
+    return cutoff is None or at is None or at > cutoff
+
+
+def _withheld_reason(reason: Any) -> Any:
+    if not reason:
+        return reason
+    m = _REASON_CODE.match(str(reason))
+    return f"{m.group(1)}: {NFL_LABEL_REASON}" if m else NFL_LABEL_REASON
+
+
+def _withhold_nfl_label(row: dict[str, Any]) -> dict[str, Any]:
+    for k in NFL_LABEL_FIELDS:
+        row.pop(k, None)
+    row["exp002_label"] = NFL_LABEL_HIDDEN
+    row["miss_reason"] = _withheld_reason(row.get("miss_reason"))
+    return row
 
 
 _LABELS = {"CLOSE": f"close (within {int(CLOSE_PROOF_TOLERANCE.total_seconds())} s of trading close)",
@@ -1168,10 +1248,18 @@ def market_history(store: SnapshotStore, market_id: str) -> list[dict[str, Any]]
     proven CLOSE (never a bare "close": the public book has no sequence number, so the close is
     proven only to within `close_tolerance_s`), else "latest pre-close observation". `is_latest_pre_close_observation` marks, per side, the last
     CAPTURED quote received before the market's latest known close_time (None when no close
-    time is known). Never a midpoint, a last price, or an order."""
+    time is known). Never a midpoint, a last price, or an order.
+
+    EXP-002 labels are withheld (`nfl_label_withheld`): such a row has no bid, ask, ask_size, depth or price_grid
+    key, carries `exp002_label`, and its miss_reason is reduced to its code."""
     out: list[dict[str, Any]] = []
     attempted = set()
+    targets = {t["target_id"]: t for t in store.price_targets(market_id=market_id)}
+    withheld: set[int] = set()
     for r in store.price_observations(market_id=market_id):
+        if nfl_label_withheld(targets.get(r["target_id"]), venue=r["venue"], native_market_id=r["native_market_id"],
+                              at_utc=r["observed_at_utc"]):
+            withheld.add(int(r["id"]))
         attempted.add(r["target_id"])
         observed, target = _t(r["observed_at_utc"]), _t(r["target_utc"])
         out.append({
@@ -1193,7 +1281,7 @@ def market_history(store: SnapshotStore, market_id: str) -> list[dict[str, Any]]
             "collection_status": r["collection_status"], "miss_reason": r["miss_reason"],
             "executable": r["collection_status"] == "CAPTURED", "is_latest_pre_close_observation": None,
         })
-    for t in store.price_targets(market_id=market_id):
+    for t in targets.values():
         if t["target_id"] in attempted:
             continue
         out.append({"observation_id": None, "target_id": t["target_id"], "phase": t["phase"], "label": t["phase"],
@@ -1217,7 +1305,7 @@ def market_history(store: SnapshotStore, market_id: str) -> list[dict[str, Any]]
             if before:
                 max(before, key=lambda h: (h["observed_at_utc"], h["observation_id"]))["is_latest_pre_close_observation"] = True
     out.sort(key=lambda h: (h["target_utc"] or h["observed_at_utc"] or "", h["observation_id"] or 0))
-    return out
+    return [_withhold_nfl_label(h) if h["observation_id"] in withheld else h for h in out]
 
 
 # --------------------------------------------------------------------------- Kalshi NFL pairing (EXP-002)
