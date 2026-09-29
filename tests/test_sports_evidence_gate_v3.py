@@ -231,7 +231,7 @@ def test_gate_v3_never_loads_a_t60m_book_and_v2_is_unchanged(tmp_path, monkeypat
     monkeypatch.setattr(se._Payloads, "payload", spy)
     out = se.measure_exp002(SnapshotStore.open_readonly(path), as_of=now)
     assert not set(loaded) & sids["T-60m"]  # no label book, whichever gate
-    assert out["version"] == "exp002-measurement-v2" and out["gate"]["version"] == "exp002-noise-gate-v2"
+    assert out["version"] == "exp002-measurement-v3" and out["gate"]["version"] == "exp002-noise-gate-v2"
     v3 = out["gate_v3"]
     assert v3["version"] == se.GATE_V3_VERSION == "exp002-noise-gate-v3" and v3["label_free"]
     assert v3["counts"]["admissible_games"] == 12 and v3["counts"]["weeks"] == 2
