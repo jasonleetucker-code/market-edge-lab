@@ -864,14 +864,94 @@ def test_a_small_puck_drop_change_on_the_same_ticks_is_replanned_with_new_ids(st
     assert plan(store, MORNING + timedelta(minutes=50))["state"] == "NOTHING_TO_DO"
 
 
-def test_moving_back_to_a_superseded_time_is_a_reported_collision(store):
+def test_moving_back_to_a_superseded_time_is_replanned_under_a_revision(store):
     oct1(store, names=OCT1[:1], window=WEEKS)
     plan(store, MORNING)
+    first = {t["target_id"] for t in nhl_targets(store)}
     discovery(store, [game(OCT1[0], shift=timedelta(minutes=5))], MORNING + timedelta(minutes=20), window=WEEKS)
     plan(store, MORNING + timedelta(minutes=35))
     oct1(store, names=OCT1[:1], at=MORNING + timedelta(minutes=40), window=WEEKS)
     report = plan(store, MORNING + timedelta(minutes=50))["nhl"]
-    assert report["not_planned_counts"]["TARGET_ID_COLLISION"] == 4
+    assert "TARGET_ID_COLLISION" not in report["not_planned_counts"]
+    live = _open(store)
+    assert len(live) == 4 and {t["target_id"] for t in live} == {f"{tid}:r1" for tid in first}
+    assert {detail(t)["commence_utc"] for t in live} == {"2026-10-01T23:00:00+00:00"}
+    assert plan(store, MORNING + timedelta(minutes=65))["state"] == "NOTHING_TO_DO"
+
+
+def test_a_game_that_leaves_and_returns_twice_gets_its_horizons_back_each_time(store):
+    oct1(store, names=OCT1[:2], window=WEEKS)
+    plan(store, MORNING)
+    first = {t["target_id"] for t in nhl_targets(store) if t["native_event_id"] == OCT1[0]}
+    at = MORNING
+    for n in (1, 2):
+        at += timedelta(minutes=15)
+        discovery(store, [game(OCT1[1])], at, window=WEEKS)  # one provider omission
+        plan(store, at + timedelta(minutes=5))
+        assert not [t for t in _open(store) if t["native_event_id"] == OCT1[0]]
+        at += timedelta(minutes=15)
+        oct1(store, names=OCT1[:2], at=at, window=WEEKS)  # back again
+        report = plan(store, at + timedelta(minutes=5))["nhl"]
+        assert "TARGET_ID_COLLISION" not in report["not_planned_counts"]
+        back = [t for t in _open(store) if t["native_event_id"] == OCT1[0]]
+        assert {t["target_id"] for t in back} == {f"{tid}:r{n}" for tid in first}
+    reasons = Counter(t["state_reason"].split(":", 1)[0] for t in nhl_targets(store)
+                      if t["native_event_id"] == OCT1[0] and t["state"] == "MISSED")
+    assert reasons == {"SUPERSEDED_NOT_IN_SCHEDULE": 8}
+    assert len([t for t in _open(store) if t["native_event_id"] == OCT1[1]]) == 4  # the other game untouched
+
+
+def test_an_attempted_predecessor_is_still_a_reported_collision(store, monkeypatch):
+    oct1(store, names=OCT1[:1], window=WEEKS)
+    plan(store, MORNING)
+    clock = Clock(datetime(2026, 10, 1, 17, 5, 20, tzinfo=UTC))
+    api = Api(clock, {**routes(OCT1[0]),
+                      f"/markets?event_ticker={OCT1[0]}&": HttpFetchError("HTTP 503", status=503, attempts=1)})
+    monkeypatch.setattr(po, "fetch_json_result", api)
+    capture(store, clock)  # the T-6h pair FAILED: a GET was sent
+    discovery(store, [game(OCT1[0], shift=timedelta(minutes=5))], datetime(2026, 10, 1, 17, 8, tzinfo=UTC),
+              window=WEEKS)
+    plan(store, datetime(2026, 10, 1, 17, 10, tzinfo=UTC))
+    oct1(store, names=OCT1[:1], at=datetime(2026, 10, 1, 17, 12, tzinfo=UTC), window=WEEKS)
+    report = plan(store, datetime(2026, 10, 1, 17, 14, tzinfo=UTC))["nhl"]
+    assert report["not_planned_counts"]["TARGET_ID_COLLISION"] == 2  # the attempted T-6h pair; T-60m re-planned
+    assert len([t for t in _open(store) if t["target_id"].endswith(":r1")]) == 2
+
+
+def test_a_book_deferred_for_a_stale_schedule_expires_with_its_own_reason(store, monkeypatch):
+    oct1(store, names=OCT1[:1], window=WEEKS)
+    plan(store, MORNING)
+    # NYR@DET on Oct 2 (18:30 ET): its T-6h deadline falls after the 10:30Z discovery turns 24 h old (stale).
+    discovery(store, [game(OCT1[0]), game("KXNHLGAME-26OCT02NYRDET")], DISC_AT + timedelta(minutes=30), window=WEEKS)
+    plan(store, MORNING + timedelta(minutes=35))
+    det = [t for t in nhl_targets(store) if t["native_event_id"] == "KXNHLGAME-26OCT02NYRDET"
+           and detail(t)["horizon"] == "T-6h"]
+    assert det and po._t(det[0]["deadline_utc"]) > DISC_AT + timedelta(days=1)
+    clock = Clock(po._t(det[0]["target_utc"]) + timedelta(seconds=20))
+    api = Api(clock, routes("KXNHLGAME-26OCT02NYRDET"))
+    monkeypatch.setattr(po, "fetch_json_result", api)
+    _, cap = capture(store, clock)
+    assert api.calls == [] and cap["nhl_deferred_schedule"]["state"] == "STALE"
+    capture(store, Clock(po._t(det[0]["deadline_utc"]) + timedelta(minutes=16)))
+    rows = [t for t in nhl_targets(store) if t["target_id"] in {x["target_id"] for x in det}]
+    assert {t["state"] for t in rows} == {"MISSED"}
+    assert all(t["state_reason"].startswith("NOT_CAPTURED_SCHEDULE_STALE") for t in rows)
+    # A book that simply was not captured under a current schedule keeps the generic reason.
+    fresh_miss = [t for t in nhl_targets(store) if t["native_event_id"] == OCT1[0] and detail(t)["horizon"] == "T-6h"]
+    assert {t["state_reason"].split(":", 1)[0] for t in fresh_miss} == {"NOT_CAPTURED_BY_DEADLINE"}
+
+
+def test_install_keeps_both_nhl_switches_together(tmp_path):
+    from test_deploy_units import _run_env_section
+
+    result = _run_env_section(tmp_path, "NWS_USER_AGENT=ua (x@y.z)\nEDGE_LAB_ODDS_NHL=on\n"
+                                        "EDGE_LAB_KALSHI_NHL_CAPTURE=off\n")
+    assert result.returncode == 0, result.stderr
+    lines = result.stdout.splitlines()
+    assert "EDGE_LAB_ODDS_NHL=on" in lines and "EDGE_LAB_KALSHI_NHL_CAPTURE=off" in lines
+    both = _run_env_section(tmp_path, "NWS_USER_AGENT=ua (x@y.z)\nEDGE_LAB_ODDS_NHL=off\n"
+                                      "EDGE_LAB_KALSHI_NHL_CAPTURE=on\n")
+    assert {"EDGE_LAB_ODDS_NHL=off", "EDGE_LAB_KALSHI_NHL_CAPTURE=on"} <= set(both.stdout.splitlines())
 
 
 def test_a_superseded_target_that_sent_gets_still_counts_against_the_week(store, monkeypatch):

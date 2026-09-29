@@ -73,11 +73,16 @@ NHL identity, rules text and the schedule read live in `sports_nhl.py` (pure, no
 - **Stale or unreadable schedule:** plans nothing new and supersedes nothing. Open NHL **books are not read** while
   the schedule is not current (a reschedule could not be seen): the capture defers them (`nhl_deferred_schedule`)
   without recording anything; a fresh discovery before the deadline releases them, otherwise they expire MISSED
-  (`NOT_CAPTURED_BY_DEADLINE`). The settled-markets read does not depend on the schedule and is not deferred.
+  `NOT_CAPTURED_SCHEDULE_STALE` (the schedule is read point in time at the deadline). The settled-markets read does
+  not depend on the schedule and is not deferred.
 - **Target ids** carry the puck drop they were planned for (`...|kalshi_nhl_schedule_v1:<horizon>:<commence>`): a
   small change that keeps the same ticks (e.g. +5 min) supersedes the old targets and plans new ids instead of
-  colliding with them. A game moved back to a time it was superseded from would reuse an id; that is reported as
-  `TARGET_ID_COLLISION` and the horizon is not planned again (never silent).
+  colliding with them. A game that leaves the schedule and returns, or moves back to a time it was superseded from,
+  would reuse an id (follow-up to #136): when every stored target of that id and its revisions is a supersession
+  closure that never sent a GET, the horizon is re-planned under the next revision (`...:r<n>`, n = superseded
+  predecessors; deterministic), so one provider omission never kills a game's horizons. A predecessor that was
+  attempted or is still open keeps the reported `TARGET_ID_COLLISION` (its GETs already count against the
+  game-horizon).
 - **Opening night / activation:** a horizon whose deadline passed before the first NHL plan is stored MISSED
   `NOT_COLLECTED_BEFORE_ACTIVATION` (later gaps: `NOT_PLANNED_BEFORE_DEADLINE`) and never captured late. Only games
   still in the discovery are covered: a discovery lists future games only, so games that had already started at
