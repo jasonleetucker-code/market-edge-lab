@@ -340,6 +340,28 @@ Related owner records that are not ideas:
 
 ## Review log
 
+- **2026-09-29: EXP-002 validation foundation + #122 offline foundation: re-plan.**
+  - **Outcome:**
+    - EXP-002 gate v3 has no PASS state (the spread-noise candidate failed validation), so the
+      freeze is blocked.
+    - The proposed E1 executable round-trip endpoint is the next technical step.
+    - KXNFLGAME fees remain unverified.
+    - The #122 offline foundation is BUILT: evidence contract, `position_policy`, `inplay_replay`,
+      a read-only Terminal page, and ADR 0038.
+  - **Classification:**
+    - NOW: the EXP-002 E1 endpoint (implement, version, review).
+    - NEXT: the EXP-002 pilot report and freeze decision (6 owner hours, by 2026-10-22; no freeze
+      promised).
+    - BLOCKED (owner): the #122 source-quality pilot (proposal ready; needs data rights, a reviewed
+      recorder and approval), the Kalshi message revision 2, and the data-rights review.
+    - LATER: #122 state-aware exits, re-entry/ADD, richer models.
+    - BLOCKED: automated account actions.
+  - **Shared primitives:** existing owners are reused. `position_policy` and `inplay_*` are the
+    new canonical owners for in-play; no second risk engine, executor or ledger. No research slot
+    is claimed; EXP-002's budget is not #122's.
+  - **Roadmap effect:** no silent deadline shift. No live in-game trading by 2026-10-22.
+  - **Supersedes:** in the 2026-09-26 entry, the "BLOCKED (owner): CI billing" item. The owner resolved CI billing on 2026-09-28.
+
 - **2026-09-26: owner decisions and first real NFL paired evidence: next batch.**
   - **Decided (owner):**
     - EXP-002: $1,000/yr continuation bar, 6 h to 2026-10-22;
