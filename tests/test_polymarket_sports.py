@@ -7,6 +7,7 @@ scripted opener."""
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -671,6 +672,15 @@ def test_at_most_100_requests_per_minute_per_run():
 PROXY_BID, PROXY_ASK, PROXY_QTY = "0.4125", "0.4175", "777.0000"  # SYNTHETIC: absent from every recorded body
 
 
+_ISO_TIME = re.compile(r"\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?")
+_HEX_ID = re.compile(r"\b[0-9a-f]{8,}(?:-[0-9a-f]{4,})*\b")
+
+
+def _scrub_volatile(text: str) -> str:
+    """`text` with ISO timestamps and hex / uuid ids replaced: they are wall-clock or random, not figures."""
+    return _HEX_ID.sub("<id>", _ISO_TIME.sub("<time>", text))
+
+
 def _proxy_book() -> bytes:
     """The recorded KC-MIA book with SYNTHETIC top levels (so a leak of the T-60m figures is detectable)."""
     raw = json.loads(BOOK_KC_MIA.read_bytes())
@@ -794,8 +804,11 @@ def test_t60m_captures_are_withheld_from_the_views_and_the_cli(tmp_path, capsys,
     monkeypatch.setattr(ps, "OWNER_ACCESS_DECISION", None)  # no clock-driven network run from a test
     assert ps.main(["status", "--db", str(db), "--market", KC_MIA]) == 0
     out = capsys.readouterr().out
+    # The output also holds uuid4 run / attempt ids and a microsecond `now`: a figure must not match inside them
+    # (a bare "777" did about 1.3% of runs), so they are replaced before the substring check.
+    scrubbed = _scrub_volatile(out)
     for figure in (PROXY_BID, PROXY_ASK, PROXY_QTY, "41.25", "41.75", "777"):
-        assert figure not in out, figure  # no reveal path in the CLI either
+        assert figure not in scrubbed, figure  # no reveal path in the CLI either
     assert "0.8500" in out and ps.LABEL_PROXY_HIDDEN in out
     tv = json.dumps(ps.terminal_view(db, now=later, access_decision=ALLOW), default=str)
     assert PROXY_BID not in tv and PROXY_ASK not in tv and PROXY_QTY not in tv
