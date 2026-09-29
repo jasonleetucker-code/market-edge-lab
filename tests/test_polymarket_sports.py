@@ -799,3 +799,24 @@ def test_t60m_captures_are_withheld_from_the_views_and_the_cli(tmp_path, capsys,
     assert "0.8500" in out and ps.LABEL_PROXY_HIDDEN in out
     tv = json.dumps(ps.terminal_view(db, now=later, access_decision=ALLOW), default=str)
     assert PROXY_BID not in tv and PROXY_ASK not in tv and PROXY_QTY not in tv
+
+
+def test_a_withheld_targets_miss_reason_is_its_code_everywhere(tmp_path):
+    """Review NIT 3: `status().recent_misses` and the fabric's `recent_misses` reduce a T-60m target's MISSED
+    reason to its code, as `market_history` does; a pre-decision target's reason stays in full."""
+    db = _discovered(tmp_path, odds_at=_due_clock_for_kc() - timedelta(hours=1))
+    at = datetime(2026, 9, 27, 16, 40, tzinfo=UTC)  # past every KC-MIA deadline: all three are MISSED
+    _fresh_catalog_at(db, at - timedelta(hours=2))
+    ps.run_capture(db, clock=lambda: at, opener=ScriptedOpener(), access_decision=ALLOW)
+    store = SnapshotStore.open_readonly(db)
+    withheld = f"NOT_CAPTURED_BY_DEADLINE: {ps.LABEL_PROXY_REASON}"
+    misses = {m["target_id"]: m["reason"] for m in ps.status(store, now=at, access_decision=ALLOW)["recent_misses"]}
+    kc = {tid.split(":")[2]: reason for tid, reason in misses.items() if KC_MIA in tid}
+    assert kc["T-60m"] == withheld
+    assert kc["T-6h"].startswith("NOT_CAPTURED_BY_DEADLINE: no capture in [") and kc["T-6h"] != withheld
+    history = {t["offset"]: t["attempts"][-1]["reason"] for t in ps.market_history(store, KC_MIA)}
+    assert history["T-60m"] == withheld and history["T-6h"] == kc["T-6h"]
+    _, cap = ps.freshness_records(store, now=at, access_decision=ALLOW)
+    t60 = [m for m in cap["recent_misses"] if KC_MIA in m and ":T-60m:" in m]
+    assert t60 and all(m.endswith(f": {withheld}") for m in t60)
+    assert ps.withhold_reason(None, offset_label="T-60m", game_start_utc=None) is None

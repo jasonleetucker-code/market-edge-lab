@@ -1024,8 +1024,11 @@ def decision_cutoff(game_start_utc: Any) -> datetime | None:
     """EXP-002's T-6h decision cutoff for a game: `odds_schedule.deadline` of a T-6h target under the Odds
     runner's default `PilotConfig` (the one `sports_evidence` uses), at this market's kickoff moved
     `START_TOLERANCE` earlier. A related Odds event's kickoff may be up to that much earlier than Polymarket's,
-    and the deadline never decreases with the kickoff, so this is never later than the real cutoff.
-    None when the kickoff is unknown."""
+    and the deadline never decreases with the kickoff, so this is never later than the real cutoff. It can be
+    earlier: by 15 min when the two kickoffs agree (up to 30 min at the relation's tolerance), and by up to 70 min
+    (85 at the tolerance) when the real Odds T-6h target is shifted out of the 17:40-18:35 ET quiet window and the
+    moved one is not (kickoffs about 23:40-00:50 ET; none on the NFL schedule). A capture in that gap is withheld
+    conservatively. None when the kickoff is unknown."""
     start = _t(game_start_utc)
     if start is None:
         return None
@@ -1047,6 +1050,15 @@ def is_label_proxy(offset_label: Any, game_start_utc: Any, received_at_utc: Any)
     return cutoff is None or received is None or received > cutoff
 
 
+def withhold_reason(reason: Any, *, offset_label: Any, game_start_utc: Any, received_at_utc: Any = None) -> Any:
+    """A reason for display: reduced to its code (`CODE: withheld (EXP-002 label proxy)`) when its capture or
+    target is a label proxy (a crossed book's anomaly quotes its prices), else unchanged. None stays None."""
+    if not reason or not is_label_proxy(offset_label, game_start_utc, received_at_utc):
+        return reason
+    m = _REASON_CODE.match(str(reason))
+    return f"{m.group(1)}: {LABEL_PROXY_REASON}" if m else LABEL_PROXY_REASON
+
+
 def withhold_label_proxy(row: Mapping[str, Any], *, offset_label: Any, game_start_utc: Any) -> dict[str, Any]:
     """A copy of one capture (an attempt row or a latest capture) for display. A label-proxy capture loses its
     prices, sizes and depth (`label_proxy` says so) and keeps only the code of its reason: a crossed book's
@@ -1059,8 +1071,8 @@ def withhold_label_proxy(row: Mapping[str, Any], *, offset_label: Any, game_star
             out.pop(k, None)
         out["label_proxy"] = LABEL_PROXY_HIDDEN
     if out.get("reason"):
-        m = _REASON_CODE.match(str(out["reason"]))
-        out["reason"] = f"{m.group(1)}: {LABEL_PROXY_REASON}" if m else LABEL_PROXY_REASON
+        out["reason"] = withhold_reason(out["reason"], offset_label=offset_label, game_start_utc=game_start_utc,
+                                        received_at_utc=out.get("received_at_utc"))
     return out
 
 
@@ -1179,7 +1191,9 @@ def status(store: SnapshotStore, *, now: datetime, access_decision: Any = _GATE)
             upcoming.append({"target_id": t["target_id"], "due_from_utc": t["due_from_utc"],
                              "deadline_utc": t["deadline_utc"], "state": state})
         if state == "MISSED":
-            misses.append({"target_id": t["target_id"], "reason": t["state_reason"], "at_utc": t["state_at_utc"]})
+            misses.append({"target_id": t["target_id"], "at_utc": t["state_at_utc"],
+                           "reason": withhold_reason(t["state_reason"], offset_label=t["offset_label"],
+                                                     game_start_utc=t["game_start_utc"])})
     due, next_due = discovery_due(store, now)
     return {"command": "pm-sports status", "now_utc": _iso(now), "policy_version": POLICY_VERSION,
             "access": ACCESS_ALLOWED if access_decision else "BLOCKED_TERMS_REVIEW", "access_decision": access_decision,
@@ -1317,7 +1331,9 @@ def freshness_records(store: SnapshotStore, *, now: datetime,
         "freshness": (Freshness.UNKNOWN if capture_age is None else
                       Freshness.FRESH if capture_age <= book_max_age else Freshness.STALE).value,
         "schedule_state": sched, "why": why, "missed_count": len(missed), "missed_scope": MISSED_SCOPE_TARGETS,
-        "recent_misses": [f"{t['target_id']}: {t['state_reason']}" for t in missed[-5:]],
+        "recent_misses": [f"{t['target_id']}: " + str(withhold_reason(t["state_reason"], offset_label=t["offset_label"],
+                                                                     game_start_utc=t["game_start_utc"]))
+                          for t in missed[-5:]],
         "controls": {"pacer_s": PACER_INTERVAL_S, "max_books_per_run": MAX_BOOKS_PER_RUN,
                      "max_http_requests_per_run": MAX_HTTP_REQUESTS_PER_RUN, "max_markets_per_slot": MAX_MARKETS_PER_SLOT,
                      "retries": RETRIES, "protected_windows": "price_observations", "lock": "<db>.pm-sports.lock",
@@ -1472,4 +1488,5 @@ __all__ = [
     "catalog_from_events", "catalog_state", "decision_cutoff", "discover", "fabric_policies", "fabric_provider",
     "freshness_records", "is_label_proxy", "main", "market_history", "plan", "related_markets", "relate",
     "rules_clauses", "run_capture", "run_discover", "status", "terminal_view", "withhold_label_proxy",
+    "withhold_reason",
 ]

@@ -385,7 +385,7 @@ and URL-encoded.
 ## 13. Evidence tooling
 
 `tests/browser/fixture_states.py` (early, demo, broken, odds, odds_issues, freshness, freshness_deferred, polymarket,
-polymarket_issues, economics, economics_issues), `tests/browser/serve_fixture.py`,
+polymarket_issues, polymarket_label_proxy, economics, economics_issues), `tests/browser/serve_fixture.py`,
 `tests/browser/capture.py` (Playwright, dev-only; blocks non-loopback requests; audits
 overflow, targets, fonts, first-row position). Emulated WebKit is not a physical iPhone.
 
@@ -594,10 +594,13 @@ directive), and the screenshots that justify it.
     - The status, receipt, freshness at capture and target states stay.
     - The Terminal has no reveal path.
     - The gallery gains the SYNTHETIC `label_proxy` state.
+    - §13 gains the browser fixture state `polymarket_label_proxy`: `polymarket` plus an ATL@GB T-60m capture
+      with SYNTHETIC prices (`fixture_states.pm_t60m_capture`).
 
-    Evidence (`tests/browser/capture.py` audits, 0 with overflow, clipping, low contrast or foreign requests):
-    - the `polymarket` fixture plus a SYNTHETIC-priced T-60m capture, `/experiments?tab=sources`:
-      - Chromium and WebKit at 360x800, 390x844 and 1440x900 with every disclosure open;
+    Evidence (`tests/browser/capture.py`, 0 shots with overflow, clipping, low contrast or foreign requests):
+    - fixture state `polymarket_label_proxy`, `/experiments?tab=sources`:
+      - Chromium and WebKit at 360x800, 390x844 and 1440x900, closed (with screenshots) and with every
+        disclosure open;
       - Chromium at 360x800 and 1440x900 with 200% root text;
     - `/gallery` in the `demo` state, Chromium and WebKit at 360x800, 390x844 and 1440x900.
 

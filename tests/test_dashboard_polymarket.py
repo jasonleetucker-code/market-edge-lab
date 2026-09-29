@@ -307,42 +307,23 @@ def test_the_coverage_code_is_translated(pm):
 # label books (docs/research/EXP002_FREEZE_PROPOSAL.md §4): the Terminal shows that it was read, never its figures.
 
 ATL_GB = "aec-nfl-atl-gb-2026-09-24"
-PROXY_BID, PROXY_ASK, PROXY_QTY = "0.4125", "0.4175", "777.0000"  # SYNTHETIC: absent from every recorded body
+PROXY_BID, PROXY_ASK, PROXY_QTY = fixture_states.PM_PROXY_BID, fixture_states.PM_PROXY_ASK, fixture_states.PM_PROXY_QTY
 PROXY_SHOWN = ("41.25", "41.75", "0.4125", "0.4175", "777")  # how those figures would render, raw or formatted
-AFTER_T60M = datetime(2026, 9, 24, 23, 30, tzinfo=timezone.utc)  # ATL@GB kicks off at 00:15Z on Sep 25
-
-
-def _t60m_capture(cfg) -> None:
-    """The fixture's ATL@GB T-6h capture (real bytes) plus its T-60m capture at 23:15Z (19:15 ET): the
-    recorded book with SYNTHETIC top levels, through the pilot's own capture entry point."""
-    import json
-
-    from edge_lab import http as pm_http
-
-    raw = json.loads((fixture_states.PM_FIX / f"book_{ATL_GB}_2026-09-24T205959Z.json").read_bytes())
-    data = {k: v for k, v in raw["marketData"].items() if k != "stats"}
-    data["bids"] = [{"px": {"value": PROXY_BID, "currency": "USD"}, "qty": PROXY_QTY}]
-    data["offers"] = [{"px": {"value": PROXY_ASK, "currency": "USD"}, "qty": PROXY_QTY}]
-    at = datetime(2026, 9, 24, 23, 15, tzinfo=timezone.utc)
-
-    class _At(datetime):
-        @classmethod
-        def now(cls, tz=None):
-            return at + timedelta(seconds=20)
-    wall, pm_http.datetime = pm_http.datetime, _At
-    try:
-        code, report = ps.run_capture(cfg.db, clock=lambda: at, sleep=lambda s: None,
-                                      opener=fixture_states._Recorded(json.dumps({"marketData": data}).encode()),
-                                      access_decision=fixture_states.PM_ACCESS)
-    finally:
-        pm_http.datetime = wall
-    assert code == 0 and report["by_status"] == {"CAPTURED": 1}, report
+AFTER_T60M = fixture_states.PM_PROXY_NOW  # ATL@GB kicks off at 00:15Z on Sep 25
 
 
 @pytest.fixture
-def pm_t60m(pm):
-    _t60m_capture(pm)
-    return replace(pm, clock=lambda: AFTER_T60M)
+def pm_t60m():
+    """The committed browser state `polymarket_label_proxy`: the ATL@GB T-6h capture (real bytes) and its
+    T-60m capture at 19:15 ET with SYNTHETIC top levels (`fixture_states.pm_t60m_capture`)."""
+    cfg, root = fixture_states.polymarket_label_proxy()
+    yield cfg
+    shutil.rmtree(root, ignore_errors=True)
+
+
+def test_the_label_proxy_browser_state_is_registered():
+    assert fixture_states.BUILDERS["polymarket_label_proxy"] is fixture_states.polymarket_label_proxy
+    assert PROXY_BID == "0.4125" and PROXY_ASK == "0.4175" and PROXY_QTY == "777.0000"
 
 
 def _atl_gb(view: dict) -> dict:

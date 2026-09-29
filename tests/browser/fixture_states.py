@@ -16,7 +16,11 @@ and status-file shapes, and returns a dashboard Config with a fixed clock:
   production result (one conditional surplus), the committed production result, or only the committed laptop
   result (not production evidence);
 - freshness / freshness_deferred: the Freshness Fabric artifact over the odds fixture, current or
-  carried through the Kalshi close-tick guard.
+  carried through the Kalshi close-tick guard;
+- polymarket / polymarket_issues: the odds fixture plus the Polymarket US NFL pilot (recorded gateway
+  bytes), complete or with a partial listing and a failed book call;
+- polymarket_label_proxy: `polymarket` plus a T-60m capture with SYNTHETIC prices (an EXP-002 label proxy,
+  shown hidden).
 """
 
 from __future__ import annotations
@@ -403,6 +407,46 @@ def polymarket_issues() -> tuple[Config, Path]:
     return polymarket(issues=True)
 
 
+# EXP-002 label proxy: SYNTHETIC top-of-book figures absent from every recorded body, so a leak is detectable.
+PM_PROXY_BID, PM_PROXY_ASK, PM_PROXY_QTY = "0.4125", "0.4175", "777.0000"
+PM_PROXY_AT = datetime(2026, 9, 24, 23, 15, tzinfo=timezone.utc)  # ATL@GB T-60m (19:15 ET; kickoff 00:15Z)
+PM_PROXY_NOW = datetime(2026, 9, 24, 23, 30, tzinfo=timezone.utc)
+
+
+def pm_t60m_capture(cfg: Config) -> None:
+    """Adds the ATL@GB T-60m research book capture at 19:15 ET to a `polymarket` store: the recorded book with
+    SYNTHETIC top levels (`PM_PROXY_*`), through the pilot's own capture entry point."""
+    from edge_lab import http as pm_http
+    from edge_lab import polymarket_sports as ps
+
+    raw = json.loads((PM_FIX / "book_aec-nfl-atl-gb-2026-09-24_2026-09-24T205959Z.json").read_bytes())
+    data = {k: v for k, v in raw["marketData"].items() if k != "stats"}
+    data["bids"] = [{"px": {"value": PM_PROXY_BID, "currency": "USD"}, "qty": PM_PROXY_QTY}]
+    data["offers"] = [{"px": {"value": PM_PROXY_ASK, "currency": "USD"}, "qty": PM_PROXY_QTY}]
+
+    class _At(datetime):  # the fetch layer stamps receipt with the wall clock: pin it to the fixture's time
+        @classmethod
+        def now(cls, tz=None):
+            return PM_PROXY_AT + timedelta(seconds=20)
+    wall, pm_http.datetime = pm_http.datetime, _At
+    try:
+        code, report = ps.run_capture(cfg.db, clock=lambda: PM_PROXY_AT, sleep=lambda s: None,
+                                      opener=_Recorded(json.dumps({"marketData": data}).encode()),
+                                      access_decision=PM_ACCESS)
+    finally:
+        pm_http.datetime = wall
+    if code != 0 or report.get("by_status") != {"CAPTURED": 1}:
+        raise RuntimeError(f"the T-60m fixture capture did not record one book: {report}")
+
+
+def polymarket_label_proxy(root: Path | None = None) -> tuple[Config, Path]:
+    """`polymarket` plus the ATL@GB T-60m capture (SYNTHETIC prices), viewed at 19:30 ET: an EXP-002 label proxy,
+    so Data sources shows it as "Hidden · EXP-002 label proxy" beside the visible T-6h capture."""
+    cfg, root = polymarket(root)
+    pm_t60m_capture(cfg)
+    return replace(cfg, clock=lambda: PM_PROXY_NOW), root
+
+
 def economics(root: Path | None = None, *, issues: bool = False) -> tuple[Config, Path]:
     """Economic Evidence v1, Family A: a SYNTHETIC store of NFL Odds captures and Kalshi KXNFLGAME books
     (`edge_lab.dashboard.sports_fixtures`, real store shapes; real team names, synthetic prices), viewed on
@@ -453,5 +497,6 @@ def payoff_production() -> tuple[Config, Path]:
 BUILDERS = {"early": early, "demo": demo, "broken": broken, "odds": odds_pilot, "odds_issues": odds_issues,
             "freshness": freshness, "freshness_deferred": freshness_deferred,
             "polymarket": polymarket, "polymarket_issues": polymarket_issues,
+            "polymarket_label_proxy": polymarket_label_proxy,
             "economics": economics, "economics_issues": economics_issues,
             "payoff": payoff, "payoff_laptop": payoff_laptop, "payoff_production": payoff_production}
