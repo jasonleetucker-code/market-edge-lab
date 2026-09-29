@@ -73,6 +73,15 @@ Findings:
 - **Sequencing.** `seq` is a "Sequential number that should be checked if you want to guarantee
   you received all the messages. Used for snapshot/delta consistency"; `sid` identifies the
   subscription.
+  - **The scope of `seq` is UNVERIFIED.** The pages do not say whether one counter runs per
+    subscription across all the markets it carries, or per market.
+    - `inplay_evidence` counts per subscription by default (`SeqScope.SUBSCRIPTION`). A gap on
+      any market makes every book on that `sid` unusable until each is resynced.
+    - A repeat of one (sid, seq) with a different message is a SEQ_SCOPE_CONFLICT, and every book
+      on that `sid` fails closed.
+    - **One market per subscription is the supported, safe mode:** both readings agree there.
+      `SeqScope.MARKET` enforces it and refuses a `sid` that carries a second market.
+    - Route A must verify the scope on its first recorded session before multiplexing markets.
   - The pages give **no explicit gap-recovery procedure**.
   - `update_subscription` supports `add_markets`, `delete_markets` and `get_snapshot`, so a
     fresh snapshot can be requested without resubscribing (search summary of the docs;
@@ -271,7 +280,8 @@ credits, and the owner has not authorized additional Odds spending.
 
 Implemented offline in `src/edge_lab/inplay_evidence.py` (contract `inplay-evidence-v1`):
 - **Books.** A book needs a valid start (a snapshot with `sid` and `seq`). Deltas apply only in
-  sequence.
+  sequence, counted per subscription across its markets by default. The scope is UNVERIFIED
+  (§1.2), and one market per subscription is the supported, safe mode.
   - Duplicates are ignored and counted.
   - A gap or a foreign `sid` makes the book UNUSABLE until a new snapshot. v1 keeps no reorder
     buffer.

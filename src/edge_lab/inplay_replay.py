@@ -191,6 +191,25 @@ class ReplayConfig:
     settlement_fee_per_contract: Decimal | None = Decimal(0)  # None: unknown (blocks after-cost)
     cancel_on_pause: bool = False
     policy_version: str = "1"
+    # A zero decision-plus-arrival latency is the FIRST_DETECTION_ZERO_LATENCY assumption: allowed only
+    # when this names it, and such a report is a labelled diagnostic, never a policy result.
+    diagnostic_mode: str | None = None
+
+    @property
+    def zero_latency(self) -> bool:
+        return self.arrival_latency is not None and self.decision_latency + self.arrival_latency == timedelta(0)
+
+    def problems(self) -> list[str]:
+        out = []
+        if self.diagnostic_mode not in (None, "FIRST_DETECTION_ZERO_LATENCY"):
+            out.append(f"unknown diagnostic mode {self.diagnostic_mode!r}")
+        if self.zero_latency and self.diagnostic_mode != "FIRST_DETECTION_ZERO_LATENCY":
+            out.append("zero decision plus arrival latency is the FIRST_DETECTION_ZERO_LATENCY assumption: set "
+                       "diagnostic_mode='FIRST_DETECTION_ZERO_LATENCY' to run it as a labelled diagnostic")
+        if self.decision_latency < timedelta(0) or (self.arrival_latency is not None
+                                                    and self.arrival_latency < timedelta(0)):
+            out.append("latencies cannot be negative")
+        return out
 
     def variant_id(self) -> str:
         key = {k: str(v) for k, v in self.__dict__.items() if k != "fee_model"}
@@ -366,6 +385,8 @@ class EntryResult:
     pnl_net: Decimal | None  # None when INCOMPLETE or any cost is unknown
     attempts: int
     touches_not_filled: int
+    placed: bool | None  # PREPLACED_LIMIT: was the resting sale placed? None for other arms
+    duplicate_receipts: int  # books sharing a receipt time with another book of this entry
     notes: tuple[str, ...]
     reconciliation: tuple[str, ...]
 
@@ -397,6 +418,7 @@ class ArmSummary:
     change_vs_hold_net: Decimal | None
     risk: Mapping[str, Any]  # dispersion and worst case of per-entry P&L, separately
     clusters: int
+    not_placed: int = 0  # PREPLACED_LIMIT entries whose resting sale was never placed: held, but not HOLD
 
 
 @dataclass(frozen=True)
@@ -404,6 +426,7 @@ class ReplayReport:
     version: str
     cohort_id: str
     cohort_sha256: str
+    diagnostic_mode: str | None
     data_kind: str
     label: str
     config_variant: str
@@ -483,6 +506,12 @@ def _books_until(entry: CohortEntry, start: datetime) -> list[tuple[datetime, Ti
                   key=lambda x: x[0])
 
 
+def _book_key(book: TimedBook, index: int) -> str:
+    """A fill's book identity: its evidence id (a seq or snapshot id) plus receipt, or its position in
+    receipt order when the book has no evidence id. Two distinct books at one receipt time differ."""
+    return f"{book.evidence_id or f'#{index}'}@{book.receipt_utc}"
+
+
 def _new_ledger(cohort: Cohort, entry: CohortEntry, cfg: ReplayConfig) -> ReplayLedger:
     ledger = ReplayLedger(balance_precision=getattr(cfg.fee_model, "balance_precision", Decimal("0.01")))
     ledger.acquire(entry.quantity, entry.entry_price, entry.entry_cost)
@@ -531,7 +560,7 @@ def _run_bot(cohort: Cohort, entry: CohortEntry, cfg: ReplayConfig, arm: Arm, le
             notes.append(f"IOC_NO_FILL: {walk.detail}")
             continue
         for n, (price, size) in enumerate(walk.levels):
-            ledger.fill(fill_id=f"{entry.game_id}:bot:{fill_book.receipt_utc}:{n}", quantity=size, price=price,
+            ledger.fill(fill_id=f"{entry.game_id}:bot:{_book_key(fill_book, idx)}:{n}", quantity=size, price=price,
                         fee=cfg.fee_model.sale_fee(size, price))
         if qty < d.quantity:
             notes.append(f"IOC_PARTIAL {qty} of {d.quantity} at {fill_book.receipt_utc}")
@@ -546,8 +575,9 @@ def _run_preplaced(cohort: Cohort, entry: CohortEntry, cfg: ReplayConfig, arm: A
         notes.append("ARRIVAL_UNKNOWN: the resting sale is never known to rest; no fill is assumed")
         return 0, 0
     placed_at = entry_at + cfg.arrival_latency
-    books = _books_until(entry, entry_at)
-    # placement is a policy action: it needs an admissible book received at or before placement
+    books = _books_until(entry, entry_at - cfg.max_book_age)
+    # placement is a policy action: it needs an admissible book received at or before placement; a book
+    # received before entry counts while it is no older than max_book_age (the policy checks its age)
     prior = [b for at, b in books if at <= placed_at]
     d = evaluate(as_of=placed_at, inventory=_inventory(entry, ledger, placed_at.isoformat()), orders=(),
                  book=_sale_book(entry, prior[-1], cfg, cohort.data_kind) if prior else None,
@@ -558,7 +588,7 @@ def _run_preplaced(cohort: Cohort, entry: CohortEntry, cfg: ReplayConfig, arm: A
     order_id = f"{entry.game_id}:rest"
     ledger.reserve(order_id, d.quantity)
     limit, filled_upto, touches, cum = d.limit_price, Decimal(0), 0, Decimal(0)
-    for at, book in books:
+    for i, (at, book) in enumerate(books):
         if at <= placed_at or order_id not in ledger.reservations:  # only books seen after it rests
             continue
         if book.trading_state in (TradingState.TRADING_PAUSED, TradingState.EXCHANGE_PAUSED) and cfg.cancel_on_pause:
@@ -577,7 +607,7 @@ def _run_preplaced(cohort: Cohort, entry: CohortEntry, cfg: ReplayConfig, arm: A
         new = min(ledger.reservations[order_id], cum - filled_upto)
         new = (new / policy.quantity_step).to_integral_value(rounding=ROUND_FLOOR) * policy.quantity_step
         if new > 0:
-            ledger.fill(fill_id=f"{entry.game_id}:rest:{book.receipt_utc}", quantity=new, price=limit,
+            ledger.fill(fill_id=f"{entry.game_id}:rest:{_book_key(book, i)}", quantity=new, price=limit,
                         fee=cfg.fee_model.sale_fee(new, limit), order_id=order_id)
             filled_upto += new
     if touches:
@@ -625,11 +655,18 @@ def replay_entry(cohort: Cohort, entry: CohortEntry, cfg: ReplayConfig, arm: Arm
     ledger = _new_ledger(cohort, entry, cfg)
     notes: list[str] = []
     attempts = touches = 0
+    placed: bool | None = None
+    receipts = [b.receipt_utc for b in entry.books]
+    duplicate_receipts = len(receipts) - len(set(receipts))
+    if duplicate_receipts:
+        notes.append(f"DUPLICATE_RECEIPT_TIMES: {duplicate_receipts} book(s) share a receipt time; fills are keyed by "
+                     "book identity, so each distinct book can fill once")
     if arm is not Arm.HOLD:
         if semantics is Semantics.BOT_TRIGGERED:
             attempts = _run_bot(cohort, entry, cfg, arm, ledger, notes)
         elif semantics is Semantics.PREPLACED_LIMIT:
             attempts, touches = _run_preplaced(cohort, entry, cfg, arm, ledger, notes)
+            placed = attempts > 0
         else:
             raise ValueError("an exit arm needs exactly one execution semantics")
     s = entry.settlement
@@ -647,7 +684,8 @@ def replay_entry(cohort: Cohort, entry: CohortEntry, cfg: ReplayConfig, arm: Arm
         sold=ledger.sold, residual=ledger.settled_quantity if status is EntryStatus.COMPLETE else None,
         gross_proceeds=ledger.gross_proceeds, fees=fees, net_proceeds=ledger.net_proceeds,
         settlement_cash=ledger.settlement_cash, pnl_gross=ledger.pnl_gross(), pnl_net=ledger.pnl_net(),
-        attempts=attempts, touches_not_filled=touches, notes=tuple(notes), reconciliation=tuple(ledger.reconcile()))
+        attempts=attempts, touches_not_filled=touches, placed=placed, duplicate_receipts=duplicate_receipts,
+        notes=tuple(notes), reconciliation=tuple(ledger.reconcile()))
 
 
 def _summ(results: Sequence[EntryResult], hold: Sequence[EntryResult] | None, arm: Arm,
@@ -673,11 +711,15 @@ def _summ(results: Sequence[EntryResult], hold: Sequence[EntryResult] | None, ar
     return ArmSummary(arm, semantics, len(results), len(complete), len(results) - len(complete), pg, pn,
                       None if pg is None else capital + pg, None if pn is None else capital + pn,
                       sum((r.pnl_gross for r in complete if r.pnl_gross is not None), Decimal(0)),
-                      change_g, change_n, risk, len({r.cluster_id for r in results}))
+                      change_g, change_n, risk, len({r.cluster_id for r in results}),
+                      sum(1 for r in results if r.placed is False))
 
 
 def replay(cohort: Cohort, cfg: ReplayConfig) -> ReplayReport:
     """Replay every arm under both semantics over the identical cohort. Pure and in memory."""
+    problems = cfg.problems()
+    if problems:
+        raise ValueError("; ".join(problems))
     if not valid_price(cfg.target_price):
         raise ValueError("target must be a valid dollar price")
     if not (Decimal(0) < cfg.partial_fraction < Decimal(1)):
@@ -696,11 +738,13 @@ def replay(cohort: Cohort, cfg: ReplayConfig) -> ReplayReport:
     basis = cfg.fee_model.claim_basis
     any_unknown = any(r.pnl_net is None and r.status is EntryStatus.COMPLETE for rs in results.values()
                       for r in rs)
-    after_cost = basis is not ClaimBasis.NONE and not any_unknown and cohort.data_kind is not DataKind.SYNTHETIC
+    after_cost = (basis is not ClaimBasis.NONE and not any_unknown and cohort.data_kind is not DataKind.SYNTHETIC
+                  and cfg.diagnostic_mode is None)
     reason = ("after-cost claims need a claimable fee basis, every cost known and non-synthetic evidence; "
               f"fee basis {basis.value}, unknown costs {any_unknown}, data {cohort.data_kind.value}")
     return ReplayReport(
         version=REPLAY_VERSION, cohort_id=cohort.cohort_id, cohort_sha256=cohort.sha256,
+        diagnostic_mode=cfg.diagnostic_mode,
         data_kind=cohort.data_kind.value, label=cohort.label, config_variant=cfg.variant_id(),
         fill_rule=cfg.fill_rule.value, fee_model=cfg.fee_model.model_id, fee_claim_basis=basis.value,
         after_cost_claim=after_cost, after_cost_reason=reason, arms=arms,
@@ -709,9 +753,9 @@ def replay(cohort: Cohort, cfg: ReplayConfig) -> ReplayReport:
                "Released cash stays idle to the common horizon; no recycling is assumed.",
                "Diagnostics (FIRST_DETECTION_ZERO_LATENCY, HINDSIGHT_UPPER_BOUND) are not policy results.",
                "Entries within one cluster (NFL week) are not independent; do not annualize.")
-        + (("ZERO_LATENCY_CONFIG: decision plus arrival latency is 0, which is the FIRST_DETECTION_ZERO_LATENCY "
-            "assumption; not executable evidence",)
-           if cfg.arrival_latency is not None and cfg.decision_latency + cfg.arrival_latency == timedelta(0) else ()))
+        + ((f"DIAGNOSTIC_MODE {cfg.diagnostic_mode}: decision plus arrival latency is 0; every arm here is a "
+            "labelled diagnostic, not a policy result and not executable evidence",)
+           if cfg.diagnostic_mode else ()))
 
 
 def sensitivity(cohort: Cohort, base: ReplayConfig, *, latencies: Sequence[timedelta | None] = (),

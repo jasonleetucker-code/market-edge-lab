@@ -256,3 +256,71 @@ def test_journal_requires_a_header(tmp_path):
     p.write_text(json.dumps({"receipt_utc": "2026-10-04T17:00:00Z", "kind": "book", "body": {}}) + "\n")
     with pytest.raises(ValueError):
         list(ev.read_journal(p))
+
+
+# ------------------------------------------------------------------ seq scope (review of #125)
+
+AWAY = "KXNFLGAME-FIXTURE-AWAY"
+
+
+def _raw(kind, ticker, sid, seq):
+    if kind == "snap":
+        return {"type": "orderbook_snapshot", "sid": sid, "seq": seq,
+                "msg": {"market_ticker": ticker, "yes_dollars_fp": [["0.30", "10.00"]], "no_dollars_fp": []}}
+    return {"type": "orderbook_delta", "sid": sid, "seq": seq,
+            "msg": {"market_ticker": ticker, "price_dollars": "0.30", "delta_fp": "1.00", "side": "yes"}}
+
+
+def msg(kind, ticker, sid, seq):
+    return ev.parse_book_message(_raw(kind, ticker, sid, seq), receipt_utc="2026-10-04T17:00:00Z")
+
+
+# the reviewer's repro: one subscription (sid 2) carrying two markets, nothing missed
+SHARED_SPEC = [("snap", TICKER, 2, 1), ("snap", AWAY, 2, 2), ("delta", TICKER, 2, 3), ("delta", AWAY, 2, 4),
+               ("delta", TICKER, 2, 5)]
+SHARED = [msg(*s) for s in SHARED_SPEC]
+
+
+def test_seq_counts_the_subscription_across_markets():
+    books, ts = ev.reconstruct_many(SHARED)
+    assert books[TICKER].usable and books[AWAY].usable  # no false gap
+    assert books[TICKER].yes_bids == ((D("0.30"), D("12.00")),) and books[AWAY].yes_bids == ((D("0.30"), D("11.00")),)
+    assert all(t.applied is not Applied.GAP_DETECTED for v in ts.values() for t in v)
+
+
+def test_a_gap_on_one_market_makes_every_book_on_the_subscription_unusable():
+    lost = SHARED[:3] + [msg("delta", AWAY, 2, 5)]  # seq 4 never arrived
+    books, ts = ev.reconstruct_many(lost)
+    assert not books[TICKER].usable and not books[AWAY].usable
+    assert ts[TICKER][-1].applied is Applied.GAP_ON_SUBSCRIPTION and ts[AWAY][-1].applied is Applied.GAP_DETECTED
+    resynced, _ = ev.reconstruct_many(lost + [msg("snap", TICKER, 2, 6)])
+    assert resynced[TICKER].usable and not resynced[AWAY].usable  # each book needs its own snapshot
+
+
+def test_a_conflicting_repeat_of_one_seq_fails_closed():
+    # per-market counting on a shared sid: AWAY's seq 1 is not HOME's seq 1
+    books, ts = ev.reconstruct_many([msg("snap", TICKER, 3, 1), msg("delta", TICKER, 3, 2), msg("snap", AWAY, 3, 1)])
+    assert ts[AWAY][-1].applied is Applied.SEQ_SCOPE_CONFLICT
+    assert not books[TICKER].usable and not books[AWAY].usable
+    exact, ts2 = ev.reconstruct_many([msg("snap", TICKER, 3, 1), msg("snap", TICKER, 3, 1)])
+    assert exact[TICKER].usable and ts2[TICKER][-1].applied is Applied.IGNORED_DUPLICATE  # a true duplicate
+
+
+def test_market_scope_refuses_a_shared_subscription_and_agrees_on_one_market():
+    books, ts = ev.reconstruct_many(SHARED, scope=ev.SeqScope.MARKET)
+    assert not books[TICKER].usable and not books[AWAY].usable
+    assert ts[AWAY][-1].applied is Applied.SHARED_SUBSCRIPTION
+    single = [msg("snap", TICKER, 1, 1), msg("delta", TICKER, 1, 2), msg("delta", TICKER, 1, 4)]
+    a, _ = ev.reconstruct_many(single, scope=ev.SeqScope.MARKET)
+    b, _ = ev.reconstruct_many(single)
+    assert a[TICKER].status is b[TICKER].status is BookStatus.GAP_AWAITING_RESYNC
+
+
+def test_journal_replay_sequences_every_market_on_the_subscription(tmp_path):
+    lines = [{"journal": "inplay-journal-v1", "data_kind": "FIXTURE"}]
+    lines += [{"receipt_utc": "2026-10-04T17:00:00Z", "kind": "book", "body": _raw(*s)} for s in SHARED_SPEC]
+    p = tmp_path / "shared.jsonl"
+    p.write_text("\n".join(json.dumps(x) for x in lines) + "\n")
+    state, ts, *_ = ev.replay_book_journal(p, TICKER)
+    assert state.usable and state.yes_bids == ((D("0.30"), D("12.00")),)
+    assert [t.applied for t in ts] == [Applied.SNAPSHOT_APPLIED, Applied.DELTA_APPLIED, Applied.DELTA_APPLIED]

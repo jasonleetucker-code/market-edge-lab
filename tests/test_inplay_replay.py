@@ -167,7 +167,33 @@ def test_paused_market_neither_fills_nor_triggers():
 def test_a_resting_sale_needs_an_admissible_book_to_be_placed():
     rep = R.replay(cohort(entry([bk(60, [("0.80", "100")])])), cfg())
     rest = res(rep, "G1", Arm.FULL_EXIT, Semantics.PREPLACED_LIMIT)
-    assert rest.sold == 0 and rest.notes[0] == "NOT_PLACED: BOOK_MISSING"
+    assert rest.sold == 0 and rest.placed is False and rest.notes[0] == "NOT_PLACED: BOOK_MISSING"
+    # the arm summary counts it, so a never-placed arm cannot pass for HOLD
+    assert rep.arm(Arm.FULL_EXIT, Semantics.PREPLACED_LIMIT).not_placed == 1
+    assert rep.arm(Arm.FULL_EXIT, Semantics.BOT_TRIGGERED).not_placed == 0
+
+
+def test_a_book_received_just_before_entry_can_place_the_resting_sale():
+    books = [bk(-10, [("0.30", "500")]), bk(60, [("0.80", "100")])]
+    rest = res(R.replay(cohort(entry(books)), cfg()), "G1", Arm.FULL_EXIT, Semantics.PREPLACED_LIMIT)
+    assert rest.placed is True and rest.sold == D(100) and rest.gross_proceeds == D("70.00")
+    too_old = [bk(-30, [("0.30", "500")]), bk(60, [("0.80", "100")])]  # older than max_book_age at placement
+    stale = res(R.replay(cohort(entry(too_old)), cfg()), "G1", Arm.FULL_EXIT, Semantics.PREPLACED_LIMIT)
+    assert stale.placed is False and stale.notes[0] == "NOT_PLACED: BOOK_MISSING"  # outside the look-back
+
+
+def test_fills_are_keyed_by_book_identity_and_duplicate_receipts_are_reported():
+    # two distinct books share one receipt time: each is its own evidence, so neither fill is lost
+    twin_a = R.TimedBook(at(62), ((D("0.75"), D("30")),), evidence_id="seq-41")
+    twin_b = R.TimedBook(at(62), ((D("0.76"), D("50")),), evidence_id="seq-42")
+    books = [bk(0, [("0.30", "500")]), twin_a, twin_b]
+    rep = R.replay(cohort(entry(books)), cfg())
+    rest = res(rep, "G1", Arm.FULL_EXIT, Semantics.PREPLACED_LIMIT)
+    assert rest.duplicate_receipts == 1 and any(n.startswith("DUPLICATE_RECEIPT_TIMES") for n in rest.notes)
+    assert rest.sold == D(50) and rest.reconciliation == ()  # the larger crossing, never 30 + 50
+    same = R.TimedBook(at(62), ((D("0.75"), D("30")),), evidence_id="seq-41")
+    rep2 = R.replay(cohort(entry([bk(0, [("0.30", "500")]), twin_a, same])), cfg())
+    assert res(rep2, "G1", Arm.FULL_EXIT, Semantics.PREPLACED_LIMIT).sold == D(30)  # a true duplicate fills once
 
 
 def test_unknown_arrival_latency_means_no_fill():
@@ -326,9 +352,11 @@ def _diff_bound(report, arm, sem):
 def test_take_profit_does_not_manufacture_alpha_on_a_calibrated_null(null_cohort):
     assert null_cohort.data_kind is DataKind.SYNTHETIC and null_cohort.label.startswith("SYNTHETIC")
     frictionless = cfg(fee_model=UnknownFeeModel("none", "frictionless null"), decision_latency=timedelta(0),
-                       arrival_latency=timedelta(0), fill_rule=FillRule.TOUCH_UPPER_BOUND)
+                       arrival_latency=timedelta(0), fill_rule=FillRule.TOUCH_UPPER_BOUND,
+                       diagnostic_mode="FIRST_DETECTION_ZERO_LATENCY")
     rep = R.replay(null_cohort, frictionless)
-    assert any(n.startswith("ZERO_LATENCY_CONFIG") for n in rep.notes)
+    assert any(n.startswith("DIAGNOSTIC_MODE FIRST_DETECTION_ZERO_LATENCY") for n in rep.notes)
+    assert rep.diagnostic_mode == "FIRST_DETECTION_ZERO_LATENCY" and not rep.after_cost_claim
     hold = [float(r.pnl_gross) / 100 + 0.30 for r in rep.entries if r.arm is Arm.HOLD]
     se_hold = statistics.stdev(hold) / len(hold) ** 0.5
     assert abs(statistics.fmean(hold) - 0.30) < 4 * se_hold  # calibrated: P(YES) = price
@@ -340,6 +368,7 @@ def test_take_profit_does_not_manufacture_alpha_on_a_calibrated_null(null_cohort
 
 def test_with_spread_and_fees_take_profit_only_loses_on_the_null(null_cohort):
     costly = cfg(decision_latency=timedelta(0), arrival_latency=timedelta(0), fill_rule=FillRule.TOUCH_UPPER_BOUND,
+                 diagnostic_mode="FIRST_DETECTION_ZERO_LATENCY",
                  spread_haircut_ticks=1)
     rep = R.replay(null_cohort, costly)
     for arm in (Arm.FULL_EXIT, Arm.PARTIAL_EXIT):
@@ -352,10 +381,38 @@ def test_with_spread_and_fees_take_profit_only_loses_on_the_null(null_cohort):
 
 def test_strict_through_is_conservative_on_the_null(null_cohort):
     strict = cfg(fee_model=UnknownFeeModel("none", "frictionless null"), decision_latency=timedelta(0),
-                 arrival_latency=timedelta(0))
+                 arrival_latency=timedelta(0), diagnostic_mode="FIRST_DETECTION_ZERO_LATENCY")
     rep = R.replay(null_cohort, strict)
     mean, se = _diff_bound(rep, Arm.FULL_EXIT, Semantics.PREPLACED_LIMIT)
     assert mean < 4 * se  # selling at the limit only after the price is already through it cannot gain
+
+
+@pytest.fixture(scope="module")
+def realistic_null_cohort():
+    # books every 5 s, so the default 1 s + 1 s latency finds a book at arrival (review of #125)
+    return R.synthetic_martingale_cohort(seed=NULL_SEED, games=NULL_GAMES, step_seconds=5)
+
+
+def test_no_pre_cost_alpha_at_realistic_latency(realistic_null_cohort):
+    base = cfg(fee_model=UnknownFeeModel("none", "frictionless null"))  # defaults: 1 s decision + 1 s arrival
+    assert base.diagnostic_mode is None and not base.zero_latency
+    rep = R.replay(realistic_null_cohort, base)
+    fills = [r for r in rep.entries if r.arm is Arm.FULL_EXIT and r.semantics is Semantics.BOT_TRIGGERED and r.sold]
+    assert fills  # the latency path really fills; the null is not vacuous
+    for arm in (Arm.FULL_EXIT, Arm.PARTIAL_EXIT):
+        for sem in Semantics:
+            mean, se = _diff_bound(rep, arm, sem)
+            assert se > 0 and mean < 4 * se, (arm, sem, mean, se)  # no positive pre-cost alpha beyond noise
+
+
+def test_zero_latency_is_refused_outside_the_labelled_diagnostic():
+    with pytest.raises(ValueError, match="FIRST_DETECTION_ZERO_LATENCY"):
+        R.replay(cohort(entry(REACH)), cfg(decision_latency=timedelta(0), arrival_latency=timedelta(0)))
+    with pytest.raises(ValueError, match="diagnostic mode"):
+        R.replay(cohort(entry(REACH)), cfg(diagnostic_mode="HINDSIGHT"))
+    with pytest.raises(ValueError, match="negative"):
+        R.replay(cohort(entry(REACH)), cfg(arrival_latency=-timedelta(seconds=1)))
+    assert R.replay(cohort(entry(REACH)), cfg()).diagnostic_mode is None
 
 
 def test_synthetic_generator_is_deterministic_and_labelled():

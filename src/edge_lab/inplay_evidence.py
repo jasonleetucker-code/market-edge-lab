@@ -13,8 +13,11 @@ rules are:
 
 - **Valid start.** Nothing is usable until a snapshot with a sequence number arrives. A delta
   before it is ignored and counted, never applied to an empty book.
-- **Sequence.** A delta applies only when its `seq` is exactly one past the last applied one on
-  the same subscription (`sid`).
+- **Sequence.** A delta applies only when its `seq` is exactly one past the last one on the same
+  subscription (`sid`). Whether `seq` counts a whole subscription across its markets or each market is
+  UNVERIFIED (`SeqScope`): the default counts per subscription across markets
+  (`SubscriptionReconstructor`), a conflicting repeat of one (sid, seq) fails closed, and one market
+  per subscription is the supported mode in which both readings agree.
 - **Duplicates** (`seq` at or below the last applied one) are ignored and counted.
 - **Gaps and out-of-order arrivals** (`seq` more than one ahead, or another `sid`) make the book
   UNUSABLE until a new snapshot. v1 keeps no reorder buffer: a late message after a gap does
@@ -252,6 +255,9 @@ class Applied(str, Enum):
     NEGATIVE_LEVEL = "NEGATIVE_LEVEL"
     CROSSED_BOOK = "CROSSED_BOOK"
     WRONG_MARKET = "WRONG_MARKET"
+    GAP_ON_SUBSCRIPTION = "GAP_ON_SUBSCRIPTION"  # another market's message revealed a gap on this book's sid
+    SEQ_SCOPE_CONFLICT = "SEQ_SCOPE_CONFLICT"  # one (sid, seq) carried two different messages: scope assumption wrong
+    SHARED_SUBSCRIPTION = "SHARED_SUBSCRIPTION"  # MARKET scope: a sid carried a second market
 
 
 @dataclass(frozen=True)
@@ -367,6 +373,122 @@ def reconstruct(market_ticker: str, messages: Iterable[BookMessage]) -> tuple[Bo
         out.append(t)
         state = t.state
     return state, tuple(out)
+
+
+class SeqScope(str, Enum):
+    """What `seq` counts. The docs say only that it guarantees "you received all the messages" of the
+    subscription; whether it runs per subscription across several markets or per market is UNVERIFIED.
+
+    - SUBSCRIPTION (default): one counter per `sid` across every market it carries. A gap seen on any
+      market makes every book on that sid unusable until each is resynced.
+    - MARKET: one counter per market. Safe only with one market per subscription, where both readings
+      coincide; a sid that carries a second market makes both books unusable (SHARED_SUBSCRIPTION)."""
+
+    SUBSCRIPTION = "SUBSCRIPTION"
+    MARKET = "MARKET"
+
+
+RECENT_SEQ_WINDOW = 4096  # (sid, seq) -> message digest kept for conflict detection
+
+
+class SubscriptionReconstructor:
+    """Books for every market in one journal, sequenced under a declared `SeqScope`.
+
+    In memory and deterministic; it never opens anything. Under SUBSCRIPTION scope a repeated
+    (sid, seq) with a *different* message is a SEQ_SCOPE_CONFLICT: the per-subscription reading is
+    wrong for this feed, so every book on that sid becomes unusable rather than silently dropping one
+    market's updates as duplicates."""
+
+    def __init__(self, scope: SeqScope = SeqScope.SUBSCRIPTION) -> None:
+        self.scope = scope
+        self.books: dict[str, BookState] = {}
+        self.transitions: dict[str, list[Transition]] = {}
+        self._sid_last: dict[int, int] = {}
+        self._recent: dict[int, dict[int, str]] = {}
+        self._sid_markets: dict[int, set[str]] = {}
+
+    def _record(self, ticker: str, t: Transition) -> None:
+        self.books[ticker] = t.state
+        self.transitions.setdefault(ticker, []).append(t)
+
+    def _book(self, ticker: str) -> BookState:
+        return self.books.get(ticker) or BookState(ticker)
+
+    def _unusable(self, ticker: str, msg: BookMessage, what: Applied, status: BookStatus, detail: str) -> None:
+        s = self._book(ticker)
+        new = replace(s, status=status, valid_since_utc=None, last_receipt_utc=msg.stamps.receipt_utc,
+                      counts=_bump(s.counts, what))
+        self._record(ticker, Transition(new, what, detail))
+
+    def _poison_sid(self, sid: int, msg: BookMessage, what: Applied, status: BookStatus, detail: str,
+                    *, skip: str | None = None) -> None:
+        for ticker, s in list(self.books.items()):
+            if ticker != skip and s.sid == sid and s.status is BookStatus.VALID:
+                self._unusable(ticker, msg, what, status, detail)
+
+    def apply(self, msg: BookMessage) -> None:
+        ticker, sid, seq = msg.market_ticker, msg.sid, msg.seq
+        if self.scope is SeqScope.MARKET:
+            if sid is not None:
+                markets = self._sid_markets.setdefault(sid, set())
+                markets.add(ticker)
+                if len(markets) > 1:
+                    for other in sorted(markets):
+                        self._unusable(other, msg, Applied.SHARED_SUBSCRIPTION, BookStatus.GAP_AWAITING_RESYNC,
+                                       f"sid {sid} carries {sorted(markets)}: MARKET scope needs one market per "
+                                       "subscription")
+                    return
+            self._record(ticker, apply_message(self._book(ticker), msg))
+            return
+        if sid is None or seq is None:  # the per-market rules already refuse these
+            self._record(ticker, apply_message(self._book(ticker), msg))
+            return
+        recent = self._recent.setdefault(sid, {})
+        last = self._sid_last.get(sid)
+        if last is not None and seq <= last:
+            seen = recent.get(seq)
+            if seen is not None and seen != msg.raw_sha256:
+                detail = f"sid {sid} seq {seq} carried two different messages: seq is not per subscription here"
+                self._poison_sid(sid, msg, Applied.SEQ_SCOPE_CONFLICT, BookStatus.INVALID_AWAITING_RESYNC, detail,
+                                 skip=ticker)
+                self._unusable(ticker, msg, Applied.SEQ_SCOPE_CONFLICT, BookStatus.INVALID_AWAITING_RESYNC, detail)
+                return
+            s = self._book(ticker)
+            self._record(ticker, Transition(replace(s, last_receipt_utc=msg.stamps.receipt_utc,
+                                                    counts=_bump(s.counts, Applied.IGNORED_DUPLICATE)),
+                                            Applied.IGNORED_DUPLICATE, f"sid {sid} seq {seq} <= {last}"))
+            return
+        gap = last is not None and seq != last + 1
+        self._sid_last[sid] = seq
+        recent[seq] = msg.raw_sha256
+        if len(recent) > RECENT_SEQ_WINDOW:
+            for old in sorted(recent)[: len(recent) - RECENT_SEQ_WINDOW]:
+                del recent[old]
+        if gap:
+            detail = f"sid {sid}: expected seq {last + 1}, got {seq}"
+            self._poison_sid(sid, msg, Applied.GAP_ON_SUBSCRIPTION, BookStatus.GAP_AWAITING_RESYNC, detail, skip=ticker)
+        s = self._book(ticker)
+        if msg.kind is MessageKind.SNAPSHOT:
+            self._record(ticker, apply_message(s, msg))  # a snapshot starts (or restarts) this market's book
+            return
+        if gap:
+            self._unusable(ticker, msg, Applied.GAP_DETECTED, BookStatus.GAP_AWAITING_RESYNC
+                           if s.status is not BookStatus.NO_VALID_START else BookStatus.NO_VALID_START, detail)
+            return
+        if s.status is BookStatus.VALID and s.sid == sid:
+            # contiguous on the subscription: present it to the per-market rules as the next seq
+            self._record(ticker, apply_message(replace(s, last_seq=seq - 1), msg))
+        else:
+            self._record(ticker, apply_message(s, msg))  # before start, unusable, or another sid: per-market rules
+
+
+def reconstruct_many(messages: Iterable[BookMessage], *, scope: SeqScope = SeqScope.SUBSCRIPTION
+                     ) -> tuple[dict[str, BookState], dict[str, tuple[Transition, ...]]]:
+    """Every market's book from one journal's messages, in arrival order, under `scope`."""
+    r = SubscriptionReconstructor(scope)
+    for msg in messages:
+        r.apply(msg)
+    return dict(r.books), {k: tuple(v) for k, v in r.transitions.items()}
 
 
 # --------------------------------------------------------------------------- REST snapshots (route B)
@@ -721,11 +843,13 @@ def read_journal(path: Path) -> Iterator[JournalLine]:
                                   data_kind)
 
 
-def replay_book_journal(path: Path, market_ticker: str) -> tuple[BookState, tuple[Transition, ...],
-                                                                   tuple[SourceFailure, ...], int, DataKind]:
+def replay_book_journal(path: Path, market_ticker: str, *, scope: SeqScope = SeqScope.SUBSCRIPTION
+                        ) -> tuple[BookState, tuple[Transition, ...], tuple[SourceFailure, ...], int, DataKind]:
     """Reconstruct one market's book from a journal file: (final state, transitions, failures,
-    parse failures, data kind). Failures and parse errors are returned, not dropped."""
-    state, transitions, failures, parse_failures = BookState(market_ticker), [], [], 0
+    parse failures, data kind). Every market's messages go through the sequencer, because `seq` may
+    count a whole subscription (`SeqScope`); only `market_ticker`'s book is returned. Failures and
+    parse errors are returned, not dropped."""
+    recon, failures, parse_failures = SubscriptionReconstructor(scope), [], 0
     data_kind = DataKind.SYNTHETIC
     for line in read_journal(path):
         data_kind = line.data_kind
@@ -748,9 +872,6 @@ def replay_book_journal(path: Path, market_ticker: str) -> tuple[BookState, tupl
             parse_failures += 1
             failures.append(SourceFailure(FailureKind.PARSE_ERROR, line.receipt_utc, f"{msg.reason}: {msg.detail}"))
             continue
-        if msg.market_ticker != market_ticker:
-            continue
-        t = apply_message(state, msg)
-        transitions.append(t)
-        state = t.state
-    return state, tuple(transitions), tuple(failures), parse_failures, data_kind
+        recon.apply(msg)
+    state = recon.books.get(market_ticker) or BookState(market_ticker)
+    return state, tuple(recon.transitions.get(market_ticker, ())), tuple(failures), parse_failures, data_kind

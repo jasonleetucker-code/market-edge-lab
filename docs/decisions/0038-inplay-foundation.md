@@ -34,7 +34,7 @@ honestly needs four things the repository lacked:
 
 | Module | Owns | Reuses |
 |---|---|---|
-| `inplay_evidence.py` (`inplay-evidence-v1`) | book reconstruction (valid start, `seq`/`sid`, duplicates, gaps → UNUSABLE until resync, negative/crossed → UNUSABLE), separate clocks, append-only game-state journal with linked corrections, coverage report, JSONL **file** transport only | `opportunity.walk_ladder` for sale walks (selling YES into YES bids mirrors taking NO asks at 1 − b); `fee_schedules.valid_price`; `OutcomeFinality` |
+| `inplay_evidence.py` (`inplay-evidence-v1`) | book reconstruction (valid start, `seq`/`sid` counted per subscription across markets by default, the scope UNVERIFIED and a conflicting repeat failing closed, one market per subscription the supported safe mode; duplicates, gaps → UNUSABLE until resync, negative/crossed → UNUSABLE), separate clocks, append-only game-state journal with linked corrections, coverage report, JSONL **file** transport only | `opportunity.walk_ladder` for sale walks (selling YES into YES bids mirrors taking NO asks at 1 − b); `fee_schedules.valid_price`; `OutcomeFinality` |
 | `position_policy.py` (`position-policy-v1`) | HOLD / REDUCE / EXIT proposals, bounded quantities, refusal states | `execution_ticket.OrderState` / `OPEN_ORDER_STATES` for order state; `fee_schedules.schedule_for` / `verification_at` / `taker_buy` for fees (no fee formula copied) |
 | `inplay_replay.py` (`inplay-replay-v1`) | three arms × two execution semantics over one cohort; isolated in-memory ledger; oracle diagnostics; sensitivities; calibrated synthetic nulls | `position_policy.evaluate` for every decision; ADR 0037's labels |
 
@@ -97,11 +97,17 @@ So:
 - **BOT_TRIGGERED.** The policy decides on the book received at detection. The marketable limit
   arrives after decision plus arrival latency. It fills only against the first usable book
   received at or after arrival, and only within `max_arrival_gap`.
-  - It never fills on the detecting book, except under an explicit zero-latency configuration,
-    which the report labels `ZERO_LATENCY_CONFIG`.
+  - It never fills on the detecting book. A zero decision-plus-arrival latency is refused unless
+    the configuration names `diagnostic_mode="FIRST_DETECTION_ZERO_LATENCY"`. Such a report is a
+    labelled diagnostic: it is never a policy result and never supports an after-cost claim.
   - Unknown arrival latency is no fill.
 - **PREPLACED_LIMIT.** A resting sale at the target is placed at entry. It needs an admissible
-  book to be placed, and it reserves its inventory.
+  book to be placed: one received at or before placement, and no older than `max_book_age`, which
+  may be a book from just before entry. It reserves its inventory.
+  - An entry whose sale was never placed is `placed=False`, and its arm reports a `not_placed`
+    count, so a never-placed arm cannot pass for HOLD.
+  - Fills are keyed by book identity (evidence id, or position, plus receipt). Books that share a
+    receipt time are counted and reported.
   - Under STRICT_THROUGH (the default) it fills only when a usable book shows bids *strictly
     above* the limit, at the limit price, and only up to the largest crossing size yet seen.
     Visible size is never summed across snapshots.
