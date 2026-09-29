@@ -3,105 +3,104 @@
 This is the live state of the repository. Each session overwrites it; it is not a history
 (git log is the history). Format: `AI_INSTRUCTIONS.md` → Handoff format.
 
-_Last updated: 2026-09-26 ~13:55 America/New_York (VPS clock) by the laptop Claude coordinator
-session. It covered the owner's decisions of 2026-09-26
-(`docs/owner/2026-09-26-owner-decisions-economics-backup.md`) and the day's first production
-observations. The Research Unblocking state of 2026-09-25 is in git history (#116)._
+_Last updated: 2026-09-28 ~23:25 America/New_York (VPS clock) by the laptop Claude coordinator
+session. It covered the owner directive of 2026-09-28
+(`docs/owner/2026-09-28-exp002-validation-inplay-foundation-directive.md`). The state of 2026-09-26
+is in git history (#121)._
 
 ```
-STATUS: DONE for everything buildable, with two exceptions:
-  - #120 (reviewed READY) and this record PR are BLOCKED on GitHub Actions: the account's billing
-    stopped CI ("recent account payments have failed or your spending limit needs to be
-    increased"). That is an owner-only fix.
-  - The Kalshi questions await the owner's confirmation of the final text and the sending channel.
-  Production is c32152f, DEPLOYED and PRODUCTION_VERIFIED.
-ACCEPTANCE: the owner decisions of 2026-09-26: record them; retention proposed-v1 via a reviewed
-  manual apply with a dry-run candidate list attached; O1 runbook and first pull; verify the first
-  NFL pairs, #107's same-run settlement and the first Polymarket capture; build the EXP-002
-  measurement endpoint and pre-freeze gate; keep EXP-002/EXP-003 DRAFT; no EXP-001 retuning; no
-  orders, paid data, accounts or gate advance.
+STATUS: DONE for this mission's buildable scope. Every PR is merged, and production e00a335 is
+  DEPLOYED and PRODUCTION_VERIFIED. EXP-002 cannot freeze: gate v3 has no PASS state, and its
+  spread-noise candidate failed validation. The #122 in-play foundation is offline only. Owner
+  decisions are in docs/owner/2026-09-29-vf-decision-packet.md.
+ACCEPTANCE: the directive of 2026-09-28:
+  - reconcile #120/#121;
+  - a defensible replacement EXP-002 gate, or a precise reason why a freeze stays unsupported;
+  - proposed freeze settings;
+  - fee verification;
+  - a gate line in the Terminal;
+  - the #122 offline foundation, a feasibility packet and one proposed pilot;
+  - an in-play Terminal view;
+  - no expansion of authority.
 EVIDENCE:
-  - MERGED, each with an independent review, re-reviews until READY, exact-head CI green and
-    reconciled with main:
-    - #117 (76e3bbc): the decision record; EXP-002 economics and hours; EXP-003 paused (hours not
-      owner-set); the final Kalshi message, NOT SENT.
-    - #118 (9911c3c): `backup retention-apply` (the only deleting command), O1 tooling and runbook
-      §7–§9. Two review rounds; the first blocker was that F09-linked and pinned protection
-      depended on flags.
-    - #119 (c32152f): the EXP-002 label-free pre-freeze gate and cross-book markout endpoint. Three
-      review rounds. A gate v2 pass is PASS_REPEAT_ONLY_NOT_FREEZE_ELIGIBLE; nothing in v2
-      authorizes a freeze.
-  - DEPLOYED (/root/deploy.sh: preflight PASS; backups verified before and after; fail-closed
-    PASS; no failed units; 13 timers):
-    - 9911c3c at 08:52Z;
-    - c32152f at 09:13Z; verify_production: VALID, valid_days 3, both restores VERIFIED, Chase
-      Upside HEALTHY.
-  - FIRST RETENTION CYCLE (owner-approved proposed-v1), recorded in
-    docs/deploy/retention-records/2026-09-26/:
-    - Dry run 20260926T085314Z, report sha256 48eb171c…1fbaec. Candidates, each SUPERSEDED and
-      covered by edge-backup-tlpycog1 (restore-verified at apply):
-      - edge-backup-mlj3ys07 (73,728 B);
-      - edge-backup-1q6ozcdh (73,728 B);
-      - edge-backup-_m9y33hi (360,448 B).
-    - Apply at 08:53:39Z: DELETED exactly those 3 (507,904 B). Kept 49 evidence and 49 ledger
-      bundles. Ledger, F09-linked, pinned and unverified copies were untouched. The live DB was
-      untouched.
-  - FIRST O1 PULL: the newest verified bundles, edge-backup-tlpycog1 (evidence) and
-    ledger/edge-backup-ui_qahf5, went to C:\Users\jason\market-edge-offhost\2026-09-26.
-    `offhost-verify`: VERIFIED (manifest sha and a restore check, both stores). Runbook bug found:
-    `--verify-reports /dev/stdin` fails under runuser; the fix is in #120.
-  - #107 same-run settlement: PRODUCTION_VERIFIED at the 2026-09-26 11:15 ET run.
-    - The run started at 15:15:04Z. Its refresh run settlement-refresh-608526a4… stored snapshot
-      149 at 15:15:09.078Z.
-    - The evidence cutoff equalled that receipt, and it settled 4 positions in the same run.
-    - KXHIGHNY-26SEP25 = 69.00; Kalshi and the resolver agree. B67.5 YES −0.16 and T67 YES −0.07
-      per account.
-    - Equity 999.10 (operational) and 99999.10 (research); realized −0.90 each; committed 0.58;
-      2 open positions each.
-    - 96 ledger entries; no duplicates; both replays pass.
-  - F09 checkpoint 2026-09-26T151756Z, after this notable ledger event:
-    - Heads: research seq 94 a4fd85d5…; operational seq 96 311599aa….
-    - Ledger backup edge-backup-ut3yody3, sha = manifest: VERIFIED against the new checkpoint and
-      EXTENDED against 2026-09-25T201836Z.
-    - Committed here, with a copy on the laptop in market-edge-anchors/2026-09-26/.
-  - First Polymarket US research capture: 9 T-24h targets (Sunday 13:00 ET games, target 17:00Z),
-    all CAPTURED at 16:55:06–14Z. Books fresh and open, snapshots 151–159, source hashes recorded.
-    9 of 9 due targets observed, 0 missed. All RELATED_NOT_EQUIVALENT.
-  - First Kalshi NFL pairs:
-    - 18 KXNFLGAME targets (9 games × 2 team markets), planned at the 17:00:11Z Odds receipt.
-    - 36 price rows, all CAPTURED at 17:05:10–13Z (receipt skew about 5 min), fresh, 1¢ spreads.
-    - Budget: 9 game-horizons; 27 GETs expected, 54 worst, of the 295 weekly cap; 0 Odds calls.
-    - `sports_evidence report --summary`: 18 sides paired, all AT_OR_AFTER_ODDS; G2 → PARTIAL.
-      Every waterfall except SNAPSHOT (not enumerated) reconciles. The 9 events are
-      RULES_UNRESOLVED (tie/not-played bounds not declared). The edge is NOT_DEFENSIBLE:
-      FEE_UNSUPPORTED, RELATION_CONDITIONAL, NO_EPISODE_DEFINITION, BENCHMARK_NOT_TRUTH.
-    - `exp002` gate: INSUFFICIENT_DATA, not freeze-eligible (9 dispersion pairs, 0 repeats,
-      1 week), as expected before T-6h.
+  - CI: the owner fixed the GitHub billing block on 2026-09-28. Every merge below had an
+    independent review, re-reviews until READY, exact-head CI green on 3.11/3.12, and was
+    reconciled with main.
+  - MERGED:
+    - #121 (0250885): the 2026-09-26 handoff, the retention record, F09 2026-09-26T151756Z, the
+      directive record and VF claims.
+    - #120 (4e8e71d): the /dev/stdin runbook fix, fail-closed F09 cadence, a junction-safe
+      re-verifying O1 prune.
+    - #123 (47526d1): #122 indexed.
+    - #124 (29a37d7): EXP-002 gate v3, the freeze proposal, fee verification (unresolved), and the
+      Terminal gate line. It also closed a label path: the Terminal "latest paired book" and the
+      full report could show T-60m books without logging.
+    - #126 (e8d4949): closes the UNKNOWN pilot T-60m exposure window at the #124 deploy,
+      2026-09-29T02:09:50Z.
+    - #125 (24a70b4): the #122 offline foundation: inplay_evidence, position_policy, inplay_replay,
+      INPLAY_SOURCE_FEASIBILITY.md and ADR 0038.
+    - #127 (e00a335): the read-only in-play Terminal page. It is never LIVE; production shows "No
+      in-play source is authorized".
+  - DEPLOYED (/root/deploy.sh: preflight PASS, backups verified before and after, fail-closed
+    PASS, no failed units, 13 timers):
+    - 4e8e71d (2026-09-29 00:15Z);
+    - 29a37d7 (02:09Z);
+    - e00a335 (03:17Z): /experiments/inplay returns 200 and reads "Not authorized"; /gallery/inplay
+      returns 404 on production.
+  - EXP-002 gate v3 (docs/research/EXP002_GATE_V3*.md):
+    - The spread-noise candidate failed the ≤ 10% false-pass acceptance: 98% worst, 21 of 37
+      settings over. The bound conditional on "value inside the spread" is 0% where that holds and
+      88% where it fails.
+    - v3 therefore returns only FAIL, INSUFFICIENT_DATA or INSUFFICIENT_EVIDENCE, and is never
+      freeze-eligible. Its 0% false-pass rate comes from having no pass path; it is not a
+      certificate.
+    - The v2 results are preserved.
+    - Production run (read-only, 02:10Z): v3 INSUFFICIENT_DATA (15 admissible T-6h games < 20;
+      1 week < 4). v2 INSUFFICIENT_DATA (0 repeats).
+  - EXP-002 label exposure: whether pilot T-60m books were seen is UNKNOWN (possible Terminal
+    display, not logged). It is recorded as two hand events (eu-7f8e6128…, eu-f4954194…): the
+    window runs 2026-09-26 to 2026-09-29T02:09:50Z, DEVELOPMENT only. Evaluation may start only
+    after that time. Production's evidence_use.jsonl had only its header before these records.
+  - Fees: KXNFLGAME stays FEE_UNSUPPORTED. The public documents don't resolve the multiplier
+    mapping, schedule currency, overrides or maker-fee start. Nothing is set to zero.
+  - #122 offline foundation:
+    - snapshot + delta books, with seq tracked per subscription (scope UNVERIFIED);
+    - a pure HOLD/REDUCE/EXIT policy that never liquidates on stale books;
+    - hold / full-exit / partial-exit replay, with bot-triggered and preplaced sales kept separate;
+    - isolated accounting (no oversell or double counting; INCOMPLETE is never 0);
+    - calibrated synthetic nulls with no alpha before costs, including at realistic latency.
+    It uses synthetic and fixture data only; real data is refused without an experiment id.
+  - Production (2026-09-29 00:01Z):
+    - valid_days 6;
+    - shadow realized −1.98 per account, 14 pending;
+    - NFL week of 09-22: 45 game-horizons, 136 expected / 271 worst of 295; 180 CAPTURED;
+    - Polymarket 43 CAPTURED / 2 MISSED;
+    - both restores VERIFIED; 62 GB free.
 UNRESOLVED:
-  - GitHub Actions billing: no CI, so no merge. #120 (runbook fix and three safeguards, READY) and
-    this PR wait.
-  - Kalshi questions: final text shown to the owner; NOT SENT. They need the owner's confirmation
-    and channel.
-  - EXP-003 owner hours: not stated by the owner (the packet recommended 2 h).
-  - EXP-002 cannot freeze until:
-    - gate v3 (spread-based noise, re-simulated, reviewed) exists;
-    - the tie/not-played bounds, episode definition and δ_min are frozen;
-    - KXNFLGAME fees are verified (G4; Kalshi Q7).
-    Target freeze 2026-10-21.
-  - Next routine operations:
-    - O1 weekly pull about 2026-10-03;
-    - F09 about weekly. An apply refuses once F09 is over 8 days old (after #120);
-    - the next retention dry run and apply at the owner's cadence;
+  - EXP-002 freeze: blocked. Next: implement the proposed E1 round-trip endpoint (versioned,
+    reviewed); verify KXNFLGAME fees; a pilot report within the 6 owner hours. The 2026-10-21
+    freeze is not promised.
+  - Kalshi message revision 2 (Q7 a–d, Q9, Q10): NOT SENT; awaits the owner's confirmation and
+    channel.
+  - Data rights: which terms govern our API-collected data is UNRESOLVED (packet B).
+  - Label proxy: Polymarket related-market T-60m captures on the Terminal Data sources tab are a
+    possible weak proxy for EXP-002 labels. They are not hidden. Follow-up: hide T-60m Polymarket
+    prices for NFL games inside the EXP-002 pilot/evaluation scope, or record the exposure.
+  - UI_CONTRACT §8 has no one-clause mention of the EXP-002 gate line. Writer A's proposed text is
+    in #124; it needs a dated amendment.
+  - Routine:
+    - O1 weekly pull due about 2026-10-03;
+    - F09 due by about 2026-10-03 (an apply refuses after 8 days);
+    - retention dry run and apply at the owner's cadence;
     - DST check after 2026-11-01;
-    - fee re-checks: Kalshi by 2026-10-23, Polymarket US by 2026-10-24.
-  - ntfy deferred by the owner. Brisket PRs #1406/#1407 are outside this repo.
-BLOCKERS (owner-only):
-  1. Fix GitHub billing (Settings → Billing & plans) so CI runs again.
-  2. Confirm the Kalshi message text and channel (own email, or the help-center form via the
-     browser).
-  3. Optional: confirm EXP-003's owner hours.
-NEXT ACTION: once CI runs, merge #120 and this record PR. Then build EXP-002 gate v3 and the
-  protocol freeze inputs (the next batch in docs/OWNER_IDEAS.md, 2026-09-26 entry).
+    - fee re-checks: Kalshi 10-23, Polymarket US 10-24.
+  - ntfy deferred by the owner.
+BLOCKERS (owner-only; docs/owner/2026-09-29-vf-decision-packet.md):
+  1. Confirm the Kalshi message revision 2 and its channel (optional: EXP-003 hours).
+  2. The data-rights review: read the Kalshi Developer Agreement.
+  3. Optional: approve the in-play source-quality pilot (after 2 and a reviewed recorder).
+NEXT ACTION: implement the EXP-002 E1 executable round-trip endpoint (versioned; label-safe;
+  reviewed), and run the O1 pull and F09 around 2026-10-03.
 ```
 
 ## Daily operation (what runs by itself)
@@ -150,8 +149,8 @@ remains MANUAL EMERGENCY FALLBACK ONLY.
 - **Production evidence:** deployed and verified; the first valid day and the first real
   shadow bookkeeping are recorded; the first real settlement is recorded and verified
   (2026-09-25, KXHIGHNY-26SEP24), with an F09 checkpoint.
-- **Research evidence:** 3 valid Stage B days (`latest.json` valid_days = 3, `verify_production.sh`
-  VALID_DAY_OBSERVED at 86e528b, 2026-09-26 01:40Z). The EXP-001 180/365-valid-day looks are far off,
+- **Research evidence:** 6 valid Stage B days (`latest.json` valid_days = 6, `verify_production.sh`
+  at 2026-09-29 00:01Z). The EXP-001 180/365-valid-day looks are far off,
   and nothing here is evidence of an edge.
 - **Gate 7 is NOT PASSED.** No Gate 8 or real-money work was done.
 
@@ -225,4 +224,4 @@ NEXT ACTION: the owner opens the tailnet URL on the iPhone and reviews Terminal,
 ```
 
 - Every user-visible change now follows docs/design/UI_CONTRACT.md (AI_INSTRUCTIONS.md, section User interface). New features use docs/design/FEATURE_INTEGRATION.md, and the PR template asks for the UI evidence.
-- Rollback: /opt/market-edge-lab/app.prev holds the previous release (9911c3c as of the c32152f deploy, 2026-09-26 09:13Z; install.sh keeps exactly one), per DAILY_SHADOW_ACTIVATION.md → Rollback. Previous bundles are kept under ~dynasty/edgelab-release/prev-<sha>/. No store or schema changed.
+- Rollback: /opt/market-edge-lab/app.prev holds the previous release (29a37d7 as of the e00a335 deploy, 2026-09-29 03:17Z; install.sh keeps exactly one), per DAILY_SHADOW_ACTIVATION.md → Rollback. Previous bundles are kept under ~dynasty/edgelab-release/prev-<sha>/. No store or schema changed.
