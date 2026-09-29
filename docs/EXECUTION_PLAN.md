@@ -545,6 +545,27 @@ be written here when they are made.
   - **Not authorized by this:** live orders, paid data, new accounts, margin,
     deposits/withdrawals, a gate advance. EXP-001 is not retuned.
 
+- **2026-09-28 ~20:00 America/New_York, owner directive: EXP-002 validation foundation + #122 in-play
+  offline foundation + operational reconciliation.** Recorded in
+  `docs/owner/2026-09-28-exp002-validation-inplay-foundation-directive.md`.
+  - **Authorized (bounded):**
+    - EXP-002 technical follow-through: a replacement pre-freeze gate, proposed freeze settings,
+      fee and payoff verification from public documents, and a Terminal gate line;
+    - #122 **offline** work: source and API feasibility research, an in-play evidence contract,
+      a pure HOLD/REDUCE/EXIT policy evaluator, deterministic replay with isolated accounting,
+      fixtures and synthetic nulls, and a read-only Terminal view;
+    - one *proposed* in-play source-quality pilot packet (not approved);
+    - canonical roadmap reconciliation.
+  - **Not authorized:**
+    - orders (real or authenticated paper), new account reads, credentials;
+    - new production streams or scheduled acquisition, including any in-play polling or streaming
+      (the 295/week pregame approval does not extend);
+    - additional Odds spending or pregame cap increases;
+    - paid data, margin/borrowing, deposits/withdrawals, outside capital;
+    - a gate advance, or a third active research family (#96 limit; EXP-003's pause frees no slot
+      automatically).
+  - EXP-002's budget is not #122's budget. EXECUTION_NOT_AUTHORIZED stays enforced.
+
 ## Standing merge rule: docs-only and test-only PRs
 
 Owner rule of 2026-09-22 (verbatim source: `docs/owner/2026-09-22-overnight-build-directive.md`).
