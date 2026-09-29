@@ -6,4 +6,3 @@ The expiry is a UTC date no more than 7 days out. An expired row is not a live c
 
 | Claim | Agent | Branch | Paths | Expires |
 |---|---|---|---|---|
-| EXP-002 timing tool nits | Claude (Writer A) | fix/exp002-timing-nits | src/edge_lab/exp002_timing.py (pilot predicate only), tests/test_exp002_timing.py, docs/research/EXP002_AC_CALIBRATION_TOOL.md | 2026-10-06 |
