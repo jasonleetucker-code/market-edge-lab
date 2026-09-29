@@ -3,94 +3,81 @@
 This is the live state of the repository. Each session overwrites it; it is not a history
 (git log is the history). Format: `AI_INSTRUCTIONS.md` → Handoff format.
 
-_Last updated: 2026-09-28 ~23:25 America/New_York (VPS clock) by the laptop Claude coordinator
-session. It covered the owner directive of 2026-09-28
-(`docs/owner/2026-09-28-exp002-validation-inplay-foundation-directive.md`). The state of 2026-09-26
-is in git history (#121)._
+_Last updated: 2026-09-29 ~11:50 America/New_York (VPS clock) by the laptop Claude coordinator
+session. It covered the batch that followed the 2026-09-28 directive
+(`docs/owner/2026-09-28-exp002-validation-inplay-foundation-directive.md`): the EXP-002 E1 endpoint and
+the label-proxy closures. The earlier 2026-09-29 state is in git history (#128)._
 
 ```
-STATUS: DONE for this mission's buildable scope. Every PR is merged, and production e00a335 is
-  DEPLOYED and PRODUCTION_VERIFIED. EXP-002 cannot freeze: gate v3 has no PASS state, and its
-  spread-noise candidate failed validation. The #122 in-play foundation is offline only. Owner
-  decisions are in docs/owner/2026-09-29-vf-decision-packet.md.
-ACCEPTANCE: the directive of 2026-09-28:
-  - reconcile #120/#121;
-  - a defensible replacement EXP-002 gate, or a precise reason why a freeze stays unsupported;
-  - proposed freeze settings;
-  - fee verification;
-  - a gate line in the Terminal;
-  - the #122 offline foundation, a feasibility packet and one proposed pilot;
-  - an in-play Terminal view;
-  - no expansion of authority.
+STATUS: DONE for this batch. Every PR is merged, and production d508773 is DEPLOYED and
+  PRODUCTION_VERIFIED. EXP-002 stays DRAFT and cannot freeze: E1 is implemented as a PROPOSED endpoint
+  that computes no entries until its tie and not-played bounds are declared. The owner decisions of
+  docs/owner/2026-09-29-vf-decision-packet.md are unchanged and still open.
+ACCEPTANCE: the HANDOFF NEXT ACTION of #128:
+  - implement the EXP-002 E1 executable round-trip endpoint (versioned, label-safe, reviewed);
+  - close the Polymarket T-60m label proxy;
+  - add the UI_CONTRACT section 8 gate-line clause;
+  - no expansion of authority, no EXP-001 change, no protocol freeze.
 EVIDENCE:
-  - CI: the owner fixed the GitHub billing block on 2026-09-28. Every merge below had an
-    independent review, re-reviews until READY, exact-head CI green on 3.11/3.12, and was
-    reconciled with main.
-  - MERGED:
-    - #121 (0250885): the 2026-09-26 handoff, the retention record, F09 2026-09-26T151756Z, the
-      directive record and VF claims.
-    - #120 (4e8e71d): the /dev/stdin runbook fix, fail-closed F09 cadence, a junction-safe
-      re-verifying O1 prune.
-    - #123 (47526d1): #122 indexed.
-    - #124 (29a37d7): EXP-002 gate v3, the freeze proposal, fee verification (unresolved), and the
-      Terminal gate line. It also closed a label path: the Terminal "latest paired book" and the
-      full report could show T-60m books without logging.
-    - #126 (e8d4949): closes the UNKNOWN pilot T-60m exposure window at the #124 deploy,
-      2026-09-29T02:09:50Z.
-    - #125 (24a70b4): the #122 offline foundation: inplay_evidence, position_policy, inplay_replay,
-      INPLAY_SOURCE_FEASIBILITY.md and ADR 0038.
-    - #127 (e00a335): the read-only in-play Terminal page. It is never LIVE; production shows "No
-      in-play source is authorized".
-  - DEPLOYED (/root/deploy.sh: preflight PASS, backups verified before and after, fail-closed
-    PASS, no failed units, 13 timers):
-    - 4e8e71d (2026-09-29 00:15Z);
-    - 29a37d7 (02:09Z);
-    - e00a335 (03:17Z): /experiments/inplay returns 200 and reads "Not authorized"; /gallery/inplay
-      returns 404 on production.
-  - EXP-002 gate v3 (docs/research/EXP002_GATE_V3*.md):
-    - The spread-noise candidate failed the ≤ 10% false-pass acceptance: 98% worst, 21 of 37
-      settings over. The bound conditional on "value inside the spread" is 0% where that holds and
-      88% where it fails.
-    - v3 therefore returns only FAIL, INSUFFICIENT_DATA or INSUFFICIENT_EVIDENCE, and is never
-      freeze-eligible. Its 0% false-pass rate comes from having no pass path; it is not a
-      certificate.
-    - The v2 results are preserved.
-    - Production run (read-only, 02:10Z): v3 INSUFFICIENT_DATA (15 admissible T-6h games < 20;
-      1 week < 4). v2 INSUFFICIENT_DATA (0 repeats).
-  - EXP-002 label exposure: whether pilot T-60m books were seen is UNKNOWN (possible Terminal
-    display, not logged). It is recorded as two hand events (eu-7f8e6128…, eu-f4954194…): the
-    window runs 2026-09-26 to 2026-09-29T02:09:50Z, DEVELOPMENT only. Evaluation may start only
-    after that time. Production's evidence_use.jsonl had only its header before these records.
-  - Fees: KXNFLGAME stays FEE_UNSUPPORTED. The public documents don't resolve the multiplier
-    mapping, schedule currency, overrides or maker-fee start. Nothing is set to zero.
-  - #122 offline foundation:
-    - snapshot + delta books, with seq tracked per subscription (scope UNVERIFIED);
-    - a pure HOLD/REDUCE/EXIT policy that never liquidates on stale books;
-    - hold / full-exit / partial-exit replay, with bot-triggered and preplaced sales kept separate;
-    - isolated accounting (no oversell or double counting; INCOMPLETE is never 0);
-    - calibrated synthetic nulls with no alpha before costs, including at realistic latency.
-    It uses synthetic and fixture data only; real data is refused without an experiment id.
-  - Production (2026-09-29 00:01Z):
-    - valid_days 6;
-    - shadow realized −1.98 per account, 14 pending;
-    - NFL week of 09-22: 45 game-horizons, 136 expected / 271 worst of 295; 180 CAPTURED;
-    - Polymarket 43 CAPTURED / 2 MISSED;
-    - both restores VERIFIED; 62 GB free.
+  - MERGED, each with an independent review (READY), review fixes, exact-head CI green on 3.11/3.12,
+    and reconciled with main:
+    - #129 (99fc32f): EXP-002 E1 endpoint `exp002-e1-roundtrip-v1`, measurement v3.
+      - Entry uses T-6h information only. Without --with-results, only label-free entry counts are shown;
+        tests prove no T-60m book, exit or settlement is read.
+      - Exit, P&L and settlement run only on the logged --with-results path, recorded before display.
+      - Gross only (FEE_UNSUPPORTED); no verdict; freeze_eligible False.
+      - Invalid E1 bounds are refused before the store opens.
+    - #130 (e0d3330): Polymarket US related-market captures at T-60m, or after a game's T-6h decision
+      cutoff, are withheld on the Terminal and in `pm-sports status`. UI_CONTRACT 2026-09-29
+      amendment (a)-(c) records the section 8 gate-line clause.
+    - #131 (0d1e210): the remaining CLI label paths are closed:
+      - `sports_evidence report` related proxies;
+      - `observe status --market kalshi:KXNFL...` T-60m and post-cutoff books and settlement reads
+        (KXHIGHNY and EXP-001 rows are byte-identical).
+      Also fixed #130's flaky "777" test (a uuid substring collision). An inventory of every command is
+      in the PR.
+    - #132 (d508773): The Odds API NFL sportsbook data at T-60m, or after the cutoff (consensus,
+      dispersion, per-book prices, implied probabilities, tie-adjusted intervals), is withheld:
+      - on the Terminal Odds capture targets;
+      - in `odds consensus`;
+      - in plain report rows.
+      The cutoff rule now has one owner, `odds_schedule.decision_cutoff`, used by `polymarket_sports`
+      and `price_observations`. A logged --with-results run records the consensus it shows.
+      UI_CONTRACT amendment (d).
+  - DEPLOYED with /root/deploy.sh (preflight PASS, backups verified before and after, fail-closed PASS,
+    no failed edgelab units, 13 timers):
+    - e0d3330 at 13:16Z. Production: 15 Polymarket captures withheld, 28 pre-decision captures shown.
+    - 0d1e210 at 14:23Z. Production: 60 of 180 captured Kalshi NFL rows (T-60m) show no figures;
+      120 shown.
+    - d508773 at 15:44Z. Production: `odds consensus --since 2026-09-20` withholds 16 events and shows 47;
+      the Data sources page shows the withheld state.
+  - E1 on production, label-free (exp002 without --with-results, 13:17Z):
+    - measurement v3; gates v2 and v3 both INSUFFICIENT_DATA;
+    - E1: 0 entries, all BOUNDS_UNDECLARED (the protocol leaves t_max and u_max UNKNOWN);
+    - T-6h AT_OR_AFTER_ODDS pairing yield 15/16 = 0.9375 (week of 09-22).
+  - EXP-002 evidence-use log: four hand-recorded POSSIBLE exposures, none a confirmed view; check-frozen
+    and validate pass:
+    - eu-4defeb1a…: Polymarket T-60m on the Terminal and pm-sports status, 2026-09-26 to 13:16:16Z;
+    - eu-1b511255…: its closing follow-up for the CLI paths, to 14:24:17Z;
+    - eu-9a3aeaf3…: Odds T-60m consensus, 2026-09-24 to 14:36:08Z;
+    - eu-d9f8610f…: its closing follow-up, to 15:45:00Z.
+    Consequence: none further. Pilot data are DEVELOPMENT only, and the evaluation window starts after
+    the freeze (no earlier than 2026-10-22).
 UNRESOLVED:
-  - EXP-002 freeze: blocked. Next: implement the proposed E1 round-trip endpoint (versioned,
-    reviewed); verify KXNFLGAME fees; a pilot report within the 6 owner hours. The 2026-10-21
-    freeze is not promised.
-  - Kalshi message revision 2 (Q7 a–d, Q9, Q10): NOT SENT; awaits the owner's confirmation and
-    channel.
+  - EXP-002 freeze blockers (freeze proposal section 5), none cleared by this batch:
+    1. review of the E1 design change;
+    2. a sourced tie and not-played count behind t_max and u_max (E1 needs declared bounds to enter);
+    3. the A.C timing calibration;
+    4. KXNFLGAME fees (FEE_UNSUPPORTED);
+    6. the owner freeze review, 2026-10-22.
+    Unresolved from #129: reading `settlement_value_dollars` as the YES payoff of a tie is unverified.
+  - Kalshi message revision 2 (Q7 a–d, Q9, Q10): NOT SENT; awaits the owner's confirmation and channel.
   - Data rights: which terms govern our API-collected data is UNRESOLVED (packet B).
-  - Label proxy: Polymarket related-market T-60m captures on the Terminal Data sources tab are a
-    possible weak proxy for EXP-002 labels. They are not hidden. Follow-up: hide T-60m Polymarket
-    prices for NFL games inside the EXP-002 pilot/evaluation scope, or record the exposure.
-  - UI_CONTRACT §8 has no one-clause mention of the EXP-002 gate line. Writer A's proposed text is
-    in #124; it needs a dated amendment.
+  - Raw-evidence access (direct SQLite, backups, snapshot APIs) is not a label view and is unchanged
+    (#131 inventory).
   - Routine:
-    - O1 weekly pull due about 2026-10-03;
-    - F09 due by about 2026-10-03 (an apply refuses after 8 days);
+    - O1 weekly pull about 2026-10-03;
+    - F09 by about 2026-10-03 (an apply refuses after 8 days);
     - retention dry run and apply at the owner's cadence;
     - DST check after 2026-11-01;
     - fee re-checks: Kalshi 10-23, Polymarket US 10-24.
@@ -99,8 +86,9 @@ BLOCKERS (owner-only; docs/owner/2026-09-29-vf-decision-packet.md):
   1. Confirm the Kalshi message revision 2 and its channel (optional: EXP-003 hours).
   2. The data-rights review: read the Kalshi Developer Agreement.
   3. Optional: approve the in-play source-quality pilot (after 2 and a reviewed recorder).
-NEXT ACTION: implement the EXP-002 E1 executable round-trip endpoint (versioned; label-safe;
-  reviewed), and run the O1 pull and F09 around 2026-10-03.
+NEXT ACTION: source an official NFL tie and not-played count for t_max and u_max (freeze blocker 2),
+  then do the label-free A.C timing calibration (FEATURE_INSPECTION, logged). Run the O1 pull and F09
+  around 2026-10-03.
 ```
 
 ## Daily operation (what runs by itself)
