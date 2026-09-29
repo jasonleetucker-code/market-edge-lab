@@ -48,13 +48,17 @@ def game(event_ticker: str, *, odds_id: str | None = None, shift: timedelta = ti
             "home_team": BY_ABBR[parsed["home"]], "away_team": BY_ABBR[parsed["away"]]}
 
 
-def discovery(store: SnapshotStore, events: list[dict], at: datetime) -> int:
+def discovery(store: SnapshotStore, events: list[dict], at: datetime, window: timedelta | None = None) -> int:
+    """A stored discovery; with `window`, its request records commence_from=at, commence_to=at+window (#137's
+    shape); without, the window is unknown."""
     run = f"odds-discovery-{at.isoformat()}"
+    request = {"purpose": "discovery", "tick_utc": at.isoformat()}
+    if window is not None:
+        request.update(commence_from=at.isoformat(), commence_to=(at + window).isoformat())
     store.start_run(run)
     sid = store.save_snapshot(run_id=run, source="the_odds_api", kind="events", entity_id=nhl.NHL_SPORT,
                               url="https://api.the-odds-api.com/v4/sports/icehockey_nhl/events?apiKey=REDACTED",
-                              payload={"sport": nhl.NHL_SPORT, "events": events,
-                                       "request": {"purpose": "discovery", "tick_utc": at.isoformat()}},
+                              payload={"sport": nhl.NHL_SPORT, "events": events, "request": request},
                               fetched_at_utc=at.isoformat(), source_id="the_odds_api")
     store.finish_run(run, status="succeeded")
     return sid
@@ -127,8 +131,8 @@ DISC_AT = datetime(2026, 10, 1, 10, 0, tzinfo=UTC)  # 06:00 ET
 MORNING = datetime(2026, 10, 1, 12, 5, tzinfo=UTC)  # 08:05 ET, an observe tick clear of every protected window
 
 
-def oct1(store, at=DISC_AT, names=OCT1):
-    return discovery(store, [game(e) for e in names], at)
+def oct1(store, at=DISC_AT, names=OCT1, window=None):
+    return discovery(store, [game(e) for e in names], at, window)
 
 
 # --------------------------------------------------------------------------- identity and scope
@@ -286,7 +290,7 @@ def test_plans_t6h_and_t60m_for_both_team_markets_from_the_schedule(store):
     for t in targets:
         assert t["origin"] == po.NHL_ORIGIN and t["phase"] == "custom" and t["venue"] == "kalshi"
         assert nhl.hockey_family(t["native_market_id"]) == "ADMITTED"
-        assert t["target_id"].endswith(f"|{po.NHL_ORIGIN}:{detail(t)['horizon']}")
+        assert t["target_id"].endswith(f"|{po.NHL_ORIGIN}:{detail(t)['horizon']}:{detail(t)['commence_utc']}")
         assert detail(t)["classification"].startswith("DATA_COLLECTION / DEVELOPMENT_ONLY")
         assert detail(t)["mapping"] == "DERIVED" and detail(t)["fee_state"] == "FEE_UNSUPPORTED"
         # Never inside a protected window, and always before puck drop - the minimum lead.
@@ -486,6 +490,7 @@ def test_the_nhl_run_share_caps_nhl_gets_in_one_run(store, monkeypatch):
     """Ten NHL game-horizons due at one tick (planned directly): at most 24 GETs go to NHL in the run."""
     tick = datetime(2026, 10, 1, 16, 5, tzinfo=UTC)
     names = [e for e in EVENTS if e.startswith("KXNHLGAME-26OCT03")][:10]
+    discovery(store, [game(e) for e in names], tick - timedelta(hours=1))  # a current schedule
     for e in names:
         for m in EVENTS[e]["markets"]:
             t = po.custom_target(venue="kalshi", native_market_id=m["ticker"], at=tick, native_event_id=e)
@@ -625,7 +630,8 @@ def test_the_settled_read_is_one_get_never_retried_and_its_result_is_withheld(st
     plan(store, tick - timedelta(minutes=10))
     reads = [t for t in nhl_targets(store) if detail(t)["nhl_role"] == po.NHL_ROLE_SETTLEMENT]
     assert len(reads) == 1 and reads[0]["native_market_id"] == "KXNHLGAME"
-    settled = {"cursor": "", "markets": [{**m, "status": "finalized", "result": "yes"} for m in EVENTS[OCT1[0]]["markets"]]}
+    settled = {"cursor": "", "markets": [{**m, "status": "finalized", "result": "yes"}
+                                         for m in EVENTS[OCT1[0]]["markets"]]}
     clock = Clock(tick + timedelta(seconds=10))
     api = Api(clock, routes(settled=settled))
     monkeypatch.setattr(po, "fetch_json_result", api)
@@ -761,3 +767,151 @@ def test_every_ordered_team_pair_splits_uniquely():
     for a in nhl.KALSHI_ABBRS:
         for b in nhl.KALSHI_ABBRS - {a}:
             assert nhl.split_teams(a + b) == ((a, b), None)
+
+
+# --------------------------------------------------------------------------- review fixes (PR #136)
+
+WEEKS = timedelta(days=35)  # #137's discovery horizon
+
+
+def _open(store) -> list:
+    return [t for t in nhl_targets(store) if t["state"] in (None, "FAILED")]
+
+
+def test_a_postponement_beyond_the_planning_horizon_supersedes_the_open_targets(store):
+    oct1(store, names=OCT1[:1], window=WEEKS)
+    plan(store, MORNING)
+    assert len(_open(store)) == 4
+    discovery(store, [game(OCT1[0], shift=timedelta(days=5))], MORNING + timedelta(minutes=30), window=WEEKS)
+    report = plan(store, MORNING + timedelta(minutes=35))
+    assert report["state"] == "OK" and len(report["nhl"]["superseded"]) == 4 and _open(store) == []
+    assert all(t["state_reason"].startswith("SUPERSEDED_RESCHEDULED") for t in nhl_targets(store))
+
+
+def test_a_game_dropped_from_a_covering_discovery_is_superseded_but_not_from_an_unknown_window(store):
+    oct1(store, names=OCT1[:2], window=WEEKS)
+    plan(store, MORNING)
+    # A later discovery with an unknown window lacks BUF@CBJ: absence proves nothing.
+    discovery(store, [game(OCT1[1])], MORNING + timedelta(minutes=20))
+    report = plan(store, MORNING + timedelta(minutes=35))["nhl"]
+    assert report["superseded"] == [] and report["absent_window_unknown"] == 4 and len(_open(store)) == 8
+    # One whose window covers the puck drop: the game was dropped (cancelled or moved outside the listing).
+    discovery(store, [game(OCT1[1])], MORNING + timedelta(minutes=40), window=WEEKS)
+    report = plan(store, MORNING + timedelta(minutes=50))["nhl"]
+    gone = [t for t in nhl_targets(store) if t["native_event_id"] == OCT1[0]]
+    assert len(report["superseded"]) == 4 and {t["state"] for t in gone} == {"MISSED"}
+    assert all(t["state_reason"].startswith("SUPERSEDED_NOT_IN_SCHEDULE") for t in gone)
+    assert len(_open(store)) == 4  # PHI@NJ untouched
+
+
+def test_a_game_that_already_started_is_not_superseded_by_its_absence(store):
+    oct1(store, names=OCT1[:1], window=WEEKS)
+    plan(store, MORNING)
+    after_start = datetime(2026, 10, 1, 23, 30, tzinfo=UTC)  # puck drop 23:00Z; the new window starts after it
+    discovery(store, [], after_start, window=WEEKS)
+    report = po.plan_nhl_targets(SnapshotStore.open_readonly(store.path), after_start + timedelta(minutes=5))[2]
+    assert report["superseded"] == []
+
+
+def test_a_stale_schedule_supersedes_nothing_and_plans_nothing(store):
+    oct1(store, names=OCT1[:1], window=WEEKS)
+    plan(store, MORNING)
+    moved = [game(OCT1[0], shift=timedelta(days=5))]
+    discovery(store, moved, MORNING - timedelta(hours=30), window=WEEKS)  # older than the one planned from
+    later = datetime(2026, 10, 2, 10, 30, tzinfo=UTC)  # the newest (10:00Z) discovery is now over 24 h old
+    new, closures, report = po.plan_nhl_targets(SnapshotStore.open_readonly(store.path), later)
+    assert new == [] and closures == [] and report["state"] == "SCHEDULE_STALE"
+
+
+def test_an_unreadable_schedule_supersedes_nothing_and_the_capture_holds_the_books(store, monkeypatch):
+    oct1(store, names=OCT1[:1], window=WEEKS)
+    plan(store, MORNING)
+    run = "bad-discovery"
+    store.start_run(run)
+    store.save_snapshot(run_id=run, source="the_odds_api", kind="events", entity_id=nhl.NHL_SPORT,
+                        url="https://example.invalid/events", payload={"sport": nhl.NHL_SPORT, "events": "oops"},
+                        fetched_at_utc=(MORNING + timedelta(hours=1)).isoformat(), source_id="the_odds_api")
+    store.finish_run(run, status="succeeded")
+    new, closures, report = po.plan_nhl_targets(SnapshotStore.open_readonly(store.path), MORNING + timedelta(hours=2))
+    assert new == [] and closures == [] and report["state"] == "SCHEDULE_UNREADABLE"
+    # The capture reads no NHL book while the schedule is not current (it cannot see a reschedule).
+    clock = Clock(datetime(2026, 10, 1, 17, 5, 20, tzinfo=UTC))
+    api = Api(clock, routes(OCT1[0]))
+    monkeypatch.setattr(po, "fetch_json_result", api)
+    _, cap = capture(store, clock)
+    assert api.calls == [] and cap["nhl_deferred_schedule"]["state"] == "UNREADABLE"
+    assert len(cap["nhl_deferred_schedule"]["targets"]) == 2
+    assert {t["state"] for t in _open(store)} == {None}  # waiting, not missed
+    # A fresh discovery before the deadline releases them.
+    oct1(store, names=OCT1[:1], at=datetime(2026, 10, 1, 17, 10, tzinfo=UTC), window=WEEKS)
+    clock.now = datetime(2026, 10, 1, 17, 20, 20, tzinfo=UTC)
+    capture(store, clock)
+    assert len(api.calls) == 3
+
+
+def test_a_small_puck_drop_change_on_the_same_ticks_is_replanned_with_new_ids(store):
+    oct1(store, names=OCT1[:1], window=WEEKS)
+    plan(store, MORNING)
+    first = {t["target_id"] for t in nhl_targets(store)}
+    discovery(store, [game(OCT1[0], shift=timedelta(minutes=5))], MORNING + timedelta(minutes=20), window=WEEKS)
+    report = plan(store, MORNING + timedelta(minutes=35))["nhl"]
+    assert sorted(report["superseded"]) == sorted(first)
+    fresh = _open(store)
+    assert len(fresh) == 4 and not {t["target_id"] for t in fresh} & first
+    assert {t["target_utc"] for t in fresh} == {t["target_utc"] for t in nhl_targets(store) if t["target_id"] in first}
+    assert {detail(t)["commence_utc"] for t in fresh} == {"2026-10-01T23:05:00+00:00"}
+    assert "TARGET_ID_COLLISION" not in report["not_planned_counts"]
+    assert plan(store, MORNING + timedelta(minutes=50))["state"] == "NOTHING_TO_DO"
+
+
+def test_moving_back_to_a_superseded_time_is_a_reported_collision(store):
+    oct1(store, names=OCT1[:1], window=WEEKS)
+    plan(store, MORNING)
+    discovery(store, [game(OCT1[0], shift=timedelta(minutes=5))], MORNING + timedelta(minutes=20), window=WEEKS)
+    plan(store, MORNING + timedelta(minutes=35))
+    oct1(store, names=OCT1[:1], at=MORNING + timedelta(minutes=40), window=WEEKS)
+    report = plan(store, MORNING + timedelta(minutes=50))["nhl"]
+    assert report["not_planned_counts"]["TARGET_ID_COLLISION"] == 4
+
+
+def test_a_superseded_target_that_sent_gets_still_counts_against_the_week(store, monkeypatch):
+    oct1(store, names=OCT1[:1], window=WEEKS)
+    plan(store, MORNING)
+    clock = Clock(datetime(2026, 10, 1, 17, 5, 20, tzinfo=UTC))
+    api = Api(clock, {**routes(OCT1[0]),
+                      f"/markets?event_ticker={OCT1[0]}&": HttpFetchError("HTTP 503", status=503, attempts=1)})
+    monkeypatch.setattr(po, "fetch_json_result", api)
+    capture(store, clock)  # T-6h FAILED (one listing GET sent)
+    discovery(store, [game(OCT1[0], shift=timedelta(days=5))], datetime(2026, 10, 1, 17, 10, tzinfo=UTC), window=WEEKS)
+    report = plan(store, datetime(2026, 10, 1, 17, 20, tzinfo=UTC))["nhl"]
+    assert len(report["superseded"]) == 4
+    assert report["budget"]["game_horizons"] == 1  # the failed T-6h still counts; the unattempted T-60m does not
+
+
+def test_the_effective_lead_is_stored_and_rendered_with_the_nominal_horizon(store):
+    from edge_lab.dashboard import data as d
+    from edge_lab.dashboard.views import research
+
+    oct1(store, names=OCT1[:1], window=WEEKS)
+    plan(store, MORNING)
+    t60 = [t for t in nhl_targets(store) if detail(t)["horizon"] == "T-60m"][0]
+    assert detail(t60)["lead_minutes"] == 85  # 17:35 ET for a 19:00 ET puck drop
+    now = datetime(2026, 10, 1, 21, 0, tzinfo=UTC)
+    cov = po.nhl_coverage(SnapshotStore.open_readonly(store.path), now)
+    assert cov["next"]["lead_minutes"] == 85
+    html = research.nhl_body(d.Loaded(d.OK, cov), now)
+    assert "T-60m nominal · read T-85m (protected window)" in html
+
+
+def test_the_contract_terms_readings_are_checkable_from_the_committed_excerpt():
+    text = (FIX / "kalshi_contract_terms_HOCKEYWINNINGINPERIOD_excerpt.txt").read_text(encoding="utf-8")
+    assert nhl.CONTRACT_TERMS_SHA256 in text and nhl.CONTRACT_TERMS_URL in text
+    # overtime VERIFIED: the default period is regulation plus overtime, and overtime goals count
+    assert "encapsulating regulation time and overtime" in text
+    assert "regulation time and overtime periods shall count" in text
+    # settlement-source order comes from the terms' Source Agency list, not from the market metadata
+    assert "in hierarchical order, the league governing <game>, ESPN" in text
+    # tie: "may" resolve No, so RULES_UNRESOLVED; the shootout is never mentioned, so RULES_UNRESOLVED
+    assert 'may resolve to "No"' in text and nhl.CONTRACT_TERMS_READING["tie"]["status"] == "RULES_UNRESOLVED"
+    assert nhl.CONTRACT_TERMS_READING["shootout"]["status"] == "RULES_UNRESOLVED"
+    assert nhl.CONTRACT_TERMS_READING["overtime"]["status"] == "VERIFIED"

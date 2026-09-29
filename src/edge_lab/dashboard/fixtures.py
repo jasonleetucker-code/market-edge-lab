@@ -514,7 +514,8 @@ def synthetic_nhl_coverage() -> dict[str, Any]:
                         "game_horizons_captured": 6, "game_horizons_missed": 2},
             "missed_reasons": {"NOT_COLLECTED_BEFORE_ACTIVATION": 2, "SUPERSEDED_RESCHEDULED": 2},
             "not_planned_counts": {"UNMAPPED_TEAM": 1},
-            "next": {"target_utc": "2026-10-01T21:35:00+00:00", "horizon": "T-60m"},
+            "next": {"target_utc": "2026-10-01T21:35:00+00:00", "horizon": "T-60m", "lead_minutes": 85,
+                     "shift_reason": "PROTECTED_WINDOW: exp001_capture_window_and_shadow_run"},
             "last_capture_utc": "2026-10-01T17:05:41+00:00", "would_plan_now": 0,
             "settlement_reads": {"planned": 1, "attempted": 0, "results": "withheld"},
             "fee": {"state": "FEE_UNSUPPORTED"}, "contract_terms": {"shootout": "RULES_UNRESOLVED"}}

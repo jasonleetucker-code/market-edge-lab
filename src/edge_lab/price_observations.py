@@ -1023,6 +1023,17 @@ def capture(store: SnapshotStore, *, clock: Clock | None = None, sleep: Sleep = 
             if held:
                 report["nhl_held"] = dict(sorted(held.items()))
             due = [t for t in due if t["target_id"] not in held]
+            books = [t["target_id"] for t in due if is_nhl_target(t) and _sports_role(t) == NHL_ROLE_BOOK]
+            if books:
+                # Stale is not current: while the NHL schedule is stale or unreadable a reschedule cannot be seen, so
+                # no NHL book is read (they wait; a fresh discovery before the deadline releases them, else they
+                # expire MISSED). The settled read does not depend on the schedule.
+                from .sports_nhl import read_schedule
+
+                schedule = read_schedule(store, now, max_age=NHL_SCHEDULE_MAX_AGE)
+                if not schedule.usable:
+                    report["nhl_deferred_schedule"] = {"state": schedule.state, "targets": sorted(books)}
+                    due = [t for t in due if t["target_id"] not in set(books)]
             if any(t["phase"] == "close" and not is_sports_target(t) for t in due):
                 # EXP-001 close observations keep the whole run: NHL targets wait (or expire MISSED).
                 report["nhl_deferred_for_close"] = sorted(t["target_id"] for t in due if is_nhl_target(t))
@@ -2041,8 +2052,10 @@ def plan_nhl_targets(store: SnapshotStore, now: datetime
             key = str(d.get("odds_event_id"))
             originals[key] = min(originals.get(key, original), original)
         superseded = t["state"] == "MISSED" and str(t["state_reason"] or "").startswith("SUPERSEDED")
-        if d.get("missed_on_plan") or superseded:
-            continue  # never attempted: costs no GET and holds no tick
+        # A superseded target whose only row is its closure never sent a GET: it holds no tick and no budget. One
+        # that was attempted first (e.g. FAILED, then superseded) keeps counting against the week.
+        if d.get("missed_on_plan") or (superseded and int(t["attempts"] or 0) <= 1):
+            continue
         load.setdefault(tick, set()).add(str(t["native_event_id"]))
         horizons.setdefault(nhl_week(tick), set()).add((str(t["native_event_id"]), str(t["target_utc"])))
         commence = _t(d.get("commence_utc"))
@@ -2057,17 +2070,41 @@ def plan_nhl_targets(store: SnapshotStore, now: datetime
         report["games"]["discovered"] = len(schedule.events)
         events = [e for e in schedule.events if now - NHL_MISSED_LOOKBACK <= e.commence_utc <= now + NHL_PLAN_HORIZON]
         report["games"]["in_horizon"] = len(events)
-        # A reschedule supersedes the open targets planned for the old start, whether or not the game still maps
-        # (a postponed game must never be read at its old time).
-        for e in events:
-            for horizon, _ in NHL_HORIZONS:
-                for t in by_horizon.get((e.event_id, horizon), []):
-                    if _t(_detail(t).get("commence_utc")) != e.commence_utc and t["state"] in (None, "FAILED")                             and t["target_id"] not in closing:
-                        closing.add(t["target_id"])
-                        closures.append((t, f"SUPERSEDED_RESCHEDULED: planned for puck drop "
-                                            f"{_detail(t).get('commence_utc')}; discovery {schedule.snapshot_id} says "
-                                            f"{_iso(e.commence_utc)}"))
-                        report["superseded"].append(t["target_id"])
+        # A reschedule supersedes the open targets planned for the old start, over EVERY event of the discovery (not
+        # only the planning horizon), whether or not the game still maps: a postponed game is never read at its old
+        # time. An open target whose game is absent from a discovery whose requested window covers its puck drop is
+        # superseded too (dropped or moved outside the listing). With the window unknown, absence proves nothing:
+        # such targets are counted, never guessed. A stale or unreadable discovery never gets here (it supersedes
+        # nothing; the capture defers NHL books while the schedule is not current, see `capture`).
+        listed = {e.event_id: e for e in schedule.events}
+
+        def supersede(t: Any, reason: str) -> None:
+            if t["state"] in (None, "FAILED") and t["target_id"] not in closing and not _detail(t).get("missed_on_plan"):
+                closing.add(t["target_id"])
+                closures.append((t, reason))
+                report["superseded"].append(t["target_id"])
+
+        unverifiable = 0
+        for (event_id, _), prior in sorted(by_horizon.items()):
+            for t in prior:
+                planned_for = _t(_detail(t).get("commence_utc"))
+                e = listed.get(event_id)
+                if e is not None:
+                    if planned_for != e.commence_utc:
+                        supersede(t, f"SUPERSEDED_RESCHEDULED: planned for puck drop {_detail(t).get('commence_utc')}; "
+                                     f"discovery {schedule.snapshot_id} says {_iso(e.commence_utc)}")
+                elif planned_for is not None and schedule.covers(planned_for):
+                    supersede(t, f"SUPERSEDED_NOT_IN_SCHEDULE: planned for puck drop {_iso(planned_for)}; discovery "
+                                 f"{schedule.snapshot_id} covers that time and no longer lists the game")
+                elif t["state"] in (None, "FAILED") and planned_for is not None and planned_for > now:
+                    unverifiable += 1
+        if unverifiable:
+            report["absent_window_unknown"] = unverifiable
+        for t, _ in closures:  # a target superseded now that never sent a GET frees its tick and its budget
+            if int(t["attempts"] or 0) == 0:
+                tick = _t(t["target_utc"])
+                horizons.get(nhl_week(tick), set()).discard((str(t["native_event_id"]), str(t["target_utc"])))
+                load.get(tick, set()).discard(str(t["native_event_id"]))
         resolved = []
         for e in events:
             away, home = nhl.team(e.away_team), nhl.team(e.home_team)
@@ -2098,7 +2135,8 @@ def plan_nhl_targets(store: SnapshotStore, now: datetime
             game_date = nhl.et_date(commence).isoformat()
             for horizon, offset in NHL_HORIZONS:
                 prior = by_horizon.get((e.event_id, horizon), [])
-                if any(_t(_detail(t).get("commence_utc")) == commence for t in prior):
+                if any(_t(_detail(t).get("commence_utc")) == commence and t["target_id"] not in closing
+                       and not str(t["state_reason"] or "").startswith("SUPERSEDED") for t in prior):
                     continue  # already planned for this schedule
                 nominal = commence - offset
                 pick = nhl_effective_tick(nominal, commence, {k: len(v) for k, v in load.items()})
@@ -2124,6 +2162,7 @@ def plan_nhl_targets(store: SnapshotStore, now: datetime
                 detail = {"nhl_role": NHL_ROLE_BOOK, "version": NHL_PLAN_VERSION, "classification": NHL_CLASSIFICATION,
                           "horizon": horizon, "nominal_utc": _iso(nominal), "effective_utc": _iso(tick),
                           "shift_minutes": int((tick - nominal).total_seconds() // 60), "shift_reason": shift,
+                          "lead_minutes": int((commence - tick).total_seconds() // 60),
                           "odds_event_id": e.event_id, "odds_discovery_snapshot_id": schedule.snapshot_id,
                           "home_team": e.home_team, "away_team": e.away_team, "commence_utc": _iso(commence),
                           "original_commence_utc": _iso(original), "game_date": game_date, "mapping": mapping,
@@ -2134,9 +2173,14 @@ def plan_nhl_targets(store: SnapshotStore, now: datetime
                 for abbr in (away[0], home[0]):
                     target = custom_target(venue="kalshi", native_market_id=f"{event}-{abbr}", at=tick,
                                            native_event_id=event)
-                    target.update(target_id=f"{target['target_id']}|{NHL_ORIGIN}:{horizon}", origin=NHL_ORIGIN,
-                                  deadline_utc=_iso(deadline), detail=detail)
+                    # The id carries the puck drop it was planned for: a reschedule, even one that keeps the same tick,
+                    # gets new ids instead of colliding with the superseded ones.
+                    target.update(target_id=f"{target['target_id']}|{NHL_ORIGIN}:{horizon}:{_iso(commence)}",
+                                  origin=NHL_ORIGIN, deadline_utc=_iso(deadline), detail=detail)
                     if target["target_id"] in known:
+                        skip(target["target_id"], "TARGET_ID_COLLISION: an NHL target with this id is already stored "
+                                                  "(e.g. a game moved back to a time it was superseded from); not "
+                                                  "planned again")
                         continue
                     known.add(target["target_id"])
                     new.append(target)
@@ -2258,6 +2302,7 @@ def nhl_coverage(store: SnapshotStore, now: datetime) -> dict[str, Any]:
         nxt = {"target_utc": upcoming[0]["target_utc"], "due_from_utc": upcoming[0]["due_from_utc"],
                "deadline_utc": upcoming[0]["deadline_utc"], "nominal_utc": d.get("nominal_utc"),
                "horizon": d.get("horizon"), "event": upcoming[0]["native_event_id"],
+               "commence_utc": d.get("commence_utc"), "lead_minutes": d.get("lead_minutes"),
                "shift_reason": d.get("shift_reason")}
     captured_at = [_t(t["state_at_utc"]) for t in books if t["state"] == "CAPTURED" and _t(t["state_at_utc"])]
     manual = [t for t in store.price_targets() if t["origin"] == "manual"

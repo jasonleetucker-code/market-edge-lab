@@ -118,7 +118,8 @@ def view(ctx: d.Context, p: pr.Params) -> cm.Page:
                                    for k in ("empty", "unavailable", "error")), sid="g-odds-t-states"))
     nhl = fixtures.synthetic_nhl_coverage()
     nnow = parse_utc(fixtures.NHL_NOW)
-    parts.append(c.section("Kalshi NHL coverage (populated · overdue · missed)", research.nhl_body(nhl["populated"], nnow),
+    parts.append(c.section("Kalshi NHL coverage (populated · overdue · missed)",
+                           research.nhl_body(nhl["populated"], nnow),
                            meta="SYNTHETIC · development only", sid="g-nhl"))
     parts.append(c.section("Kalshi NHL coverage (not collecting / schedule stale / unavailable / read error)",
                            "".join(research.nhl_body(nhl[k], nnow) for k in ("idle", "stale", "unavailable", "error")),

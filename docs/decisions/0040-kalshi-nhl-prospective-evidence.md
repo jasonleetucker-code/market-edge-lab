@@ -61,12 +61,35 @@ NHL identity, rules text and the schedule read live in `sports_nhl.py` (pure, no
   market or labels it differently, or a stored listing whose `occurrence_datetime` is not within 2 h of puck drop
   + 3 h (the offset observed for every listed game) is UNMAPPED and counted, never guessed. Without a stored listing
   the tickers are DERIVED and the capture's own listing GET verifies them (the NFL rule).
-- **Reschedule:** a new puck drop supersedes the event's open targets (MISSED `SUPERSEDED_RESCHEDULED`, via
-  `plan(closures=...)`), mapped or not, so a postponed game is never read at its old time.
+- **Reschedule and cancellation** (review fix, PR #136). Checked against **every** event of a fresh discovery, not
+  only the 72 h planning horizon, mapped or not, so a postponed game is never read at its old time:
+  - a game listed with a different puck drop: its open targets are MISSED `SUPERSEDED_RESCHEDULED` (via
+    `plan(closures=...)`);
+  - a game absent from a fresh discovery whose requested window (`request.commence_from` / `commence_to`, as #137
+    stores it) covers the planned puck drop: MISSED `SUPERSEDED_NOT_IN_SCHEDULE`;
+  - absent from a discovery whose window is unknown: nothing is superseded (absence proves nothing); the count is
+    reported (`absent_window_unknown`). A game that already started is outside any later window and is never
+    superseded by its absence.
+- **Stale or unreadable schedule:** plans nothing new and supersedes nothing. Open NHL **books are not read** while
+  the schedule is not current (a reschedule could not be seen): the capture defers them (`nhl_deferred_schedule`)
+  without recording anything; a fresh discovery before the deadline releases them, otherwise they expire MISSED
+  (`NOT_CAPTURED_BY_DEADLINE`). The settled-markets read does not depend on the schedule and is not deferred.
+- **Target ids** carry the puck drop they were planned for (`...|kalshi_nhl_schedule_v1:<horizon>:<commence>`): a
+  small change that keeps the same ticks (e.g. +5 min) supersedes the old targets and plans new ids instead of
+  colliding with them. A game moved back to a time it was superseded from would reuse an id; that is reported as
+  `TARGET_ID_COLLISION` and the horizon is not planned again (never silent).
 - **Opening night / activation:** a horizon whose deadline passed before the first NHL plan is stored MISSED
-  `NOT_COLLECTED_BEFORE_ACTIVATION` (later gaps: `NOT_PLANNED_BEFORE_DEADLINE`) and never captured late. NHL targets
-  carry origin `kalshi_nhl_schedule_v1` and a target id suffixed `|kalshi_nhl_schedule_v1:<horizon>`, so they can
-  never collide with, relabel or group with the coordinator's manual opening-night custom targets (origin `manual`).
+  `NOT_COLLECTED_BEFORE_ACTIVATION` (later gaps: `NOT_PLANNED_BEFORE_DEADLINE`) and never captured late. Only games
+  still in the discovery are covered: a discovery lists future games only, so games that had already started at
+  activation (such as the 2026-09-29 games) are **absent from NHL coverage**, not recorded MISSED. NHL targets carry
+  origin `kalshi_nhl_schedule_v1` and their own id suffix, so they can never collide with, relabel or group with the
+  coordinator's manual opening-night custom targets (origin `manual`).
+- **Manual path:** `observe plan --custom-market` (origin `manual`) is operator-driven and is not covered by the NHL
+  family guard (which holds any NHL-origin target outside `KXNHLGAME`, `NHL_FAMILY_NOT_ADMITTED`); the operator is
+  responsible for what a manual target names.
+- **Horizon labels:** a book is labelled with its nominal horizon **and** its actual lead (`lead_minutes` in the
+  target detail). The Terminal shows e.g. "T-60m nominal · read T-85m (protected window)", never a bare "T-60m" for
+  a book read at another lead. `observe status` shows no horizon label.
 
 ### The request bound (its own, never shared with NFL)
 
@@ -104,7 +127,11 @@ the real plan and capture path (every run ≤ 24 GETs, 97 GETs in total).
     mentioned; the market's "wins the game" on the official final result makes a shootout winner the likely reading,
     not a stated rule);
   - tie **RULES_UNRESOLVED** (no tie payout stated; a drawn team "may" resolve No);
-  - postponement / not started / cancelled **VERIFIED** (market rules text); settlement sources NHL, then ESPN.
+  - postponement / not started / cancelled **VERIFIED** (market rules text);
+  - settlement sources: the event and series metadata list NHL and ESPN **without an order**; the order (the
+    governing league first, then ESPN) is the contract terms' Source Agency list, stated there as hierarchical.
+  - The clauses marked VERIFIED are quoted in `tests/fixtures/sports_nhl/kalshi_contract_terms_HOCKEYWINNINGINPERIOD_excerpt.txt`
+    (checkable without a PDF tool; a test pins them).
 - Fees: **FEE_UNSUPPORTED.** The series reads `fee_type quadratic_with_maker_fees`, `fee_multiplier 1`, but no fee
   verification record covers KXNHLGAME; nothing is priced and no fee is set to 0. Note for the fee owner:
   `fee_schedules.schedule_for("kalshi", "KXNHLGAME")` routes to the general quadratic schedule because KXNHLGAME is
@@ -129,6 +156,29 @@ horizons (it may then need to withhold T-60m books, as EXP-002 does for NFL).
   decision-grade. The supervisor has no environment file, so it cannot read the switch: with no NHL target, or
   the newest held by the switch, the record is PAUSED and says so.
 - Terminal: one compact block on Research & Data › Data sources (UI_CONTRACT 2026-09-29 (e)).
+
+### Activation dependency on NHL-A, and the NHL-C runbook
+
+Kalshi NHL planning reads only the stored NHL discovery, which NHL-A (#137, ADR 0039) writes. As reviewed on #137:
+- `odds run --sport icehockey_nhl` returns DISABLED **before discovery** unless `EDGE_LAB_ODDS_NHL=on` (and the Odds
+  key is present), so no discovery is stored while NHL-A is off;
+- `edgelab-odds.service` is `Type=oneshot` with the NFL `ExecStart` first: when the NFL line exits non-zero, the NHL
+  line does not run on that tick.
+
+So with NHL-A off or failing, this collector sits at `SCHEDULE_NO_DISCOVERY` (or `SCHEDULE_STALE` after 24 h) and
+reads no NHL book, even with its own switch on. That is the intended fail-closed behaviour, not a fault.
+
+NHL-C (activation, a reviewed operator step; deploy only through `docs/deploy/DAILY_SHADOW_ACTIVATION.md`, never in a
+protected window):
+1. Confirm NHL-A is live: `EDGE_LAB_ODDS_NHL=on` in `/etc/market-edge-lab/env` and a stored `icehockey_nhl` discovery
+   younger than 24 h (the Terminal's Kalshi NHL block shows "Schedule current").
+2. Preview read-only: `python -m edge_lab.price_observations nhl-dry-run --db /var/lib/market-edge-lab/db/edge_lab.sqlite3`
+   (writes nothing, sends nothing). Check the schedule state, mapped/unmapped counts, the planned ticks and
+   `budget.weekly_get_cap` 727.
+3. Set `EDGE_LAB_KALSHI_NHL_CAPTURE=on` in `/etc/market-edge-lab/env` (install.sh keeps it). No unit changes.
+4. After the next `edgelab-observe` ticks: `edge-lab observe status`, the freshness record `kalshi_nhl.game_books`
+   and the Terminal block. Pause/rollback: set the switch to `off` (pending targets are held MISSED
+   `NHL_CAPTURE_DISABLED`; stored evidence is kept).
 
 ## Alternatives considered
 

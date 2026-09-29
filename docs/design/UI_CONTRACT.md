@@ -650,6 +650,8 @@ directive), and the screenshots that justify it.
       the next target, the last capture, the schedule state, team-market targets by state, missed reasons, reasons
       nothing is planned, settled reads (count only), fee and shootout-rule states, and the development-only note.
     - Never shown: a price, a size, a depth or a settled result. Outcomes read "Hidden · NHL outcome".
+    - A horizon is shown with its nominal label and its actual lead when they differ, e.g. "T-60m nominal · read
+      T-85m (protected window)" (`research.nhl_horizon_text`); never a bare "T-60m" for a book read at another lead.
     - States: source unavailable, read error, no schedule stored, schedule stale (warn), not collecting (off by
       default; the switch is not readable here), overdue targets (warn), populated.
   - New neutral or warning state words (`presentation.STATES`): `NHL_NOT_COLLECTING`, `NHL_SCHEDULE_OK`,

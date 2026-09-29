@@ -33,6 +33,7 @@ def test_every_synthetic_state_renders():
     populated = research.nhl_body(states["populated"], now)
     assert "Kalshi mapped" in populated and "past the deadline" in populated and "Hidden · NHL outcome" in populated
     assert "No fee model" in populated and "Rules not verified" in populated
+    assert "T-60m nominal · read T-85m (protected window)" in populated
     assert "Not collecting · off by default" in research.nhl_body(states["idle"], now)
     assert "Schedule stale · nothing new planned" in research.nhl_body(states["stale"], now)
     assert "Kalshi NHL coverage unavailable" in research.nhl_body(states["unavailable"], now)
@@ -42,7 +43,8 @@ def test_every_synthetic_state_renders():
 def test_the_sources_tab_shows_the_nhl_block_from_a_real_store():
     cfg, root = fixture_states.nhl()
     page = get(cfg, "/experiments?tab=sources")
-    assert "Kalshi NHL coverage" in page and "KXNHLGAME · T-6h / T-60m before puck drop" in page
+    assert "Kalshi NHL coverage" in page and "KXNHLGAME · nominal T-6h / T-60m before puck drop" in page
+    assert "T-60m nominal · read T-85m (protected window)" in page
     cov = d.Context(cfg).nhl_coverage
     assert cov.status == d.OK
     text = json.dumps(cov.value)

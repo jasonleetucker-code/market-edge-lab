@@ -1,0 +1,15 @@
+Excerpt (verbatim clauses only) of the Kalshi contract terms linked from GET /series/KXNHLGAME
+contract_terms_url = https://assets.kalshi.com/contract_terms/HOCKEYWINNINGINPERIOD.pdf
+Read once 2026-09-29 for NHL-B (ADR 0040). PDF sha256 4243633b6c7f2b19ccf67384d3a79bab1a497cd64fbc4730a0de689e8f6d2983.
+Only the clauses behind sports_nhl.CONTRACT_TERMS_READING are quoted; the full document is the PDF above.
+
+[Underlying] Statistics recorded during regulation time and overtime periods shall count toward the Underlying, unless <time period> specifies otherwise.
+
+[<time period>] Entire game, which refers to the time period encapsulating regulation time and overtime
+[<time period>] Where not specified otherwise, <time period> shall be understood to refer to the sum of regulation time and overtime.
+
+[Source Agency] The Source Agencies are, in hierarchical order, the league governing <game>, ESPN, Fox Sports, and the official broadcaster of <hockey game>.
+
+[Payout Criterion, clarification] To be considered to have won <time period> of <hockey game>, <team> must have scored a strictly greater number of goals within <time period> than their opponent(s). If <team> are drawn with their opponent (i.e. the point differential is zero), the Contract for <team> may resolve to "No", and a "Tie" strike, if present, may resolve "Yes".
+
+(The word "shootout" does not appear anywhere in the document.)

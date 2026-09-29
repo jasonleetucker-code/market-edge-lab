@@ -1674,6 +1674,26 @@ def _nhl_counts(counts: Any) -> str:
                       for k, n in sorted(counts.items(), key=lambda kv: (-(kv[1] or 0), kv[0])))
 
 
+NHL_NOMINAL = {"T-6h": 360, "T-60m": 60}
+NHL_SHIFT_WORDS = {"PROTECTED_WINDOW": "protected window", "TICK_AT_CAPACITY": "tick full"}
+
+
+def _lead(minutes: int) -> str:
+    return f"T-{minutes}m" if minutes < 120 else f"T-{minutes // 60}h" + (f"{minutes % 60:02d}m" if minutes % 60 else "")
+
+
+def nhl_horizon_text(target: Any) -> str | None:
+    """A target's horizon as planned and as read: "T-60m nominal · read T-85m (protected window)". The nominal label
+    alone is never shown for a book read at another lead."""
+    if not isinstance(target, dict) or not target.get("horizon"):
+        return None
+    horizon, lead = str(target["horizon"]), target.get("lead_minutes")
+    if not isinstance(lead, int) or lead == NHL_NOMINAL.get(horizon):
+        return horizon if isinstance(lead, int) else f"{horizon} nominal · read time unknown"
+    why = NHL_SHIFT_WORDS.get(str(target.get("shift_reason") or "").split(":", 1)[0])
+    return f"{horizon} nominal · read {_lead(lead)}" + (f" ({why})" if why else "")
+
+
 def nhl_body(result: d.Loaded, now: Any) -> str:
     """Every state of the Kalshi NHL coverage block: unavailable, read error, no schedule, schedule stale, not
     collecting (off by default), overdue, populated. Counts, times and states only."""
@@ -1710,12 +1730,12 @@ def nhl_body(result: d.Loaded, now: Any) -> str:
         ("Kalshi mapped", c.num(pr.count(games.get("mapped")), reason="unknown")
          + _sub(f"{pr.count(games.get('unmapped')) or '0'} unmapped (never guessed)")),
         ("Game-horizons planned", c.num(pr.count(targets.get("game_horizons")), reason="unknown")
-         + _sub(f"{pr.count(targets.get('games')) or '0'} games · T-6h / T-60m")),
+         + _sub(f"{pr.count(targets.get('games')) or '0'} games · nominal T-6h / T-60m")),
         ("Captured", c.num(pr.count(targets.get("game_horizons_captured")), reason="unknown")
          + _sub("game-horizons, both books")),
         ("Missed", c.num(pr.count(targets.get("game_horizons_missed")), reason="unknown") + _sub("game-horizons")),
         ("Next target", c.txt(pr.datetime_et(nxt.get("target_utc")), reason="none planned")
-         + (_sub(f"{nxt.get('horizon')} · {pr.age_text(nxt.get('target_utc'), now) or ''}".rstrip(" ·"))
+         + (_sub(" · ".join(x for x in (nhl_horizon_text(nxt), pr.age_text(nxt.get("target_utc"), now)) if x))
             if nxt else "")),
         ("Last capture", c.txt(pr.datetime_et(v.get("last_capture_utc")), reason="none yet")
          + _sub(pr.age_text(v.get("last_capture_utc"), now))),
@@ -1740,7 +1760,8 @@ def nhl_body(result: d.Loaded, now: Any) -> str:
 
 def nhl_section(ctx: d.Context) -> str:
     return c.section("Kalshi NHL coverage", nhl_body(ctx.nhl_coverage, ctx.now),
-                     meta="KXNHLGAME · T-6h / T-60m before puck drop · development only", sid="nhl-h")
+                     meta="KXNHLGAME · nominal T-6h / T-60m before puck drop, read at the nearest allowed tick · "
+                          "development only", sid="nhl-h")
 
 
 def sources_tab(ctx: d.Context) -> str:

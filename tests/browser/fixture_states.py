@@ -583,7 +583,8 @@ def nhl(root: Path | None = None) -> tuple[Config, Path]:
 
     root = root or Path(tempfile.mkdtemp(prefix="edge-ui-nhl-"))
     fix = REPO / "tests" / "fixtures"
-    listing = json.loads((fix / "sports_nhl" / "kalshi_events_KXNHLGAME_open_2026-09-29.json").read_text(encoding="utf-8"))
+    listing = json.loads((fix / "sports_nhl" / "kalshi_events_KXNHLGAME_open_2026-09-29.json")
+                         .read_text(encoding="utf-8"))
     book = json.loads((fix / "forward" / "orderbook_KXHIGHNY-26SEP23-B69.5.json").read_text(encoding="utf-8"))
     events = {e["event_ticker"]: e for e in listing["events"] if e["event_ticker"].startswith("KXNHLGAME-26OCT01")}
     by_abbr = {abbr: name for name, (abbr, _) in sports_nhl.NHL_TEAMS.items()}

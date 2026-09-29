@@ -819,7 +819,8 @@ def kalshi_nhl_schedule(ctx: FabricContext, now: datetime) -> list[SourceFreshne
                + ")" if not targets else f"the newest NHL target was held by {po.NHL_SWITCH} (off or invalid)")
         record = dataclasses.replace(record, schedule_state=ScheduleState.PAUSED, why_due=_clip(why))
     return [dataclasses.replace(record, usable_for_decision=False, details=details,
-                                notes=record.notes + ("NHL is DATA_COLLECTION / DEVELOPMENT_ONLY: never decision-grade",))]
+                                notes=record.notes + ("NHL is DATA_COLLECTION / DEVELOPMENT_ONLY: never "
+                                                      "decision-grade",))]
 
 
 # =========================================================================== settlement refresh and shadow bookkeeping

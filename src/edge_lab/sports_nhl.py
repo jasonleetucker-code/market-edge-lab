@@ -230,8 +230,10 @@ CONTRACT_TERMS_READING: dict[str, dict[str, str]] = {
         "source": "market rules_secondary"},
     "official_final_result": {
         "status": "VERIFIED",
-        "reading": "settlement sources NHL, then ESPN (event and series metadata)",
-        "source": "event settlement_sources; series settlement_sources"},
+        "reading": "the event and series metadata list NHL and ESPN without an order; the order (the governing "
+                   "league first, then ESPN, then Fox Sports and the official broadcaster) is the contract terms' "
+                   "Source Agency list, stated as hierarchical",
+        "source": "event and series settlement_sources; contract terms, Source Agency"},
 }
 # Fees: the series metadata says fee_type quadratic_with_maker_fees, fee_multiplier 1 (2026-09-29). No verification
 # record covers KXNHLGAME, so NHL evidence records FEE_UNSUPPORTED and prices nothing; never a zero fee.
@@ -258,10 +260,20 @@ class NhlSchedule:
     events: tuple[ScheduledEvent, ...] = ()
     problems: tuple[str, ...] = ()
     detail: str | None = None
+    # The discovery's requested commence window (its stored `request` context), or None when not recorded. Only
+    # inside a known window does an event's absence mean anything (a dropped or moved game).
+    window_from: datetime | None = None
+    window_to: datetime | None = None
 
     @property
     def usable(self) -> bool:
         return self.state == "OK"
+
+    def covers(self, commence: datetime) -> bool:
+        """Whether this discovery's requested window is known and contains `commence`."""
+        if self.window_from is None or self.window_to is None:
+            return False
+        return self.window_from <= commence <= self.window_to
 
 
 SCHEDULE_PAGE = 1000
@@ -291,11 +303,15 @@ def read_schedule(store: Any, now: datetime, *, max_age: timedelta) -> NhlSchedu
         payload = None
     if not isinstance(payload, Mapping):
         return NhlSchedule("UNREADABLE", now, sid, received, detail=f"discovery snapshot {sid} is not a JSON object")
+    if not isinstance(payload.get("events"), list):
+        return NhlSchedule("UNREADABLE", now, sid, received, detail=f"discovery snapshot {sid} holds no events list")
     events, problems = odds_api.parse_events(payload.get("events"), sport=NHL_SPORT)
+    request = payload.get("request") if isinstance(payload.get("request"), Mapping) else {}
+    lo, hi = parse_utc(request.get("commence_from")), parse_utc(request.get("commence_to"))
     state = "OK" if now - received <= max_age else "STALE"
     detail = None if state == "OK" else (f"newest discovery {sid} received {received.isoformat()} is older than "
                                          f"{int(max_age.total_seconds() // 3600)} h")
-    return NhlSchedule(state, now, sid, received, events, problems, detail)
+    return NhlSchedule(state, now, sid, received, events, problems, detail, lo, hi)
 
 
 # --------------------------------------------------------------------------- listings (stored, point in time)
@@ -310,8 +326,9 @@ def listing_problem(markets: Mapping[str, Mapping[str, Any]], expected: Mapping[
     for ticker in expected:
         occ = parse_utc((markets.get(ticker) or {}).get("occurrence_datetime"))
         if occ is not None and abs(occ - (commence + occurrence_offset)) > tolerance:
-            return (f"COMMENCE_MISMATCH: {ticker} occurrence {occ.isoformat()} is not within "
-                    f"{int(tolerance.total_seconds() // 60)} min of commence + {int(occurrence_offset.total_seconds() // 3600)} h")
+            minutes, hours = int(tolerance.total_seconds() // 60), int(occurrence_offset.total_seconds() // 3600)
+            return (f"COMMENCE_MISMATCH: {ticker} occurrence {occ.isoformat()} is not within {minutes} min of "
+                    f"commence + {hours} h")
     return None
 
 
