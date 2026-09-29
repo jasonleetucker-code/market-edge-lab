@@ -757,7 +757,9 @@ def main(argv: list[str] | None = None) -> int:
                                                   "dirs with VERIFIED.json); lists only unless --apply")
     prune.add_argument("--base", type=Path, required=True)
     prune.add_argument("--keep", type=int, default=4)
-    prune.add_argument("--apply", action="store_true", help="remove the older verified pulls listed")
+    prune.add_argument("--apply", action="store_true",
+                       help="re-verify the pulls kept, then remove the older verified pulls listed")
+    prune.add_argument("--timeout", type=float, default=120, help="per-bundle budget of the re-verification")
     args = parser.parse_args(argv)
     if args.command == "retention-plan":
         return _retention_main(args)
@@ -895,9 +897,26 @@ OFFHOST_MARKER = "VERIFIED.json"
 _PULL_NAME = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 
+_FILE_ATTRIBUTE_REPARSE_POINT = 0x400
+
+
+def _is_link(path: Path) -> bool:
+    """A symlink, a Windows junction or any other reparse point: never counted, followed or removed by O1.
+    `Path.is_junction` exists from Python 3.12; the stat attribute check covers older versions too."""
+    try:
+        if path.is_symlink():
+            return True
+        is_junction = getattr(path, "is_junction", None)
+        if is_junction is not None and is_junction():
+            return True
+        return bool(getattr(os.lstat(path), "st_file_attributes", 0) & _FILE_ATTRIBUTE_REPARSE_POINT)
+    except OSError:
+        return True  # unknown: treat as a link (fail closed)
+
+
 def _verified_pull(directory: Path) -> bool:
     marker = directory / OFFHOST_MARKER
-    if marker.is_symlink() or not marker.is_file():
+    if _is_link(directory) or _is_link(marker) or not marker.is_file():
         return False
     try:
         data = json.loads(marker.read_text(encoding="utf-8"))
@@ -906,29 +925,51 @@ def _verified_pull(directory: Path) -> bool:
     return isinstance(data, dict) and data.get("state") == "VERIFIED" and bool(data.get("bundles"))
 
 
-def offhost_prune(base: Path, *, keep: int = 4, apply: bool = False) -> dict[str, Any]:
+def offhost_prune(base: Path, *, keep: int = 4, apply: bool = False, timeout: float = 120) -> dict[str, Any]:
     """O1 "keep the last 4": among the dated pull directories (YYYY-MM-DD) under `base`, keep the `keep`
     newest VERIFIED ones (with a valid VERIFIED.json from offhost-verify) and remove older VERIFIED ones.
     A pull that is not VERIFIED is never counted toward the 4 and never removed here (inspect it by hand),
-    so a failed pull can never displace a verified one. Lists only, unless `apply`."""
+    so a failed pull can never displace a verified one. Links (symlinks, Windows junctions) are never
+    counted, followed or removed. Lists only, unless `apply`; with `apply`, every pull to be kept is first
+    re-verified against its current bytes (offhost-verify), and if any fails nothing is removed (REFUSED)."""
     if keep < 1:
         raise ValueError("keep must be at least 1")
-    dated = sorted((p for p in base.iterdir() if p.is_dir() and not p.is_symlink() and _PULL_NAME.match(p.name)),
-                   key=lambda p: p.name, reverse=True) if base.is_dir() else []
+    entries = sorted(base.iterdir(), key=lambda p: p.name, reverse=True) if base.is_dir() and not _is_link(base) else []
+    dated = [p for p in entries if _PULL_NAME.match(p.name) and not _is_link(p) and p.is_dir()]
+    links = [p.name for p in entries if _PULL_NAME.match(p.name) and _is_link(p)]
     verified = [p for p in dated if _verified_pull(p)]
-    remove = verified[keep:]
-    report = {"command": "backup offhost-prune", "base": str(base), "keep": keep, "applied": apply,
-              "kept_verified": [p.name for p in verified[:keep]], "remove": [p.name for p in remove],
-              "not_verified_left_alone": [p.name for p in dated if p not in verified]}
-    if apply:
-        for p in remove:
-            shutil.rmtree(p)
+    kept, remove = verified[:keep], verified[keep:]
+    report: dict[str, Any] = {
+        "command": "backup offhost-prune", "base": str(base), "keep": keep, "applied": False,
+        "kept_verified": [p.name for p in kept], "remove": [p.name for p in remove],
+        "not_verified_left_alone": [p.name for p in dated if p not in verified], "links_ignored": links,
+        "state": "LISTED"}
+    if not apply:
+        return report
+    if not remove:
+        report["state"] = "NOTHING_TO_REMOVE"
+        return report
+    # The markers say what was verified when they were written; the bytes may have changed since.
+    reverified = {p.name: offhost_verify(p, timeout=timeout)["state"] for p in kept}
+    report["reverified"] = reverified
+    stale = sorted(n for n, s in reverified.items() if s != "VERIFIED")
+    if stale:
+        report["state"] = "REFUSED"
+        report["reason"] = (f"KEPT_PULL_NOT_VERIFIED: {stale} no longer verify against their bytes (their markers "
+                            "were removed); nothing was removed. Inspect them, pull again, then prune.")
+        return report
+    for p in remove:
+        if _is_link(p) or not _verified_pull(p):
+            raise BackupError(f"{p} changed during the prune; stopped")
+        shutil.rmtree(p)
+    report.update(applied=True, state="REMOVED")
     return report
 
 
 def _offhost_prune_main(args: argparse.Namespace) -> int:
-    print(json.dumps(offhost_prune(args.base, keep=args.keep, apply=args.apply), indent=2, sort_keys=True))
-    return 0
+    report = offhost_prune(args.base, keep=args.keep, apply=args.apply, timeout=args.timeout)
+    print(json.dumps(report, indent=2, sort_keys=True))
+    return 2 if report["state"] == "REFUSED" else 0
 
 
 def _offhost_verify_main(args: argparse.Namespace) -> int:
@@ -948,6 +989,8 @@ def _offhost_verify_main(args: argparse.Namespace) -> int:
 APPLY_LOG_NAME = "retention-apply-log.jsonl"
 APPLY_MAX_REPORT_AGE = timedelta(minutes=30)
 APPLY_VERIFY_TIMEOUT_S = 120.0
+# F09 checkpoints are taken roughly weekly (docs/EXECUTION_PLAN.md); a day of slack.
+F09_MAX_GAP = timedelta(days=8)
 _PROTECTED_REASON_PREFIXES = ("NEWEST_GOOD", "FIRST_BUNDLE_BASELINE", "RECENT", "PINNED_BASELINE", "FORENSIC",
                               "NOT_ELIGIBLE_KIND", "DAILY", "WEEKLY", "MONTHLY", "SCHEMA_BOUNDARY", "CHECKPOINT",
                               "NOT_COVERED", "UNVERIFIED_RESTORE", "ACTIVE", "NEWEST_GOOD_STALE")
@@ -992,6 +1035,8 @@ def retention_apply(root: Path, report_path: Path, confirm: str, *, now: datetim
     - the report used the canonical F09 checkpoint directory (the running code's committed set, non-empty)
       and every pin of the policy; the recorded inputs (verify-reports file, checkpoint files) are unchanged,
       and re-running the plan now with them gives exactly the same DELETE-CANDIDATE set (names and hashes);
+    - F09 is not overdue: the newest ledger bundle completed at most `F09_MAX_GAP` after the newest committed
+      checkpoint;
     - the root is a backups directory; no stale freeze; every candidate is an evidence bundle directly in the
       root, directory without symlinks, with only SUPERSEDED as its reason (so never ledger, ACTIVE,
       QUARANTINE, unverified, pinned, checkpoint-linked, schema-boundary or otherwise kept) and a covering bundle;
@@ -1054,6 +1099,17 @@ def retention_apply(root: Path, report_path: Path, confirm: str, *, now: datetim
     frozen = [f for f in fresh.get("flags") or [] if f.startswith(("NEWEST_GOOD_STALE", "NO_GOOD_BUNDLE:evidence"))]
     if frozen:
         raise ApplyRefused(f"STALE_FREEZE: {frozen}")
+    # F09 cadence: the committed checkpoints protect the ledger events they anchor. If the ledger has moved on
+    # for longer than the F09 cadence since the newest committed checkpoint, a checkpoint (and the bundles it
+    # would link) is missing: refuse until an F09 is taken, committed and deployed.
+    checkpoints, _ = load_checkpoints(canonical)
+    newest_cp = max((c["created_at_utc"] for c in checkpoints), default=None)
+    ledger_done = [t for r in fresh.get("bundles") or [] if r.get("kind") == "ledger"
+                   and (t := _aware(r.get("completed_at_utc"))) is not None]
+    if ledger_done and (newest_cp is None or max(ledger_done) - newest_cp > F09_MAX_GAP):
+        raise ApplyRefused(f"F09_OVERDUE: the newest ledger bundle completed {max(ledger_done).isoformat()}, more than "
+                           f"{F09_MAX_GAP.days} days after the newest committed F09 checkpoint "
+                           f"({newest_cp.isoformat() if newest_cp else 'none'}); take, commit and deploy an F09 first")
     linked = {b for c in fresh.get("checkpoints") or [] for b in c.get("bundles") or []}
     pins = set(inputs.get("pins") or ()) | set(policy.pins)
     for name, row in sorted(current.items()):

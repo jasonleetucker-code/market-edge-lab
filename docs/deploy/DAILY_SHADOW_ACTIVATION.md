@@ -654,6 +654,7 @@ After the apply:
 - Exit 2 is `REFUSED`: nothing was deleted, and the reason is printed. Fix the cause, then start again at step 1.
 - `CANDIDATES_CHANGED` or `STALE_REPORT` only mean the dry run must be repeated.
 - `CHECKPOINTS_NOT_CANONICAL` or `PINS_MISSING` mean the dry run was not made as above: deploy the checkpoints and repeat.
+- `F09_OVERDUE` means the newest ledger bundle completed more than 8 days (the F09 cadence plus a day) after the newest committed checkpoint. Take the F09, commit and deploy it, then repeat.
 
 **If an apply was interrupted** (killed, host restart) partway through deleting a bundle:
 - **What it looks like:**
@@ -689,7 +690,10 @@ $K = "$HOME\.ssh\id_ed25519_riskit"; $H = "root@chaseupside.com"
 $Dest = "C:\Users\jason\market-edge-offhost\$D"
 
 # 1. Which bundles: the newest restore-verified evidence and ledger bundle (read-only on the server).
-ssh -i $K $H "journalctl -u edgelab-backup.service -o cat --no-pager --since '-8 days' | runuser -u edgelab -- /opt/market-edge-lab/venv/bin/python -m edge_lab.backup newest-verified --root /var/lib/market-edge-lab/backups --verify-reports /dev/stdin"
+#    The recorded reports are saved as edgelab first, as in section 7. A pipe from root cannot be read as
+#    /dev/stdin by the service account ("Permission denied"). The single quotes keep PowerShell from
+#    expanding the remote $ variables.
+ssh -i $K $H 'R=/var/lib/market-edge-lab/retention; S=$(date -u +%Y%m%dT%H%M%SZ); install -d -o edgelab -g edgelab -m 0700 $R && journalctl -u edgelab-backup.service -o cat --no-pager --since=-8d | runuser -u edgelab -- tee $R/$S-o1-reports.txt >/dev/null && runuser -u edgelab -- /opt/market-edge-lab/venv/bin/python -m edge_lab.backup newest-verified --root /var/lib/market-edge-lab/backups --verify-reports $R/$S-o1-reports.txt'
 #    Note evidence.name, ledger.path and both database_sha256 values. state must be OK.
 
 # 2. Copy them.
@@ -709,7 +713,10 @@ Get-FileHash "$Dest\<evidence.name>\database.sqlite3" -Algorithm SHA256
 #    Step 3 writes VERIFIED.json into the pull only when every bundle passes, and removes a stale one.
 #    offhost-prune keeps the 4 newest pulls that have VERIFIED.json. It removes only older verified pulls,
 #    and never removes (or counts) a pull that is not verified, so a failed pull cannot displace a
-#    verified one. Inspect or fix a failed pull by hand. List first, then apply.
+#    verified one. Links (symlinks, Windows junctions) are never counted, followed or removed.
+#    --apply first re-verifies every pull it keeps against its current bytes. If any fails, it removes
+#    nothing, drops that pull's marker and exits 2 (REFUSED): inspect it, pull again, then prune.
+#    Inspect or fix a failed pull by hand. List first, then apply.
 python -m edge_lab.backup offhost-prune --base C:\Users\jason\market-edge-offhost --keep 4
 python -m edge_lab.backup offhost-prune --base C:\Users\jason\market-edge-offhost --keep 4 --apply
 ```
