@@ -233,9 +233,11 @@ protocol state (from the experiment registry), as-of and evidence window, due ho
 weeks, not-yet-due and superseded, paired horizons, largest exclusion, outcome labels (hidden),
 probability / relation (CONDITIONAL_MAPPING, never equivalent), edge at a size ("Not defensible" with its
 first reason), protocol-eligible opportunities (research_evidence attrition), the economic-screen verdict
-(research_economics), next action and blocker; in disclosures the join diagnostics, missing evidence (the
+(research_economics), next action and blocker; the EXP-002 gate line (`sports_evidence.exp002_gate_line`:
+gate v3, a diagnostic with no pass state; freeze eligibility shown separately and always "Not eligible"; nothing
+green); in disclosures the join diagnostics, missing evidence (the
 report's gaps), protocol attrition (None reads unavailable, never 0), the screen's reasons, the size ladder
-of the latest paired book (depth status, all-in cost or its absence, fee state) with the fill modes, costs
+of the latest pre-label (T-24h / T-6h) paired book (depth status, all-in cost or its absence, fee state) with the fill modes, costs
 and inputs with their evidence class, and provenance. Family B renders the newest EXP-003 payoff-scan result
 file (`experiments/EXP-003-*/results/payoff_scan_*.json`, by evaluation as-of, found through the registry),
 checked only with `payoff_constraints.verify_result_provenance` against EXP-003's own evidence-use log; nothing
@@ -293,7 +295,9 @@ partial, stale, failed or no scan), then per Odds API event of the target rows s
 ("RELATED MARKET — NOT ECONOMICALLY EQUIVALENT", ambiguous, or none) with reasons and every rule check, the
 latest research book capture (YES bid / ask, sizes, receipt, freshness at capture) with the
 "Polymarket US (gateway.polymarket.us public API)" attribution on the figures, and the capture targets'
-states; every event in a disclosure; each Odds capture target row names its event's relationship. Never
+states; a capture at T-60m or received after EXP-002's T-6h decision cutoff (a proxy for its labels) reads
+"Hidden · EXP-002 label proxy" in place of its prices, sizes and depth, there and in the capture attempts and
+All events table, with its status, receipt and freshness kept and no reveal path; every event in a disclosure; each Odds capture target row names its event's relationship. Never
 ranked, never "cheaper", nothing green; a partial, stale or missing scan never reads as "no market". Venues (Tested ≠ connected), collected sources with freshness,
 fee verification, venue registry and full receipt in disclosures.
 
@@ -570,3 +574,25 @@ directive), and the screenshots that justify it.
 
   This is Chromium and WebKit emulation, not a physical phone. The shots were reviewed locally by the
   author, described in the PR and not attached.
+- **2026-09-29 — EXP-002 label hiding: the gate line and the Polymarket label proxy.** State rules only: no
+  new component, token, CSS, layout, component style or navigation. Approved by the owner directive of
+  2026-09-28 (§7D: a later price is an outcome too; §21A: the gate line;
+  `docs/owner/2026-09-28-exp002-validation-inplay-foundation-directive.md`) and the coordinator's follow-up
+  assignment (HANDOFF 2026-09-29, UNRESOLVED "Label proxy" and "UI_CONTRACT §8").
+  - (a) Recorded after the fact for #124, which deferred it here. §8 Family A names the EXP-002 gate line:
+    gate v3 is a diagnostic with no pass state; outcome access is read from the evidence-use log; freeze
+    eligibility is separate and always "Not eligible"; nothing is green. The size ladder is that of the latest
+    pre-label (T-24h / T-6h) paired book, because a T-60m Kalshi book is an EXP-002 label. #124's PR describes
+    its screenshots.
+  - (b) The in-play page of #127 is already recorded (2026-09-28 above) and is not repeated.
+  - (c) §8 Data sources, "Polymarket US related markets": a capture at T-60m, or received after EXP-002's T-6h
+    decision cutoff, is a correlated proxy for its labels (`docs/research/EXP002_FREEZE_PROPOSAL.md` §4).
+    - The pilot's views withhold its prices, sizes and depth and the free text of its reason
+      (`polymarket_sports.withhold_label_proxy`). This covers the Terminal and `pm-sports status`.
+    - The page reads "Hidden · EXP-002 label proxy" (one new state word, `PM_CAPTURE_LABEL_PROXY`, neutral).
+      It appears in the latest research book, the capture attempts ("Hidden") and the All events table.
+    - The status, receipt, freshness at capture and target states stay.
+    - The Terminal has no reveal path.
+    - The gallery gains the SYNTHETIC `label_proxy` state.
+
+    Screenshots: see the PR.

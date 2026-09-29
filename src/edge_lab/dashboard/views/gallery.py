@@ -148,6 +148,10 @@ def view(ctx: d.Context, p: pr.Params) -> cm.Page:
         parts.append(c.section(f"Polymarket US related markets ({title})",
                                research.pm_related_body(loaded, pnow, ("DEMO-NFL-1", "DEMO-NFL-2", "DEMO-NFL-3"), history),
                                sid=f"g-pm-{key}"))
+    loaded, history = pm["label_proxy"]
+    parts.append(c.section("Polymarket US related markets (EXP-002 label proxy: T-60m capture hidden)",
+                           research.pm_related_body(loaded, parse_utc(fixtures.PM_PROXY_NOW), ("DEMO-NFL-1",), history),
+                           sid="g-pm-label-proxy"))
     parts.append(c.section("Polymarket US related markets (no scan / stale / gate blocked / error / unavailable)",
                            "".join(research.pm_related_body(pm[k][0], pnow, ("DEMO-NFL-1",), pm[k][1])
                                    for k in ("no_scan", "stale", "blocked", "error", "unavailable")), sid="g-pm-states"))

@@ -425,6 +425,9 @@ STATES: dict[str, StateWord] = {
     "PM_TARGET_SUPERSEDED": StateWord("Superseded", ND_K),
     "PM_TARGET_SKIPPED_CAP": StateWord("Skipped · slot cap", WARN_K),
     "PM_TARGET_OVERDUE": StateWord("Overdue · not captured", WARN_K),
+    # A capture at T-60m or after the T-6h decision cutoff is a proxy for EXP-002's labels: its prices, sizes and
+    # depth are withheld by the pilot's views (polymarket_sports.withhold_label_proxy); the Terminal never reveals them.
+    "PM_CAPTURE_LABEL_PROXY": StateWord("Hidden · EXP-002 label proxy", ND_K),
     # Freshness Fabric (freshness.ScheduleState / SourceHealth, the supervisor's state), namespaced.
     "SCHEDULE_DUE": StateWord("Due now", INFO_K),
     "SCHEDULE_NOT_DUE": StateWord("Not due", ND_K),
