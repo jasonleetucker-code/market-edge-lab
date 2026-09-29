@@ -70,8 +70,11 @@ from . import http, odds_api, polymarket_us
 from .discovery import CoverageState
 from .forward import MIN_REQUEST_BUDGET, REQUEST_TIMEOUT_S, DeadlineExceeded, LockBusy, eastern_offset, exclusive_lock
 from .freshness import Freshness, parse_utc
-from .odds_schedule import DEFAULT_OFFSETS, CaptureTarget, PilotConfig, ScheduledEvent, iso_z
-from .odds_schedule import deadline as odds_deadline
+from .odds_schedule import DECISION_OFFSET as ODDS_DECISION_OFFSET
+from .odds_schedule import DEFAULT_OFFSETS, ScheduledEvent, iso_z
+from .odds_schedule import PRE_DECISION_OFFSETS as ODDS_PRE_DECISION_OFFSETS
+from .odds_schedule import decision_cutoff as odds_decision_cutoff
+from .odds_schedule import is_label_proxy as odds_is_label_proxy
 from .price_observations import protected_window_at
 from .provenance import bytes_sha256
 from .sources import get_source
@@ -1015,39 +1018,27 @@ LABEL_PROXY_FIELDS = ("yes_bid", "yes_bid_size", "yes_ask", "yes_ask_size", "dep
 LABEL_PROXY_HIDDEN = ("HIDDEN (EXP-002 label proxy: a related-market capture at T-60m or after the T-6h decision "
                       "cutoff; its prices, sizes and depth are not shown here)")
 LABEL_PROXY_REASON = "withheld (EXP-002 label proxy)"
-PRE_DECISION_OFFSETS = ("T-24h", "T-6h")  # every other horizon (T-60m, or one this code does not know) is withheld
-DECISION_OFFSET = "T-6h"
+PRE_DECISION_OFFSETS, DECISION_OFFSET = ODDS_PRE_DECISION_OFFSETS, ODDS_DECISION_OFFSET  # odds_schedule's
 _REASON_CODE = re.compile(r"^([A-Z][A-Z0-9_]*):")
 
 
 def decision_cutoff(game_start_utc: Any) -> datetime | None:
-    """EXP-002's T-6h decision cutoff for a game: `odds_schedule.deadline` of a T-6h target under the Odds
-    runner's default `PilotConfig` (the one `sports_evidence` uses), at this market's kickoff moved
-    `START_TOLERANCE` earlier. A related Odds event's kickoff may be up to that much earlier than Polymarket's,
-    and the deadline never decreases with the kickoff, so this is never later than the real cutoff. It can be
-    earlier: by 15 min when the two kickoffs agree (up to 30 min at the relation's tolerance), and by up to 70 min
-    (85 at the tolerance) when the real Odds T-6h target is shifted out of the 17:40-18:35 ET quiet window and the
-    moved one is not (kickoffs about 23:40-00:50 ET; none on the NFL schedule). A capture in that gap is withheld
-    conservatively. None when the kickoff is unknown."""
-    start = _t(game_start_utc)
-    if start is None:
-        return None
-    kick = start - START_TOLERANCE
-    off = next(o for o in OFFSETS if o.label == DECISION_OFFSET)
-    return odds_deadline(CaptureTarget("", ODDS_SPORT, "", off.label, off.priority, kick, kick - off.before),
-                         PilotConfig())
+    """EXP-002's T-6h decision cutoff for a game (`odds_schedule.decision_cutoff`, the one rule), at this market's
+    kickoff moved `START_TOLERANCE` earlier. A related Odds event's kickoff may be up to that much earlier than
+    Polymarket's, and the deadline never decreases with the kickoff, so this is never later than the real cutoff.
+    It can be earlier: by 15 min when the two kickoffs agree (up to 30 min at the relation's tolerance), and by up
+    to 70 min (85 at the tolerance) when the real Odds T-6h target is shifted out of the 17:40-18:35 ET quiet
+    window and the moved one is not (kickoffs about 23:40-00:50 ET; none on the NFL schedule). A capture in that
+    gap is withheld conservatively. None when the kickoff is unknown."""
+    return odds_decision_cutoff(game_start_utc, kickoff_tolerance=START_TOLERANCE)
 
 
 def is_label_proxy(offset_label: Any, game_start_utc: Any, received_at_utc: Any) -> bool:
-    """True when a capture's figures are withheld: its horizon is not a pre-decision one (T-60m, or unknown:
-    fails closed), or it was received after the game's T-6h decision cutoff, or either time is unreadable.
-    A row with no receipt holds no figure (the store's own constraint)."""
-    if offset_label not in PRE_DECISION_OFFSETS:
-        return True
-    if received_at_utc is None:
-        return False
-    cutoff, received = decision_cutoff(game_start_utc), _t(received_at_utc)
-    return cutoff is None or received is None or received > cutoff
+    """True when a capture's figures are withheld (`odds_schedule.is_label_proxy` with this pilot's kickoff
+    tolerance): its horizon is not a pre-decision one (T-60m, or unknown: fails closed), or it was received after
+    the game's T-6h decision cutoff, or either time is unreadable. A row with no receipt holds no figure (the
+    store's own constraint)."""
+    return odds_is_label_proxy(offset_label, game_start_utc, received_at_utc, kickoff_tolerance=START_TOLERANCE)
 
 
 def withhold_reason(reason: Any, *, offset_label: Any, game_start_utc: Any, received_at_utc: Any = None) -> Any:

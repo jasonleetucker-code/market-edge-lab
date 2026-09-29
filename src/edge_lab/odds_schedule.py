@@ -211,6 +211,65 @@ def is_expired(target: CaptureTarget, now: datetime, config: PilotConfig = Pilot
     return now > deadline(target, config)
 
 
+# --------------------------------------------------------------------------- EXP-002 decision horizon
+#
+# EXP-002 decides at T-6h (with T-24h as a prior input); its labels are the Kalshi T-60m books and settlement.
+# Any NFL price captured at T-60m, or received after a game's T-6h decision cutoff, is a proxy for those labels
+# (owner directive 2026-09-28 §7D; docs/research/EXP002_FREEZE_PROPOSAL.md §4), so read-only displays withhold it.
+# The one rule lives here, beside the `deadline` it uses: Polymarket US (`polymarket_sports`) and The Odds API
+# (`odds_consensus`) displays both call it. EXP-002's own measurement and its logged --with-results path do not.
+DECISION_OFFSET = "T-6h"
+PRE_DECISION_OFFSETS = ("T-24h", "T-6h")  # every other horizon (T-60m, or one this code does not know) is withheld
+
+
+def _utc(value: object) -> datetime | None:
+    if isinstance(value, datetime):
+        return value.astimezone(UTC) if value.tzinfo is not None else None
+    if not isinstance(value, str) or not value.strip():
+        return None
+    text = value.strip()
+    try:
+        parsed = datetime.fromisoformat(text[:-1] + "+00:00" if text.endswith("Z") else text)
+    except ValueError:
+        return None
+    return parsed.astimezone(UTC) if parsed.tzinfo is not None else None
+
+
+def decision_cutoff(commence_utc: object, config: PilotConfig = PilotConfig(), *,
+                    kickoff_tolerance: timedelta = timedelta(0)) -> datetime | None:
+    """EXP-002's T-6h decision cutoff for a game: `deadline` of a T-6h target at its kickoff (under the Odds
+    runner's default `PilotConfig`, the one `sports_evidence` uses). `kickoff_tolerance` moves the kickoff
+    earlier first, for a source whose kickoff may differ from the Odds event's by up to that much; the deadline
+    never decreases with the kickoff, so the result is then never later than the Odds event's own cutoff.
+    None when the kickoff is unknown or naive."""
+    kick = _utc(commence_utc)
+    if kick is None:
+        return None
+    kick -= kickoff_tolerance
+    off = next(o for o in DEFAULT_OFFSETS if o.label == DECISION_OFFSET)
+    return deadline(CaptureTarget("", "", "", off.label, off.priority, kick, kick - off.before), config)
+
+
+def after_decision(commence_utc: object, received_utc: object, *,
+                   kickoff_tolerance: timedelta = timedelta(0)) -> bool:
+    """True when a receipt is after the game's T-6h decision cutoff, or when either time is unknown (fails
+    closed)."""
+    cutoff, received = decision_cutoff(commence_utc, kickoff_tolerance=kickoff_tolerance), _utc(received_utc)
+    return cutoff is None or received is None or received > cutoff
+
+
+def is_label_proxy(offset_label: object, commence_utc: object, received_utc: object, *,
+                   kickoff_tolerance: timedelta = timedelta(0)) -> bool:
+    """The EXP-002 label-proxy rule for one capture of one game: withheld when its horizon is not a pre-decision
+    one (T-60m, or unknown: fails closed) or it was received after the T-6h decision cutoff (`after_decision`).
+    A capture with no receipt holds no figure, so the horizon alone decides it."""
+    if offset_label not in PRE_DECISION_OFFSETS:
+        return True
+    if received_utc is None:
+        return False
+    return after_decision(commence_utc, received_utc, kickoff_tolerance=kickoff_tolerance)
+
+
 # --------------------------------------------------------------------------- slots
 
 

@@ -351,6 +351,7 @@ def synthetic_odds_targets() -> dict[str, Any]:
 # SYNTHETIC sportsbook consensus: SYNTHETIC stored rows run through the real contract
 # (`odds_consensus.build_snapshot_consensus`), so every figure the gallery shows is its own output.
 CONSENSUS_RECEIVED = "2026-09-24T18:15:41Z"
+CONSENSUS_T60M = "2026-09-24T23:15:20Z"  # the label-proxy state: 60 min before the SYNTHETIC kickoff
 
 
 def _book(key: str, updated: str | None, markets: list) -> dict:
@@ -392,7 +393,8 @@ def _consensus_row(sid: int, events: list, *, bad_hash: bool = False) -> dict:
 def synthetic_consensus() -> dict[str, Any]:
     """name -> (a `data.Loaded` of `odds_consensus.consensus_for_event`'s result, the capture's snapshot id):
     populated with stale, unknown, insufficient and unsupported books; all fresh; this capture
-    unusable with an earlier one shown; failed closed; none; not installed; read error. Point-in-time
+    unusable with an earlier one shown; failed closed; none; not installed; read error; `label_proxy` (an NFL
+    read at T-60m, withheld by `odds_consensus.withhold_label_proxies`). Point-in-time
     fields are those of a read at the capture's own receipt time (receipt age zero, so
     `freshness_as_of` equals the books' worst freshness at receipt)."""
     from .. import odds_consensus as oc
@@ -406,6 +408,11 @@ def synthetic_consensus() -> dict[str, Any]:
                                                            "but its response does not include it",))
     broken = at_receipt(oc.build_snapshot_consensus(_consensus_row(904, [_consensus_event(mixed=False)],
                                                                    bad_hash=True)))
+    # EXP-002 label proxy: the same SYNTHETIC books as an NFL event read 60 min before kickoff (after the T-6h
+    # decision cutoff), withheld by the contract's own display rule.
+    t60m = {**_consensus_row(908, [{**_consensus_event(mixed=False), "sport_key": "americanfootball_nfl"}]),
+            "fetched_at_utc": CONSENSUS_T60M}
+    proxy = oc.withhold_label_proxies(at_receipt(oc.build_snapshot_consensus(t60m)))
     return {
         "populated": (d.Loaded(d.OK, mixed), 901),
         "fresh": (d.Loaded(d.OK, fresh), 902),
@@ -416,6 +423,7 @@ def synthetic_consensus() -> dict[str, Any]:
         "unavailable": (d.Loaded(d.NO_DATA, message="the consensus research benchmark (odds_consensus) is not "
                                                     "installed in this build"), 906),
         "error": (d.Loaded(d.ERROR, message="OperationalError: database disk image is malformed"), 907),
+        "label_proxy": (d.Loaded(d.OK, proxy), 908),
     }
 
 

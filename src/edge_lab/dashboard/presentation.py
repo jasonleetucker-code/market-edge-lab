@@ -397,6 +397,9 @@ STATES: dict[str, StateWord] = {
     "CONSENSUS_SUPPORTED": StateWord("Consensus computed", INFO_K),
     "CONSENSUS_INSUFFICIENT_BOOKS": StateWord("Insufficient books", WARN_K),
     "CONSENSUS_UNSUPPORTED": StateWord("Unsupported", WARN_K),
+    # A sportsbook capture at T-60m or after the T-6h decision cutoff is a proxy for EXP-002's labels: its figures
+    # are withheld by odds_consensus.withhold_label_proxies; the Terminal never reveals them.
+    "ODDS_CAPTURE_LABEL_PROXY": StateWord("Hidden · EXP-002 label proxy", ND_K),
     # Polymarket US NFL pilot (polymarket_sports): relationships, catalog, access gate, checks, targets.
     # Nothing here is green: a relationship is never equivalence and a scan is never a full catalog.
     "PM_EVENT_RELATED_NOT_EQUIVALENT": StateWord("RELATED MARKET — NOT ECONOMICALLY EQUIVALENT", WARN_K),

@@ -234,6 +234,11 @@ CONSENSUS_NOTE = ("A consensus probability is the median, across books, of each 
                   "each book's quote as received; their implied probability still includes the book's margin. "
                   "Spreads and totals are never combined across lines.")
 DISPERSION_TEXT = "range (max − min) and MAD (median absolute deviation, unscaled) of the books' de-vigged probabilities"
+# EXP-002 label proxy: `odds_consensus.withhold_label_proxies` marks an event read at T-60m or after the T-6h decision
+# cutoff (`label_proxy`); its probabilities, prices, lines and de-vigs are not shown and nothing here reveals them.
+ODDS_HIDDEN = "ODDS_CAPTURE_LABEL_PROXY"
+ODDS_HIDDEN_NOTE = ("probabilities, offered prices, lines and de-vigs withheld: a sportsbook capture at T-60m or after "
+                    "the T-6h decision is a proxy for EXP-002's labels and is never shown here")
 
 
 def _side(name: Any, line: Any, market: Any = None) -> str:
@@ -337,6 +342,20 @@ def consensus_body(result: d.Loaded | None, capture_snapshot_id: Any = None) -> 
         ("Books quoting this event", c.num(pr.count(event.bookmaker_count))),
         ("Consensus version", c.code(r.consensus_version)),
     ], wide=True, text_cols=(1,)))
+    hidden = getattr(event, "label_proxy", None)
+    if isinstance(hidden, dict):  # EXP-002 label proxy: status, receipt, freshness and counts only
+        out.append(c.facts([
+            ("Figures", c.state_text(ODDS_HIDDEN) + _sub(ODDS_HIDDEN_NOTE)),
+            ("Propositions", c.num(pr.count(hidden.get("propositions")), reason="not recorded")
+             + _sub(f"{pr.count(hidden.get('supported_propositions')) or '0'} with a consensus")),
+            ("Unsupported groups", c.num(pr.count(hidden.get("unsupported_groups")), reason="not recorded")),
+        ], wide=True, text_cols=(0,)))
+        out.append(c.disclosure("Consensus provenance", c.kv([
+            ("input sha256", c.code(r.input_sha256)), ("output sha256 (of what is shown)", c.code(r.output_sha256)),
+            ("odds format", c.code(r.odds_format)), ("purpose", c.code(r.purpose)), ("slot", c.code(r.slot_id)),
+            ("problems", c.ul(r.problems, empty="none"))])))
+        out.append(f'<p class="note">{esc(CONSENSUS_NOTE)}</p>')
+        return "".join(out)
     order = {"h2h": 0, "spreads": 1, "totals": 2}
     props = sorted(event.propositions, key=lambda p: (order.get(p.market_key, 9), p.market_key,
                                                       tuple(ln or "" for _, ln in p.outcomes)))

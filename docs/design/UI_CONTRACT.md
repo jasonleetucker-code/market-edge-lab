@@ -288,7 +288,10 @@ offered prices as received and each book's de-vig in a separate nested disclosur
 tables, never in the consensus table; unsupported groups with their reason codes. States: populated,
 insufficient books, unsupported, stale/unknown freshness, this capture unusable with an earlier one
 shown and newer unusable captures listed (`newer_unusable`), failed closed, no consensus, not
-installed, read error. After it, "Polymarket US related markets" (Lane B's
+installed, read error, and EXP-002 label proxy: an NFL event read at T-60m or after its T-6h decision cutoff
+reads "Hidden · EXP-002 label proxy" in place of its probabilities, prices, lines and de-vigs
+(`odds_consensus.withhold_label_proxies`), with its receipt, freshness and book and proposition counts kept and
+no reveal path. After it, "Polymarket US related markets" (Lane B's
 `polymarket_sports.terminal_view`, pm-sports-status/1): the access gate (an owner risk decision, never a
 terms clearance; blocked when none is recorded), the catalog state (a filtered listing, never a full catalog;
 partial, stale, failed or no scan), then per Odds API event of the target rows shown the relationship
@@ -385,7 +388,8 @@ and URL-encoded.
 ## 13. Evidence tooling
 
 `tests/browser/fixture_states.py` (early, demo, broken, odds, odds_issues, freshness, freshness_deferred, polymarket,
-polymarket_issues, polymarket_label_proxy, economics, economics_issues), `tests/browser/serve_fixture.py`,
+polymarket_issues, polymarket_label_proxy, odds_label_proxy, economics, economics_issues),
+`tests/browser/serve_fixture.py`,
 `tests/browser/capture.py` (Playwright, dev-only; blocks non-loopback requests; audits
 overflow, targets, fonts, first-row position). Emulated WebKit is not a physical iPhone.
 
@@ -607,3 +611,32 @@ directive), and the screenshots that justify it.
     Element shots of the Polymarket section and the gallery state were reviewed at 390 and 1440 px. This is
     emulation, not a physical phone. The shots were reviewed locally by the author, described in the PR and not
     attached.
+- **2026-09-29 (d) — EXP-002 label hiding: the sportsbook consensus proxy.** A state rule only: no new
+  component, token, CSS, layout, component style or navigation. Approved by the coordinator's PR D assignment
+  (a reviewer's finding after #130: sportsbook data at T-60m tracks the Kalshi T-60m book that is E1's exit label)
+  under the owner directive of 2026-09-28 (§7D).
+  - §8 Data sources, Odds capture targets, "Consensus at this capture": an NFL event read at T-60m or after its
+    T-6h decision cutoff is withheld by the contract's display copy (`odds_consensus.withhold_label_proxies`).
+    The cutoff is the Odds event's own kickoff with no tolerance.
+    - The one rule is `odds_schedule.is_label_proxy` / `decision_cutoff`, beside the `deadline` it uses.
+      Polymarket US (entry (c)) now calls the same rule with its 15-min kickoff tolerance.
+    - Withheld: probabilities, offered prices, lines, de-vigs, unsupported groups, and the free text of the
+      event's parse problems.
+    - Kept: snapshot, receipt, freshness, books quoting and proposition counts.
+    - The page reads "Hidden · EXP-002 label proxy" (one new neutral state word, `ODDS_CAPTURE_LABEL_PROXY`).
+    - The Terminal and `edge-lab odds consensus` have no reveal path.
+    - Other sports and pre-decision captures are unchanged.
+  - The gallery gains the SYNTHETIC `label_proxy` consensus state. §13 gains the browser fixture state
+    `odds_label_proxy`: `odds` plus the first game's T-60m capture with SYNTHETIC prices
+    (`fixture_states.odds_t60m_capture`).
+
+    Evidence (`tests/browser/capture.py`, 20 shots, 0 with overflow, clipping, low contrast or foreign requests):
+    - fixture state `odds_label_proxy`, `/experiments?tab=sources`:
+      - Chromium and WebKit at 360x800, 390x844 and 1440x900, closed (with screenshots) and with every
+        disclosure open;
+      - Chromium at 360x800 and 1440x900 with 200% root text;
+    - `/gallery` in the `demo` state, Chromium and WebKit at 360x800, 390x844 and 1440x900.
+
+    Element shots of the T-60m target row, with its consensus open, were reviewed in Chromium and WebKit at 390
+    and 1440 px. This is emulation, not a physical phone. The shots were reviewed locally by the author, described
+    in the PR and not attached.

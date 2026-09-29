@@ -20,7 +20,9 @@ and status-file shapes, and returns a dashboard Config with a fixed clock:
 - polymarket / polymarket_issues: the odds fixture plus the Polymarket US NFL pilot (recorded gateway
   bytes), complete or with a partial listing and a failed book call;
 - polymarket_label_proxy: `polymarket` plus a T-60m capture with SYNTHETIC prices (an EXP-002 label proxy,
-  shown hidden).
+  shown hidden);
+- odds_label_proxy: `odds` plus the first game's T-60m sportsbook capture with SYNTHETIC prices (an EXP-002
+  label proxy: its consensus is shown hidden).
 """
 
 from __future__ import annotations
@@ -293,6 +295,77 @@ def odds_issues() -> tuple[Config, Path]:
     return odds_pilot(issues=True)
 
 
+# EXP-002 label proxy (The Odds API): SYNTHETIC sportsbook prices for the first game's T-60m capture, distinct from
+# every other fixture's, so a leak of its consensus, prices or lines is detectable.
+ODDS_PROXY_H2H = (-237, 197)  # home, away (american)
+ODDS_PROXY_SPREAD = 6.5
+ODDS_PROXY_TOTAL = 41.5
+ODDS_PROXY_NOW = datetime(2026, 9, 24, 23, 30, tzinfo=timezone.utc)  # after the 19:15 ET (23:15Z) T-60m capture
+
+
+def _proxy_event(native: str, home: str, away: str, commence: datetime) -> dict:
+    def outcome(name: str, price: int, point: float | None = None) -> dict:
+        return {"name": name, "price": price, **({"point": point} if point is not None else {})}
+    books = [{"key": b, "title": b, "last_update": "2026-09-24T23:14:00Z", "markets": [
+        {"key": "h2h", "outcomes": [outcome(home, ODDS_PROXY_H2H[0]), outcome(away, ODDS_PROXY_H2H[1])]},
+        {"key": "spreads", "outcomes": [outcome(home, -115, -ODDS_PROXY_SPREAD),
+                                        outcome(away, -105, ODDS_PROXY_SPREAD)]},
+        {"key": "totals", "outcomes": [outcome("Over", -104, ODDS_PROXY_TOTAL),
+                                       outcome("Under", -116, ODDS_PROXY_TOTAL)]}]}
+        for b in _BOOKS]
+    return {"id": native, "sport_key": "americanfootball_nfl", "sport_title": "NFL",
+            "commence_time": commence.strftime("%Y-%m-%dT%H:%M:%SZ"), "home_team": home, "away_team": away,
+            "bookmakers": books}
+
+
+def odds_t60m_capture(cfg: Config) -> str:
+    """Adds the first game's T-60m capture (23:15:20Z, 60 min before its 00:15Z kickoff) to an `odds_pilot`
+    store exactly as the runner records one: the stored response (SYNTHETIC prices, `ODDS_PROXY_*`) and the
+    CAPTURING / CAPTURED transitions. Returns the target id."""
+    from edge_lab import odds_api
+    from edge_lab.odds_schedule import iso_z
+
+    store = SnapshotStore(cfg.db)
+    sport = "americanfootball_nfl"
+    target = next(dict(r) for r in store.odds_targets(sport=sport)
+                  if r["offset_label"] == "T-60m" and r["commence_time_utc"] == "2026-09-25T00:15:00Z")
+    intended = datetime.fromisoformat(target["target_utc"].replace("Z", "+00:00"))
+    received, slot = intended + timedelta(seconds=20), f"{sport}:{iso_z(intended)}"
+    event = _proxy_event(target["event_id"], target["home_team"], target["away_team"],
+                         datetime(2026, 9, 25, 0, 15, tzinfo=timezone.utc))
+    store.start_run("odds-capture-t60m")
+    sid = store.save_snapshot(run_id="odds-capture-t60m", source="the_odds_api", kind="odds", entity_id=sport,
+                              url="https://api.the-odds-api.com/v4/sports/americanfootball_nfl/odds?apiKey=REDACTED",
+                              payload={"sport": sport, "events": [event],
+                                       "request": {"purpose": "capture", "odds_format": "american",
+                                                   "markets": ["h2h", "spreads", "totals"], "regions": ["us"],
+                                                   "slot_id": slot, "targets": [
+                                                       {"target_id": target["target_id"],
+                                                        "event_id": target["event_id"], "offset": "T-60m",
+                                                        "target_utc": iso_z(intended)}]},
+                                       "quota_headers": {"x-requests-last": "3"}},
+                              fetched_at_utc=iso_z(received), source_id="the_odds_api")
+    store.finish_run("odds-capture-t60m", status="succeeded")
+    parsed = odds_api.parse_odds([event], odds_format="american")
+    store.record_odds_transition(target_id=target["target_id"], state="CAPTURING", at_utc=iso_z(received), slot_id=slot)
+    store.record_odds_transition(
+        target_id=target["target_id"], state="CAPTURED", at_utc=iso_z(received), slot_id=slot, snapshot_id=sid,
+        captured_at_utc=iso_z(received), credits_last=3,
+        detail={"event_present": True, "bookmakers": sorted({o.bookmaker for o in parsed.offers}),
+                "markets": ["h2h", "spreads", "totals"], "missing_markets": [], "offers": len(parsed.offers),
+                "offset": "T-60m", "target_utc": iso_z(intended), "deviation_minutes": 0.3, "lead_minutes": 59.7,
+                "parse_problems": 0})
+    return str(target["target_id"])
+
+
+def odds_label_proxy() -> tuple[Config, Path]:
+    """`odds` plus the first game's T-60m capture with SYNTHETIC prices, viewed at 19:30 ET: an EXP-002 label proxy,
+    so its "Consensus at this capture" is hidden beside the visible T-6h one."""
+    cfg, root = odds_pilot()
+    odds_t60m_capture(cfg)
+    return replace(cfg, clock=lambda: ODDS_PROXY_NOW), root
+
+
 def _with_freshness(cfg: Config, root: Path, evaluated: datetime, now: datetime, window=None) -> Config:
     """Write the supervisor's artifact exactly as `edge-lab freshness status --write` does, over this
     fixture's evidence (the real providers), then serve the dashboard with `status_dir` pointing at it."""
@@ -497,6 +570,6 @@ def payoff_production() -> tuple[Config, Path]:
 BUILDERS = {"early": early, "demo": demo, "broken": broken, "odds": odds_pilot, "odds_issues": odds_issues,
             "freshness": freshness, "freshness_deferred": freshness_deferred,
             "polymarket": polymarket, "polymarket_issues": polymarket_issues,
-            "polymarket_label_proxy": polymarket_label_proxy,
+            "polymarket_label_proxy": polymarket_label_proxy, "odds_label_proxy": odds_label_proxy,
             "economics": economics, "economics_issues": economics_issues,
             "payoff": payoff, "payoff_laptop": payoff_laptop, "payoff_production": payoff_production}

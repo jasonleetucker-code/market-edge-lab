@@ -123,6 +123,10 @@ def view(ctx: d.Context, p: pr.Params) -> cm.Page:
         loaded, sid = consensus[key]
         parts.append(c.section(f"Consensus at a capture ({title})", research.consensus_body(loaded, sid),
                                meta=research.CONSENSUS_LABEL, sid=f"g-cons-{key}"))
+    loaded, sid = consensus["label_proxy"]
+    parts.append(c.section("Consensus at a capture (EXP-002 label proxy: a T-60m NFL read hidden)",
+                           research.consensus_body(loaded, sid), meta=research.CONSENSUS_LABEL,
+                           sid="g-cons-label-proxy"))
     parts.append(c.section("Consensus at a capture (failed closed / none / missing capture / not installed / read error)",
                            "".join(research.consensus_body(*consensus[k])
                                    for k in ("failed_closed", "none", "missing", "unavailable", "error")),
