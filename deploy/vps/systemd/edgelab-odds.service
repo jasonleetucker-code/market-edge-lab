@@ -1,5 +1,5 @@
 [Unit]
-Description=Market Edge Lab: The Odds API NFL pilot tick (read-only odds, 450-credit monthly ceiling)
+Description=Market Edge Lab: The Odds API pilot tick, NFL then NHL (read-only odds, one shared 450-credit monthly ceiling)
 Documentation=file:///opt/market-edge-lab/app/docs/decisions/0029-game-relative-odds-capture.md
 After=network-online.target
 Wants=network-online.target
@@ -19,6 +19,12 @@ WorkingDirectory=/var/lib/market-edge-lab
 # reconcile only if the quota is unknown, and ONE paid odds call when a slot is due), each one
 # attempt with a 20 s timeout and no redirects. Payloads are tens of kilobytes.
 ExecStart=/opt/market-edge-lab/venv/bin/python -m edge_lab.cli odds run --db /var/lib/market-edge-lab/db/edge_lab.sqlite3 --ledger /var/lib/market-edge-lab/db/odds_quota_ledger.json --sport americanfootball_nfl --markets h2h,spreads,totals --regions us
+# NHL (ADR 0039, issue #134), after NFL in the same oneshot: never concurrent with it, same ledger,
+# same tick lock. Prepared, NOT enabled: unless EDGE_LAB_ODDS_NHL=on in /etc/market-edge-lab/env it
+# prints DISABLED and sends and writes nothing. Admitted only from the credits left after NFL's full
+# monthly worst case (one joint proof). If the NFL tick exits 1 (a new alert), systemd skips this line
+# for that tick; the next tick runs both. Same per-tick bound: at most three GETs.
+ExecStart=/opt/market-edge-lab/venv/bin/python -m edge_lab.cli odds run --db /var/lib/market-edge-lab/db/edge_lab.sqlite3 --ledger /var/lib/market-edge-lab/db/odds_quota_ledger.json --sport icehockey_nhl --markets h2h --regions us --offsets 60m
 TimeoutStartSec=3min
 UMask=0077
 MemoryHigh=128M

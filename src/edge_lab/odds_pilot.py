@@ -23,6 +23,7 @@ One tick (`run_tick`, the `edgelab-odds` timer every 15 minutes):
 from __future__ import annotations
 
 import json
+import os
 import sys
 import time
 import traceback
@@ -37,14 +38,19 @@ from .forward import LockBusy, eastern_offset, exclusive_lock
 from .freshness import assess, parse_utc
 from .odds_schedule import (
     POLICY_VERSION,
+    SPORT_POLICIES,
     BudgetProof,
     CaptureTarget,
+    JointBudgetProof,
     PilotConfig,
     QuotaReading,
     ScheduledEvent,
     Slot,
+    SportDemand,
+    SportPolicy,
     budget,
     coalesce,
+    joint_budget,
     deadline,
     effective_due,
     in_quiet_window,
@@ -52,6 +58,8 @@ from .odds_schedule import (
     iso_z,
     month_bounds,
     plan_targets,
+    policy_for,
+    switch_on,
 )
 from .storage import ODDS_TARGET_FINAL_STATES, ReadOnlyStoreError, SnapshotStore
 
@@ -75,6 +83,49 @@ class RunnerSettings:
     @property
     def cost_per_call(self) -> int:
         return odds_api.estimate_cost(list(self.markets), list(self.regions))
+
+    @property
+    def policy(self) -> SportPolicy | None:
+        return policy_for(self.sport)
+
+    @classmethod
+    def for_sport(cls, sport: str, offsets: Sequence[Any] | None = None) -> "RunnerSettings":
+        """The reviewed defaults of one sport's policy (ADR 0039). For NFL this equals RunnerSettings()."""
+        pol = policy_for(sport)
+        if pol is None:
+            raise ValueError(f"no Odds sport policy for {sport!r}")
+        return cls(sport=sport, markets=pol.markets, regions=pol.regions, discovery_horizon=pol.discovery_horizon,
+                   config=pol.config(offsets))
+
+
+def policy_refusal(settings: RunnerSettings) -> str | None:
+    """Why these settings may not spend anything, or None. A sport needs a policy (its place in the
+    shared budget), and may request only its policy's markets and regions: the joint proof prices
+    every sport at its policy's cost, so a wider request would break it."""
+    pol = settings.policy
+    if pol is None:
+        return (f"UNSUPPORTED_SPORT: {settings.sport!r} has no Odds sport policy (odds_schedule.SPORT_POLICIES); "
+                "a sport without a place in the shared budget sends nothing")
+    extra = sorted(set(settings.markets) - set(pol.markets)) + sorted(set(settings.regions) - set(pol.regions))
+    if extra or not settings.markets or not settings.regions:
+        return (f"POLICY_REFUSED: {settings.sport} allows markets {list(pol.markets)} and regions "
+                f"{list(pol.regions)} only; requested {list(settings.markets)} / {list(settings.regions)}")
+    if settings.config.ceiling != PilotConfig().ceiling or settings.config.reserve_credits != PilotConfig().reserve_credits:
+        return "POLICY_REFUSED: every sport shares one ceiling and one reserve"
+    return None
+
+
+def _environ(environ: Mapping[str, str] | None) -> Mapping[str, str]:
+    return os.environ if environ is None else environ
+
+
+def _switch_off(settings: RunnerSettings, environ: Mapping[str, str] | None) -> str | None:
+    """The detail of a switched-off sport, or None when it may run."""
+    pol = settings.policy
+    if pol is None or switch_on(pol, _environ(environ)):
+        return None
+    return (f"DISABLED: {pol.switch_env} is not 'on'; {settings.sport} Odds collection is prepared but not "
+            "enabled. Nothing was sent or written. Activation is a reviewed operator step.")
 
 
 def _real_clock() -> datetime:
@@ -190,6 +241,78 @@ def _event_coverage(snapshot: odds_api.OddsSnapshot, native_event: str, markets:
             "markets": got, "missing_markets": sorted(set(markets) - set(got)), "offers": len(offers)}
 
 
+# --------------------------------------------------------------------------- the shared budget (ADR 0039)
+
+
+def _demand(store: SnapshotStore | None, policy: SportPolicy, now: datetime, *,
+            due_from: datetime | None = None) -> SportDemand:
+    """A higher-ranked sport's demand on the shared month, rebuilt from ITS stored discovery and
+    targets as its own tick would see them, never from the calling sport's data. Conservative
+    where the two could differ: every non-final, unexpired stored target counts (an EVENT_ABSENT
+    game may come back), so do targets its latest discovery implies but its tick has not written
+    yet; with no fresh discovery nothing is known and its worst-case assumption covers the whole
+    rest of the month. `due_from` keeps only slots due at or after it (next month's projection)."""
+    settings = RunnerSettings.for_sport(policy.sport)
+    cfg = settings.config
+    events: tuple[ScheduledEvent, ...] = ()
+    fresh = False
+    rows: list[Any] = []
+    if store is not None:
+        latest = store.latest_snapshot(source=SOURCE, kind="events", entity_id=policy.sport)
+        if latest is not None:
+            try:
+                events = _events_from_snapshot(latest, policy.sport)[0]
+                fresh = now - _discovered_at(latest) <= settings.discovery_max_age
+            except (ValueError, KeyError, TypeError):
+                events, fresh = (), False
+        rows = store.odds_targets(sport=policy.sport)
+    recorded = {r["target_id"] for r in rows}
+    targets = [t for t in (_target(r) for r in rows if r["state"] not in ODDS_TARGET_FINAL_STATES)
+               if not is_expired(t, now, cfg)]
+    targets += [t for t in plan_targets(events, cfg.offsets) if t.target_id not in recorded and deadline(t, cfg) > now]
+    slots = coalesce(targets, cfg)
+    if due_from is not None:
+        slots = [s for s in slots if s.due_utc >= due_from]
+    horizon = max((e.commence_utc for e in events), default=None) if fresh else None
+    return SportDemand(policy.sport, policy.rank, slots, settings.cost_per_call, horizon, cfg)
+
+
+def _prove(store: SnapshotStore | None, settings: RunnerSettings, slots: Sequence[Slot], *, now: datetime,
+           quota: QuotaReading, known_horizon: datetime | None, environ: Mapping[str, str] | None,
+           demand_now: datetime | None = None) -> tuple[BudgetProof, JointBudgetProof | None]:
+    """The month's proof for this sport. The rank-1 sport (NFL) proves alone, exactly as before
+    (nothing ranked below it can change its admissions). Any other sport proves jointly with every
+    enabled higher-ranked sport on the one ledger and ceiling, and is admitted only from what they
+    leave. `demand_now` (next month's projection) is the clock for the higher-ranked sports'
+    stored targets while `now` is the projected month start."""
+    pol = settings.policy
+    env = _environ(environ)
+    higher = sorted((p for p in SPORT_POLICIES.values() if pol is not None and p.rank < pol.rank and switch_on(p, env)),
+                    key=lambda p: p.rank)
+    if pol is None or not higher:
+        return budget(slots, now=now, quota=quota, cost_per_call=settings.cost_per_call, known_horizon=known_horizon,
+                      config=settings.config), None
+    at = demand_now or now
+    demands = [_demand(store, p, at, due_from=None if demand_now is None else now) for p in higher]
+    demands.append(SportDemand(settings.sport, pol.rank, slots, settings.cost_per_call, known_horizon, settings.config))
+    joint = joint_budget(demands, now=now, quota=quota)
+    return joint.proof_for(settings.sport), joint
+
+
+def _joint_summary(joint: JointBudgetProof) -> dict[str, Any]:
+    return {"state": joint.state, "month": joint.month, "spent": joint.spent, "headroom": joint.headroom,
+            "ceiling": joint.ceiling, "reserve_credits": joint.reserve_credits,
+            "provider_remaining": joint.provider_remaining, "outstanding": joint.outstanding,
+            "worst_case_month_credits": joint.worst_case_month_credits,
+            "expected_month_credits": joint.expected_month_credits,
+            "sports": [{"sport": s.sport, "rank": s.rank, "cost_per_call": s.cost_per_call, "available": s.available,
+                        "admitted_slots": len(s.admitted_slot_ids), "skipped_slots": len(s.skipped_slot_ids),
+                        "admitted_credits": s.admitted_credits, "reserved_unknown_credits": s.reserved_unknown_credits,
+                        "expected_credits": s.expected_credits, "known_horizon_utc": s.known_horizon_utc,
+                        "assumption": s.assumption, "fits": s.fits, "blocked_by": s.blocked_by,
+                        "notes": list(s.notes)} for s in joint.shares]}
+
+
 # --------------------------------------------------------------------------- the tick
 
 
@@ -203,6 +326,14 @@ def run_tick(db_path: str | Path, ledger_path: str | Path, settings: RunnerSetti
     report: dict[str, Any] = {"command": "odds run", "now_utc": iso_z(now), "sport": settings.sport,
                               "policy_version": POLICY_VERSION, "paid_calls": 0}
     db_path, ledger_path = Path(db_path), Path(ledger_path)
+    refused = policy_refusal(settings)
+    if refused is not None:
+        report.update(state=refused.split(":", 1)[0], detail=refused)
+        return 1, report
+    off = _switch_off(settings, environ)
+    if off is not None:
+        report.update(state="DISABLED", detail=off)
+        return 0, report
     key_present = odds_api.load_key(environ) is not None
     if not key_present and not db_path.exists():
         report.update(state="SETUP_NEEDED", detail=_setup_text())
@@ -269,6 +400,55 @@ class PilotState:
         tmp.replace(self.path)
 
 
+class SportState:
+    """One sport's view of the shared runner state file (ADR 0039).
+
+    NFL (a policy with no `state_scope`) keeps the historical top-level keys, byte for byte. Any
+    other sport keeps its own keys (discovery attempt and outcome, key rejection, last paid call,
+    smoke, activation time) under `sports.<scope>`, so one sport's discovery failure never marks
+    another degraded or stale. `SHARED` keys are one for all sports: a cost block means the
+    provider charged more than the documented formula (COST_ANOMALY) or the runner state itself
+    was lost or corrupt (PILOT_STATE_*). Both are provider- or ledger-level trouble, so a block
+    stops every sport's paid calls until an operator reviews it. The file's fail-closed load is
+    unchanged (`PilotState`): a corrupt or lost file blocks all sports."""
+
+    SHARED = ("cost_block",)
+
+    def __init__(self, pilot: PilotState, scope: str | None) -> None:
+        self.pilot, self.scope = pilot, scope
+
+    @property
+    def status(self) -> str:
+        return self.pilot.status
+
+    def _own(self) -> dict[str, Any]:
+        sports = self.pilot.data.get("sports")
+        mine = sports.get(self.scope) if isinstance(sports, dict) else None
+        return mine if isinstance(mine, dict) else {}
+
+    def get(self, key: str) -> Any:
+        if self.scope is None or key in self.SHARED:
+            return self.pilot.get(key)
+        return self._own().get(key)
+
+    def set(self, **values: Any) -> None:
+        if self.scope is None:
+            self.pilot.set(**values)
+            return
+        shared = {k: v for k, v in values.items() if k in self.SHARED}
+        mine = self._own() | {k: v for k, v in values.items() if k not in self.SHARED}
+        sports = self.pilot.data.get("sports")
+        sports = dict(sports) if isinstance(sports, dict) else {}
+        sports[self.scope] = mine
+        self.pilot.set(sports=sports, **shared)
+
+
+def _sport_state(ledger_path: Path, settings: RunnerSettings, *, paid_history: bool, now_utc: str) -> SportState:
+    pol = settings.policy
+    return SportState(PilotState(ledger_path, paid_history=paid_history, now_utc=now_utc),
+                      pol.state_scope if pol is not None else settings.sport)
+
+
 KEY_REJECTED_STATUSES = (401, 403)
 
 
@@ -300,7 +480,12 @@ def _tick_body(store: SnapshotStore, run: _LazyRun, ledger_path: Path, settings:
                key_present: bool, report: dict[str, Any], clear_cost_block: bool) -> tuple[int, dict[str, Any]]:
     cfg = settings.config
     ledger = odds_api.QuotaLedger(ledger_path, cfg.ceiling, clock=clock)
-    pilot = PilotState(ledger_path, paid_history=PilotState.paid_history(ledger), now_utc=iso_z(now))
+    pilot = _sport_state(ledger_path, settings, paid_history=PilotState.paid_history(ledger), now_utc=iso_z(now))
+    policy = settings.policy
+    if policy is not None and policy.record_prior_misses and pilot.get("activated_utc") is None:
+        # The first tick with the collector switched on: targets whose deadline passed before now
+        # were never collectable, and say so (NOT_COLLECTED_BEFORE_ACTIVATION), never relabelled.
+        pilot.set(activated_utc=iso_z(now))
     failed = False
     alert = False  # exit 1 only for a new failure, not for every tick of a known one
     notes: list[str] = []
@@ -416,6 +601,30 @@ def _tick_body(store: SnapshotStore, run: _LazyRun, ledger_path: Path, settings:
                                       planned_at_utc=stamp, policy_version=POLICY_VERSION, home_team=t.home_team,
                                       away_team=t.away_team, discovery_snapshot_id=discovery_snapshot_id):
                 planned_new += 1
+    prior_missed = 0
+    if discovery_fresh and policy is not None and policy.record_prior_misses:
+        # A target already past its deadline when first seen is written as MISSED with the reason,
+        # so the gap is on record. It is never captured later under its horizon's label.
+        known = {r["target_id"] for r in store.odds_targets(sport=settings.sport)}
+        activated = parse_utc(pilot.get("activated_utc"))
+        for t in plan_targets(events, cfg.offsets):
+            due_by = deadline(t, cfg)
+            if due_by > now or t.target_id in known:
+                continue
+            if not store.plan_odds_target(target_id=t.target_id, sport=t.sport, event_id=t.event_id,
+                                          offset_label=t.offset_label, priority=t.priority,
+                                          commence_time_utc=iso_z(t.commence_utc), target_utc=iso_z(t.target_utc),
+                                          planned_at_utc=stamp, policy_version=POLICY_VERSION, home_team=t.home_team,
+                                          away_team=t.away_team, discovery_snapshot_id=discovery_snapshot_id):
+                continue
+            if activated is not None and due_by <= activated:
+                why = (f"NOT_COLLECTED_BEFORE_ACTIVATION: the {t.offset_label} capture deadline {iso_z(due_by)} passed "
+                       f"before this collector was activated ({iso_z(activated)}); never captured later or relabelled")
+            else:
+                why = (f"NOT_DISCOVERED_BEFORE_DEADLINE: first planned at {stamp}, after the {t.offset_label} capture "
+                       f"deadline {iso_z(due_by)}; never captured later or relabelled")
+            move({"target_id": t.target_id}, "MISSED", why)
+            prior_missed += 1
 
     # 5. Expired targets become MISSED, with the state they were stuck in as the reason.
     #    A game missing from a fresh discovery that covered its kickoff (postponed, cancelled,
@@ -454,6 +663,8 @@ def _tick_body(store: SnapshotStore, run: _LazyRun, ledger_path: Path, settings:
         open_rows.append(row)
     report["targets"] = {"planned_new": planned_new, "superseded_now": superseded, "missed_now": missed,
                          "event_absent": absent}
+    if policy is not None and policy.record_prior_misses:
+        report["targets"]["missed_before_planning"] = prior_missed
 
     # 6. Slots and the monthly proof.
     by_target = {r["target_id"]: r for r in open_rows}
@@ -468,9 +679,10 @@ def _tick_body(store: SnapshotStore, run: _LazyRun, ledger_path: Path, settings:
         except Exception as exc:  # stays QUOTA_UNKNOWN: no paid call
             notes.append(f"quota reconcile (free) failed: {type(exc).__name__}; quota stays unknown")
         quota = _quota(ledger)
-    proof = budget(slots, now=now, quota=quota, cost_per_call=settings.cost_per_call, known_horizon=horizon,
-                   config=cfg)
+    proof, joint = _prove(store, settings, slots, now=now, quota=quota, known_horizon=horizon, environ=environ)
     report["budget"] = _proof_summary(proof)
+    if joint is not None:
+        report["joint_budget"] = _joint_summary(joint)
     admitted = set(proof.admitted_slot_ids)
     if proof.state == "PROVEN":
         for slot in slots:
@@ -616,12 +828,16 @@ def _capture(store: SnapshotStore, ledger: odds_api.QuotaLedger, run: _LazyRun, 
                 error=f"capture {slot.slot_id}: {reason}", environ=environ)
         return "FAILED", fired, True
     received_dt = _parse(received)
+    not_two_way, pairing_error = _h2h_not_two_way(parsed)
     for m in members:
         detail = _event_coverage(parsed, m.event_id, settings.markets)
         detail.update(offset=m.offset_label, target_utc=iso_z(m.target_utc),
                       deviation_minutes=round((received_dt - m.target_utc).total_seconds() / 60, 1),
                       lead_minutes=round((m.commence_utc - received_dt).total_seconds() / 60, 1),
                       parse_problems=len(parsed.problems))
+        own = not_two_way.get(odds_api.event_id(m.event_id))
+        if own:
+            detail["h2h_not_two_way"] = own
         store.record_odds_transition(target_id=m.target_id, state="CAPTURED", at_utc=stamp, slot_id=slot.slot_id,
                                      snapshot_id=sid, captured_at_utc=received, credits_last=credits, detail=detail)
     fired.update(snapshot_id=sid, credits_last=credits, received_at_utc=received,
@@ -632,10 +848,31 @@ def _capture(store: SnapshotStore, ledger: odds_api.QuotaLedger, run: _LazyRun, 
     anomalies = [f"capture {slot.slot_id}: {p}" for p in parsed.problems]
     if not parsed.offers:
         anomalies.append(f"capture {slot.slot_id}: the response held no offers")
+    for eid, n in sorted(not_two_way.items()):
+        anomalies.append(f"capture {slot.slot_id}: {eid}: {n} h2h offer(s) are not a clean two-way market (a draw or "
+                         "three or more outcomes): kept as evidence, UNSUPPORTED for any two-way consensus")
+    if pairing_error:
+        anomalies.append(f"capture {slot.slot_id}: h2h two-way check failed ({pairing_error}); nothing inferred")
     _health(store, run, source_id=HEALTH_ODDS, started_utc=t0_utc, started_mono=t0,
             status="partial" if anomalies else "ok", records=1, payload_bytes=len(out.fetch.body),
             anomalies=anomalies, environ=environ)
     return "CAPTURED", fired, False
+
+
+def _h2h_not_two_way(parsed: odds_api.OddsSnapshot) -> tuple[dict[str, int], str | None]:
+    """Offers per event of an h2h market that is not a clean two-way complement (a Draw/Tie outcome, or
+    three or more outcomes), by the canonical pairing rule (`odds_api.pair_offers`, NOT_TWO_WAY). Hockey
+    books normally price h2h including overtime and shootout (two outcomes); anything else is recorded,
+    never forced into a two-way formula."""
+    try:
+        _, unpaired = odds_api.pair_offers(parsed)
+    except Exception as exc:  # noqa: BLE001 - a check on stored evidence must not fail the paid capture
+        return {}, type(exc).__name__
+    out: dict[str, int] = {}
+    for u in unpaired:
+        if u.status is odds_api.PairingStatus.NOT_TWO_WAY:
+            out[u.offer.event_id] = out.get(u.offer.event_id, 0) + 1
+    return out, None
 
 
 def _proof_summary(proof: BudgetProof) -> dict[str, Any]:
@@ -729,12 +966,12 @@ def plan(db_path: str | Path, ledger_path: str | Path, settings: RunnerSettings 
         targets = [t for t in targets if recorded.get(t.target_id) not in ODDS_TARGET_FINAL_STATES]
     slots = coalesce(targets, cfg)
     horizon = max((e.commence_utc for e in events), default=None)
-    proof = budget(slots, now=now, quota=quota, cost_per_call=settings.cost_per_call, known_horizon=horizon, config=cfg)
+    proof, joint = _prove(store, settings, slots, now=now, quota=quota, known_horizon=horizon, environ=environ)
     _, month_end = month_bounds(now)
-    projection = budget([s for s in slots if s.due_utc >= month_end], now=month_end,
-                        quota=QuotaReading("READY", local_used=0, provider_used=0,
-                                           provider_remaining=odds_api.FREE_TIER_MONTHLY_CREDITS),
-                        cost_per_call=settings.cost_per_call, known_horizon=horizon, config=cfg)
+    projection, pjoint = _prove(store, settings, [s for s in slots if s.due_utc >= month_end], now=month_end,
+                                quota=QuotaReading("READY", local_used=0, provider_used=0,
+                                                   provider_remaining=odds_api.FREE_TIER_MONTHLY_CREDITS),
+                                known_horizon=horizon, environ=environ, demand_now=now)
     admitted = set(proof.admitted_slot_ids) | set(projection.admitted_slot_ids)
     report["schedule"] = [{"event_id": e.event_id, "commence_utc": iso_z(e.commence_utc),
                            "commence_et": _et_text(e.commence_utc), "away": e.away_team, "home": e.home_team}
@@ -748,11 +985,14 @@ def plan(db_path: str | Path, ledger_path: str | Path, settings: RunnerSettings 
     report["budget"] = proof.to_dict()
     report["projection_next_month"] = projection.to_dict() | {
         "assumption_note": "a fresh month: 0 used and the free allowance remaining; the first reconcile decides"}
+    if joint is not None and pjoint is not None:
+        report["joint_budget"] = _joint_summary(joint)
+        report["joint_projection_next_month"] = _joint_summary(pjoint)
     report["state"] = proof.state
     report["verdict"] = _verdict(proof)
     # The runner's own blocks outrank the arithmetic: never a go-ahead while one is active.
-    pilot = PilotState(ledger_path, paid_history=ledger_path.exists() and PilotState.paid_history(ledger),
-                       now_utc=iso_z(now))
+    pilot = _sport_state(ledger_path, settings, paid_history=ledger_path.exists() and PilotState.paid_history(ledger),
+                         now_utc=iso_z(now))
     report["runner_state"] = {"file": pilot.status, "discovery_outcome": pilot.get("discovery_outcome"),
                               "cost_block": pilot.get("cost_block")}
     blocked = None
@@ -793,6 +1033,14 @@ def smoke(db_path: str | Path, ledger_path: str | Path, settings: RunnerSettings
     cfg = settings.config
     report: dict[str, Any] = {"command": "odds smoke", "now_utc": iso_z(now), "sport": settings.sport,
                               "markets": list(settings.markets), "regions": list(settings.regions), "paid_calls": 0}
+    refused = policy_refusal(settings)
+    if refused is not None:
+        report.update(state=refused.split(":", 1)[0], detail=refused)
+        return 1, report
+    off = _switch_off(settings, environ)
+    if off is not None:
+        report.update(state="DISABLED", detail=off)
+        return 1, report
     if odds_api.load_key(environ) is None:
         report.update(state="SETUP_NEEDED", detail=_setup_text())
         return 0, report
@@ -800,7 +1048,7 @@ def smoke(db_path: str | Path, ledger_path: str | Path, settings: RunnerSettings
         report.update(state="DEFERRED_CAPTURE_WINDOW", detail="inside 17:40-18:35 America/New_York: nothing sent; retry after 18:35 ET")
         return 1, report
     ledger = odds_api.QuotaLedger(ledger_path, cfg.ceiling, clock=clock)
-    pilot = PilotState(ledger_path, paid_history=PilotState.paid_history(ledger), now_utc=iso_z(now))
+    pilot = _sport_state(ledger_path, settings, paid_history=PilotState.paid_history(ledger), now_utc=iso_z(now))
     if pilot.get("cost_block"):
         report.update(state="COST_BLOCKED", detail=_block_text(pilot.get("cost_block")))
         return 1, report
@@ -909,9 +1157,15 @@ def dashboard_status(db_path: str | Path, ledger_path: str | Path, state_path: s
         "next_capture": None, "cost_block": None, "problems": []}
     problems: list[str] = out["problems"]
 
-    # Runner state (non-secret): cost block, discovery outcome, key rejection.
-    state_file, pilot = _read_state_file(state_path)
+    # Runner state (non-secret): cost block (shared by every sport), discovery outcome, key rejection
+    # (the sport's own, ADR 0039: another sport's discovery never marks this one degraded or stale).
+    state_file, shared_state = _read_state_file(state_path)
     out["pilot_state_file"] = state_file
+    scope = settings.policy.state_scope if settings.policy is not None else settings.sport
+    pilot = shared_state
+    if scope is not None:
+        sports = shared_state.get("sports")
+        pilot = sports.get(scope) if isinstance(sports, dict) and isinstance(sports.get(scope), dict) else {}
 
     # Quota ledger, read without the lock and without writing.
     quota: dict[str, Any]
@@ -932,7 +1186,7 @@ def dashboard_status(db_path: str | Path, ledger_path: str | Path, state_path: s
         quota = {"state": "UNREADABLE", "detail": ledger_error, "ceiling": cfg.ceiling}
     out["quota"] = quota
 
-    cost_block = pilot.get("cost_block")
+    cost_block = shared_state.get("cost_block")
     if state_file == "CORRUPT" or (state_file == "MISSING" and paid_history):
         cost_block = {"reason": f"PILOT_STATE_{state_file}: the runner state file is {state_file.lower()} although "
                                 "paid calls exist; the runner treats this as a cost block"}
@@ -1078,6 +1332,92 @@ def dashboard_status(db_path: str | Path, ledger_path: str | Path, state_path: s
     elif not discovery_fresh:
         state, detail = "DISCOVERY_STALE", "no discovery in the last 24 h; captures are deferred"
     else:
-        state, detail = "ACTIVE", "captures run at T-24h, T-6h and T-60m under the monthly credit proof"
+        labels = [o.label for o in sorted(cfg.offsets, key=lambda o: o.before, reverse=True)]
+        when = labels[0] if len(labels) == 1 else ", ".join(labels[:-1]) + " and " + labels[-1]
+        state, detail = "ACTIVE", f"captures run at {when} under the monthly credit proof"
     out["state"], out["detail"] = state, detail
     return out
+
+
+# --------------------------------------------------------------------------- per-sport coverage (read-only)
+
+COVERAGE_SCHEMA = "odds-sport-coverage/1"
+_ATTEMPTED = ("CAPTURING", "CAPTURED", "FAILED")
+
+
+def coverage_status(db_path: str | Path, *, now: datetime, settings: RunnerSettings = RunnerSettings()) -> dict[str, Any]:
+    """One sport's capture coverage from its own targets (ADR 0039): what is due now, what was attempted,
+    captured, newly captured (last 24 h), whether the latest capture is stale, and which past games are
+    complete. Read-only: the store is opened read-only; no ledger, no network, no key. Counts only
+    `odds_targets(sport=...)`, so sports never mix."""
+    if not isinstance(now, datetime) or now.tzinfo is None:
+        raise ValueError("now must be a timezone-aware datetime")
+    now = now.astimezone(UTC)
+    cfg = settings.config
+    db_path = Path(db_path)
+    out: dict[str, Any] = {"schema": COVERAGE_SCHEMA, "as_of_utc": iso_z(now), "sport": settings.sport,
+                           "offsets": [o.label for o in cfg.offsets], "label": RESEARCH_LABEL, "executable": False}
+    if not db_path.is_file():
+        out.update(state="NO_STORE", detail=f"{db_path} does not exist; nothing collected")
+        return out
+    try:
+        store = SnapshotStore.open_readonly(db_path)
+        rows = store.odds_targets(sport=settings.sport)
+        latest_events = store.latest_snapshot(source=SOURCE, kind="events", entity_id=settings.sport)
+    except Exception as exc:  # noqa: BLE001 - shown, never repaired here
+        out.update(state="ERROR", detail=f"evidence store unreadable: {type(exc).__name__}")
+        return out
+    due = []
+    for r in rows:
+        if r["state"] in ODDS_TARGET_FINAL_STATES:
+            continue
+        t = _target(r)
+        if effective_due(t, cfg) <= now and not is_expired(t, now, cfg):
+            due.append(r)
+    captured = [r for r in rows if r["state"] == "CAPTURED"]
+    last = max((_parse(r["captured_at_utc"]) for r in captured), default=None)
+    max_age = odds_api.get_source(odds_api.SOURCE_ID).max_age["odds"]
+    freshness = assess(iso_z(last), max_age=max_age, now=now).value if last is not None else None
+    discovered_at = _discovered_at(latest_events) if latest_events is not None else None
+    by_event: dict[str, list[Any]] = {}
+    for r in rows:
+        if r["state"] != "SUPERSEDED":  # a moved game's old targets are not part of its coverage
+            by_event.setdefault(r["event_id"], []).append(r)
+    started = {e: rs for e, rs in by_event.items() if _parse(rs[0]["commence_time_utc"]) <= now}
+    complete = [e for e, rs in started.items() if all(r["state"] == "CAPTURED" for r in rs)]
+    by_offset: dict[str, dict[str, int]] = {}
+    for r in rows:
+        by_offset.setdefault(r["offset_label"], {})
+        by_offset[r["offset_label"]][r["state"]] = by_offset[r["offset_label"]].get(r["state"], 0) + 1
+    missed_reasons: dict[str, int] = {}
+    for r in rows:
+        if r["state"] == "MISSED":
+            code = (r["reason"] or "").split(":", 1)[0] if (r["reason"] or "").split(":", 1)[0].isupper() else "MISSED"
+            missed_reasons[code] = missed_reasons.get(code, 0) + 1
+    out.update(
+        state="OK", targets=len(rows), by_state=_counts(rows),
+        by_offset={k: dict(sorted(v.items())) for k, v in sorted(by_offset.items())},
+        due=len(due), attempted=sum(1 for r in rows if r["state"] in _ATTEMPTED), captured=len(captured),
+        new_24h=sum(1 for r in captured if now - _parse(r["captured_at_utc"]) <= timedelta(hours=24)),
+        latest_capture_utc=iso_z(last) if last is not None else None, latest_capture_freshness=freshness,
+        stale=freshness != "fresh",
+        discovery={"last_success_utc": iso_z(discovered_at) if discovered_at is not None else None,
+                   "fresh": discovered_at is not None and now - discovered_at <= settings.discovery_max_age},
+        games_started=len(started), games_complete=len(complete), games_incomplete=len(started) - len(complete),
+        missed_reasons=dict(sorted(missed_reasons.items())))
+    return out
+
+
+def status(db_path: str | Path, ledger_path: str | Path, settings: RunnerSettings = RunnerSettings(), *,
+           clock: Clock = _real_clock) -> tuple[int, dict[str, Any]]:
+    """`odds status`: the sport's dashboard state and its coverage. Read-only and network-free."""
+    now = clock()
+    ledger_path = Path(ledger_path)
+    state_path = ledger_path.with_name(ledger_path.name + ".pilot.json")
+    report = {"command": "odds status", "now_utc": iso_z(now), "sport": settings.sport,
+              "switch": None, "coverage": coverage_status(db_path, now=now, settings=settings),
+              "source": dashboard_status(db_path, ledger_path, state_path, now=now, settings=settings)}
+    pol = settings.policy
+    if pol is not None and pol.switch_env is not None:
+        report["switch"] = {"env": pol.switch_env, "on": switch_on(pol, os.environ)}
+    return 0, report

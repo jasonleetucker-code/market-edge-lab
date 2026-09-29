@@ -30,6 +30,14 @@ Policy (owner correction 3, 2026-09-24):
 - **The capture quiet window.** A target whose time falls inside 17:40-18:35 America/New_York
   (the EXP-001 capture window) is moved to the end of that window if that is still
   `min_lead` before kickoff, else to five minutes before the window starts.
+
+Sport-aware (ADR 0039, issue #134): each sport has one `SportPolicy` in `SPORT_POLICIES`
+(markets, offsets, worst-case assumption, merge window, discovery horizon, rank in the shared
+budget). Every sport draws on ONE quota ledger and ONE monthly ceiling. `joint_budget` proves the
+month for every enabled sport at once, in rank order: NFL (rank 1) takes all of its classes and
+its unknown-week reservation first, and a lower-ranked sport is admitted only from the headroom
+left after that; if the higher-ranked sport's own worst case does not fully fit, the lower-ranked
+sport gets nothing. `budget` is the one-sport case and is unchanged for NFL.
 """
 
 from __future__ import annotations
@@ -37,7 +45,7 @@ from __future__ import annotations
 import math
 from dataclasses import asdict, dataclass, field
 from datetime import date, datetime, time, timedelta, timezone
-from typing import Iterable, Sequence
+from typing import Iterable, Mapping, Sequence
 
 from .forward import eastern_date, eastern_offset
 from .freshness import parse_utc
@@ -104,6 +112,22 @@ NFL_WORST_CASE = WorstCaseAssumption(
     expected_groups_per_week=6.0,
 )
 
+# NHL, derived from the published 2026-27 regular-season schedule (1,344 games), fetched once from
+# the public NHL schedule API (keyless; the URL is in ADR 0039, never called by code) on 2026-09-29 (17:29Z), and
+# coalesced by THIS planner (20-minute merge window, quiet-window shifts included) for each of
+# T-60m, T-6h and T-24h. Measured maxima over every class: 37 groups in any 7 consecutive ET
+# dates (T-6h/T-24h, from 2027-04-02; T-60m 34) and, per ET weekday Mon..Sun, (7, 10, 5, 6, 7,
+# 9, 8); Tuesday 10 is 2026-10-13's staggered 16-game day. Average 28.0 groups a week (T-6h).
+# Margin: +3 a week, +1 a weekday, for reschedules and make-up games. Derivation: ADR 0039 and
+# docs/research/NHL_ODDS_BUDGET_2026-10.md.
+NHL_WORST_CASE = WorstCaseAssumption(
+    name="nhl_2026_27_v1",
+    max_groups_per_week=40,
+    #                       Mon Tue Wed Thu Fri Sat Sun
+    max_groups_by_weekday=(8, 11, 6, 7, 8, 10, 9),
+    expected_groups_per_week=28.0,
+)
+
 
 @dataclass(frozen=True)
 class PilotConfig:
@@ -125,6 +149,59 @@ class PilotConfig:
             raise ValueError("ceiling must be below the 500-credit free allowance")
         if self.merge_window < timedelta(0) or self.late_tolerance <= timedelta(0):
             raise ValueError("invalid tolerances")
+
+
+@dataclass(frozen=True)
+class SportPolicy:
+    """One sport's place in the shared Odds planner (ADR 0039). Everything a sport may differ in
+    lives here; the planning rules, the quiet window, the ceiling and the ledger are shared."""
+
+    sport: str  # the provider's sport key
+    rank: int  # 1 = first claim on the shared monthly budget
+    markets: tuple[str, ...]  # the only markets this sport may request
+    regions: tuple[str, ...]
+    offsets: tuple[Offset, ...]  # the default (reviewed) offsets
+    assumption: WorstCaseAssumption
+    merge_window: timedelta
+    discovery_horizon: timedelta
+    # Scheduled collection runs only while this environment variable is exactly "on" (None: always
+    # on). Off makes `odds run` and `odds smoke` for the sport send nothing and write nothing.
+    switch_env: str | None = None
+    # Runner-state scope in the shared state file: None keeps the historical top-level keys (NFL).
+    state_scope: str | None = None
+    # Record discovered targets whose deadline had already passed as MISSED with a reason, instead
+    # of never writing them (NFL keeps its historical behaviour).
+    record_prior_misses: bool = False
+
+    def config(self, offsets: Sequence[Offset] | None = None) -> "PilotConfig":
+        return PilotConfig(offsets=tuple(offsets) if offsets is not None else self.offsets,
+                           merge_window=self.merge_window, assumption=self.assumption)
+
+
+NFL = "americanfootball_nfl"
+NHL = "icehockey_nhl"
+NHL_SWITCH = "EDGE_LAB_ODDS_NHL"
+SPORT_POLICIES: dict[str, SportPolicy] = {
+    NFL: SportPolicy(sport=NFL, rank=1, markets=("h2h", "spreads", "totals"), regions=("us",),
+                     offsets=DEFAULT_OFFSETS, assumption=NFL_WORST_CASE, merge_window=timedelta(minutes=20),
+                     discovery_horizon=timedelta(days=35)),
+    # NHL v1 (owner direction 2026-09-29, #134): h2h only, region us, T-60m by default; T-6h and T-24h
+    # only when the combined proof supports them. Merge window 20 min, as NFL: games at 19:00 and
+    # 19:30 ET stay two groups, so a T-60m label never covers a T-90m capture (ADR 0039).
+    NHL: SportPolicy(sport=NHL, rank=2, markets=("h2h",), regions=("us",), offsets=parse_offsets("60m"),
+                     assumption=NHL_WORST_CASE, merge_window=timedelta(minutes=20),
+                     discovery_horizon=timedelta(days=35), switch_env=NHL_SWITCH, state_scope=NHL,
+                     record_prior_misses=True),
+}
+
+
+def policy_for(sport: str) -> SportPolicy | None:
+    return SPORT_POLICIES.get(sport)
+
+
+def switch_on(policy: SportPolicy, environ: Mapping[str, str]) -> bool:
+    """A sport without a switch is always on; one with a switch is on only when it reads exactly "on"."""
+    return policy.switch_env is None or (environ.get(policy.switch_env) or "").strip() == "on"
 
 
 # --------------------------------------------------------------------------- events and targets
@@ -392,84 +469,213 @@ class BudgetProof:
         return asdict(self) | {"proven": self.proven}
 
 
+@dataclass(frozen=True)
+class SportDemand:
+    """One sport's open slots and assumptions for this month's joint proof."""
+
+    sport: str
+    rank: int
+    slots: Sequence[Slot]
+    cost_per_call: int
+    known_horizon: datetime | None  # the latest discovered commence time; None: nothing is known
+    config: PilotConfig
+
+
+@dataclass(frozen=True)
+class SportShare:
+    """What one sport was granted in the joint proof."""
+
+    sport: str
+    rank: int
+    cost_per_call: int
+    available: int  # credits this sport could still commit when its turn came (the proof's headroom for rank 1)
+    classes: tuple[ClassBudget, ...]
+    admitted_slot_ids: tuple[str, ...]
+    skipped_slot_ids: tuple[str, ...]
+    admitted_credits: int
+    reserved_unknown_credits: int
+    expected_credits: int  # admitted + the expected share of the reserved unknown calls
+    known_horizon_utc: str | None
+    unknown_window: tuple[str, str] | None
+    unknown_et_dates: int
+    assumption: str
+    fits: bool  # every known slot admitted and every worst-case unknown call reserved
+    blocked_by: str | None  # a higher-ranked sport whose own worst case did not fit (this sport got nothing)
+    notes: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class JointBudgetProof:
+    """The month's proof for every enabled sport on the one shared ledger and ceiling."""
+
+    month: str
+    state: str  # PROVEN | QUOTA_UNKNOWN | QUOTA_EXHAUSTED
+    ceiling: int
+    reserve_credits: int
+    spent: int | None
+    provider_remaining: int | None
+    outstanding: int
+    headroom: int | None
+    shares: tuple[SportShare, ...]
+    worst_case_month_credits: int | None
+    expected_month_credits: int | None
+    notes: tuple[str, ...]
+
+    @property
+    def proven(self) -> bool:
+        return self.state == "PROVEN"
+
+    def share(self, sport: str) -> SportShare:
+        for s in self.shares:
+            if s.sport == sport:
+                return s
+        raise KeyError(sport)
+
+    def proof_for(self, sport: str) -> BudgetProof:
+        """This sport's view: its own classes and admissions, the JOINT month totals."""
+        s = self.share(sport)
+        return BudgetProof(month=self.month, state=self.state, ceiling=self.ceiling, cost_per_call=s.cost_per_call,
+                           reserve_credits=self.reserve_credits, spent=self.spent,
+                           provider_remaining=self.provider_remaining, outstanding=self.outstanding,
+                           headroom=None if self.headroom is None else s.available,
+                           known_horizon_utc=s.known_horizon_utc, unknown_window=s.unknown_window,
+                           unknown_et_dates=s.unknown_et_dates, assumption=s.assumption, classes=s.classes,
+                           admitted_slot_ids=s.admitted_slot_ids, skipped_slot_ids=s.skipped_slot_ids,
+                           worst_case_month_credits=self.worst_case_month_credits,
+                           expected_month_credits=self.expected_month_credits, notes=s.notes + self.notes)
+
+    def to_dict(self) -> dict:
+        return asdict(self) | {"proven": self.proven}
+
+
 def budget(slots: Sequence[Slot], *, now: datetime, quota: QuotaReading, cost_per_call: int,
            known_horizon: datetime | None, config: PilotConfig = PilotConfig()) -> BudgetProof:
     """Admit or skip this month's open slots and prove the month's worst case fits.
 
     `slots` are the open (unfired, unexpired) slots; only those due before the month ends are
     this month's. `known_horizon` is the latest discovered commence time: after it the
-    schedule is unknown and `config.assumption` stands in for it."""
-    if cost_per_call <= 0:
+    schedule is unknown and `config.assumption` stands in for it. The one-sport case of
+    `joint_budget` (ADR 0039); its output for NFL is pinned byte-for-byte."""
+    joint = joint_budget([SportDemand("", 1, slots, cost_per_call, known_horizon, config)], now=now, quota=quota)
+    return joint.proof_for("")
+
+
+def joint_budget(demands: Sequence[SportDemand], *, now: datetime, quota: QuotaReading) -> JointBudgetProof:
+    """Admit or skip every enabled sport's slots against ONE ledger and ONE ceiling, and prove the
+    month's joint worst case fits.
+
+    Sports are served in rank order. Within a sport, as in ADR 0029: class by class (highest
+    priority first), known slots (earliest first) before the reservation for undiscovered events.
+    A lower-ranked sport is admitted only from the headroom left after every higher-ranked sport's
+    FULL worst case. If a higher-ranked sport skips a known slot or cannot reserve a worst-case
+    unknown call, every lower-ranked sport gets zero: it never takes credits the higher-ranked
+    sport might need, not even a remainder too small for that sport's call.
+
+    Invariant (checked; `BudgetInvariantError` if broken): worst <= ceiling and
+    worst - spent <= provider remaining - outstanding. QUOTA_UNKNOWN admits nothing for any sport."""
+    if not demands:
+        raise ValueError("at least one sport")
+    ordered = sorted(demands, key=lambda d: (d.rank, d.sport))
+    if len({d.sport for d in ordered}) != len(ordered) or len({d.rank for d in ordered}) != len(ordered):
+        raise ValueError("each sport once, each with its own rank")
+    first = ordered[0].config
+    if any(d.config.ceiling != first.ceiling or d.config.reserve_credits != first.reserve_credits for d in ordered):
+        raise ValueError("every sport shares one ceiling and one reserve")
+    ceiling, reserve = first.ceiling, first.reserve_credits
+    if any(d.cost_per_call <= 0 for d in ordered):
         raise ValueError("cost_per_call must be positive")
     month_start, month_end = month_bounds(now)
     month = month_start.strftime("%Y-%m")
-    in_month = [s for s in slots if s.due_utc < month_end]
-    max_offset = max(o.before for o in config.offsets)
-    unknown_from = max(now, known_horizon) if known_horizon is not None else now
-    unknown_to = month_end + max_offset
-    worst_groups, expected_groups, n_dates = unknown_groups(unknown_from, unknown_to, config.assumption)
-    window = (iso_z(unknown_from), iso_z(unknown_to)) if n_dates else None
-    horizon = iso_z(known_horizon) if known_horizon is not None else None
-    common = dict(month=month, ceiling=config.ceiling, cost_per_call=cost_per_call,
-                  reserve_credits=config.reserve_credits, outstanding=quota.outstanding,
-                  known_horizon_utc=horizon, unknown_window=window, unknown_et_dates=n_dates,
-                  assumption=config.assumption.name)
 
+    def window(d: SportDemand) -> tuple[list[Slot], int, int, int, tuple[str, str] | None, str | None]:
+        in_month = [s for s in d.slots if s.due_utc < month_end]
+        max_offset = max(o.before for o in d.config.offsets)
+        unknown_from = max(now, d.known_horizon) if d.known_horizon is not None else now
+        unknown_to = month_end + max_offset
+        worst_groups, expected_groups, n_dates = unknown_groups(unknown_from, unknown_to, d.config.assumption)
+        win = (iso_z(unknown_from), iso_z(unknown_to)) if n_dates else None
+        horizon = iso_z(d.known_horizon) if d.known_horizon is not None else None
+        return in_month, worst_groups, expected_groups, n_dates, win, horizon
+
+    shares: list[SportShare] = []
     if quota.state == "QUOTA_UNKNOWN" or quota.provider_used is None or quota.provider_remaining is None:
-        classes = tuple(ClassBudget(o.priority, o.label, sum(1 for s in in_month if s.priority == o.priority), 0,
-                                    sum(1 for s in in_month if s.priority == o.priority), worst_groups, 0,
-                                    expected_groups) for o in sorted(config.offsets, key=lambda o: o.priority))
-        return BudgetProof(state="QUOTA_UNKNOWN", spent=None, provider_remaining=quota.provider_remaining,
-                           headroom=None, classes=classes, admitted_slot_ids=(),
-                           skipped_slot_ids=tuple(s.slot_id for s in in_month), worst_case_month_credits=None,
-                           expected_month_credits=None,
-                           notes=("no provider quota reading this month: no paid call until a free reconcile",),
-                           **common)
+        for d in ordered:
+            in_month, worst_groups, expected_groups, n_dates, win, horizon = window(d)
+            classes = tuple(ClassBudget(o.priority, o.label, sum(1 for s in in_month if s.priority == o.priority), 0,
+                                        sum(1 for s in in_month if s.priority == o.priority), worst_groups, 0,
+                                        expected_groups) for o in sorted(d.config.offsets, key=lambda o: o.priority))
+            shares.append(SportShare(d.sport, d.rank, d.cost_per_call, 0, classes, (),
+                                     tuple(s.slot_id for s in in_month), 0, 0, 0, horizon, win, n_dates,
+                                     d.config.assumption.name, False, None, ()))
+        return JointBudgetProof(month=month, state="QUOTA_UNKNOWN", ceiling=ceiling, reserve_credits=reserve,
+                                spent=None, provider_remaining=quota.provider_remaining, outstanding=quota.outstanding,
+                                headroom=None, shares=tuple(shares), worst_case_month_credits=None,
+                                expected_month_credits=None,
+                                notes=("no provider quota reading this month: no paid call until a free reconcile",))
 
     spent = max(quota.local_used or 0, quota.provider_used) + quota.outstanding
-    headroom = min(config.ceiling - spent, quota.provider_remaining - quota.outstanding) - config.reserve_credits
+    headroom = min(ceiling - spent, quota.provider_remaining - quota.outstanding) - reserve
     remaining = max(headroom, 0)
-    admitted: list[Slot] = []
-    skipped: list[Slot] = []
-    classes: list[ClassBudget] = []
-    reserved_unknown_total = 0
-    expected_unknown_total = 0
-    for off in sorted(config.offsets, key=lambda o: o.priority):
-        mine = sorted((s for s in in_month if s.priority == off.priority), key=lambda s: (s.due_utc, s.slot_id))
-        ok = []
-        for s in mine:
-            if remaining >= cost_per_call:
-                ok.append(s)
-                remaining -= cost_per_call
-            else:
-                skipped.append(s)
-        admitted += ok
-        reserved = min(worst_groups, remaining // cost_per_call)
-        remaining -= reserved * cost_per_call
-        reserved_unknown_total += reserved
-        expected_unknown_total += min(expected_groups, reserved)
-        classes.append(ClassBudget(off.priority, off.label, len(mine), len(ok), len(mine) - len(ok), worst_groups,
-                                   reserved, min(expected_groups, reserved)))
-    admitted_credits = len(admitted) * cost_per_call
-    worst = spent + config.reserve_credits + admitted_credits + reserved_unknown_total * cost_per_call
-    expected = spent + admitted_credits + expected_unknown_total * cost_per_call
+    blocked_by: str | None = None
+    for d in ordered:
+        in_month, worst_groups, expected_groups, n_dates, win, horizon = window(d)
+        cost = d.cost_per_call
+        mine_left = remaining if blocked_by is None else 0
+        available = headroom if d is ordered[0] else mine_left
+        admitted: list[Slot] = []
+        skipped: list[Slot] = []
+        classes: list[ClassBudget] = []
+        reserved_total = expected_total = 0
+        for off in sorted(d.config.offsets, key=lambda o: o.priority):
+            mine = sorted((s for s in in_month if s.priority == off.priority), key=lambda s: (s.due_utc, s.slot_id))
+            ok = []
+            for s in mine:
+                if mine_left >= cost:
+                    ok.append(s)
+                    mine_left -= cost
+                else:
+                    skipped.append(s)
+            admitted += ok
+            reserved = min(worst_groups, mine_left // cost)
+            mine_left -= reserved * cost
+            reserved_total += reserved
+            expected_total += min(expected_groups, reserved)
+            classes.append(ClassBudget(off.priority, off.label, len(mine), len(ok), len(mine) - len(ok), worst_groups,
+                                       reserved, min(expected_groups, reserved)))
+        if blocked_by is None:
+            remaining = mine_left
+        notes = []
+        if blocked_by is not None:
+            notes.append(f"nothing admitted: the higher-ranked {blocked_by} worst case does not fully fit, so no "
+                         "credit is taken from it")
+        elif d is not ordered[0]:
+            notes.append(f"admitted only from the {available} credit(s) left after every higher-ranked sport's full "
+                         "worst case")
+        unreservable = sum(c.unknown_calls_worst - c.unknown_calls_reserved for c in classes)
+        if unreservable:
+            notes.append(f"{unreservable} worst-case future call(s) could not be reserved; if those events "
+                         "materialize, their lowest-priority slots will be SKIPPED_BUDGET")
+        if skipped:
+            notes.append(f"{len(skipped)} known slot(s) SKIPPED_BUDGET (lowest priority, latest first)")
+        fits = not unreservable and not skipped
+        shares.append(SportShare(d.sport, d.rank, cost, available, tuple(classes), tuple(s.slot_id for s in admitted),
+                                 tuple(s.slot_id for s in skipped), len(admitted) * cost, reserved_total * cost,
+                                 len(admitted) * cost + expected_total * cost, horizon, win, n_dates,
+                                 d.config.assumption.name, fits, blocked_by, tuple(notes)))
+        if not fits and blocked_by is None:
+            blocked_by = d.sport
+    worst = spent + reserve + sum(s.admitted_credits + s.reserved_unknown_credits for s in shares)
+    expected = spent + sum(s.expected_credits for s in shares)
     notes = []
-    unreservable = sum(c.unknown_calls_worst - c.unknown_calls_reserved for c in classes)
-    if unreservable:
-        notes.append(f"{unreservable} worst-case future call(s) could not be reserved; if those events "
-                     "materialize, their lowest-priority slots will be SKIPPED_BUDGET")
-    if skipped:
-        notes.append(f"{len(skipped)} known slot(s) SKIPPED_BUDGET (lowest priority, latest first)")
     state = "PROVEN"
     if headroom < 0 or quota.state == "QUOTA_EXHAUSTED":
         state = "QUOTA_EXHAUSTED"
         notes.append("no headroom under the ceiling or the provider's remaining quota")
     # The invariant this function exists for. It holds by construction; fail closed if not.
-    if state == "PROVEN" and not (worst <= config.ceiling
-                                  and worst - spent <= quota.provider_remaining - quota.outstanding):
-        raise BudgetInvariantError(f"worst case {worst} breaks the ceiling {config.ceiling} or the provider "
+    if state == "PROVEN" and not (worst <= ceiling and worst - spent <= quota.provider_remaining - quota.outstanding):
+        raise BudgetInvariantError(f"worst case {worst} breaks the ceiling {ceiling} or the provider "
                                    f"remaining {quota.provider_remaining} (spent {spent})")
-    return BudgetProof(state=state, spent=spent, provider_remaining=quota.provider_remaining, headroom=headroom,
-                       classes=tuple(classes), admitted_slot_ids=tuple(s.slot_id for s in admitted),
-                       skipped_slot_ids=tuple(s.slot_id for s in skipped), worst_case_month_credits=worst,
-                       expected_month_credits=expected, notes=tuple(notes), **common)
+    return JointBudgetProof(month=month, state=state, ceiling=ceiling, reserve_credits=reserve, spent=spent,
+                            provider_remaining=quota.provider_remaining, outstanding=quota.outstanding,
+                            headroom=headroom, shares=tuple(shares), worst_case_month_credits=worst,
+                            expected_month_credits=expected, notes=tuple(notes))
