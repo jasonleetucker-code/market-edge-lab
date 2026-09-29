@@ -1,0 +1,23 @@
+{
+ "_note": "Kalshi public GET /series/KXNHLGAME read once 2026-09-29 for NHL-B (fee and terms metadata; additional_prohibitions omitted).",
+ "series": {
+  "category": "Sports",
+  "contract_terms_url": "https://assets.kalshi.com/contract_terms/HOCKEYWINNINGINPERIOD.pdf",
+  "contract_url": "https://assets.kalshi.com/regulatory/product-certifications/HOCKEYWINNINGINPERIOD.pdf",
+  "fee_multiplier": 1,
+  "fee_type": "quadratic_with_maker_fees",
+  "frequency": "custom",
+  "settlement_sources": [
+   {
+    "name": "NHL",
+    "url": "https://www.nhl.com"
+   },
+   {
+    "name": "ESPN",
+    "url": "https://espn.com"
+   }
+  ],
+  "ticker": "KXNHLGAME",
+  "title": "NHL Game"
+ }
+}

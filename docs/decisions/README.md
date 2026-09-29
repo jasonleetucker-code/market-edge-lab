@@ -37,5 +37,6 @@ Under the 2026-09-25 Research Unblocking directive:
 Under the 2026-09-29 NHL prospective-evidence directive (#134):
 - 0039: the sport-aware shared Odds planner: one policy table, one ledger and ceiling, one joint NFL-first
   monthly proof; NHL h2h prepared behind `EDGE_LAB_ODDS_NHL` (NHL-A).
+- 0040: Kalshi KXNHLGAME prospective evidence: schedule-driven T-6h / T-60m books under its own bound (727 GETs a week), after EXP-001 and NFL, off until activation; outcomes withheld (#136).
 
-New decisions start at 0040.
+New decisions start at 0041.

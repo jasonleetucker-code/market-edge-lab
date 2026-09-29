@@ -1,0 +1,2675 @@
+{
+ "calls": [
+  "https://external-api.kalshi.com/trade-api/v2/markets?event_ticker=KXNFLGAME-26OCT04ARINYG&limit=1000",
+  "https://external-api.kalshi.com/trade-api/v2/markets/KXNFLGAME-26OCT04ARINYG-ARI/orderbook?depth=100",
+  "https://external-api.kalshi.com/trade-api/v2/markets/KXNFLGAME-26OCT04ARINYG-NYG/orderbook?depth=100",
+  "https://external-api.kalshi.com/trade-api/v2/markets?event_ticker=KXNFLGAME-26OCT04DENSF&limit=1000",
+  "https://external-api.kalshi.com/trade-api/v2/markets/KXNFLGAME-26OCT04DENSF-DEN/orderbook?depth=100",
+  "https://external-api.kalshi.com/trade-api/v2/markets/KXNFLGAME-26OCT04DENSF-SF/orderbook?depth=100",
+  "https://external-api.kalshi.com/trade-api/v2/markets?event_ticker=KXNFLGAME-26OCT04ARINYG&limit=1000",
+  "https://external-api.kalshi.com/trade-api/v2/markets?event_ticker=KXNFLGAME-26OCT04ARINYG&limit=1000",
+  "https://external-api.kalshi.com/trade-api/v2/markets/KXNFLGAME-26OCT04ARINYG-ARI/orderbook?depth=100",
+  "https://external-api.kalshi.com/trade-api/v2/markets/KXNFLGAME-26OCT04ARINYG-NYG/orderbook?depth=100",
+  "https://external-api.kalshi.com/trade-api/v2/markets?event_ticker=KXNFLGAME-26OCT04ARINYG&limit=1000",
+  "https://external-api.kalshi.com/trade-api/v2/markets/KXNFLGAME-26OCT04ARINYG-ARI/orderbook?depth=100",
+  "https://external-api.kalshi.com/trade-api/v2/markets/KXNFLGAME-26OCT04ARINYG-NYG/orderbook?depth=100",
+  "https://external-api.kalshi.com/trade-api/v2/markets?series_ticker=KXNFLGAME&status=settled&min_settled_ts=1791086400&max_settled_ts=1791169500&limit=100"
+ ],
+ "capture_off": [
+  0,
+  {
+   "attempted": 0,
+   "by_status": {},
+   "command": "observe capture",
+   "deferred": [],
+   "failed_final": [],
+   "failed_retrying": [],
+   "missed": [],
+   "nfl_held": {
+    "kalshi:KXNFLGAME-26OCT04DENSF-DEN|custom|2026-10-04T19:25:04+00:00": "NFL_CAPTURE_DISABLED: EDGE_LAB_KALSHI_NFL_CAPTURE is off (or invalid): not attempted",
+    "kalshi:KXNFLGAME-26OCT04DENSF-SF|custom|2026-10-04T19:25:04+00:00": "NFL_CAPTURE_DISABLED: EDGE_LAB_KALSHI_NFL_CAPTURE is off (or invalid): not attempted"
+   },
+   "now_utc": "2026-10-04T19:35:20+00:00",
+   "policy_version": "price-observations-v1",
+   "requests": 0,
+   "run_id": "run-0",
+   "state": "NOTHING_DUE"
+  }
+ ],
+ "capture_settle": [
+  0,
+  {
+   "attempted": 1,
+   "by_status": {
+    "NOT_EXECUTABLE": 1
+   },
+   "command": "observe capture",
+   "deferred": [],
+   "failed_final": [],
+   "failed_retrying": [],
+   "missed": [],
+   "now_utc": "2026-10-05T03:05:10+00:00",
+   "policy_version": "price-observations-v1",
+   "requests": 1,
+   "run_id": "run-1",
+   "state": "CAPTURED"
+  }
+ ],
+ "capture_t24": [
+  0,
+  {
+   "attempted": 4,
+   "by_status": {
+    "CAPTURED": 8
+   },
+   "command": "observe capture",
+   "deferred": [],
+   "failed_final": [],
+   "failed_retrying": [],
+   "missed": [],
+   "now_utc": "2026-10-03T17:05:20+00:00",
+   "policy_version": "price-observations-v1",
+   "requests": 6,
+   "run_id": "run-2",
+   "state": "CAPTURED"
+  }
+ ],
+ "capture_t60": [
+  0,
+  {
+   "attempted": 2,
+   "by_status": {
+    "CAPTURED": 4
+   },
+   "command": "observe capture",
+   "deferred": [],
+   "failed_final": [],
+   "failed_retrying": [],
+   "missed": [],
+   "now_utc": "2026-10-04T16:05:20+00:00",
+   "policy_version": "price-observations-v1",
+   "requests": 3,
+   "run_id": "run-3",
+   "state": "CAPTURED"
+  }
+ ],
+ "capture_t6_fail": [
+  0,
+  {
+   "attempted": 2,
+   "by_status": {
+    "FAILED": 2
+   },
+   "command": "observe capture",
+   "deferred": [],
+   "failed_final": [],
+   "failed_retrying": [],
+   "missed": [],
+   "nfl_failed": [
+    "kalshi:KXNFLGAME-26OCT04ARINYG-ARI|custom|2026-10-04T11:00:04+00:00",
+    "kalshi:KXNFLGAME-26OCT04ARINYG-NYG|custom|2026-10-04T11:00:04+00:00"
+   ],
+   "now_utc": "2026-10-04T11:05:20+00:00",
+   "policy_version": "price-observations-v1",
+   "requests": 1,
+   "run_id": "run-4",
+   "state": "PARTIAL_RETRYING"
+  }
+ ],
+ "capture_t6_retry": [
+  0,
+  {
+   "attempted": 2,
+   "by_status": {
+    "CAPTURED": 4
+   },
+   "command": "observe capture",
+   "deferred": [],
+   "failed_final": [],
+   "failed_retrying": [],
+   "missed": [],
+   "now_utc": "2026-10-04T11:20:20+00:00",
+   "policy_version": "price-observations-v1",
+   "requests": 3,
+   "run_id": "run-5",
+   "state": "CAPTURED"
+  }
+ ],
+ "close_calls": [
+  "https://external-api.kalshi.com/trade-api/v2/markets?event_ticker=KXHIGHNY-26SEP23&limit=1000",
+  "https://external-api.kalshi.com/trade-api/v2/markets/KXHIGHNY-26SEP23-B69.5/orderbook?depth=100",
+  "https://external-api.kalshi.com/trade-api/v2/markets?event_ticker=KXHIGHNY-26SEP23&limit=1000",
+  "https://external-api.kalshi.com/trade-api/v2/markets?event_ticker=KXNFLGAME-26OCT04ARINYG&limit=1000",
+  "https://external-api.kalshi.com/trade-api/v2/markets/KXNFLGAME-26OCT04ARINYG-ARI/orderbook?depth=100",
+  "https://external-api.kalshi.com/trade-api/v2/markets/KXNFLGAME-26OCT04ARINYG-NYG/orderbook?depth=100"
+ ],
+ "close_capture": [
+  0,
+  {
+   "attempted": 1,
+   "by_status": {
+    "CAPTURED": 2
+   },
+   "command": "observe capture",
+   "deferred": [],
+   "failed_final": [],
+   "failed_retrying": [],
+   "missed": [],
+   "nfl_deferred_for_close": [
+    "kalshi:KXNFLGAME-26OCT04ARINYG-ARI|custom|2026-09-24T04:55:01+00:00",
+    "kalshi:KXNFLGAME-26OCT04ARINYG-NYG|custom|2026-09-24T04:55:01+00:00"
+   ],
+   "now_utc": "2026-09-24T04:57:45+00:00",
+   "policy_version": "price-observations-v1",
+   "requests": 3,
+   "run_id": "run-6",
+   "state": "CAPTURED"
+  }
+ ],
+ "close_next": [
+  0,
+  {
+   "attempted": 2,
+   "by_status": {
+    "CAPTURED": 4
+   },
+   "command": "observe capture",
+   "deferred": [],
+   "failed_final": [],
+   "failed_retrying": [],
+   "missed": [],
+   "now_utc": "2026-09-24T05:05:05+00:00",
+   "policy_version": "price-observations-v1",
+   "requests": 3,
+   "run_id": "run-7",
+   "state": "CAPTURED"
+  }
+ ],
+ "close_plan": [
+  0,
+  {
+   "backfill_rows": 0,
+   "command": "observe plan",
+   "decisions": 0,
+   "ledger": "NOT_GIVEN",
+   "missed": [],
+   "nfl": {
+    "budget": {
+     "expected_gets": 3,
+     "game_horizon_cap": 48,
+     "game_horizons": 1,
+     "settlement_read_cap": 7,
+     "settlement_reads": 0,
+     "week": "nfl-week-of-2026-09-22",
+     "weekly_get_cap": 295,
+     "worst_case_gets": 6,
+     "worst_gets_per_game_horizon": 6
+    },
+    "not_planned": [],
+    "odds_api_calls": 0,
+    "planned": [
+     {
+      "mapping": "DERIVED",
+      "odds_target_id": "americanfootball_nfl:odds-KXNFLGAME-26OCT04ARINYG:T-6h:2026-10-04T11:00:00Z",
+      "target_id": "kalshi:KXNFLGAME-26OCT04ARINYG-ARI|custom|2026-09-24T04:55:01+00:00"
+     },
+     {
+      "mapping": "DERIVED",
+      "odds_target_id": "americanfootball_nfl:odds-KXNFLGAME-26OCT04ARINYG:T-6h:2026-10-04T11:00:00Z",
+      "target_id": "kalshi:KXNFLGAME-26OCT04ARINYG-NYG|custom|2026-09-24T04:55:01+00:00"
+     }
+    ],
+    "series": "KXNFLGAME",
+    "state": "ON",
+    "switch": "EDGE_LAB_KALSHI_NFL_CAPTURE",
+    "version": "kalshi-nfl-pairing-v1"
+   },
+   "not_planned": [],
+   "now_utc": "2026-09-24T04:56:01+00:00",
+   "policy_version": "price-observations-v1",
+   "run_id": "run-8",
+   "state": "OK",
+   "targets_known": 0,
+   "targets_planned": 2
+  }
+ ],
+ "close_rows": {
+  "observations": [
+   {
+    "ask": "0.1400",
+    "ask_size": "30.00",
+    "attempt_id": "run-6:kalshi:KXHIGHNY-26SEP23-B69.5|close|2026-09-24T04:59:30+00:00:<attempt>",
+    "bid": "0.1300",
+    "close_label": "LATEST_PRE_CLOSE",
+    "close_proof_json": "{\"book_received_utc\": \"2026-09-24T04:59:30.600000+00:00\", \"close_time_utc\": \"2026-09-24T05:00:00+00:00\", \"confirm_received_utc\": \"2026-09-24T05:00:05.300000+00:00\", \"confirm_snapshot_id\": 4, \"confirm_status\": \"active\", \"not_close_because\": [\"market still 'active' after close_time (extended or delayed)\"], \"semantics\": \"kalshi_close_time_v1\", \"tolerance_s\": 60}",
+    "close_time_utc": "2026-09-24T05:00:00Z",
+    "collection_status": "CAPTURED",
+    "depth_json": "{\"asks\": [[\"0.1400\", \"30.00\"], [\"0.1500\", \"145.00\"], [\"0.1600\", \"84.00\"], [\"0.1700\", \"61.00\"], [\"0.1800\", \"46.00\"], [\"0.1900\", \"68.00\"], [\"0.2000\", \"83.89\"], [\"0.2100\", \"31.00\"], [\"0.2200\", \"33.00\"], [\"0.2300\", \"25.00\"], [\"0.2400\", \"30.00\"], [\"0.2500\", \"6.00\"], [\"0.2600\", \"7.00\"], [\"0.2700\", \"20.00\"], [\"0.2800\", \"6.00\"], [\"0.2900\", \"39.00\"], [\"0.3000\", \"13.00\"], [\"0.3100\", \"9.00\"], [\"0.3200\", \"9.00\"], [\"0.3300\", \"10.00\"], [\"0.3400\", \"11.00\"], [\"0.3500\", \"11.96\"], [\"0.3600\", \"1.00\"], [\"0.3700\", \"5.00\"], [\"0.4000\", \"5.00\"], [\"0.4200\", \"35.00\"], [\"0.4300\", \"57.00\"], [\"0.4400\", \"3.00\"], [\"0.4500\", \"14.00\"], [\"0.4700\", \"42.00\"], [\"0.4800\", \"5.00\"], [\"0.5000\", \"15.00\"], [\"0.5100\", \"8.00\"], [\"0.5200\", \"74.00\"], [\"0.5300\", \"749.00\"], [\"0.5400\", \"21.00\"], [\"0.5600\", \"67.76\"], [\"0.5700\", \"130.00\"], [\"0.5800\", \"32.76\"], [\"0.5900\", \"32.00\"], [\"0.6000\", \"112.00\"], [\"0.6100\", \"1.53\"], [\"0.6200\", \"300.00\"], [\"0.6300\", \"32.00\"], [\"0.6500\", \"101.53\"], [\"0.6700\", \"750.00\"], [\"0.7000\", \"100.00\"], [\"0.7400\", \"100.00\"], [\"0.7800\", \"25.00\"], [\"0.8200\", \"100.00\"], [\"0.8800\", \"72.00\"], [\"0.8900\", \"100.00\"], [\"0.9200\", \"30.00\"], [\"0.9400\", \"100.00\"], [\"0.9500\", \"45.00\"], [\"0.9600\", \"20.00\"], [\"0.9700\", \"162.00\"], [\"0.9800\", \"82.00\"], [\"0.9900\", \"771.60\"]], \"depth_limit\": 100, \"truncated\": false}",
+    "event_id": "kalshi:KXHIGHNY-26SEP23",
+    "freshness": "fresh",
+    "id": 1,
+    "market_id": "kalshi:KXHIGHNY-26SEP23-B69.5",
+    "market_status": "active",
+    "miss_reason": null,
+    "native_market_id": "KXHIGHNY-26SEP23-B69.5",
+    "observed_at_utc": "2026-09-24T04:59:30.600000+00:00",
+    "phase": "close",
+    "policy_version": "price-observations-v1",
+    "price_grid_json": "{\"ranges\": [[\"0.0000\", \"1.0000\", \"0.0100\"]], \"source\": \"kalshi price_ranges (linear_cent)\"}",
+    "recorded_at_utc": "2026-09-24T04:59:30.600000+00:00",
+    "rules_sha256": "db1b59ecb88912cab6c77fbc69a38f814afa124733daa1e97d5412e6216dd1e2",
+    "run_id": "run-6",
+    "side": "YES",
+    "snapshot_id": 3,
+    "source_sha256": "903434e295b153212c6ef035a92132fca0c95b5af71ff2e4fb7d79830b662cf8",
+    "source_timestamp_utc": null,
+    "target_id": "kalshi:KXHIGHNY-26SEP23-B69.5|close|2026-09-24T04:59:30+00:00",
+    "target_utc": "2026-09-24T04:59:30+00:00",
+    "venue": "kalshi"
+   },
+   {
+    "ask": "0.8700",
+    "ask_size": "161.43",
+    "attempt_id": "run-6:kalshi:KXHIGHNY-26SEP23-B69.5|close|2026-09-24T04:59:30+00:00:<attempt>",
+    "bid": "0.8600",
+    "close_label": "LATEST_PRE_CLOSE",
+    "close_proof_json": "{\"book_received_utc\": \"2026-09-24T04:59:30.600000+00:00\", \"close_time_utc\": \"2026-09-24T05:00:00+00:00\", \"confirm_received_utc\": \"2026-09-24T05:00:05.300000+00:00\", \"confirm_snapshot_id\": 4, \"confirm_status\": \"active\", \"not_close_because\": [\"market still 'active' after close_time (extended or delayed)\"], \"semantics\": \"kalshi_close_time_v1\", \"tolerance_s\": 60}",
+    "close_time_utc": "2026-09-24T05:00:00Z",
+    "collection_status": "CAPTURED",
+    "depth_json": "{\"asks\": [[\"0.8700\", \"161.43\"], [\"0.8800\", \"400.00\"], [\"0.8900\", \"71.00\"], [\"0.9000\", \"152.40\"], [\"0.9100\", \"67.00\"], [\"0.9200\", \"19.76\"], [\"0.9300\", \"162.00\"], [\"0.9400\", \"69.09\"], [\"0.9500\", \"133.59\"], [\"0.9600\", \"152.00\"], [\"0.9700\", \"712.96\"], [\"0.9800\", \"609.00\"], [\"0.9900\", \"1709.00\"]], \"depth_limit\": 100, \"truncated\": false}",
+    "event_id": "kalshi:KXHIGHNY-26SEP23",
+    "freshness": "fresh",
+    "id": 2,
+    "market_id": "kalshi:KXHIGHNY-26SEP23-B69.5",
+    "market_status": "active",
+    "miss_reason": null,
+    "native_market_id": "KXHIGHNY-26SEP23-B69.5",
+    "observed_at_utc": "2026-09-24T04:59:30.600000+00:00",
+    "phase": "close",
+    "policy_version": "price-observations-v1",
+    "price_grid_json": "{\"ranges\": [[\"0.0000\", \"1.0000\", \"0.0100\"]], \"source\": \"kalshi price_ranges (linear_cent)\"}",
+    "recorded_at_utc": "2026-09-24T04:59:30.600000+00:00",
+    "rules_sha256": "db1b59ecb88912cab6c77fbc69a38f814afa124733daa1e97d5412e6216dd1e2",
+    "run_id": "run-6",
+    "side": "NO",
+    "snapshot_id": 3,
+    "source_sha256": "903434e295b153212c6ef035a92132fca0c95b5af71ff2e4fb7d79830b662cf8",
+    "source_timestamp_utc": null,
+    "target_id": "kalshi:KXHIGHNY-26SEP23-B69.5|close|2026-09-24T04:59:30+00:00",
+    "target_utc": "2026-09-24T04:59:30+00:00",
+    "venue": "kalshi"
+   },
+   {
+    "ask": "0.1400",
+    "ask_size": "30.00",
+    "attempt_id": "run-7:kalshi:KXNFLGAME-26OCT04ARINYG-ARI|custom|2026-09-24T04:55:01+00:00:<attempt>",
+    "bid": "0.1300",
+    "close_label": null,
+    "close_proof_json": null,
+    "close_time_utc": "2026-10-06T17:00:00Z",
+    "collection_status": "CAPTURED",
+    "depth_json": "{\"asks\": [[\"0.1400\", \"30.00\"], [\"0.1500\", \"145.00\"], [\"0.1600\", \"84.00\"], [\"0.1700\", \"61.00\"], [\"0.1800\", \"46.00\"], [\"0.1900\", \"68.00\"], [\"0.2000\", \"83.89\"], [\"0.2100\", \"31.00\"], [\"0.2200\", \"33.00\"], [\"0.2300\", \"25.00\"], [\"0.2400\", \"30.00\"], [\"0.2500\", \"6.00\"], [\"0.2600\", \"7.00\"], [\"0.2700\", \"20.00\"], [\"0.2800\", \"6.00\"], [\"0.2900\", \"39.00\"], [\"0.3000\", \"13.00\"], [\"0.3100\", \"9.00\"], [\"0.3200\", \"9.00\"], [\"0.3300\", \"10.00\"], [\"0.3400\", \"11.00\"], [\"0.3500\", \"11.96\"], [\"0.3600\", \"1.00\"], [\"0.3700\", \"5.00\"], [\"0.4000\", \"5.00\"], [\"0.4200\", \"35.00\"], [\"0.4300\", \"57.00\"], [\"0.4400\", \"3.00\"], [\"0.4500\", \"14.00\"], [\"0.4700\", \"42.00\"], [\"0.4800\", \"5.00\"], [\"0.5000\", \"15.00\"], [\"0.5100\", \"8.00\"], [\"0.5200\", \"74.00\"], [\"0.5300\", \"749.00\"], [\"0.5400\", \"21.00\"], [\"0.5600\", \"67.76\"], [\"0.5700\", \"130.00\"], [\"0.5800\", \"32.76\"], [\"0.5900\", \"32.00\"], [\"0.6000\", \"112.00\"], [\"0.6100\", \"1.53\"], [\"0.6200\", \"300.00\"], [\"0.6300\", \"32.00\"], [\"0.6500\", \"101.53\"], [\"0.6700\", \"750.00\"], [\"0.7000\", \"100.00\"], [\"0.7400\", \"100.00\"], [\"0.7800\", \"25.00\"], [\"0.8200\", \"100.00\"], [\"0.8800\", \"72.00\"], [\"0.8900\", \"100.00\"], [\"0.9200\", \"30.00\"], [\"0.9400\", \"100.00\"], [\"0.9500\", \"45.00\"], [\"0.9600\", \"20.00\"], [\"0.9700\", \"162.00\"], [\"0.9800\", \"82.00\"], [\"0.9900\", \"771.60\"]], \"depth_limit\": 100, \"truncated\": false}",
+    "event_id": "kalshi:KXNFLGAME-26OCT04ARINYG",
+    "freshness": "fresh",
+    "id": 3,
+    "market_id": "kalshi:KXNFLGAME-26OCT04ARINYG-ARI",
+    "market_status": "active",
+    "miss_reason": null,
+    "native_market_id": "KXNFLGAME-26OCT04ARINYG-ARI",
+    "observed_at_utc": "2026-09-24T05:05:05.600000+00:00",
+    "phase": "custom",
+    "policy_version": "price-observations-v1",
+    "price_grid_json": "{\"ranges\": [[\"0.0000\", \"1.0000\", \"0.0100\"]], \"source\": \"kalshi price_ranges (linear_cent)\"}",
+    "recorded_at_utc": "2026-09-24T05:05:05.600000+00:00",
+    "rules_sha256": "e77154c60047cf0a1214e45c21acaed129c2d18c433c9b9e822b4e5da66c3d8f",
+    "run_id": "run-7",
+    "side": "YES",
+    "snapshot_id": 6,
+    "source_sha256": "903434e295b153212c6ef035a92132fca0c95b5af71ff2e4fb7d79830b662cf8",
+    "source_timestamp_utc": null,
+    "target_id": "kalshi:KXNFLGAME-26OCT04ARINYG-ARI|custom|2026-09-24T04:55:01+00:00",
+    "target_utc": "2026-09-24T04:55:01+00:00",
+    "venue": "kalshi"
+   },
+   {
+    "ask": "0.8700",
+    "ask_size": "161.43",
+    "attempt_id": "run-7:kalshi:KXNFLGAME-26OCT04ARINYG-ARI|custom|2026-09-24T04:55:01+00:00:<attempt>",
+    "bid": "0.8600",
+    "close_label": null,
+    "close_proof_json": null,
+    "close_time_utc": "2026-10-06T17:00:00Z",
+    "collection_status": "CAPTURED",
+    "depth_json": "{\"asks\": [[\"0.8700\", \"161.43\"], [\"0.8800\", \"400.00\"], [\"0.8900\", \"71.00\"], [\"0.9000\", \"152.40\"], [\"0.9100\", \"67.00\"], [\"0.9200\", \"19.76\"], [\"0.9300\", \"162.00\"], [\"0.9400\", \"69.09\"], [\"0.9500\", \"133.59\"], [\"0.9600\", \"152.00\"], [\"0.9700\", \"712.96\"], [\"0.9800\", \"609.00\"], [\"0.9900\", \"1709.00\"]], \"depth_limit\": 100, \"truncated\": false}",
+    "event_id": "kalshi:KXNFLGAME-26OCT04ARINYG",
+    "freshness": "fresh",
+    "id": 4,
+    "market_id": "kalshi:KXNFLGAME-26OCT04ARINYG-ARI",
+    "market_status": "active",
+    "miss_reason": null,
+    "native_market_id": "KXNFLGAME-26OCT04ARINYG-ARI",
+    "observed_at_utc": "2026-09-24T05:05:05.600000+00:00",
+    "phase": "custom",
+    "policy_version": "price-observations-v1",
+    "price_grid_json": "{\"ranges\": [[\"0.0000\", \"1.0000\", \"0.0100\"]], \"source\": \"kalshi price_ranges (linear_cent)\"}",
+    "recorded_at_utc": "2026-09-24T05:05:05.600000+00:00",
+    "rules_sha256": "e77154c60047cf0a1214e45c21acaed129c2d18c433c9b9e822b4e5da66c3d8f",
+    "run_id": "run-7",
+    "side": "NO",
+    "snapshot_id": 6,
+    "source_sha256": "903434e295b153212c6ef035a92132fca0c95b5af71ff2e4fb7d79830b662cf8",
+    "source_timestamp_utc": null,
+    "target_id": "kalshi:KXNFLGAME-26OCT04ARINYG-ARI|custom|2026-09-24T04:55:01+00:00",
+    "target_utc": "2026-09-24T04:55:01+00:00",
+    "venue": "kalshi"
+   },
+   {
+    "ask": "0.1400",
+    "ask_size": "30.00",
+    "attempt_id": "run-7:kalshi:KXNFLGAME-26OCT04ARINYG-NYG|custom|2026-09-24T04:55:01+00:00:<attempt>",
+    "bid": "0.1300",
+    "close_label": null,
+    "close_proof_json": null,
+    "close_time_utc": "2026-10-06T17:00:00Z",
+    "collection_status": "CAPTURED",
+    "depth_json": "{\"asks\": [[\"0.1400\", \"30.00\"], [\"0.1500\", \"145.00\"], [\"0.1600\", \"84.00\"], [\"0.1700\", \"61.00\"], [\"0.1800\", \"46.00\"], [\"0.1900\", \"68.00\"], [\"0.2000\", \"83.89\"], [\"0.2100\", \"31.00\"], [\"0.2200\", \"33.00\"], [\"0.2300\", \"25.00\"], [\"0.2400\", \"30.00\"], [\"0.2500\", \"6.00\"], [\"0.2600\", \"7.00\"], [\"0.2700\", \"20.00\"], [\"0.2800\", \"6.00\"], [\"0.2900\", \"39.00\"], [\"0.3000\", \"13.00\"], [\"0.3100\", \"9.00\"], [\"0.3200\", \"9.00\"], [\"0.3300\", \"10.00\"], [\"0.3400\", \"11.00\"], [\"0.3500\", \"11.96\"], [\"0.3600\", \"1.00\"], [\"0.3700\", \"5.00\"], [\"0.4000\", \"5.00\"], [\"0.4200\", \"35.00\"], [\"0.4300\", \"57.00\"], [\"0.4400\", \"3.00\"], [\"0.4500\", \"14.00\"], [\"0.4700\", \"42.00\"], [\"0.4800\", \"5.00\"], [\"0.5000\", \"15.00\"], [\"0.5100\", \"8.00\"], [\"0.5200\", \"74.00\"], [\"0.5300\", \"749.00\"], [\"0.5400\", \"21.00\"], [\"0.5600\", \"67.76\"], [\"0.5700\", \"130.00\"], [\"0.5800\", \"32.76\"], [\"0.5900\", \"32.00\"], [\"0.6000\", \"112.00\"], [\"0.6100\", \"1.53\"], [\"0.6200\", \"300.00\"], [\"0.6300\", \"32.00\"], [\"0.6500\", \"101.53\"], [\"0.6700\", \"750.00\"], [\"0.7000\", \"100.00\"], [\"0.7400\", \"100.00\"], [\"0.7800\", \"25.00\"], [\"0.8200\", \"100.00\"], [\"0.8800\", \"72.00\"], [\"0.8900\", \"100.00\"], [\"0.9200\", \"30.00\"], [\"0.9400\", \"100.00\"], [\"0.9500\", \"45.00\"], [\"0.9600\", \"20.00\"], [\"0.9700\", \"162.00\"], [\"0.9800\", \"82.00\"], [\"0.9900\", \"771.60\"]], \"depth_limit\": 100, \"truncated\": false}",
+    "event_id": "kalshi:KXNFLGAME-26OCT04ARINYG",
+    "freshness": "fresh",
+    "id": 5,
+    "market_id": "kalshi:KXNFLGAME-26OCT04ARINYG-NYG",
+    "market_status": "active",
+    "miss_reason": null,
+    "native_market_id": "KXNFLGAME-26OCT04ARINYG-NYG",
+    "observed_at_utc": "2026-09-24T05:05:05.900000+00:00",
+    "phase": "custom",
+    "policy_version": "price-observations-v1",
+    "price_grid_json": "{\"ranges\": [[\"0.0000\", \"1.0000\", \"0.0100\"]], \"source\": \"kalshi price_ranges (linear_cent)\"}",
+    "recorded_at_utc": "2026-09-24T05:05:05.900000+00:00",
+    "rules_sha256": "169c870b9383dcc1c85f0edd0a9d58e2f6c98a17c62a39efa777bcb1069fe667",
+    "run_id": "run-7",
+    "side": "YES",
+    "snapshot_id": 7,
+    "source_sha256": "903434e295b153212c6ef035a92132fca0c95b5af71ff2e4fb7d79830b662cf8",
+    "source_timestamp_utc": null,
+    "target_id": "kalshi:KXNFLGAME-26OCT04ARINYG-NYG|custom|2026-09-24T04:55:01+00:00",
+    "target_utc": "2026-09-24T04:55:01+00:00",
+    "venue": "kalshi"
+   },
+   {
+    "ask": "0.8700",
+    "ask_size": "161.43",
+    "attempt_id": "run-7:kalshi:KXNFLGAME-26OCT04ARINYG-NYG|custom|2026-09-24T04:55:01+00:00:<attempt>",
+    "bid": "0.8600",
+    "close_label": null,
+    "close_proof_json": null,
+    "close_time_utc": "2026-10-06T17:00:00Z",
+    "collection_status": "CAPTURED",
+    "depth_json": "{\"asks\": [[\"0.8700\", \"161.43\"], [\"0.8800\", \"400.00\"], [\"0.8900\", \"71.00\"], [\"0.9000\", \"152.40\"], [\"0.9100\", \"67.00\"], [\"0.9200\", \"19.76\"], [\"0.9300\", \"162.00\"], [\"0.9400\", \"69.09\"], [\"0.9500\", \"133.59\"], [\"0.9600\", \"152.00\"], [\"0.9700\", \"712.96\"], [\"0.9800\", \"609.00\"], [\"0.9900\", \"1709.00\"]], \"depth_limit\": 100, \"truncated\": false}",
+    "event_id": "kalshi:KXNFLGAME-26OCT04ARINYG",
+    "freshness": "fresh",
+    "id": 6,
+    "market_id": "kalshi:KXNFLGAME-26OCT04ARINYG-NYG",
+    "market_status": "active",
+    "miss_reason": null,
+    "native_market_id": "KXNFLGAME-26OCT04ARINYG-NYG",
+    "observed_at_utc": "2026-09-24T05:05:05.900000+00:00",
+    "phase": "custom",
+    "policy_version": "price-observations-v1",
+    "price_grid_json": "{\"ranges\": [[\"0.0000\", \"1.0000\", \"0.0100\"]], \"source\": \"kalshi price_ranges (linear_cent)\"}",
+    "recorded_at_utc": "2026-09-24T05:05:05.900000+00:00",
+    "rules_sha256": "169c870b9383dcc1c85f0edd0a9d58e2f6c98a17c62a39efa777bcb1069fe667",
+    "run_id": "run-7",
+    "side": "NO",
+    "snapshot_id": 7,
+    "source_sha256": "903434e295b153212c6ef035a92132fca0c95b5af71ff2e4fb7d79830b662cf8",
+    "source_timestamp_utc": null,
+    "target_id": "kalshi:KXNFLGAME-26OCT04ARINYG-NYG|custom|2026-09-24T04:55:01+00:00",
+    "target_utc": "2026-09-24T04:55:01+00:00",
+    "venue": "kalshi"
+   }
+  ],
+  "targets": [
+   {
+    "attempts": 1,
+    "close_basis": "kalshi_close_time_v1",
+    "close_time_utc": null,
+    "deadline_utc": "2026-09-24T05:24:01+00:00",
+    "decision_as_of_utc": null,
+    "decision_ref": null,
+    "detail_json": "{\"commence_utc\":\"2026-10-04T17:00:00+00:00\",\"game_date\":\"2026-10-04\",\"mapping\":\"DERIVED\",\"mapping_detail\":\"no listing received yet: the capture's listing GET verifies the derived tickers\",\"nfl_role\":\"book\",\"odds_captured_at_utc\":\"2026-09-24T04:55:01+00:00\",\"odds_event_id\":\"odds-KXNFLGAME-26OCT04ARINYG\",\"odds_offset\":\"T-6h\",\"odds_target_id\":\"americanfootball_nfl:odds-KXNFLGAME-26OCT04ARINYG:T-6h:2026-10-04T11:00:00Z\",\"pairing\":\"reactive: planned after the Odds capture, at its receipt time (option (a))\",\"version\":\"kalshi-nfl-pairing-v1\"}",
+    "due_from_utc": "2026-09-24T04:50:01+00:00",
+    "event_id": "kalshi:KXNFLGAME-26OCT04ARINYG",
+    "market_id": "kalshi:KXNFLGAME-26OCT04ARINYG-ARI",
+    "native_event_id": "KXNFLGAME-26OCT04ARINYG",
+    "native_market_id": "KXNFLGAME-26OCT04ARINYG-ARI",
+    "origin": "kalshi_nfl_pairing_v1",
+    "phase": "custom",
+    "planned_at_utc": "2026-09-24T04:56:01+00:00",
+    "planned_rules_sha256": null,
+    "policy_version": "price-observations-v1",
+    "state": "CAPTURED",
+    "state_at_utc": "2026-09-24T05:05:05.600000+00:00",
+    "state_reason": null,
+    "target_id": "kalshi:KXNFLGAME-26OCT04ARINYG-ARI|custom|2026-09-24T04:55:01+00:00",
+    "target_utc": "2026-09-24T04:55:01+00:00",
+    "venue": "kalshi"
+   },
+   {
+    "attempts": 1,
+    "close_basis": "kalshi_close_time_v1",
+    "close_time_utc": null,
+    "deadline_utc": "2026-09-24T05:24:01+00:00",
+    "decision_as_of_utc": null,
+    "decision_ref": null,
+    "detail_json": "{\"commence_utc\":\"2026-10-04T17:00:00+00:00\",\"game_date\":\"2026-10-04\",\"mapping\":\"DERIVED\",\"mapping_detail\":\"no listing received yet: the capture's listing GET verifies the derived tickers\",\"nfl_role\":\"book\",\"odds_captured_at_utc\":\"2026-09-24T04:55:01+00:00\",\"odds_event_id\":\"odds-KXNFLGAME-26OCT04ARINYG\",\"odds_offset\":\"T-6h\",\"odds_target_id\":\"americanfootball_nfl:odds-KXNFLGAME-26OCT04ARINYG:T-6h:2026-10-04T11:00:00Z\",\"pairing\":\"reactive: planned after the Odds capture, at its receipt time (option (a))\",\"version\":\"kalshi-nfl-pairing-v1\"}",
+    "due_from_utc": "2026-09-24T04:50:01+00:00",
+    "event_id": "kalshi:KXNFLGAME-26OCT04ARINYG",
+    "market_id": "kalshi:KXNFLGAME-26OCT04ARINYG-NYG",
+    "native_event_id": "KXNFLGAME-26OCT04ARINYG",
+    "native_market_id": "KXNFLGAME-26OCT04ARINYG-NYG",
+    "origin": "kalshi_nfl_pairing_v1",
+    "phase": "custom",
+    "planned_at_utc": "2026-09-24T04:56:01+00:00",
+    "planned_rules_sha256": null,
+    "policy_version": "price-observations-v1",
+    "state": "CAPTURED",
+    "state_at_utc": "2026-09-24T05:05:05.900000+00:00",
+    "state_reason": null,
+    "target_id": "kalshi:KXNFLGAME-26OCT04ARINYG-NYG|custom|2026-09-24T04:55:01+00:00",
+    "target_utc": "2026-09-24T04:55:01+00:00",
+    "venue": "kalshi"
+   },
+   {
+    "attempts": 1,
+    "close_basis": "kalshi_close_time_v1",
+    "close_time_utc": "2026-09-24T05:00:00+00:00",
+    "deadline_utc": "2026-09-24T04:59:50+00:00",
+    "decision_as_of_utc": "2026-09-23T19:00:00+00:00",
+    "decision_ref": "d1",
+    "detail_json": "{}",
+    "due_from_utc": "2026-09-24T04:57:30+00:00",
+    "event_id": "kalshi:KXHIGHNY-26SEP23",
+    "market_id": "kalshi:KXHIGHNY-26SEP23-B69.5",
+    "native_event_id": "KXHIGHNY-26SEP23",
+    "native_market_id": "KXHIGHNY-26SEP23-B69.5",
+    "origin": "ledger_decision",
+    "phase": "close",
+    "planned_at_utc": "2026-09-23T19:00:00+00:00",
+    "planned_rules_sha256": null,
+    "policy_version": "price-observations-v1",
+    "state": "CAPTURED",
+    "state_at_utc": "2026-09-24T04:59:30.600000+00:00",
+    "state_reason": null,
+    "target_id": "kalshi:KXHIGHNY-26SEP23-B69.5|close|2026-09-24T04:59:30+00:00",
+    "target_utc": "2026-09-24T04:59:30+00:00",
+    "venue": "kalshi"
+   }
+  ]
+ },
+ "dry_run": {
+  "budget": {
+   "expected_gets": 16,
+   "game_horizon_cap": 48,
+   "game_horizons": 5,
+   "settlement_read_cap": 7,
+   "settlement_reads": 1,
+   "week": "nfl-week-of-2026-09-29",
+   "weekly_get_cap": 295,
+   "worst_case_gets": 31,
+   "worst_gets_per_game_horizon": 6
+  },
+  "command": "nfl dry-run",
+  "not_planned": [],
+  "now_utc": "2026-10-05T03:05:00+00:00",
+  "odds_api_calls": 0,
+  "planned": [],
+  "requests": 0,
+  "series": "KXNFLGAME",
+  "state": "ON",
+  "switch": "EDGE_LAB_KALSHI_NFL_CAPTURE",
+  "switch_state": "ON",
+  "version": "kalshi-nfl-pairing-v1",
+  "would_plan": [],
+  "writes": 0
+ },
+ "history_book": [
+  {
+   "ask": "0.1400",
+   "ask_size": "30.00",
+   "bid": "0.1300",
+   "close_label": null,
+   "close_proof": null,
+   "close_time_utc": "2026-10-06T17:00:00Z",
+   "close_tolerance_s": null,
+   "collection_status": "CAPTURED",
+   "depth": {
+    "asks": [
+     [
+      "0.1400",
+      "30.00"
+     ],
+     [
+      "0.1500",
+      "145.00"
+     ],
+     [
+      "0.1600",
+      "84.00"
+     ],
+     [
+      "0.1700",
+      "61.00"
+     ],
+     [
+      "0.1800",
+      "46.00"
+     ],
+     [
+      "0.1900",
+      "68.00"
+     ],
+     [
+      "0.2000",
+      "83.89"
+     ],
+     [
+      "0.2100",
+      "31.00"
+     ],
+     [
+      "0.2200",
+      "33.00"
+     ],
+     [
+      "0.2300",
+      "25.00"
+     ],
+     [
+      "0.2400",
+      "30.00"
+     ],
+     [
+      "0.2500",
+      "6.00"
+     ],
+     [
+      "0.2600",
+      "7.00"
+     ],
+     [
+      "0.2700",
+      "20.00"
+     ],
+     [
+      "0.2800",
+      "6.00"
+     ],
+     [
+      "0.2900",
+      "39.00"
+     ],
+     [
+      "0.3000",
+      "13.00"
+     ],
+     [
+      "0.3100",
+      "9.00"
+     ],
+     [
+      "0.3200",
+      "9.00"
+     ],
+     [
+      "0.3300",
+      "10.00"
+     ],
+     [
+      "0.3400",
+      "11.00"
+     ],
+     [
+      "0.3500",
+      "11.96"
+     ],
+     [
+      "0.3600",
+      "1.00"
+     ],
+     [
+      "0.3700",
+      "5.00"
+     ],
+     [
+      "0.4000",
+      "5.00"
+     ],
+     [
+      "0.4200",
+      "35.00"
+     ],
+     [
+      "0.4300",
+      "57.00"
+     ],
+     [
+      "0.4400",
+      "3.00"
+     ],
+     [
+      "0.4500",
+      "14.00"
+     ],
+     [
+      "0.4700",
+      "42.00"
+     ],
+     [
+      "0.4800",
+      "5.00"
+     ],
+     [
+      "0.5000",
+      "15.00"
+     ],
+     [
+      "0.5100",
+      "8.00"
+     ],
+     [
+      "0.5200",
+      "74.00"
+     ],
+     [
+      "0.5300",
+      "749.00"
+     ],
+     [
+      "0.5400",
+      "21.00"
+     ],
+     [
+      "0.5600",
+      "67.76"
+     ],
+     [
+      "0.5700",
+      "130.00"
+     ],
+     [
+      "0.5800",
+      "32.76"
+     ],
+     [
+      "0.5900",
+      "32.00"
+     ],
+     [
+      "0.6000",
+      "112.00"
+     ],
+     [
+      "0.6100",
+      "1.53"
+     ],
+     [
+      "0.6200",
+      "300.00"
+     ],
+     [
+      "0.6300",
+      "32.00"
+     ],
+     [
+      "0.6500",
+      "101.53"
+     ],
+     [
+      "0.6700",
+      "750.00"
+     ],
+     [
+      "0.7000",
+      "100.00"
+     ],
+     [
+      "0.7400",
+      "100.00"
+     ],
+     [
+      "0.7800",
+      "25.00"
+     ],
+     [
+      "0.8200",
+      "100.00"
+     ],
+     [
+      "0.8800",
+      "72.00"
+     ],
+     [
+      "0.8900",
+      "100.00"
+     ],
+     [
+      "0.9200",
+      "30.00"
+     ],
+     [
+      "0.9400",
+      "100.00"
+     ],
+     [
+      "0.9500",
+      "45.00"
+     ],
+     [
+      "0.9600",
+      "20.00"
+     ],
+     [
+      "0.9700",
+      "162.00"
+     ],
+     [
+      "0.9800",
+      "82.00"
+     ],
+     [
+      "0.9900",
+      "771.60"
+     ]
+    ],
+    "depth_limit": 100,
+    "truncated": false
+   },
+   "deviation_s": 316.6,
+   "event_id": "kalshi:KXNFLGAME-26OCT04ARINYG",
+   "executable": true,
+   "freshness": "fresh",
+   "is_latest_pre_close_observation": false,
+   "label": "custom",
+   "market_id": "kalshi:KXNFLGAME-26OCT04ARINYG-ARI",
+   "market_status": "active",
+   "miss_reason": null,
+   "native_market_id": "KXNFLGAME-26OCT04ARINYG-ARI",
+   "observation_id": 1,
+   "observed_at_utc": "2026-10-03T17:05:20.600000+00:00",
+   "phase": "custom",
+   "price_grid": {
+    "ranges": [
+     [
+      "0.0000",
+      "1.0000",
+      "0.0100"
+     ]
+    ],
+    "source": "kalshi price_ranges (linear_cent)"
+   },
+   "rules_sha256": "e77154c60047cf0a1214e45c21acaed129c2d18c433c9b9e822b4e5da66c3d8f",
+   "side": "YES",
+   "snapshot_id": 4,
+   "source_sha256": "903434e295b153212c6ef035a92132fca0c95b5af71ff2e4fb7d79830b662cf8",
+   "source_timestamp_utc": null,
+   "target_id": "kalshi:KXNFLGAME-26OCT04ARINYG-ARI|custom|2026-10-03T17:00:04+00:00",
+   "target_utc": "2026-10-03T17:00:04+00:00",
+   "venue": "kalshi"
+  },
+  {
+   "ask": "0.8700",
+   "ask_size": "161.43",
+   "bid": "0.8600",
+   "close_label": null,
+   "close_proof": null,
+   "close_time_utc": "2026-10-06T17:00:00Z",
+   "close_tolerance_s": null,
+   "collection_status": "CAPTURED",
+   "depth": {
+    "asks": [
+     [
+      "0.8700",
+      "161.43"
+     ],
+     [
+      "0.8800",
+      "400.00"
+     ],
+     [
+      "0.8900",
+      "71.00"
+     ],
+     [
+      "0.9000",
+      "152.40"
+     ],
+     [
+      "0.9100",
+      "67.00"
+     ],
+     [
+      "0.9200",
+      "19.76"
+     ],
+     [
+      "0.9300",
+      "162.00"
+     ],
+     [
+      "0.9400",
+      "69.09"
+     ],
+     [
+      "0.9500",
+      "133.59"
+     ],
+     [
+      "0.9600",
+      "152.00"
+     ],
+     [
+      "0.9700",
+      "712.96"
+     ],
+     [
+      "0.9800",
+      "609.00"
+     ],
+     [
+      "0.9900",
+      "1709.00"
+     ]
+    ],
+    "depth_limit": 100,
+    "truncated": false
+   },
+   "deviation_s": 316.6,
+   "event_id": "kalshi:KXNFLGAME-26OCT04ARINYG",
+   "executable": true,
+   "freshness": "fresh",
+   "is_latest_pre_close_observation": false,
+   "label": "custom",
+   "market_id": "kalshi:KXNFLGAME-26OCT04ARINYG-ARI",
+   "market_status": "active",
+   "miss_reason": null,
+   "native_market_id": "KXNFLGAME-26OCT04ARINYG-ARI",
+   "observation_id": 2,
+   "observed_at_utc": "2026-10-03T17:05:20.600000+00:00",
+   "phase": "custom",
+   "price_grid": {
+    "ranges": [
+     [
+      "0.0000",
+      "1.0000",
+      "0.0100"
+     ]
+    ],
+    "source": "kalshi price_ranges (linear_cent)"
+   },
+   "rules_sha256": "e77154c60047cf0a1214e45c21acaed129c2d18c433c9b9e822b4e5da66c3d8f",
+   "side": "NO",
+   "snapshot_id": 4,
+   "source_sha256": "903434e295b153212c6ef035a92132fca0c95b5af71ff2e4fb7d79830b662cf8",
+   "source_timestamp_utc": null,
+   "target_id": "kalshi:KXNFLGAME-26OCT04ARINYG-ARI|custom|2026-10-03T17:00:04+00:00",
+   "target_utc": "2026-10-03T17:00:04+00:00",
+   "venue": "kalshi"
+  },
+  {
+   "ask": null,
+   "ask_size": null,
+   "bid": null,
+   "close_label": null,
+   "close_proof": null,
+   "close_time_utc": null,
+   "close_tolerance_s": null,
+   "collection_status": "FAILED",
+   "depth": null,
+   "deviation_s": null,
+   "event_id": "kalshi:KXNFLGAME-26OCT04ARINYG",
+   "executable": false,
+   "freshness": "unknown",
+   "is_latest_pre_close_observation": null,
+   "label": "custom",
+   "market_id": "kalshi:KXNFLGAME-26OCT04ARINYG-ARI",
+   "market_status": null,
+   "miss_reason": "LISTING_FAILED: HttpFetchError: HTTP 503",
+   "native_market_id": "KXNFLGAME-26OCT04ARINYG-ARI",
+   "observation_id": 9,
+   "observed_at_utc": null,
+   "phase": "custom",
+   "price_grid": null,
+   "rules_sha256": null,
+   "side": null,
+   "snapshot_id": null,
+   "source_sha256": null,
+   "source_timestamp_utc": null,
+   "target_id": "kalshi:KXNFLGAME-26OCT04ARINYG-ARI|custom|2026-10-04T11:00:04+00:00",
+   "target_utc": "2026-10-04T11:00:04+00:00",
+   "venue": "kalshi"
+  },
+  {
+   "ask": "0.1400",
+   "ask_size": "30.00",
+   "bid": "0.1300",
+   "close_label": null,
+   "close_proof": null,
+   "close_time_utc": "2026-10-06T17:00:00Z",
+   "close_tolerance_s": null,
+   "collection_status": "CAPTURED",
+   "depth": {
+    "asks": [
+     [
+      "0.1400",
+      "30.00"
+     ],
+     [
+      "0.1500",
+      "145.00"
+     ],
+     [
+      "0.1600",
+      "84.00"
+     ],
+     [
+      "0.1700",
+      "61.00"
+     ],
+     [
+      "0.1800",
+      "46.00"
+     ],
+     [
+      "0.1900",
+      "68.00"
+     ],
+     [
+      "0.2000",
+      "83.89"
+     ],
+     [
+      "0.2100",
+      "31.00"
+     ],
+     [
+      "0.2200",
+      "33.00"
+     ],
+     [
+      "0.2300",
+      "25.00"
+     ],
+     [
+      "0.2400",
+      "30.00"
+     ],
+     [
+      "0.2500",
+      "6.00"
+     ],
+     [
+      "0.2600",
+      "7.00"
+     ],
+     [
+      "0.2700",
+      "20.00"
+     ],
+     [
+      "0.2800",
+      "6.00"
+     ],
+     [
+      "0.2900",
+      "39.00"
+     ],
+     [
+      "0.3000",
+      "13.00"
+     ],
+     [
+      "0.3100",
+      "9.00"
+     ],
+     [
+      "0.3200",
+      "9.00"
+     ],
+     [
+      "0.3300",
+      "10.00"
+     ],
+     [
+      "0.3400",
+      "11.00"
+     ],
+     [
+      "0.3500",
+      "11.96"
+     ],
+     [
+      "0.3600",
+      "1.00"
+     ],
+     [
+      "0.3700",
+      "5.00"
+     ],
+     [
+      "0.4000",
+      "5.00"
+     ],
+     [
+      "0.4200",
+      "35.00"
+     ],
+     [
+      "0.4300",
+      "57.00"
+     ],
+     [
+      "0.4400",
+      "3.00"
+     ],
+     [
+      "0.4500",
+      "14.00"
+     ],
+     [
+      "0.4700",
+      "42.00"
+     ],
+     [
+      "0.4800",
+      "5.00"
+     ],
+     [
+      "0.5000",
+      "15.00"
+     ],
+     [
+      "0.5100",
+      "8.00"
+     ],
+     [
+      "0.5200",
+      "74.00"
+     ],
+     [
+      "0.5300",
+      "749.00"
+     ],
+     [
+      "0.5400",
+      "21.00"
+     ],
+     [
+      "0.5600",
+      "67.76"
+     ],
+     [
+      "0.5700",
+      "130.00"
+     ],
+     [
+      "0.5800",
+      "32.76"
+     ],
+     [
+      "0.5900",
+      "32.00"
+     ],
+     [
+      "0.6000",
+      "112.00"
+     ],
+     [
+      "0.6100",
+      "1.53"
+     ],
+     [
+      "0.6200",
+      "300.00"
+     ],
+     [
+      "0.6300",
+      "32.00"
+     ],
+     [
+      "0.6500",
+      "101.53"
+     ],
+     [
+      "0.6700",
+      "750.00"
+     ],
+     [
+      "0.7000",
+      "100.00"
+     ],
+     [
+      "0.7400",
+      "100.00"
+     ],
+     [
+      "0.7800",
+      "25.00"
+     ],
+     [
+      "0.8200",
+      "100.00"
+     ],
+     [
+      "0.8800",
+      "72.00"
+     ],
+     [
+      "0.8900",
+      "100.00"
+     ],
+     [
+      "0.9200",
+      "30.00"
+     ],
+     [
+      "0.9400",
+      "100.00"
+     ],
+     [
+      "0.9500",
+      "45.00"
+     ],
+     [
+      "0.9600",
+      "20.00"
+     ],
+     [
+      "0.9700",
+      "162.00"
+     ],
+     [
+      "0.9800",
+      "82.00"
+     ],
+     [
+      "0.9900",
+      "771.60"
+     ]
+    ],
+    "depth_limit": 100,
+    "truncated": false
+   },
+   "deviation_s": 1216.6,
+   "event_id": "kalshi:KXNFLGAME-26OCT04ARINYG",
+   "executable": true,
+   "freshness": "fresh",
+   "is_latest_pre_close_observation": false,
+   "label": "custom",
+   "market_id": "kalshi:KXNFLGAME-26OCT04ARINYG-ARI",
+   "market_status": "active",
+   "miss_reason": null,
+   "native_market_id": "KXNFLGAME-26OCT04ARINYG-ARI",
+   "observation_id": 11,
+   "observed_at_utc": "2026-10-04T11:20:20.600000+00:00",
+   "phase": "custom",
+   "price_grid": {
+    "ranges": [
+     [
+      "0.0000",
+      "1.0000",
+      "0.0100"
+     ]
+    ],
+    "source": "kalshi price_ranges (linear_cent)"
+   },
+   "rules_sha256": "e77154c60047cf0a1214e45c21acaed129c2d18c433c9b9e822b4e5da66c3d8f",
+   "side": "YES",
+   "snapshot_id": 11,
+   "source_sha256": "903434e295b153212c6ef035a92132fca0c95b5af71ff2e4fb7d79830b662cf8",
+   "source_timestamp_utc": null,
+   "target_id": "kalshi:KXNFLGAME-26OCT04ARINYG-ARI|custom|2026-10-04T11:00:04+00:00",
+   "target_utc": "2026-10-04T11:00:04+00:00",
+   "venue": "kalshi"
+  },
+  {
+   "ask": "0.8700",
+   "ask_size": "161.43",
+   "bid": "0.8600",
+   "close_label": null,
+   "close_proof": null,
+   "close_time_utc": "2026-10-06T17:00:00Z",
+   "close_tolerance_s": null,
+   "collection_status": "CAPTURED",
+   "depth": {
+    "asks": [
+     [
+      "0.8700",
+      "161.43"
+     ],
+     [
+      "0.8800",
+      "400.00"
+     ],
+     [
+      "0.8900",
+      "71.00"
+     ],
+     [
+      "0.9000",
+      "152.40"
+     ],
+     [
+      "0.9100",
+      "67.00"
+     ],
+     [
+      "0.9200",
+      "19.76"
+     ],
+     [
+      "0.9300",
+      "162.00"
+     ],
+     [
+      "0.9400",
+      "69.09"
+     ],
+     [
+      "0.9500",
+      "133.59"
+     ],
+     [
+      "0.9600",
+      "152.00"
+     ],
+     [
+      "0.9700",
+      "712.96"
+     ],
+     [
+      "0.9800",
+      "609.00"
+     ],
+     [
+      "0.9900",
+      "1709.00"
+     ]
+    ],
+    "depth_limit": 100,
+    "truncated": false
+   },
+   "deviation_s": 1216.6,
+   "event_id": "kalshi:KXNFLGAME-26OCT04ARINYG",
+   "executable": true,
+   "freshness": "fresh",
+   "is_latest_pre_close_observation": false,
+   "label": "custom",
+   "market_id": "kalshi:KXNFLGAME-26OCT04ARINYG-ARI",
+   "market_status": "active",
+   "miss_reason": null,
+   "native_market_id": "KXNFLGAME-26OCT04ARINYG-ARI",
+   "observation_id": 12,
+   "observed_at_utc": "2026-10-04T11:20:20.600000+00:00",
+   "phase": "custom",
+   "price_grid": {
+    "ranges": [
+     [
+      "0.0000",
+      "1.0000",
+      "0.0100"
+     ]
+    ],
+    "source": "kalshi price_ranges (linear_cent)"
+   },
+   "rules_sha256": "e77154c60047cf0a1214e45c21acaed129c2d18c433c9b9e822b4e5da66c3d8f",
+   "side": "NO",
+   "snapshot_id": 11,
+   "source_sha256": "903434e295b153212c6ef035a92132fca0c95b5af71ff2e4fb7d79830b662cf8",
+   "source_timestamp_utc": null,
+   "target_id": "kalshi:KXNFLGAME-26OCT04ARINYG-ARI|custom|2026-10-04T11:00:04+00:00",
+   "target_utc": "2026-10-04T11:00:04+00:00",
+   "venue": "kalshi"
+  },
+  {
+   "close_label": null,
+   "close_proof": null,
+   "close_time_utc": "2026-10-06T17:00:00Z",
+   "close_tolerance_s": null,
+   "collection_status": "CAPTURED",
+   "deviation_s": 316.6,
+   "event_id": "kalshi:KXNFLGAME-26OCT04ARINYG",
+   "executable": true,
+   "exp002_label": "HIDDEN (EXP-002 label: a Kalshi NFL book at T-60m, after the T-6h decision cutoff or at an unknown horizon, or a settlement read; its prices, sizes, depth and result are not shown here)",
+   "freshness": "fresh",
+   "is_latest_pre_close_observation": true,
+   "label": "custom",
+   "market_id": "kalshi:KXNFLGAME-26OCT04ARINYG-ARI",
+   "market_status": "active",
+   "miss_reason": null,
+   "native_market_id": "KXNFLGAME-26OCT04ARINYG-ARI",
+   "observation_id": 15,
+   "observed_at_utc": "2026-10-04T16:05:20.600000+00:00",
+   "phase": "custom",
+   "rules_sha256": "e77154c60047cf0a1214e45c21acaed129c2d18c433c9b9e822b4e5da66c3d8f",
+   "side": "YES",
+   "snapshot_id": 15,
+   "source_sha256": "903434e295b153212c6ef035a92132fca0c95b5af71ff2e4fb7d79830b662cf8",
+   "source_timestamp_utc": null,
+   "target_id": "kalshi:KXNFLGAME-26OCT04ARINYG-ARI|custom|2026-10-04T16:00:04+00:00",
+   "target_utc": "2026-10-04T16:00:04+00:00",
+   "venue": "kalshi"
+  },
+  {
+   "close_label": null,
+   "close_proof": null,
+   "close_time_utc": "2026-10-06T17:00:00Z",
+   "close_tolerance_s": null,
+   "collection_status": "CAPTURED",
+   "deviation_s": 316.6,
+   "event_id": "kalshi:KXNFLGAME-26OCT04ARINYG",
+   "executable": true,
+   "exp002_label": "HIDDEN (EXP-002 label: a Kalshi NFL book at T-60m, after the T-6h decision cutoff or at an unknown horizon, or a settlement read; its prices, sizes, depth and result are not shown here)",
+   "freshness": "fresh",
+   "is_latest_pre_close_observation": true,
+   "label": "custom",
+   "market_id": "kalshi:KXNFLGAME-26OCT04ARINYG-ARI",
+   "market_status": "active",
+   "miss_reason": null,
+   "native_market_id": "KXNFLGAME-26OCT04ARINYG-ARI",
+   "observation_id": 16,
+   "observed_at_utc": "2026-10-04T16:05:20.600000+00:00",
+   "phase": "custom",
+   "rules_sha256": "e77154c60047cf0a1214e45c21acaed129c2d18c433c9b9e822b4e5da66c3d8f",
+   "side": "NO",
+   "snapshot_id": 15,
+   "source_sha256": "903434e295b153212c6ef035a92132fca0c95b5af71ff2e4fb7d79830b662cf8",
+   "source_timestamp_utc": null,
+   "target_id": "kalshi:KXNFLGAME-26OCT04ARINYG-ARI|custom|2026-10-04T16:00:04+00:00",
+   "target_utc": "2026-10-04T16:00:04+00:00",
+   "venue": "kalshi"
+  }
+ ],
+ "history_settled": [
+  {
+   "close_label": null,
+   "close_proof": null,
+   "close_time_utc": null,
+   "close_tolerance_s": null,
+   "collection_status": "NOT_EXECUTABLE",
+   "deviation_s": 10.3,
+   "event_id": "kalshi:KXNFLGAME:settled:2026-10-04",
+   "executable": false,
+   "exp002_label": "HIDDEN (EXP-002 label: a Kalshi NFL book at T-60m, after the T-6h decision cutoff or at an unknown horizon, or a settlement read; its prices, sizes, depth and result are not shown here)",
+   "freshness": "fresh",
+   "is_latest_pre_close_observation": null,
+   "label": "custom",
+   "market_id": "kalshi:KXNFLGAME",
+   "market_status": null,
+   "miss_reason": "SETTLEMENT_METADATA_READ: withheld (EXP-002 label)",
+   "native_market_id": "KXNFLGAME",
+   "observation_id": 21,
+   "observed_at_utc": "2026-10-05T03:05:10.300000+00:00",
+   "phase": "custom",
+   "rules_sha256": null,
+   "side": null,
+   "snapshot_id": 18,
+   "source_sha256": "a020fc11155d77aef84865cc618382bc57e51f852e81dbad1b5ba5ca5263723c",
+   "source_timestamp_utc": null,
+   "target_id": "kalshi:KXNFLGAME|custom|2026-10-05T03:05:00+00:00",
+   "target_utc": "2026-10-05T03:05:00+00:00",
+   "venue": "kalshi"
+  }
+ ],
+ "plan_off": [
+  0,
+  {
+   "command": "observe plan",
+   "decisions": 0,
+   "ledger": "NOT_GIVEN",
+   "nfl": {
+    "detail": "EDGE_LAB_KALSHI_NFL_CAPTURE=off: no Kalshi NFL target planned, pending ones are not attempted",
+    "state": "OFF",
+    "switch": "EDGE_LAB_KALSHI_NFL_CAPTURE",
+    "version": "kalshi-nfl-pairing-v1"
+   },
+   "now_utc": "2026-10-04T19:50:00+00:00",
+   "state": "NOTHING_TO_DO"
+  }
+ ],
+ "plan_settle": [
+  0,
+  {
+   "backfill_rows": 0,
+   "command": "observe plan",
+   "decisions": 0,
+   "ledger": "NOT_GIVEN",
+   "missed": [],
+   "nfl": {
+    "budget": {
+     "expected_gets": 16,
+     "game_horizon_cap": 48,
+     "game_horizons": 5,
+     "settlement_read_cap": 7,
+     "settlement_reads": 1,
+     "week": "nfl-week-of-2026-09-29",
+     "weekly_get_cap": 295,
+     "worst_case_gets": 31,
+     "worst_gets_per_game_horizon": 6
+    },
+    "not_planned": [],
+    "odds_api_calls": 0,
+    "planned": [
+     {
+      "game_date": "2026-10-04",
+      "role": "settlement_read",
+      "target_id": "kalshi:KXNFLGAME|custom|2026-10-05T03:05:00+00:00"
+     }
+    ],
+    "series": "KXNFLGAME",
+    "state": "ON",
+    "switch": "EDGE_LAB_KALSHI_NFL_CAPTURE",
+    "version": "kalshi-nfl-pairing-v1"
+   },
+   "not_planned": [],
+   "now_utc": "2026-10-05T02:55:00+00:00",
+   "policy_version": "price-observations-v1",
+   "run_id": "run-9",
+   "state": "OK",
+   "targets_known": 0,
+   "targets_planned": 1
+  }
+ ],
+ "plan_t24": [
+  0,
+  {
+   "backfill_rows": 0,
+   "command": "observe plan",
+   "decisions": 0,
+   "ledger": "NOT_GIVEN",
+   "missed": [],
+   "nfl": {
+    "budget": {
+     "expected_gets": 6,
+     "game_horizon_cap": 48,
+     "game_horizons": 2,
+     "settlement_read_cap": 7,
+     "settlement_reads": 0,
+     "week": "nfl-week-of-2026-09-29",
+     "weekly_get_cap": 295,
+     "worst_case_gets": 12,
+     "worst_gets_per_game_horizon": 6
+    },
+    "not_planned": [],
+    "odds_api_calls": 0,
+    "planned": [
+     {
+      "mapping": "DERIVED",
+      "odds_target_id": "americanfootball_nfl:odds-KXNFLGAME-26OCT04ARINYG:T-24h:2026-10-03T17:00:00Z",
+      "target_id": "kalshi:KXNFLGAME-26OCT04ARINYG-ARI|custom|2026-10-03T17:00:04+00:00"
+     },
+     {
+      "mapping": "DERIVED",
+      "odds_target_id": "americanfootball_nfl:odds-KXNFLGAME-26OCT04ARINYG:T-24h:2026-10-03T17:00:00Z",
+      "target_id": "kalshi:KXNFLGAME-26OCT04ARINYG-NYG|custom|2026-10-03T17:00:04+00:00"
+     },
+     {
+      "mapping": "DERIVED",
+      "odds_target_id": "americanfootball_nfl:odds-KXNFLGAME-26OCT04DENSF:T-24h:2026-10-03T20:25:00Z",
+      "target_id": "kalshi:KXNFLGAME-26OCT04DENSF-DEN|custom|2026-10-03T17:00:04+00:00"
+     },
+     {
+      "mapping": "DERIVED",
+      "odds_target_id": "americanfootball_nfl:odds-KXNFLGAME-26OCT04DENSF:T-24h:2026-10-03T20:25:00Z",
+      "target_id": "kalshi:KXNFLGAME-26OCT04DENSF-SF|custom|2026-10-03T17:00:04+00:00"
+     }
+    ],
+    "series": "KXNFLGAME",
+    "state": "ON",
+    "switch": "EDGE_LAB_KALSHI_NFL_CAPTURE",
+    "version": "kalshi-nfl-pairing-v1"
+   },
+   "not_planned": [],
+   "now_utc": "2026-10-03T17:05:00+00:00",
+   "policy_version": "price-observations-v1",
+   "run_id": "run-10",
+   "state": "OK",
+   "targets_known": 0,
+   "targets_planned": 4
+  }
+ ],
+ "plan_t6": [
+  0,
+  {
+   "backfill_rows": 0,
+   "command": "observe plan",
+   "decisions": 0,
+   "ledger": "NOT_GIVEN",
+   "missed": [],
+   "nfl": {
+    "budget": {
+     "expected_gets": 9,
+     "game_horizon_cap": 48,
+     "game_horizons": 3,
+     "settlement_read_cap": 7,
+     "settlement_reads": 0,
+     "week": "nfl-week-of-2026-09-29",
+     "weekly_get_cap": 295,
+     "worst_case_gets": 18,
+     "worst_gets_per_game_horizon": 6
+    },
+    "not_planned": [],
+    "odds_api_calls": 0,
+    "planned": [
+     {
+      "mapping": "LISTED",
+      "odds_target_id": "americanfootball_nfl:odds-KXNFLGAME-26OCT04ARINYG:T-6h:2026-10-04T11:00:00Z",
+      "target_id": "kalshi:KXNFLGAME-26OCT04ARINYG-ARI|custom|2026-10-04T11:00:04+00:00"
+     },
+     {
+      "mapping": "LISTED",
+      "odds_target_id": "americanfootball_nfl:odds-KXNFLGAME-26OCT04ARINYG:T-6h:2026-10-04T11:00:00Z",
+      "target_id": "kalshi:KXNFLGAME-26OCT04ARINYG-NYG|custom|2026-10-04T11:00:04+00:00"
+     }
+    ],
+    "series": "KXNFLGAME",
+    "state": "ON",
+    "switch": "EDGE_LAB_KALSHI_NFL_CAPTURE",
+    "version": "kalshi-nfl-pairing-v1"
+   },
+   "not_planned": [],
+   "now_utc": "2026-10-04T11:05:00+00:00",
+   "policy_version": "price-observations-v1",
+   "run_id": "run-11",
+   "state": "OK",
+   "targets_known": 0,
+   "targets_planned": 2
+  }
+ ],
+ "plan_t60": [
+  0,
+  {
+   "backfill_rows": 0,
+   "command": "observe plan",
+   "decisions": 0,
+   "ledger": "NOT_GIVEN",
+   "missed": [],
+   "nfl": {
+    "budget": {
+     "expected_gets": 12,
+     "game_horizon_cap": 48,
+     "game_horizons": 4,
+     "settlement_read_cap": 7,
+     "settlement_reads": 0,
+     "week": "nfl-week-of-2026-09-29",
+     "weekly_get_cap": 295,
+     "worst_case_gets": 24,
+     "worst_gets_per_game_horizon": 6
+    },
+    "not_planned": [],
+    "odds_api_calls": 0,
+    "planned": [
+     {
+      "mapping": "LISTED",
+      "odds_target_id": "americanfootball_nfl:odds-KXNFLGAME-26OCT04ARINYG:T-60m:2026-10-04T16:00:00Z",
+      "target_id": "kalshi:KXNFLGAME-26OCT04ARINYG-ARI|custom|2026-10-04T16:00:04+00:00"
+     },
+     {
+      "mapping": "LISTED",
+      "odds_target_id": "americanfootball_nfl:odds-KXNFLGAME-26OCT04ARINYG:T-60m:2026-10-04T16:00:00Z",
+      "target_id": "kalshi:KXNFLGAME-26OCT04ARINYG-NYG|custom|2026-10-04T16:00:04+00:00"
+     }
+    ],
+    "series": "KXNFLGAME",
+    "state": "ON",
+    "switch": "EDGE_LAB_KALSHI_NFL_CAPTURE",
+    "version": "kalshi-nfl-pairing-v1"
+   },
+   "not_planned": [],
+   "now_utc": "2026-10-04T16:05:00+00:00",
+   "policy_version": "price-observations-v1",
+   "run_id": "run-12",
+   "state": "OK",
+   "targets_known": 0,
+   "targets_planned": 2
+  }
+ ],
+ "plan_t60b": [
+  0,
+  {
+   "backfill_rows": 0,
+   "command": "observe plan",
+   "decisions": 0,
+   "ledger": "NOT_GIVEN",
+   "missed": [],
+   "nfl": {
+    "budget": {
+     "expected_gets": 15,
+     "game_horizon_cap": 48,
+     "game_horizons": 5,
+     "settlement_read_cap": 7,
+     "settlement_reads": 0,
+     "week": "nfl-week-of-2026-09-29",
+     "weekly_get_cap": 295,
+     "worst_case_gets": 30,
+     "worst_gets_per_game_horizon": 6
+    },
+    "not_planned": [],
+    "odds_api_calls": 0,
+    "planned": [
+     {
+      "mapping": "LISTED",
+      "odds_target_id": "americanfootball_nfl:odds-KXNFLGAME-26OCT04DENSF:T-60m:2026-10-04T19:25:00Z",
+      "target_id": "kalshi:KXNFLGAME-26OCT04DENSF-DEN|custom|2026-10-04T19:25:04+00:00"
+     },
+     {
+      "mapping": "LISTED",
+      "odds_target_id": "americanfootball_nfl:odds-KXNFLGAME-26OCT04DENSF:T-60m:2026-10-04T19:25:00Z",
+      "target_id": "kalshi:KXNFLGAME-26OCT04DENSF-SF|custom|2026-10-04T19:25:04+00:00"
+     }
+    ],
+    "series": "KXNFLGAME",
+    "state": "ON",
+    "switch": "EDGE_LAB_KALSHI_NFL_CAPTURE",
+    "version": "kalshi-nfl-pairing-v1"
+   },
+   "not_planned": [],
+   "now_utc": "2026-10-04T19:35:00+00:00",
+   "policy_version": "price-observations-v1",
+   "run_id": "run-13",
+   "state": "OK",
+   "targets_known": 0,
+   "targets_planned": 2
+  }
+ ],
+ "rows": {
+  "observations": [
+   {
+    "ask": "0.1400",
+    "ask_size": "30.00",
+    "attempt_id": "run-2:kalshi:KXNFLGAME-26OCT04ARINYG-ARI|custom|2026-10-03T17:00:04+00:00:<attempt>",
+    "bid": "0.1300",
+    "close_label": null,
+    "close_proof_json": null,
+    "close_time_utc": "2026-10-06T17:00:00Z",
+    "collection_status": "CAPTURED",
+    "depth_json": "{\"asks\": [[\"0.1400\", \"30.00\"], [\"0.1500\", \"145.00\"], [\"0.1600\", \"84.00\"], [\"0.1700\", \"61.00\"], [\"0.1800\", \"46.00\"], [\"0.1900\", \"68.00\"], [\"0.2000\", \"83.89\"], [\"0.2100\", \"31.00\"], [\"0.2200\", \"33.00\"], [\"0.2300\", \"25.00\"], [\"0.2400\", \"30.00\"], [\"0.2500\", \"6.00\"], [\"0.2600\", \"7.00\"], [\"0.2700\", \"20.00\"], [\"0.2800\", \"6.00\"], [\"0.2900\", \"39.00\"], [\"0.3000\", \"13.00\"], [\"0.3100\", \"9.00\"], [\"0.3200\", \"9.00\"], [\"0.3300\", \"10.00\"], [\"0.3400\", \"11.00\"], [\"0.3500\", \"11.96\"], [\"0.3600\", \"1.00\"], [\"0.3700\", \"5.00\"], [\"0.4000\", \"5.00\"], [\"0.4200\", \"35.00\"], [\"0.4300\", \"57.00\"], [\"0.4400\", \"3.00\"], [\"0.4500\", \"14.00\"], [\"0.4700\", \"42.00\"], [\"0.4800\", \"5.00\"], [\"0.5000\", \"15.00\"], [\"0.5100\", \"8.00\"], [\"0.5200\", \"74.00\"], [\"0.5300\", \"749.00\"], [\"0.5400\", \"21.00\"], [\"0.5600\", \"67.76\"], [\"0.5700\", \"130.00\"], [\"0.5800\", \"32.76\"], [\"0.5900\", \"32.00\"], [\"0.6000\", \"112.00\"], [\"0.6100\", \"1.53\"], [\"0.6200\", \"300.00\"], [\"0.6300\", \"32.00\"], [\"0.6500\", \"101.53\"], [\"0.6700\", \"750.00\"], [\"0.7000\", \"100.00\"], [\"0.7400\", \"100.00\"], [\"0.7800\", \"25.00\"], [\"0.8200\", \"100.00\"], [\"0.8800\", \"72.00\"], [\"0.8900\", \"100.00\"], [\"0.9200\", \"30.00\"], [\"0.9400\", \"100.00\"], [\"0.9500\", \"45.00\"], [\"0.9600\", \"20.00\"], [\"0.9700\", \"162.00\"], [\"0.9800\", \"82.00\"], [\"0.9900\", \"771.60\"]], \"depth_limit\": 100, \"truncated\": false}",
+    "event_id": "kalshi:KXNFLGAME-26OCT04ARINYG",
+    "freshness": "fresh",
+    "id": 1,
+    "market_id": "kalshi:KXNFLGAME-26OCT04ARINYG-ARI",
+    "market_status": "active",
+    "miss_reason": null,
+    "native_market_id": "KXNFLGAME-26OCT04ARINYG-ARI",
+    "observed_at_utc": "2026-10-03T17:05:20.600000+00:00",
+    "phase": "custom",
+    "policy_version": "price-observations-v1",
+    "price_grid_json": "{\"ranges\": [[\"0.0000\", \"1.0000\", \"0.0100\"]], \"source\": \"kalshi price_ranges (linear_cent)\"}",
+    "recorded_at_utc": "2026-10-03T17:05:20.600000+00:00",
+    "rules_sha256": "e77154c60047cf0a1214e45c21acaed129c2d18c433c9b9e822b4e5da66c3d8f",
+    "run_id": "run-2",
+    "side": "YES",
+    "snapshot_id": 4,
+    "source_sha256": "903434e295b153212c6ef035a92132fca0c95b5af71ff2e4fb7d79830b662cf8",
+    "source_timestamp_utc": null,
+    "target_id": "kalshi:KXNFLGAME-26OCT04ARINYG-ARI|custom|2026-10-03T17:00:04+00:00",
+    "target_utc": "2026-10-03T17:00:04+00:00",
+    "venue": "kalshi"
+   },
+   {
+    "ask": "0.8700",
+    "ask_size": "161.43",
+    "attempt_id": "run-2:kalshi:KXNFLGAME-26OCT04ARINYG-ARI|custom|2026-10-03T17:00:04+00:00:<attempt>",
+    "bid": "0.8600",
+    "close_label": null,
+    "close_proof_json": null,
+    "close_time_utc": "2026-10-06T17:00:00Z",
+    "collection_status": "CAPTURED",
+    "depth_json": "{\"asks\": [[\"0.8700\", \"161.43\"], [\"0.8800\", \"400.00\"], [\"0.8900\", \"71.00\"], [\"0.9000\", \"152.40\"], [\"0.9100\", \"67.00\"], [\"0.9200\", \"19.76\"], [\"0.9300\", \"162.00\"], [\"0.9400\", \"69.09\"], [\"0.9500\", \"133.59\"], [\"0.9600\", \"152.00\"], [\"0.9700\", \"712.96\"], [\"0.9800\", \"609.00\"], [\"0.9900\", \"1709.00\"]], \"depth_limit\": 100, \"truncated\": false}",
+    "event_id": "kalshi:KXNFLGAME-26OCT04ARINYG",
+    "freshness": "fresh",
+    "id": 2,
+    "market_id": "kalshi:KXNFLGAME-26OCT04ARINYG-ARI",
+    "market_status": "active",
+    "miss_reason": null,
+    "native_market_id": "KXNFLGAME-26OCT04ARINYG-ARI",
+    "observed_at_utc": "2026-10-03T17:05:20.600000+00:00",
+    "phase": "custom",
+    "policy_version": "price-observations-v1",
+    "price_grid_json": "{\"ranges\": [[\"0.0000\", \"1.0000\", \"0.0100\"]], \"source\": \"kalshi price_ranges (linear_cent)\"}",
+    "recorded_at_utc": "2026-10-03T17:05:20.600000+00:00",
+    "rules_sha256": "e77154c60047cf0a1214e45c21acaed129c2d18c433c9b9e822b4e5da66c3d8f",
+    "run_id": "run-2",
+    "side": "NO",
+    "snapshot_id": 4,
+    "source_sha256": "903434e295b153212c6ef035a92132fca0c95b5af71ff2e4fb7d79830b662cf8",
+    "source_timestamp_utc": null,
+    "target_id": "kalshi:KXNFLGAME-26OCT04ARINYG-ARI|custom|2026-10-03T17:00:04+00:00",
+    "target_utc": "2026-10-03T17:00:04+00:00",
+    "venue": "kalshi"
+   },
+   {
+    "ask": "0.1400",
+    "ask_size": "30.00",
+    "attempt_id": "run-2:kalshi:KXNFLGAME-26OCT04ARINYG-NYG|custom|2026-10-03T17:00:04+00:00:<attempt>",
+    "bid": "0.1300",
+    "close_label": null,
+    "close_proof_json": null,
+    "close_time_utc": "2026-10-06T17:00:00Z",
+    "collection_status": "CAPTURED",
+    "depth_json": "{\"asks\": [[\"0.1400\", \"30.00\"], [\"0.1500\", \"145.00\"], [\"0.1600\", \"84.00\"], [\"0.1700\", \"61.00\"], [\"0.1800\", \"46.00\"], [\"0.1900\", \"68.00\"], [\"0.2000\", \"83.89\"], [\"0.2100\", \"31.00\"], [\"0.2200\", \"33.00\"], [\"0.2300\", \"25.00\"], [\"0.2400\", \"30.00\"], [\"0.2500\", \"6.00\"], [\"0.2600\", \"7.00\"], [\"0.2700\", \"20.00\"], [\"0.2800\", \"6.00\"], [\"0.2900\", \"39.00\"], [\"0.3000\", \"13.00\"], [\"0.3100\", \"9.00\"], [\"0.3200\", \"9.00\"], [\"0.3300\", \"10.00\"], [\"0.3400\", \"11.00\"], [\"0.3500\", \"11.96\"], [\"0.3600\", \"1.00\"], [\"0.3700\", \"5.00\"], [\"0.4000\", \"5.00\"], [\"0.4200\", \"35.00\"], [\"0.4300\", \"57.00\"], [\"0.4400\", \"3.00\"], [\"0.4500\", \"14.00\"], [\"0.4700\", \"42.00\"], [\"0.4800\", \"5.00\"], [\"0.5000\", \"15.00\"], [\"0.5100\", \"8.00\"], [\"0.5200\", \"74.00\"], [\"0.5300\", \"749.00\"], [\"0.5400\", \"21.00\"], [\"0.5600\", \"67.76\"], [\"0.5700\", \"130.00\"], [\"0.5800\", \"32.76\"], [\"0.5900\", \"32.00\"], [\"0.6000\", \"112.00\"], [\"0.6100\", \"1.53\"], [\"0.6200\", \"300.00\"], [\"0.6300\", \"32.00\"], [\"0.6500\", \"101.53\"], [\"0.6700\", \"750.00\"], [\"0.7000\", \"100.00\"], [\"0.7400\", \"100.00\"], [\"0.7800\", \"25.00\"], [\"0.8200\", \"100.00\"], [\"0.8800\", \"72.00\"], [\"0.8900\", \"100.00\"], [\"0.9200\", \"30.00\"], [\"0.9400\", \"100.00\"], [\"0.9500\", \"45.00\"], [\"0.9600\", \"20.00\"], [\"0.9700\", \"162.00\"], [\"0.9800\", \"82.00\"], [\"0.9900\", \"771.60\"]], \"depth_limit\": 100, \"truncated\": false}",
+    "event_id": "kalshi:KXNFLGAME-26OCT04ARINYG",
+    "freshness": "fresh",
+    "id": 3,
+    "market_id": "kalshi:KXNFLGAME-26OCT04ARINYG-NYG",
+    "market_status": "active",
+    "miss_reason": null,
+    "native_market_id": "KXNFLGAME-26OCT04ARINYG-NYG",
+    "observed_at_utc": "2026-10-03T17:05:20.900000+00:00",
+    "phase": "custom",
+    "policy_version": "price-observations-v1",
+    "price_grid_json": "{\"ranges\": [[\"0.0000\", \"1.0000\", \"0.0100\"]], \"source\": \"kalshi price_ranges (linear_cent)\"}",
+    "recorded_at_utc": "2026-10-03T17:05:20.900000+00:00",
+    "rules_sha256": "169c870b9383dcc1c85f0edd0a9d58e2f6c98a17c62a39efa777bcb1069fe667",
+    "run_id": "run-2",
+    "side": "YES",
+    "snapshot_id": 5,
+    "source_sha256": "903434e295b153212c6ef035a92132fca0c95b5af71ff2e4fb7d79830b662cf8",
+    "source_timestamp_utc": null,
+    "target_id": "kalshi:KXNFLGAME-26OCT04ARINYG-NYG|custom|2026-10-03T17:00:04+00:00",
+    "target_utc": "2026-10-03T17:00:04+00:00",
+    "venue": "kalshi"
+   },
+   {
+    "ask": "0.8700",
+    "ask_size": "161.43",
+    "attempt_id": "run-2:kalshi:KXNFLGAME-26OCT04ARINYG-NYG|custom|2026-10-03T17:00:04+00:00:<attempt>",
+    "bid": "0.8600",
+    "close_label": null,
+    "close_proof_json": null,
+    "close_time_utc": "2026-10-06T17:00:00Z",
+    "collection_status": "CAPTURED",
+    "depth_json": "{\"asks\": [[\"0.8700\", \"161.43\"], [\"0.8800\", \"400.00\"], [\"0.8900\", \"71.00\"], [\"0.9000\", \"152.40\"], [\"0.9100\", \"67.00\"], [\"0.9200\", \"19.76\"], [\"0.9300\", \"162.00\"], [\"0.9400\", \"69.09\"], [\"0.9500\", \"133.59\"], [\"0.9600\", \"152.00\"], [\"0.9700\", \"712.96\"], [\"0.9800\", \"609.00\"], [\"0.9900\", \"1709.00\"]], \"depth_limit\": 100, \"truncated\": false}",
+    "event_id": "kalshi:KXNFLGAME-26OCT04ARINYG",
+    "freshness": "fresh",
+    "id": 4,
+    "market_id": "kalshi:KXNFLGAME-26OCT04ARINYG-NYG",
+    "market_status": "active",
+    "miss_reason": null,
+    "native_market_id": "KXNFLGAME-26OCT04ARINYG-NYG",
+    "observed_at_utc": "2026-10-03T17:05:20.900000+00:00",
+    "phase": "custom",
+    "policy_version": "price-observations-v1",
+    "price_grid_json": "{\"ranges\": [[\"0.0000\", \"1.0000\", \"0.0100\"]], \"source\": \"kalshi price_ranges (linear_cent)\"}",
+    "recorded_at_utc": "2026-10-03T17:05:20.900000+00:00",
+    "rules_sha256": "169c870b9383dcc1c85f0edd0a9d58e2f6c98a17c62a39efa777bcb1069fe667",
+    "run_id": "run-2",
+    "side": "NO",
+    "snapshot_id": 5,
+    "source_sha256": "903434e295b153212c6ef035a92132fca0c95b5af71ff2e4fb7d79830b662cf8",
+    "source_timestamp_utc": null,
+    "target_id": "kalshi:KXNFLGAME-26OCT04ARINYG-NYG|custom|2026-10-03T17:00:04+00:00",
+    "target_utc": "2026-10-03T17:00:04+00:00",
+    "venue": "kalshi"
+   },
+   {
+    "ask": "0.1400",
+    "ask_size": "30.00",
+    "attempt_id": "run-2:kalshi:KXNFLGAME-26OCT04DENSF-DEN|custom|2026-10-03T17:00:04+00:00:<attempt>",
+    "bid": "0.1300",
+    "close_label": null,
+    "close_proof_json": null,
+    "close_time_utc": "2026-10-06T20:25:00Z",
+    "collection_status": "CAPTURED",
+    "depth_json": "{\"asks\": [[\"0.1400\", \"30.00\"], [\"0.1500\", \"145.00\"], [\"0.1600\", \"84.00\"], [\"0.1700\", \"61.00\"], [\"0.1800\", \"46.00\"], [\"0.1900\", \"68.00\"], [\"0.2000\", \"83.89\"], [\"0.2100\", \"31.00\"], [\"0.2200\", \"33.00\"], [\"0.2300\", \"25.00\"], [\"0.2400\", \"30.00\"], [\"0.2500\", \"6.00\"], [\"0.2600\", \"7.00\"], [\"0.2700\", \"20.00\"], [\"0.2800\", \"6.00\"], [\"0.2900\", \"39.00\"], [\"0.3000\", \"13.00\"], [\"0.3100\", \"9.00\"], [\"0.3200\", \"9.00\"], [\"0.3300\", \"10.00\"], [\"0.3400\", \"11.00\"], [\"0.3500\", \"11.96\"], [\"0.3600\", \"1.00\"], [\"0.3700\", \"5.00\"], [\"0.4000\", \"5.00\"], [\"0.4200\", \"35.00\"], [\"0.4300\", \"57.00\"], [\"0.4400\", \"3.00\"], [\"0.4500\", \"14.00\"], [\"0.4700\", \"42.00\"], [\"0.4800\", \"5.00\"], [\"0.5000\", \"15.00\"], [\"0.5100\", \"8.00\"], [\"0.5200\", \"74.00\"], [\"0.5300\", \"749.00\"], [\"0.5400\", \"21.00\"], [\"0.5600\", \"67.76\"], [\"0.5700\", \"130.00\"], [\"0.5800\", \"32.76\"], [\"0.5900\", \"32.00\"], [\"0.6000\", \"112.00\"], [\"0.6100\", \"1.53\"], [\"0.6200\", \"300.00\"], [\"0.6300\", \"32.00\"], [\"0.6500\", \"101.53\"], [\"0.6700\", \"750.00\"], [\"0.7000\", \"100.00\"], [\"0.7400\", \"100.00\"], [\"0.7800\", \"25.00\"], [\"0.8200\", \"100.00\"], [\"0.8800\", \"72.00\"], [\"0.8900\", \"100.00\"], [\"0.9200\", \"30.00\"], [\"0.9400\", \"100.00\"], [\"0.9500\", \"45.00\"], [\"0.9600\", \"20.00\"], [\"0.9700\", \"162.00\"], [\"0.9800\", \"82.00\"], [\"0.9900\", \"771.60\"]], \"depth_limit\": 100, \"truncated\": false}",
+    "event_id": "kalshi:KXNFLGAME-26OCT04DENSF",
+    "freshness": "fresh",
+    "id": 5,
+    "market_id": "kalshi:KXNFLGAME-26OCT04DENSF-DEN",
+    "market_status": "active",
+    "miss_reason": null,
+    "native_market_id": "KXNFLGAME-26OCT04DENSF-DEN",
+    "observed_at_utc": "2026-10-03T17:05:21.500000+00:00",
+    "phase": "custom",
+    "policy_version": "price-observations-v1",
+    "price_grid_json": "{\"ranges\": [[\"0.0000\", \"1.0000\", \"0.0100\"]], \"source\": \"kalshi price_ranges (linear_cent)\"}",
+    "recorded_at_utc": "2026-10-03T17:05:21.500000+00:00",
+    "rules_sha256": "169d2a184cad0c5d32a3b37e5fcea181574418820306e8f45d8cfa3ff8730cd8",
+    "run_id": "run-2",
+    "side": "YES",
+    "snapshot_id": 7,
+    "source_sha256": "903434e295b153212c6ef035a92132fca0c95b5af71ff2e4fb7d79830b662cf8",
+    "source_timestamp_utc": null,
+    "target_id": "kalshi:KXNFLGAME-26OCT04DENSF-DEN|custom|2026-10-03T17:00:04+00:00",
+    "target_utc": "2026-10-03T17:00:04+00:00",
+    "venue": "kalshi"
+   },
+   {
+    "ask": "0.8700",
+    "ask_size": "161.43",
+    "attempt_id": "run-2:kalshi:KXNFLGAME-26OCT04DENSF-DEN|custom|2026-10-03T17:00:04+00:00:<attempt>",
+    "bid": "0.8600",
+    "close_label": null,
+    "close_proof_json": null,
+    "close_time_utc": "2026-10-06T20:25:00Z",
+    "collection_status": "CAPTURED",
+    "depth_json": "{\"asks\": [[\"0.8700\", \"161.43\"], [\"0.8800\", \"400.00\"], [\"0.8900\", \"71.00\"], [\"0.9000\", \"152.40\"], [\"0.9100\", \"67.00\"], [\"0.9200\", \"19.76\"], [\"0.9300\", \"162.00\"], [\"0.9400\", \"69.09\"], [\"0.9500\", \"133.59\"], [\"0.9600\", \"152.00\"], [\"0.9700\", \"712.96\"], [\"0.9800\", \"609.00\"], [\"0.9900\", \"1709.00\"]], \"depth_limit\": 100, \"truncated\": false}",
+    "event_id": "kalshi:KXNFLGAME-26OCT04DENSF",
+    "freshness": "fresh",
+    "id": 6,
+    "market_id": "kalshi:KXNFLGAME-26OCT04DENSF-DEN",
+    "market_status": "active",
+    "miss_reason": null,
+    "native_market_id": "KXNFLGAME-26OCT04DENSF-DEN",
+    "observed_at_utc": "2026-10-03T17:05:21.500000+00:00",
+    "phase": "custom",
+    "policy_version": "price-observations-v1",
+    "price_grid_json": "{\"ranges\": [[\"0.0000\", \"1.0000\", \"0.0100\"]], \"source\": \"kalshi price_ranges (linear_cent)\"}",
+    "recorded_at_utc": "2026-10-03T17:05:21.500000+00:00",
+    "rules_sha256": "169d2a184cad0c5d32a3b37e5fcea181574418820306e8f45d8cfa3ff8730cd8",
+    "run_id": "run-2",
+    "side": "NO",
+    "snapshot_id": 7,
+    "source_sha256": "903434e295b153212c6ef035a92132fca0c95b5af71ff2e4fb7d79830b662cf8",
+    "source_timestamp_utc": null,
+    "target_id": "kalshi:KXNFLGAME-26OCT04DENSF-DEN|custom|2026-10-03T17:00:04+00:00",
+    "target_utc": "2026-10-03T17:00:04+00:00",
+    "venue": "kalshi"
+   },
+   {
+    "ask": "0.1400",
+    "ask_size": "30.00",
+    "attempt_id": "run-2:kalshi:KXNFLGAME-26OCT04DENSF-SF|custom|2026-10-03T17:00:04+00:00:<attempt>",
+    "bid": "0.1300",
+    "close_label": null,
+    "close_proof_json": null,
+    "close_time_utc": "2026-10-06T20:25:00Z",
+    "collection_status": "CAPTURED",
+    "depth_json": "{\"asks\": [[\"0.1400\", \"30.00\"], [\"0.1500\", \"145.00\"], [\"0.1600\", \"84.00\"], [\"0.1700\", \"61.00\"], [\"0.1800\", \"46.00\"], [\"0.1900\", \"68.00\"], [\"0.2000\", \"83.89\"], [\"0.2100\", \"31.00\"], [\"0.2200\", \"33.00\"], [\"0.2300\", \"25.00\"], [\"0.2400\", \"30.00\"], [\"0.2500\", \"6.00\"], [\"0.2600\", \"7.00\"], [\"0.2700\", \"20.00\"], [\"0.2800\", \"6.00\"], [\"0.2900\", \"39.00\"], [\"0.3000\", \"13.00\"], [\"0.3100\", \"9.00\"], [\"0.3200\", \"9.00\"], [\"0.3300\", \"10.00\"], [\"0.3400\", \"11.00\"], [\"0.3500\", \"11.96\"], [\"0.3600\", \"1.00\"], [\"0.3700\", \"5.00\"], [\"0.4000\", \"5.00\"], [\"0.4200\", \"35.00\"], [\"0.4300\", \"57.00\"], [\"0.4400\", \"3.00\"], [\"0.4500\", \"14.00\"], [\"0.4700\", \"42.00\"], [\"0.4800\", \"5.00\"], [\"0.5000\", \"15.00\"], [\"0.5100\", \"8.00\"], [\"0.5200\", \"74.00\"], [\"0.5300\", \"749.00\"], [\"0.5400\", \"21.00\"], [\"0.5600\", \"67.76\"], [\"0.5700\", \"130.00\"], [\"0.5800\", \"32.76\"], [\"0.5900\", \"32.00\"], [\"0.6000\", \"112.00\"], [\"0.6100\", \"1.53\"], [\"0.6200\", \"300.00\"], [\"0.6300\", \"32.00\"], [\"0.6500\", \"101.53\"], [\"0.6700\", \"750.00\"], [\"0.7000\", \"100.00\"], [\"0.7400\", \"100.00\"], [\"0.7800\", \"25.00\"], [\"0.8200\", \"100.00\"], [\"0.8800\", \"72.00\"], [\"0.8900\", \"100.00\"], [\"0.9200\", \"30.00\"], [\"0.9400\", \"100.00\"], [\"0.9500\", \"45.00\"], [\"0.9600\", \"20.00\"], [\"0.9700\", \"162.00\"], [\"0.9800\", \"82.00\"], [\"0.9900\", \"771.60\"]], \"depth_limit\": 100, \"truncated\": false}",
+    "event_id": "kalshi:KXNFLGAME-26OCT04DENSF",
+    "freshness": "fresh",
+    "id": 7,
+    "market_id": "kalshi:KXNFLGAME-26OCT04DENSF-SF",
+    "market_status": "active",
+    "miss_reason": null,
+    "native_market_id": "KXNFLGAME-26OCT04DENSF-SF",
+    "observed_at_utc": "2026-10-03T17:05:21.800000+00:00",
+    "phase": "custom",
+    "policy_version": "price-observations-v1",
+    "price_grid_json": "{\"ranges\": [[\"0.0000\", \"1.0000\", \"0.0100\"]], \"source\": \"kalshi price_ranges (linear_cent)\"}",
+    "recorded_at_utc": "2026-10-03T17:05:21.800000+00:00",
+    "rules_sha256": "61105e2013696f5711eeff70a6ad7b1f6bb39f2d5e517565083a339c6b03a37a",
+    "run_id": "run-2",
+    "side": "YES",
+    "snapshot_id": 8,
+    "source_sha256": "903434e295b153212c6ef035a92132fca0c95b5af71ff2e4fb7d79830b662cf8",
+    "source_timestamp_utc": null,
+    "target_id": "kalshi:KXNFLGAME-26OCT04DENSF-SF|custom|2026-10-03T17:00:04+00:00",
+    "target_utc": "2026-10-03T17:00:04+00:00",
+    "venue": "kalshi"
+   },
+   {
+    "ask": "0.8700",
+    "ask_size": "161.43",
+    "attempt_id": "run-2:kalshi:KXNFLGAME-26OCT04DENSF-SF|custom|2026-10-03T17:00:04+00:00:<attempt>",
+    "bid": "0.8600",
+    "close_label": null,
+    "close_proof_json": null,
+    "close_time_utc": "2026-10-06T20:25:00Z",
+    "collection_status": "CAPTURED",
+    "depth_json": "{\"asks\": [[\"0.8700\", \"161.43\"], [\"0.8800\", \"400.00\"], [\"0.8900\", \"71.00\"], [\"0.9000\", \"152.40\"], [\"0.9100\", \"67.00\"], [\"0.9200\", \"19.76\"], [\"0.9300\", \"162.00\"], [\"0.9400\", \"69.09\"], [\"0.9500\", \"133.59\"], [\"0.9600\", \"152.00\"], [\"0.9700\", \"712.96\"], [\"0.9800\", \"609.00\"], [\"0.9900\", \"1709.00\"]], \"depth_limit\": 100, \"truncated\": false}",
+    "event_id": "kalshi:KXNFLGAME-26OCT04DENSF",
+    "freshness": "fresh",
+    "id": 8,
+    "market_id": "kalshi:KXNFLGAME-26OCT04DENSF-SF",
+    "market_status": "active",
+    "miss_reason": null,
+    "native_market_id": "KXNFLGAME-26OCT04DENSF-SF",
+    "observed_at_utc": "2026-10-03T17:05:21.800000+00:00",
+    "phase": "custom",
+    "policy_version": "price-observations-v1",
+    "price_grid_json": "{\"ranges\": [[\"0.0000\", \"1.0000\", \"0.0100\"]], \"source\": \"kalshi price_ranges (linear_cent)\"}",
+    "recorded_at_utc": "2026-10-03T17:05:21.800000+00:00",
+    "rules_sha256": "61105e2013696f5711eeff70a6ad7b1f6bb39f2d5e517565083a339c6b03a37a",
+    "run_id": "run-2",
+    "side": "NO",
+    "snapshot_id": 8,
+    "source_sha256": "903434e295b153212c6ef035a92132fca0c95b5af71ff2e4fb7d79830b662cf8",
+    "source_timestamp_utc": null,
+    "target_id": "kalshi:KXNFLGAME-26OCT04DENSF-SF|custom|2026-10-03T17:00:04+00:00",
+    "target_utc": "2026-10-03T17:00:04+00:00",
+    "venue": "kalshi"
+   },
+   {
+    "ask": null,
+    "ask_size": null,
+    "attempt_id": "run-4:kalshi:KXNFLGAME-26OCT04ARINYG-ARI|custom|2026-10-04T11:00:04+00:00:<attempt>",
+    "bid": null,
+    "close_label": null,
+    "close_proof_json": null,
+    "close_time_utc": null,
+    "collection_status": "FAILED",
+    "depth_json": null,
+    "event_id": "kalshi:KXNFLGAME-26OCT04ARINYG",
+    "freshness": "unknown",
+    "id": 9,
+    "market_id": "kalshi:KXNFLGAME-26OCT04ARINYG-ARI",
+    "market_status": null,
+    "miss_reason": "LISTING_FAILED: HttpFetchError: HTTP 503",
+    "native_market_id": "KXNFLGAME-26OCT04ARINYG-ARI",
+    "observed_at_utc": null,
+    "phase": "custom",
+    "policy_version": "price-observations-v1",
+    "price_grid_json": null,
+    "recorded_at_utc": "2026-10-04T11:05:20.300000+00:00",
+    "rules_sha256": null,
+    "run_id": "run-4",
+    "side": null,
+    "snapshot_id": null,
+    "source_sha256": null,
+    "source_timestamp_utc": null,
+    "target_id": "kalshi:KXNFLGAME-26OCT04ARINYG-ARI|custom|2026-10-04T11:00:04+00:00",
+    "target_utc": "2026-10-04T11:00:04+00:00",
+    "venue": "kalshi"
+   },
+   {
+    "ask": null,
+    "ask_size": null,
+    "attempt_id": "run-4:kalshi:KXNFLGAME-26OCT04ARINYG-NYG|custom|2026-10-04T11:00:04+00:00:<attempt>",
+    "bid": null,
+    "close_label": null,
+    "close_proof_json": null,
+    "close_time_utc": null,
+    "collection_status": "FAILED",
+    "depth_json": null,
+    "event_id": "kalshi:KXNFLGAME-26OCT04ARINYG",
+    "freshness": "unknown",
+    "id": 10,
+    "market_id": "kalshi:KXNFLGAME-26OCT04ARINYG-NYG",
+    "market_status": null,
+    "miss_reason": "LISTING_FAILED: HttpFetchError: HTTP 503",
+    "native_market_id": "KXNFLGAME-26OCT04ARINYG-NYG",
+    "observed_at_utc": null,
+    "phase": "custom",
+    "policy_version": "price-observations-v1",
+    "price_grid_json": null,
+    "recorded_at_utc": "2026-10-04T11:05:20.300000+00:00",
+    "rules_sha256": null,
+    "run_id": "run-4",
+    "side": null,
+    "snapshot_id": null,
+    "source_sha256": null,
+    "source_timestamp_utc": null,
+    "target_id": "kalshi:KXNFLGAME-26OCT04ARINYG-NYG|custom|2026-10-04T11:00:04+00:00",
+    "target_utc": "2026-10-04T11:00:04+00:00",
+    "venue": "kalshi"
+   },
+   {
+    "ask": "0.1400",
+    "ask_size": "30.00",
+    "attempt_id": "run-5:kalshi:KXNFLGAME-26OCT04ARINYG-ARI|custom|2026-10-04T11:00:04+00:00:<attempt>",
+    "bid": "0.1300",
+    "close_label": null,
+    "close_proof_json": null,
+    "close_time_utc": "2026-10-06T17:00:00Z",
+    "collection_status": "CAPTURED",
+    "depth_json": "{\"asks\": [[\"0.1400\", \"30.00\"], [\"0.1500\", \"145.00\"], [\"0.1600\", \"84.00\"], [\"0.1700\", \"61.00\"], [\"0.1800\", \"46.00\"], [\"0.1900\", \"68.00\"], [\"0.2000\", \"83.89\"], [\"0.2100\", \"31.00\"], [\"0.2200\", \"33.00\"], [\"0.2300\", \"25.00\"], [\"0.2400\", \"30.00\"], [\"0.2500\", \"6.00\"], [\"0.2600\", \"7.00\"], [\"0.2700\", \"20.00\"], [\"0.2800\", \"6.00\"], [\"0.2900\", \"39.00\"], [\"0.3000\", \"13.00\"], [\"0.3100\", \"9.00\"], [\"0.3200\", \"9.00\"], [\"0.3300\", \"10.00\"], [\"0.3400\", \"11.00\"], [\"0.3500\", \"11.96\"], [\"0.3600\", \"1.00\"], [\"0.3700\", \"5.00\"], [\"0.4000\", \"5.00\"], [\"0.4200\", \"35.00\"], [\"0.4300\", \"57.00\"], [\"0.4400\", \"3.00\"], [\"0.4500\", \"14.00\"], [\"0.4700\", \"42.00\"], [\"0.4800\", \"5.00\"], [\"0.5000\", \"15.00\"], [\"0.5100\", \"8.00\"], [\"0.5200\", \"74.00\"], [\"0.5300\", \"749.00\"], [\"0.5400\", \"21.00\"], [\"0.5600\", \"67.76\"], [\"0.5700\", \"130.00\"], [\"0.5800\", \"32.76\"], [\"0.5900\", \"32.00\"], [\"0.6000\", \"112.00\"], [\"0.6100\", \"1.53\"], [\"0.6200\", \"300.00\"], [\"0.6300\", \"32.00\"], [\"0.6500\", \"101.53\"], [\"0.6700\", \"750.00\"], [\"0.7000\", \"100.00\"], [\"0.7400\", \"100.00\"], [\"0.7800\", \"25.00\"], [\"0.8200\", \"100.00\"], [\"0.8800\", \"72.00\"], [\"0.8900\", \"100.00\"], [\"0.9200\", \"30.00\"], [\"0.9400\", \"100.00\"], [\"0.9500\", \"45.00\"], [\"0.9600\", \"20.00\"], [\"0.9700\", \"162.00\"], [\"0.9800\", \"82.00\"], [\"0.9900\", \"771.60\"]], \"depth_limit\": 100, \"truncated\": false}",
+    "event_id": "kalshi:KXNFLGAME-26OCT04ARINYG",
+    "freshness": "fresh",
+    "id": 11,
+    "market_id": "kalshi:KXNFLGAME-26OCT04ARINYG-ARI",
+    "market_status": "active",
+    "miss_reason": null,
+    "native_market_id": "KXNFLGAME-26OCT04ARINYG-ARI",
+    "observed_at_utc": "2026-10-04T11:20:20.600000+00:00",
+    "phase": "custom",
+    "policy_version": "price-observations-v1",
+    "price_grid_json": "{\"ranges\": [[\"0.0000\", \"1.0000\", \"0.0100\"]], \"source\": \"kalshi price_ranges (linear_cent)\"}",
+    "recorded_at_utc": "2026-10-04T11:20:20.600000+00:00",
+    "rules_sha256": "e77154c60047cf0a1214e45c21acaed129c2d18c433c9b9e822b4e5da66c3d8f",
+    "run_id": "run-5",
+    "side": "YES",
+    "snapshot_id": 11,
+    "source_sha256": "903434e295b153212c6ef035a92132fca0c95b5af71ff2e4fb7d79830b662cf8",
+    "source_timestamp_utc": null,
+    "target_id": "kalshi:KXNFLGAME-26OCT04ARINYG-ARI|custom|2026-10-04T11:00:04+00:00",
+    "target_utc": "2026-10-04T11:00:04+00:00",
+    "venue": "kalshi"
+   },
+   {
+    "ask": "0.8700",
+    "ask_size": "161.43",
+    "attempt_id": "run-5:kalshi:KXNFLGAME-26OCT04ARINYG-ARI|custom|2026-10-04T11:00:04+00:00:<attempt>",
+    "bid": "0.8600",
+    "close_label": null,
+    "close_proof_json": null,
+    "close_time_utc": "2026-10-06T17:00:00Z",
+    "collection_status": "CAPTURED",
+    "depth_json": "{\"asks\": [[\"0.8700\", \"161.43\"], [\"0.8800\", \"400.00\"], [\"0.8900\", \"71.00\"], [\"0.9000\", \"152.40\"], [\"0.9100\", \"67.00\"], [\"0.9200\", \"19.76\"], [\"0.9300\", \"162.00\"], [\"0.9400\", \"69.09\"], [\"0.9500\", \"133.59\"], [\"0.9600\", \"152.00\"], [\"0.9700\", \"712.96\"], [\"0.9800\", \"609.00\"], [\"0.9900\", \"1709.00\"]], \"depth_limit\": 100, \"truncated\": false}",
+    "event_id": "kalshi:KXNFLGAME-26OCT04ARINYG",
+    "freshness": "fresh",
+    "id": 12,
+    "market_id": "kalshi:KXNFLGAME-26OCT04ARINYG-ARI",
+    "market_status": "active",
+    "miss_reason": null,
+    "native_market_id": "KXNFLGAME-26OCT04ARINYG-ARI",
+    "observed_at_utc": "2026-10-04T11:20:20.600000+00:00",
+    "phase": "custom",
+    "policy_version": "price-observations-v1",
+    "price_grid_json": "{\"ranges\": [[\"0.0000\", \"1.0000\", \"0.0100\"]], \"source\": \"kalshi price_ranges (linear_cent)\"}",
+    "recorded_at_utc": "2026-10-04T11:20:20.600000+00:00",
+    "rules_sha256": "e77154c60047cf0a1214e45c21acaed129c2d18c433c9b9e822b4e5da66c3d8f",
+    "run_id": "run-5",
+    "side": "NO",
+    "snapshot_id": 11,
+    "source_sha256": "903434e295b153212c6ef035a92132fca0c95b5af71ff2e4fb7d79830b662cf8",
+    "source_timestamp_utc": null,
+    "target_id": "kalshi:KXNFLGAME-26OCT04ARINYG-ARI|custom|2026-10-04T11:00:04+00:00",
+    "target_utc": "2026-10-04T11:00:04+00:00",
+    "venue": "kalshi"
+   },
+   {
+    "ask": "0.1400",
+    "ask_size": "30.00",
+    "attempt_id": "run-5:kalshi:KXNFLGAME-26OCT04ARINYG-NYG|custom|2026-10-04T11:00:04+00:00:<attempt>",
+    "bid": "0.1300",
+    "close_label": null,
+    "close_proof_json": null,
+    "close_time_utc": "2026-10-06T17:00:00Z",
+    "collection_status": "CAPTURED",
+    "depth_json": "{\"asks\": [[\"0.1400\", \"30.00\"], [\"0.1500\", \"145.00\"], [\"0.1600\", \"84.00\"], [\"0.1700\", \"61.00\"], [\"0.1800\", \"46.00\"], [\"0.1900\", \"68.00\"], [\"0.2000\", \"83.89\"], [\"0.2100\", \"31.00\"], [\"0.2200\", \"33.00\"], [\"0.2300\", \"25.00\"], [\"0.2400\", \"30.00\"], [\"0.2500\", \"6.00\"], [\"0.2600\", \"7.00\"], [\"0.2700\", \"20.00\"], [\"0.2800\", \"6.00\"], [\"0.2900\", \"39.00\"], [\"0.3000\", \"13.00\"], [\"0.3100\", \"9.00\"], [\"0.3200\", \"9.00\"], [\"0.3300\", \"10.00\"], [\"0.3400\", \"11.00\"], [\"0.3500\", \"11.96\"], [\"0.3600\", \"1.00\"], [\"0.3700\", \"5.00\"], [\"0.4000\", \"5.00\"], [\"0.4200\", \"35.00\"], [\"0.4300\", \"57.00\"], [\"0.4400\", \"3.00\"], [\"0.4500\", \"14.00\"], [\"0.4700\", \"42.00\"], [\"0.4800\", \"5.00\"], [\"0.5000\", \"15.00\"], [\"0.5100\", \"8.00\"], [\"0.5200\", \"74.00\"], [\"0.5300\", \"749.00\"], [\"0.5400\", \"21.00\"], [\"0.5600\", \"67.76\"], [\"0.5700\", \"130.00\"], [\"0.5800\", \"32.76\"], [\"0.5900\", \"32.00\"], [\"0.6000\", \"112.00\"], [\"0.6100\", \"1.53\"], [\"0.6200\", \"300.00\"], [\"0.6300\", \"32.00\"], [\"0.6500\", \"101.53\"], [\"0.6700\", \"750.00\"], [\"0.7000\", \"100.00\"], [\"0.7400\", \"100.00\"], [\"0.7800\", \"25.00\"], [\"0.8200\", \"100.00\"], [\"0.8800\", \"72.00\"], [\"0.8900\", \"100.00\"], [\"0.9200\", \"30.00\"], [\"0.9400\", \"100.00\"], [\"0.9500\", \"45.00\"], [\"0.9600\", \"20.00\"], [\"0.9700\", \"162.00\"], [\"0.9800\", \"82.00\"], [\"0.9900\", \"771.60\"]], \"depth_limit\": 100, \"truncated\": false}",
+    "event_id": "kalshi:KXNFLGAME-26OCT04ARINYG",
+    "freshness": "fresh",
+    "id": 13,
+    "market_id": "kalshi:KXNFLGAME-26OCT04ARINYG-NYG",
+    "market_status": "active",
+    "miss_reason": null,
+    "native_market_id": "KXNFLGAME-26OCT04ARINYG-NYG",
+    "observed_at_utc": "2026-10-04T11:20:20.900000+00:00",
+    "phase": "custom",
+    "policy_version": "price-observations-v1",
+    "price_grid_json": "{\"ranges\": [[\"0.0000\", \"1.0000\", \"0.0100\"]], \"source\": \"kalshi price_ranges (linear_cent)\"}",
+    "recorded_at_utc": "2026-10-04T11:20:20.900000+00:00",
+    "rules_sha256": "169c870b9383dcc1c85f0edd0a9d58e2f6c98a17c62a39efa777bcb1069fe667",
+    "run_id": "run-5",
+    "side": "YES",
+    "snapshot_id": 12,
+    "source_sha256": "903434e295b153212c6ef035a92132fca0c95b5af71ff2e4fb7d79830b662cf8",
+    "source_timestamp_utc": null,
+    "target_id": "kalshi:KXNFLGAME-26OCT04ARINYG-NYG|custom|2026-10-04T11:00:04+00:00",
+    "target_utc": "2026-10-04T11:00:04+00:00",
+    "venue": "kalshi"
+   },
+   {
+    "ask": "0.8700",
+    "ask_size": "161.43",
+    "attempt_id": "run-5:kalshi:KXNFLGAME-26OCT04ARINYG-NYG|custom|2026-10-04T11:00:04+00:00:<attempt>",
+    "bid": "0.8600",
+    "close_label": null,
+    "close_proof_json": null,
+    "close_time_utc": "2026-10-06T17:00:00Z",
+    "collection_status": "CAPTURED",
+    "depth_json": "{\"asks\": [[\"0.8700\", \"161.43\"], [\"0.8800\", \"400.00\"], [\"0.8900\", \"71.00\"], [\"0.9000\", \"152.40\"], [\"0.9100\", \"67.00\"], [\"0.9200\", \"19.76\"], [\"0.9300\", \"162.00\"], [\"0.9400\", \"69.09\"], [\"0.9500\", \"133.59\"], [\"0.9600\", \"152.00\"], [\"0.9700\", \"712.96\"], [\"0.9800\", \"609.00\"], [\"0.9900\", \"1709.00\"]], \"depth_limit\": 100, \"truncated\": false}",
+    "event_id": "kalshi:KXNFLGAME-26OCT04ARINYG",
+    "freshness": "fresh",
+    "id": 14,
+    "market_id": "kalshi:KXNFLGAME-26OCT04ARINYG-NYG",
+    "market_status": "active",
+    "miss_reason": null,
+    "native_market_id": "KXNFLGAME-26OCT04ARINYG-NYG",
+    "observed_at_utc": "2026-10-04T11:20:20.900000+00:00",
+    "phase": "custom",
+    "policy_version": "price-observations-v1",
+    "price_grid_json": "{\"ranges\": [[\"0.0000\", \"1.0000\", \"0.0100\"]], \"source\": \"kalshi price_ranges (linear_cent)\"}",
+    "recorded_at_utc": "2026-10-04T11:20:20.900000+00:00",
+    "rules_sha256": "169c870b9383dcc1c85f0edd0a9d58e2f6c98a17c62a39efa777bcb1069fe667",
+    "run_id": "run-5",
+    "side": "NO",
+    "snapshot_id": 12,
+    "source_sha256": "903434e295b153212c6ef035a92132fca0c95b5af71ff2e4fb7d79830b662cf8",
+    "source_timestamp_utc": null,
+    "target_id": "kalshi:KXNFLGAME-26OCT04ARINYG-NYG|custom|2026-10-04T11:00:04+00:00",
+    "target_utc": "2026-10-04T11:00:04+00:00",
+    "venue": "kalshi"
+   },
+   {
+    "ask": "0.1400",
+    "ask_size": "30.00",
+    "attempt_id": "run-3:kalshi:KXNFLGAME-26OCT04ARINYG-ARI|custom|2026-10-04T16:00:04+00:00:<attempt>",
+    "bid": "0.1300",
+    "close_label": null,
+    "close_proof_json": null,
+    "close_time_utc": "2026-10-06T17:00:00Z",
+    "collection_status": "CAPTURED",
+    "depth_json": "{\"asks\": [[\"0.1400\", \"30.00\"], [\"0.1500\", \"145.00\"], [\"0.1600\", \"84.00\"], [\"0.1700\", \"61.00\"], [\"0.1800\", \"46.00\"], [\"0.1900\", \"68.00\"], [\"0.2000\", \"83.89\"], [\"0.2100\", \"31.00\"], [\"0.2200\", \"33.00\"], [\"0.2300\", \"25.00\"], [\"0.2400\", \"30.00\"], [\"0.2500\", \"6.00\"], [\"0.2600\", \"7.00\"], [\"0.2700\", \"20.00\"], [\"0.2800\", \"6.00\"], [\"0.2900\", \"39.00\"], [\"0.3000\", \"13.00\"], [\"0.3100\", \"9.00\"], [\"0.3200\", \"9.00\"], [\"0.3300\", \"10.00\"], [\"0.3400\", \"11.00\"], [\"0.3500\", \"11.96\"], [\"0.3600\", \"1.00\"], [\"0.3700\", \"5.00\"], [\"0.4000\", \"5.00\"], [\"0.4200\", \"35.00\"], [\"0.4300\", \"57.00\"], [\"0.4400\", \"3.00\"], [\"0.4500\", \"14.00\"], [\"0.4700\", \"42.00\"], [\"0.4800\", \"5.00\"], [\"0.5000\", \"15.00\"], [\"0.5100\", \"8.00\"], [\"0.5200\", \"74.00\"], [\"0.5300\", \"749.00\"], [\"0.5400\", \"21.00\"], [\"0.5600\", \"67.76\"], [\"0.5700\", \"130.00\"], [\"0.5800\", \"32.76\"], [\"0.5900\", \"32.00\"], [\"0.6000\", \"112.00\"], [\"0.6100\", \"1.53\"], [\"0.6200\", \"300.00\"], [\"0.6300\", \"32.00\"], [\"0.6500\", \"101.53\"], [\"0.6700\", \"750.00\"], [\"0.7000\", \"100.00\"], [\"0.7400\", \"100.00\"], [\"0.7800\", \"25.00\"], [\"0.8200\", \"100.00\"], [\"0.8800\", \"72.00\"], [\"0.8900\", \"100.00\"], [\"0.9200\", \"30.00\"], [\"0.9400\", \"100.00\"], [\"0.9500\", \"45.00\"], [\"0.9600\", \"20.00\"], [\"0.9700\", \"162.00\"], [\"0.9800\", \"82.00\"], [\"0.9900\", \"771.60\"]], \"depth_limit\": 100, \"truncated\": false}",
+    "event_id": "kalshi:KXNFLGAME-26OCT04ARINYG",
+    "freshness": "fresh",
+    "id": 15,
+    "market_id": "kalshi:KXNFLGAME-26OCT04ARINYG-ARI",
+    "market_status": "active",
+    "miss_reason": null,
+    "native_market_id": "KXNFLGAME-26OCT04ARINYG-ARI",
+    "observed_at_utc": "2026-10-04T16:05:20.600000+00:00",
+    "phase": "custom",
+    "policy_version": "price-observations-v1",
+    "price_grid_json": "{\"ranges\": [[\"0.0000\", \"1.0000\", \"0.0100\"]], \"source\": \"kalshi price_ranges (linear_cent)\"}",
+    "recorded_at_utc": "2026-10-04T16:05:20.600000+00:00",
+    "rules_sha256": "e77154c60047cf0a1214e45c21acaed129c2d18c433c9b9e822b4e5da66c3d8f",
+    "run_id": "run-3",
+    "side": "YES",
+    "snapshot_id": 15,
+    "source_sha256": "903434e295b153212c6ef035a92132fca0c95b5af71ff2e4fb7d79830b662cf8",
+    "source_timestamp_utc": null,
+    "target_id": "kalshi:KXNFLGAME-26OCT04ARINYG-ARI|custom|2026-10-04T16:00:04+00:00",
+    "target_utc": "2026-10-04T16:00:04+00:00",
+    "venue": "kalshi"
+   },
+   {
+    "ask": "0.8700",
+    "ask_size": "161.43",
+    "attempt_id": "run-3:kalshi:KXNFLGAME-26OCT04ARINYG-ARI|custom|2026-10-04T16:00:04+00:00:<attempt>",
+    "bid": "0.8600",
+    "close_label": null,
+    "close_proof_json": null,
+    "close_time_utc": "2026-10-06T17:00:00Z",
+    "collection_status": "CAPTURED",
+    "depth_json": "{\"asks\": [[\"0.8700\", \"161.43\"], [\"0.8800\", \"400.00\"], [\"0.8900\", \"71.00\"], [\"0.9000\", \"152.40\"], [\"0.9100\", \"67.00\"], [\"0.9200\", \"19.76\"], [\"0.9300\", \"162.00\"], [\"0.9400\", \"69.09\"], [\"0.9500\", \"133.59\"], [\"0.9600\", \"152.00\"], [\"0.9700\", \"712.96\"], [\"0.9800\", \"609.00\"], [\"0.9900\", \"1709.00\"]], \"depth_limit\": 100, \"truncated\": false}",
+    "event_id": "kalshi:KXNFLGAME-26OCT04ARINYG",
+    "freshness": "fresh",
+    "id": 16,
+    "market_id": "kalshi:KXNFLGAME-26OCT04ARINYG-ARI",
+    "market_status": "active",
+    "miss_reason": null,
+    "native_market_id": "KXNFLGAME-26OCT04ARINYG-ARI",
+    "observed_at_utc": "2026-10-04T16:05:20.600000+00:00",
+    "phase": "custom",
+    "policy_version": "price-observations-v1",
+    "price_grid_json": "{\"ranges\": [[\"0.0000\", \"1.0000\", \"0.0100\"]], \"source\": \"kalshi price_ranges (linear_cent)\"}",
+    "recorded_at_utc": "2026-10-04T16:05:20.600000+00:00",
+    "rules_sha256": "e77154c60047cf0a1214e45c21acaed129c2d18c433c9b9e822b4e5da66c3d8f",
+    "run_id": "run-3",
+    "side": "NO",
+    "snapshot_id": 15,
+    "source_sha256": "903434e295b153212c6ef035a92132fca0c95b5af71ff2e4fb7d79830b662cf8",
+    "source_timestamp_utc": null,
+    "target_id": "kalshi:KXNFLGAME-26OCT04ARINYG-ARI|custom|2026-10-04T16:00:04+00:00",
+    "target_utc": "2026-10-04T16:00:04+00:00",
+    "venue": "kalshi"
+   },
+   {
+    "ask": "0.1400",
+    "ask_size": "30.00",
+    "attempt_id": "run-3:kalshi:KXNFLGAME-26OCT04ARINYG-NYG|custom|2026-10-04T16:00:04+00:00:<attempt>",
+    "bid": "0.1300",
+    "close_label": null,
+    "close_proof_json": null,
+    "close_time_utc": "2026-10-06T17:00:00Z",
+    "collection_status": "CAPTURED",
+    "depth_json": "{\"asks\": [[\"0.1400\", \"30.00\"], [\"0.1500\", \"145.00\"], [\"0.1600\", \"84.00\"], [\"0.1700\", \"61.00\"], [\"0.1800\", \"46.00\"], [\"0.1900\", \"68.00\"], [\"0.2000\", \"83.89\"], [\"0.2100\", \"31.00\"], [\"0.2200\", \"33.00\"], [\"0.2300\", \"25.00\"], [\"0.2400\", \"30.00\"], [\"0.2500\", \"6.00\"], [\"0.2600\", \"7.00\"], [\"0.2700\", \"20.00\"], [\"0.2800\", \"6.00\"], [\"0.2900\", \"39.00\"], [\"0.3000\", \"13.00\"], [\"0.3100\", \"9.00\"], [\"0.3200\", \"9.00\"], [\"0.3300\", \"10.00\"], [\"0.3400\", \"11.00\"], [\"0.3500\", \"11.96\"], [\"0.3600\", \"1.00\"], [\"0.3700\", \"5.00\"], [\"0.4000\", \"5.00\"], [\"0.4200\", \"35.00\"], [\"0.4300\", \"57.00\"], [\"0.4400\", \"3.00\"], [\"0.4500\", \"14.00\"], [\"0.4700\", \"42.00\"], [\"0.4800\", \"5.00\"], [\"0.5000\", \"15.00\"], [\"0.5100\", \"8.00\"], [\"0.5200\", \"74.00\"], [\"0.5300\", \"749.00\"], [\"0.5400\", \"21.00\"], [\"0.5600\", \"67.76\"], [\"0.5700\", \"130.00\"], [\"0.5800\", \"32.76\"], [\"0.5900\", \"32.00\"], [\"0.6000\", \"112.00\"], [\"0.6100\", \"1.53\"], [\"0.6200\", \"300.00\"], [\"0.6300\", \"32.00\"], [\"0.6500\", \"101.53\"], [\"0.6700\", \"750.00\"], [\"0.7000\", \"100.00\"], [\"0.7400\", \"100.00\"], [\"0.7800\", \"25.00\"], [\"0.8200\", \"100.00\"], [\"0.8800\", \"72.00\"], [\"0.8900\", \"100.00\"], [\"0.9200\", \"30.00\"], [\"0.9400\", \"100.00\"], [\"0.9500\", \"45.00\"], [\"0.9600\", \"20.00\"], [\"0.9700\", \"162.00\"], [\"0.9800\", \"82.00\"], [\"0.9900\", \"771.60\"]], \"depth_limit\": 100, \"truncated\": false}",
+    "event_id": "kalshi:KXNFLGAME-26OCT04ARINYG",
+    "freshness": "fresh",
+    "id": 17,
+    "market_id": "kalshi:KXNFLGAME-26OCT04ARINYG-NYG",
+    "market_status": "active",
+    "miss_reason": null,
+    "native_market_id": "KXNFLGAME-26OCT04ARINYG-NYG",
+    "observed_at_utc": "2026-10-04T16:05:20.900000+00:00",
+    "phase": "custom",
+    "policy_version": "price-observations-v1",
+    "price_grid_json": "{\"ranges\": [[\"0.0000\", \"1.0000\", \"0.0100\"]], \"source\": \"kalshi price_ranges (linear_cent)\"}",
+    "recorded_at_utc": "2026-10-04T16:05:20.900000+00:00",
+    "rules_sha256": "169c870b9383dcc1c85f0edd0a9d58e2f6c98a17c62a39efa777bcb1069fe667",
+    "run_id": "run-3",
+    "side": "YES",
+    "snapshot_id": 16,
+    "source_sha256": "903434e295b153212c6ef035a92132fca0c95b5af71ff2e4fb7d79830b662cf8",
+    "source_timestamp_utc": null,
+    "target_id": "kalshi:KXNFLGAME-26OCT04ARINYG-NYG|custom|2026-10-04T16:00:04+00:00",
+    "target_utc": "2026-10-04T16:00:04+00:00",
+    "venue": "kalshi"
+   },
+   {
+    "ask": "0.8700",
+    "ask_size": "161.43",
+    "attempt_id": "run-3:kalshi:KXNFLGAME-26OCT04ARINYG-NYG|custom|2026-10-04T16:00:04+00:00:<attempt>",
+    "bid": "0.8600",
+    "close_label": null,
+    "close_proof_json": null,
+    "close_time_utc": "2026-10-06T17:00:00Z",
+    "collection_status": "CAPTURED",
+    "depth_json": "{\"asks\": [[\"0.8700\", \"161.43\"], [\"0.8800\", \"400.00\"], [\"0.8900\", \"71.00\"], [\"0.9000\", \"152.40\"], [\"0.9100\", \"67.00\"], [\"0.9200\", \"19.76\"], [\"0.9300\", \"162.00\"], [\"0.9400\", \"69.09\"], [\"0.9500\", \"133.59\"], [\"0.9600\", \"152.00\"], [\"0.9700\", \"712.96\"], [\"0.9800\", \"609.00\"], [\"0.9900\", \"1709.00\"]], \"depth_limit\": 100, \"truncated\": false}",
+    "event_id": "kalshi:KXNFLGAME-26OCT04ARINYG",
+    "freshness": "fresh",
+    "id": 18,
+    "market_id": "kalshi:KXNFLGAME-26OCT04ARINYG-NYG",
+    "market_status": "active",
+    "miss_reason": null,
+    "native_market_id": "KXNFLGAME-26OCT04ARINYG-NYG",
+    "observed_at_utc": "2026-10-04T16:05:20.900000+00:00",
+    "phase": "custom",
+    "policy_version": "price-observations-v1",
+    "price_grid_json": "{\"ranges\": [[\"0.0000\", \"1.0000\", \"0.0100\"]], \"source\": \"kalshi price_ranges (linear_cent)\"}",
+    "recorded_at_utc": "2026-10-04T16:05:20.900000+00:00",
+    "rules_sha256": "169c870b9383dcc1c85f0edd0a9d58e2f6c98a17c62a39efa777bcb1069fe667",
+    "run_id": "run-3",
+    "side": "NO",
+    "snapshot_id": 16,
+    "source_sha256": "903434e295b153212c6ef035a92132fca0c95b5af71ff2e4fb7d79830b662cf8",
+    "source_timestamp_utc": null,
+    "target_id": "kalshi:KXNFLGAME-26OCT04ARINYG-NYG|custom|2026-10-04T16:00:04+00:00",
+    "target_utc": "2026-10-04T16:00:04+00:00",
+    "venue": "kalshi"
+   },
+   {
+    "ask": null,
+    "ask_size": null,
+    "attempt_id": "run-0:kalshi:KXNFLGAME-26OCT04DENSF-DEN|custom|2026-10-04T19:25:04+00:00:<attempt>",
+    "bid": null,
+    "close_label": null,
+    "close_proof_json": null,
+    "close_time_utc": null,
+    "collection_status": "MISSED",
+    "depth_json": null,
+    "event_id": "kalshi:KXNFLGAME-26OCT04DENSF",
+    "freshness": "unknown",
+    "id": 19,
+    "market_id": "kalshi:KXNFLGAME-26OCT04DENSF-DEN",
+    "market_status": null,
+    "miss_reason": "NFL_CAPTURE_DISABLED: EDGE_LAB_KALSHI_NFL_CAPTURE is off (or invalid): not attempted",
+    "native_market_id": "KXNFLGAME-26OCT04DENSF-DEN",
+    "observed_at_utc": null,
+    "phase": "custom",
+    "policy_version": "price-observations-v1",
+    "price_grid_json": null,
+    "recorded_at_utc": "2026-10-04T19:35:20+00:00",
+    "rules_sha256": null,
+    "run_id": "run-0",
+    "side": null,
+    "snapshot_id": null,
+    "source_sha256": null,
+    "source_timestamp_utc": null,
+    "target_id": "kalshi:KXNFLGAME-26OCT04DENSF-DEN|custom|2026-10-04T19:25:04+00:00",
+    "target_utc": "2026-10-04T19:25:04+00:00",
+    "venue": "kalshi"
+   },
+   {
+    "ask": null,
+    "ask_size": null,
+    "attempt_id": "run-0:kalshi:KXNFLGAME-26OCT04DENSF-SF|custom|2026-10-04T19:25:04+00:00:<attempt>",
+    "bid": null,
+    "close_label": null,
+    "close_proof_json": null,
+    "close_time_utc": null,
+    "collection_status": "MISSED",
+    "depth_json": null,
+    "event_id": "kalshi:KXNFLGAME-26OCT04DENSF",
+    "freshness": "unknown",
+    "id": 20,
+    "market_id": "kalshi:KXNFLGAME-26OCT04DENSF-SF",
+    "market_status": null,
+    "miss_reason": "NFL_CAPTURE_DISABLED: EDGE_LAB_KALSHI_NFL_CAPTURE is off (or invalid): not attempted",
+    "native_market_id": "KXNFLGAME-26OCT04DENSF-SF",
+    "observed_at_utc": null,
+    "phase": "custom",
+    "policy_version": "price-observations-v1",
+    "price_grid_json": null,
+    "recorded_at_utc": "2026-10-04T19:35:20+00:00",
+    "rules_sha256": null,
+    "run_id": "run-0",
+    "side": null,
+    "snapshot_id": null,
+    "source_sha256": null,
+    "source_timestamp_utc": null,
+    "target_id": "kalshi:KXNFLGAME-26OCT04DENSF-SF|custom|2026-10-04T19:25:04+00:00",
+    "target_utc": "2026-10-04T19:25:04+00:00",
+    "venue": "kalshi"
+   },
+   {
+    "ask": null,
+    "ask_size": null,
+    "attempt_id": "run-1:kalshi:KXNFLGAME|custom|2026-10-05T03:05:00+00:00:<attempt>",
+    "bid": null,
+    "close_label": null,
+    "close_proof_json": null,
+    "close_time_utc": null,
+    "collection_status": "NOT_EXECUTABLE",
+    "depth_json": null,
+    "event_id": "kalshi:KXNFLGAME:settled:2026-10-04",
+    "freshness": "fresh",
+    "id": 21,
+    "market_id": "kalshi:KXNFLGAME",
+    "market_status": null,
+    "miss_reason": "SETTLEMENT_METADATA_READ: 2 KXNFLGAME market(s) settled 2026-10-04T04:00:00+00:00..2026-10-05T03:05:00+00:00; listing only, no book",
+    "native_market_id": "KXNFLGAME",
+    "observed_at_utc": "2026-10-05T03:05:10.300000+00:00",
+    "phase": "custom",
+    "policy_version": "price-observations-v1",
+    "price_grid_json": null,
+    "recorded_at_utc": "2026-10-05T03:05:10.300000+00:00",
+    "rules_sha256": null,
+    "run_id": "run-1",
+    "side": null,
+    "snapshot_id": 18,
+    "source_sha256": "a020fc11155d77aef84865cc618382bc57e51f852e81dbad1b5ba5ca5263723c",
+    "source_timestamp_utc": null,
+    "target_id": "kalshi:KXNFLGAME|custom|2026-10-05T03:05:00+00:00",
+    "target_utc": "2026-10-05T03:05:00+00:00",
+    "venue": "kalshi"
+   }
+  ],
+  "targets": [
+   {
+    "attempts": 1,
+    "close_basis": "kalshi_close_time_v1",
+    "close_time_utc": null,
+    "deadline_utc": "2026-10-03T17:29:04+00:00",
+    "decision_as_of_utc": null,
+    "decision_ref": null,
+    "detail_json": "{\"commence_utc\":\"2026-10-04T17:00:00+00:00\",\"game_date\":\"2026-10-04\",\"mapping\":\"DERIVED\",\"mapping_detail\":\"no listing received yet: the capture's listing GET verifies the derived tickers\",\"nfl_role\":\"book\",\"odds_captured_at_utc\":\"2026-10-03T17:00:04+00:00\",\"odds_event_id\":\"odds-KXNFLGAME-26OCT04ARINYG\",\"odds_offset\":\"T-24h\",\"odds_target_id\":\"americanfootball_nfl:odds-KXNFLGAME-26OCT04ARINYG:T-24h:2026-10-03T17:00:00Z\",\"pairing\":\"reactive: planned after the Odds capture, at its receipt time (option (a))\",\"version\":\"kalshi-nfl-pairing-v1\"}",
+    "due_from_utc": "2026-10-03T16:55:04+00:00",
+    "event_id": "kalshi:KXNFLGAME-26OCT04ARINYG",
+    "market_id": "kalshi:KXNFLGAME-26OCT04ARINYG-ARI",
+    "native_event_id": "KXNFLGAME-26OCT04ARINYG",
+    "native_market_id": "KXNFLGAME-26OCT04ARINYG-ARI",
+    "origin": "kalshi_nfl_pairing_v1",
+    "phase": "custom",
+    "planned_at_utc": "2026-10-03T17:05:00+00:00",
+    "planned_rules_sha256": null,
+    "policy_version": "price-observations-v1",
+    "state": "CAPTURED",
+    "state_at_utc": "2026-10-03T17:05:20.600000+00:00",
+    "state_reason": null,
+    "target_id": "kalshi:KXNFLGAME-26OCT04ARINYG-ARI|custom|2026-10-03T17:00:04+00:00",
+    "target_utc": "2026-10-03T17:00:04+00:00",
+    "venue": "kalshi"
+   },
+   {
+    "attempts": 1,
+    "close_basis": "kalshi_close_time_v1",
+    "close_time_utc": null,
+    "deadline_utc": "2026-10-03T17:29:04+00:00",
+    "decision_as_of_utc": null,
+    "decision_ref": null,
+    "detail_json": "{\"commence_utc\":\"2026-10-04T17:00:00+00:00\",\"game_date\":\"2026-10-04\",\"mapping\":\"DERIVED\",\"mapping_detail\":\"no listing received yet: the capture's listing GET verifies the derived tickers\",\"nfl_role\":\"book\",\"odds_captured_at_utc\":\"2026-10-03T17:00:04+00:00\",\"odds_event_id\":\"odds-KXNFLGAME-26OCT04ARINYG\",\"odds_offset\":\"T-24h\",\"odds_target_id\":\"americanfootball_nfl:odds-KXNFLGAME-26OCT04ARINYG:T-24h:2026-10-03T17:00:00Z\",\"pairing\":\"reactive: planned after the Odds capture, at its receipt time (option (a))\",\"version\":\"kalshi-nfl-pairing-v1\"}",
+    "due_from_utc": "2026-10-03T16:55:04+00:00",
+    "event_id": "kalshi:KXNFLGAME-26OCT04ARINYG",
+    "market_id": "kalshi:KXNFLGAME-26OCT04ARINYG-NYG",
+    "native_event_id": "KXNFLGAME-26OCT04ARINYG",
+    "native_market_id": "KXNFLGAME-26OCT04ARINYG-NYG",
+    "origin": "kalshi_nfl_pairing_v1",
+    "phase": "custom",
+    "planned_at_utc": "2026-10-03T17:05:00+00:00",
+    "planned_rules_sha256": null,
+    "policy_version": "price-observations-v1",
+    "state": "CAPTURED",
+    "state_at_utc": "2026-10-03T17:05:20.900000+00:00",
+    "state_reason": null,
+    "target_id": "kalshi:KXNFLGAME-26OCT04ARINYG-NYG|custom|2026-10-03T17:00:04+00:00",
+    "target_utc": "2026-10-03T17:00:04+00:00",
+    "venue": "kalshi"
+   },
+   {
+    "attempts": 1,
+    "close_basis": "kalshi_close_time_v1",
+    "close_time_utc": null,
+    "deadline_utc": "2026-10-03T17:29:04+00:00",
+    "decision_as_of_utc": null,
+    "decision_ref": null,
+    "detail_json": "{\"commence_utc\":\"2026-10-04T20:25:00+00:00\",\"game_date\":\"2026-10-04\",\"mapping\":\"DERIVED\",\"mapping_detail\":\"no listing received yet: the capture's listing GET verifies the derived tickers\",\"nfl_role\":\"book\",\"odds_captured_at_utc\":\"2026-10-03T17:00:04+00:00\",\"odds_event_id\":\"odds-KXNFLGAME-26OCT04DENSF\",\"odds_offset\":\"T-24h\",\"odds_target_id\":\"americanfootball_nfl:odds-KXNFLGAME-26OCT04DENSF:T-24h:2026-10-03T20:25:00Z\",\"pairing\":\"reactive: planned after the Odds capture, at its receipt time (option (a))\",\"version\":\"kalshi-nfl-pairing-v1\"}",
+    "due_from_utc": "2026-10-03T16:55:04+00:00",
+    "event_id": "kalshi:KXNFLGAME-26OCT04DENSF",
+    "market_id": "kalshi:KXNFLGAME-26OCT04DENSF-DEN",
+    "native_event_id": "KXNFLGAME-26OCT04DENSF",
+    "native_market_id": "KXNFLGAME-26OCT04DENSF-DEN",
+    "origin": "kalshi_nfl_pairing_v1",
+    "phase": "custom",
+    "planned_at_utc": "2026-10-03T17:05:00+00:00",
+    "planned_rules_sha256": null,
+    "policy_version": "price-observations-v1",
+    "state": "CAPTURED",
+    "state_at_utc": "2026-10-03T17:05:21.500000+00:00",
+    "state_reason": null,
+    "target_id": "kalshi:KXNFLGAME-26OCT04DENSF-DEN|custom|2026-10-03T17:00:04+00:00",
+    "target_utc": "2026-10-03T17:00:04+00:00",
+    "venue": "kalshi"
+   },
+   {
+    "attempts": 1,
+    "close_basis": "kalshi_close_time_v1",
+    "close_time_utc": null,
+    "deadline_utc": "2026-10-03T17:29:04+00:00",
+    "decision_as_of_utc": null,
+    "decision_ref": null,
+    "detail_json": "{\"commence_utc\":\"2026-10-04T20:25:00+00:00\",\"game_date\":\"2026-10-04\",\"mapping\":\"DERIVED\",\"mapping_detail\":\"no listing received yet: the capture's listing GET verifies the derived tickers\",\"nfl_role\":\"book\",\"odds_captured_at_utc\":\"2026-10-03T17:00:04+00:00\",\"odds_event_id\":\"odds-KXNFLGAME-26OCT04DENSF\",\"odds_offset\":\"T-24h\",\"odds_target_id\":\"americanfootball_nfl:odds-KXNFLGAME-26OCT04DENSF:T-24h:2026-10-03T20:25:00Z\",\"pairing\":\"reactive: planned after the Odds capture, at its receipt time (option (a))\",\"version\":\"kalshi-nfl-pairing-v1\"}",
+    "due_from_utc": "2026-10-03T16:55:04+00:00",
+    "event_id": "kalshi:KXNFLGAME-26OCT04DENSF",
+    "market_id": "kalshi:KXNFLGAME-26OCT04DENSF-SF",
+    "native_event_id": "KXNFLGAME-26OCT04DENSF",
+    "native_market_id": "KXNFLGAME-26OCT04DENSF-SF",
+    "origin": "kalshi_nfl_pairing_v1",
+    "phase": "custom",
+    "planned_at_utc": "2026-10-03T17:05:00+00:00",
+    "planned_rules_sha256": null,
+    "policy_version": "price-observations-v1",
+    "state": "CAPTURED",
+    "state_at_utc": "2026-10-03T17:05:21.800000+00:00",
+    "state_reason": null,
+    "target_id": "kalshi:KXNFLGAME-26OCT04DENSF-SF|custom|2026-10-03T17:00:04+00:00",
+    "target_utc": "2026-10-03T17:00:04+00:00",
+    "venue": "kalshi"
+   },
+   {
+    "attempts": 2,
+    "close_basis": "kalshi_close_time_v1",
+    "close_time_utc": null,
+    "deadline_utc": "2026-10-04T11:29:04+00:00",
+    "decision_as_of_utc": null,
+    "decision_ref": null,
+    "detail_json": "{\"commence_utc\":\"2026-10-04T17:00:00+00:00\",\"game_date\":\"2026-10-04\",\"mapping\":\"LISTED\",\"mapping_detail\":\"stored listing 3 (2026-10-03T17:05:20.300000+00:00) lists both team markets\",\"nfl_role\":\"book\",\"odds_captured_at_utc\":\"2026-10-04T11:00:04+00:00\",\"odds_event_id\":\"odds-KXNFLGAME-26OCT04ARINYG\",\"odds_offset\":\"T-6h\",\"odds_target_id\":\"americanfootball_nfl:odds-KXNFLGAME-26OCT04ARINYG:T-6h:2026-10-04T11:00:00Z\",\"pairing\":\"reactive: planned after the Odds capture, at its receipt time (option (a))\",\"version\":\"kalshi-nfl-pairing-v1\"}",
+    "due_from_utc": "2026-10-04T10:55:04+00:00",
+    "event_id": "kalshi:KXNFLGAME-26OCT04ARINYG",
+    "market_id": "kalshi:KXNFLGAME-26OCT04ARINYG-ARI",
+    "native_event_id": "KXNFLGAME-26OCT04ARINYG",
+    "native_market_id": "KXNFLGAME-26OCT04ARINYG-ARI",
+    "origin": "kalshi_nfl_pairing_v1",
+    "phase": "custom",
+    "planned_at_utc": "2026-10-04T11:05:00+00:00",
+    "planned_rules_sha256": null,
+    "policy_version": "price-observations-v1",
+    "state": "CAPTURED",
+    "state_at_utc": "2026-10-04T11:20:20.600000+00:00",
+    "state_reason": null,
+    "target_id": "kalshi:KXNFLGAME-26OCT04ARINYG-ARI|custom|2026-10-04T11:00:04+00:00",
+    "target_utc": "2026-10-04T11:00:04+00:00",
+    "venue": "kalshi"
+   },
+   {
+    "attempts": 2,
+    "close_basis": "kalshi_close_time_v1",
+    "close_time_utc": null,
+    "deadline_utc": "2026-10-04T11:29:04+00:00",
+    "decision_as_of_utc": null,
+    "decision_ref": null,
+    "detail_json": "{\"commence_utc\":\"2026-10-04T17:00:00+00:00\",\"game_date\":\"2026-10-04\",\"mapping\":\"LISTED\",\"mapping_detail\":\"stored listing 3 (2026-10-03T17:05:20.300000+00:00) lists both team markets\",\"nfl_role\":\"book\",\"odds_captured_at_utc\":\"2026-10-04T11:00:04+00:00\",\"odds_event_id\":\"odds-KXNFLGAME-26OCT04ARINYG\",\"odds_offset\":\"T-6h\",\"odds_target_id\":\"americanfootball_nfl:odds-KXNFLGAME-26OCT04ARINYG:T-6h:2026-10-04T11:00:00Z\",\"pairing\":\"reactive: planned after the Odds capture, at its receipt time (option (a))\",\"version\":\"kalshi-nfl-pairing-v1\"}",
+    "due_from_utc": "2026-10-04T10:55:04+00:00",
+    "event_id": "kalshi:KXNFLGAME-26OCT04ARINYG",
+    "market_id": "kalshi:KXNFLGAME-26OCT04ARINYG-NYG",
+    "native_event_id": "KXNFLGAME-26OCT04ARINYG",
+    "native_market_id": "KXNFLGAME-26OCT04ARINYG-NYG",
+    "origin": "kalshi_nfl_pairing_v1",
+    "phase": "custom",
+    "planned_at_utc": "2026-10-04T11:05:00+00:00",
+    "planned_rules_sha256": null,
+    "policy_version": "price-observations-v1",
+    "state": "CAPTURED",
+    "state_at_utc": "2026-10-04T11:20:20.900000+00:00",
+    "state_reason": null,
+    "target_id": "kalshi:KXNFLGAME-26OCT04ARINYG-NYG|custom|2026-10-04T11:00:04+00:00",
+    "target_utc": "2026-10-04T11:00:04+00:00",
+    "venue": "kalshi"
+   },
+   {
+    "attempts": 1,
+    "close_basis": "kalshi_close_time_v1",
+    "close_time_utc": null,
+    "deadline_utc": "2026-10-04T16:29:04+00:00",
+    "decision_as_of_utc": null,
+    "decision_ref": null,
+    "detail_json": "{\"commence_utc\":\"2026-10-04T17:00:00+00:00\",\"game_date\":\"2026-10-04\",\"mapping\":\"LISTED\",\"mapping_detail\":\"stored listing 10 (2026-10-04T11:20:20.300000+00:00) lists both team markets\",\"nfl_role\":\"book\",\"odds_captured_at_utc\":\"2026-10-04T16:00:04+00:00\",\"odds_event_id\":\"odds-KXNFLGAME-26OCT04ARINYG\",\"odds_offset\":\"T-60m\",\"odds_target_id\":\"americanfootball_nfl:odds-KXNFLGAME-26OCT04ARINYG:T-60m:2026-10-04T16:00:00Z\",\"pairing\":\"reactive: planned after the Odds capture, at its receipt time (option (a))\",\"version\":\"kalshi-nfl-pairing-v1\"}",
+    "due_from_utc": "2026-10-04T15:55:04+00:00",
+    "event_id": "kalshi:KXNFLGAME-26OCT04ARINYG",
+    "market_id": "kalshi:KXNFLGAME-26OCT04ARINYG-ARI",
+    "native_event_id": "KXNFLGAME-26OCT04ARINYG",
+    "native_market_id": "KXNFLGAME-26OCT04ARINYG-ARI",
+    "origin": "kalshi_nfl_pairing_v1",
+    "phase": "custom",
+    "planned_at_utc": "2026-10-04T16:05:00+00:00",
+    "planned_rules_sha256": null,
+    "policy_version": "price-observations-v1",
+    "state": "CAPTURED",
+    "state_at_utc": "2026-10-04T16:05:20.600000+00:00",
+    "state_reason": null,
+    "target_id": "kalshi:KXNFLGAME-26OCT04ARINYG-ARI|custom|2026-10-04T16:00:04+00:00",
+    "target_utc": "2026-10-04T16:00:04+00:00",
+    "venue": "kalshi"
+   },
+   {
+    "attempts": 1,
+    "close_basis": "kalshi_close_time_v1",
+    "close_time_utc": null,
+    "deadline_utc": "2026-10-04T16:29:04+00:00",
+    "decision_as_of_utc": null,
+    "decision_ref": null,
+    "detail_json": "{\"commence_utc\":\"2026-10-04T17:00:00+00:00\",\"game_date\":\"2026-10-04\",\"mapping\":\"LISTED\",\"mapping_detail\":\"stored listing 10 (2026-10-04T11:20:20.300000+00:00) lists both team markets\",\"nfl_role\":\"book\",\"odds_captured_at_utc\":\"2026-10-04T16:00:04+00:00\",\"odds_event_id\":\"odds-KXNFLGAME-26OCT04ARINYG\",\"odds_offset\":\"T-60m\",\"odds_target_id\":\"americanfootball_nfl:odds-KXNFLGAME-26OCT04ARINYG:T-60m:2026-10-04T16:00:00Z\",\"pairing\":\"reactive: planned after the Odds capture, at its receipt time (option (a))\",\"version\":\"kalshi-nfl-pairing-v1\"}",
+    "due_from_utc": "2026-10-04T15:55:04+00:00",
+    "event_id": "kalshi:KXNFLGAME-26OCT04ARINYG",
+    "market_id": "kalshi:KXNFLGAME-26OCT04ARINYG-NYG",
+    "native_event_id": "KXNFLGAME-26OCT04ARINYG",
+    "native_market_id": "KXNFLGAME-26OCT04ARINYG-NYG",
+    "origin": "kalshi_nfl_pairing_v1",
+    "phase": "custom",
+    "planned_at_utc": "2026-10-04T16:05:00+00:00",
+    "planned_rules_sha256": null,
+    "policy_version": "price-observations-v1",
+    "state": "CAPTURED",
+    "state_at_utc": "2026-10-04T16:05:20.900000+00:00",
+    "state_reason": null,
+    "target_id": "kalshi:KXNFLGAME-26OCT04ARINYG-NYG|custom|2026-10-04T16:00:04+00:00",
+    "target_utc": "2026-10-04T16:00:04+00:00",
+    "venue": "kalshi"
+   },
+   {
+    "attempts": 1,
+    "close_basis": "kalshi_close_time_v1",
+    "close_time_utc": null,
+    "deadline_utc": "2026-10-04T19:54:04+00:00",
+    "decision_as_of_utc": null,
+    "decision_ref": null,
+    "detail_json": "{\"commence_utc\":\"2026-10-04T20:25:00+00:00\",\"game_date\":\"2026-10-04\",\"mapping\":\"LISTED\",\"mapping_detail\":\"stored listing 6 (2026-10-03T17:05:21.200000+00:00) lists both team markets\",\"nfl_role\":\"book\",\"odds_captured_at_utc\":\"2026-10-04T19:25:04+00:00\",\"odds_event_id\":\"odds-KXNFLGAME-26OCT04DENSF\",\"odds_offset\":\"T-60m\",\"odds_target_id\":\"americanfootball_nfl:odds-KXNFLGAME-26OCT04DENSF:T-60m:2026-10-04T19:25:00Z\",\"pairing\":\"reactive: planned after the Odds capture, at its receipt time (option (a))\",\"version\":\"kalshi-nfl-pairing-v1\"}",
+    "due_from_utc": "2026-10-04T19:20:04+00:00",
+    "event_id": "kalshi:KXNFLGAME-26OCT04DENSF",
+    "market_id": "kalshi:KXNFLGAME-26OCT04DENSF-DEN",
+    "native_event_id": "KXNFLGAME-26OCT04DENSF",
+    "native_market_id": "KXNFLGAME-26OCT04DENSF-DEN",
+    "origin": "kalshi_nfl_pairing_v1",
+    "phase": "custom",
+    "planned_at_utc": "2026-10-04T19:35:00+00:00",
+    "planned_rules_sha256": null,
+    "policy_version": "price-observations-v1",
+    "state": "MISSED",
+    "state_at_utc": "2026-10-04T19:35:20+00:00",
+    "state_reason": "NFL_CAPTURE_DISABLED: EDGE_LAB_KALSHI_NFL_CAPTURE is off (or invalid): not attempted",
+    "target_id": "kalshi:KXNFLGAME-26OCT04DENSF-DEN|custom|2026-10-04T19:25:04+00:00",
+    "target_utc": "2026-10-04T19:25:04+00:00",
+    "venue": "kalshi"
+   },
+   {
+    "attempts": 1,
+    "close_basis": "kalshi_close_time_v1",
+    "close_time_utc": null,
+    "deadline_utc": "2026-10-04T19:54:04+00:00",
+    "decision_as_of_utc": null,
+    "decision_ref": null,
+    "detail_json": "{\"commence_utc\":\"2026-10-04T20:25:00+00:00\",\"game_date\":\"2026-10-04\",\"mapping\":\"LISTED\",\"mapping_detail\":\"stored listing 6 (2026-10-03T17:05:21.200000+00:00) lists both team markets\",\"nfl_role\":\"book\",\"odds_captured_at_utc\":\"2026-10-04T19:25:04+00:00\",\"odds_event_id\":\"odds-KXNFLGAME-26OCT04DENSF\",\"odds_offset\":\"T-60m\",\"odds_target_id\":\"americanfootball_nfl:odds-KXNFLGAME-26OCT04DENSF:T-60m:2026-10-04T19:25:00Z\",\"pairing\":\"reactive: planned after the Odds capture, at its receipt time (option (a))\",\"version\":\"kalshi-nfl-pairing-v1\"}",
+    "due_from_utc": "2026-10-04T19:20:04+00:00",
+    "event_id": "kalshi:KXNFLGAME-26OCT04DENSF",
+    "market_id": "kalshi:KXNFLGAME-26OCT04DENSF-SF",
+    "native_event_id": "KXNFLGAME-26OCT04DENSF",
+    "native_market_id": "KXNFLGAME-26OCT04DENSF-SF",
+    "origin": "kalshi_nfl_pairing_v1",
+    "phase": "custom",
+    "planned_at_utc": "2026-10-04T19:35:00+00:00",
+    "planned_rules_sha256": null,
+    "policy_version": "price-observations-v1",
+    "state": "MISSED",
+    "state_at_utc": "2026-10-04T19:35:20+00:00",
+    "state_reason": "NFL_CAPTURE_DISABLED: EDGE_LAB_KALSHI_NFL_CAPTURE is off (or invalid): not attempted",
+    "target_id": "kalshi:KXNFLGAME-26OCT04DENSF-SF|custom|2026-10-04T19:25:04+00:00",
+    "target_utc": "2026-10-04T19:25:04+00:00",
+    "venue": "kalshi"
+   },
+   {
+    "attempts": 1,
+    "close_basis": "kalshi_close_time_v1",
+    "close_time_utc": null,
+    "deadline_utc": "2026-10-05T03:14:00+00:00",
+    "decision_as_of_utc": null,
+    "decision_ref": null,
+    "detail_json": "{\"game_date\":\"2026-10-04\",\"last_kickoff_utc\":\"2026-10-04T20:25:00+00:00\",\"max_settled_utc\":\"2026-10-05T03:05:00+00:00\",\"min_settled_utc\":\"2026-10-04T04:00:00+00:00\",\"nfl_role\":\"settlement_read\",\"version\":\"kalshi-nfl-pairing-v1\"}",
+    "due_from_utc": "2026-10-05T03:00:00+00:00",
+    "event_id": "kalshi:KXNFLGAME:settled:2026-10-04",
+    "market_id": "kalshi:KXNFLGAME",
+    "native_event_id": "KXNFLGAME",
+    "native_market_id": "KXNFLGAME",
+    "origin": "kalshi_nfl_pairing_v1",
+    "phase": "custom",
+    "planned_at_utc": "2026-10-05T02:55:00+00:00",
+    "planned_rules_sha256": null,
+    "policy_version": "price-observations-v1",
+    "state": "NOT_EXECUTABLE",
+    "state_at_utc": "2026-10-05T03:05:10.300000+00:00",
+    "state_reason": "SETTLEMENT_METADATA_READ: 2 KXNFLGAME market(s) settled 2026-10-04T04:00:00+00:00..2026-10-05T03:05:00+00:00; listing only, no book",
+    "target_id": "kalshi:KXNFLGAME|custom|2026-10-05T03:05:00+00:00",
+    "target_utc": "2026-10-05T03:05:00+00:00",
+    "venue": "kalshi"
+   }
+  ]
+ },
+ "status": {
+  "by_phase": {
+   "custom": {
+    "CAPTURED": 8,
+    "MISSED": 2,
+    "NOT_EXECUTABLE": 1
+   }
+  },
+  "close_labels": {},
+  "close_tick_alignment": {
+   "aligned": 0,
+   "close_tick_utc": "04:57:45",
+   "misaligned": [],
+   "state": "NO_OPEN_CLOSE_TARGET"
+  },
+  "command": "observe status",
+  "next_due": [],
+  "now_utc": "2026-10-05T03:06:00+00:00",
+  "policy_version": "price-observations-v1",
+  "recent_misses": [
+   {
+    "at_utc": "2026-10-04T19:35:20+00:00",
+    "reason": "NFL_CAPTURE_DISABLED: withheld (EXP-002 label)",
+    "target_id": "kalshi:KXNFLGAME-26OCT04DENSF-DEN|custom|2026-10-04T19:25:04+00:00"
+   },
+   {
+    "at_utc": "2026-10-04T19:35:20+00:00",
+    "reason": "NFL_CAPTURE_DISABLED: withheld (EXP-002 label)",
+    "target_id": "kalshi:KXNFLGAME-26OCT04DENSF-SF|custom|2026-10-04T19:25:04+00:00"
+   }
+  ],
+  "schedule": "ADR0030_OPTION_A (owner-approved 2026-09-24): edgelab-observe.timer at :05/:20/:35/:50 America/New_York; edgelab-observe-close.timer at 04:57:45 UTC; both Persistent=false",
+  "targets": 11,
+  "timers": {
+   "edgelab-observe-close.timer": "enabled/enabled",
+   "edgelab-observe.timer": "enabled/enabled"
+  }
+ }
+}

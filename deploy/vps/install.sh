@@ -99,6 +99,10 @@ case "$NFL_CAPTURE" in ""|on|off) ;; *) die "EDGE_LAB_KALSHI_NFL_CAPTURE must be
 # off; unset means the code default (off). Turning it on is a reviewed operator step, never this script's.
 ODDS_NHL=$(existing EDGE_LAB_ODDS_NHL)
 case "$ODDS_NHL" in ""|on|off) ;; *) die "EDGE_LAB_ODDS_NHL must be on or off" ;; esac
+# The Kalshi NHL collector switch (price_observations.NHL_SWITCH, ADR 0040): kept across installs the same way.
+# Unset means the code default, which is OFF: activation is a reviewed operator step, never an install.
+NHL_CAPTURE=$(existing EDGE_LAB_KALSHI_NHL_CAPTURE)
+case "$NHL_CAPTURE" in ""|on|off) ;; *) die "EDGE_LAB_KALSHI_NHL_CAPTURE must be on or off" ;; esac
 [ -n "$UA" ] || die "--user-agent is required on first install (NWS asks for contact information)"
 case "$UA$ALERT_URL" in *$'\n'*|*\"*|*\'*) die "values must be single-line without quotes" ;; esac
 tmp=$(mktemp "$ETC/env.XXXXXX")
@@ -109,6 +113,7 @@ tmp=$(mktemp "$ETC/env.XXXXXX")
   [ -n "$ALERT_URL" ] && echo "EDGE_LAB_ALERT_URL=$ALERT_URL"
   [ -n "$NFL_CAPTURE" ] && echo "EDGE_LAB_KALSHI_NFL_CAPTURE=$NFL_CAPTURE"
   [ -n "$ODDS_NHL" ] && echo "EDGE_LAB_ODDS_NHL=$ODDS_NHL"
+  [ -n "$NHL_CAPTURE" ] && echo "EDGE_LAB_KALSHI_NHL_CAPTURE=$NHL_CAPTURE"
 } > "$tmp"
 chown root:edgelab "$tmp"; chmod 0640 "$tmp"; mv -f "$tmp" "$ENV_FILE"
 # The owner's secrets (ADR 0028: the Odds API key, the ntfy topic URL) live in their own file,

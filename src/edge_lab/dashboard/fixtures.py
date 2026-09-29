@@ -498,6 +498,38 @@ def synthetic_freshness() -> dict[str, Any]:
 
 # SYNTHETIC Polymarket US views in `polymarket_sports.terminal_view`'s shape (pm-sports-status/1). Every
 # relationship, reason and check is the real `polymarket_sports.relate` over SYNTHETIC markets and events.
+NHL_NOW = "2026-10-01T21:00:00+00:00"
+
+
+def synthetic_nhl_coverage() -> dict[str, Any]:
+    """SYNTHETIC `price_observations.nhl_coverage` views for the gallery: populated (with misses and an overdue
+    target), not collecting (off by default), schedule stale, and the unavailable / error states."""
+    from .data import ERROR, NO_DATA, OK, Loaded
+
+    base = {"series": "KXNHLGAME", "classification": "DATA_COLLECTION / DEVELOPMENT_ONLY (SYNTHETIC)",
+            "schedule": {"state": "OK", "received_utc": "2026-10-01T16:00:00+00:00", "events": 8},
+            "games": {"discovered": 8, "in_horizon": 8, "mapped": 7, "unmapped": 1},
+            "targets": {"books": 28, "game_horizons": 14, "games": 7,
+                        "by_state": {"CAPTURED": 12, "MISSED": 4, "PLANNED": 10, "OVERDUE": 2},
+                        "game_horizons_captured": 6, "game_horizons_missed": 2},
+            "missed_reasons": {"NOT_COLLECTED_BEFORE_ACTIVATION": 2, "SUPERSEDED_RESCHEDULED": 2},
+            "not_planned_counts": {"UNMAPPED_TEAM": 1},
+            "next": {"target_utc": "2026-10-01T21:35:00+00:00", "horizon": "T-60m", "lead_minutes": 85,
+                     "shift_reason": "PROTECTED_WINDOW: exp001_capture_window_and_shadow_run"},
+            "last_capture_utc": "2026-10-01T17:05:41+00:00", "would_plan_now": 0,
+            "settlement_reads": {"planned": 1, "attempted": 0, "results": "withheld"},
+            "fee": {"state": "FEE_UNSUPPORTED"}, "contract_terms": {"shootout": "RULES_UNRESOLVED"}}
+    idle = {**base, "targets": {"books": 0, "game_horizons": 0, "games": 0, "by_state": {},
+                                "game_horizons_captured": 0, "game_horizons_missed": 0},
+            "missed_reasons": {}, "next": None, "last_capture_utc": None, "would_plan_now": 32,
+            "settlement_reads": {"planned": 0, "attempted": 0, "results": "withheld"}}
+    stale = {**idle, "schedule": {"state": "STALE", "received_utc": "2026-09-30T08:00:00+00:00"}, "would_plan_now": 0,
+             "games": {"discovered": 8, "in_horizon": 0, "mapped": 0, "unmapped": 0}}
+    return {"populated": Loaded(OK, base), "idle": Loaded(OK, idle), "stale": Loaded(OK, stale),
+            "unavailable": Loaded(NO_DATA, message="no evidence database configured (--db)"),
+            "error": Loaded(ERROR, message="RuntimeError: SYNTHETIC")}
+
+
 PM_NOW = "2026-09-24T21:00:00+00:00"
 PM_PROXY_NOW = "2026-09-27T16:30:00+00:00"  # the label-proxy state: 30 min before the SYNTHETIC kickoff
 

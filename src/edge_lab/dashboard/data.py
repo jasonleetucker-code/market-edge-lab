@@ -270,6 +270,19 @@ class Context:
         return economic_evidence_b(self)
 
     @cached_property
+    def nhl_coverage(self) -> Loaded:
+        """Kalshi KXNHLGAME prospective evidence coverage (`price_observations.nhl_coverage`, ADR 0040): counts,
+        times and states only, never a price or a settled result. Read-only, network-free."""
+        if self.store.status != OK:
+            return self.store
+        from .. import price_observations
+
+        try:
+            return Loaded(OK, price_observations.nhl_coverage(self.store.value, self.now))
+        except Exception as exc:  # noqa: BLE001 - shown as an error state, never raised
+            return Loaded(ERROR, message=short_error(exc, self.config))
+
+    @cached_property
     def odds_targets(self) -> Loaded:
         """The Odds API pilot's capture targets and their history (`odds_capture_targets`)."""
         return odds_capture_targets(self)

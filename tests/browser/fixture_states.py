@@ -23,6 +23,9 @@ and status-file shapes, and returns a dashboard Config with a fixed clock:
   shown hidden);
 - odds_label_proxy: `odds` plus the first game's T-60m sportsbook capture with SYNTHETIC prices (an EXP-002
   label proxy: its consensus is shown hidden).
+- nhl: Kalshi KXNHLGAME prospective evidence (ADR 0040) for the 2026-10-01 games: the recorded listing, T-6h books
+  captured through a fake fetch (recorded order book), one failed game-horizon, one rescheduled game, one unmapped
+  team; viewed at 17:00 ET.
 """
 
 from __future__ import annotations
@@ -567,9 +570,86 @@ def payoff_production() -> tuple[Config, Path]:
 
 
 
+# Kalshi NHL prospective evidence (NHL-B, ADR 0040): the recorded 2026-09-29 KXNHLGAME listing, a stored
+# icehockey_nhl discovery of the 2026-10-01 games, planned with the switch on, the T-6h books captured through a
+# fake fetch (recorded order book), one game-horizon failed, and a later game rescheduled. Viewed at 17:00 ET.
+NHL_NOW = datetime(2026, 10, 1, 21, 0, tzinfo=timezone.utc)
+
+
+def nhl(root: Path | None = None) -> tuple[Config, Path]:
+    from edge_lab import price_observations as po
+    from edge_lab import sports_nhl
+    from edge_lab.http import FetchResult, HttpFetchError
+
+    root = root or Path(tempfile.mkdtemp(prefix="edge-ui-nhl-"))
+    fix = REPO / "tests" / "fixtures"
+    listing = json.loads((fix / "sports_nhl" / "kalshi_events_KXNHLGAME_open_2026-09-29.json")
+                         .read_text(encoding="utf-8"))
+    book = json.loads((fix / "forward" / "orderbook_KXHIGHNY-26SEP23-B69.5.json").read_text(encoding="utf-8"))
+    events = {e["event_ticker"]: e for e in listing["events"] if e["event_ticker"].startswith("KXNHLGAME-26OCT01")}
+    by_abbr = {abbr: name for name, (abbr, _) in sports_nhl.NHL_TEAMS.items()}
+    store = SnapshotStore(root / "edge_lab.sqlite3")
+
+    def odds_events(shift_last: bool = False) -> list:
+        out = []
+        for i, (ticker, e) in enumerate(sorted(events.items())):
+            parsed, _ = sports_nhl.parse_ticker(ticker)
+            occ = datetime.fromisoformat(e["markets"][0]["occurrence_datetime"].replace("Z", "+00:00"))
+            start = occ - timedelta(hours=3) + (timedelta(days=1) if shift_last and i == 0 else timedelta(0))
+            out.append({"id": f"nhl_fixture_{i}", "sport_key": sports_nhl.NHL_SPORT,
+                        "commence_time": start.isoformat().replace("+00:00", "Z"),
+                        "home_team": by_abbr[parsed["home"]], "away_team": by_abbr[parsed["away"]]})
+        out.append({"id": "nhl_fixture_unmapped", "sport_key": sports_nhl.NHL_SPORT,
+                    "commence_time": "2026-10-01T23:30:00Z", "home_team": "Hartford Whalers",
+                    "away_team": "Boston Bruins"})
+        return out
+
+    def discover(at: datetime, shift_last: bool = False) -> None:
+        run = f"nhl-discovery-{at.isoformat()}"
+        store.start_run(run)
+        store.save_snapshot(run_id=run, source="the_odds_api", kind="events", entity_id=sports_nhl.NHL_SPORT,
+                            url="https://api.the-odds-api.com/v4/sports/icehockey_nhl/events?apiKey=REDACTED",
+                            payload={"sport": sports_nhl.NHL_SPORT, "events": odds_events(shift_last),
+                                     "request": {"purpose": "discovery", "tick_utc": at.isoformat()}},
+                            fetched_at_utc=at.isoformat(), source_id="the_odds_api")
+        store.finish_run(run, status="succeeded")
+
+    clock = [datetime(2026, 10, 1, 17, 5, 20, tzinfo=timezone.utc)]
+    failing = "KXNHLGAME-26OCT01MINNSH"  # its T-6h book request fails at 14:05 ET
+
+    def fake(url, **_kw):
+        clock[0] += timedelta(seconds=0.3)
+        if f"event_ticker={failing}&" in url:
+            raise HttpFetchError("HTTP 503", status=503, attempts=1)
+        if "/orderbook" in url:
+            payload = book
+        else:
+            ticker = url.split("event_ticker=")[1].split("&")[0]
+            payload = {"cursor": "", "markets": events[ticker]["markets"]}
+        return payload, FetchResult(url, url, 200, "application/json", json.dumps(payload).encode(),
+                                    clock[0].isoformat(), 1, 1)
+
+    env = {po.NHL_SWITCH: "on"}
+    discover(datetime(2026, 10, 1, 10, 0, tzinfo=timezone.utc))
+    po.run_plan(store.path, None, now=datetime(2026, 10, 1, 12, 5, tzinfo=timezone.utc), environ=env)
+    original = po.fetch_json_result
+    po.fetch_json_result = fake
+    try:
+        po.run_capture(store.path, clock=lambda: clock[0], sleep=lambda s: None, environ=env)
+        clock[0] = datetime(2026, 10, 1, 18, 5, 20, tzinfo=timezone.utc)
+        po.run_capture(store.path, clock=lambda: clock[0], sleep=lambda s: None, environ=env)
+    finally:
+        po.fetch_json_result = original
+    discover(datetime(2026, 10, 1, 16, 0, tzinfo=timezone.utc), shift_last=True)
+    po.run_plan(store.path, None, now=datetime(2026, 10, 1, 20, 5, tzinfo=timezone.utc), environ=env)
+    cfg = Config(db=store.path, experiments_root=REPO / "experiments", clock=lambda: NHL_NOW)
+    return cfg, root
+
+
 BUILDERS = {"early": early, "demo": demo, "broken": broken, "odds": odds_pilot, "odds_issues": odds_issues,
             "freshness": freshness, "freshness_deferred": freshness_deferred,
             "polymarket": polymarket, "polymarket_issues": polymarket_issues,
             "polymarket_label_proxy": polymarket_label_proxy, "odds_label_proxy": odds_label_proxy,
             "economics": economics, "economics_issues": economics_issues,
-            "payoff": payoff, "payoff_laptop": payoff_laptop, "payoff_production": payoff_production}
+            "payoff": payoff, "payoff_laptop": payoff_laptop, "payoff_production": payoff_production,
+            "nhl": nhl}
