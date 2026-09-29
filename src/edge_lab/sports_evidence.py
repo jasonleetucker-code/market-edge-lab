@@ -1620,6 +1620,32 @@ def _join(store: Any, as_of: datetime, policy: JoinPolicy, results: bool,
     return rows, catalog, payloads, targets, targets_truncated
 
 
+# A T-60m Kalshi book is EXP-002's markout label (a later price is an outcome too; owner directive 2026-09-28
+# §7D). Without a logged --with-results run, its prices, sizes, depth and ladder are withheld from the report rows
+# (and so from the CLI's full JSON and the Terminal). Pairing status, stages and counts stay: they say whether a
+# book existed, never what it priced (availability is noted in docs/research/EXP002_FREEZE_PROPOSAL.md §4).
+LABEL_BOOK_FIELDS = ("yes_bid", "yes_ask", "yes_ask_size", "anomaly", "depth_levels", "depth_truncated",
+                     "visible_depth", "capacity", "observed_gap_unadjusted")
+LABEL_BOOK_HIDDEN = ("HIDDEN (EXP-002 label: a T-60m book's prices, sizes and depth are shown only by a logged "
+                     "--with-results run)")
+
+
+def _hide_label_books(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    out = []
+    for r in rows:
+        if r.get("horizon") != TARGET_HORIZON or not r.get("sides"):
+            out.append(r)
+            continue
+        sides = {}
+        for team, side in r["sides"].items():
+            hidden = {k: v for k, v in side.items() if k not in LABEL_BOOK_FIELDS}
+            if len(hidden) != len(side):
+                hidden["label_book"] = LABEL_BOOK_HIDDEN
+            sides[team] = hidden
+        out.append({**r, "sides": sides})
+    return out
+
+
 def build_report(store: Any, *, as_of: datetime, policy: JoinPolicy = JoinPolicy(),
                  experiments_root: Path | None = None, results: bool = False) -> dict[str, Any]:
     """The Family A paired-evidence report over one read-only store. Deterministic for the same stored
@@ -1661,7 +1687,7 @@ def build_report(store: Any, *, as_of: datetime, policy: JoinPolicy = JoinPolicy
         "attrition": protocol_attrition(rows, as_of=as_of, policy=policy, catalog=catalog, results=results),
         "join": join, "gaps": gaps,
         "economics": economics(rows, observations, protocol, join, policy, as_of, [g["stream"] for g in gaps]),
-        "rows": rows,
+        "rows": rows if results else _hide_label_books(rows),
     }
     plain = _plain(body)
     plain["output_sha256"] = sha256_hex(canonical_json(plain))
@@ -2190,12 +2216,14 @@ def _roll_sensitivity(games: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
 #
 #   (W) within-spread: each book's reverting mid error |e| = |mid - V| is at most half its quoted spread, where V
 #       is the value the book's price later reverts around (the latent martingale of the A.A null);
-#   (I) the consensus deviation w = c - V is independent of the books' errors at the decision time;
+#   (I) the consensus deviation w = c - V is independent of the books' errors at the decision time, and each
+#       book's error is mean-zero (E[e] = 0), so E[sign(w) e_A] = E[sign(w)] E[e_A] = 0;
 #   (R) the T-60m error is mean-zero given the T-6h information, or persists with a coefficient in [0, 1].
 #
 # Under (W), (I), (R) and the A.A null (the latent value is a martingale that the consensus does not predict), the
 # bias of one half of the cross-book statistic, E[sign(c - H6)(A1 - A6)], is at most E[s_A * 1{|c - H6| <= s_H}]:
-# sign(w - e_H) differs from sign(w) only when w lies between 0 and e_H, E[sign(w) e_A] = 0 under (I), |e_A| <=
+# sign(w - e_H) differs from sign(w) only when w lies between 0 and e_H, E[sign(w) e_A] = 0 under (I) (independence
+# and E[e_A] = 0), |e_A| <=
 # s_A / 2 under (W), and |w| <= |e_H| implies |c - H6| = |w - e_H| <= s_H. No distribution, density or noise
 # correlation is assumed (the worst case, perfectly shared error, is allowed). The bound is label-free: T-6h
 # features only.
@@ -2228,7 +2256,8 @@ V3_NOT_A_BOUND = ("A quoted spread is not a bound on latent pricing error, stale
 V3_ASSUMPTIONS = {
     "W": "within-spread: |mid - V| <= spread / 2 for each T-6h book (V = the value the price later reverts around); "
          "NOT identified from these observations",
-    "I": "the consensus deviation c - V is independent of the T-6h book errors; not testable without V",
+    "I": "the consensus deviation c - V is independent of the T-6h book errors, and each error is mean-zero (E[e] = "
+         "0), so E[sign(w) e_A] = 0; not testable without V",
     "R": "the T-60m book error is mean-zero given T-6h information, or persists with a coefficient in [0, 1]; "
          "needs later prices (labels) to check",
     "N": "the A.A null: the latent value is a martingale the consensus does not predict (the hypothesis under test)",
@@ -2687,7 +2716,9 @@ def view_from_report(report: Mapping[str, Any], now: datetime) -> dict[str, Any]
     latest = max(shown, key=lambda x: (x[2]["decision_utc"], x[2]["ticker"]), default=None)
     sides = [s for r in rows for s in r["sides"].values()]
     rel = next((s["relation"] for s in sides if s.get("relation", {}).get("tier")), None)
-    books = [s for s in sides if s.get("book_snapshot_id")]
+    # Capacity counts cover pre-label books only: a T-60m book's depth status is part of the EXP-002 label.
+    books = [s for r in rows if r.get("horizon") != TARGET_HORIZON for s in r["sides"].values()
+             if s.get("book_snapshot_id")]
     action, blocker = _next_action(report)
     econ = report["economics"]
     screen = econ.get("screen") or {}

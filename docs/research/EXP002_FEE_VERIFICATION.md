@@ -97,6 +97,26 @@ subject only to event overrides. The evidence suggests adding:
   waive?
 - (d) Did KXNFLGAME maker fees apply from July 7 or from August 20, 2026?
 
+## Drafted question S1: suspended after 55 minutes (payoff conflict; NOT SENT)
+
+No question in `KALSHI_QUESTIONS_2026-09-26.md` covers this conflict. Q2 asks only about the NO-side payout at a
+non-binary value. The coordinator adds S1 to the Kalshi message file; this document does not send it.
+
+> **S1 (KXNFLGAME, game suspended after 55 minutes of play).** Two governing texts differ for an NFL game that is
+> suspended after 55 minutes of play, is not resumed, and is not declared complete or final by the league.
+> - The FOOTBALLGAMEWIN contract terms (PDF created 2026-09-11) resolve the market to the result as it stands at
+>   suspension.
+> - The CFTC self-certification letter of 2026-02-18 resolves it to the last fair market price as determined by
+>   Kalshi.
+>
+> Which text governs KXNFLGAME markets listed since 2026-09-11? If the fair-price text governs, is that price
+> confined to [$0, $1] and to the price grid, and is it paid identically to YES and (as $1 − value) to NO holders?
+
+Evidence: `experiments/EXP-002-nfl-consensus-vs-event-market/rules_evidence/` (both documents, with hashes) and
+`RESEARCH_UNBLOCKING_DECISIONS.md` A.D. The freeze proposal's payoff bound does not depend on the answer (both
+texts pay a value in [0, 1]). The answer decides only whether that state is modelled as the standing result or as
+a discretionary F.
+
 ## Re-check
 
 The Kalshi fee re-check date in HANDOFF (by 2026-10-23) is unchanged. A verification record for KXNFLGAME is

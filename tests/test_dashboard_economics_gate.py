@@ -85,7 +85,7 @@ def test_insufficient_evidence_line_shows_every_required_field_and_freeze_separa
     for needed in ("EXP-002 pre-freeze gate", "exp002-noise-gate-v3", "diagnostic only", "as of", "T-6h (bound)",
                    "T-24h (diagnostics)", "54 admissible T-6h game(s) of 60 due", "4 NFL week(s)",
                    "Insufficient evidence", "Spreads cannot bound latent, stale or shared book error",
-                   "Outcome access", "No logged label view", "the gate reads no label",
+                   "Outcome access", "No label access recorded", "the gate reads no label",
                    "Freeze eligibility", "Not eligible", "a diagnostic is never freeze eligibility",
                    "0.42¢", "0.125¢", "why a spread is not a bound", "not identifiable here", "freeze blockers",
                    "book-before-odds sides 2 (comparability only)"):
@@ -98,7 +98,7 @@ def test_insufficient_data_fail_error_and_missing_states():
         "9 admissible T-6h games < 20", "1 NFL week(s) < 4: no week-cluster bound"]), "PARTIAL"))
     assert "Insufficient data" in thin and "9 admissible T-6h games < 20" in thin and "Not eligible" in thin
     mirror = plain(research._ev_exp002_gate(_line(se.V3_FAIL), "POPULATED"))
-    assert "Fail" in mirror and "mirror quoting" in mirror and "Not eligible" in mirror
+    assert "Fail · premise refuted" in mirror and "mirror quoting" in mirror and "Not eligible" in mirror
     error = _assert_safe(research._ev_exp002_gate({"state": "ERROR", "version": se.GATE_V3_VERSION,
                                                    "detail": "RuntimeError: boom"}, "POPULATED"))
     assert "Gate error" in error and "could not be computed" in error and "RuntimeError: boom" in error
@@ -107,13 +107,24 @@ def test_insufficient_data_fail_error_and_missing_states():
     assert "gate status not available" in missing and "—" in missing  # unavailable, never zero or a verdict
 
 
+def test_gate_and_freeze_codes_are_registered_and_never_green():
+    from edge_lab.dashboard import presentation as pr
+
+    for code in ("INSUFFICIENT_EVIDENCE", "INSUFFICIENT_DATA", "FAIL", "ERROR"):
+        word = pr.prefixed_word("EV_GATE", code)
+        assert f"EV_GATE_{code}" in pr.STATES and word.kind in (pr.WARN_K, pr.ERR_K)
+    assert pr.prefixed_word("EV_FREEZE", "NOT_ELIGIBLE").kind == pr.WARN_K
+    html = research._ev_exp002_gate(_line(se.V3_FAIL), "POPULATED")
+    assert "k-ok" not in html and "k-nd" not in html.split("Outcome access")[0]
+
+
 def test_stale_evidence_and_logged_labels_are_named():
     stale = plain(research._ev_exp002_gate(_line(), "STALE"))
     assert "evidence stale: nothing here is current" in stale
     logged = plain(research._ev_exp002_gate(_line(outcome_access={
         "state": "LABEL_VIEWS_LOGGED", "label_views": 2, "latest_label_view_utc": "2026-10-20T01:00:00Z",
         "roles": ["DEVELOPMENT"]}), "POPULATED"))
-    assert "2 logged label view(s)" in logged and "DEVELOPMENT" in logged
+    assert "2 logged label view(s)" in logged and "latest recorded" in logged and "DEVELOPMENT" in logged
     possible = plain(research._ev_exp002_gate(_line(outcome_access={
         "state": "POSSIBLE_LABEL_EXPOSURE_LOGGED", "label_views": 0, "possible_label_exposures": 1,
         "latest_label_view_utc": "2026-09-29T01:16:30Z", "roles": ["DEVELOPMENT"]}), "POPULATED"))

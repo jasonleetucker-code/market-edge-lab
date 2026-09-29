@@ -1166,7 +1166,7 @@ GATE_TEXT = {  # sports_evidence gate v3 verdicts, in plain words; nothing here 
     "INSUFFICIENT_DATA": "Too few admissible T-6h games or NFL weeks for any bound.",
     "FAIL": "The two team books quote as one (mirror quoting): the cross-book design removes none of the bias.",
 }
-ACCESS_TEXT = {"NO_LABEL_VIEW_LOGGED": "No logged label view", "LABEL_VIEWS_LOGGED": "Label views logged",
+ACCESS_TEXT = {"NO_LABEL_VIEW_LOGGED": "No label access recorded", "LABEL_VIEWS_LOGGED": "Label views recorded",
                "NO_LOG": "No evidence-use log · access unknown", "NO_PROTOCOL": "No protocol registered",
                "UNREADABLE": "Evidence-use log unreadable · access unknown"}
 
@@ -1179,7 +1179,7 @@ def _gate_access(acc: Any) -> str:
     if state in ("LABEL_VIEWS_LOGGED", "POSSIBLE_LABEL_EXPOSURE_LOGGED"):
         label = (f"{pr.count(acc.get('label_views') or 0)} logged label view(s) · "
                  f"{pr.count(acc.get('possible_label_exposures') or 0)} possible (unconfirmed) exposure(s) · latest "
-                 f"{pr.datetime_et(acc.get('latest_label_view_utc')) or 'time not recorded'} · "
+                 f"recorded {pr.datetime_et(acc.get('latest_label_view_utc')) or 'time not recorded'} · "
                  f"{', '.join(acc.get('roles') or []) or 'role not recorded'}")
     return c.txt(label) + _sub("the gate reads no label; this page shows none · the log records declared access only")
 
@@ -1192,8 +1192,7 @@ def _ev_exp002_gate(g: Any, family_state: str) -> str:
         return c.facts([("EXP-002 pre-freeze gate", c.txt(None, reason="not computed by this build")
                          + _sub("gate status not available in this view"))], wide=True, text_cols=(0,))
     if g.get("state") != "OK":
-        err = pr.prefixed_word("EV_STATE", "ERROR")  # the canonical error kind; the gate names its own label
-        return c.facts([("EXP-002 pre-freeze gate", c.badge("EV_GATE_ERROR", label="Gate error", kind=err.kind) + _sub(
+        return c.facts([("EXP-002 pre-freeze gate", _pm_badge("EV_GATE", "ERROR") + _sub(
             f"{g.get('version') or 'gate'} could not be computed: {g.get('detail') or 'no detail'}")),
                         ("Freeze eligibility", _pm_badge("EV_FREEZE", "NOT_ELIGIBLE")
                          + _sub("no gate result: not eligible"))], wide=True, text_cols=(0, 1))

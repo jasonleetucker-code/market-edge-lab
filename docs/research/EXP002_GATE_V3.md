@@ -52,14 +52,15 @@ quote breaks it, and the validation (§4) shows it false-passing. Instead v3 com
 can support, and only under stated assumptions:
 - (W) **within-spread**: each book's reverting mid error `|mid − V| ≤ s/2`. Here V is the value the price later
   reverts around, the latent martingale of the A.A null.
-- (I) The consensus deviation `w = c − V` is independent of the T-6h book errors.
+- (I) The consensus deviation `w = c − V` is independent of the T-6h book errors, and each book error is
+  mean-zero (`E[e] = 0`).
 - (R) The T-60m error is mean-zero given T-6h information, or persists with a coefficient in [0, 1].
 - (N) The A.A null holds: V is a martingale that the consensus does not predict.
 
 Under (W), (I), (R) and (N), each half of the cross-book statistic has `|bias| ≤ E[s_A · 1{|c − H6| ≤ s_H}]`.
 The argument:
 1. `sign(c − H6) = sign(w − e_H)`, and this differs from `sign(w)` only when w lies between 0 and `e_H`.
-2. `E[sign(w)·e_A] = 0` under (I).
+2. `E[sign(w)·e_A] = E[sign(w)]·E[e_A] = 0` under (I): independence plus `E[e_A] = 0`.
 3. `|e_A| ≤ s_A/2` under (W).
 4. `|w| ≤ |e_H|` implies `|c − H6| ≤ 2|e_H| ≤ s_H`.
 
@@ -230,10 +231,15 @@ thousands of games.
      Mark to the first T-60m book's **bid** on the same market, and hold to settlement as a secondary.
    - Mid noise inside the spread cannot make the expected gross round-trip P&L positive: under W, the
      ask ≥ V6 and E[bid₁] ≤ E[V₁] = V6.
-   - A deviation beyond the spread (a stale quote) that the rule captures is executable money at the snapshot.
-     That is the hypothesis, not a bias.
-   - So this endpoint needs **no noise gate**. It keeps the Kalshi-only placebo and the cross-book check as
-     descriptive controls.
+   - A deviation beyond the spread (a stale quote) that the rule captures is priced at a **displayed** quote, not
+     a proven fill. Under the FIRST_DETECTION_ZERO_LATENCY fill assumption (labels v2: the displayed ask and bid
+     at their receipt times, no decision or submission delay, displayed depth as a ceiling), it is the hypothesis,
+     not a bias.
+   - So this endpoint needs **no noise gate only under that fill assumption**. It does not show that the quote
+     would have filled, or that it was still there after a real delay; latency and fill sensitivities stay
+     separate. It keeps the Kalshi-only placebo and the cross-book check as descriptive controls.
+   - Trade eligibility uses T-6h information only. A missing or empty T-60m bid is scored (freeze proposal row
+     3), never dropped.
    - Costs:
      - it trades only when the consensus lies outside the Kalshi spread, so it has fewer units and less power;
      - it measures GROSS P&L until KXNFLGAME fees are verified;
@@ -260,5 +266,7 @@ freeze eligibility separate and always "Not eligible".
 The Terminal's "latest paired book" no longer shows a T-60m book. A T-60m book is EXP-002's markout label,
 and the Terminal is not a logged consumer of labels. Before this change the capacity panel could show a T-60m
 ask and depth for pilot games. Any such viewing was unlogged, so pilot T-60m label exposure is **UNKNOWN**. It is
-hand-recorded as a possible exposure in EXP-002's evidence-use log (`EXP002_FREEZE_PROPOSAL.md` §4). The gate
+hand-recorded as a possible exposure in EXP-002's evidence-use log (`EXP002_FREEZE_PROPOSAL.md` §4). The same fix hides T-60m book prices, sizes, depth and ladders from
+the report rows (`sports_evidence report` without `--with-results`, `LABEL_BOOK_FIELDS`) and from the Terminal's
+capacity counts. Only the logged `--with-results` run shows them. The gate
 line's outcome-access field shows such records as "possible (unconfirmed)", apart from confirmed label views.

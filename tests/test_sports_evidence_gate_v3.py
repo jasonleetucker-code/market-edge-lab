@@ -287,6 +287,28 @@ def test_the_terminal_view_carries_the_gate_line_and_hides_t60m_prices(tmp_path)
     assert again["outcome_access"]["state"] == "LABEL_VIEWS_LOGGED"
 
 
+def test_the_full_report_hides_t60m_book_prices_unless_the_view_is_logged(tmp_path, capsys):
+    path, now, sids = t2.build_store(tmp_path)
+    root, own = t2._registry_copy(tmp_path)
+    before = len(rev.read_log(own).uses)
+    assert se.main(["report", "--db", str(path), "--as-of", now.isoformat(), "--experiments", str(root)]) == 0
+    plain_report = json.loads(capsys.readouterr().out)
+    t60 = [s for r in plain_report["rows"] if r["horizon"] == "T-60m" for s in r["sides"].values()]
+    assert t60 and all(s.get("book_snapshot_id") for s in t60)  # availability stays visible ...
+    for s in t60:  # ... prices, sizes, depth and the ladder do not
+        assert not set(s) & set(se.LABEL_BOOK_FIELDS) and s["label_book"] == se.LABEL_BOOK_HIDDEN
+    earlier = [s for r in plain_report["rows"] if r["horizon"] in ("T-24h", "T-6h") for s in r["sides"].values()]
+    assert earlier and all(s.get("yes_ask") is not None for s in earlier)  # features stay
+    assert len(rev.read_log(own).uses) == before  # nothing was logged, nothing label-bearing was shown
+    view = se.terminal_view(path, now=now, experiments_root=root)["family_a"]
+    assert view["capacity"]["latest"]["horizon"] != "T-60m"
+    assert se.main(["report", "--db", str(path), "--as-of", now.isoformat(), "--experiments", str(root),
+                    "--with-results", "--evidence-log", str(own), "--actor", "test", "--code-version", "abc"]) == 0
+    logged = json.loads(capsys.readouterr().out)
+    t60_logged = [s for r in logged["rows"] if r["horizon"] == "T-60m" for s in r["sides"].values()]
+    assert any(s.get("yes_ask") is not None for s in t60_logged) and logged["evidence_use"] == "APPENDED"
+
+
 def test_a_gate_error_is_a_state_not_a_crash(tmp_path, monkeypatch):
     path, now, _ = t2.build_store(tmp_path)
 
