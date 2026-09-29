@@ -308,6 +308,11 @@ def read_schedule(store: Any, now: datetime, *, max_age: timedelta) -> NhlSchedu
     events, problems = odds_api.parse_events(payload.get("events"), sport=NHL_SPORT)
     request = payload.get("request") if isinstance(payload.get("request"), Mapping) else {}
     lo, hi = parse_utc(request.get("commence_from")), parse_utc(request.get("commence_to"))
+    # Age on the discovering tick's clock (`request.tick_utc`) when recorded, else the receipt: the rule
+    # `odds_pilot._discovered_at` uses for its own planning (the two agree in production).
+    stamped = parse_utc(request.get("tick_utc"))
+    if stamped is not None and stamped <= now:
+        received = stamped
     state = "OK" if now - received <= max_age else "STALE"
     detail = None if state == "OK" else (f"newest discovery {sid} received {received.isoformat()} is older than "
                                          f"{int(max_age.total_seconds() // 3600)} h")
