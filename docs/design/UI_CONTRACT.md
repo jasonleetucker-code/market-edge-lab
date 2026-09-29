@@ -297,6 +297,22 @@ states; every event in a disclosure; each Odds capture target row names its even
 ranked, never "cheaper", nothing green; a partial, stale or missing scan never reads as "no market". Venues (Tested ≠ connected), collected sources with freshness,
 fee verification, venue registry and full receipt in disclosures.
 
+**In-play research `/experiments/inplay`** (#122; nav Research & Data; no global item) — the
+`inplay_view` contract (inplay-view/1) as: label "IN-PLAY RESEARCH · NOT LIVE · NOT AN EDGE CLAIM",
+a mode capsule (Fixture replay · not live, Synthetic replay · not live, No in-play source authorized;
+never LIVE) and a state capsule whose populated word follows the mode (Fixture, Synthetic or Recorded evidence); a status line with the replay clock ("the fixture's time, not now");
+Position · simulated (contract, game, book reconstruction state and age at the replay clock, coverage,
+market state, simulated initial / remaining inventory, reserved by resting sales; reconstruction details
+and every kept failure in a disclosure); Policy proposal (action "· proposal only", decision "Proposed ·
+not sent" or "Blocked · no new risk", quantity, limit, execution assumption, primary reason (the decision's own reason, never the fee caveat; every reason in Policy details); exit proceeds
+estimate at size with gross at displayed bids, fees, net "not profit" — unknown fees read "after-cost
+figure unavailable", never a number); Hold versus exit (a note first: "A synthetic cohort of N games, not this contract (<ticker>)"; then one row per arm and execution semantics with
+replay P&L gross and net, change vs hold, worst and best entry — signed, never coloured; oracle diagnostics
+and provenance in a disclosure); Blocker and approval (authority, the pilot "PROPOSED, NOT APPROVED",
+blocker; assumptions in a disclosure). Production reads "No in-play source is authorized". No balance,
+edge score, input or trade control. States: populated, empty, stale, partial, unsupported, paused, error,
+not authorized; `/gallery/inplay` (demo only) renders each from fixtures.
+
 **Alerts `/alerts`** — Needs attention, Standing conditions, Recent notifications, Tests,
 verification checks and diagnostics, Expired; delivery state stated honestly (recorded locally;
 phone delivery not recorded; stored and never pushed where the origin policy holds it). Origins
@@ -535,3 +551,22 @@ directive), and the screenshots that justify it.
   result with one conditional surplus) and `payoff_laptop` (the committed laptop result, not production evidence)
   at 360x800 and 1440x900, closed and with every disclosure open, and at 200% root text (Chromium emulation, not a
   physical phone), reviewed locally by the author and described in the PR (not attached).
+- **2026-09-28 — In-play research page.** Approved by the owner directive of 2026-09-28 (#122 §21B: a compact
+  in-play research view, never LIVE, no invented balances, no trade buttons, no edge score;
+  `docs/owner/2026-09-28-exp002-validation-inplay-foundation-directive.md`) and the coordinator's PR C
+  assignment. §8 gains "In-play research" at `/experiments/inplay` under Research & Data (no global navigation
+  item; a crumb back to Research & Data) and the demo-only `/gallery/inplay`. Composed in `views/inplay.py` from
+  the existing page-head, badge, state-text, status-line, section, facts, row, table, kv, list, disclosure and
+  empty/blocked/error/unavailable components; no new component, token, CSS or `presentation.STATES` word (plain
+  labels are passed to `badge` / `state_text`, codes stay in the title). Money is signed but uncoloured because
+  every figure is a fixture or synthetic replay. The Research tab links it with one "In-play research"
+  section after Economic evidence · B (a coordinator-granted exception to the claim row). Screenshots
+  (`tests/browser/capture.py`), 24 shots, 0 with overflow, clipping, low contrast or foreign requests:
+  - Chromium, `demo` state: `/experiments/inplay` and `/gallery/inplay` at 360x800, 390x844, 768x1024,
+    1440x900 and 1920x1080, and at 360x800 and 1440x900 with 200% root text and every disclosure open;
+  - Chromium, `early` state (production shape: not authorized): `/experiments/inplay` at 360x800 and 1440x900;
+  - WebKit: `/experiments/inplay` in both states at 390x844 and 1440x900;
+  - Chromium: `/experiments` (the Research tab link) in both states at 360x800 and 1440x900.
+
+  This is Chromium and WebKit emulation, not a physical phone. The shots were reviewed locally by the
+  author, described in the PR and not attached.

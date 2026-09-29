@@ -779,12 +779,14 @@ def sensitivity(cohort: Cohort, base: ReplayConfig, *, latencies: Sequence[timed
 def synthetic_martingale_cohort(*, seed: int, games: int, start: Decimal = Decimal("0.30"),
                                 tick: Decimal = Decimal("0.10"), quantity: Decimal = Decimal(100),
                                 depth: Decimal = Decimal(1000), spread_ticks: int = 0, step_seconds: int = 30,
-                                games_per_cluster: int = 4, entry_cost: Decimal | None = None) -> Cohort:
+                                games_per_cluster: int = 4, entry_cost: Decimal | None = None,
+                                entry_fee_known: bool = True) -> Cohort:
     """A calibrated-price synthetic null: the YES price is a symmetric random walk on a `tick`
     grid, absorbed at 0 or 1, so it is a martingale and P(YES) equals the price by construction.
     Selling at any stopping time cannot beat holding in expectation before costs; with spread
     and fees it can only lose. The walk is continuous on its grid, so it cannot jump through a
-    target on the grid. Deterministic for a seed. Labelled SYNTHETIC; never evidence of an edge."""
+    target on the grid. Deterministic for a seed. Labelled SYNTHETIC; never evidence of an edge.
+    `entry_fee_known=False` leaves every entry cost unknown (None), so no net figure exists."""
     if not valid_price(start) or tick <= 0 or (start % tick) != 0:
         raise ValueError("start must be a valid price on the tick grid")
     rng = random.Random(seed)
@@ -801,7 +803,8 @@ def synthetic_martingale_cohort(*, seed: int, games: int, start: Decimal = Decim
         horizon = max(horizon, t)
         entries.append(CohortEntry(
             game_id=f"SYN-{seed}-{g:05d}", cluster_id=f"W{g // games_per_cluster:04d}", market_id=f"kalshi:SYN-{g}",
-            quantity=quantity, entry_price=start, entry_cost=quantity * start if entry_cost is None else entry_cost,
+            quantity=quantity, entry_price=start,
+            entry_cost=None if not entry_fee_known else quantity * start if entry_cost is None else entry_cost,
             entry_at_utc=t0.isoformat(), books=tuple(books),
             settlement=Settlement(Decimal(1) if p >= 1 else Decimal(0), True, t.isoformat())))
     return Cohort(cohort_id=f"synthetic-martingale-{seed}-{games}", data_kind=DataKind.SYNTHETIC,

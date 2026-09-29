@@ -33,7 +33,9 @@ Before: `/`, `/opportunities`, `/positions`, `/outcome-board`, `/risk`, `/experi
 After: the same deep links (relabelled Terminal, Markets, Portfolio, Outcomes, Risk, Research
 & Data) plus `/market` (detail), `/alerts`, `/more`, `/gallery` (demo only),
 `/static/<version>/<allowlisted name>`, `/healthz`. Per-route query allowlists
-(`presentation.ROUTE_PARAMS`).
+(`presentation.ROUTE_PARAMS`). `/experiments/inplay` (In-play research, nav Research & Data, no query
+parameters) and `/gallery/inplay` (its fixture states, demo only), registered by `views/inplay.py`
+(`INPLAY_PAGES`, `INPLAY_DEMO_PAGES`) and merged in `app.make_app`.
 
 ## Data-to-view map (every visible number has a canonical origin)
 
@@ -63,6 +65,7 @@ After: the same deep links (relabelled Terminal, Markets, Portfolio, Outcomes, R
 | Consensus at a capture: consensus probability, range, MAD, contributing / quoting books, status, reason, freshness, update bounds, offered prices, implied with margin, per-book de-vig and margin, unsupported groups, version, hashes | `odds_consensus.consensus_for_event(store, event_id, as_of=captured_at_utc)` via `data.odds_consensus_at_capture`, for the captured rows shown only; memoized by (database, event, as_of, newest odds snapshot id received by as_of; other sources' writes never invalidate); every figure is the contract's value, only formatted (`percent`, `pp_size`, `pp`, `datetime_et`) |
 | Source freshness: every source's freshness, schedule state, health, why, times, data and upstream age, usability, misses, disagreements, notes, details and policy; the summary and "due next"; the supervisor's state, deferral window and carried evaluation | `<status-dir>/freshness.json` (`freshness_fabric` supervisor, schema `freshness-fabric-status/1`) via `data.freshness_report`, read as written; the report's own age by `freshness.assess(generated_at_utc, max_age=freshness_fabric.SUPERVISOR_MAX_AGE)`; ages formatted from the artifact's seconds (`duration_text`), never recomputed from now |
 | Polymarket US related markets: access gate, catalog state and coverage note, per Odds API event relationship, reasons, checks, flags, market fields, latest research book capture (YES bid / ask, sizes, receipt, freshness at capture), capture target states and attempts, attribution | `polymarket_sports.terminal_view(db, now=...)` via `data.pm_sports_view`; `polymarket_sports.market_history(store, slug)` via `data.pm_market_history` for the markets shown; prices formatted by `cents`, sizes by `quantity`; nothing is compared with a sportsbook price |
+| In-play research (#122): mode, state, contract, book status and age at the replay clock, coverage, gaps, resyncs, failures, simulated inventory and reservations, policy proposal (action, quantity, limit, execution assumption, reasons), exit proceeds estimate at displayed depth, hold-versus-exit arms (replay P&L gross and net, change vs hold, worst and best entry), oracle diagnostics, after-cost claim, assumptions, authority, pilot status, blocker | `inplay_view.not_authorized_view()` in production (no in-play source is authorized) and `inplay_view.fixture_view(...)` in demo mode, via `data.inplay_view` / `data.inplay_fixture_views` (schema `inplay-view/1`; a LIVE mode or another schema is an error). Inside the contract: `inplay_evidence` (reconstruction, coverage), `position_policy.evaluate`, `inplay_replay.replay`. Formatted only (`money` unsigned-colour, `cents`, `count`, `percent`, `datetime_et`) |
 | Experiments, Stage A result, report names, Stage B plan looks, limitations | experiment registry + `gate4/stage_a_result.json` |
 | Venues and capabilities | `venues.VENUES` / `coverage_rows` |
 | Source health | `SnapshotStore.latest_source_health` + `sources` registry descriptions |
