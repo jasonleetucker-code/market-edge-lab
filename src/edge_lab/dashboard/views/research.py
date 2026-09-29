@@ -1601,7 +1601,9 @@ def economics_section(ctx: d.Context) -> str:
                       + family_a_body(ctx.economic_a, ctx.now),
                       meta="Sportsbook consensus vs Kalshi NFL · research only · no edge claimed", sid="ev-h")
             + c.section("Economic evidence · B", family_b_body(ctx.economic_b, ctx.now),
-                        meta="Same-venue payoff consistency · research only", sid="ev-b-h"))
+                        meta="Same-venue payoff consistency · research only", sid="ev-b-h")
+            + c.section("In-play research", '<p class="note">Owner Idea 122 · hold versus exit · offline foundation, '
+                        "fixtures only · not live</p>", sid="ip-h", action='<a href="/experiments/inplay">Open</a>'))
 
 
 def sources_tab(ctx: d.Context) -> str:

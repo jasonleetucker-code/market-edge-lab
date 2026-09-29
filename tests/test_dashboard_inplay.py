@@ -123,6 +123,11 @@ def test_error_state_renders_on_the_page(monkeypatch, prod):
     assert status.startswith("200") and "Data unavailable" in body
 
 
+def test_the_research_tab_links_the_page(prod):
+    status, body = get(prod, "/experiments")
+    assert status.startswith("200") and 'href="/experiments/inplay"' in body and "In-play research" in body
+
+
 def test_only_get_and_head(prod):
     assert get(prod, "/experiments/inplay", method="POST")[0].startswith("405")
     assert get(prod, "/experiments/inplay", method="HEAD")[0].startswith("200")
