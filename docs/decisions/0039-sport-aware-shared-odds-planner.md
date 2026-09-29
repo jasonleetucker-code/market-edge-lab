@@ -93,6 +93,16 @@ NHL data. Where this view could differ from NFL's own tick, it is more conservat
 A NFL target that expired uncaptured (MISSED) is final, and its reservation is released. This is the only way
 NFL's demand shrinks, apart from NFL's own captures and newly discovered weeks.
 
+**Known gap: NFL demand that grows inside its known horizon after NHL has spent has no reservation.** Examples: a
+reschedule into a new kickoff group, a late-listed game, a flexed game. NFL's worst case covers unknown weeks,
+not new groups inside weeks it has already listed. NFL still has priority for every later admission, and the
+per-spend invariant still holds: no single call ever exceeds the ceiling or the provider's remaining quota. But
+an NFL slot created that way could be SKIPPED_BUDGET because of credits NHL already spent.
+
+**Default offsets.** The demand is built with the NFL policy's default offsets, markets and regions. The
+production NFL line must run exactly those; `test_the_odds_service_arguments_are_each_sports_reviewed_policy`
+pins it.
+
 ### Concurrency
 
 Both sports run in the existing `edgelab-odds.service` (Type=oneshot), as two sequential `ExecStart` lines,
@@ -103,8 +113,16 @@ NFL first. There is no new timer or service.
   re-checks the ceiling at the call. No two ticks can spend the same headroom.
 - If the NFL tick exits 1 (a new alert), systemd skips the NHL line for that tick, and the next tick runs both.
   This is fail-closed, and NFL keeps priority.
-- A manual `odds smoke` (either sport) is outside the tick lock, as before. It costs at most one call, and the
-  3-credit reserve exists for it.
+- **`odds smoke` is for the rank-1 sport (NFL) only.** It never passes the joint proof, so a lower-ranked sport's
+  smoke could spend credits reserved for NFL's worst case: the 3-credit reserve belongs to the ledger, not to
+  NHL. An NHL smoke is refused with no request (`SMOKE_REFUSED_RANK`). NHL's first live read is a scheduled
+  capture that the joint proof admitted. The NFL smoke is unchanged: outside the tick lock, at most one call.
+- **Per run.** Each `ExecStart` line makes at most three GETs, so one run makes at most six (20 s each), plus two
+  Python starts. `TimeoutStartSec` was raised from 3 to 5 min. Measured with fixtures: the heaviest NHL tick
+  (first planning) used 0.72 s of CPU, a steady tick 0.05 s, and an interpreter start with imports 0.2 s. That
+  gives about 170 s in the worst case under `CPUQuota=10%`.
+- **The shared unit's OnFailure alert names only `edgelab-odds`.** A failing NHL line prints its JSON report
+  (`"sport": "icehockey_nhl"`) and a stderr line `odds run icehockey_nhl: exit 1, state ...` to the journal.
 
 ### Per-sport runner state
 
@@ -128,11 +146,14 @@ Discovery uses the existing quota-free events endpoint with sport `icehockey_nhl
 - event id, commence time, teams and receipt;
 - a moved game SUPERSEDES its old targets.
 
-An h2h market with a Draw or Tie outcome, or with three or more outcomes, is already refused by
-`odds_api.pair_offers` (`NOT_TWO_WAY`), so the consensus shows it as UNSUPPORTED. The runner now also records
-it on the paid capture:
-- a source-health anomaly;
+An h2h market with a Draw or Tie outcome, or with a number of outcomes other than two, is already refused by
+`odds_api.pair_offers` (`NOT_TWO_WAY`), so the consensus shows it as UNSUPPORTED.
+
+For sports whose policy sets `check_two_way_h2h` (NHL only), the runner also records it on the paid capture:
+- a source-health anomaly naming each book's actual outcomes (for example `draftkings: 3 outcome(s) [...]`);
 - `h2h_not_two_way` in each affected target's detail.
+
+NFL capture records are unchanged. A one-outcome NFL h2h book still leaves source health `ok` (tested).
 
 Nothing is forced into a two-way formula. `odds_consensus.LABEL_PROXY_SPORTS` stays NFL-only.
 
@@ -140,8 +161,13 @@ Nothing is forced into a two-way formula. `odds_consensus.LABEL_PROXY_SPORTS` st
 
 For NHL (`record_prior_misses`), a discovered target whose deadline has already passed when it is first seen
 is written as `MISSED`, never silently dropped:
-- `NOT_COLLECTED_BEFORE_ACTIVATION` when the deadline passed before the collector's first switched-on tick;
-- `NOT_DISCOVERED_BEFORE_DEADLINE` when the provider first listed the game after the deadline.
+- `NOT_COLLECTED_BEFORE_ACTIVATION` when the deadline passed before activation;
+- `NOT_DISCOVERED_BEFORE_DEADLINE` when the target was not planned before its deadline: a late listing, a
+  discovery outage, or the collector disabled.
+
+**Activation** (`activated_utc`) is the first tick that could actually plan: switched on, with a key and a fresh
+discovery. It is not merely the first switched-on tick. A tick without a key, or with a failed discovery, does not
+activate the collector.
 
 A MISSED target is final, so it is never captured later and never relabelled T-24h, T-6h or T-60m. NFL keeps
 its historical behaviour, which is not to write such targets.
@@ -187,6 +213,27 @@ fixture.
 - At T-60m, the 17:40-18:35 ET quiet window already moves both 19:00 and 19:30 games to 18:35 ET, one call:
   - 19:00 games are captured at T-25m and 19:30 games at T-55m;
   - the recorded `deviation_minutes` keep this visible.
+
+**Disclosure: many NHL "T-60m" captures are closer to the puck drop.** Over the published 2026-27 season
+(`test_nhl_t60m_actual_leads_over_the_published_season`), the planned leads of the 1,344 T-60m targets are:
+
+| Planned lead | Targets | Share | Why |
+|---|---|---|---|
+| T-60m | 750 | 55.8% | as labelled |
+| T-55m | 107 | 8.0% | 19:30 ET games |
+| T-40m | 2 | 0.1% | 19:15 ET games |
+| **T-25m** | **484** | **36%** | 19:00 ET games |
+| T-10m | 1 | 0.1% | an 18:45 ET game |
+
+The deadline accepts a capture up to T-5m.
+
+The quiet-window rule is kept, and the policy is not changed now. `odds status` reports planned and captured
+lead bands: at least 55 min, 25–55 min, and under 25 min.
+
+**Tracked follow-up (coordinator / owner).** Kalshi NHL (#136) reads the same 19:00 ET games at 17:35 ET (T-85m),
+because the observe protected window runs to 18:50 ET. NHL sportsbook odds and the Kalshi books for those games
+are therefore about 60 minutes apart. Unifying both under one shared protected-window contract is a follow-up
+outside this ADR.
 - Widening to 30 minutes would save about 21% of T-60m calls, but it would capture some games up to 30 minutes
   before their labelled horizon. It was not done to save credits.
 
@@ -206,8 +253,8 @@ outcomes, and each book's rules stay unverified (`rules_resolved=False`).
 
 ### Switch, CLI and status
 
-- `EDGE_LAB_ODDS_NHL=on` (exactly "on") enables NHL `odds run` and `odds smoke`. Anything else sends and writes
-  nothing (`DISABLED`, exit 0).
+- `EDGE_LAB_ODDS_NHL=on` (exactly "on") enables NHL `odds run`. Anything else sends and writes nothing
+  (`DISABLED`, exit 0). NHL `odds smoke` is refused in any case (rank-1 only).
 - `install.sh` keeps the value across installs, like `EDGE_LAB_KALSHI_NFL_CAPTURE`. Unset means off.
 - The CLI takes each sport's defaults from its policy.
 - `odds plan --sport icehockey_nhl` is read-only and free, and it shows the joint proof and next month's joint
@@ -217,7 +264,8 @@ outcomes, and each book's rules stay unverified (`rules_resolved=False`).
   - whether the latest capture is stale (odds max_age 10 min);
   - discovery freshness;
   - games started, complete and incomplete;
-  - MISSED reasons.
+  - MISSED reasons;
+  - planned and captured lead bands.
 
 ## Tradeoffs
 
@@ -230,6 +278,8 @@ outcomes, and each book's rules stay unverified (`rules_resolved=False`).
 - **The joint view of NFL is more conservative than NFL's own view** (EVENT_ABSENT rows, stale discovery). It can
   only give NHL less, never more.
 - **An NFL alert tick skips that tick's NHL run.**
+- **NFL demand growing inside its known horizon after NHL has spent is not reserved** (see above). A reschedule
+  can cost an NFL slot.
 
 ## What would make us reconsider
 

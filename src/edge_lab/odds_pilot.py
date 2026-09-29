@@ -251,7 +251,12 @@ def _demand(store: SnapshotStore | None, policy: SportPolicy, now: datetime, *,
     where the two could differ: every non-final, unexpired stored target counts (an EVENT_ABSENT
     game may come back), so do targets its latest discovery implies but its tick has not written
     yet; with no fresh discovery nothing is known and its worst-case assumption covers the whole
-    rest of the month. `due_from` keeps only slots due at or after it (next month's projection)."""
+    rest of the month. `due_from` keeps only slots due at or after it (next month's projection).
+
+    The demand uses the policy's DEFAULT offsets, markets and regions. The production unit must run
+    the higher-ranked sport with exactly those (pinned by tests/test_deploy_units.py
+    `test_the_odds_service_arguments_are_each_sports_reviewed_policy`); a wider production run would
+    make this view under-reserve for it."""
     settings = RunnerSettings.for_sport(policy.sport)
     cfg = settings.config
     events: tuple[ScheduledEvent, ...] = ()
@@ -482,10 +487,6 @@ def _tick_body(store: SnapshotStore, run: _LazyRun, ledger_path: Path, settings:
     ledger = odds_api.QuotaLedger(ledger_path, cfg.ceiling, clock=clock)
     pilot = _sport_state(ledger_path, settings, paid_history=PilotState.paid_history(ledger), now_utc=iso_z(now))
     policy = settings.policy
-    if policy is not None and policy.record_prior_misses and pilot.get("activated_utc") is None:
-        # The first tick with the collector switched on: targets whose deadline passed before now
-        # were never collectable, and say so (NOT_COLLECTED_BEFORE_ACTIVATION), never relabelled.
-        pilot.set(activated_utc=iso_z(now))
     failed = False
     alert = False  # exit 1 only for a new failure, not for every tick of a known one
     notes: list[str] = []
@@ -603,8 +604,13 @@ def _tick_body(store: SnapshotStore, run: _LazyRun, ledger_path: Path, settings:
                 planned_new += 1
     prior_missed = 0
     if discovery_fresh and policy is not None and policy.record_prior_misses:
-        # A target already past its deadline when first seen is written as MISSED with the reason,
-        # so the gap is on record. It is never captured later under its horizon's label.
+        # Activation is the first tick that can actually plan: switched on, with a key and a fresh
+        # discovery. Targets whose deadline passed before it were never collectable
+        # (NOT_COLLECTED_BEFORE_ACTIVATION); a later-first-seen target was not planned before its
+        # deadline (NOT_DISCOVERED_BEFORE_DEADLINE). Either is written as MISSED so the gap is on
+        # record, and is never captured later under its horizon's label.
+        if pilot.get("activated_utc") is None:
+            pilot.set(activated_utc=stamp)
         known = {r["target_id"] for r in store.odds_targets(sport=settings.sport)}
         activated = parse_utc(pilot.get("activated_utc"))
         for t in plan_targets(events, cfg.offsets):
@@ -621,8 +627,9 @@ def _tick_body(store: SnapshotStore, run: _LazyRun, ledger_path: Path, settings:
                 why = (f"NOT_COLLECTED_BEFORE_ACTIVATION: the {t.offset_label} capture deadline {iso_z(due_by)} passed "
                        f"before this collector was activated ({iso_z(activated)}); never captured later or relabelled")
             else:
-                why = (f"NOT_DISCOVERED_BEFORE_DEADLINE: first planned at {stamp}, after the {t.offset_label} capture "
-                       f"deadline {iso_z(due_by)}; never captured later or relabelled")
+                why = (f"NOT_DISCOVERED_BEFORE_DEADLINE: not planned before its {t.offset_label} capture deadline "
+                       f"{iso_z(due_by)} (late listing, discovery outage, or collector disabled); first planned at {stamp}; "
+                       "never captured later or relabelled")
             move({"target_id": t.target_id}, "MISSED", why)
             prior_missed += 1
 
@@ -828,7 +835,8 @@ def _capture(store: SnapshotStore, ledger: odds_api.QuotaLedger, run: _LazyRun, 
                 error=f"capture {slot.slot_id}: {reason}", environ=environ)
         return "FAILED", fired, True
     received_dt = _parse(received)
-    not_two_way, pairing_error = _h2h_not_two_way(parsed)
+    check = settings.policy is not None and settings.policy.check_two_way_h2h
+    not_two_way, pairing_error = _h2h_not_two_way(parsed) if check else ({}, None)
     for m in members:
         detail = _event_coverage(parsed, m.event_id, settings.markets)
         detail.update(offset=m.offset_label, target_utc=iso_z(m.target_utc),
@@ -837,7 +845,7 @@ def _capture(store: SnapshotStore, ledger: odds_api.QuotaLedger, run: _LazyRun, 
                       parse_problems=len(parsed.problems))
         own = not_two_way.get(odds_api.event_id(m.event_id))
         if own:
-            detail["h2h_not_two_way"] = own
+            detail["h2h_not_two_way"] = own["offers"]
         store.record_odds_transition(target_id=m.target_id, state="CAPTURED", at_utc=stamp, slot_id=slot.slot_id,
                                      snapshot_id=sid, captured_at_utc=received, credits_last=credits, detail=detail)
     fired.update(snapshot_id=sid, credits_last=credits, received_at_utc=received,
@@ -848,9 +856,9 @@ def _capture(store: SnapshotStore, ledger: odds_api.QuotaLedger, run: _LazyRun, 
     anomalies = [f"capture {slot.slot_id}: {p}" for p in parsed.problems]
     if not parsed.offers:
         anomalies.append(f"capture {slot.slot_id}: the response held no offers")
-    for eid, n in sorted(not_two_way.items()):
-        anomalies.append(f"capture {slot.slot_id}: {eid}: {n} h2h offer(s) are not a clean two-way market (a draw or "
-                         "three or more outcomes): kept as evidence, UNSUPPORTED for any two-way consensus")
+    for eid, found in sorted(not_two_way.items()):
+        anomalies.append(f"capture {slot.slot_id}: {eid}: {found['offers']} h2h offer(s) not a clean two-way market "
+                         f"({'; '.join(found['outcome_sets'])}): kept as evidence, UNSUPPORTED for any two-way consensus")
     if pairing_error:
         anomalies.append(f"capture {slot.slot_id}: h2h two-way check failed ({pairing_error}); nothing inferred")
     _health(store, run, source_id=HEALTH_ODDS, started_utc=t0_utc, started_mono=t0,
@@ -859,7 +867,7 @@ def _capture(store: SnapshotStore, ledger: odds_api.QuotaLedger, run: _LazyRun, 
     return "CAPTURED", fired, False
 
 
-def _h2h_not_two_way(parsed: odds_api.OddsSnapshot) -> tuple[dict[str, int], str | None]:
+def _h2h_not_two_way(parsed: odds_api.OddsSnapshot) -> tuple[dict[str, dict[str, Any]], str | None]:
     """Offers per event of an h2h market that is not a clean two-way complement (a Draw/Tie outcome, or
     three or more outcomes), by the canonical pairing rule (`odds_api.pair_offers`, NOT_TWO_WAY). Hockey
     books normally price h2h including overtime and shootout (two outcomes); anything else is recorded,
@@ -868,10 +876,15 @@ def _h2h_not_two_way(parsed: odds_api.OddsSnapshot) -> tuple[dict[str, int], str
         _, unpaired = odds_api.pair_offers(parsed)
     except Exception as exc:  # noqa: BLE001 - a check on stored evidence must not fail the paid capture
         return {}, type(exc).__name__
-    out: dict[str, int] = {}
+    books: dict[tuple[str, str], list[str]] = {}
     for u in unpaired:
         if u.status is odds_api.PairingStatus.NOT_TWO_WAY:
-            out[u.offer.event_id] = out.get(u.offer.event_id, 0) + 1
+            books.setdefault((u.offer.event_id, u.offer.bookmaker), []).append(u.offer.outcome_name)
+    out: dict[str, dict[str, Any]] = {}
+    for (eid, book), names in sorted(books.items()):
+        entry = out.setdefault(eid, {"offers": 0, "outcome_sets": []})
+        entry["offers"] += len(names)
+        entry["outcome_sets"].append(f"{book}: {len(names)} outcome(s) {sorted(names)}")
     return out, None
 
 
@@ -1040,6 +1053,14 @@ def smoke(db_path: str | Path, ledger_path: str | Path, settings: RunnerSettings
     off = _switch_off(settings, environ)
     if off is not None:
         report.update(state="DISABLED", detail=off)
+        return 1, report
+    if settings.policy is not None and settings.policy.rank != 1:
+        # A smoke read never passes the joint NFL-first proof, so a lower-ranked sport could spend credits
+        # reserved for NFL's worst case (ADR 0039 review). Only the rank-1 sport may smoke; a lower-ranked
+        # sport proves its first live read through a scheduled capture the joint proof admitted.
+        report.update(state="SMOKE_REFUSED_RANK",
+                      detail=f"odds smoke is for the rank-1 sport only; {settings.sport} is rank {settings.policy.rank} "
+                             "and is admitted only through the joint monthly proof of `odds run`. Nothing was sent.")
         return 1, report
     if odds_api.load_key(environ) is None:
         report.update(state="SETUP_NEEDED", detail=_setup_text())
@@ -1389,6 +1410,22 @@ def coverage_status(db_path: str | Path, *, now: datetime, settings: RunnerSetti
     for r in rows:
         by_offset.setdefault(r["offset_label"], {})
         by_offset[r["offset_label"]][r["state"]] = by_offset[r["offset_label"]].get(r["state"], 0) + 1
+    # Actual capture lead (kickoff minus effective due time). For NHL the 17:40-18:35 ET quiet window moves
+    # the T-60m of 19:00 ET games to 18:35 ET (T-25m) and of 19:30 ET games to T-55m (ADR 0039).
+    def band(minutes: float) -> str:
+        return "lead_ge_55m" if minutes >= 55 else ("lead_25_to_55m" if minutes >= 25 else "lead_lt_25m")
+
+    planned_bands: dict[str, int] = {}
+    captured_bands: dict[str, int] = {}
+    for r in rows:
+        if r["state"] == "SUPERSEDED":
+            continue
+        t = _target(r)
+        b = band((t.commence_utc - effective_due(t, cfg)).total_seconds() / 60)
+        planned_bands[b] = planned_bands.get(b, 0) + 1
+        if r["state"] == "CAPTURED" and r["captured_at_utc"]:
+            cb = band((t.commence_utc - _parse(r["captured_at_utc"])).total_seconds() / 60)
+            captured_bands[cb] = captured_bands.get(cb, 0) + 1
     missed_reasons: dict[str, int] = {}
     for r in rows:
         if r["state"] == "MISSED":
@@ -1404,7 +1441,8 @@ def coverage_status(db_path: str | Path, *, now: datetime, settings: RunnerSetti
         discovery={"last_success_utc": iso_z(discovered_at) if discovered_at is not None else None,
                    "fresh": discovered_at is not None and now - discovered_at <= settings.discovery_max_age},
         games_started=len(started), games_complete=len(complete), games_incomplete=len(started) - len(complete),
-        missed_reasons=dict(sorted(missed_reasons.items())))
+        missed_reasons=dict(sorted(missed_reasons.items())),
+        planned_lead_bands=dict(sorted(planned_bands.items())), captured_lead_bands=dict(sorted(captured_bands.items())))
     return out
 
 

@@ -673,3 +673,102 @@ def test_odds_status_reports_each_sports_coverage_separately(paths, capsys, monk
     assert cli.main(["odds", "status", "--db", str(paths[0]), "--ledger", str(paths[1]), "--sport", NHL]) == 0
     printed = json.loads(capsys.readouterr().out)
     assert printed["coverage"]["sport"] == NHL and printed["switch"] == {"env": "EDGE_LAB_ODDS_NHL", "on": False}
+
+
+# ------------------------------------------------------------------ review fixes (#137)
+
+
+def test_an_nhl_smoke_is_refused_while_nfl_holds_the_month_and_spends_nothing(paths):
+    """October 2026: NFL's worst case fills the ceiling, so NHL is admitted nothing. A manual NHL smoke must
+    not spend a credit out of NFL's reservation either (review blocker): smoke is for the rank-1 sport only."""
+    provider = TwoSportProvider(used=0, remaining=500)
+    at = utc(2026, 10, 1, 12)
+    run(paths, provider, at, settings=NFL_SETTINGS)
+    code, report = run(paths, provider, at)
+    assert report["joint_budget"]["sports"][1]["available"] == 0
+    ledger_before = paths[1].read_bytes()
+    calls_before = list(provider.calls)
+    for _ in range(3):
+        code, report = op.smoke(paths[0], paths[1], NHL_SETTINGS, clock=Clock(at), opener=provider, environ=ENV_ON)
+        assert code == 1 and report["state"] == "SMOKE_REFUSED_RANK" and report["paid_calls"] == 0
+    assert provider.calls == calls_before and provider.paid(NHL) == [] and paths[1].read_bytes() == ledger_before
+    # NFL, rank 1, may still smoke (after its free reconcile), exactly as before.
+    code, report = op.smoke(paths[0], paths[1], NFL_SETTINGS, clock=Clock(at), opener=provider, environ=ENV_ON)
+    assert report["state"] == "CAPTURED" and report["paid_calls"] == 1
+
+
+class OneOutcomeNFL(TwoSportProvider):
+    def odds_for(self, event, markets):
+        out = super().odds_for(event, markets)
+        if event["sport_key"] == NFL:
+            for book in out["bookmakers"]:
+                for m in book["markets"]:
+                    if m["key"] == "h2h":
+                        m["outcomes"] = m["outcomes"][:1]  # a book listing one h2h side only
+        return out
+
+
+def test_the_two_way_h2h_record_is_nhl_only_and_nfl_captures_are_unchanged(paths):
+    provider = OneOutcomeNFL()
+    at = utc(2026, 10, 1, 23, 15)  # NFL TNF T-60m (Oct 2 00:15Z kickoff)
+    run(paths, provider, utc(2026, 10, 1, 12), settings=NFL_SETTINGS)
+    code, report = run(paths, provider, at, settings=NFL_SETTINGS)
+    assert report["state"] == "CAPTURED"
+    store = SnapshotStore(paths[0])
+    captured = [r for r in store.odds_targets(sport=NFL) if r["state"] == "CAPTURED"]
+    assert captured and all("h2h_not_two_way" not in json.loads(r["detail_json"]) for r in captured)
+    health = {r["source_id"]: r for r in store.latest_source_health()}["the_odds_api"]
+    assert health["status"] == "ok" and "two-way" not in health["anomalies_json"]
+    assert sch.SPORT_POLICIES[NFL].check_two_way_h2h is False and sch.SPORT_POLICIES[NHL].check_two_way_h2h
+
+
+def test_the_nhl_two_way_anomaly_names_the_actual_outcomes(paths):
+    provider = TwoSportProvider(draw=True)
+    run(paths, provider, utc(2026, 9, 30, 12), settings=NFL_SETTINGS)
+    run(paths, provider, utc(2026, 9, 30, 12))
+    run(paths, provider, utc(2026, 9, 30, 22, 35))
+    health = {r["source_id"]: r for r in SnapshotStore(paths[0]).latest_source_health()}["the_odds_api"]
+    assert "draftkings: 3 outcome(s) ['Blackhawks', 'Draw', 'Senators']" in health["anomalies_json"]
+
+
+def test_activation_is_the_first_tick_that_can_plan_not_the_first_switched_on_tick(paths):
+    provider = TwoSportProvider(events_error={NHL: URLError("down")})
+    run(paths, provider, utc(2026, 9, 30, 12), settings=NFL_SETTINGS)
+    run(paths, provider, utc(2026, 9, 30, 12))  # switched on, key present, discovery failed: not yet active
+    state_file = paths[1].with_name(paths[1].name + ".pilot.json")
+    assert json.loads(state_file.read_text())["sports"][NHL].get("activated_utc") is None
+    provider.events_error = {}
+    run(paths, provider, utc(2026, 9, 30, 18, 5))
+    assert json.loads(state_file.read_text())["sports"][NHL]["activated_utc"] == "2026-09-30T18:05:00Z"
+
+
+def test_nhl_t60m_actual_leads_over_the_published_season():
+    """Disclosure (ADR 0039): the quiet window moves many NHL "T-60m" captures closer to the puck drop."""
+    cfg = sch.SPORT_POLICIES[NHL].config()
+    leads: dict[int, int] = {}
+    for t in sch.plan_targets(_published(), cfg.offsets):
+        m = int((t.commence_utc - sch.effective_due(t, cfg)).total_seconds() // 60)
+        leads[m] = leads.get(m, 0) + 1
+    assert leads == {60: 750, 55: 107, 40: 2, 25: 484, 10: 1}
+    bands = {"lead_ge_55m": 750 + 107, "lead_25_to_55m": 2 + 484, "lead_lt_25m": 1}
+    assert sum(bands.values()) == 1344 and round(484 / 1344, 3) == 0.360
+
+
+def test_odds_status_reports_actual_lead_bands(paths, monkeypatch):
+    monkeypatch.setattr(http, "datetime", ReceiptClock)
+    provider = TwoSportProvider()
+    run(paths, provider, utc(2026, 9, 30, 12), settings=NFL_SETTINGS)
+    run(paths, provider, utc(2026, 9, 30, 12))
+    run(paths, provider, utc(2026, 9, 30, 22, 35))
+    cov = op.coverage_status(paths[0], now=utc(2026, 9, 30, 22, 40), settings=NHL_SETTINGS)
+    # 19:30 ET games captured at 18:35 ET (T-55m); 22:00 ET at 21:00 (T-60m); 19:00 ET games at 18:35 (T-25m).
+    assert cov["captured_lead_bands"] == {"lead_ge_55m": 2}
+    assert cov["planned_lead_bands"] == {"lead_25_to_55m": 3, "lead_ge_55m": 3}
+
+
+def test_a_failing_nhl_cli_run_names_the_sport_for_the_shared_units_alert(paths, capsys):
+    code = cli.main(["odds", "run", "--db", str(paths[0]), "--ledger", str(paths[1]), "--sport", NHL,
+                     "--markets", "h2h,totals"])
+    out = capsys.readouterr()
+    assert code == 1 and json.loads(out.out)["sport"] == NHL
+    assert "odds run icehockey_nhl: exit 1, state POLICY_REFUSED" in out.err

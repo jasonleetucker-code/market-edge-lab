@@ -25,7 +25,9 @@ print the tables.
     coordinator's production reading exactly.
   - Replayed through the month: **337 credits** at T-60m only (NFL 234 + NHL 103), or **385** with T-6h (NFL 234
     + NHL 151).
-  - NFL's captures are identical in every NHL scenario.
+  - NFL's captures are identical in every NHL scenario, **under this no-reschedule model**. NFL demand that grows
+    inside its listed weeks after NHL has spent (a reschedule, a late-listed or flexed game) has no reservation,
+    and could then be SKIPPED_BUDGET (ADR 0039).
 
 This is the honest result. `NFL_WORST_CASE` was **not** weakened to make NHL fit. The owner's options are at the
 end, and none is chosen.
@@ -72,9 +74,10 @@ With these admitted, the joint September worst case is 45 + 3 + 6 = **54**.
 **Sep 30 has exactly one September T-60m slot.** The 22:00 ET game's T-60m is 21:00 ET = **01:00Z Oct 1**. That
 is an October slot, and it falls under October's proof (see below: not admissible).
 
-The collector is not active tonight. Every Sep 29 slot will be MISSED: the games are over before activation, and
-they have no Odds target, because the collector never saw their provider events. The manual Kalshi observations
-(#135) are the only opening-night record.
+The collector is not active tonight. The Sep 29 games have **no target row at all**: the collector never saw
+their provider events, so their horizons are missing. They are recorded as NOT_COLLECTED_BEFORE_ACTIVATION
+in the #135 record, not in the Odds target table. The manual Kalshi observations (#135) are the only
+opening-night record.
 
 **With T-6h as well**, September has 5 more slots (Sep 29 13:00, 14:00 and 16:30 ET; Sep 30 13:30 and 16:00 ET).
 All fit (11 slots, 11 credits).
@@ -223,6 +226,18 @@ The release depends on how far ahead the provider lists NFL games, and that was 
 days ahead, NFL's worst case fits from Oct 1, and NHL T-60m captures **118 of 118** (spend 352). If it lists fewer
 than 7, NHL starts later than Oct 4. The Odds tick's `joint_budget` report shows the live figure every tick. After
 activation, `odds plan --sport icehockey_nhl --offline` shows it without spending anything.
+
+## Disclosure: NHL "T-60m" is often closer to the puck drop
+
+The 17:40-18:35 ET quiet window (EXP-001) moves NHL T-60m captures of 19:00 ET games to 18:35 ET, which is
+**T-25m**: 484 of 1,344 targets (36%) over the published season. 19:30 ET games move to T-55m (107), 19:15 ET
+games to T-40m (2), and one 18:45 ET game to T-10m. The deadline accepts a capture up to T-5m.
+
+The budget is unaffected (one call either way). The label is not relabelled; the actual lead is recorded per
+capture, and `odds status` shows planned and captured lead bands.
+
+Kalshi NHL (#136) reads the same games at 17:35 ET (T-85m). A shared protected-window contract is a tracked
+follow-up (ADR 0039).
 
 ## Owner options (listed, not chosen)
 

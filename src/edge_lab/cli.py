@@ -1091,6 +1091,9 @@ def _odds(args: argparse.Namespace) -> int:
     else:
         code, report = odds_pilot.smoke(args.db, args.ledger, settings)
     print(json.dumps(report, sort_keys=True, indent=None if args.odds_command == "run" else 2, default=str))
+    if code != 0 and policy is not None and policy.rank != 1:
+        # The shared edgelab-odds unit's OnFailure alert names only the unit: say which sport failed.
+        print(f"odds {args.odds_command} {args.sport}: exit {code}, state {report.get('state')}", file=sys.stderr)
     return code
 
 

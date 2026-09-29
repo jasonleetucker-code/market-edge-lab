@@ -593,7 +593,7 @@ def test_odds_unit_is_a_bounded_networked_tick_that_loads_only_the_optional_secr
     assert u[("Service", "EnvironmentFile")] == ["/etc/market-edge-lab/env", "-/etc/market-edge-lab/secrets.env"]
     assert u[("Service", "RestrictAddressFamilies")] == ["AF_INET AF_INET6 AF_UNIX"]
     assert u[("Unit", "OnFailure")] == ["edgelab-alert@%n.service"]
-    assert u[("Service", "MemoryMax")] == ["256M"] and u[("Service", "TimeoutStartSec")] == ["3min"]
+    assert u[("Service", "MemoryMax")] == ["256M"] and u[("Service", "TimeoutStartSec")] == ["5min"]  # two lines (ADR 0039)
     assert u[("Service", "ReadWritePaths")] == ["/var/lib/market-edge-lab /var/lib/market-edge-lab-status"]
     nfl, nhl = u[("Service", "ExecStart")]  # sequential in one oneshot: NFL first (ADR 0039)
     args = nfl.split()

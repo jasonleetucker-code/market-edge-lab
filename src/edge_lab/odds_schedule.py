@@ -172,6 +172,10 @@ class SportPolicy:
     # Record discovered targets whose deadline had already passed as MISSED with a reason, instead
     # of never writing them (NFL keeps its historical behaviour).
     record_prior_misses: bool = False
+    # Record, on a paid capture, h2h markets that are not a clean two-way complement (a Draw/Tie or a
+    # number of outcomes other than two) as a source-health anomaly and target detail. NFL keeps its
+    # historical capture records unchanged.
+    check_two_way_h2h: bool = False
 
     def config(self, offsets: Sequence[Offset] | None = None) -> "PilotConfig":
         return PilotConfig(offsets=tuple(offsets) if offsets is not None else self.offsets,
@@ -191,7 +195,7 @@ SPORT_POLICIES: dict[str, SportPolicy] = {
     NHL: SportPolicy(sport=NHL, rank=2, markets=("h2h",), regions=("us",), offsets=parse_offsets("60m"),
                      assumption=NHL_WORST_CASE, merge_window=timedelta(minutes=20),
                      discovery_horizon=timedelta(days=35), switch_env=NHL_SWITCH, state_scope=NHL,
-                     record_prior_misses=True),
+                     record_prior_misses=True, check_two_way_h2h=True),
 }
 
 
