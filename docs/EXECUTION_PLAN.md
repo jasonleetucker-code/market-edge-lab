@@ -566,6 +566,29 @@ be written here when they are made.
       automatically).
   - EXP-002's budget is not #122's budget. EXECUTION_NOT_AUTHORIZED stays enforced.
 
+- **2026-09-29 ~13:15 America/New_York, owner directive: EXP-002 correctness continuation + bounded NHL
+  prospective evidence.** Recorded in `docs/owner/2026-09-29-nhl-prospective-evidence-directive.md`; the
+  durable owner record is issue #134. Owner statement: "Hockey starts tonight, so we need to start collecting
+  data for that as well."
+  - **Authorized (bounded):** implementing and **activating** a free/public NHL prospective evidence collector.
+    NHL is DATA_COLLECTION / DEVELOPMENT_ONLY and not a research family.
+    - The Odds API `icehockey_nhl`, `h2h` only: T-60m first; T-6h and T-24h only if the exact combined proof
+      fits. It runs under the **one shared quota ledger and the 450-credit ceiling**. NFL keeps priority, and
+      NHL never consumes an NFL reservation.
+    - Kalshi `KXNHLGAME` only (public, keyless), under its own exact request bound, after EXP-001 and NFL in
+      capture priority.
+    - Private Terminal coverage.
+  - **Gates:** exact quota proof, tests, independent review, exact-head CI, protected windows and deploy
+    preflight. Opening night: missed horizons stay MISSED; manual observations are labelled as such and never
+    relabelled.
+  - **Supersedes, for NHL only:** the 2026-09-28 directive's "no new scheduled acquisition" and "no additional
+    Odds spending", within the existing free ceiling. The NFL pregame approval (295/week), the NFL Odds caps
+    and the ceiling are **unchanged**.
+  - **Needs explicit owner approval before activation:** a paid tier, a higher ceiling or a materially larger
+    budget, a new credential scope, a new timer or service, or high-frequency or in-play streaming.
+  - **Not authorized:** orders, account reads, credentials, a gate advance, mixing NHL into EXP-002, or an NHL
+    model. EXECUTION_NOT_AUTHORIZED stays enforced.
+
 ## Standing merge rule: docs-only and test-only PRs
 
 Owner rule of 2026-09-22 (verbatim source: `docs/owner/2026-09-22-overnight-build-directive.md`).
