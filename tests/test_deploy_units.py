@@ -593,15 +593,23 @@ def test_odds_unit_is_a_bounded_networked_tick_that_loads_only_the_optional_secr
     assert u[("Service", "EnvironmentFile")] == ["/etc/market-edge-lab/env", "-/etc/market-edge-lab/secrets.env"]
     assert u[("Service", "RestrictAddressFamilies")] == ["AF_INET AF_INET6 AF_UNIX"]
     assert u[("Unit", "OnFailure")] == ["edgelab-alert@%n.service"]
-    assert u[("Service", "MemoryMax")] == ["256M"] and u[("Service", "TimeoutStartSec")] == ["3min"]
+    assert u[("Service", "MemoryMax")] == ["256M"] and u[("Service", "TimeoutStartSec")] == ["5min"]  # two lines (ADR 0039)
     assert u[("Service", "ReadWritePaths")] == ["/var/lib/market-edge-lab /var/lib/market-edge-lab-status"]
-    (exec_start,) = u[("Service", "ExecStart")]
-    args = exec_start.split()
+    nfl, nhl = u[("Service", "ExecStart")]  # sequential in one oneshot: NFL first (ADR 0039)
+    args = nfl.split()
     assert args[:5] == ["/opt/market-edge-lab/venv/bin/python", "-m", "edge_lab.cli", "odds", "run"]
     assert args[args.index("--sport") + 1] == "americanfootball_nfl"
     assert args[args.index("--markets") + 1] == "h2h,spreads,totals" and args[args.index("--regions") + 1] == "us"
     assert args[args.index("--ledger") + 1].startswith("/var/lib/market-edge-lab/")
     assert "smoke" not in args and "plan" not in args
+    # NHL: the same database, the same (shared) ledger, h2h / us / T-60m only.
+    hockey = nhl.split()
+    assert hockey[:5] == args[:5] and hockey[hockey.index("--sport") + 1] == "icehockey_nhl"
+    for flag in ("--db", "--ledger"):
+        assert hockey[hockey.index(flag) + 1] == args[args.index(flag) + 1]
+    assert hockey[hockey.index("--markets") + 1] == "h2h" and hockey[hockey.index("--regions") + 1] == "us"
+    assert hockey[hockey.index("--offsets") + 1] == "60m"
+    assert "smoke" not in hockey and "plan" not in hockey and "--clear-cost-block" not in hockey
 
 
 def test_odds_timer_ticks_every_15_minutes_without_catch_up_and_is_not_enabled_by_install():
@@ -1095,3 +1103,40 @@ def test_install_writes_no_nfl_switch_when_none_was_set(tmp_path):
 def test_install_refuses_an_invalid_nfl_switch_value(tmp_path):
     result = _run_env_section(tmp_path, "NWS_USER_AGENT=ua (x@y.z)\nEDGE_LAB_KALSHI_NFL_CAPTURE=maybe\n")
     assert result.returncode != 0 and "must be on or off" in result.stderr
+
+
+# --------------------------------------------------------------------------- the Odds API NHL switch (ADR 0039)
+
+
+@pytest.mark.parametrize("value", ["on", "off"])
+def test_install_keeps_the_odds_nhl_switch_across_installs(tmp_path, value):
+    result = _run_env_section(tmp_path, f"NWS_USER_AGENT=ua (x@y.z)\nEDGE_LAB_ODDS_NHL={value}\n")
+    assert result.returncode == 0, result.stderr
+    assert f"EDGE_LAB_ODDS_NHL={value}" in result.stdout.splitlines()
+
+
+def test_install_writes_no_odds_nhl_switch_when_none_was_set(tmp_path):
+    result = _run_env_section(tmp_path, "NWS_USER_AGENT=ua (x@y.z)\n")
+    assert result.returncode == 0, result.stderr
+    assert "EDGE_LAB_ODDS_NHL" not in result.stdout  # the code default (off) applies
+
+
+def test_install_refuses_an_invalid_odds_nhl_switch_value(tmp_path):
+    result = _run_env_section(tmp_path, "NWS_USER_AGENT=ua (x@y.z)\nEDGE_LAB_ODDS_NHL=yes\n")
+    assert result.returncode != 0 and "EDGE_LAB_ODDS_NHL must be on or off" in result.stderr
+
+
+def test_the_odds_service_arguments_are_each_sports_reviewed_policy():
+    """The joint proof prices each sport at its policy's cost; the unit must request exactly that."""
+    from edge_lab.odds_schedule import SPORT_POLICIES, parse_offsets
+
+    for line in _parse("edgelab-odds.service")[("Service", "ExecStart")]:
+        args = line.split()
+        pol = SPORT_POLICIES[args[args.index("--sport") + 1]]
+        assert tuple(args[args.index("--markets") + 1].split(",")) == pol.markets
+        assert tuple(args[args.index("--regions") + 1].split(",")) == pol.regions
+        offsets = args[args.index("--offsets") + 1] if "--offsets" in args else None
+        assert (parse_offsets(offsets) if offsets else pol.offsets) == pol.offsets
+    # The switch lives in the installer-kept env file, never set by the unit itself.
+    assert not [x for x in (UNITS / "edgelab-odds.service").read_text().splitlines()
+                if x.startswith("Environment=") and "EDGE_LAB_ODDS_NHL" in x]

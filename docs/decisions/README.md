@@ -34,4 +34,8 @@ Under the 2026-09-25 Research Unblocking directive:
 - 0037: fill-mode labels v2: first detection is zero-latency, the best observation is a hindsight upper bound (#111).
 - 0038: in-play foundation (#122, offline): evidence contract, pure position policy, hold-vs-exit replay; native/bot inventory reservation; stale inputs never liquidate (#125).
 
-New decisions start at 0039.
+Under the 2026-09-29 NHL prospective-evidence directive (#134):
+- 0039: the sport-aware shared Odds planner: one policy table, one ledger and ceiling, one joint NFL-first
+  monthly proof; NHL h2h prepared behind `EDGE_LAB_ODDS_NHL` (NHL-A).
+
+New decisions start at 0040.
