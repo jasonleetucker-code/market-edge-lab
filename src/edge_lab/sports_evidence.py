@@ -65,18 +65,22 @@ Clusters for later statistics: the game (Odds event id) and the NFL week (Tuesda
 Delayed-signal and placebo control references are listed per row for the protocol to use; this module
 computes no statistic from them.
 
-**EXP-002 measurement** (`measure_exp002`, `exp002-measurement-v2`): the label-free pre-freeze noise gates v2 and v3 (they
-never load a T-60m book) and the cross-book markout endpoint (it reads the first T-60m book of each market, a
-label, so it runs only in a logged results path). See the section "EXP-002 measurement" below.
+**EXP-002 measurement** (`measure_exp002`, `exp002-measurement-v3`): the label-free pre-freeze noise gates v2 and v3
+(they never load a T-60m book), the cross-book markout endpoint (it reads the first T-60m book of each market, a
+label, so it runs only in a logged results path) and the PROPOSED E1 executable round-trip endpoint (label-free
+entry counts always; exits, settlement and gross P&L only in the logged results path). See the sections "EXP-002
+measurement" and "EXP-002 E1" below.
 
 CLI (read-only): `python -m edge_lab.sports_evidence report --db <path> [--as-of ISO] [--out FILE]` and
-`python -m edge_lab.sports_evidence exp002 --db <path> [--as-of ISO] [--min-effect D] [--with-results
---evidence-log <EXP-002 evidence_use.jsonl> --actor NAME --code-version SHA] [--out FILE]`.
+`python -m edge_lab.sports_evidence exp002 --db <path> [--as-of ISO] [--min-effect D] [--e1-tie-bound T
+--e1-postponement-bound U] [--with-results --evidence-log <EXP-002 evidence_use.jsonl> --actor NAME --code-version
+SHA] [--out FILE]`.
 """
 
 from __future__ import annotations
 
 import argparse
+import itertools
 import json
 import math
 import os
@@ -86,7 +90,7 @@ import statistics
 import sys
 import uuid
 from collections import OrderedDict, deque
-from dataclasses import dataclass, field, fields, is_dataclass
+from dataclasses import dataclass, field, fields, is_dataclass, replace
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 from enum import Enum
@@ -1720,7 +1724,9 @@ def build_report(store: Any, *, as_of: datetime, policy: JoinPolicy = JoinPolicy
 #   `exp002 --with-results` records the view first). Nothing here is an edge claim or a frozen statistic.
 
 # v2 (2026-09-28): the output adds `gate_v3` beside the unchanged v2 gate; v1 outputs keep their own version.
-MEASUREMENT_VERSION = "exp002-measurement-v2"
+# v3 (2026-09-29): the output adds `e1`, the PROPOSED E1 round-trip endpoint (label-free entry counts without
+# results; exits, P&L and settlement only in the logged results path). Every v2 key is unchanged.
+MEASUREMENT_VERSION = "exp002-measurement-v3"
 GATE_VERSION = "exp002-noise-gate-v2"
 MARKOUT_VERSION = "exp002-cross-book-markout-v1"
 GATE_HORIZONS = ("T-24h", "T-6h")
@@ -2521,6 +2527,430 @@ def noise_gate_v3(obs: GateV3Observations, *, min_effect: float | None = None,
     }
 
 
+# --------------------------------------------------------------------------- EXP-002 E1 (PROPOSED endpoint)
+#
+# docs/research/EXP002_FREEZE_PROPOSAL.md (exp002-freeze-proposal-v1) §3 rows 3, 4, 5(b), 11 and 15; the
+# implementation notes and the conservative readings are in docs/research/EXP002_E1_ENDPOINT.md. A PROPOSED
+# endpoint, NOT FROZEN: nothing here is a test, a verdict, a freeze or an edge claim.
+#
+# Split like the gate and the markout, on purpose:
+# - `e1_entries` decides the entries from T-6h information only: the fields the join already put on the T-6h rows
+#   (the paired book's ask and ask size, its timing and freshness, the side's consensus and rules). It takes no
+#   catalog, payload reader or target list, so it cannot load a T-60m book or read a settlement. Its counts are the
+#   label-free E1 summary (`e1_entry_summary`).
+# - `e1_endpoint` exits at the bid of the first T-60m book of the same market, falls back to the settlement payoff
+#   when that exit is missing, and summarises gross P&L. Exit bids and settlements are EXP-002 labels: only the
+#   logged results path (`measure_exp002(results=True)`; the CLI's `exp002 --with-results`) calls it.
+
+E1_VERSION = "exp002-e1-roundtrip-v1"
+E1_STATE = "PILOT DESCRIPTIVE — PROPOSED ENDPOINT, NOT FROZEN, NOT A TEST"
+E1_PROPOSAL = "docs/research/EXP002_FREEZE_PROPOSAL.md (exp002-freeze-proposal-v1) §3 rows 3, 4, 5(b), 11, 15"
+E1_THETA = Decimal("0.01")  # row 4: one tick beyond the ask; a named constant, never tuned here
+E1_MIN_DEPTH = Decimal(1)  # contracts displayed at the T-6h ask (entry) and at the first T-60m bid (exit)
+E1_QUANTITY = 1  # contracts per trade (row 3)
+E1_FILL = ("FIRST_DETECTION_ZERO_LATENCY: the displayed T-6h ask and the displayed first T-60m bid at their receipt "
+           "times, with no decision or submission delay and displayed depth as a ceiling. A displayed quote is not a "
+           "proven fill; latency and fill sensitivities are separate and not computed here")
+E1_COSTS = ("GROSS ONLY: KXNFLGAME trading fees are FEE_UNSUPPORTED, so no fee is applied, no fee is treated as 0 and "
+            "no net figure is computed")
+E1_NO_VERDICT = "NONE: no verdict (operational, statistical or economic futility) is permitted before a freeze"
+# Entry reasons per team side, in check order: every due T-6h side gets exactly one (the first that applies).
+E1_NOT_PAIRED, E1_BEFORE_ODDS, E1_STALE = "NOT_PAIRED", "BEFORE_ODDS", "STALE_OR_UNKNOWN_INPUT"
+E1_NO_ASK, E1_NO_CONSENSUS, E1_BOUNDS_UNDECLARED = "NO_ASK", "NO_CONSENSUS", "BOUNDS_UNDECLARED"
+E1_TIE_PAYOUT_UNKNOWN, E1_BELOW_THETA = "TIE_PAYOUT_UNKNOWN", "MARGIN_BELOW_THETA"
+E1_ASK_DEPTH_MISSING, E1_ASK_DEPTH_BELOW_MIN, E1_ELIGIBLE = "ASK_DEPTH_MISSING", "ASK_DEPTH_BELOW_1", "ELIGIBLE"
+E1_SIDE_REASONS = (E1_NOT_PAIRED, E1_STALE, E1_BEFORE_ODDS, E1_NO_ASK, E1_NO_CONSENSUS, E1_BOUNDS_UNDECLARED,
+                   E1_TIE_PAYOUT_UNKNOWN, E1_BELOW_THETA, E1_ASK_DEPTH_MISSING, E1_ASK_DEPTH_BELOW_MIN, E1_ELIGIBLE)
+E1_TRADE, E1_NO_ELIGIBLE, E1_MARGIN_TIE = "TRADE", "NO_ELIGIBLE_SIDE", "MARGIN_TIE_NO_TRADE"
+# Exit bases; the reasons a T-60m exit is missing (scored, never dropped); the reasons a trade is not yet scored.
+E1_EXIT_BID, E1_SETTLEMENT_FALLBACK, E1_PENDING = "EXIT_BID", "SETTLEMENT_FALLBACK", "PENDING"
+E1_MISSING_EXITS = ("NO_T60_TARGET", "NO_T60_BOOK", "UNUSABLE_BOOK", "NO_BID", "BID_DEPTH_MISSING", "BID_DEPTH_BELOW_1")
+E1_EXIT_PENDING = ("T60_WINDOW_OPEN", "NO_T60_TARGET_BEFORE_KICKOFF")
+E1_SETTLEMENT_PENDING = ("SETTLEMENT_NOT_FINAL", "SETTLED_VALUE_UNKNOWN", "SETTLEMENT_CONFLICT")
+E1_WILD_ENUMERATE_MAX = 4096  # up to 12 week clusters every Rademacher sign pattern is enumerated (exact)
+E1_FEW_CLUSTERS = 10  # below this many weeks the wild cluster bootstrap is coarse (2^G patterns); flagged
+
+
+def _stage_value(stage: Any) -> Any:
+    return getattr(stage, "value", stage)
+
+
+def _e1_side(row: Mapping[str, Any], team: str | None, role: str, policy: JoinPolicy) -> dict[str, Any]:
+    """One team side's entry decision from the T-6h row alone (the first failing check is its reason)."""
+    side = (row.get("sides") or {}).get(team) if team else None
+    out: dict[str, Any] = {"team": team, "role": role, "ticker": None if side is None else side.get("ticker"),
+                           "book_timing": None if side is None else side.get("book_timing"),
+                           "paired_at_or_after_odds": False, "c_low": None, "ask": None, "margin": None,
+                           "ask_depth": None}
+    if side is None or row.get("status") not in (PAIRED, PARTIAL_PAIR) or side.get("stage") is not None:
+        # A join failure. The stale ones (odds not fresh at receipt, a book stale or undated at the decision time)
+        # are named; every other failure is NOT_PAIRED, with the join's stage kept.
+        stale = (Stage.ODDS_NOT_FRESH.value in [_stage_value(s) for s in row.get("all_stages") or []]
+                 or (side is not None and side.get("book_freshness_at_decision")
+                     not in (None, Freshness.FRESH.value)))
+        stage = _stage_value(side.get("stage")) if side is not None else None
+        return {**out, "reason": E1_STALE if stale else E1_NOT_PAIRED,
+                "join_stage": stage or row.get("primary") or row.get("status")}
+    out.update(book_snapshot_id=side.get("book_snapshot_id"), decision_utc=side.get("decision_utc"))
+    if out["book_timing"] != BOOK_AT_OR_AFTER_ODDS:
+        # Comparability-only: the book is older than the odds, so its ask was never executable at the decision.
+        return {**out, "reason": E1_BEFORE_ODDS if out["book_timing"] == BOOK_BEFORE_ODDS else E1_NOT_PAIRED}
+    out["paired_at_or_after_odds"] = True
+    if (side.get("book_freshness_at_decision") != Freshness.FRESH.value
+            or side.get("decision_freshness_odds") != Freshness.FRESH.value):
+        return {**out, "reason": E1_STALE}  # stale or unknown inputs fail closed, never enter
+    ask = _dec(side.get("yes_ask"))
+    out["ask"] = ask
+    if ask is None:
+        return {**out, "reason": E1_NO_ASK}
+    p = _dec(side.get("consensus_probability"))
+    if p is None:
+        return {**out, "reason": E1_NO_CONSENSUS}
+    t, u = policy.tie_probability_bound, policy.postponement_probability_bound
+    if t is None or u is None or t + u > 1:
+        # No fallback to the unadjusted consensus: an executable decision needs the tie-adjusted lower end.
+        return {**out, "reason": E1_BOUNDS_UNDECLARED}
+    interval = tie_adjusted_interval(p, _dec((side.get("rules") or {}).get("tie_payout")), t, u)
+    if interval is None:
+        return {**out, "reason": E1_TIE_PAYOUT_UNKNOWN}
+    depth = _dec(side.get("yes_ask_size"))
+    out.update(c_low=interval[0], margin=interval[0] - ask, ask_depth=depth)
+    if out["margin"] < E1_THETA:
+        return {**out, "reason": E1_BELOW_THETA}
+    if depth is None:
+        return {**out, "reason": E1_ASK_DEPTH_MISSING}
+    if depth < E1_MIN_DEPTH:
+        return {**out, "reason": E1_ASK_DEPTH_BELOW_MIN}
+    return {**out, "reason": E1_ELIGIBLE}
+
+
+def e1_entries(rows: Sequence[Mapping[str, Any]], policy: JoinPolicy, *, bounds_source: str | None = None
+               ) -> dict[str, Any]:
+    """E1 entry decisions (proposal row 3) from T-6h rows only. Label-free: rows of any other horizon are
+    ignored and counted, and nothing but the rows' own T-6h fields is read (no catalog, book, target or outcome).
+
+    Per team side, from an AT_OR_AFTER_ODDS paired side only (BEFORE_ODDS sides are counted, never entered):
+    c_low = the lower end of that side's OWN tie-adjusted interval (`tie_adjusted_interval` under the policy's tie
+    and postponement bounds; the away side's c_low comes from the away consensus, never from 1 - c_high(home)),
+    margin = c_low - ask. Eligible if margin >= E1_THETA and the ask shows displayed depth >= 1 (missing size: not
+    eligible). Stale or unknown inputs, undeclared bounds and an unparsed tie payout are not eligible and counted.
+    Per game: at most one side, the larger margin; an exact tie of margins is no trade (counted). An ineligible or
+    unpaired side never blocks the other side of the same game."""
+    counts = {"rows_other_horizon_ignored": 0, "t6_not_yet_due_or_superseded": 0, "t6_due": 0,
+              "games_with_at_or_after_side": 0, "games_both_sides_at_or_after": 0, "games_evaluable": 0,
+              "entries": 0, "no_eligible_side": 0, "margin_ties_no_trade": 0}
+    by_reason = {r: 0 for r in E1_SIDE_REASONS}
+    due_by_week: dict[str, int] = {}
+    entries_by_week: dict[str, int] = {}
+    games = []
+    for r in sorted(rows, key=lambda x: (x.get("commence_utc") or "", x.get("event_id") or "")):
+        if r.get("horizon") != SIGNAL_HORIZON:
+            counts["rows_other_horizon_ignored"] += 1
+            continue
+        if r.get("status") in (SUPERSEDED, NOT_YET_DUE):
+            counts["t6_not_yet_due_or_superseded"] += 1
+            continue
+        counts["t6_due"] += 1
+        week = r.get("week_cluster")
+        due_by_week[week] = due_by_week.get(week, 0) + 1
+        sides = [_e1_side(r, r.get("home_team"), "home", policy), _e1_side(r, r.get("away_team"), "away", policy)]
+        for s in sides:
+            by_reason[s["reason"]] += 1
+        after = sum(s["paired_at_or_after_odds"] for s in sides)
+        counts["games_with_at_or_after_side"] += after >= 1
+        counts["games_both_sides_at_or_after"] += after == 2
+        counts["games_evaluable"] += any(s["margin"] is not None for s in sides)
+        eligible = [s for s in sides if s["reason"] == E1_ELIGIBLE]
+        chosen = None
+        if len(eligible) == 2 and eligible[0]["margin"] == eligible[1]["margin"]:
+            decision = E1_MARGIN_TIE
+            counts["margin_ties_no_trade"] += 1
+        elif eligible:
+            chosen = max(eligible, key=lambda s: s["margin"])
+            decision = E1_TRADE
+            counts["entries"] += 1
+            entries_by_week[week] = entries_by_week.get(week, 0) + 1
+        else:
+            decision = E1_NO_ELIGIBLE
+            counts["no_eligible_side"] += 1
+        games.append({"event_id": r.get("event_id"), "week": week, "commence_utc": r.get("commence_utc"),
+                      "home_team": r.get("home_team"), "away_team": r.get("away_team"),
+                      "t6_target_id": r.get("target_id"), "sides": {s["role"]: s for s in sides},
+                      "decision": decision, "entry": chosen})
+    t, u = policy.tie_probability_bound, policy.postponement_probability_bound
+    if bounds_source is None:
+        bounds_source = ("JOIN_POLICY" if t is not None and u is not None else
+                         "UNDECLARED: the JoinPolicy default is None and EXP-002's protocol leaves the bounds UNKNOWN, "
+                         "so no entry is computed (BOUNDS_UNDECLARED)")
+    due, weeks = counts["t6_due"], len(due_by_week)
+    return {
+        "version": E1_VERSION, "rule": {
+            "theta": E1_THETA, "min_displayed_depth": E1_MIN_DEPTH, "quantity": E1_QUANTITY,
+            "entry": "T-6h information only: AT_OR_AFTER_ODDS paired sides; c_low(side) - ask(side) >= theta and the "
+                     "ask shows displayed depth >= 1; at most one side per game (larger margin; none on an exact tie)"},
+        "bounds": {"tie_probability_bound": t, "postponement_probability_bound": u, "source": bounds_source},
+        "games": games, "counts": counts, "sides_by_reason": by_reason, "bounds_undeclared": by_reason[E1_BOUNDS_UNDECLARED],
+        "operational_futility_inputs": {
+            "note": "numbers only (" + E1_NO_VERDICT + "); proposal row 15 compares them with 50% and 1 per week "
+                    "only at the freeze review",
+            "t6_due": due,
+            "t6_at_or_after_odds_pairing_yield": None if not due else counts["games_with_at_or_after_side"] / due,
+            "t6_both_sides_at_or_after_odds_yield": None if not due else counts["games_both_sides_at_or_after"] / due,
+            "trade_rate": {"entries": counts["entries"], "games_evaluable": counts["games_evaluable"],
+                           "value": None if not counts["games_evaluable"] else
+                           counts["entries"] / counts["games_evaluable"],
+                           "denominator": "due T-6h games with at least one side whose margin was computed"},
+            "entries_per_week": {"weeks_with_due_t6": weeks, "mean": None if not weeks else counts["entries"] / weeks,
+                                 "by_week": [{"week": w, "t6_due": n, "entries": entries_by_week.get(w, 0)}
+                                             for w, n in sorted(due_by_week.items())]}},
+    }
+
+
+def e1_bounds_problem(bounds: Any) -> str | None:
+    """Why caller-declared E1 bounds (tie, postponement) are invalid, or None when they are usable: each a finite
+    Decimal in [0, 1] and their sum at most 1 (otherwise `tie_adjusted_interval` has no interval)."""
+    if not isinstance(bounds, (tuple, list)) or len(bounds) != 2:
+        return "give exactly two bounds (tie, postponement)"
+    for name, value in zip(("tie", "postponement"), bounds):
+        if not isinstance(value, Decimal) or not value.is_finite():
+            return f"the {name} bound is not a finite number"
+        if not Decimal(0) <= value <= Decimal(1):
+            return f"the {name} bound {value} is outside [0, 1]"
+    if bounds[0] + bounds[1] > 1:
+        return f"tie + postponement = {bounds[0] + bounds[1]} exceeds 1"
+    return None
+
+
+def e1_entry_summary(entries: Mapping[str, Any]) -> dict[str, Any]:
+    """The label-free E1 output: entry counts by T-6h reason and the operational inputs. No per-game row, exit,
+    P&L, settlement or T-60m availability (those are labels, shown only by the logged results path)."""
+    return {"version": E1_VERSION, "state": E1_STATE, "proposal": E1_PROPOSAL,
+            "part": "ENTRIES ONLY (label-free: T-6h information; no T-60m book, exit, P&L or settlement is read or "
+                    "shown)",
+            "exit_and_pnl": "HIDDEN (EXP-002 labels: the first T-60m bid and the settlement are shown only by a logged "
+                            "run, exp002 --with-results)",
+            "fill_assumption": E1_FILL, "costs": E1_COSTS, "rule": entries["rule"], "bounds": entries["bounds"],
+            "counts": entries["counts"], "sides_by_reason": entries["sides_by_reason"],
+            "bounds_undeclared": entries["bounds_undeclared"],
+            "operational_futility_inputs": entries["operational_futility_inputs"], "verdict": E1_NO_VERDICT,
+            "freeze_eligible": False}
+
+
+def _e1_exit(catalog: KalshiCatalog, payloads: _Payloads, ticker: str, start: datetime, end: datetime
+             ) -> tuple[Decimal | None, Decimal | None, str | None, tuple[datetime, int, str, str] | None]:
+    """(bid, bid depth, missing-exit reason, book) at the FIRST book of the market in the T-60m window. Label."""
+    book = _first_book(catalog, ticker, start, end)
+    if book is None:
+        return None, None, "NO_T60_BOOK", None
+    received, sid = book[0], book[1]
+    payload, bad = payloads.payload(sid)
+    if bad:
+        return None, None, "UNUSABLE_BOOK", book
+    quotes = kalshi_quotes.quotes_from_orderbook(ticker, payload, received_at_utc=_iso(received),
+                                                 evidence_id=f"snapshot:{sid}")
+    yes, no = quotes.get("YES"), quotes.get("NO")
+    if yes is None or yes.anomaly:
+        return None, None, "UNUSABLE_BOOK", book  # no book in the payload, or a malformed or crossed one
+    if yes.best_bid is None:
+        return None, None, "NO_BID", book
+    depth = None if no is None else no.displayed_size  # the YES best bid's size is the NO ask's displayed size
+    if depth is None:
+        return yes.best_bid, None, "BID_DEPTH_MISSING", book
+    if depth < E1_MIN_DEPTH:
+        return yes.best_bid, depth, "BID_DEPTH_BELOW_1", book
+    return yes.best_bid, depth, None, book
+
+
+def _e1_settlement(ticker: str, catalog: KalshiCatalog, as_of: datetime) -> dict[str, Any]:
+    """The YES payoff of one market at `as_of` from its stored listings (a label): 1 on a settled YES, 0 on a settled
+    NO, else the listing's `settlement_value_dollars` (a tie at $0.50, a fair price F) only when it is stated and in
+    [0, 1]. Anything else is not scored: a market not yet settled or finalized (a `determined` result is
+    preliminary), a settled value that is not stated, or a stated value that contradicts the result."""
+    outcome = outcome_for(ticker, catalog, as_of)
+    latest = catalog.latest(ticker, as_of)
+    out: dict[str, Any] = {"outcome_state": outcome["state"], "payoff": None, "basis": None, "pending_reason": None,
+                           "listing_snapshot_id": None if latest is None else latest.snapshot_id}
+    status = str((latest.fields if latest else {}).get("status") or "").lower()
+    if latest is None or status not in ("settled", "finalized"):
+        return {**out, "pending_reason": "SETTLEMENT_NOT_FINAL"}
+    result = str(latest.fields.get("result") or "").lower()
+    value = _dec(latest.fields.get("settlement_value_dollars"))
+    if value is not None and not Decimal(0) <= value <= Decimal(1):
+        value = None
+    if result in ("yes", "no"):
+        payoff = Decimal(1) if result == "yes" else Decimal(0)
+        if value is not None and value != payoff:
+            return {**out, "pending_reason": "SETTLEMENT_CONFLICT"}
+        return {**out, "payoff": payoff, "basis": f"RESULT_{result.upper()}"}
+    if value is None:
+        return {**out, "pending_reason": "SETTLED_VALUE_UNKNOWN"}
+    return {**out, "payoff": value, "basis": "SETTLEMENT_VALUE (a tie at $0.50 or a fair price F)"}
+
+
+def _wild_cluster_bounds(pairs: Sequence[tuple[str, float]], *, seed: int, resamples: int,
+                         q: float = 0.9) -> dict[str, Any]:
+    """One-sided 90% lower and upper bounds for a mean, by a wild cluster bootstrap with Rademacher weights over
+    NFL-week clusters (proposal row 4, A.G): mean* = mean + sum_g w_g S_g / n, S_g the week's residual sum. The
+    bounds are the basic (reflected) bootstrap: lower = mean - q90(mean* - mean), upper = mean - q10(mean* - mean)
+    (the same as the percentile bounds when the deviations are symmetric, as they are when enumerated). Every
+    sign pattern is enumerated when 2^G <= E1_WILD_ENUMERATE_MAX (exact, seed unused); otherwise `resamples`
+    patterns are drawn with the fixed seed. Descriptive: no test is made from it before a freeze."""
+    by_week: dict[str, list[float]] = {}
+    for week, value in pairs:
+        by_week.setdefault(week, []).append(value)
+    weeks, n = sorted(by_week), len(pairs)
+    out: dict[str, Any] = {"method": "wild cluster bootstrap, Rademacher weights, NFL-week clusters, basic (reflected) "
+                                     "bounds: mean - q90 and mean - q10 of the deviations mean* - mean",
+                           "clusters": len(weeks), "seed": seed, "level": q}
+    if n < 2 or len(weeks) < 2:
+        return {**out, "state": "INSUFFICIENT_CLUSTERS", "lower_90_one_sided": None, "upper_90_one_sided": None,
+                "weight_patterns": 0, "exact_enumeration": None}
+    mean = sum(v for _, v in pairs) / n
+    sums = [sum(v - mean for v in by_week[w]) for w in weeks]
+    exact = 2 ** len(weeks) <= E1_WILD_ENUMERATE_MAX
+    if exact:
+        patterns: Any = itertools.product((-1, 1), repeat=len(weeks))
+    else:
+        rng = random.Random(seed)
+        patterns = ([rng.choice((-1, 1)) for _ in weeks] for _ in range(resamples))
+    devs = sorted(sum(w * s for w, s in zip(p, sums)) / n for p in patterns)
+    hi, lo = math.ceil(q * len(devs)) - 1, max(0, math.ceil((1 - q) * len(devs)) - 1)
+    return {**out, "state": "COARSE_FEW_CLUSTERS" if len(weeks) < E1_FEW_CLUSTERS else "OK",
+            "lower_90_one_sided": mean - devs[hi], "upper_90_one_sided": mean - devs[lo],
+            "weight_patterns": len(devs), "exact_enumeration": exact}
+
+
+def _e1_describe(pairs: Sequence[tuple[str, float]], *, seed: int, resamples: int, bounds: bool = True
+                 ) -> dict[str, Any]:
+    values = [v for _, v in pairs]
+    by_week: dict[str, list[float]] = {}
+    for week, value in pairs:
+        by_week.setdefault(week, []).append(value)
+    out = {"n": len(values), "weeks": len(by_week), "mean_gross": sum(values) / len(values) if values else None,
+           "sd_gross": statistics.stdev(values) if len(values) >= 2 else None,
+           "by_week": [{"week": w, "n": len(v), "mean_gross": sum(v) / len(v)} for w, v in sorted(by_week.items())]}
+    if bounds:
+        out["week_cluster_bounds"] = _wild_cluster_bounds(pairs, seed=seed, resamples=resamples)
+    return out
+
+
+def e1_endpoint(entries: Mapping[str, Any], targets: Sequence[Mapping[str, Any]], catalog: KalshiCatalog,
+                payloads: _Payloads, *, as_of: datetime, seed: int = GATE_BOOTSTRAP_SEED,
+                resamples: int = GATE_BOOTSTRAP_RESAMPLES) -> dict[str, Any]:
+    """E1 exits, P&L and summaries (proposal rows 3, 4, 5(b), 15). READS LABELS: the first T-60m book of each
+    traded market and its settlement. Call it only from a logged results path, with a catalog that keeps the settled
+    listing fields.
+
+    Exit: the FIRST book of the same market received in the T-60m horizon window (the window `markout_endpoint`
+    uses) at its YES bid, with displayed bid depth >= 1. Gross P&L per contract = bid - ask (1 contract, no fee).
+    A missing exit (no T-60m target once kickoff has passed, no book, an unusable book, no bid, bid depth missing or
+    < 1) is scored, never dropped: the primary replaces the bid with the settlement payoff (PENDING, excluded from
+    the mean and never 0, while the settlement is not final); the sensitivity exits at 0. A T-60m window that closes
+    after `as_of` (or a missing T-60m target before kickoff) is PENDING and not scored anywhere. Secondary (b): the
+    hold-to-settlement gross, payoff - ask, of every trade whose settlement is final (descriptive)."""
+    target_of: dict[tuple[str, str], Mapping[str, Any]] = {}
+    for t in targets:
+        if t.get("state") != "SUPERSEDED":
+            target_of[(t["event_id"], t["offset_label"])] = t
+    att = {"t6_due_games": entries["counts"]["t6_due"], "games_evaluable": entries["counts"]["games_evaluable"],
+           "no_eligible_side": entries["counts"]["no_eligible_side"],
+           "margin_ties_no_trade": entries["counts"]["margin_ties_no_trade"], "trades": 0,
+           "exit_pending": {r: 0 for r in E1_EXIT_PENDING}, "exit_determined": 0, "exit_bid": 0,
+           "missing_exit": {r: 0 for r in E1_MISSING_EXITS}, "missing_exit_total": 0,
+           "missing_exit_settlement_fallback_scored": 0,
+           "missing_exit_settlement_pending": {r: 0 for r in E1_SETTLEMENT_PENDING},
+           "scored_primary": 0, "scored_exit_at_0_sensitivity": 0, "hold_to_settlement_final": 0}
+    games, primary, sensitivity, hold = [], [], [], []
+    for g in entries["games"]:
+        row: dict[str, Any] = {
+            "event_id": g["event_id"], "week": g["week"], "commence_utc": g["commence_utc"],
+            "home_team": g["home_team"], "away_team": g["away_team"], "decision": g["decision"],
+            "side_reasons": {role: s["reason"] for role, s in g["sides"].items()},
+            "side_margins": {role: s["margin"] for role, s in g["sides"].items()}}
+        e = g["entry"]
+        if e is None:
+            games.append(row)
+            continue
+        att["trades"] += 1
+        ask = e["ask"]
+        row.update(side=e["team"], role=e["role"], ticker=e["ticker"], c_low=e["c_low"], ask6=ask,
+                   margin=e["margin"], ask_depth=e["ask_depth"], t6_book_snapshot_id=e.get("book_snapshot_id"),
+                   t6_decision_utc=e.get("decision_utc"), exit_basis=None, missing_exit=None, pending_reason=None,
+                   exit_value=None, bid_depth=None, t60_book=None, gross=None, gross_exit_at_0=None)
+        exit_pending = missing = None
+        bid = depth = book = None
+        t60 = target_of.get((g["event_id"], TARGET_HORIZON))
+        commence = parse_utc(g["commence_utc"])
+        if t60 is None:
+            if commence is None or as_of < commence:
+                exit_pending = "NO_T60_TARGET_BEFORE_KICKOFF"
+            else:
+                missing = "NO_T60_TARGET"
+        else:
+            target = _capture_target(t60)
+            start, end = effective_due(target, PILOT_CONFIG) - PILOT_CONFIG.early_tolerance, deadline(target, PILOT_CONFIG)
+            row["t60_window"] = {"start_utc": _iso(start), "end_utc": _iso(end)}
+            if end > as_of:
+                exit_pending = "T60_WINDOW_OPEN"
+            else:
+                bid, depth, missing, book = _e1_exit(catalog, payloads, e["ticker"], start, end)
+        if book is not None:
+            row["t60_book"] = {"snapshot_id": book[1], "received_utc": _iso(book[0])}
+        settlement = _e1_settlement(e["ticker"], catalog, as_of)
+        row["settlement"] = settlement
+        row["hold_to_settlement_gross"] = None if settlement["payoff"] is None else settlement["payoff"] - ask
+        if row["hold_to_settlement_gross"] is not None:
+            hold.append((g["week"], float(row["hold_to_settlement_gross"])))
+            att["hold_to_settlement_final"] += 1
+        if exit_pending is not None:
+            att["exit_pending"][exit_pending] += 1
+            row.update(exit_basis=E1_PENDING, pending_reason=exit_pending)
+            games.append(row)
+            continue
+        att["exit_determined"] += 1
+        if missing is None:
+            att["exit_bid"] += 1
+            row.update(exit_basis=E1_EXIT_BID, exit_value=bid, bid_depth=depth, gross=bid - ask,
+                       gross_exit_at_0=bid - ask)
+        else:
+            att["missing_exit"][missing] += 1
+            att["missing_exit_total"] += 1
+            row.update(missing_exit=missing, bid_depth=depth, gross_exit_at_0=Decimal(0) - ask)
+            if settlement["payoff"] is None:
+                att["missing_exit_settlement_pending"][settlement["pending_reason"]] += 1
+                row.update(exit_basis=E1_PENDING, pending_reason=settlement["pending_reason"])
+            else:
+                att["missing_exit_settlement_fallback_scored"] += 1
+                row.update(exit_basis=E1_SETTLEMENT_FALLBACK, exit_value=settlement["payoff"],
+                           gross=settlement["payoff"] - ask)
+        if row["gross"] is not None:
+            primary.append((g["week"], float(row["gross"])))
+        sensitivity.append((g["week"], float(row["gross_exit_at_0"])))
+        games.append(row)
+    att["scored_primary"], att["scored_exit_at_0_sensitivity"] = len(primary), len(sensitivity)
+    return {
+        "version": E1_VERSION, "state": E1_STATE, "proposal": E1_PROPOSAL,
+        "label_reads": "the FIRST book of each traded market in the T-60m horizon window (its YES bid and bid size) and "
+                       "the market's settlement: EXP-002 labels, logged results path only",
+        "fill_assumption": E1_FILL, "costs": E1_COSTS,
+        "statistic": "gross P&L per contract = bid1 - ask6 (1 contract); a missing exit is scored at the settlement "
+                     "payoff (primary) and at 0 (sensitivity), never dropped",
+        "rule": {**entries["rule"],
+                 "exit": "the YES bid of the first book of the same market in the T-60m window, displayed depth >= 1"},
+        "bounds": entries["bounds"], "games": games, "attrition": att, "entry_counts": entries["counts"],
+        "sides_by_reason": entries["sides_by_reason"], "bounds_undeclared": entries["bounds_undeclared"],
+        "summary": {
+            "primary": _e1_describe(primary, seed=seed, resamples=resamples),
+            "sensitivity_exit_at_0": _e1_describe(sensitivity, seed=seed, resamples=resamples, bounds=False),
+            "secondary_hold_to_settlement": {
+                **_e1_describe(hold, seed=seed, resamples=resamples, bounds=False),
+                "use": "secondary (b), descriptive: every trade whose settlement is final, held to its payoff"},
+            "trades_by_week": entries["operational_futility_inputs"]["entries_per_week"]["by_week"]},
+        "operational_futility_inputs": entries["operational_futility_inputs"],
+        "verdict": E1_NO_VERDICT, "freeze_eligible": False,
+    }
+
+
 def exp002_gate_line(store: Any, *, as_of: datetime, rows: Sequence[Mapping[str, Any]] | None = None,
                      policy: JoinPolicy = JoinPolicy(), protocol: Mapping[str, Any] | None = None,
                      experiments_root: Path | None = None, resamples: int = GATE_BOOTSTRAP_RESAMPLES) -> dict[str, Any]:
@@ -2594,10 +3024,18 @@ def freeze_eligibility(gate: Mapping[str, Any], protocol: Mapping[str, Any]) -> 
 
 
 def measure_exp002(store: Any, *, as_of: datetime, results: bool = False, min_effect: float | None = None,
-                   policy: JoinPolicy = JoinPolicy(), experiments_root: Path | None = None) -> dict[str, Any]:
+                   policy: JoinPolicy = JoinPolicy(), experiments_root: Path | None = None,
+                   e1_bounds: tuple[Decimal, Decimal] | None = None) -> dict[str, Any]:
     """The EXP-002 measurement over one read-only store. The gate always runs and is label-free: the join is
     built for the T-24h and T-6h horizons only, so no T-60m book is loaded for it. The markout endpoint runs only
-    with `results=True` (its T-60m books are labels): the CLI records the view in EXP-002's evidence log first."""
+    with `results=True` (its T-60m books are labels): the CLI records the view in EXP-002's evidence log first.
+
+    E1 (PROPOSED, not frozen): the entry decisions always run on the same label-free T-6h rows; without results
+    only their counts are returned (`e1_entry_summary`). With `results=True`, `e1_endpoint` adds the exits, the
+    settlement fallback and gross P&L, from a second catalog that keeps the settled listing fields (labels).
+    `e1_bounds` = (tie, postponement) probability bounds for E1 only, declared by the caller as a candidate (the
+    proposal's PROPOSED t_max and u_max); the gates keep `policy`. Without them E1 uses the policy's bounds, and
+    with none declared no entry is computed (BOUNDS_UNDECLARED)."""
     if not isinstance(as_of, datetime) or as_of.tzinfo is None:
         raise ValueError("as_of must be a timezone-aware datetime")
     as_of = as_of.astimezone(UTC)
@@ -2607,18 +3045,29 @@ def measure_exp002(store: Any, *, as_of: datetime, results: bool = False, min_ef
     gate = noise_gate(gate_observations(rows, catalog, reader), min_effect=min_effect)
     gate_reads = list(reader.read)
     gate_v3 = noise_gate_v3(gate_v3_observations(rows, policy), min_effect=min_effect)
+    e1_policy, e1_source = policy, None
+    if e1_bounds is not None:
+        problem = e1_bounds_problem(e1_bounds)
+        if problem:
+            raise ValueError(f"E1 bounds: {problem}")
+        e1_policy = replace(policy, tie_probability_bound=e1_bounds[0], postponement_probability_bound=e1_bounds[1])
+        e1_source = ("CALLER_DECLARED_CANDIDATE: given for this run (the proposal's PROPOSED t_max / u_max, row 1); "
+                     "not frozen, not a protocol value")
+    entries = e1_entries(rows, e1_policy, bounds_source=e1_source)
     markout: dict[str, Any]
     if results:
         markout = markout_endpoint(rows, targets, catalog, reader, as_of=as_of, policy=policy)
+        e1 = e1_endpoint(entries, targets, kalshi_catalog(store, as_of, payloads), payloads, as_of=as_of)
     else:
         markout = {"state": "HIDDEN", "detail": "the markout reads the first T-60m book (an EXP-002 label); it is "
                                                 "shown only by a logged run (exp002 --with-results)"}
+        e1 = e1_entry_summary(entries)
     protocol = protocol_status(experiments_root)
     body = {"schema": "exp002-measurement/1", "label": MEASUREMENT_LABEL, "version": MEASUREMENT_VERSION,
             "join_version": JOIN_VERSION, "consensus_version": odds_consensus.CONSENSUS_VERSION,
             "policy": policy.to_dict(), "as_of_utc": _iso(as_of), "protocol": protocol,
             "labels": "INCLUDED (a logged --with-results run)" if results else "HIDDEN",
-            "gate": gate, "gate_books_read": gate_reads, "gate_v3": gate_v3, "markout": markout,
+            "gate": gate, "gate_books_read": gate_reads, "gate_v3": gate_v3, "markout": markout, "e1": e1,
             "economics_note": "economics inputs are unchanged: only book-at-or-after-odds pairs feed them "
                               "(build_report); BEFORE_ODDS pairs are comparability-only and counted"}
     plain = _plain(body)
@@ -2848,16 +3297,23 @@ def record_results_view(report: Mapping[str, Any], *, log: Path, actor: str, cod
 def record_markout_view(measurement: Mapping[str, Any], *, log: Path, actor: str, code_version: str,
                         experiments_root: Path | None = None, now: datetime | None = None) -> str:
     """Log an `exp002 --with-results` run before anything is printed: its markout reads the first T-60m book of
-    each market (a label). Same checks as `record_results_view`."""
-    games = (measurement.get("markout") or {}).get("games") or []
-    shown = sorted(g["commence_utc"] for g in games if g.get("commence_utc"))
+    each market, and E1 its exit bids, settlements and gross P&L (labels). Same checks as `record_results_view`."""
+    games = list((measurement.get("markout") or {}).get("games") or [])
+    e1 = measurement.get("e1") or {}
+    games += list(e1.get("games") or [])  # E1 rows: every due T-6h game, traded or not
+    shown = sorted({g["commence_utc"] for g in games if g.get("commence_utc")})
+    bounds = e1.get("bounds") or {}
     return _record_label_view(
         measurement.get("protocol") or {}, shown, as_of_utc=measurement["as_of_utc"], sha=measurement["output_sha256"],
         log=log, actor=actor, code_version=code_version, experiments_root=experiments_root, now=now,
         dataset_id="sports_evidence:exp002_markout", dataset_version=f"{MEASUREMENT_VERSION}/{JOIN_VERSION}",
         tool="python -m edge_lab.sports_evidence exp002 --with-results",
         note=f"EXP-002 measurement as of {measurement['as_of_utc']}; cross-book markout (first T-60m books) and "
-             "placebo shown; development data", role=rev.DatasetRole.DEVELOPMENT)
+             f"placebo shown; E1 {E1_VERSION} (PROPOSED, not frozen) shown: exit bids and bid depth at the first "
+             "T-60m books, settlement payoffs, gross P&L per trade, the exit-at-0 sensitivity, hold-to-settlement "
+             f"gross and exit attrition, with E1 bounds tie={bounds.get('tie_probability_bound')} "
+             f"postponement={bounds.get('postponement_probability_bound')}; development data",
+        role=rev.DatasetRole.DEVELOPMENT)
 
 
 def _record_label_view(protocol: Mapping[str, Any], shown: Sequence[str], *, as_of_utc: str, sha: str, log: Path,
@@ -2927,6 +3383,11 @@ def main(argv: list[str] | None = None) -> int:
     ms.add_argument("--code-version", default=os.getenv("EDGE_LAB_CODE_VERSION"),
                     help="git commit of the code that runs (default: $EDGE_LAB_CODE_VERSION)")
     ms.add_argument("--experiments", help="experiment registry root (default: the repository's experiments/)")
+    ms.add_argument("--e1-tie-bound", help="E1 only (PROPOSED endpoint): a candidate tie probability bound t_max "
+                                           "(e.g. 0.01); give it with --e1-postponement-bound. Without both, no E1 "
+                                           "entry is computed (BOUNDS_UNDECLARED)")
+    ms.add_argument("--e1-postponement-bound", help="E1 only: a candidate not-played probability bound u_max "
+                                                    "(e.g. 0.005)")
     args = parser.parse_args(argv)
     if args.command == "exp002":
         return _main_exp002(args, parser)
@@ -2978,6 +3439,14 @@ def _main_exp002(args: argparse.Namespace, parser: argparse.ArgumentParser) -> i
     from .storage import ReadOnlyStoreError, SnapshotStore
 
     name = "sports_evidence exp002"
+    e1_bounds = None
+    if (args.e1_tie_bound is None) != (args.e1_postponement_bound is None):
+        parser.error("--e1-tie-bound and --e1-postponement-bound go together")
+    if args.e1_tie_bound is not None:
+        e1_bounds = (_dec(args.e1_tie_bound), _dec(args.e1_postponement_bound))
+        problem = e1_bounds_problem(e1_bounds)
+        if problem:  # refused before the store opens: an invalid bound must never spend a logged look
+            parser.error(f"E1 bounds: {problem}")
     if args.with_results and not (args.evidence_log and args.actor and args.code_version):
         print(json.dumps({"command": name, "state": "REFUSED",
                           "detail": "--with-results reads EXP-002 labels (the first T-60m books): give --evidence-log, "
@@ -3000,7 +3469,7 @@ def _main_exp002(args: argparse.Namespace, parser: argparse.ArgumentParser) -> i
         return 1
     root = Path(args.experiments) if args.experiments else None
     out = measure_exp002(store, as_of=as_of, results=args.with_results, min_effect=args.min_effect,
-                         experiments_root=root)
+                         experiments_root=root, e1_bounds=e1_bounds)
     if args.with_results:
         try:
             logged = record_markout_view(out, log=Path(args.evidence_log), actor=args.actor,
@@ -3015,7 +3484,7 @@ def _main_exp002(args: argparse.Namespace, parser: argparse.ArgumentParser) -> i
         _write_atomic(Path(args.out), text + "\n")
         print(json.dumps({"command": name, "state": "WRITTEN", "out": args.out, "output_sha256": out["output_sha256"],
                           "gate_verdict": out["gate"]["verdict"], "gate_v3_verdict": out["gate_v3"]["verdict"],
-                          "freeze_eligible": False}))
+                          "e1_state": out["e1"]["state"], "freeze_eligible": False}))
     else:
         sys.stdout.write(text + "\n")
     return 0
