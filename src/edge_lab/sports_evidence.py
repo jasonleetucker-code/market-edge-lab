@@ -3410,7 +3410,13 @@ def record_markout_view(measurement: Mapping[str, Any], *, log: Path, actor: str
 def _record_label_view(protocol: Mapping[str, Any], shown: Sequence[str], *, as_of_utc: str, sha: str, log: Path,
                        actor: str, code_version: str, experiments_root: Path | None, now: datetime | None,
                        dataset_id: str, dataset_version: str, tool: str, note: str,
-                       role: "rev.DatasetRole" = rev.DatasetRole.UNASSIGNED) -> str:
+                       role: "rev.DatasetRole" = rev.DatasetRole.UNASSIGNED,
+                       action: "rev.Action" = rev.Action.LABEL_RESULT_INSPECTION, viewed_features: bool | None = True,
+                       viewed_labels: bool | None = True, viewed_results: bool | None = True,
+                       influenced_tuning: bool | None = None) -> str:
+    """Record one view in the protocol's own evidence log (the registry decides which log), with its prohibited
+    inputs and label scopes enforced. The defaults are a label/result view; the A.C timing calibration
+    (`exp002_timing`) records a FEATURE_INSPECTION with labels and results not viewed."""
     experiment_id = protocol.get("experiment_id")
     if not experiment_id:
         raise rev.EvidenceError("no Family A protocol is registered, so there is no evidence log to record in")
@@ -3430,9 +3436,9 @@ def _record_label_view(protocol: Mapping[str, Any], shown: Sequence[str], *, as_
         experiment_id=experiment_id, family=FAMILY_ID, dataset_id=dataset_id,
         dataset_version=dataset_version, dataset_sha256=sha, role=role,
         window=rev.InformationWindow(OUTCOME_SCOPE, start, end), actor=actor, tool=tool,
-        action_time_utc=_iso(now or _clock()), action=rev.Action.LABEL_RESULT_INSPECTION,
-        code_version=code_version, model_version=None, prompt_version=None, viewed_features=True,
-        viewed_labels=True, viewed_results=True, influenced_tuning=None, note=note)
+        action_time_utc=_iso(now or _clock()), action=action,
+        code_version=code_version, model_version=None, prompt_version=None, viewed_features=viewed_features,
+        viewed_labels=viewed_labels, viewed_results=viewed_results, influenced_tuning=influenced_tuning, note=note)
     return rev.record_use(own, use, prohibited_prefixes=registry.prohibited_inputs(exp),
                           prohibited_label_scopes=registry.prohibited_label_scopes(exp))
 
@@ -3479,9 +3485,14 @@ def main(argv: list[str] | None = None) -> int:
                                            "entry is computed (BOUNDS_UNDECLARED)")
     ms.add_argument("--e1-postponement-bound", help="E1 only: a candidate not-played probability bound u_max "
                                                     "(e.g. 0.005)")
+    from . import exp002_timing  # the A.C timing calibration (a separate module; it imports this one)
+
+    exp002_timing.add_parser(sub)
     args = parser.parse_args(argv)
     if args.command == "exp002":
         return _main_exp002(args, parser)
+    if args.command == "exp002-timing":
+        return exp002_timing.main_timing(args, parser)
     if args.with_results and not (args.evidence_log and args.actor and args.code_version):
         print(json.dumps({"command": "sports_evidence report", "state": "REFUSED",
                           "detail": "--with-results shows EXP-002 outcome labels: give --evidence-log, --actor and "
