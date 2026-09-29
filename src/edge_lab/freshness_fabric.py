@@ -303,6 +303,22 @@ POLICY_OBSERVE_CLOSE = SourcePolicy(
     retry="one close tick a day; a missed close is lost")
 OBSERVATION_POLICIES = (POLICY_OBSERVE, POLICY_OBSERVE_CLOSE)
 
+POLICY_KALSHI_NHL = SourcePolicy(
+    source_id="kalshi_nhl.game_books", domain="sports", mode=EXTERNAL, underlying_mode=AcquisitionMode.EVENT_RELATIVE,
+    description="Kalshi KXNHLGAME books at T-6h / T-60m before puck drop and one settled read per game day (ADR "
+                "0040); DATA_COLLECTION / DEVELOPMENT_ONLY, never EXP-002; objective: the registered orderbook max_age",
+    policy_version=po.NHL_PLAN_VERSION,
+    schedule_owner="systemd edgelab-observe.timer :05/:20/:35/:50 America/New_York + edge_lab.price_observations "
+                   f"(Kalshi NHL, {po.NHL_SWITCH}, default off)",
+    max_useful_age=get_source("kalshi_public_nhl_game").max_age["orderbook"],
+    pacing=(f"after every EXP-001 and NFL target; at most {po.NHL_RUN_GET_SHARE} GETs a run, "
+            f"{po.NHL_WORST_GETS_PER_GAME_HORIZON} per game-horizon, {po.NHL_WEEKLY_GET_CAP} a week"),
+    budget=f"its own weekly bound ({po.NHL_WEEKLY_GAME_HORIZONS} game-horizons + {po.NHL_WEEKLY_SETTLEMENT_READS} "
+           "settled reads), never shared with the NFL bound",
+    protected_windows=_PROTECTED,
+    retry="a failed game-horizon is retried once at the next tick; a settled read never; then MISSED")
+NHL_POLICIES = (POLICY_KALSHI_NHL,)
+
 POLICY_SETTLEMENT = SourcePolicy(
     source_id="kalshi_settlement.refresh", domain="settlement", mode=EXTERNAL,
     underlying_mode=AcquisitionMode.RELEASE_DRIVEN,
@@ -767,10 +783,43 @@ def price_observations_schedule(ctx: FabricContext, now: datetime) -> list[Sourc
         return [unknown_record(p, now, problem or "evidence store unavailable") for p in OBSERVATION_POLICIES]
     # The Kalshi NFL pairing targets share the collector but are not ADR 0030 observations: their
     # misses, kill-switch holds and receipts must never change the EXP-001 observation record.
-    targets = [t for t in store.price_targets() if not po.is_nfl_target(t)]
+    # The same holds for the Kalshi NHL targets (ADR 0040), which have their own record (`kalshi_nhl_schedule`).
+    targets = [t for t in store.price_targets() if not po.is_sports_target(t)]
     return [_observation_record(POLICY_OBSERVE, [t for t in targets if t["phase"] != "close"], targets, now, close=False),
             _observation_record(POLICY_OBSERVE_CLOSE, [t for t in targets if t["phase"] == "close"], targets, now,
                                 close=True)]
+
+
+def kalshi_nhl_schedule(ctx: FabricContext, now: datetime) -> list[SourceFreshness]:
+    """Kalshi KXNHLGAME prospective evidence (ADR 0040), from the NHL targets only: due, attempted, captured,
+    missed, stale. No other source's targets are read, so a healthy NFL or EXP-001 collector says nothing about NHL
+    and NHL failures never touch them. The supervisor has no environment file, so the switch itself is not read:
+    with no NHL target stored, or the newest NHL row held by the switch, the record is PAUSED and says why."""
+    import dataclasses
+
+    store, problem = _open_store(ctx)
+    if store is None:
+        return [unknown_record(POLICY_KALSHI_NHL, now, problem or "evidence store unavailable")]
+    targets = [t for t in store.price_targets() if po.is_nhl_target(t)]
+    coverage = po.nhl_coverage(store, now)
+    record = _observation_record(POLICY_KALSHI_NHL, targets, targets, now, close=False)
+    missed = coverage["missed_reasons"]
+    details = {**dict(record.details), "schedule": (coverage["schedule"] or {}).get("state"),
+               "games_discovered": coverage["games"]["discovered"], "games_mapped": coverage["games"]["mapped"],
+               "games_unmapped": coverage["games"]["unmapped"],
+               "game_horizons": coverage["targets"]["game_horizons"],
+               "game_horizons_captured": coverage["targets"]["game_horizons_captured"],
+               "missed_reasons": dict(list(missed.items())[:MAX_ITEMS]),
+               "settlement_reads": coverage["settlement_reads"]["planned"], "fee": coverage["fee"]["state"]}
+    newest = max(targets, key=lambda t: t["state_at_utc"] or "", default=None)
+    held = newest is not None and str(newest["state_reason"] or "").startswith("NHL_CAPTURE_DISABLED")
+    if not targets or held:
+        why = (f"no Kalshi NHL target is planned: {po.NHL_SWITCH} is off by default (activation is a reviewed "
+               "operator step), or the NHL schedule is unavailable (" + str((coverage['schedule'] or {}).get('state'))
+               + ")" if not targets else f"the newest NHL target was held by {po.NHL_SWITCH} (off or invalid)")
+        record = dataclasses.replace(record, schedule_state=ScheduleState.PAUSED, why_due=_clip(why))
+    return [dataclasses.replace(record, usable_for_decision=False, details=details,
+                                notes=record.notes + ("NHL is DATA_COLLECTION / DEVELOPMENT_ONLY: never decision-grade",))]
 
 
 # =========================================================================== settlement refresh and shadow bookkeeping
@@ -998,6 +1047,7 @@ REGISTRY: tuple[FabricProvider, ...] = (
     FabricProvider("exp001_forward", FORWARD_POLICIES, forward_weather),
     FabricProvider("the_odds_api", ODDS_POLICIES, odds_api_pilot),
     FabricProvider("price_observations", OBSERVATION_POLICIES, price_observations_schedule),
+    FabricProvider("kalshi_nhl", NHL_POLICIES, kalshi_nhl_schedule),
     FabricProvider("settlement_and_shadow", SETTLEMENT_POLICIES, settlement_and_shadow),
     FabricProvider("backups", BACKUP_POLICIES, backups),
     FabricProvider("freshness_supervisor", SUPERVISOR_POLICIES, supervisor_self),

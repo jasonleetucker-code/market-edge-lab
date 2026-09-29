@@ -311,6 +311,27 @@ REGISTRY: dict[str, SourceSpec] = {
             license_notes="Same source, terms review and verdict as polymarket_us_nfl_discovery.",
         ),
         SourceSpec(
+            # Health-only identity for the Kalshi KXNHLGAME prospective evidence collector (NHL-B, ADR 0040).
+            # Its listings, books and settled reads are stored under kalshi_public (legacy name "kalshi"); this
+            # id keeps NHL health apart from EXP-001 and from the NFL pairing, so neither can vouch for the other.
+            source_id="kalshi_public_nhl_game",
+            legacy_name="kalshi_public_nhl_game",
+            description=(
+                "Kalshi public market data, KXNHLGAME (NHL game winner) only: both team markets' books at T-6h and "
+                "T-60m before puck drop, planned from the stored The Odds API icehockey_nhl schedule, plus one "
+                "settled-markets read per game day (edge_lab.price_observations, ADR 0040). DATA_COLLECTION / "
+                "DEVELOPMENT_ONLY, never EXP-002. Still PLANNED: EDGE_LAB_KALSHI_NHL_CAPTURE defaults off."
+            ),
+            access_tier=AccessTier.OFFICIAL_API,
+            base_url="https://external-api.kalshi.com/trade-api/v2",
+            status=SourceStatus.PLANNED,
+            # Event-relative: a book is current for minutes (the kalshi_public orderbook objective); the settled
+            # read is once a game day.
+            max_age={"orderbook": timedelta(minutes=5), "settled_markets": timedelta(hours=26)},
+            license_notes="Same source and terms as kalshi_public: unauthenticated public endpoints only, no "
+                          "redistribution before a terms review.",
+        ),
+        SourceSpec(
             source_id="the_odds_api",
             legacy_name="the_odds_api",
             description=(

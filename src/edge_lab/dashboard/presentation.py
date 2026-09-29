@@ -400,6 +400,14 @@ STATES: dict[str, StateWord] = {
     # A sportsbook capture at T-60m or after the T-6h decision cutoff is a proxy for EXP-002's labels: its figures
     # are withheld by odds_consensus.withhold_label_proxies; the Terminal never reveals them.
     "ODDS_CAPTURE_LABEL_PROXY": StateWord("Hidden · EXP-002 label proxy", ND_K),
+    # Kalshi NHL prospective evidence (price_observations.nhl_coverage, ADR 0040): development only, never green
+    # beyond a captured book; outcomes are withheld.
+    "NHL_NOT_COLLECTING": StateWord("Not collecting · off by default", ND_K),
+    "NHL_SCHEDULE_OK": StateWord("Schedule current", INFO_K),
+    "NHL_SCHEDULE_STALE": StateWord("Schedule stale · nothing new planned", WARN_K),
+    "NHL_SCHEDULE_NO_DISCOVERY": StateWord("No NHL schedule stored", ND_K),
+    "NHL_SCHEDULE_UNREADABLE": StateWord("Schedule unreadable", ERR_K),
+    "NHL_OUTCOME_WITHHELD": StateWord("Hidden · NHL outcome", ND_K),
     # Polymarket US NFL pilot (polymarket_sports): relationships, catalog, access gate, checks, targets.
     # Nothing here is green: a relationship is never equivalence and a scan is never a full catalog.
     "PM_EVENT_RELATED_NOT_EQUIVALENT": StateWord("RELATED MARKET — NOT ECONOMICALLY EQUIVALENT", WARN_K),

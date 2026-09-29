@@ -1,0 +1,3016 @@
+{
+ "_note": "Kalshi public GET /events?series_ticker=KXNHLGAME&with_nested_markets=true&status=open&limit=200, read once 2026-09-29 ~17:27Z (read-only, keyless) for NHL-B; market fields trimmed to those the tests use. Quote fields removed.",
+ "cursor": "",
+ "events": [
+  {
+   "event_ticker": "KXNHLGAME-26SEP29FLACAR",
+   "markets": [
+    {
+     "can_close_early": true,
+     "close_time": "2026-10-01T21:00:00Z",
+     "event_ticker": "KXNHLGAME-26SEP29FLACAR",
+     "expected_expiration_time": "2026-09-30T00:00:00Z",
+     "market_type": "binary",
+     "no_sub_title": "Carolina",
+     "notional_value_dollars": "1.0000",
+     "occurrence_datetime": "2026-09-30T00:00:00Z",
+     "price_level_structure": "linear_cent",
+     "price_ranges": [
+      {
+       "end": "1.0000",
+       "start": "0.0000",
+       "step": "0.0100"
+      }
+     ],
+     "result": "",
+     "rules_primary": "If Carolina wins the Florida vs Carolina NHL game originally scheduled for Sep 29, 2026, then the market resolves to Yes.",
+     "rules_secondary": "If the game is postponed but begins within 48 hours of its originally scheduled start time, the market will remain open and resolve based on the official final result. If the game is cancelled or not started within 48 hours of its originally scheduled start, all markets will resolve to a fair price.",
+     "settlement_timer_seconds": 45,
+     "status": "active",
+     "ticker": "KXNHLGAME-26SEP29FLACAR-CAR",
+     "title": "Carolina wins",
+     "yes_sub_title": "Carolina"
+    },
+    {
+     "can_close_early": true,
+     "close_time": "2026-10-01T21:00:00Z",
+     "event_ticker": "KXNHLGAME-26SEP29FLACAR",
+     "expected_expiration_time": "2026-09-30T00:00:00Z",
+     "market_type": "binary",
+     "no_sub_title": "Florida",
+     "notional_value_dollars": "1.0000",
+     "occurrence_datetime": "2026-09-30T00:00:00Z",
+     "price_level_structure": "linear_cent",
+     "price_ranges": [
+      {
+       "end": "1.0000",
+       "start": "0.0000",
+       "step": "0.0100"
+      }
+     ],
+     "result": "",
+     "rules_primary": "If Florida wins the Florida vs Carolina NHL game originally scheduled for Sep 29, 2026, then the market resolves to Yes.",
+     "rules_secondary": "If the game is postponed but begins within 48 hours of its originally scheduled start time, the market will remain open and resolve based on the official final result. If the game is cancelled or not started within 48 hours of its originally scheduled start, all markets will resolve to a fair price.",
+     "settlement_timer_seconds": 45,
+     "status": "active",
+     "ticker": "KXNHLGAME-26SEP29FLACAR-FLA",
+     "title": "Florida wins",
+     "yes_sub_title": "Florida"
+    }
+   ],
+   "series_ticker": "KXNHLGAME",
+   "settlement_sources": [
+    {
+     "name": "NHL",
+     "url": "https://www.nhl.com"
+    },
+    {
+     "name": "ESPN",
+     "url": "https://espn.com"
+    }
+   ],
+   "sub_title": "FLA vs CAR (Sep 29)",
+   "title": "Florida vs Carolina"
+  },
+  {
+   "event_ticker": "KXNHLGAME-26SEP29MTLTOR",
+   "markets": [
+    {
+     "can_close_early": true,
+     "close_time": "2026-10-01T23:00:00Z",
+     "event_ticker": "KXNHLGAME-26SEP29MTLTOR",
+     "expected_expiration_time": "2026-09-30T02:00:00Z",
+     "market_type": "binary",
+     "no_sub_title": "Toronto",
+     "notional_value_dollars": "1.0000",
+     "occurrence_datetime": "2026-09-30T02:00:00Z",
+     "price_level_structure": "linear_cent",
+     "price_ranges": [
+      {
+       "end": "1.0000",
+       "start": "0.0000",
+       "step": "0.0100"
+      }
+     ],
+     "result": "",
+     "rules_primary": "If Toronto wins the Montreal vs Toronto NHL game originally scheduled for Sep 29, 2026, then the market resolves to Yes.",
+     "rules_secondary": "If the game is postponed but begins within 48 hours of its originally scheduled start time, the market will remain open and resolve based on the official final result. If the game is cancelled or not started within 48 hours of its originally scheduled start, all markets will resolve to a fair price.",
+     "settlement_timer_seconds": 45,
+     "status": "active",
+     "ticker": "KXNHLGAME-26SEP29MTLTOR-TOR",
+     "title": "Toronto wins",
+     "yes_sub_title": "Toronto"
+    },
+    {
+     "can_close_early": true,
+     "close_time": "2026-10-01T23:00:00Z",
+     "event_ticker": "KXNHLGAME-26SEP29MTLTOR",
+     "expected_expiration_time": "2026-09-30T02:00:00Z",
+     "market_type": "binary",
+     "no_sub_title": "Montreal",
+     "notional_value_dollars": "1.0000",
+     "occurrence_datetime": "2026-09-30T02:00:00Z",
+     "price_level_structure": "linear_cent",
+     "price_ranges": [
+      {
+       "end": "1.0000",
+       "start": "0.0000",
+       "step": "0.0100"
+      }
+     ],
+     "result": "",
+     "rules_primary": "If Montreal wins the Montreal vs Toronto NHL game originally scheduled for Sep 29, 2026, then the market resolves to Yes.",
+     "rules_secondary": "If the game is postponed but begins within 48 hours of its originally scheduled start time, the market will remain open and resolve based on the official final result. If the game is cancelled or not started within 48 hours of its originally scheduled start, all markets will resolve to a fair price.",
+     "settlement_timer_seconds": 45,
+     "status": "active",
+     "ticker": "KXNHLGAME-26SEP29MTLTOR-MTL",
+     "title": "Montreal wins",
+     "yes_sub_title": "Montreal"
+    }
+   ],
+   "series_ticker": "KXNHLGAME",
+   "settlement_sources": [
+    {
+     "name": "NHL",
+     "url": "https://www.nhl.com"
+    },
+    {
+     "name": "ESPN",
+     "url": "https://espn.com"
+    }
+   ],
+   "sub_title": "MTL vs TOR (Sep 29)",
+   "title": "Montreal vs Toronto"
+  },
+  {
+   "event_ticker": "KXNHLGAME-26SEP29NYRBOS",
+   "markets": [
+    {
+     "can_close_early": true,
+     "close_time": "2026-10-02T00:00:00Z",
+     "event_ticker": "KXNHLGAME-26SEP29NYRBOS",
+     "expected_expiration_time": "2026-09-30T03:00:00Z",
+     "market_type": "binary",
+     "no_sub_title": "Boston",
+     "notional_value_dollars": "1.0000",
+     "occurrence_datetime": "2026-09-30T03:00:00Z",
+     "price_level_structure": "linear_cent",
+     "price_ranges": [
+      {
+       "end": "1.0000",
+       "start": "0.0000",
+       "step": "0.0100"
+      }
+     ],
+     "result": "",
+     "rules_primary": "If Boston wins the New York R vs Boston NHL game originally scheduled for Sep 29, 2026, then the market resolves to Yes.",
+     "rules_secondary": "If the game is postponed but begins within 48 hours of its originally scheduled start time, the market will remain open and resolve based on the official final result. If the game is cancelled or not started within 48 hours of its originally scheduled start, all markets will resolve to a fair price.",
+     "settlement_timer_seconds": 45,
+     "status": "active",
+     "ticker": "KXNHLGAME-26SEP29NYRBOS-BOS",
+     "title": "Boston wins",
+     "yes_sub_title": "Boston"
+    },
+    {
+     "can_close_early": true,
+     "close_time": "2026-10-02T00:00:00Z",
+     "event_ticker": "KXNHLGAME-26SEP29NYRBOS",
+     "expected_expiration_time": "2026-09-30T03:00:00Z",
+     "market_type": "binary",
+     "no_sub_title": "New York R",
+     "notional_value_dollars": "1.0000",
+     "occurrence_datetime": "2026-09-30T03:00:00Z",
+     "price_level_structure": "linear_cent",
+     "price_ranges": [
+      {
+       "end": "1.0000",
+       "start": "0.0000",
+       "step": "0.0100"
+      }
+     ],
+     "result": "",
+     "rules_primary": "If New York R wins the New York R vs Boston NHL game originally scheduled for Sep 29, 2026, then the market resolves to Yes.",
+     "rules_secondary": "If the game is postponed but begins within 48 hours of its originally scheduled start time, the market will remain open and resolve based on the official final result. If the game is cancelled or not started within 48 hours of its originally scheduled start, all markets will resolve to a fair price.",
+     "settlement_timer_seconds": 45,
+     "status": "active",
+     "ticker": "KXNHLGAME-26SEP29NYRBOS-NYR",
+     "title": "New York R wins",
+     "yes_sub_title": "New York R"
+    }
+   ],
+   "series_ticker": "KXNHLGAME",
+   "settlement_sources": [
+    {
+     "name": "NHL",
+     "url": "https://www.nhl.com"
+    },
+    {
+     "name": "ESPN",
+     "url": "https://espn.com"
+    }
+   ],
+   "sub_title": "NYR vs BOS (Sep 29)",
+   "title": "New York R vs Boston"
+  },
+  {
+   "event_ticker": "KXNHLGAME-26SEP29VANEDM",
+   "markets": [
+    {
+     "can_close_early": true,
+     "close_time": "2026-10-02T02:00:00Z",
+     "event_ticker": "KXNHLGAME-26SEP29VANEDM",
+     "expected_expiration_time": "2026-09-30T05:00:00Z",
+     "market_type": "binary",
+     "no_sub_title": "Edmonton",
+     "notional_value_dollars": "1.0000",
+     "occurrence_datetime": "2026-09-30T05:00:00Z",
+     "price_level_structure": "linear_cent",
+     "price_ranges": [
+      {
+       "end": "1.0000",
+       "start": "0.0000",
+       "step": "0.0100"
+      }
+     ],
+     "result": "",
+     "rules_primary": "If Edmonton wins the Vancouver vs Edmonton NHL game originally scheduled for Sep 29, 2026, then the market resolves to Yes.",
+     "rules_secondary": "If the game is postponed but begins within 48 hours of its originally scheduled start time, the market will remain open and resolve based on the official final result. If the game is cancelled or not started within 48 hours of its originally scheduled start, all markets will resolve to a fair price.",
+     "settlement_timer_seconds": 45,
+     "status": "active",
+     "ticker": "KXNHLGAME-26SEP29VANEDM-EDM",
+     "title": "Edmonton wins",
+     "yes_sub_title": "Edmonton"
+    },
+    {
+     "can_close_early": true,
+     "close_time": "2026-10-02T02:00:00Z",
+     "event_ticker": "KXNHLGAME-26SEP29VANEDM",
+     "expected_expiration_time": "2026-09-30T05:00:00Z",
+     "market_type": "binary",
+     "no_sub_title": "Vancouver",
+     "notional_value_dollars": "1.0000",
+     "occurrence_datetime": "2026-09-30T05:00:00Z",
+     "price_level_structure": "linear_cent",
+     "price_ranges": [
+      {
+       "end": "1.0000",
+       "start": "0.0000",
+       "step": "0.0100"
+      }
+     ],
+     "result": "",
+     "rules_primary": "If Vancouver wins the Vancouver vs Edmonton NHL game originally scheduled for Sep 29, 2026, then the market resolves to Yes.",
+     "rules_secondary": "If the game is postponed but begins within 48 hours of its originally scheduled start time, the market will remain open and resolve based on the official final result. If the game is cancelled or not started within 48 hours of its originally scheduled start, all markets will resolve to a fair price.",
+     "settlement_timer_seconds": 45,
+     "status": "active",
+     "ticker": "KXNHLGAME-26SEP29VANEDM-VAN",
+     "title": "Vancouver wins",
+     "yes_sub_title": "Vancouver"
+    }
+   ],
+   "series_ticker": "KXNHLGAME",
+   "settlement_sources": [
+    {
+     "name": "NHL",
+     "url": "https://www.nhl.com"
+    },
+    {
+     "name": "ESPN",
+     "url": "https://espn.com"
+    }
+   ],
+   "sub_title": "VAN vs EDM (Sep 29)",
+   "title": "Vancouver vs Edmonton"
+  },
+  {
+   "event_ticker": "KXNHLGAME-26SEP29CHIVGK",
+   "markets": [
+    {
+     "can_close_early": true,
+     "close_time": "2026-10-02T02:30:00Z",
+     "event_ticker": "KXNHLGAME-26SEP29CHIVGK",
+     "expected_expiration_time": "2026-09-30T05:30:00Z",
+     "market_type": "binary",
+     "no_sub_title": "Vegas",
+     "notional_value_dollars": "1.0000",
+     "occurrence_datetime": "2026-09-30T05:30:00Z",
+     "price_level_structure": "linear_cent",
+     "price_ranges": [
+      {
+       "end": "1.0000",
+       "start": "0.0000",
+       "step": "0.0100"
+      }
+     ],
+     "result": "",
+     "rules_primary": "If Vegas wins the Chicago vs Vegas NHL game originally scheduled for Sep 29, 2026, then the market resolves to Yes.",
+     "rules_secondary": "If the game is postponed but begins within 48 hours of its originally scheduled start time, the market will remain open and resolve based on the official final result. If the game is cancelled or not started within 48 hours of its originally scheduled start, all markets will resolve to a fair price.",
+     "settlement_timer_seconds": 45,
+     "status": "active",
+     "ticker": "KXNHLGAME-26SEP29CHIVGK-VGK",
+     "title": "Vegas wins",
+     "yes_sub_title": "Vegas"
+    },
+    {
+     "can_close_early": true,
+     "close_time": "2026-10-02T02:30:00Z",
+     "event_ticker": "KXNHLGAME-26SEP29CHIVGK",
+     "expected_expiration_time": "2026-09-30T05:30:00Z",
+     "market_type": "binary",
+     "no_sub_title": "Chicago",
+     "notional_value_dollars": "1.0000",
+     "occurrence_datetime": "2026-09-30T05:30:00Z",
+     "price_level_structure": "linear_cent",
+     "price_ranges": [
+      {
+       "end": "1.0000",
+       "start": "0.0000",
+       "step": "0.0100"
+      }
+     ],
+     "result": "",
+     "rules_primary": "If Chicago wins the Chicago vs Vegas NHL game originally scheduled for Sep 29, 2026, then the market resolves to Yes.",
+     "rules_secondary": "If the game is postponed but begins within 48 hours of its originally scheduled start time, the market will remain open and resolve based on the official final result. If the game is cancelled or not started within 48 hours of its originally scheduled start, all markets will resolve to a fair price.",
+     "settlement_timer_seconds": 45,
+     "status": "active",
+     "ticker": "KXNHLGAME-26SEP29CHIVGK-CHI",
+     "title": "Chicago wins",
+     "yes_sub_title": "Chicago"
+    }
+   ],
+   "series_ticker": "KXNHLGAME",
+   "settlement_sources": [
+    {
+     "name": "NHL",
+     "url": "https://www.nhl.com"
+    },
+    {
+     "name": "ESPN",
+     "url": "https://espn.com"
+    }
+   ],
+   "sub_title": "CHI vs VGK (Sep 29)",
+   "title": "Chicago vs Vegas"
+  },
+  {
+   "event_ticker": "KXNHLGAME-26SEP30NYITOR",
+   "markets": [
+    {
+     "can_close_early": true,
+     "close_time": "2026-10-02T23:30:00Z",
+     "event_ticker": "KXNHLGAME-26SEP30NYITOR",
+     "expected_expiration_time": "2026-10-01T02:30:00Z",
+     "market_type": "binary",
+     "no_sub_title": "Toronto",
+     "notional_value_dollars": "1.0000",
+     "occurrence_datetime": "2026-10-01T02:30:00Z",
+     "price_level_structure": "linear_cent",
+     "price_ranges": [
+      {
+       "end": "1.0000",
+       "start": "0.0000",
+       "step": "0.0100"
+      }
+     ],
+     "result": "",
+     "rules_primary": "If Toronto wins the New York I vs Toronto NHL game originally scheduled for Sep 30, 2026, then the market resolves to Yes.",
+     "rules_secondary": "If the game is postponed but begins within 48 hours of its originally scheduled start time, the market will remain open and resolve based on the official final result. If the game is cancelled or not started within 48 hours of its originally scheduled start, all markets will resolve to a fair price.",
+     "settlement_timer_seconds": 45,
+     "status": "active",
+     "ticker": "KXNHLGAME-26SEP30NYITOR-TOR",
+     "title": "Toronto wins",
+     "yes_sub_title": "Toronto"
+    },
+    {
+     "can_close_early": true,
+     "close_time": "2026-10-02T23:30:00Z",
+     "event_ticker": "KXNHLGAME-26SEP30NYITOR",
+     "expected_expiration_time": "2026-10-01T02:30:00Z",
+     "market_type": "binary",
+     "no_sub_title": "New York I",
+     "notional_value_dollars": "1.0000",
+     "occurrence_datetime": "2026-10-01T02:30:00Z",
+     "price_level_structure": "linear_cent",
+     "price_ranges": [
+      {
+       "end": "1.0000",
+       "start": "0.0000",
+       "step": "0.0100"
+      }
+     ],
+     "result": "",
+     "rules_primary": "If New York I wins the New York I vs Toronto NHL game originally scheduled for Sep 30, 2026, then the market resolves to Yes.",
+     "rules_secondary": "If the game is postponed but begins within 48 hours of its originally scheduled start time, the market will remain open and resolve based on the official final result. If the game is cancelled or not started within 48 hours of its originally scheduled start, all markets will resolve to a fair price.",
+     "settlement_timer_seconds": 45,
+     "status": "active",
+     "ticker": "KXNHLGAME-26SEP30NYITOR-NYI",
+     "title": "New York I wins",
+     "yes_sub_title": "New York I"
+    }
+   ],
+   "series_ticker": "KXNHLGAME",
+   "settlement_sources": [
+    {
+     "name": "NHL",
+     "url": "https://www.nhl.com"
+    },
+    {
+     "name": "ESPN",
+     "url": "https://espn.com"
+    }
+   ],
+   "sub_title": "NYI vs TOR (Sep 30)",
+   "title": "New York I vs Toronto"
+  },
+  {
+   "event_ticker": "KXNHLGAME-26SEP30PITPHI",
+   "markets": [
+    {
+     "can_close_early": true,
+     "close_time": "2026-10-02T23:30:00Z",
+     "event_ticker": "KXNHLGAME-26SEP30PITPHI",
+     "expected_expiration_time": "2026-10-01T02:30:00Z",
+     "market_type": "binary",
+     "no_sub_title": "Philadelphia",
+     "notional_value_dollars": "1.0000",
+     "occurrence_datetime": "2026-10-01T02:30:00Z",
+     "price_level_structure": "linear_cent",
+     "price_ranges": [
+      {
+       "end": "1.0000",
+       "start": "0.0000",
+       "step": "0.0100"
+      }
+     ],
+     "result": "",
+     "rules_primary": "If Philadelphia wins the Pittsburgh vs Philadelphia NHL game originally scheduled for Sep 30, 2026, then the market resolves to Yes.",
+     "rules_secondary": "If the game is postponed but begins within 48 hours of its originally scheduled start time, the market will remain open and resolve based on the official final result. If the game is cancelled or not started within 48 hours of its originally scheduled start, all markets will resolve to a fair price.",
+     "settlement_timer_seconds": 45,
+     "status": "active",
+     "ticker": "KXNHLGAME-26SEP30PITPHI-PHI",
+     "title": "Philadelphia wins",
+     "yes_sub_title": "Philadelphia"
+    },
+    {
+     "can_close_early": true,
+     "close_time": "2026-10-02T23:30:00Z",
+     "event_ticker": "KXNHLGAME-26SEP30PITPHI",
+     "expected_expiration_time": "2026-10-01T02:30:00Z",
+     "market_type": "binary",
+     "no_sub_title": "Pittsburgh",
+     "notional_value_dollars": "1.0000",
+     "occurrence_datetime": "2026-10-01T02:30:00Z",
+     "price_level_structure": "linear_cent",
+     "price_ranges": [
+      {
+       "end": "1.0000",
+       "start": "0.0000",
+       "step": "0.0100"
+      }
+     ],
+     "result": "",
+     "rules_primary": "If Pittsburgh wins the Pittsburgh vs Philadelphia NHL game originally scheduled for Sep 30, 2026, then the market resolves to Yes.",
+     "rules_secondary": "If the game is postponed but begins within 48 hours of its originally scheduled start time, the market will remain open and resolve based on the official final result. If the game is cancelled or not started within 48 hours of its originally scheduled start, all markets will resolve to a fair price.",
+     "settlement_timer_seconds": 45,
+     "status": "active",
+     "ticker": "KXNHLGAME-26SEP30PITPHI-PIT",
+     "title": "Pittsburgh wins",
+     "yes_sub_title": "Pittsburgh"
+    }
+   ],
+   "series_ticker": "KXNHLGAME",
+   "settlement_sources": [
+    {
+     "name": "NHL",
+     "url": "https://www.nhl.com"
+    },
+    {
+     "name": "ESPN",
+     "url": "https://espn.com"
+    }
+   ],
+   "sub_title": "PIT vs PHI (Sep 30)",
+   "title": "Pittsburgh vs Philadelphia"
+  },
+  {
+   "event_ticker": "KXNHLGAME-26SEP30LACOL",
+   "markets": [
+    {
+     "can_close_early": true,
+     "close_time": "2026-10-03T02:00:00Z",
+     "event_ticker": "KXNHLGAME-26SEP30LACOL",
+     "expected_expiration_time": "2026-10-01T05:00:00Z",
+     "market_type": "binary",
+     "no_sub_title": "Colorado",
+     "notional_value_dollars": "1.0000",
+     "occurrence_datetime": "2026-10-01T05:00:00Z",
+     "price_level_structure": "linear_cent",
+     "price_ranges": [
+      {
+       "end": "1.0000",
+       "start": "0.0000",
+       "step": "0.0100"
+      }
+     ],
+     "result": "",
+     "rules_primary": "If Colorado wins the Los Angeles vs Colorado NHL game originally scheduled for Sep 30, 2026, then the market resolves to Yes.",
+     "rules_secondary": "If the game is postponed but begins within 48 hours of its originally scheduled start time, the market will remain open and resolve based on the official final result. If the game is cancelled or not started within 48 hours of its originally scheduled start, all markets will resolve to a fair price.",
+     "settlement_timer_seconds": 45,
+     "status": "active",
+     "ticker": "KXNHLGAME-26SEP30LACOL-COL",
+     "title": "Colorado wins",
+     "yes_sub_title": "Colorado"
+    },
+    {
+     "can_close_early": true,
+     "close_time": "2026-10-03T02:00:00Z",
+     "event_ticker": "KXNHLGAME-26SEP30LACOL",
+     "expected_expiration_time": "2026-10-01T05:00:00Z",
+     "market_type": "binary",
+     "no_sub_title": "Los Angeles",
+     "notional_value_dollars": "1.0000",
+     "occurrence_datetime": "2026-10-01T05:00:00Z",
+     "price_level_structure": "linear_cent",
+     "price_ranges": [
+      {
+       "end": "1.0000",
+       "start": "0.0000",
+       "step": "0.0100"
+      }
+     ],
+     "result": "",
+     "rules_primary": "If Los Angeles wins the Los Angeles vs Colorado NHL game originally scheduled for Sep 30, 2026, then the market resolves to Yes.",
+     "rules_secondary": "If the game is postponed but begins within 48 hours of its originally scheduled start time, the market will remain open and resolve based on the official final result. If the game is cancelled or not started within 48 hours of its originally scheduled start, all markets will resolve to a fair price.",
+     "settlement_timer_seconds": 45,
+     "status": "active",
+     "ticker": "KXNHLGAME-26SEP30LACOL-LA",
+     "title": "Los Angeles wins",
+     "yes_sub_title": "Los Angeles"
+    }
+   ],
+   "series_ticker": "KXNHLGAME",
+   "settlement_sources": [
+    {
+     "name": "NHL",
+     "url": "https://www.nhl.com"
+    },
+    {
+     "name": "ESPN",
+     "url": "https://espn.com"
+    }
+   ],
+   "sub_title": "LA vs COL (Sep 30)",
+   "title": "Los Angeles vs Colorado"
+  },
+  {
+   "event_ticker": "KXNHLGAME-26OCT01BUFCBJ",
+   "markets": [
+    {
+     "can_close_early": true,
+     "close_time": "2026-10-03T23:00:00Z",
+     "event_ticker": "KXNHLGAME-26OCT01BUFCBJ",
+     "expected_expiration_time": "2026-10-02T02:00:00Z",
+     "market_type": "binary",
+     "no_sub_title": "Columbus",
+     "notional_value_dollars": "1.0000",
+     "occurrence_datetime": "2026-10-02T02:00:00Z",
+     "price_level_structure": "linear_cent",
+     "price_ranges": [
+      {
+       "end": "1.0000",
+       "start": "0.0000",
+       "step": "0.0100"
+      }
+     ],
+     "result": "",
+     "rules_primary": "If Columbus wins the Buffalo vs Columbus NHL game originally scheduled for Oct 1, 2026, then the market resolves to Yes.",
+     "rules_secondary": "If the game is postponed but begins within 48 hours of its originally scheduled start time, the market will remain open and resolve based on the official final result. If the game is cancelled or not started within 48 hours of its originally scheduled start, all markets will resolve to a fair price.",
+     "settlement_timer_seconds": 45,
+     "status": "active",
+     "ticker": "KXNHLGAME-26OCT01BUFCBJ-CBJ",
+     "title": "Columbus wins",
+     "yes_sub_title": "Columbus"
+    },
+    {
+     "can_close_early": true,
+     "close_time": "2026-10-03T23:00:00Z",
+     "event_ticker": "KXNHLGAME-26OCT01BUFCBJ",
+     "expected_expiration_time": "2026-10-02T02:00:00Z",
+     "market_type": "binary",
+     "no_sub_title": "Buffalo",
+     "notional_value_dollars": "1.0000",
+     "occurrence_datetime": "2026-10-02T02:00:00Z",
+     "price_level_structure": "linear_cent",
+     "price_ranges": [
+      {
+       "end": "1.0000",
+       "start": "0.0000",
+       "step": "0.0100"
+      }
+     ],
+     "result": "",
+     "rules_primary": "If Buffalo wins the Buffalo vs Columbus NHL game originally scheduled for Oct 1, 2026, then the market resolves to Yes.",
+     "rules_secondary": "If the game is postponed but begins within 48 hours of its originally scheduled start time, the market will remain open and resolve based on the official final result. If the game is cancelled or not started within 48 hours of its originally scheduled start, all markets will resolve to a fair price.",
+     "settlement_timer_seconds": 45,
+     "status": "active",
+     "ticker": "KXNHLGAME-26OCT01BUFCBJ-BUF",
+     "title": "Buffalo wins",
+     "yes_sub_title": "Buffalo"
+    }
+   ],
+   "series_ticker": "KXNHLGAME",
+   "settlement_sources": [
+    {
+     "name": "NHL",
+     "url": "https://www.nhl.com"
+    },
+    {
+     "name": "ESPN",
+     "url": "https://espn.com"
+    }
+   ],
+   "sub_title": "BUF vs CBJ (Oct 1)",
+   "title": "Buffalo vs Columbus"
+  },
+  {
+   "event_ticker": "KXNHLGAME-26OCT01PHINJ",
+   "markets": [
+    {
+     "can_close_early": true,
+     "close_time": "2026-10-03T23:00:00Z",
+     "event_ticker": "KXNHLGAME-26OCT01PHINJ",
+     "expected_expiration_time": "2026-10-02T02:00:00Z",
+     "market_type": "binary",
+     "no_sub_title": "New Jersey",
+     "notional_value_dollars": "1.0000",
+     "occurrence_datetime": "2026-10-02T02:00:00Z",
+     "price_level_structure": "linear_cent",
+     "price_ranges": [
+      {
+       "end": "1.0000",
+       "start": "0.0000",
+       "step": "0.0100"
+      }
+     ],
+     "result": "",
+     "rules_primary": "If New Jersey wins the Philadelphia vs New Jersey NHL game originally scheduled for Oct 1, 2026, then the market resolves to Yes.",
+     "rules_secondary": "If the game is postponed but begins within 48 hours of its originally scheduled start time, the market will remain open and resolve based on the official final result. If the game is cancelled or not started within 48 hours of its originally scheduled start, all markets will resolve to a fair price.",
+     "settlement_timer_seconds": 45,
+     "status": "active",
+     "ticker": "KXNHLGAME-26OCT01PHINJ-NJ",
+     "title": "New Jersey wins",
+     "yes_sub_title": "New Jersey"
+    },
+    {
+     "can_close_early": true,
+     "close_time": "2026-10-03T23:00:00Z",
+     "event_ticker": "KXNHLGAME-26OCT01PHINJ",
+     "expected_expiration_time": "2026-10-02T02:00:00Z",
+     "market_type": "binary",
+     "no_sub_title": "Philadelphia",
+     "notional_value_dollars": "1.0000",
+     "occurrence_datetime": "2026-10-02T02:00:00Z",
+     "price_level_structure": "linear_cent",
+     "price_ranges": [
+      {
+       "end": "1.0000",
+       "start": "0.0000",
+       "step": "0.0100"
+      }
+     ],
+     "result": "",
+     "rules_primary": "If Philadelphia wins the Philadelphia vs New Jersey NHL game originally scheduled for Oct 1, 2026, then the market resolves to Yes.",
+     "rules_secondary": "If the game is postponed but begins within 48 hours of its originally scheduled start time, the market will remain open and resolve based on the official final result. If the game is cancelled or not started within 48 hours of its originally scheduled start, all markets will resolve to a fair price.",
+     "settlement_timer_seconds": 45,
+     "status": "active",
+     "ticker": "KXNHLGAME-26OCT01PHINJ-PHI",
+     "title": "Philadelphia wins",
+     "yes_sub_title": "Philadelphia"
+    }
+   ],
+   "series_ticker": "KXNHLGAME",
+   "settlement_sources": [
+    {
+     "name": "NHL",
+     "url": "https://www.nhl.com"
+    },
+    {
+     "name": "ESPN",
+     "url": "https://espn.com"
+    }
+   ],
+   "sub_title": "PHI vs NJ (Oct 1)",
+   "title": "Philadelphia vs New Jersey"
+  },
+  {
+   "event_ticker": "KXNHLGAME-26OCT01TBNYR",
+   "markets": [
+    {
+     "can_close_early": true,
+     "close_time": "2026-10-03T23:00:00Z",
+     "event_ticker": "KXNHLGAME-26OCT01TBNYR",
+     "expected_expiration_time": "2026-10-02T02:00:00Z",
+     "market_type": "binary",
+     "no_sub_title": "New York R",
+     "notional_value_dollars": "1.0000",
+     "occurrence_datetime": "2026-10-02T02:00:00Z",
+     "price_level_structure": "linear_cent",
+     "price_ranges": [
+      {
+       "end": "1.0000",
+       "start": "0.0000",
+       "step": "0.0100"
+      }
+     ],
+     "result": "",
+     "rules_primary": "If New York R wins the Tampa Bay vs New York R NHL game originally scheduled for Oct 1, 2026, then the market resolves to Yes.",
+     "rules_secondary": "If the game is postponed but begins within 48 hours of its originally scheduled start time, the market will remain open and resolve based on the official final result. If the game is cancelled or not started within 48 hours of its originally scheduled start, all markets will resolve to a fair price.",
+     "settlement_timer_seconds": 45,
+     "status": "active",
+     "ticker": "KXNHLGAME-26OCT01TBNYR-NYR",
+     "title": "New York R wins",
+     "yes_sub_title": "New York R"
+    },
+    {
+     "can_close_early": true,
+     "close_time": "2026-10-03T23:00:00Z",
+     "event_ticker": "KXNHLGAME-26OCT01TBNYR",
+     "expected_expiration_time": "2026-10-02T02:00:00Z",
+     "market_type": "binary",
+     "no_sub_title": "Tampa Bay",
+     "notional_value_dollars": "1.0000",
+     "occurrence_datetime": "2026-10-02T02:00:00Z",
+     "price_level_structure": "linear_cent",
+     "price_ranges": [
+      {
+       "end": "1.0000",
+       "start": "0.0000",
+       "step": "0.0100"
+      }
+     ],
+     "result": "",
+     "rules_primary": "If Tampa Bay wins the Tampa Bay vs New York R NHL game originally scheduled for Oct 1, 2026, then the market resolves to Yes.",
+     "rules_secondary": "If the game is postponed but begins within 48 hours of its originally scheduled start time, the market will remain open and resolve based on the official final result. If the game is cancelled or not started within 48 hours of its originally scheduled start, all markets will resolve to a fair price.",
+     "settlement_timer_seconds": 45,
+     "status": "active",
+     "ticker": "KXNHLGAME-26OCT01TBNYR-TB",
+     "title": "Tampa Bay wins",
+     "yes_sub_title": "Tampa Bay"
+    }
+   ],
+   "series_ticker": "KXNHLGAME",
+   "settlement_sources": [
+    {
+     "name": "NHL",
+     "url": "https://www.nhl.com"
+    },
+    {
+     "name": "ESPN",
+     "url": "https://espn.com"
+    }
+   ],
+   "sub_title": "TB vs NYR (Oct 1)",
+   "title": "Tampa Bay vs New York R"
+  },
+  {
+   "event_ticker": "KXNHLGAME-26OCT01MINNSH",
+   "markets": [
+    {
+     "can_close_early": true,
+     "close_time": "2026-10-04T00:00:00Z",
+     "event_ticker": "KXNHLGAME-26OCT01MINNSH",
+     "expected_expiration_time": "2026-10-02T03:00:00Z",
+     "market_type": "binary",
+     "no_sub_title": "Nashville",
+     "notional_value_dollars": "1.0000",
+     "occurrence_datetime": "2026-10-02T03:00:00Z",
+     "price_level_structure": "linear_cent",
+     "price_ranges": [
+      {
+       "end": "1.0000",
+       "start": "0.0000",
+       "step": "0.0100"
+      }
+     ],
+     "result": "",
+     "rules_primary": "If Nashville wins the Minnesota vs Nashville NHL game originally scheduled for Oct 1, 2026, then the market resolves to Yes.",
+     "rules_secondary": "If the game is postponed but begins within 48 hours of its originally scheduled start time, the market will remain open and resolve based on the official final result. If the game is cancelled or not started within 48 hours of its originally scheduled start, all markets will resolve to a fair price.",
+     "settlement_timer_seconds": 45,
+     "status": "active",
+     "ticker": "KXNHLGAME-26OCT01MINNSH-NSH",
+     "title": "Nashville wins",
+     "yes_sub_title": "Nashville"
+    },
+    {
+     "can_close_early": true,
+     "close_time": "2026-10-04T00:00:00Z",
+     "event_ticker": "KXNHLGAME-26OCT01MINNSH",
+     "expected_expiration_time": "2026-10-02T03:00:00Z",
+     "market_type": "binary",
+     "no_sub_title": "Minnesota",
+     "notional_value_dollars": "1.0000",
+     "occurrence_datetime": "2026-10-02T03:00:00Z",
+     "price_level_structure": "linear_cent",
+     "price_ranges": [
+      {
+       "end": "1.0000",
+       "start": "0.0000",
+       "step": "0.0100"
+      }
+     ],
+     "result": "",
+     "rules_primary": "If Minnesota wins the Minnesota vs Nashville NHL game originally scheduled for Oct 1, 2026, then the market resolves to Yes.",
+     "rules_secondary": "If the game is postponed but begins within 48 hours of its originally scheduled start time, the market will remain open and resolve based on the official final result. If the game is cancelled or not started within 48 hours of its originally scheduled start, all markets will resolve to a fair price.",
+     "settlement_timer_seconds": 45,
+     "status": "active",
+     "ticker": "KXNHLGAME-26OCT01MINNSH-MIN",
+     "title": "Minnesota wins",
+     "yes_sub_title": "Minnesota"
+    }
+   ],
+   "series_ticker": "KXNHLGAME",
+   "settlement_sources": [
+    {
+     "name": "NHL",
+     "url": "https://www.nhl.com"
+    },
+    {
+     "name": "ESPN",
+     "url": "https://espn.com"
+    }
+   ],
+   "sub_title": "MIN vs NSH (Oct 1)",
+   "title": "Minnesota vs Nashville"
+  },
+  {
+   "event_ticker": "KXNHLGAME-26OCT01SEACGY",
+   "markets": [
+    {
+     "can_close_early": true,
+     "close_time": "2026-10-04T01:00:00Z",
+     "event_ticker": "KXNHLGAME-26OCT01SEACGY",
+     "expected_expiration_time": "2026-10-02T04:00:00Z",
+     "market_type": "binary",
+     "no_sub_title": "Calgary",
+     "notional_value_dollars": "1.0000",
+     "occurrence_datetime": "2026-10-02T04:00:00Z",
+     "price_level_structure": "linear_cent",
+     "price_ranges": [
+      {
+       "end": "1.0000",
+       "start": "0.0000",
+       "step": "0.0100"
+      }
+     ],
+     "result": "",
+     "rules_primary": "If Calgary wins the Seattle vs Calgary NHL game originally scheduled for Oct 1, 2026, then the market resolves to Yes.",
+     "rules_secondary": "If the game is postponed but begins within 48 hours of its originally scheduled start time, the market will remain open and resolve based on the official final result. If the game is cancelled or not started within 48 hours of its originally scheduled start, all markets will resolve to a fair price.",
+     "settlement_timer_seconds": 45,
+     "status": "active",
+     "ticker": "KXNHLGAME-26OCT01SEACGY-CGY",
+     "title": "Calgary wins",
+     "yes_sub_title": "Calgary"
+    },
+    {
+     "can_close_early": true,
+     "close_time": "2026-10-04T01:00:00Z",
+     "event_ticker": "KXNHLGAME-26OCT01SEACGY",
+     "expected_expiration_time": "2026-10-02T04:00:00Z",
+     "market_type": "binary",
+     "no_sub_title": "Seattle",
+     "notional_value_dollars": "1.0000",
+     "occurrence_datetime": "2026-10-02T04:00:00Z",
+     "price_level_structure": "linear_cent",
+     "price_ranges": [
+      {
+       "end": "1.0000",
+       "start": "0.0000",
+       "step": "0.0100"
+      }
+     ],
+     "result": "",
+     "rules_primary": "If Seattle wins the Seattle vs Calgary NHL game originally scheduled for Oct 1, 2026, then the market resolves to Yes.",
+     "rules_secondary": "If the game is postponed but begins within 48 hours of its originally scheduled start time, the market will remain open and resolve based on the official final result. If the game is cancelled or not started within 48 hours of its originally scheduled start, all markets will resolve to a fair price.",
+     "settlement_timer_seconds": 45,
+     "status": "active",
+     "ticker": "KXNHLGAME-26OCT01SEACGY-SEA",
+     "title": "Seattle wins",
+     "yes_sub_title": "Seattle"
+    }
+   ],
+   "series_ticker": "KXNHLGAME",
+   "settlement_sources": [
+    {
+     "name": "NHL",
+     "url": "https://www.nhl.com"
+    },
+    {
+     "name": "ESPN",
+     "url": "https://espn.com"
+    }
+   ],
+   "sub_title": "SEA vs CGY (Oct 1)",
+   "title": "Seattle vs Calgary"
+  },
+  {
+   "event_ticker": "KXNHLGAME-26OCT01CHIUTA",
+   "markets": [
+    {
+     "can_close_early": true,
+     "close_time": "2026-10-04T01:30:00Z",
+     "event_ticker": "KXNHLGAME-26OCT01CHIUTA",
+     "expected_expiration_time": "2026-10-02T04:30:00Z",
+     "market_type": "binary",
+     "no_sub_title": "Utah",
+     "notional_value_dollars": "1.0000",
+     "occurrence_datetime": "2026-10-02T04:30:00Z",
+     "price_level_structure": "linear_cent",
+     "price_ranges": [
+      {
+       "end": "1.0000",
+       "start": "0.0000",
+       "step": "0.0100"
+      }
+     ],
+     "result": "",
+     "rules_primary": "If Utah wins the Chicago vs Utah NHL game originally scheduled for Oct 1, 2026, then the market resolves to Yes.",
+     "rules_secondary": "If the game is postponed but begins within 48 hours of its originally scheduled start time, the market will remain open and resolve based on the official final result. If the game is cancelled or not started within 48 hours of its originally scheduled start, all markets will resolve to a fair price.",
+     "settlement_timer_seconds": 45,
+     "status": "active",
+     "ticker": "KXNHLGAME-26OCT01CHIUTA-UTA",
+     "title": "Utah wins",
+     "yes_sub_title": "Utah"
+    },
+    {
+     "can_close_early": true,
+     "close_time": "2026-10-04T01:30:00Z",
+     "event_ticker": "KXNHLGAME-26OCT01CHIUTA",
+     "expected_expiration_time": "2026-10-02T04:30:00Z",
+     "market_type": "binary",
+     "no_sub_title": "Chicago",
+     "notional_value_dollars": "1.0000",
+     "occurrence_datetime": "2026-10-02T04:30:00Z",
+     "price_level_structure": "linear_cent",
+     "price_ranges": [
+      {
+       "end": "1.0000",
+       "start": "0.0000",
+       "step": "0.0100"
+      }
+     ],
+     "result": "",
+     "rules_primary": "If Chicago wins the Chicago vs Utah NHL game originally scheduled for Oct 1, 2026, then the market resolves to Yes.",
+     "rules_secondary": "If the game is postponed but begins within 48 hours of its originally scheduled start time, the market will remain open and resolve based on the official final result. If the game is cancelled or not started within 48 hours of its originally scheduled start, all markets will resolve to a fair price.",
+     "settlement_timer_seconds": 45,
+     "status": "active",
+     "ticker": "KXNHLGAME-26OCT01CHIUTA-CHI",
+     "title": "Chicago wins",
+     "yes_sub_title": "Chicago"
+    }
+   ],
+   "series_ticker": "KXNHLGAME",
+   "settlement_sources": [
+    {
+     "name": "NHL",
+     "url": "https://www.nhl.com"
+    },
+    {
+     "name": "ESPN",
+     "url": "https://espn.com"
+    }
+   ],
+   "sub_title": "CHI vs UTA (Oct 1)",
+   "title": "Chicago vs Utah"
+  },
+  {
+   "event_ticker": "KXNHLGAME-26OCT01EDMVAN",
+   "markets": [
+    {
+     "can_close_early": true,
+     "close_time": "2026-10-04T02:00:00Z",
+     "event_ticker": "KXNHLGAME-26OCT01EDMVAN",
+     "expected_expiration_time": "2026-10-02T05:00:00Z",
+     "market_type": "binary",
+     "no_sub_title": "Vancouver",
+     "notional_value_dollars": "1.0000",
+     "occurrence_datetime": "2026-10-02T05:00:00Z",
+     "price_level_structure": "linear_cent",
+     "price_ranges": [
+      {
+       "end": "1.0000",
+       "start": "0.0000",
+       "step": "0.0100"
+      }
+     ],
+     "result": "",
+     "rules_primary": "If Vancouver wins the Edmonton vs Vancouver NHL game originally scheduled for Oct 1, 2026, then the market resolves to Yes.",
+     "rules_secondary": "If the game is postponed but begins within 48 hours of its originally scheduled start time, the market will remain open and resolve based on the official final result. If the game is cancelled or not started within 48 hours of its originally scheduled start, all markets will resolve to a fair price.",
+     "settlement_timer_seconds": 45,
+     "status": "active",
+     "ticker": "KXNHLGAME-26OCT01EDMVAN-VAN",
+     "title": "Vancouver wins",
+     "yes_sub_title": "Vancouver"
+    },
+    {
+     "can_close_early": true,
+     "close_time": "2026-10-04T02:00:00Z",
+     "event_ticker": "KXNHLGAME-26OCT01EDMVAN",
+     "expected_expiration_time": "2026-10-02T05:00:00Z",
+     "market_type": "binary",
+     "no_sub_title": "Edmonton",
+     "notional_value_dollars": "1.0000",
+     "occurrence_datetime": "2026-10-02T05:00:00Z",
+     "price_level_structure": "linear_cent",
+     "price_ranges": [
+      {
+       "end": "1.0000",
+       "start": "0.0000",
+       "step": "0.0100"
+      }
+     ],
+     "result": "",
+     "rules_primary": "If Edmonton wins the Edmonton vs Vancouver NHL game originally scheduled for Oct 1, 2026, then the market resolves to Yes.",
+     "rules_secondary": "If the game is postponed but begins within 48 hours of its originally scheduled start time, the market will remain open and resolve based on the official final result. If the game is cancelled or not started within 48 hours of its originally scheduled start, all markets will resolve to a fair price.",
+     "settlement_timer_seconds": 45,
+     "status": "active",
+     "ticker": "KXNHLGAME-26OCT01EDMVAN-EDM",
+     "title": "Edmonton wins",
+     "yes_sub_title": "Edmonton"
+    }
+   ],
+   "series_ticker": "KXNHLGAME",
+   "settlement_sources": [
+    {
+     "name": "NHL",
+     "url": "https://www.nhl.com"
+    },
+    {
+     "name": "ESPN",
+     "url": "https://espn.com"
+    }
+   ],
+   "sub_title": "EDM vs VAN (Oct 1)",
+   "title": "Edmonton vs Vancouver"
+  },
+  {
+   "event_ticker": "KXNHLGAME-26OCT01FLASJ",
+   "markets": [
+    {
+     "can_close_early": true,
+     "close_time": "2026-10-04T02:00:00Z",
+     "event_ticker": "KXNHLGAME-26OCT01FLASJ",
+     "expected_expiration_time": "2026-10-02T05:00:00Z",
+     "market_type": "binary",
+     "no_sub_title": "San Jose",
+     "notional_value_dollars": "1.0000",
+     "occurrence_datetime": "2026-10-02T05:00:00Z",
+     "price_level_structure": "linear_cent",
+     "price_ranges": [
+      {
+       "end": "1.0000",
+       "start": "0.0000",
+       "step": "0.0100"
+      }
+     ],
+     "result": "",
+     "rules_primary": "If San Jose wins the Florida vs San Jose NHL game originally scheduled for Oct 1, 2026, then the market resolves to Yes.",
+     "rules_secondary": "If the game is postponed but begins within 48 hours of its originally scheduled start time, the market will remain open and resolve based on the official final result. If the game is cancelled or not started within 48 hours of its originally scheduled start, all markets will resolve to a fair price.",
+     "settlement_timer_seconds": 45,
+     "status": "active",
+     "ticker": "KXNHLGAME-26OCT01FLASJ-SJ",
+     "title": "San Jose wins",
+     "yes_sub_title": "San Jose"
+    },
+    {
+     "can_close_early": true,
+     "close_time": "2026-10-04T02:00:00Z",
+     "event_ticker": "KXNHLGAME-26OCT01FLASJ",
+     "expected_expiration_time": "2026-10-02T05:00:00Z",
+     "market_type": "binary",
+     "no_sub_title": "Florida",
+     "notional_value_dollars": "1.0000",
+     "occurrence_datetime": "2026-10-02T05:00:00Z",
+     "price_level_structure": "linear_cent",
+     "price_ranges": [
+      {
+       "end": "1.0000",
+       "start": "0.0000",
+       "step": "0.0100"
+      }
+     ],
+     "result": "",
+     "rules_primary": "If Florida wins the Florida vs San Jose NHL game originally scheduled for Oct 1, 2026, then the market resolves to Yes.",
+     "rules_secondary": "If the game is postponed but begins within 48 hours of its originally scheduled start time, the market will remain open and resolve based on the official final result. If the game is cancelled or not started within 48 hours of its originally scheduled start, all markets will resolve to a fair price.",
+     "settlement_timer_seconds": 45,
+     "status": "active",
+     "ticker": "KXNHLGAME-26OCT01FLASJ-FLA",
+     "title": "Florida wins",
+     "yes_sub_title": "Florida"
+    }
+   ],
+   "series_ticker": "KXNHLGAME",
+   "settlement_sources": [
+    {
+     "name": "NHL",
+     "url": "https://www.nhl.com"
+    },
+    {
+     "name": "ESPN",
+     "url": "https://espn.com"
+    }
+   ],
+   "sub_title": "FLA vs SJ (Oct 1)",
+   "title": "Florida vs San Jose"
+  },
+  {
+   "event_ticker": "KXNHLGAME-26OCT02NYRDET",
+   "markets": [
+    {
+     "can_close_early": true,
+     "close_time": "2026-10-04T22:30:00Z",
+     "event_ticker": "KXNHLGAME-26OCT02NYRDET",
+     "expected_expiration_time": "2026-10-03T01:30:00Z",
+     "market_type": "binary",
+     "no_sub_title": "Detroit",
+     "notional_value_dollars": "1.0000",
+     "occurrence_datetime": "2026-10-03T01:30:00Z",
+     "price_level_structure": "linear_cent",
+     "price_ranges": [
+      {
+       "end": "1.0000",
+       "start": "0.0000",
+       "step": "0.0100"
+      }
+     ],
+     "result": "",
+     "rules_primary": "If Detroit wins the New York R vs Detroit NHL game originally scheduled for Oct 2, 2026, then the market resolves to Yes.",
+     "rules_secondary": "If the game is postponed but begins within 48 hours of its originally scheduled start time, the market will remain open and resolve based on the official final result. If the game is cancelled or not started within 48 hours of its originally scheduled start, all markets will resolve to a fair price.",
+     "settlement_timer_seconds": 45,
+     "status": "active",
+     "ticker": "KXNHLGAME-26OCT02NYRDET-DET",
+     "title": "Detroit wins",
+     "yes_sub_title": "Detroit"
+    },
+    {
+     "can_close_early": true,
+     "close_time": "2026-10-04T22:30:00Z",
+     "event_ticker": "KXNHLGAME-26OCT02NYRDET",
+     "expected_expiration_time": "2026-10-03T01:30:00Z",
+     "market_type": "binary",
+     "no_sub_title": "New York R",
+     "notional_value_dollars": "1.0000",
+     "occurrence_datetime": "2026-10-03T01:30:00Z",
+     "price_level_structure": "linear_cent",
+     "price_ranges": [
+      {
+       "end": "1.0000",
+       "start": "0.0000",
+       "step": "0.0100"
+      }
+     ],
+     "result": "",
+     "rules_primary": "If New York R wins the New York R vs Detroit NHL game originally scheduled for Oct 2, 2026, then the market resolves to Yes.",
+     "rules_secondary": "If the game is postponed but begins within 48 hours of its originally scheduled start time, the market will remain open and resolve based on the official final result. If the game is cancelled or not started within 48 hours of its originally scheduled start, all markets will resolve to a fair price.",
+     "settlement_timer_seconds": 45,
+     "status": "active",
+     "ticker": "KXNHLGAME-26OCT02NYRDET-NYR",
+     "title": "New York R wins",
+     "yes_sub_title": "New York R"
+    }
+   ],
+   "series_ticker": "KXNHLGAME",
+   "settlement_sources": [
+    {
+     "name": "NHL",
+     "url": "https://www.nhl.com"
+    },
+    {
+     "name": "ESPN",
+     "url": "https://espn.com"
+    }
+   ],
+   "sub_title": "NYR vs DET (Oct 2)",
+   "title": "New York R vs Detroit"
+  },
+  {
+   "event_ticker": "KXNHLGAME-26OCT02WSHCAR",
+   "markets": [
+    {
+     "can_close_early": true,
+     "close_time": "2026-10-04T23:00:00Z",
+     "event_ticker": "KXNHLGAME-26OCT02WSHCAR",
+     "expected_expiration_time": "2026-10-03T02:00:00Z",
+     "market_type": "binary",
+     "no_sub_title": "Carolina",
+     "notional_value_dollars": "1.0000",
+     "occurrence_datetime": "2026-10-03T02:00:00Z",
+     "price_level_structure": "linear_cent",
+     "price_ranges": [
+      {
+       "end": "1.0000",
+       "start": "0.0000",
+       "step": "0.0100"
+      }
+     ],
+     "result": "",
+     "rules_primary": "If Carolina wins the Washington vs Carolina NHL game originally scheduled for Oct 2, 2026, then the market resolves to Yes.",
+     "rules_secondary": "If the game is postponed but begins within 48 hours of its originally scheduled start time, the market will remain open and resolve based on the official final result. If the game is cancelled or not started within 48 hours of its originally scheduled start, all markets will resolve to a fair price.",
+     "settlement_timer_seconds": 45,
+     "status": "active",
+     "ticker": "KXNHLGAME-26OCT02WSHCAR-CAR",
+     "title": "Carolina wins",
+     "yes_sub_title": "Carolina"
+    },
+    {
+     "can_close_early": true,
+     "close_time": "2026-10-04T23:00:00Z",
+     "event_ticker": "KXNHLGAME-26OCT02WSHCAR",
+     "expected_expiration_time": "2026-10-03T02:00:00Z",
+     "market_type": "binary",
+     "no_sub_title": "Washington",
+     "notional_value_dollars": "1.0000",
+     "occurrence_datetime": "2026-10-03T02:00:00Z",
+     "price_level_structure": "linear_cent",
+     "price_ranges": [
+      {
+       "end": "1.0000",
+       "start": "0.0000",
+       "step": "0.0100"
+      }
+     ],
+     "result": "",
+     "rules_primary": "If Washington wins the Washington vs Carolina NHL game originally scheduled for Oct 2, 2026, then the market resolves to Yes.",
+     "rules_secondary": "If the game is postponed but begins within 48 hours of its originally scheduled start time, the market will remain open and resolve based on the official final result. If the game is cancelled or not started within 48 hours of its originally scheduled start, all markets will resolve to a fair price.",
+     "settlement_timer_seconds": 45,
+     "status": "active",
+     "ticker": "KXNHLGAME-26OCT02WSHCAR-WSH",
+     "title": "Washington wins",
+     "yes_sub_title": "Washington"
+    }
+   ],
+   "series_ticker": "KXNHLGAME",
+   "settlement_sources": [
+    {
+     "name": "NHL",
+     "url": "https://www.nhl.com"
+    },
+    {
+     "name": "ESPN",
+     "url": "https://espn.com"
+    }
+   ],
+   "sub_title": "WSH vs CAR (Oct 2)",
+   "title": "Washington vs Carolina"
+  },
+  {
+   "event_ticker": "KXNHLGAME-26OCT02BOSWPG",
+   "markets": [
+    {
+     "can_close_early": true,
+     "close_time": "2026-10-05T00:00:00Z",
+     "event_ticker": "KXNHLGAME-26OCT02BOSWPG",
+     "expected_expiration_time": "2026-10-03T03:00:00Z",
+     "market_type": "binary",
+     "no_sub_title": "Winnipeg",
+     "notional_value_dollars": "1.0000",
+     "occurrence_datetime": "2026-10-03T03:00:00Z",
+     "price_level_structure": "linear_cent",
+     "price_ranges": [
+      {
+       "end": "1.0000",
+       "start": "0.0000",
+       "step": "0.0100"
+      }
+     ],
+     "result": "",
+     "rules_primary": "If Winnipeg wins the Boston vs Winnipeg NHL game originally scheduled for Oct 2, 2026, then the market resolves to Yes.",
+     "rules_secondary": "If the game is postponed but begins within 48 hours of its originally scheduled start time, the market will remain open and resolve based on the official final result. If the game is cancelled or not started within 48 hours of its originally scheduled start, all markets will resolve to a fair price.",
+     "settlement_timer_seconds": 45,
+     "status": "active",
+     "ticker": "KXNHLGAME-26OCT02BOSWPG-WPG",
+     "title": "Winnipeg wins",
+     "yes_sub_title": "Winnipeg"
+    },
+    {
+     "can_close_early": true,
+     "close_time": "2026-10-05T00:00:00Z",
+     "event_ticker": "KXNHLGAME-26OCT02BOSWPG",
+     "expected_expiration_time": "2026-10-03T03:00:00Z",
+     "market_type": "binary",
+     "no_sub_title": "Boston",
+     "notional_value_dollars": "1.0000",
+     "occurrence_datetime": "2026-10-03T03:00:00Z",
+     "price_level_structure": "linear_cent",
+     "price_ranges": [
+      {
+       "end": "1.0000",
+       "start": "0.0000",
+       "step": "0.0100"
+      }
+     ],
+     "result": "",
+     "rules_primary": "If Boston wins the Boston vs Winnipeg NHL game originally scheduled for Oct 2, 2026, then the market resolves to Yes.",
+     "rules_secondary": "If the game is postponed but begins within 48 hours of its originally scheduled start time, the market will remain open and resolve based on the official final result. If the game is cancelled or not started within 48 hours of its originally scheduled start, all markets will resolve to a fair price.",
+     "settlement_timer_seconds": 45,
+     "status": "active",
+     "ticker": "KXNHLGAME-26OCT02BOSWPG-BOS",
+     "title": "Boston wins",
+     "yes_sub_title": "Boston"
+    }
+   ],
+   "series_ticker": "KXNHLGAME",
+   "settlement_sources": [
+    {
+     "name": "NHL",
+     "url": "https://www.nhl.com"
+    },
+    {
+     "name": "ESPN",
+     "url": "https://espn.com"
+    }
+   ],
+   "sub_title": "BOS vs WPG (Oct 2)",
+   "title": "Boston vs Winnipeg"
+  },
+  {
+   "event_ticker": "KXNHLGAME-26OCT02STLDAL",
+   "markets": [
+    {
+     "can_close_early": true,
+     "close_time": "2026-10-05T01:00:00Z",
+     "event_ticker": "KXNHLGAME-26OCT02STLDAL",
+     "expected_expiration_time": "2026-10-03T04:00:00Z",
+     "market_type": "binary",
+     "no_sub_title": "Dallas",
+     "notional_value_dollars": "1.0000",
+     "occurrence_datetime": "2026-10-03T04:00:00Z",
+     "price_level_structure": "linear_cent",
+     "price_ranges": [
+      {
+       "end": "1.0000",
+       "start": "0.0000",
+       "step": "0.0100"
+      }
+     ],
+     "result": "",
+     "rules_primary": "If Dallas wins the St. Louis vs Dallas NHL game originally scheduled for Oct 2, 2026, then the market resolves to Yes.",
+     "rules_secondary": "If the game is postponed but begins within 48 hours of its originally scheduled start time, the market will remain open and resolve based on the official final result. If the game is cancelled or not started within 48 hours of its originally scheduled start, all markets will resolve to a fair price.",
+     "settlement_timer_seconds": 45,
+     "status": "active",
+     "ticker": "KXNHLGAME-26OCT02STLDAL-DAL",
+     "title": "Dallas wins",
+     "yes_sub_title": "Dallas"
+    },
+    {
+     "can_close_early": true,
+     "close_time": "2026-10-05T01:00:00Z",
+     "event_ticker": "KXNHLGAME-26OCT02STLDAL",
+     "expected_expiration_time": "2026-10-03T04:00:00Z",
+     "market_type": "binary",
+     "no_sub_title": "St. Louis",
+     "notional_value_dollars": "1.0000",
+     "occurrence_datetime": "2026-10-03T04:00:00Z",
+     "price_level_structure": "linear_cent",
+     "price_ranges": [
+      {
+       "end": "1.0000",
+       "start": "0.0000",
+       "step": "0.0100"
+      }
+     ],
+     "result": "",
+     "rules_primary": "If St. Louis wins the St. Louis vs Dallas NHL game originally scheduled for Oct 2, 2026, then the market resolves to Yes.",
+     "rules_secondary": "If the game is postponed but begins within 48 hours of its originally scheduled start time, the market will remain open and resolve based on the official final result. If the game is cancelled or not started within 48 hours of its originally scheduled start, all markets will resolve to a fair price.",
+     "settlement_timer_seconds": 45,
+     "status": "active",
+     "ticker": "KXNHLGAME-26OCT02STLDAL-STL",
+     "title": "St. Louis wins",
+     "yes_sub_title": "St. Louis"
+    }
+   ],
+   "series_ticker": "KXNHLGAME",
+   "settlement_sources": [
+    {
+     "name": "NHL",
+     "url": "https://www.nhl.com"
+    },
+    {
+     "name": "ESPN",
+     "url": "https://espn.com"
+    }
+   ],
+   "sub_title": "STL vs DAL (Oct 2)",
+   "title": "St. Louis vs Dallas"
+  },
+  {
+   "event_ticker": "KXNHLGAME-26OCT02ANAVGK",
+   "markets": [
+    {
+     "can_close_early": true,
+     "close_time": "2026-10-05T02:00:00Z",
+     "event_ticker": "KXNHLGAME-26OCT02ANAVGK",
+     "expected_expiration_time": "2026-10-03T05:00:00Z",
+     "market_type": "binary",
+     "no_sub_title": "Vegas",
+     "notional_value_dollars": "1.0000",
+     "occurrence_datetime": "2026-10-03T05:00:00Z",
+     "price_level_structure": "linear_cent",
+     "price_ranges": [
+      {
+       "end": "1.0000",
+       "start": "0.0000",
+       "step": "0.0100"
+      }
+     ],
+     "result": "",
+     "rules_primary": "If Vegas wins the Anaheim vs Vegas NHL game originally scheduled for Oct 2, 2026, then the market resolves to Yes.",
+     "rules_secondary": "If the game is postponed but begins within 48 hours of its originally scheduled start time, the market will remain open and resolve based on the official final result. If the game is cancelled or not started within 48 hours of its originally scheduled start, all markets will resolve to a fair price.",
+     "settlement_timer_seconds": 45,
+     "status": "active",
+     "ticker": "KXNHLGAME-26OCT02ANAVGK-VGK",
+     "title": "Vegas wins",
+     "yes_sub_title": "Vegas"
+    },
+    {
+     "can_close_early": true,
+     "close_time": "2026-10-05T02:00:00Z",
+     "event_ticker": "KXNHLGAME-26OCT02ANAVGK",
+     "expected_expiration_time": "2026-10-03T05:00:00Z",
+     "market_type": "binary",
+     "no_sub_title": "Anaheim",
+     "notional_value_dollars": "1.0000",
+     "occurrence_datetime": "2026-10-03T05:00:00Z",
+     "price_level_structure": "linear_cent",
+     "price_ranges": [
+      {
+       "end": "1.0000",
+       "start": "0.0000",
+       "step": "0.0100"
+      }
+     ],
+     "result": "",
+     "rules_primary": "If Anaheim wins the Anaheim vs Vegas NHL game originally scheduled for Oct 2, 2026, then the market resolves to Yes.",
+     "rules_secondary": "If the game is postponed but begins within 48 hours of its originally scheduled start time, the market will remain open and resolve based on the official final result. If the game is cancelled or not started within 48 hours of its originally scheduled start, all markets will resolve to a fair price.",
+     "settlement_timer_seconds": 45,
+     "status": "active",
+     "ticker": "KXNHLGAME-26OCT02ANAVGK-ANA",
+     "title": "Anaheim wins",
+     "yes_sub_title": "Anaheim"
+    }
+   ],
+   "series_ticker": "KXNHLGAME",
+   "settlement_sources": [
+    {
+     "name": "NHL",
+     "url": "https://www.nhl.com"
+    },
+    {
+     "name": "ESPN",
+     "url": "https://espn.com"
+    }
+   ],
+   "sub_title": "ANA vs VGK (Oct 2)",
+   "title": "Anaheim vs Vegas"
+  },
+  {
+   "event_ticker": "KXNHLGAME-26OCT03CARPHI",
+   "markets": [
+    {
+     "can_close_early": true,
+     "close_time": "2026-10-05T23:00:00Z",
+     "event_ticker": "KXNHLGAME-26OCT03CARPHI",
+     "expected_expiration_time": "2026-10-04T02:00:00Z",
+     "market_type": "binary",
+     "no_sub_title": "Philadelphia",
+     "notional_value_dollars": "1.0000",
+     "occurrence_datetime": "2026-10-04T02:00:00Z",
+     "price_level_structure": "linear_cent",
+     "price_ranges": [
+      {
+       "end": "1.0000",
+       "start": "0.0000",
+       "step": "0.0100"
+      }
+     ],
+     "result": "",
+     "rules_primary": "If Philadelphia wins the Carolina vs Philadelphia NHL game originally scheduled for Oct 3, 2026, then the market resolves to Yes.",
+     "rules_secondary": "If the game is postponed but begins within 48 hours of its originally scheduled start time, the market will remain open and resolve based on the official final result. If the game is cancelled or not started within 48 hours of its originally scheduled start, all markets will resolve to a fair price.",
+     "settlement_timer_seconds": 45,
+     "status": "active",
+     "ticker": "KXNHLGAME-26OCT03CARPHI-PHI",
+     "title": "Philadelphia wins",
+     "yes_sub_title": "Philadelphia"
+    },
+    {
+     "can_close_early": true,
+     "close_time": "2026-10-05T23:00:00Z",
+     "event_ticker": "KXNHLGAME-26OCT03CARPHI",
+     "expected_expiration_time": "2026-10-04T02:00:00Z",
+     "market_type": "binary",
+     "no_sub_title": "Carolina",
+     "notional_value_dollars": "1.0000",
+     "occurrence_datetime": "2026-10-04T02:00:00Z",
+     "price_level_structure": "linear_cent",
+     "price_ranges": [
+      {
+       "end": "1.0000",
+       "start": "0.0000",
+       "step": "0.0100"
+      }
+     ],
+     "result": "",
+     "rules_primary": "If Carolina wins the Carolina vs Philadelphia NHL game originally scheduled for Oct 3, 2026, then the market resolves to Yes.",
+     "rules_secondary": "If the game is postponed but begins within 48 hours of its originally scheduled start time, the market will remain open and resolve based on the official final result. If the game is cancelled or not started within 48 hours of its originally scheduled start, all markets will resolve to a fair price.",
+     "settlement_timer_seconds": 45,
+     "status": "active",
+     "ticker": "KXNHLGAME-26OCT03CARPHI-CAR",
+     "title": "Carolina wins",
+     "yes_sub_title": "Carolina"
+    }
+   ],
+   "series_ticker": "KXNHLGAME",
+   "settlement_sources": [
+    {
+     "name": "NHL",
+     "url": "https://www.nhl.com"
+    },
+    {
+     "name": "ESPN",
+     "url": "https://espn.com"
+    }
+   ],
+   "sub_title": "CAR vs PHI (Oct 3)",
+   "title": "Carolina vs Philadelphia"
+  },
+  {
+   "event_ticker": "KXNHLGAME-26OCT03CHIBUF",
+   "markets": [
+    {
+     "can_close_early": true,
+     "close_time": "2026-10-05T23:00:00Z",
+     "event_ticker": "KXNHLGAME-26OCT03CHIBUF",
+     "expected_expiration_time": "2026-10-04T02:00:00Z",
+     "market_type": "binary",
+     "no_sub_title": "Buffalo",
+     "notional_value_dollars": "1.0000",
+     "occurrence_datetime": "2026-10-04T02:00:00Z",
+     "price_level_structure": "linear_cent",
+     "price_ranges": [
+      {
+       "end": "1.0000",
+       "start": "0.0000",
+       "step": "0.0100"
+      }
+     ],
+     "result": "",
+     "rules_primary": "If Buffalo wins the Chicago vs Buffalo NHL game originally scheduled for Oct 3, 2026, then the market resolves to Yes.",
+     "rules_secondary": "If the game is postponed but begins within 48 hours of its originally scheduled start time, the market will remain open and resolve based on the official final result. If the game is cancelled or not started within 48 hours of its originally scheduled start, all markets will resolve to a fair price.",
+     "settlement_timer_seconds": 45,
+     "status": "active",
+     "ticker": "KXNHLGAME-26OCT03CHIBUF-BUF",
+     "title": "Buffalo wins",
+     "yes_sub_title": "Buffalo"
+    },
+    {
+     "can_close_early": true,
+     "close_time": "2026-10-05T23:00:00Z",
+     "event_ticker": "KXNHLGAME-26OCT03CHIBUF",
+     "expected_expiration_time": "2026-10-04T02:00:00Z",
+     "market_type": "binary",
+     "no_sub_title": "Chicago",
+     "notional_value_dollars": "1.0000",
+     "occurrence_datetime": "2026-10-04T02:00:00Z",
+     "price_level_structure": "linear_cent",
+     "price_ranges": [
+      {
+       "end": "1.0000",
+       "start": "0.0000",
+       "step": "0.0100"
+      }
+     ],
+     "result": "",
+     "rules_primary": "If Chicago wins the Chicago vs Buffalo NHL game originally scheduled for Oct 3, 2026, then the market resolves to Yes.",
+     "rules_secondary": "If the game is postponed but begins within 48 hours of its originally scheduled start time, the market will remain open and resolve based on the official final result. If the game is cancelled or not started within 48 hours of its originally scheduled start, all markets will resolve to a fair price.",
+     "settlement_timer_seconds": 45,
+     "status": "active",
+     "ticker": "KXNHLGAME-26OCT03CHIBUF-CHI",
+     "title": "Chicago wins",
+     "yes_sub_title": "Chicago"
+    }
+   ],
+   "series_ticker": "KXNHLGAME",
+   "settlement_sources": [
+    {
+     "name": "NHL",
+     "url": "https://www.nhl.com"
+    },
+    {
+     "name": "ESPN",
+     "url": "https://espn.com"
+    }
+   ],
+   "sub_title": "CHI vs BUF (Oct 3)",
+   "title": "Chicago vs Buffalo"
+  },
+  {
+   "event_ticker": "KXNHLGAME-26OCT03MTLPIT",
+   "markets": [
+    {
+     "can_close_early": true,
+     "close_time": "2026-10-05T23:00:00Z",
+     "event_ticker": "KXNHLGAME-26OCT03MTLPIT",
+     "expected_expiration_time": "2026-10-04T02:00:00Z",
+     "market_type": "binary",
+     "no_sub_title": "Pittsburgh",
+     "notional_value_dollars": "1.0000",
+     "occurrence_datetime": "2026-10-04T02:00:00Z",
+     "price_level_structure": "linear_cent",
+     "price_ranges": [
+      {
+       "end": "1.0000",
+       "start": "0.0000",
+       "step": "0.0100"
+      }
+     ],
+     "result": "",
+     "rules_primary": "If Pittsburgh wins the Montreal vs Pittsburgh NHL game originally scheduled for Oct 3, 2026, then the market resolves to Yes.",
+     "rules_secondary": "If the game is postponed but begins within 48 hours of its originally scheduled start time, the market will remain open and resolve based on the official final result. If the game is cancelled or not started within 48 hours of its originally scheduled start, all markets will resolve to a fair price.",
+     "settlement_timer_seconds": 45,
+     "status": "active",
+     "ticker": "KXNHLGAME-26OCT03MTLPIT-PIT",
+     "title": "Pittsburgh wins",
+     "yes_sub_title": "Pittsburgh"
+    },
+    {
+     "can_close_early": true,
+     "close_time": "2026-10-05T23:00:00Z",
+     "event_ticker": "KXNHLGAME-26OCT03MTLPIT",
+     "expected_expiration_time": "2026-10-04T02:00:00Z",
+     "market_type": "binary",
+     "no_sub_title": "Montreal",
+     "notional_value_dollars": "1.0000",
+     "occurrence_datetime": "2026-10-04T02:00:00Z",
+     "price_level_structure": "linear_cent",
+     "price_ranges": [
+      {
+       "end": "1.0000",
+       "start": "0.0000",
+       "step": "0.0100"
+      }
+     ],
+     "result": "",
+     "rules_primary": "If Montreal wins the Montreal vs Pittsburgh NHL game originally scheduled for Oct 3, 2026, then the market resolves to Yes.",
+     "rules_secondary": "If the game is postponed but begins within 48 hours of its originally scheduled start time, the market will remain open and resolve based on the official final result. If the game is cancelled or not started within 48 hours of its originally scheduled start, all markets will resolve to a fair price.",
+     "settlement_timer_seconds": 45,
+     "status": "active",
+     "ticker": "KXNHLGAME-26OCT03MTLPIT-MTL",
+     "title": "Montreal wins",
+     "yes_sub_title": "Montreal"
+    }
+   ],
+   "series_ticker": "KXNHLGAME",
+   "settlement_sources": [
+    {
+     "name": "NHL",
+     "url": "https://www.nhl.com"
+    },
+    {
+     "name": "ESPN",
+     "url": "https://espn.com"
+    }
+   ],
+   "sub_title": "MTL vs PIT (Oct 3)",
+   "title": "Montreal vs Pittsburgh"
+  },
+  {
+   "event_ticker": "KXNHLGAME-26OCT03OTTTOR",
+   "markets": [
+    {
+     "can_close_early": true,
+     "close_time": "2026-10-05T23:00:00Z",
+     "event_ticker": "KXNHLGAME-26OCT03OTTTOR",
+     "expected_expiration_time": "2026-10-04T02:00:00Z",
+     "market_type": "binary",
+     "no_sub_title": "Toronto",
+     "notional_value_dollars": "1.0000",
+     "occurrence_datetime": "2026-10-04T02:00:00Z",
+     "price_level_structure": "linear_cent",
+     "price_ranges": [
+      {
+       "end": "1.0000",
+       "start": "0.0000",
+       "step": "0.0100"
+      }
+     ],
+     "result": "",
+     "rules_primary": "If Toronto wins the Ottawa vs Toronto NHL game originally scheduled for Oct 3, 2026, then the market resolves to Yes.",
+     "rules_secondary": "If the game is postponed but begins within 48 hours of its originally scheduled start time, the market will remain open and resolve based on the official final result. If the game is cancelled or not started within 48 hours of its originally scheduled start, all markets will resolve to a fair price.",
+     "settlement_timer_seconds": 45,
+     "status": "active",
+     "ticker": "KXNHLGAME-26OCT03OTTTOR-TOR",
+     "title": "Toronto wins",
+     "yes_sub_title": "Toronto"
+    },
+    {
+     "can_close_early": true,
+     "close_time": "2026-10-05T23:00:00Z",
+     "event_ticker": "KXNHLGAME-26OCT03OTTTOR",
+     "expected_expiration_time": "2026-10-04T02:00:00Z",
+     "market_type": "binary",
+     "no_sub_title": "Ottawa",
+     "notional_value_dollars": "1.0000",
+     "occurrence_datetime": "2026-10-04T02:00:00Z",
+     "price_level_structure": "linear_cent",
+     "price_ranges": [
+      {
+       "end": "1.0000",
+       "start": "0.0000",
+       "step": "0.0100"
+      }
+     ],
+     "result": "",
+     "rules_primary": "If Ottawa wins the Ottawa vs Toronto NHL game originally scheduled for Oct 3, 2026, then the market resolves to Yes.",
+     "rules_secondary": "If the game is postponed but begins within 48 hours of its originally scheduled start time, the market will remain open and resolve based on the official final result. If the game is cancelled or not started within 48 hours of its originally scheduled start, all markets will resolve to a fair price.",
+     "settlement_timer_seconds": 45,
+     "status": "active",
+     "ticker": "KXNHLGAME-26OCT03OTTTOR-OTT",
+     "title": "Ottawa wins",
+     "yes_sub_title": "Ottawa"
+    }
+   ],
+   "series_ticker": "KXNHLGAME",
+   "settlement_sources": [
+    {
+     "name": "NHL",
+     "url": "https://www.nhl.com"
+    },
+    {
+     "name": "ESPN",
+     "url": "https://espn.com"
+    }
+   ],
+   "sub_title": "OTT vs TOR (Oct 3)",
+   "title": "Ottawa vs Toronto"
+  },
+  {
+   "event_ticker": "KXNHLGAME-26OCT03SEAEDM",
+   "markets": [
+    {
+     "can_close_early": true,
+     "close_time": "2026-10-05T23:00:00Z",
+     "event_ticker": "KXNHLGAME-26OCT03SEAEDM",
+     "expected_expiration_time": "2026-10-04T02:00:00Z",
+     "market_type": "binary",
+     "no_sub_title": "Edmonton",
+     "notional_value_dollars": "1.0000",
+     "occurrence_datetime": "2026-10-04T02:00:00Z",
+     "price_level_structure": "linear_cent",
+     "price_ranges": [
+      {
+       "end": "1.0000",
+       "start": "0.0000",
+       "step": "0.0100"
+      }
+     ],
+     "result": "",
+     "rules_primary": "If Edmonton wins the Seattle vs Edmonton NHL game originally scheduled for Oct 3, 2026, then the market resolves to Yes.",
+     "rules_secondary": "If the game is postponed but begins within 48 hours of its originally scheduled start time, the market will remain open and resolve based on the official final result. If the game is cancelled or not started within 48 hours of its originally scheduled start, all markets will resolve to a fair price.",
+     "settlement_timer_seconds": 45,
+     "status": "active",
+     "ticker": "KXNHLGAME-26OCT03SEAEDM-EDM",
+     "title": "Edmonton wins",
+     "yes_sub_title": "Edmonton"
+    },
+    {
+     "can_close_early": true,
+     "close_time": "2026-10-05T23:00:00Z",
+     "event_ticker": "KXNHLGAME-26OCT03SEAEDM",
+     "expected_expiration_time": "2026-10-04T02:00:00Z",
+     "market_type": "binary",
+     "no_sub_title": "Seattle",
+     "notional_value_dollars": "1.0000",
+     "occurrence_datetime": "2026-10-04T02:00:00Z",
+     "price_level_structure": "linear_cent",
+     "price_ranges": [
+      {
+       "end": "1.0000",
+       "start": "0.0000",
+       "step": "0.0100"
+      }
+     ],
+     "result": "",
+     "rules_primary": "If Seattle wins the Seattle vs Edmonton NHL game originally scheduled for Oct 3, 2026, then the market resolves to Yes.",
+     "rules_secondary": "If the game is postponed but begins within 48 hours of its originally scheduled start time, the market will remain open and resolve based on the official final result. If the game is cancelled or not started within 48 hours of its originally scheduled start, all markets will resolve to a fair price.",
+     "settlement_timer_seconds": 45,
+     "status": "active",
+     "ticker": "KXNHLGAME-26OCT03SEAEDM-SEA",
+     "title": "Seattle wins",
+     "yes_sub_title": "Seattle"
+    }
+   ],
+   "series_ticker": "KXNHLGAME",
+   "settlement_sources": [
+    {
+     "name": "NHL",
+     "url": "https://www.nhl.com"
+    },
+    {
+     "name": "ESPN",
+     "url": "https://espn.com"
+    }
+   ],
+   "sub_title": "SEA vs EDM (Oct 3)",
+   "title": "Seattle vs Edmonton"
+  },
+  {
+   "event_ticker": "KXNHLGAME-26OCT03UTACBJ",
+   "markets": [
+    {
+     "can_close_early": true,
+     "close_time": "2026-10-05T23:00:00Z",
+     "event_ticker": "KXNHLGAME-26OCT03UTACBJ",
+     "expected_expiration_time": "2026-10-04T02:00:00Z",
+     "market_type": "binary",
+     "no_sub_title": "Columbus",
+     "notional_value_dollars": "1.0000",
+     "occurrence_datetime": "2026-10-04T02:00:00Z",
+     "price_level_structure": "linear_cent",
+     "price_ranges": [
+      {
+       "end": "1.0000",
+       "start": "0.0000",
+       "step": "0.0100"
+      }
+     ],
+     "result": "",
+     "rules_primary": "If Columbus wins the Utah vs Columbus NHL game originally scheduled for Oct 3, 2026, then the market resolves to Yes.",
+     "rules_secondary": "If the game is postponed but begins within 48 hours of its originally scheduled start time, the market will remain open and resolve based on the official final result. If the game is cancelled or not started within 48 hours of its originally scheduled start, all markets will resolve to a fair price.",
+     "settlement_timer_seconds": 45,
+     "status": "active",
+     "ticker": "KXNHLGAME-26OCT03UTACBJ-CBJ",
+     "title": "Columbus wins",
+     "yes_sub_title": "Columbus"
+    },
+    {
+     "can_close_early": true,
+     "close_time": "2026-10-05T23:00:00Z",
+     "event_ticker": "KXNHLGAME-26OCT03UTACBJ",
+     "expected_expiration_time": "2026-10-04T02:00:00Z",
+     "market_type": "binary",
+     "no_sub_title": "Utah",
+     "notional_value_dollars": "1.0000",
+     "occurrence_datetime": "2026-10-04T02:00:00Z",
+     "price_level_structure": "linear_cent",
+     "price_ranges": [
+      {
+       "end": "1.0000",
+       "start": "0.0000",
+       "step": "0.0100"
+      }
+     ],
+     "result": "",
+     "rules_primary": "If Utah wins the Utah vs Columbus NHL game originally scheduled for Oct 3, 2026, then the market resolves to Yes.",
+     "rules_secondary": "If the game is postponed but begins within 48 hours of its originally scheduled start time, the market will remain open and resolve based on the official final result. If the game is cancelled or not started within 48 hours of its originally scheduled start, all markets will resolve to a fair price.",
+     "settlement_timer_seconds": 45,
+     "status": "active",
+     "ticker": "KXNHLGAME-26OCT03UTACBJ-UTA",
+     "title": "Utah wins",
+     "yes_sub_title": "Utah"
+    }
+   ],
+   "series_ticker": "KXNHLGAME",
+   "settlement_sources": [
+    {
+     "name": "NHL",
+     "url": "https://www.nhl.com"
+    },
+    {
+     "name": "ESPN",
+     "url": "https://espn.com"
+    }
+   ],
+   "sub_title": "UTA vs CBJ (Oct 3)",
+   "title": "Utah vs Columbus"
+  },
+  {
+   "event_ticker": "KXNHLGAME-26OCT03WSHTB",
+   "markets": [
+    {
+     "can_close_early": true,
+     "close_time": "2026-10-05T23:00:00Z",
+     "event_ticker": "KXNHLGAME-26OCT03WSHTB",
+     "expected_expiration_time": "2026-10-04T02:00:00Z",
+     "market_type": "binary",
+     "no_sub_title": "Tampa Bay",
+     "notional_value_dollars": "1.0000",
+     "occurrence_datetime": "2026-10-04T02:00:00Z",
+     "price_level_structure": "linear_cent",
+     "price_ranges": [
+      {
+       "end": "1.0000",
+       "start": "0.0000",
+       "step": "0.0100"
+      }
+     ],
+     "result": "",
+     "rules_primary": "If Tampa Bay wins the Washington vs Tampa Bay NHL game originally scheduled for Oct 3, 2026, then the market resolves to Yes.",
+     "rules_secondary": "If the game is postponed but begins within 48 hours of its originally scheduled start time, the market will remain open and resolve based on the official final result. If the game is cancelled or not started within 48 hours of its originally scheduled start, all markets will resolve to a fair price.",
+     "settlement_timer_seconds": 45,
+     "status": "active",
+     "ticker": "KXNHLGAME-26OCT03WSHTB-TB",
+     "title": "Tampa Bay wins",
+     "yes_sub_title": "Tampa Bay"
+    },
+    {
+     "can_close_early": true,
+     "close_time": "2026-10-05T23:00:00Z",
+     "event_ticker": "KXNHLGAME-26OCT03WSHTB",
+     "expected_expiration_time": "2026-10-04T02:00:00Z",
+     "market_type": "binary",
+     "no_sub_title": "Washington",
+     "notional_value_dollars": "1.0000",
+     "occurrence_datetime": "2026-10-04T02:00:00Z",
+     "price_level_structure": "linear_cent",
+     "price_ranges": [
+      {
+       "end": "1.0000",
+       "start": "0.0000",
+       "step": "0.0100"
+      }
+     ],
+     "result": "",
+     "rules_primary": "If Washington wins the Washington vs Tampa Bay NHL game originally scheduled for Oct 3, 2026, then the market resolves to Yes.",
+     "rules_secondary": "If the game is postponed but begins within 48 hours of its originally scheduled start time, the market will remain open and resolve based on the official final result. If the game is cancelled or not started within 48 hours of its originally scheduled start, all markets will resolve to a fair price.",
+     "settlement_timer_seconds": 45,
+     "status": "active",
+     "ticker": "KXNHLGAME-26OCT03WSHTB-WSH",
+     "title": "Washington wins",
+     "yes_sub_title": "Washington"
+    }
+   ],
+   "series_ticker": "KXNHLGAME",
+   "settlement_sources": [
+    {
+     "name": "NHL",
+     "url": "https://www.nhl.com"
+    },
+    {
+     "name": "ESPN",
+     "url": "https://espn.com"
+    }
+   ],
+   "sub_title": "WSH vs TB (Oct 3)",
+   "title": "Washington vs Tampa Bay"
+  },
+  {
+   "event_ticker": "KXNHLGAME-26OCT03NJNYI",
+   "markets": [
+    {
+     "can_close_early": true,
+     "close_time": "2026-10-05T23:30:00Z",
+     "event_ticker": "KXNHLGAME-26OCT03NJNYI",
+     "expected_expiration_time": "2026-10-04T02:30:00Z",
+     "market_type": "binary",
+     "no_sub_title": "New York I",
+     "notional_value_dollars": "1.0000",
+     "occurrence_datetime": "2026-10-04T02:30:00Z",
+     "price_level_structure": "linear_cent",
+     "price_ranges": [
+      {
+       "end": "1.0000",
+       "start": "0.0000",
+       "step": "0.0100"
+      }
+     ],
+     "result": "",
+     "rules_primary": "If New York I wins the New Jersey vs New York I NHL game originally scheduled for Oct 3, 2026, then the market resolves to Yes.",
+     "rules_secondary": "If the game is postponed but begins within 48 hours of its originally scheduled start time, the market will remain open and resolve based on the official final result. If the game is cancelled or not started within 48 hours of its originally scheduled start, all markets will resolve to a fair price.",
+     "settlement_timer_seconds": 45,
+     "status": "active",
+     "ticker": "KXNHLGAME-26OCT03NJNYI-NYI",
+     "title": "New York I wins",
+     "yes_sub_title": "New York I"
+    },
+    {
+     "can_close_early": true,
+     "close_time": "2026-10-05T23:30:00Z",
+     "event_ticker": "KXNHLGAME-26OCT03NJNYI",
+     "expected_expiration_time": "2026-10-04T02:30:00Z",
+     "market_type": "binary",
+     "no_sub_title": "New Jersey",
+     "notional_value_dollars": "1.0000",
+     "occurrence_datetime": "2026-10-04T02:30:00Z",
+     "price_level_structure": "linear_cent",
+     "price_ranges": [
+      {
+       "end": "1.0000",
+       "start": "0.0000",
+       "step": "0.0100"
+      }
+     ],
+     "result": "",
+     "rules_primary": "If New Jersey wins the New Jersey vs New York I NHL game originally scheduled for Oct 3, 2026, then the market resolves to Yes.",
+     "rules_secondary": "If the game is postponed but begins within 48 hours of its originally scheduled start time, the market will remain open and resolve based on the official final result. If the game is cancelled or not started within 48 hours of its originally scheduled start, all markets will resolve to a fair price.",
+     "settlement_timer_seconds": 45,
+     "status": "active",
+     "ticker": "KXNHLGAME-26OCT03NJNYI-NJ",
+     "title": "New Jersey wins",
+     "yes_sub_title": "New Jersey"
+    }
+   ],
+   "series_ticker": "KXNHLGAME",
+   "settlement_sources": [
+    {
+     "name": "NHL",
+     "url": "https://www.nhl.com"
+    },
+    {
+     "name": "ESPN",
+     "url": "https://espn.com"
+    }
+   ],
+   "sub_title": "NJ vs NYI (Oct 3)",
+   "title": "New Jersey vs New York I"
+  },
+  {
+   "event_ticker": "KXNHLGAME-26OCT03BOSMIN",
+   "markets": [
+    {
+     "can_close_early": true,
+     "close_time": "2026-10-06T00:00:00Z",
+     "event_ticker": "KXNHLGAME-26OCT03BOSMIN",
+     "expected_expiration_time": "2026-10-04T03:00:00Z",
+     "market_type": "binary",
+     "no_sub_title": "Minnesota",
+     "notional_value_dollars": "1.0000",
+     "occurrence_datetime": "2026-10-04T03:00:00Z",
+     "price_level_structure": "linear_cent",
+     "price_ranges": [
+      {
+       "end": "1.0000",
+       "start": "0.0000",
+       "step": "0.0100"
+      }
+     ],
+     "result": "",
+     "rules_primary": "If Minnesota wins the Boston vs Minnesota NHL game originally scheduled for Oct 3, 2026, then the market resolves to Yes.",
+     "rules_secondary": "If the game is postponed but begins within 48 hours of its originally scheduled start time, the market will remain open and resolve based on the official final result. If the game is cancelled or not started within 48 hours of its originally scheduled start, all markets will resolve to a fair price.",
+     "settlement_timer_seconds": 45,
+     "status": "active",
+     "ticker": "KXNHLGAME-26OCT03BOSMIN-MIN",
+     "title": "Minnesota wins",
+     "yes_sub_title": "Minnesota"
+    },
+    {
+     "can_close_early": true,
+     "close_time": "2026-10-06T00:00:00Z",
+     "event_ticker": "KXNHLGAME-26OCT03BOSMIN",
+     "expected_expiration_time": "2026-10-04T03:00:00Z",
+     "market_type": "binary",
+     "no_sub_title": "Boston",
+     "notional_value_dollars": "1.0000",
+     "occurrence_datetime": "2026-10-04T03:00:00Z",
+     "price_level_structure": "linear_cent",
+     "price_ranges": [
+      {
+       "end": "1.0000",
+       "start": "0.0000",
+       "step": "0.0100"
+      }
+     ],
+     "result": "",
+     "rules_primary": "If Boston wins the Boston vs Minnesota NHL game originally scheduled for Oct 3, 2026, then the market resolves to Yes.",
+     "rules_secondary": "If the game is postponed but begins within 48 hours of its originally scheduled start time, the market will remain open and resolve based on the official final result. If the game is cancelled or not started within 48 hours of its originally scheduled start, all markets will resolve to a fair price.",
+     "settlement_timer_seconds": 45,
+     "status": "active",
+     "ticker": "KXNHLGAME-26OCT03BOSMIN-BOS",
+     "title": "Boston wins",
+     "yes_sub_title": "Boston"
+    }
+   ],
+   "series_ticker": "KXNHLGAME",
+   "settlement_sources": [
+    {
+     "name": "NHL",
+     "url": "https://www.nhl.com"
+    },
+    {
+     "name": "ESPN",
+     "url": "https://espn.com"
+    }
+   ],
+   "sub_title": "BOS vs MIN (Oct 3)",
+   "title": "Boston vs Minnesota"
+  },
+  {
+   "event_ticker": "KXNHLGAME-26OCT03DALNSH",
+   "markets": [
+    {
+     "can_close_early": true,
+     "close_time": "2026-10-06T00:00:00Z",
+     "event_ticker": "KXNHLGAME-26OCT03DALNSH",
+     "expected_expiration_time": "2026-10-04T03:00:00Z",
+     "market_type": "binary",
+     "no_sub_title": "Nashville",
+     "notional_value_dollars": "1.0000",
+     "occurrence_datetime": "2026-10-04T03:00:00Z",
+     "price_level_structure": "linear_cent",
+     "price_ranges": [
+      {
+       "end": "1.0000",
+       "start": "0.0000",
+       "step": "0.0100"
+      }
+     ],
+     "result": "",
+     "rules_primary": "If Nashville wins the Dallas vs Nashville NHL game originally scheduled for Oct 3, 2026, then the market resolves to Yes.",
+     "rules_secondary": "If the game is postponed but begins within 48 hours of its originally scheduled start time, the market will remain open and resolve based on the official final result. If the game is cancelled or not started within 48 hours of its originally scheduled start, all markets will resolve to a fair price.",
+     "settlement_timer_seconds": 45,
+     "status": "active",
+     "ticker": "KXNHLGAME-26OCT03DALNSH-NSH",
+     "title": "Nashville wins",
+     "yes_sub_title": "Nashville"
+    },
+    {
+     "can_close_early": true,
+     "close_time": "2026-10-06T00:00:00Z",
+     "event_ticker": "KXNHLGAME-26OCT03DALNSH",
+     "expected_expiration_time": "2026-10-04T03:00:00Z",
+     "market_type": "binary",
+     "no_sub_title": "Dallas",
+     "notional_value_dollars": "1.0000",
+     "occurrence_datetime": "2026-10-04T03:00:00Z",
+     "price_level_structure": "linear_cent",
+     "price_ranges": [
+      {
+       "end": "1.0000",
+       "start": "0.0000",
+       "step": "0.0100"
+      }
+     ],
+     "result": "",
+     "rules_primary": "If Dallas wins the Dallas vs Nashville NHL game originally scheduled for Oct 3, 2026, then the market resolves to Yes.",
+     "rules_secondary": "If the game is postponed but begins within 48 hours of its originally scheduled start time, the market will remain open and resolve based on the official final result. If the game is cancelled or not started within 48 hours of its originally scheduled start, all markets will resolve to a fair price.",
+     "settlement_timer_seconds": 45,
+     "status": "active",
+     "ticker": "KXNHLGAME-26OCT03DALNSH-DAL",
+     "title": "Dallas wins",
+     "yes_sub_title": "Dallas"
+    }
+   ],
+   "series_ticker": "KXNHLGAME",
+   "settlement_sources": [
+    {
+     "name": "NHL",
+     "url": "https://www.nhl.com"
+    },
+    {
+     "name": "ESPN",
+     "url": "https://espn.com"
+    }
+   ],
+   "sub_title": "DAL vs NSH (Oct 3)",
+   "title": "Dallas vs Nashville"
+  },
+  {
+   "event_ticker": "KXNHLGAME-26OCT03STLCOL",
+   "markets": [
+    {
+     "can_close_early": true,
+     "close_time": "2026-10-06T01:00:00Z",
+     "event_ticker": "KXNHLGAME-26OCT03STLCOL",
+     "expected_expiration_time": "2026-10-04T04:00:00Z",
+     "market_type": "binary",
+     "no_sub_title": "Colorado",
+     "notional_value_dollars": "1.0000",
+     "occurrence_datetime": "2026-10-04T04:00:00Z",
+     "price_level_structure": "linear_cent",
+     "price_ranges": [
+      {
+       "end": "1.0000",
+       "start": "0.0000",
+       "step": "0.0100"
+      }
+     ],
+     "result": "",
+     "rules_primary": "If Colorado wins the St. Louis vs Colorado NHL game originally scheduled for Oct 3, 2026, then the market resolves to Yes.",
+     "rules_secondary": "If the game is postponed but begins within 48 hours of its originally scheduled start time, the market will remain open and resolve based on the official final result. If the game is cancelled or not started within 48 hours of its originally scheduled start, all markets will resolve to a fair price.",
+     "settlement_timer_seconds": 45,
+     "status": "active",
+     "ticker": "KXNHLGAME-26OCT03STLCOL-COL",
+     "title": "Colorado wins",
+     "yes_sub_title": "Colorado"
+    },
+    {
+     "can_close_early": true,
+     "close_time": "2026-10-06T01:00:00Z",
+     "event_ticker": "KXNHLGAME-26OCT03STLCOL",
+     "expected_expiration_time": "2026-10-04T04:00:00Z",
+     "market_type": "binary",
+     "no_sub_title": "St. Louis",
+     "notional_value_dollars": "1.0000",
+     "occurrence_datetime": "2026-10-04T04:00:00Z",
+     "price_level_structure": "linear_cent",
+     "price_ranges": [
+      {
+       "end": "1.0000",
+       "start": "0.0000",
+       "step": "0.0100"
+      }
+     ],
+     "result": "",
+     "rules_primary": "If St. Louis wins the St. Louis vs Colorado NHL game originally scheduled for Oct 3, 2026, then the market resolves to Yes.",
+     "rules_secondary": "If the game is postponed but begins within 48 hours of its originally scheduled start time, the market will remain open and resolve based on the official final result. If the game is cancelled or not started within 48 hours of its originally scheduled start, all markets will resolve to a fair price.",
+     "settlement_timer_seconds": 45,
+     "status": "active",
+     "ticker": "KXNHLGAME-26OCT03STLCOL-STL",
+     "title": "St. Louis wins",
+     "yes_sub_title": "St. Louis"
+    }
+   ],
+   "series_ticker": "KXNHLGAME",
+   "settlement_sources": [
+    {
+     "name": "NHL",
+     "url": "https://www.nhl.com"
+    },
+    {
+     "name": "ESPN",
+     "url": "https://espn.com"
+    }
+   ],
+   "sub_title": "STL vs COL (Oct 3)",
+   "title": "St. Louis vs Colorado"
+  },
+  {
+   "event_ticker": "KXNHLGAME-26OCT03CGYVAN",
+   "markets": [
+    {
+     "can_close_early": true,
+     "close_time": "2026-10-06T02:00:00Z",
+     "event_ticker": "KXNHLGAME-26OCT03CGYVAN",
+     "expected_expiration_time": "2026-10-04T05:00:00Z",
+     "market_type": "binary",
+     "no_sub_title": "Vancouver",
+     "notional_value_dollars": "1.0000",
+     "occurrence_datetime": "2026-10-04T05:00:00Z",
+     "price_level_structure": "linear_cent",
+     "price_ranges": [
+      {
+       "end": "1.0000",
+       "start": "0.0000",
+       "step": "0.0100"
+      }
+     ],
+     "result": "",
+     "rules_primary": "If Vancouver wins the Calgary vs Vancouver NHL game originally scheduled for Oct 3, 2026, then the market resolves to Yes.",
+     "rules_secondary": "If the game is postponed but begins within 48 hours of its originally scheduled start time, the market will remain open and resolve based on the official final result. If the game is cancelled or not started within 48 hours of its originally scheduled start, all markets will resolve to a fair price.",
+     "settlement_timer_seconds": 45,
+     "status": "active",
+     "ticker": "KXNHLGAME-26OCT03CGYVAN-VAN",
+     "title": "Vancouver wins",
+     "yes_sub_title": "Vancouver"
+    },
+    {
+     "can_close_early": true,
+     "close_time": "2026-10-06T02:00:00Z",
+     "event_ticker": "KXNHLGAME-26OCT03CGYVAN",
+     "expected_expiration_time": "2026-10-04T05:00:00Z",
+     "market_type": "binary",
+     "no_sub_title": "Calgary",
+     "notional_value_dollars": "1.0000",
+     "occurrence_datetime": "2026-10-04T05:00:00Z",
+     "price_level_structure": "linear_cent",
+     "price_ranges": [
+      {
+       "end": "1.0000",
+       "start": "0.0000",
+       "step": "0.0100"
+      }
+     ],
+     "result": "",
+     "rules_primary": "If Calgary wins the Calgary vs Vancouver NHL game originally scheduled for Oct 3, 2026, then the market resolves to Yes.",
+     "rules_secondary": "If the game is postponed but begins within 48 hours of its originally scheduled start time, the market will remain open and resolve based on the official final result. If the game is cancelled or not started within 48 hours of its originally scheduled start, all markets will resolve to a fair price.",
+     "settlement_timer_seconds": 45,
+     "status": "active",
+     "ticker": "KXNHLGAME-26OCT03CGYVAN-CGY",
+     "title": "Calgary wins",
+     "yes_sub_title": "Calgary"
+    }
+   ],
+   "series_ticker": "KXNHLGAME",
+   "settlement_sources": [
+    {
+     "name": "NHL",
+     "url": "https://www.nhl.com"
+    },
+    {
+     "name": "ESPN",
+     "url": "https://espn.com"
+    }
+   ],
+   "sub_title": "CGY vs VAN (Oct 3)",
+   "title": "Calgary vs Vancouver"
+  },
+  {
+   "event_ticker": "KXNHLGAME-26OCT03LASJ",
+   "markets": [
+    {
+     "can_close_early": true,
+     "close_time": "2026-10-06T02:00:00Z",
+     "event_ticker": "KXNHLGAME-26OCT03LASJ",
+     "expected_expiration_time": "2026-10-04T05:00:00Z",
+     "market_type": "binary",
+     "no_sub_title": "San Jose",
+     "notional_value_dollars": "1.0000",
+     "occurrence_datetime": "2026-10-04T05:00:00Z",
+     "price_level_structure": "linear_cent",
+     "price_ranges": [
+      {
+       "end": "1.0000",
+       "start": "0.0000",
+       "step": "0.0100"
+      }
+     ],
+     "result": "",
+     "rules_primary": "If San Jose wins the Los Angeles vs San Jose NHL game originally scheduled for Oct 3, 2026, then the market resolves to Yes.",
+     "rules_secondary": "If the game is postponed but begins within 48 hours of its originally scheduled start time, the market will remain open and resolve based on the official final result. If the game is cancelled or not started within 48 hours of its originally scheduled start, all markets will resolve to a fair price.",
+     "settlement_timer_seconds": 45,
+     "status": "active",
+     "ticker": "KXNHLGAME-26OCT03LASJ-SJ",
+     "title": "San Jose wins",
+     "yes_sub_title": "San Jose"
+    },
+    {
+     "can_close_early": true,
+     "close_time": "2026-10-06T02:00:00Z",
+     "event_ticker": "KXNHLGAME-26OCT03LASJ",
+     "expected_expiration_time": "2026-10-04T05:00:00Z",
+     "market_type": "binary",
+     "no_sub_title": "Los Angeles",
+     "notional_value_dollars": "1.0000",
+     "occurrence_datetime": "2026-10-04T05:00:00Z",
+     "price_level_structure": "linear_cent",
+     "price_ranges": [
+      {
+       "end": "1.0000",
+       "start": "0.0000",
+       "step": "0.0100"
+      }
+     ],
+     "result": "",
+     "rules_primary": "If Los Angeles wins the Los Angeles vs San Jose NHL game originally scheduled for Oct 3, 2026, then the market resolves to Yes.",
+     "rules_secondary": "If the game is postponed but begins within 48 hours of its originally scheduled start time, the market will remain open and resolve based on the official final result. If the game is cancelled or not started within 48 hours of its originally scheduled start, all markets will resolve to a fair price.",
+     "settlement_timer_seconds": 45,
+     "status": "active",
+     "ticker": "KXNHLGAME-26OCT03LASJ-LA",
+     "title": "Los Angeles wins",
+     "yes_sub_title": "Los Angeles"
+    }
+   ],
+   "series_ticker": "KXNHLGAME",
+   "settlement_sources": [
+    {
+     "name": "NHL",
+     "url": "https://www.nhl.com"
+    },
+    {
+     "name": "ESPN",
+     "url": "https://espn.com"
+    }
+   ],
+   "sub_title": "LA vs SJ (Oct 3)",
+   "title": "Los Angeles vs San Jose"
+  },
+  {
+   "event_ticker": "KXNHLGAME-26OCT04WPGDET",
+   "markets": [
+    {
+     "can_close_early": true,
+     "close_time": "2026-10-06T17:00:00Z",
+     "event_ticker": "KXNHLGAME-26OCT04WPGDET",
+     "expected_expiration_time": "2026-10-04T20:00:00Z",
+     "market_type": "binary",
+     "no_sub_title": "Detroit",
+     "notional_value_dollars": "1.0000",
+     "occurrence_datetime": "2026-10-04T20:00:00Z",
+     "price_level_structure": "linear_cent",
+     "price_ranges": [
+      {
+       "end": "1.0000",
+       "start": "0.0000",
+       "step": "0.0100"
+      }
+     ],
+     "result": "",
+     "rules_primary": "If Detroit wins the Winnipeg vs Detroit NHL game originally scheduled for Oct 4, 2026, then the market resolves to Yes.",
+     "rules_secondary": "If the game is postponed but begins within 48 hours of its originally scheduled start time, the market will remain open and resolve based on the official final result. If the game is cancelled or not started within 48 hours of its originally scheduled start, all markets will resolve to a fair price.",
+     "settlement_timer_seconds": 45,
+     "status": "active",
+     "ticker": "KXNHLGAME-26OCT04WPGDET-DET",
+     "title": "Detroit wins",
+     "yes_sub_title": "Detroit"
+    },
+    {
+     "can_close_early": true,
+     "close_time": "2026-10-06T17:00:00Z",
+     "event_ticker": "KXNHLGAME-26OCT04WPGDET",
+     "expected_expiration_time": "2026-10-04T20:00:00Z",
+     "market_type": "binary",
+     "no_sub_title": "Winnipeg",
+     "notional_value_dollars": "1.0000",
+     "occurrence_datetime": "2026-10-04T20:00:00Z",
+     "price_level_structure": "linear_cent",
+     "price_ranges": [
+      {
+       "end": "1.0000",
+       "start": "0.0000",
+       "step": "0.0100"
+      }
+     ],
+     "result": "",
+     "rules_primary": "If Winnipeg wins the Winnipeg vs Detroit NHL game originally scheduled for Oct 4, 2026, then the market resolves to Yes.",
+     "rules_secondary": "If the game is postponed but begins within 48 hours of its originally scheduled start time, the market will remain open and resolve based on the official final result. If the game is cancelled or not started within 48 hours of its originally scheduled start, all markets will resolve to a fair price.",
+     "settlement_timer_seconds": 45,
+     "status": "active",
+     "ticker": "KXNHLGAME-26OCT04WPGDET-WPG",
+     "title": "Winnipeg wins",
+     "yes_sub_title": "Winnipeg"
+    }
+   ],
+   "series_ticker": "KXNHLGAME",
+   "settlement_sources": [
+    {
+     "name": "NHL",
+     "url": "https://www.nhl.com"
+    },
+    {
+     "name": "ESPN",
+     "url": "https://espn.com"
+    }
+   ],
+   "sub_title": "WPG vs DET (Oct 4)",
+   "title": "Winnipeg vs Detroit"
+  },
+  {
+   "event_ticker": "KXNHLGAME-26OCT04UTANYR",
+   "markets": [
+    {
+     "can_close_early": true,
+     "close_time": "2026-10-06T22:00:00Z",
+     "event_ticker": "KXNHLGAME-26OCT04UTANYR",
+     "expected_expiration_time": "2026-10-05T01:00:00Z",
+     "market_type": "binary",
+     "no_sub_title": "New York R",
+     "notional_value_dollars": "1.0000",
+     "occurrence_datetime": "2026-10-05T01:00:00Z",
+     "price_level_structure": "linear_cent",
+     "price_ranges": [
+      {
+       "end": "1.0000",
+       "start": "0.0000",
+       "step": "0.0100"
+      }
+     ],
+     "result": "",
+     "rules_primary": "If New York R wins the Utah vs New York R NHL game originally scheduled for Oct 4, 2026, then the market resolves to Yes.",
+     "rules_secondary": "If the game is postponed but begins within 48 hours of its originally scheduled start time, the market will remain open and resolve based on the official final result. If the game is cancelled or not started within 48 hours of its originally scheduled start, all markets will resolve to a fair price.",
+     "settlement_timer_seconds": 45,
+     "status": "active",
+     "ticker": "KXNHLGAME-26OCT04UTANYR-NYR",
+     "title": "New York R wins",
+     "yes_sub_title": "New York R"
+    },
+    {
+     "can_close_early": true,
+     "close_time": "2026-10-06T22:00:00Z",
+     "event_ticker": "KXNHLGAME-26OCT04UTANYR",
+     "expected_expiration_time": "2026-10-05T01:00:00Z",
+     "market_type": "binary",
+     "no_sub_title": "Utah",
+     "notional_value_dollars": "1.0000",
+     "occurrence_datetime": "2026-10-05T01:00:00Z",
+     "price_level_structure": "linear_cent",
+     "price_ranges": [
+      {
+       "end": "1.0000",
+       "start": "0.0000",
+       "step": "0.0100"
+      }
+     ],
+     "result": "",
+     "rules_primary": "If Utah wins the Utah vs New York R NHL game originally scheduled for Oct 4, 2026, then the market resolves to Yes.",
+     "rules_secondary": "If the game is postponed but begins within 48 hours of its originally scheduled start time, the market will remain open and resolve based on the official final result. If the game is cancelled or not started within 48 hours of its originally scheduled start, all markets will resolve to a fair price.",
+     "settlement_timer_seconds": 45,
+     "status": "active",
+     "ticker": "KXNHLGAME-26OCT04UTANYR-UTA",
+     "title": "Utah wins",
+     "yes_sub_title": "Utah"
+    }
+   ],
+   "series_ticker": "KXNHLGAME",
+   "settlement_sources": [
+    {
+     "name": "NHL",
+     "url": "https://www.nhl.com"
+    },
+    {
+     "name": "ESPN",
+     "url": "https://espn.com"
+    }
+   ],
+   "sub_title": "UTA vs NYR (Oct 4)",
+   "title": "Utah vs New York R"
+  },
+  {
+   "event_ticker": "KXNHLGAME-26OCT04CGYSEA",
+   "markets": [
+    {
+     "can_close_early": true,
+     "close_time": "2026-10-07T00:00:00Z",
+     "event_ticker": "KXNHLGAME-26OCT04CGYSEA",
+     "expected_expiration_time": "2026-10-05T03:00:00Z",
+     "market_type": "binary",
+     "no_sub_title": "Seattle",
+     "notional_value_dollars": "1.0000",
+     "occurrence_datetime": "2026-10-05T03:00:00Z",
+     "price_level_structure": "linear_cent",
+     "price_ranges": [
+      {
+       "end": "1.0000",
+       "start": "0.0000",
+       "step": "0.0100"
+      }
+     ],
+     "result": "",
+     "rules_primary": "If Seattle wins the Calgary vs Seattle NHL game originally scheduled for Oct 4, 2026, then the market resolves to Yes.",
+     "rules_secondary": "If the game is postponed but begins within 48 hours of its originally scheduled start time, the market will remain open and resolve based on the official final result. If the game is cancelled or not started within 48 hours of its originally scheduled start, all markets will resolve to a fair price.",
+     "settlement_timer_seconds": 45,
+     "status": "active",
+     "ticker": "KXNHLGAME-26OCT04CGYSEA-SEA",
+     "title": "Seattle wins",
+     "yes_sub_title": "Seattle"
+    },
+    {
+     "can_close_early": true,
+     "close_time": "2026-10-07T00:00:00Z",
+     "event_ticker": "KXNHLGAME-26OCT04CGYSEA",
+     "expected_expiration_time": "2026-10-05T03:00:00Z",
+     "market_type": "binary",
+     "no_sub_title": "Calgary",
+     "notional_value_dollars": "1.0000",
+     "occurrence_datetime": "2026-10-05T03:00:00Z",
+     "price_level_structure": "linear_cent",
+     "price_ranges": [
+      {
+       "end": "1.0000",
+       "start": "0.0000",
+       "step": "0.0100"
+      }
+     ],
+     "result": "",
+     "rules_primary": "If Calgary wins the Calgary vs Seattle NHL game originally scheduled for Oct 4, 2026, then the market resolves to Yes.",
+     "rules_secondary": "If the game is postponed but begins within 48 hours of its originally scheduled start time, the market will remain open and resolve based on the official final result. If the game is cancelled or not started within 48 hours of its originally scheduled start, all markets will resolve to a fair price.",
+     "settlement_timer_seconds": 45,
+     "status": "active",
+     "ticker": "KXNHLGAME-26OCT04CGYSEA-CGY",
+     "title": "Calgary wins",
+     "yes_sub_title": "Calgary"
+    }
+   ],
+   "series_ticker": "KXNHLGAME",
+   "settlement_sources": [
+    {
+     "name": "NHL",
+     "url": "https://www.nhl.com"
+    },
+    {
+     "name": "ESPN",
+     "url": "https://espn.com"
+    }
+   ],
+   "sub_title": "CGY vs SEA (Oct 4)",
+   "title": "Calgary vs Seattle"
+  },
+  {
+   "event_ticker": "KXNHLGAME-26OCT04FLAANA",
+   "markets": [
+    {
+     "can_close_early": true,
+     "close_time": "2026-10-07T00:00:00Z",
+     "event_ticker": "KXNHLGAME-26OCT04FLAANA",
+     "expected_expiration_time": "2026-10-05T03:00:00Z",
+     "market_type": "binary",
+     "no_sub_title": "Anaheim",
+     "notional_value_dollars": "1.0000",
+     "occurrence_datetime": "2026-10-05T03:00:00Z",
+     "price_level_structure": "linear_cent",
+     "price_ranges": [
+      {
+       "end": "1.0000",
+       "start": "0.0000",
+       "step": "0.0100"
+      }
+     ],
+     "result": "",
+     "rules_primary": "If Anaheim wins the Florida vs Anaheim NHL game originally scheduled for Oct 4, 2026, then the market resolves to Yes.",
+     "rules_secondary": "If the game is postponed but begins within 48 hours of its originally scheduled start time, the market will remain open and resolve based on the official final result. If the game is cancelled or not started within 48 hours of its originally scheduled start, all markets will resolve to a fair price.",
+     "settlement_timer_seconds": 45,
+     "status": "active",
+     "ticker": "KXNHLGAME-26OCT04FLAANA-ANA",
+     "title": "Anaheim wins",
+     "yes_sub_title": "Anaheim"
+    },
+    {
+     "can_close_early": true,
+     "close_time": "2026-10-07T00:00:00Z",
+     "event_ticker": "KXNHLGAME-26OCT04FLAANA",
+     "expected_expiration_time": "2026-10-05T03:00:00Z",
+     "market_type": "binary",
+     "no_sub_title": "Florida",
+     "notional_value_dollars": "1.0000",
+     "occurrence_datetime": "2026-10-05T03:00:00Z",
+     "price_level_structure": "linear_cent",
+     "price_ranges": [
+      {
+       "end": "1.0000",
+       "start": "0.0000",
+       "step": "0.0100"
+      }
+     ],
+     "result": "",
+     "rules_primary": "If Florida wins the Florida vs Anaheim NHL game originally scheduled for Oct 4, 2026, then the market resolves to Yes.",
+     "rules_secondary": "If the game is postponed but begins within 48 hours of its originally scheduled start time, the market will remain open and resolve based on the official final result. If the game is cancelled or not started within 48 hours of its originally scheduled start, all markets will resolve to a fair price.",
+     "settlement_timer_seconds": 45,
+     "status": "active",
+     "ticker": "KXNHLGAME-26OCT04FLAANA-FLA",
+     "title": "Florida wins",
+     "yes_sub_title": "Florida"
+    }
+   ],
+   "series_ticker": "KXNHLGAME",
+   "settlement_sources": [
+    {
+     "name": "NHL",
+     "url": "https://www.nhl.com"
+    },
+    {
+     "name": "ESPN",
+     "url": "https://espn.com"
+    }
+   ],
+   "sub_title": "FLA vs ANA (Oct 4)",
+   "title": "Florida vs Anaheim"
+  },
+  {
+   "event_ticker": "KXNHLGAME-26OCT04VGKVAN",
+   "markets": [
+    {
+     "can_close_early": true,
+     "close_time": "2026-10-07T01:00:00Z",
+     "event_ticker": "KXNHLGAME-26OCT04VGKVAN",
+     "expected_expiration_time": "2026-10-05T04:00:00Z",
+     "market_type": "binary",
+     "no_sub_title": "Vancouver",
+     "notional_value_dollars": "1.0000",
+     "occurrence_datetime": "2026-10-05T04:00:00Z",
+     "price_level_structure": "linear_cent",
+     "price_ranges": [
+      {
+       "end": "1.0000",
+       "start": "0.0000",
+       "step": "0.0100"
+      }
+     ],
+     "result": "",
+     "rules_primary": "If Vancouver wins the Vegas vs Vancouver NHL game originally scheduled for Oct 4, 2026, then the market resolves to Yes.",
+     "rules_secondary": "If the game is postponed but begins within 48 hours of its originally scheduled start time, the market will remain open and resolve based on the official final result. If the game is cancelled or not started within 48 hours of its originally scheduled start, all markets will resolve to a fair price.",
+     "settlement_timer_seconds": 45,
+     "status": "active",
+     "ticker": "KXNHLGAME-26OCT04VGKVAN-VAN",
+     "title": "Vancouver wins",
+     "yes_sub_title": "Vancouver"
+    },
+    {
+     "can_close_early": true,
+     "close_time": "2026-10-07T01:00:00Z",
+     "event_ticker": "KXNHLGAME-26OCT04VGKVAN",
+     "expected_expiration_time": "2026-10-05T04:00:00Z",
+     "market_type": "binary",
+     "no_sub_title": "Vegas",
+     "notional_value_dollars": "1.0000",
+     "occurrence_datetime": "2026-10-05T04:00:00Z",
+     "price_level_structure": "linear_cent",
+     "price_ranges": [
+      {
+       "end": "1.0000",
+       "start": "0.0000",
+       "step": "0.0100"
+      }
+     ],
+     "result": "",
+     "rules_primary": "If Vegas wins the Vegas vs Vancouver NHL game originally scheduled for Oct 4, 2026, then the market resolves to Yes.",
+     "rules_secondary": "If the game is postponed but begins within 48 hours of its originally scheduled start time, the market will remain open and resolve based on the official final result. If the game is cancelled or not started within 48 hours of its originally scheduled start, all markets will resolve to a fair price.",
+     "settlement_timer_seconds": 45,
+     "status": "active",
+     "ticker": "KXNHLGAME-26OCT04VGKVAN-VGK",
+     "title": "Vegas wins",
+     "yes_sub_title": "Vegas"
+    }
+   ],
+   "series_ticker": "KXNHLGAME",
+   "settlement_sources": [
+    {
+     "name": "NHL",
+     "url": "https://www.nhl.com"
+    },
+    {
+     "name": "ESPN",
+     "url": "https://espn.com"
+    }
+   ],
+   "sub_title": "VGK vs VAN (Oct 4)",
+   "title": "Vegas vs Vancouver"
+  },
+  {
+   "event_ticker": "KXNHLGAME-26OCT05PHITB",
+   "markets": [
+    {
+     "can_close_early": true,
+     "close_time": "2026-10-07T23:00:00Z",
+     "event_ticker": "KXNHLGAME-26OCT05PHITB",
+     "expected_expiration_time": "2026-10-06T02:00:00Z",
+     "market_type": "binary",
+     "no_sub_title": "Tampa Bay",
+     "notional_value_dollars": "1.0000",
+     "occurrence_datetime": "2026-10-06T02:00:00Z",
+     "price_level_structure": "linear_cent",
+     "price_ranges": [
+      {
+       "end": "1.0000",
+       "start": "0.0000",
+       "step": "0.0100"
+      }
+     ],
+     "result": "",
+     "rules_primary": "If Tampa Bay wins the Philadelphia vs Tampa Bay NHL game originally scheduled for Oct 5, 2026, then the market resolves to Yes.",
+     "rules_secondary": "If the game is postponed but begins within 48 hours of its originally scheduled start time, the market will remain open and resolve based on the official final result. If the game is cancelled or not started within 48 hours of its originally scheduled start, all markets will resolve to a fair price.",
+     "settlement_timer_seconds": 45,
+     "status": "active",
+     "ticker": "KXNHLGAME-26OCT05PHITB-TB",
+     "title": "Tampa Bay wins",
+     "yes_sub_title": "Tampa Bay"
+    },
+    {
+     "can_close_early": true,
+     "close_time": "2026-10-07T23:00:00Z",
+     "event_ticker": "KXNHLGAME-26OCT05PHITB",
+     "expected_expiration_time": "2026-10-06T02:00:00Z",
+     "market_type": "binary",
+     "no_sub_title": "Philadelphia",
+     "notional_value_dollars": "1.0000",
+     "occurrence_datetime": "2026-10-06T02:00:00Z",
+     "price_level_structure": "linear_cent",
+     "price_ranges": [
+      {
+       "end": "1.0000",
+       "start": "0.0000",
+       "step": "0.0100"
+      }
+     ],
+     "result": "",
+     "rules_primary": "If Philadelphia wins the Philadelphia vs Tampa Bay NHL game originally scheduled for Oct 5, 2026, then the market resolves to Yes.",
+     "rules_secondary": "If the game is postponed but begins within 48 hours of its originally scheduled start time, the market will remain open and resolve based on the official final result. If the game is cancelled or not started within 48 hours of its originally scheduled start, all markets will resolve to a fair price.",
+     "settlement_timer_seconds": 45,
+     "status": "active",
+     "ticker": "KXNHLGAME-26OCT05PHITB-PHI",
+     "title": "Philadelphia wins",
+     "yes_sub_title": "Philadelphia"
+    }
+   ],
+   "series_ticker": "KXNHLGAME",
+   "settlement_sources": [
+    {
+     "name": "NHL",
+     "url": "https://www.nhl.com"
+    },
+    {
+     "name": "ESPN",
+     "url": "https://espn.com"
+    }
+   ],
+   "sub_title": "PHI vs TB (Oct 5)",
+   "title": "Philadelphia vs Tampa Bay"
+  },
+  {
+   "event_ticker": "KXNHLGAME-26OCT05OTTBOS",
+   "markets": [
+    {
+     "can_close_early": true,
+     "close_time": "2026-10-07T23:30:00Z",
+     "event_ticker": "KXNHLGAME-26OCT05OTTBOS",
+     "expected_expiration_time": "2026-10-06T02:30:00Z",
+     "market_type": "binary",
+     "no_sub_title": "Boston",
+     "notional_value_dollars": "1.0000",
+     "occurrence_datetime": "2026-10-06T02:30:00Z",
+     "price_level_structure": "linear_cent",
+     "price_ranges": [
+      {
+       "end": "1.0000",
+       "start": "0.0000",
+       "step": "0.0100"
+      }
+     ],
+     "result": "",
+     "rules_primary": "If Boston wins the Ottawa vs Boston NHL game originally scheduled for Oct 5, 2026, then the market resolves to Yes.",
+     "rules_secondary": "If the game is postponed but begins within 48 hours of its originally scheduled start time, the market will remain open and resolve based on the official final result. If the game is cancelled or not started within 48 hours of its originally scheduled start, all markets will resolve to a fair price.",
+     "settlement_timer_seconds": 45,
+     "status": "active",
+     "ticker": "KXNHLGAME-26OCT05OTTBOS-BOS",
+     "title": "Boston wins",
+     "yes_sub_title": "Boston"
+    },
+    {
+     "can_close_early": true,
+     "close_time": "2026-10-07T23:30:00Z",
+     "event_ticker": "KXNHLGAME-26OCT05OTTBOS",
+     "expected_expiration_time": "2026-10-06T02:30:00Z",
+     "market_type": "binary",
+     "no_sub_title": "Ottawa",
+     "notional_value_dollars": "1.0000",
+     "occurrence_datetime": "2026-10-06T02:30:00Z",
+     "price_level_structure": "linear_cent",
+     "price_ranges": [
+      {
+       "end": "1.0000",
+       "start": "0.0000",
+       "step": "0.0100"
+      }
+     ],
+     "result": "",
+     "rules_primary": "If Ottawa wins the Ottawa vs Boston NHL game originally scheduled for Oct 5, 2026, then the market resolves to Yes.",
+     "rules_secondary": "If the game is postponed but begins within 48 hours of its originally scheduled start time, the market will remain open and resolve based on the official final result. If the game is cancelled or not started within 48 hours of its originally scheduled start, all markets will resolve to a fair price.",
+     "settlement_timer_seconds": 45,
+     "status": "active",
+     "ticker": "KXNHLGAME-26OCT05OTTBOS-OTT",
+     "title": "Ottawa wins",
+     "yes_sub_title": "Ottawa"
+    }
+   ],
+   "series_ticker": "KXNHLGAME",
+   "settlement_sources": [
+    {
+     "name": "NHL",
+     "url": "https://www.nhl.com"
+    },
+    {
+     "name": "ESPN",
+     "url": "https://espn.com"
+    }
+   ],
+   "sub_title": "OTT vs BOS (Oct 5)",
+   "title": "Ottawa vs Boston"
+  },
+  {
+   "event_ticker": "KXNHLGAME-26OCT05WPGPIT",
+   "markets": [
+    {
+     "can_close_early": true,
+     "close_time": "2026-10-07T23:30:00Z",
+     "event_ticker": "KXNHLGAME-26OCT05WPGPIT",
+     "expected_expiration_time": "2026-10-06T02:30:00Z",
+     "market_type": "binary",
+     "no_sub_title": "Pittsburgh",
+     "notional_value_dollars": "1.0000",
+     "occurrence_datetime": "2026-10-06T02:30:00Z",
+     "price_level_structure": "linear_cent",
+     "price_ranges": [
+      {
+       "end": "1.0000",
+       "start": "0.0000",
+       "step": "0.0100"
+      }
+     ],
+     "result": "",
+     "rules_primary": "If Pittsburgh wins the Winnipeg vs Pittsburgh NHL game originally scheduled for Oct 5, 2026, then the market resolves to Yes.",
+     "rules_secondary": "If the game is postponed but begins within 48 hours of its originally scheduled start time, the market will remain open and resolve based on the official final result. If the game is cancelled or not started within 48 hours of its originally scheduled start, all markets will resolve to a fair price.",
+     "settlement_timer_seconds": 45,
+     "status": "active",
+     "ticker": "KXNHLGAME-26OCT05WPGPIT-PIT",
+     "title": "Pittsburgh wins",
+     "yes_sub_title": "Pittsburgh"
+    },
+    {
+     "can_close_early": true,
+     "close_time": "2026-10-07T23:30:00Z",
+     "event_ticker": "KXNHLGAME-26OCT05WPGPIT",
+     "expected_expiration_time": "2026-10-06T02:30:00Z",
+     "market_type": "binary",
+     "no_sub_title": "Winnipeg",
+     "notional_value_dollars": "1.0000",
+     "occurrence_datetime": "2026-10-06T02:30:00Z",
+     "price_level_structure": "linear_cent",
+     "price_ranges": [
+      {
+       "end": "1.0000",
+       "start": "0.0000",
+       "step": "0.0100"
+      }
+     ],
+     "result": "",
+     "rules_primary": "If Winnipeg wins the Winnipeg vs Pittsburgh NHL game originally scheduled for Oct 5, 2026, then the market resolves to Yes.",
+     "rules_secondary": "If the game is postponed but begins within 48 hours of its originally scheduled start time, the market will remain open and resolve based on the official final result. If the game is cancelled or not started within 48 hours of its originally scheduled start, all markets will resolve to a fair price.",
+     "settlement_timer_seconds": 45,
+     "status": "active",
+     "ticker": "KXNHLGAME-26OCT05WPGPIT-WPG",
+     "title": "Winnipeg wins",
+     "yes_sub_title": "Winnipeg"
+    }
+   ],
+   "series_ticker": "KXNHLGAME",
+   "settlement_sources": [
+    {
+     "name": "NHL",
+     "url": "https://www.nhl.com"
+    },
+    {
+     "name": "ESPN",
+     "url": "https://espn.com"
+    }
+   ],
+   "sub_title": "WPG vs PIT (Oct 5)",
+   "title": "Winnipeg vs Pittsburgh"
+  },
+  {
+   "event_ticker": "KXNHLGAME-26OCT05SJDAL",
+   "markets": [
+    {
+     "can_close_early": true,
+     "close_time": "2026-10-08T00:00:00Z",
+     "event_ticker": "KXNHLGAME-26OCT05SJDAL",
+     "expected_expiration_time": "2026-10-06T03:00:00Z",
+     "market_type": "binary",
+     "no_sub_title": "Dallas",
+     "notional_value_dollars": "1.0000",
+     "occurrence_datetime": "2026-10-06T03:00:00Z",
+     "price_level_structure": "linear_cent",
+     "price_ranges": [
+      {
+       "end": "1.0000",
+       "start": "0.0000",
+       "step": "0.0100"
+      }
+     ],
+     "result": "",
+     "rules_primary": "If Dallas wins the San Jose vs Dallas NHL game originally scheduled for Oct 5, 2026, then the market resolves to Yes.",
+     "rules_secondary": "If the game is postponed but begins within 48 hours of its originally scheduled start time, the market will remain open and resolve based on the official final result. If the game is cancelled or not started within 48 hours of its originally scheduled start, all markets will resolve to a fair price.",
+     "settlement_timer_seconds": 45,
+     "status": "active",
+     "ticker": "KXNHLGAME-26OCT05SJDAL-DAL",
+     "title": "Dallas wins",
+     "yes_sub_title": "Dallas"
+    },
+    {
+     "can_close_early": true,
+     "close_time": "2026-10-08T00:00:00Z",
+     "event_ticker": "KXNHLGAME-26OCT05SJDAL",
+     "expected_expiration_time": "2026-10-06T03:00:00Z",
+     "market_type": "binary",
+     "no_sub_title": "San Jose",
+     "notional_value_dollars": "1.0000",
+     "occurrence_datetime": "2026-10-06T03:00:00Z",
+     "price_level_structure": "linear_cent",
+     "price_ranges": [
+      {
+       "end": "1.0000",
+       "start": "0.0000",
+       "step": "0.0100"
+      }
+     ],
+     "result": "",
+     "rules_primary": "If San Jose wins the San Jose vs Dallas NHL game originally scheduled for Oct 5, 2026, then the market resolves to Yes.",
+     "rules_secondary": "If the game is postponed but begins within 48 hours of its originally scheduled start time, the market will remain open and resolve based on the official final result. If the game is cancelled or not started within 48 hours of its originally scheduled start, all markets will resolve to a fair price.",
+     "settlement_timer_seconds": 45,
+     "status": "active",
+     "ticker": "KXNHLGAME-26OCT05SJDAL-SJ",
+     "title": "San Jose wins",
+     "yes_sub_title": "San Jose"
+    }
+   ],
+   "series_ticker": "KXNHLGAME",
+   "settlement_sources": [
+    {
+     "name": "NHL",
+     "url": "https://www.nhl.com"
+    },
+    {
+     "name": "ESPN",
+     "url": "https://espn.com"
+    }
+   ],
+   "sub_title": "SJ vs DAL (Oct 5)",
+   "title": "San Jose vs Dallas"
+  }
+ ]
+}

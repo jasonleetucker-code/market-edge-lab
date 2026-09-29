@@ -640,3 +640,30 @@ directive), and the screenshots that justify it.
     Element shots of the T-60m target row, with its consensus open, were reviewed in Chromium and WebKit at 390
     and 1440 px. This is emulation, not a physical phone. The shots were reviewed locally by the author, described
     in the PR and not attached.
+- **2026-09-29 (e) — Kalshi NHL coverage block (NHL-B, ADR 0040).** One section, no new component, token, CSS,
+  layout, component style or navigation. Approved by the coordinator's NHL-B assignment under the owner directive of
+  2026-09-29 (`docs/owner/2026-09-29-nhl-prospective-evidence-directive.md`, issue #134).
+  - §8 Data sources gains "Kalshi NHL coverage" after "Odds capture targets" (meta: KXNHLGAME · T-6h / T-60m before
+    puck drop · development only). It reads `price_observations.nhl_coverage` through `data.Context.nhl_coverage`
+    and is drawn with the existing `facts`, `empty_state`, `badge` and note patterns (`research.nhl_body`).
+    - Shown: games discovered, Kalshi mapped and unmapped (never guessed), game-horizons planned, captured and missed,
+      the next target, the last capture, the schedule state, team-market targets by state, missed reasons, reasons
+      nothing is planned, settled reads (count only), fee and shootout-rule states, and the development-only note.
+    - Never shown: a price, a size, a depth or a settled result. Outcomes read "Hidden · NHL outcome".
+    - States: source unavailable, read error, no schedule stored, schedule stale (warn), not collecting (off by
+      default; the switch is not readable here), overdue targets (warn), populated.
+  - New neutral or warning state words (`presentation.STATES`): `NHL_NOT_COLLECTING`, `NHL_SCHEDULE_OK`,
+    `NHL_SCHEDULE_STALE`, `NHL_SCHEDULE_NO_DISCOVERY`, `NHL_SCHEDULE_UNREADABLE`, `NHL_OUTCOME_WITHHELD`. None is green.
+  - The gallery gains the SYNTHETIC NHL coverage states (`fixtures.synthetic_nhl_coverage`). §13 gains the browser
+    fixture state `nhl` (`fixture_states.nhl`): the recorded KXNHLGAME listing, a stored 2026-10-01 schedule, T-6h
+    books captured through a fake fetch, a failed game-horizon, a rescheduled game and an unmapped team.
+
+    Evidence (`tests/browser/capture.py`, 20 shots, 0 with overflow, clipping, low contrast or foreign requests):
+    - fixture state `nhl`, `/experiments?tab=sources`:
+      - Chromium and WebKit at 360x800, 390x844 and 1440x900, closed (with screenshots) and with every
+        disclosure open;
+      - Chromium at 360x800 and 1440x900 with 200% root text;
+    - `/gallery` in the `demo` state, Chromium and WebKit at 360x800, 390x844 and 1440x900.
+
+    Element shots of the NHL section were reviewed in Chromium at 390 and 1440 px. This is emulation, not a physical
+    phone. The shots were reviewed locally by the author, described in the PR and not attached.

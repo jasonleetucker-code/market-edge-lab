@@ -1653,6 +1653,96 @@ def economics_section(ctx: d.Context) -> str:
                         "fixtures only · not live</p>", sid="ip-h", action='<a href="/experiments/inplay">Open</a>'))
 
 
+# --------------------------------------------------------------------------- Kalshi NHL coverage (ADR 0040)
+
+NHL_NOTE = ("NHL is data collection for development only: not EXP-002, no NHL protocol, no model, no comparison. "
+            "Pregame books are kept as features; settled results are outcome labels and are not shown here. The "
+            "shootout reading and KXNHLGAME fees are unverified.")
+
+
+def _nhl(v: Any, *keys: str) -> Any:
+    for k in keys:
+        v = v.get(k) if isinstance(v, dict) else None
+    return v
+
+
+def _nhl_counts(counts: Any) -> str:
+    if not isinstance(counts, dict) or not counts:
+        return "none"
+    words = {"OVERDUE": "TARGET_OVERDUE"}
+    return " · ".join(f"{pr.state_word(words.get(k, k)).label if words.get(k, k) in pr.STATES else k} {pr.count(n)}"
+                      for k, n in sorted(counts.items(), key=lambda kv: (-(kv[1] or 0), kv[0])))
+
+
+def nhl_body(result: d.Loaded, now: Any) -> str:
+    """Every state of the Kalshi NHL coverage block: unavailable, read error, no schedule, schedule stale, not
+    collecting (off by default), overdue, populated. Counts, times and states only."""
+    if result.status == d.ERROR:
+        return c.error_state("Kalshi NHL coverage unavailable (read error)",
+                             f"ERROR — {result.message}. This is not an empty collection.")
+    if result.status != d.OK:
+        msg = result.message or "the evidence database is not available"
+        return c.unavailable("Kalshi NHL coverage unavailable", f"Source unavailable — {msg}.")
+    v = result.value if isinstance(result.value, dict) else {}
+    schedule = str(_nhl(v, "schedule", "state") or "UNKNOWN")
+    games, targets = v.get("games") or {}, v.get("targets") or {}
+    out = []
+    if schedule != "OK":
+        word = f"NHL_SCHEDULE_{schedule}"
+        text = {"NO_DISCOVERY": "No The Odds API icehockey_nhl discovery is stored, so no NHL game is known and "
+                                "nothing can be planned.",
+                "STALE": "The newest NHL discovery is older than 24 h: nothing new is planned from it (fail closed).",
+                }.get(schedule, "The stored NHL discovery cannot be read.")
+        received = _nhl(v, "schedule", "received_utc")
+        out.append(c.empty_state(pr.state_word(word).label, text,
+                                 kind="warn" if schedule == "STALE" else "err" if schedule == "UNREADABLE" else "nd",
+                                 times=f"Newest discovery {pr.datetime_et(received)}" if received else None))
+    if not targets.get("books"):
+        would = v.get("would_plan_now") or 0
+        out.append(c.empty_state(pr.state_word("NHL_NOT_COLLECTING").label,
+                                 f"No Kalshi NHL target is stored. {pr.count(would)} target(s) would be planned now. "
+                                 "The switch defaults off and is not readable here; activation is a reviewed operator "
+                                 "step."))
+    by_state = targets.get("by_state") or {}
+    nxt = v.get("next") or {}
+    out.append(c.facts([
+        ("Games discovered", c.num(pr.count(games.get("discovered")), reason="unknown")),
+        ("Kalshi mapped", c.num(pr.count(games.get("mapped")), reason="unknown")
+         + _sub(f"{pr.count(games.get('unmapped')) or '0'} unmapped (never guessed)")),
+        ("Game-horizons planned", c.num(pr.count(targets.get("game_horizons")), reason="unknown")
+         + _sub(f"{pr.count(targets.get('games')) or '0'} games · T-6h / T-60m")),
+        ("Captured", c.num(pr.count(targets.get("game_horizons_captured")), reason="unknown")
+         + _sub("game-horizons, both books")),
+        ("Missed", c.num(pr.count(targets.get("game_horizons_missed")), reason="unknown") + _sub("game-horizons")),
+        ("Next target", c.txt(pr.datetime_et(nxt.get("target_utc")), reason="none planned")
+         + (_sub(f"{nxt.get('horizon')} · {pr.age_text(nxt.get('target_utc'), now) or ''}".rstrip(" ·"))
+            if nxt else "")),
+        ("Last capture", c.txt(pr.datetime_et(v.get("last_capture_utc")), reason="none yet")
+         + _sub(pr.age_text(v.get("last_capture_utc"), now))),
+        ("Schedule", c.badge(f"NHL_SCHEDULE_{schedule}")),
+    ], wide=True, text_cols=(5, 6, 7)))
+    overdue = by_state.get("OVERDUE") or 0
+    if overdue:
+        out.append(c.empty_state(f"{pr.count(overdue)} open NHL target{'' if overdue == 1 else 's'} past the deadline",
+                                 "No outcome has been recorded since the deadline passed, so this record is stale. The "
+                                 "next observe run records it as Missed.", kind="warn"))
+    reads = v.get("settlement_reads") or {}
+    out.append(f'<p class="meta">Team-market targets by state: {esc(_nhl_counts(by_state))}</p>'
+               f'<p class="meta">Missed by reason: {esc(_nhl_counts(v.get("missed_reasons")))}</p>'
+               f'<p class="meta">Not planned now: {esc(_nhl_counts(v.get("not_planned_counts")))}</p>'
+               f'<p class="meta">Settled reads: {esc(pr.count(reads.get("planned")) or "0")} planned · results '
+               f'{c.badge("NHL_OUTCOME_WITHHELD")}</p>'
+               f'<p class="meta">Fees: {c.badge(_nhl(v, "fee", "state") or "FEE_UNSUPPORTED")} · shootout rule: '
+               f'{c.badge(_nhl(v, "contract_terms", "shootout") or "RULES_UNRESOLVED")}</p>')
+    out.append(f'<p class="note">{esc(NHL_NOTE)}</p>')
+    return "".join(x for x in out if x)
+
+
+def nhl_section(ctx: d.Context) -> str:
+    return c.section("Kalshi NHL coverage", nhl_body(ctx.nhl_coverage, ctx.now),
+                     meta="KXNHLGAME · T-6h / T-60m before puck drop · development only", sid="nhl-h")
+
+
 def sources_tab(ctx: d.Context) -> str:
     out = [freshness_section(ctx)]
     rows = []
@@ -1679,6 +1769,7 @@ def sources_tab(ctx: d.Context) -> str:
                            "imply account or order access.</p></div>", sid="ven-h", flush=True))
     out.append(odds_section(ctx))
     out.append(odds_targets_section(ctx))
+    out.append(nhl_section(ctx))
     out.append(pm_related_section(ctx))
     health = ctx.source_health
     missing = cm.loaded_state("Collected sources", health)
