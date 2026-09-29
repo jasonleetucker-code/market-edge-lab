@@ -216,23 +216,26 @@ def build_parser() -> argparse.ArgumentParser:
     n_relay.add_argument("--status-dir", required=True, help="directory holding notifications.jsonl")
     notify_sub.add_parser("test", help="Send one fixed, non-sensitive TEST event.")
 
-    # --- odds: The Odds API free-tier NFL pilot (ADR 0029). Self-contained block.
+    # --- odds: The Odds API free-tier pilot (ADR 0029; sport-aware, ADR 0039). Self-contained block.
     odds = subparsers.add_parser(
-        "odds", help="The Odds API NFL pilot: game-relative captures under a 450-credit monthly ceiling."
+        "odds", help="The Odds API pilot (NFL; NHL behind EDGE_LAB_ODDS_NHL): game-relative captures under one "
+                     "shared 450-credit monthly ceiling."
     )
     odds_sub = odds.add_subparsers(dest="odds_command", required=True)
     for name, text in (
         ("run", "One idempotent tick: free discovery, targets, budget, at most one paid call."),
         ("plan", "Read-only: enumerate the schedule and prove expected/worst-case monthly credits."),
         ("smoke", "Exactly one bounded live odds read for activation (refuses if quota is unknown)."),
+        ("status", "Read-only, no network: one sport's coverage (due, attempted, captured, new, stale, complete)."),
     ):
         o = odds_sub.add_parser(name, help=text)
         o.add_argument("--db", default="data/edge_lab.sqlite3")
         o.add_argument("--ledger", required=True, help="quota ledger JSON path")
         o.add_argument("--sport", default="americanfootball_nfl")
-        o.add_argument("--markets", default="h2h,spreads,totals")
-        o.add_argument("--regions", default="us")
-        o.add_argument("--offsets", default="24h,6h,60m", help="capture offsets before kickoff")
+        # Unset: the sport's reviewed policy (odds_schedule.SPORT_POLICIES); NFL h2h,spreads,totals / us / 24h,6h,60m.
+        o.add_argument("--markets", default=None)
+        o.add_argument("--regions", default=None)
+        o.add_argument("--offsets", default=None, help="capture offsets before kickoff")
         if name == "plan":
             o.add_argument("--offline", action="store_true", help="use the stored discovery; no network at all")
         if name == "run":
@@ -1062,22 +1065,35 @@ def _odds(args: argparse.Namespace) -> int:
     from dataclasses import replace as _replace
 
     from . import odds_pilot
-    from .odds_schedule import PilotConfig, parse_offsets
+    from .odds_schedule import parse_offsets, policy_for
 
     def keys(text: str) -> tuple[str, ...]:
         return tuple(part.strip() for part in text.split(",") if part.strip())
 
-    settings = odds_pilot.RunnerSettings(
-        sport=args.sport, markets=keys(args.markets), regions=keys(args.regions),
-        config=_replace(PilotConfig(), offsets=parse_offsets(args.offsets)),
+    # The sport's reviewed policy supplies the defaults; a sport without one keeps the historical defaults
+    # and is refused before any request (odds_pilot.policy_refusal).
+    policy = policy_for(args.sport)
+    base = odds_pilot.RunnerSettings.for_sport(args.sport) if policy is not None else odds_pilot.RunnerSettings(
+        sport=args.sport)
+    settings = _replace(
+        base,
+        markets=keys(args.markets) if args.markets is not None else base.markets,
+        regions=keys(args.regions) if args.regions is not None else base.regions,
+        config=_replace(base.config, offsets=parse_offsets(args.offsets)) if args.offsets is not None
+        else base.config,
     )
-    if args.odds_command == "run":
+    if args.odds_command == "status":
+        code, report = odds_pilot.status(args.db, args.ledger, settings)
+    elif args.odds_command == "run":
         code, report = odds_pilot.run_tick(args.db, args.ledger, settings, clear_cost_block=args.clear_cost_block)
     elif args.odds_command == "plan":
         code, report = odds_pilot.plan(args.db, args.ledger, settings, offline=args.offline)
     else:
         code, report = odds_pilot.smoke(args.db, args.ledger, settings)
     print(json.dumps(report, sort_keys=True, indent=None if args.odds_command == "run" else 2, default=str))
+    if code != 0 and policy is not None and policy.rank != 1:
+        # The shared edgelab-odds unit's OnFailure alert names only the unit: say which sport failed.
+        print(f"odds {args.odds_command} {args.sport}: exit {code}, state {report.get('state')}", file=sys.stderr)
     return code
 
 

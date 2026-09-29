@@ -1,5 +1,5 @@
 [Unit]
-Description=Market Edge Lab: The Odds API NFL pilot tick (read-only odds, 450-credit monthly ceiling)
+Description=Market Edge Lab: The Odds API pilot tick, NFL then NHL (read-only odds, one shared 450-credit monthly ceiling)
 Documentation=file:///opt/market-edge-lab/app/docs/decisions/0029-game-relative-odds-capture.md
 After=network-online.target
 Wants=network-online.target
@@ -15,11 +15,22 @@ EnvironmentFile=/etc/market-edge-lab/env
 # tick prints SETUP_NEEDED and exits 0 without sending anything.
 EnvironmentFile=-/etc/market-edge-lab/secrets.env
 WorkingDirectory=/var/lib/market-edge-lab
-# Resource bound: at most three GETs per tick (free events discovery, a free sports-list
+# Resource bound, PER ExecStart line: at most three GETs (free events discovery, a free sports-list
 # reconcile only if the quota is unknown, and ONE paid odds call when a slot is due), each one
 # attempt with a 20 s timeout and no redirects. Payloads are tens of kilobytes.
 ExecStart=/opt/market-edge-lab/venv/bin/python -m edge_lab.cli odds run --db /var/lib/market-edge-lab/db/edge_lab.sqlite3 --ledger /var/lib/market-edge-lab/db/odds_quota_ledger.json --sport americanfootball_nfl --markets h2h,spreads,totals --regions us
-TimeoutStartSec=3min
+# NHL (ADR 0039, issue #134), after NFL in the same oneshot: never concurrent with it, same ledger,
+# same tick lock. Prepared, NOT enabled: unless EDGE_LAB_ODDS_NHL=on in /etc/market-edge-lab/env it
+# prints DISABLED and sends and writes nothing. Admitted only from the credits left after NFL's full
+# monthly worst case (one joint proof). If the NFL tick exits 1 (a new alert), systemd skips this line
+# for that tick; the next tick runs both. Its report and journal line name the sport (icehockey_nhl).
+# Per line at most three GETs, so one run makes at most six (20 s each) plus two Python starts.
+ExecStart=/opt/market-edge-lab/venv/bin/python -m edge_lab.cli odds run --db /var/lib/market-edge-lab/db/edge_lab.sqlite3 --ledger /var/lib/market-edge-lab/db/odds_quota_ledger.json --sport icehockey_nhl --markets h2h --regions us --offsets 60m
+# Worst case for both lines: 6 x 20 s of network + 2 x 5 s of lock wait + CPU. Measured 2026-09-29 on the
+# laptop with fixtures (242 NHL + 70 NFL events): the heaviest NHL tick (first planning) 0.72 s CPU, a
+# steady tick 0.05 s, an interpreter start + import 0.2 s; about 2 s CPU for both lines, or about 20-40 s
+# wall under CPUQuota=10% on a slower host. About 170 s in all, so 5 min leaves margin.
+TimeoutStartSec=5min
 UMask=0077
 MemoryHigh=128M
 MemoryMax=256M
