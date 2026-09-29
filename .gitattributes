@@ -6,3 +6,5 @@ deploy/** text eol=lf
 # Never convert their line endings on checkout or commit: the committed blob is the evidence.
 experiments/** -text
 tests/fixtures/** -text
+# Retention records are hashed byte-for-byte (the report sha256 confirmed at apply time).
+docs/deploy/retention-records/** -text
