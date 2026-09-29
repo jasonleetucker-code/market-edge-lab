@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import io
 import json
+import re
 import shutil
 import socket
 import sys
@@ -61,27 +62,39 @@ SKEWS = (60, 8 * 60, -7 * 60, 12 * 60)
 
 
 def build_store(tmp_path: Path, *, labels: bool, name: str | None = None, repeat_change: str = "0.00",
-                skews: tuple[int, ...] = SKEWS) -> tuple[Path, datetime, dict]:
+                skews: tuple[int, ...] = SKEWS, outside: bool = False, t24_repeat: bool = False
+                ) -> tuple[Path, datetime, dict]:
     """Four games in one NFL week. T-24h and T-6h odds are captured; each team market gets one book of that horizon
     at the game's skew. The home market of game 0 gets a repeat book 5 min after its first T-6h book (its ask and
     bid moved by `repeat_change`). `labels=True` adds T-60m odds captures, T-60m books and settled listings: none of
-    it may change the output."""
+    it may change the output. `outside` adds a fully captured game kicking off 2026-10-25 (after the pilot weeks);
+    `t24_repeat` gives game 0's home market an unchanged repeat book 5 min after its T-24h book."""
     games = [sf.Game(f"fxtm{i:02d}", TEAMS[2 * i], TEAMS[2 * i + 1], KICKOFF + timedelta(hours=3 * (i % 2)), D("0.60"))
              for i in range(len(skews))]
     now = max(g.commence for g in games) + timedelta(hours=8)
     early = min(g.commence for g in games) - timedelta(hours=2)  # T-24h and T-6h due, T-60m not yet
     store = SnapshotStore(tmp_path / (name or ("tm-labels.sqlite3" if labels else "tm-clean.sqlite3")))
-    sf.write_pairing_fixture(store, games=games, now=early, books=False, settle=False)
+    if outside:
+        # One fixture run: the pilot games' T-60m odds are then captured too (never read by the tool).
+        late_game = sf.Game("fxtmout", TEAMS[20], TEAMS[21], datetime(2026, 10, 25, 17, 0, tzinfo=UTC), D("0.60"))
+        sf.write_pairing_fixture(store, games=games + [late_game], now=late_game.commence - timedelta(hours=2),
+                                 books=False, settle=False)
+        games_all = games + [late_game]
+        skews = tuple(skews) + (60,)
+        now = late_game.commence + timedelta(hours=8)
+    else:
+        sf.write_pairing_fixture(store, games=games, now=early, books=False, settle=False)
+        games_all = games
     cfg = se.PILOT_CONFIG
     run = "SYNTHETIC-timing"
     store.start_run(run)
     ids = {"t60m_books": set(), "horizon_books": set(), "late_books": set()}
-    by_event = {g.event_id: (g, s) for g, s in zip(games, skews)}
+    by_event = {g.event_id: (g, s) for g, s in zip(games_all, skews)}
     for t in store.odds_targets(sport=se.SPORT):
         g, skew = by_event[t["event_id"]]
         target = se._capture_target(dict(t))
         if t["offset_label"] == "T-60m":
-            if not labels:
+            if not labels or t["state"] == "CAPTURED":
                 continue
             received = effective_due(target, cfg) + timedelta(seconds=40)
             sid = store.save_snapshot(run_id=run, source="the_odds_api", kind="odds", entity_id=se.SPORT, url=sf.ODDS_URL,
@@ -106,6 +119,12 @@ def build_store(tmp_path: Path, *, labels: bool, name: str | None = None, repeat
                                       url=f"{sf.KALSHI_API}/markets/{ticker}/orderbook?depth=100",
                                       payload=_book("0.61", "0.59"), fetched_at_utc=iso_z(at), source_id="kalshi_public")
             ids["horizon_books"].add(sid)
+            if t["offset_label"] == "T-24h" and t24_repeat and g is games[0] and team == g.home:
+                rsid = store.save_snapshot(run_id=run, source=se.KALSHI, kind="orderbook", entity_id=ticker,
+                                           url=f"{sf.KALSHI_API}/markets/{ticker}/orderbook?depth=100",
+                                           payload=_book("0.61", "0.59"),
+                                           fetched_at_utc=iso_z(at + timedelta(minutes=5)), source_id="kalshi_public")
+                ids["horizon_books"].add(rsid)
             if t["offset_label"] == "T-6h" and g is games[0] and team == g.home:
                 moved = D(repeat_change)
                 rsid = store.save_snapshot(run_id=run, source=se.KALSHI, kind="orderbook", entity_id=ticker,
@@ -220,12 +239,32 @@ def test_distributions_report_skew_ages_spread_and_depth(tmp_path):
 # ================================================================== label safety
 
 
+def _spy_reads(monkeypatch) -> list[int]:
+    """Every snapshot id read through `_Payloads` (payloads and rows: odds snapshots are loaded by `row`)."""
+    loaded: list[int] = []
+    original_row = se._Payloads.row
+    monkeypatch.setattr(se._Payloads, "row", lambda self, sid: (loaded.append(sid), original_row(self, sid))[1])
+    return loaded
+
+
+def _t60m_odds_ids(path: Path) -> set[int]:
+    return {int(r["snapshot_id"]) for r in SnapshotStore.open_readonly(path).odds_targets(sport=se.SPORT)
+            if r["offset_label"] == "T-60m" and r["snapshot_id"] is not None}
+
+
+def test_the_read_spy_catches_a_t60m_odds_read(tmp_path, monkeypatch):
+    """The spy is not vacuous: an odds read through the consensus (it uses `_Payloads.row`) is recorded."""
+    path, now, _ = build_store(tmp_path, labels=True)
+    loaded = _spy_reads(monkeypatch)
+    t60 = _t60m_odds_ids(path)
+    se._Consensus(se._Payloads(SnapshotStore.open_readonly(path))).snapshot(min(t60))
+    assert set(loaded) & t60
+
+
 def test_no_t60m_book_later_book_or_settlement_is_read(tmp_path, monkeypatch):
     path, now, ids = build_store(tmp_path, labels=True)
-    loaded: list[int] = []
+    loaded = _spy_reads(monkeypatch)
     calls: list[str] = []
-    original = se._Payloads.payload
-    monkeypatch.setattr(se._Payloads, "payload", lambda self, sid: (loaded.append(sid), original(self, sid))[1])
     for name in ("_first_book", "outcome_for", "_e1_settlement", "_e1_exit", "e1_endpoint", "markout_endpoint", "_join"):
         real = getattr(se, name)
         monkeypatch.setattr(se, name, lambda *a, _n=name, _r=real, **k: (calls.append(_n), _r(*a, **k))[1])
@@ -233,8 +272,7 @@ def test_no_t60m_book_later_book_or_settlement_is_read(tmp_path, monkeypatch):
     real_catalog = se.kalshi_catalog
     monkeypatch.setattr(se, "kalshi_catalog", lambda store, as_of, payloads, drop_fields=(): (
         drops.append(tuple(drop_fields)), real_catalog(store, as_of, payloads, drop_fields))[1])
-    captured_odds = {int(r["snapshot_id"]) for r in SnapshotStore.open_readonly(path).odds_targets(sport=se.SPORT)
-                     if r["offset_label"] == "T-60m" and r["snapshot_id"] is not None}
+    captured_odds = _t60m_odds_ids(path)
     out = calibrate(path, now)
     assert not calls and drops == [se.SETTLED_LISTING_FIELDS]
     assert captured_odds and not set(loaded) & (ids["t60m_books"] | ids["late_books"] | captured_odds)
@@ -326,3 +364,79 @@ def test_cli_records_a_feature_inspection_before_printing(tmp_path, monkeypatch)
     assert use.window.start_utc == shown["coverage"]["first_kickoff_utc"]
     assert use.window.end_utc == shown["coverage"]["last_kickoff_utc"]
     assert tm.TIMING_VERSION in use.note and "T-60m book prices possibly seen" in use.note
+
+
+# ================================================================== review fixes (#142)
+
+
+def test_games_outside_the_pilot_weeks_are_ignored_and_never_logged(tmp_path, monkeypatch):
+    path, now, _ = build_store(tmp_path, labels=False, outside=True)
+    loaded = _spy_reads(monkeypatch)
+    out = calibrate(path, now)
+    read_here = set(loaded)  # before any other store is read (snapshot ids are per store)
+    assert out["inputs"]["pilot_kickoffs_et"]["first"] == "2026-09-27"
+    assert out["inputs"]["pilot_kickoffs_et"]["last"] == "2026-10-19"
+    assert out["coverage"]["games"] == 4 and out["coverage"]["last_kickoff_utc"] < "2026-10-20"
+    assert "fxtmout" not in json.dumps(out)
+    clean, _, _ = build_store(tmp_path, labels=False, name="tm-clean-2.sqlite3")
+    assert {k: v for k, v in calibrate(clean, now).items() if k not in ("as_of_utc", "output_sha256")} == {
+        k: v for k, v in out.items() if k not in ("as_of_utc", "output_sha256")}
+    outside_odds = {int(r["snapshot_id"]) for r in SnapshotStore.open_readonly(path).odds_targets(sport=se.SPORT)
+                    if r["event_id"] == "fxtmout" and r["snapshot_id"] is not None}
+    assert outside_odds and not read_here & outside_odds
+    root, own = _registry_copy(tmp_path)
+    code, text = _run(["exp002-timing", "--db", str(path), "--as-of", iso_z(now), "--experiments", str(root),
+                       "--delta-min", "0.01", "--evidence-log", str(own), "--actor", "t", "--code-version", "abc"])
+    assert code == 0
+    use = rev.read_log(own).uses[-1]
+    assert use.window.end_utc < "2026-10-20" and "fxtmout" not in text
+
+
+def test_last_update_ages_are_collected_even_when_a_book_is_stale(tmp_path, monkeypatch):
+    real = sf._odds_event
+
+    def stale(g, received):
+        ev = real(g, received)
+        if g.event_id == "fxtm00":  # one game's books last updated 15 min before receipt: not fresh
+            stamp = iso_z(received - timedelta(minutes=15))
+            for book in ev["bookmakers"]:
+                book["last_update"] = stamp
+                for m in book["markets"]:
+                    m["last_update"] = stamp
+        return ev
+
+    monkeypatch.setattr(sf, "_odds_event", stale)
+    path, now, _ = build_store(tmp_path, labels=False)
+    out = calibrate(path, now)
+    ages = out["distributions"]["T-6h"]["odds_book_last_update_age_seconds"]
+    assert ages["max"] == 900 and ages["n"] == 12  # 4 games x 3 books, the stale game included
+    by = out["coverage"]["by_horizon"]["T-6h"]
+    assert by["odds_not_fresh"] == 1 and by["sides_lost_upstream"] == 2 and by["odds_not_captured"] == 0
+    w = _window(out, "[-10,+15]")
+    assert w["t6h_due_pairs"] == 6 and w["t6h_all_due_sides"] == 8 and w["t6h_kept_over_all_due_sides"] == 6 / 8
+
+
+def test_t24h_drift_is_descriptive_and_never_decides_the_rule(tmp_path):
+    base, now, _ = build_store(tmp_path, labels=False, repeat_change="0.01")
+    both, _, _ = build_store(tmp_path, labels=False, repeat_change="0.01", t24_repeat=True, name="tm-t24.sqlite3")
+    a, b = calibrate(base, now), calibrate(both, now)
+    assert a["recommendation"]["basis"] == b["recommendation"]["basis"] == "NO_QUALIFIER_FALLBACK"
+    wb = _window(b, "[-10,+15]")
+    assert wb["drift"]["horizon"] == "T-6h" and wb["drift"]["median_abs"] == pytest.approx(0.01)
+    assert wb["drift"]["t24h_descriptive"] == {"pairs": 1, "median_abs": 0.0}
+    assert b["short_interval_drift"]["T-24h"]["abs_mid_change"]["n"] == 1
+
+
+def test_a_truncated_catalog_refuses_with_no_counts(tmp_path, monkeypatch):
+    path, now, _ = build_store(tmp_path, labels=True)
+    monkeypatch.setattr(se, "MAX_KALSHI_ROWS", 5)
+    with pytest.raises(tm.TimingRefused):
+        calibrate(path, now)
+    root, own = _registry_copy(tmp_path)
+    before = len(rev.read_log(own).uses)
+    code, text = _run(["exp002-timing", "--db", str(path), "--as-of", iso_z(now), "--experiments", str(root),
+                       "--delta-min", "0.01", "--evidence-log", str(own), "--actor", "t", "--code-version", "abc"])
+    out = json.loads(text)
+    assert code == 2 and out["state"] == "REFUSED" and "windows_tried" not in text and "TRUNCATED" not in text
+    assert not re.search(r"\d", out["detail"].replace("T-60m", "").replace("T-24h", ""))  # no count leaks
+    assert len(rev.read_log(own).uses) == before  # nothing shown, nothing logged

@@ -28,7 +28,7 @@ import os
 import statistics
 import sys
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
 from typing import Any, Mapping, Sequence
@@ -41,7 +41,13 @@ from .odds_schedule import deadline, effective_due
 from .provenance import canonical_json, sha256_hex
 
 UTC = timezone.utc
-TIMING_VERSION = "exp002-ac-timing-v1"
+TIMING_VERSION = "exp002-ac-timing-v2"
+# A.C step 1: "use only the development pilot weeks (A.H)". The pilot is kickoffs 2026-09-27 -> 2026-10-19
+# (RESEARCH_UNBLOCKING_DECISIONS.md A.H; EXP002_FREEZE_PROPOSAL.md section 4, "Development pilot"). Games with an ET
+# kickoff date outside it are skipped before anything about them is read, whenever the tool runs, so a run after
+# 2026-10-21 can never log evaluation-window games as DEVELOPMENT.
+PILOT_FIRST_ET = date(2026, 9, 27)
+PILOT_LAST_ET = date(2026, 10, 19)
 SCHEMA = "exp002-ac-timing/1"
 LABEL = "PROPOSED calibration input, not a freeze"
 HORIZONS = se.GATE_HORIZONS  # ("T-24h", "T-6h"): never T-60m
@@ -81,6 +87,11 @@ EXPOSURE_CAVEAT = ("T-60m book prices possibly seen (UNKNOWN, unlogged Terminal 
                    "calibration reads no T-60m data itself, but it cannot certify that no label was ever in view.")
 OPTION_B_NOTE = ("No window qualified. A.C step 3: freeze [-5,+10] and record its attrition, or pursue PR C option "
                  "(b), capturing the Kalshi book in the same run as the odds (a runner change that needs review).")
+
+
+class TimingRefused(RuntimeError):
+    """The calibration cannot be computed without its output depending on data it must not read (a truncated
+    catalog or target list: the caps count T-60m rows). Nothing is shown and nothing is logged."""
 
 
 def _seconds(delta: timedelta) -> int:
@@ -125,14 +136,25 @@ def timing_observations(store: Any, *, as_of: datetime, windows: Sequence[Window
     payloads = se._Payloads(store)
     consensus = se._Consensus(payloads)
     catalog = se.kalshi_catalog(store, as_of, payloads, se.SETTLED_LISTING_FIELDS)
+    # `se._targets` holds every target in memory, T-60m ones included (their state transitions are replayed to
+    # as_of there); this loop drops non-T-24h/T-6h rows before reading anything about them.
     all_targets, truncated = se._targets(store, as_of)
+    if catalog.truncated or truncated:
+        # Past the row caps the kept rows depend on how many T-60m rows exist, and a truncation drops earlier
+        # (T-24h) books: the output would reveal T-60m availability. Refuse with no counts.
+        raise TimingRefused("the Kalshi catalog or the target list reached its row cap; the calibration would depend "
+                            "on T-60m rows, so nothing is computed or shown (run it with a narrower --as-of or raise "
+                            "the caps in a reviewed change)")
     reader = _BookReader(payloads)
     cfg = se.PILOT_CONFIG
     sides: list[dict[str, Any]] = []
     odds_ages: dict[str, list[int]] = {h: [] for h in HORIZONS}
     drift: list[dict[str, Any]] = []
-    counts = {h: {"targets_due": 0, "superseded": 0, "odds_unusable": 0, "not_mapped": 0, "sides": 0}
-              for h in HORIZONS}
+    counts = {h: {"targets_due": 0, "superseded": 0, "odds_not_captured": 0, "odds_capture_unusable": 0,
+                  "consensus_not_supported": 0, "odds_not_fresh": 0, "not_mapped": 0, "sides": 0,
+                  "sides_lost_upstream": 0} for h in HORIZONS}
+    stage_key = {se.Stage.ODDS_NOT_CAPTURED: "odds_not_captured", se.Stage.ODDS_CAPTURE_UNUSABLE: "odds_capture_unusable",
+                 se.Stage.CONSENSUS_NOT_SUPPORTED: "consensus_not_supported", se.Stage.ODDS_NOT_FRESH: "odds_not_fresh"}
     games: set[tuple[str, str, str]] = set()
     drift_seen: set[tuple[str, str]] = set()
     for r in all_targets:
@@ -140,6 +162,8 @@ def timing_observations(store: Any, *, as_of: datetime, windows: Sequence[Window
         if horizon not in HORIZONS:  # T-60m rows are skipped before anything about them is looked at
             continue
         t = se._capture_target(r)
+        if not PILOT_FIRST_ET <= se.et_date(t.commence_utc) <= PILOT_LAST_ET:
+            continue  # outside the development pilot weeks (A.C step 1): never read, counted or logged
         cutoff = deadline(t, cfg)
         if cutoff > as_of:
             continue  # not yet due
@@ -150,23 +174,33 @@ def timing_observations(store: Any, *, as_of: datetime, windows: Sequence[Window
             continue
         games.add((se._iso(t.commence_utc), t.event_id, se.week_cluster(t.commence_utc)))
         window_start = effective_due(t, cfg) - cfg.early_tolerance
+        # Per-book last_update ages for every CAPTURED target received by its cutoff, whatever its freshness: a
+        # book older than 10 min is exactly what this distribution must be able to show.
+        if r.get("state") == "CAPTURED" and r.get("snapshot_id") is not None:
+            result = consensus.snapshot(int(r["snapshot_id"]))
+            got = se.parse_utc(result.received_at_utc) if result is not None else None
+            if got is not None and got <= cutoff:
+                event = next((e for e in result.events if e.event_id == r["event_id"]), None)
+                prop, _ = se._h2h(event, t.home_team, t.away_team) if event is not None else (None, None)
+                if prop is not None:
+                    odds_ages[horizon] += [b.age_at_receipt_seconds for b in prop.books
+                                           if b.age_at_receipt_seconds is not None]
         odds = se.odds_side(r, consensus, cutoff)
         received = odds.get("_received")
         if received is None:
-            c["odds_unusable"] += 1
+            c[stage_key.get(odds.get("stage"), "odds_capture_unusable")] += 1
+            c["sides_lost_upstream"] += 2  # both team markets of the game
             continue
-        result = consensus.snapshot(int(r["snapshot_id"]))
-        event = next((e for e in result.events if e.event_id == r["event_id"]), None) if result else None
-        prop, _ = se._h2h(event, t.home_team, t.away_team) if event is not None else (None, None)
-        if prop is not None:
-            odds_ages[horizon] += [b.age_at_receipt_seconds for b in prop.books if b.age_at_receipt_seconds is not None]
         mapping = se.map_event(t.home_team, t.away_team, t.commence_utc, catalog, cutoff)
         if mapping["state"] != "MAPPED":
             c["not_mapped"] += 1
+            c["sides_lost_upstream"] += 2
             continue
         for team, obs in sorted(mapping["markets"].items()):
             ticker = obs.ticker
-            # Only this horizon's books, received by this target's own cutoff: no later book is ever considered.
+            # Only this horizon's books, received from the horizon window start (effective due - early tolerance)
+            # to this target's own cutoff: no later book is ever considered, and every window's before-side is
+            # capped at the window start.
             horizon_books = [b for b in catalog.books.get(ticker, []) if window_start <= b[0] <= cutoff]
             c["sides"] += 1
             side: dict[str, Any] = {"horizon": horizon, "event_id": t.event_id, "ticker": ticker,
@@ -186,7 +220,8 @@ def timing_observations(store: Any, *, as_of: datetime, windows: Sequence[Window
                     side["spread"] = None if quote is None else quote["spread"]
                     side["ask_size"] = None if quote is None else quote["ask_size"]
             sides.append(side)
-            # Short-interval drift: consecutive books of this market and horizon within 15 minutes.
+            # Short-interval drift: consecutive books of this market and horizon within 15 minutes (only markets of
+            # sides that reached this point: a game whose odds or mapping failed contributes no drift pair).
             if (ticker, horizon) in drift_seen:
                 continue
             drift_seen.add((ticker, horizon))
@@ -265,16 +300,26 @@ def calibrate(store: Any, *, as_of: datetime, delta_min: Decimal, windows: Seque
         kept6 = sum(1 for s in t6 if s["kept"][w.name])
         t24 = [s for s in sides if s["horizon"] == "T-24h"]
         kept24 = sum(1 for s in t24 if s["kept"][w.name])
-        in_gap = [d["abs_mid_change"] for d in drift_values if d["gap_s"] <= _seconds(w.drift_gap)]
+        # The rule uses T-6h drift only (the decision horizon, as the keep test); T-24h drift is descriptive.
+        in_gap = [d["abs_mid_change"] for d in drift_values
+                  if d["horizon"] == RULE_HORIZON and d["gap_s"] <= _seconds(w.drift_gap)]
+        in_gap24 = [d["abs_mid_change"] for d in drift_values
+                    if d["horizon"] == "T-24h" and d["gap_s"] <= _seconds(w.drift_gap)]
         med = statistics.median(in_gap) if in_gap else None
+        lost_upstream = obs["counts"][RULE_HORIZON]["sides_lost_upstream"]
+        all_due = len(t6) + lost_upstream
         frac = None if not t6 else kept6 / len(t6)
         reasons = window_verdict(len(t6), kept6, med, delta_min)
         window_rows.append({
             "window": w.name, "before_min": w.before_min, "after_min": w.after_min, "width_min": w.width,
             "t6h_due_pairs": len(t6), "t6h_kept": kept6, "t6h_lost": len(t6) - kept6, "t6h_kept_fraction": frac,
+            "t6h_all_due_sides": all_due, "t6h_sides_lost_upstream": lost_upstream,
+            "t6h_kept_over_all_due_sides": None if not all_due else kept6 / all_due,
             "t24h_due_pairs": len(t24), "t24h_kept": kept24, "t24h_kept_fraction": None if not t24 else kept24 / len(t24),
-            "drift": {"max_gap_minutes": int(w.drift_gap.total_seconds() // 60), "pairs": len(in_gap),
-                      "median_abs": med},
+            "drift": {"horizon": RULE_HORIZON, "max_gap_minutes": int(w.drift_gap.total_seconds() // 60),
+                      "pairs": len(in_gap), "median_abs": med,
+                      "t24h_descriptive": {"pairs": len(in_gap24),
+                                           "median_abs": statistics.median(in_gap24) if in_gap24 else None}},
             "qualifies": not reasons, "reasons": reasons})
     by_h = {h: [s for s in sides if s["horizon"] == h] for h in HORIZONS}
 
@@ -293,13 +338,25 @@ def calibrate(store: Any, *, as_of: datetime, delta_min: Decimal, windows: Seque
                    "keep_min": float(KEEP_MIN), "drift_fraction": "1/3", "drift_limit": float(limit),
                    "windows": [w.name for w in windows], "fallback_window": FALLBACK.name,
                    "drift_window_minutes": int(DRIFT_WINDOW.total_seconds() // 60), "horizons": list(HORIZONS),
+                   "pilot_kickoffs_et": {"first": PILOT_FIRST_ET.isoformat(), "last": PILOT_LAST_ET.isoformat(),
+                                         "source": "A.H development pilot (RESEARCH_UNBLOCKING_DECISIONS.md); "
+                                                   "EXP002_FREEZE_PROPOSAL.md section 4",
+                                         "outside": "skipped before anything is read; never counted or logged"},
+                   "window_start_cap": "every window's before-side is capped at the horizon window start (effective "
+                                       "due - 7 min early tolerance): no book of an earlier horizon is ever used",
                    "join_version": se.JOIN_VERSION, "book_choice": se.BOOK_CHOICE,
                    "due_pair_definition": "a due T-6h target side whose odds capture is usable (a receipt R_o) and "
                                          "whose market is mapped by the cutoff: only the window decides it. Sides lost "
                                          "upstream (odds not captured or unusable, not mapped) are counted in "
                                          "`coverage` and are the same for every window.",
-                   "drift_definition": "consecutive books of one market and horizon at most 15 min apart; a window "
-                                       "uses the pairs whose gap is within its larger side"},
+                   "drift_definition": "consecutive books of one market and horizon at most 15 min apart. The rule "
+                                       "uses T-6h pairs only (the decision horizon); T-24h drift is descriptive. "
+                                       "INTERPRETATION for the freeze review: A.C step 2 names one 15-min measure; "
+                                       "here each window uses the pairs whose gap is within its larger side (5, 10 "
+                                       "or 15 min). Games whose odds or mapping failed contribute no drift pair.",
+                   "all_due_sides_definition": "kept / all due T-6h sides also counts the two sides of every due game "
+                                               "lost upstream (odds not captured, unusable, not supported or not "
+                                               "fresh; market not mapped)"},
         "coverage": {"games": len(obs["games"]), "first_kickoff_utc": first, "last_kickoff_utc": last,
                      "weeks": sorted({g[2] for g in obs["games"]}), "by_horizon": obs["counts"],
                      "targets_truncated": obs["targets_truncated"], "catalog_problems": obs["catalog_problems"]},
@@ -385,7 +442,11 @@ def main_timing(args: argparse.Namespace, parser: argparse.ArgumentParser) -> in
         print(json.dumps({"command": name, "state": "NO_STORE", "detail": str(exc)}))
         return 1
     root = Path(args.experiments) if args.experiments else None
-    result = calibrate(store, as_of=as_of, delta_min=delta_min)
+    try:
+        result = calibrate(store, as_of=as_of, delta_min=delta_min)
+    except TimingRefused as exc:
+        print(json.dumps({"command": name, "state": "REFUSED", "detail": str(exc)}))
+        return 2
     try:
         logged = record_timing_view(result, log=Path(args.evidence_log), actor=args.actor,
                                     code_version=args.code_version, experiments_root=root)
