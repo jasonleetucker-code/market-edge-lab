@@ -595,4 +595,12 @@ directive), and the screenshots that justify it.
     - The Terminal has no reveal path.
     - The gallery gains the SYNTHETIC `label_proxy` state.
 
-    Screenshots: see the PR.
+    Evidence (`tests/browser/capture.py` audits, 0 with overflow, clipping, low contrast or foreign requests):
+    - the `polymarket` fixture plus a SYNTHETIC-priced T-60m capture, `/experiments?tab=sources`:
+      - Chromium and WebKit at 360x800, 390x844 and 1440x900 with every disclosure open;
+      - Chromium at 360x800 and 1440x900 with 200% root text;
+    - `/gallery` in the `demo` state, Chromium and WebKit at 360x800, 390x844 and 1440x900.
+
+    Element shots of the Polymarket section and the gallery state were reviewed at 390 and 1440 px. This is
+    emulation, not a physical phone. The shots were reviewed locally by the author, described in the PR and not
+    attached.
