@@ -169,8 +169,11 @@ def test_an_empty_log_reads_no_label_view_and_the_committed_exposure_record_is_u
     protocol = se.protocol_status(root)
     uses = rev.read_log(own).uses
     hand = [u for u in uses if u.actor == "coordinator (recorded by VF Writer A)"]
-    assert len(hand) == 1 and hand[0].viewed_labels is None and hand[0].influenced_tuning is False
-    assert hand[0].role is rev.DatasetRole.DEVELOPMENT and hand[0].window.scope == "sports:nfl:moneyline"
+    # the opening record (to 01:16:30Z) and its follow-up closing the window at the #124 deploy
+    assert len(hand) == 2 and all(u.viewed_labels is None and u.influenced_tuning is False for u in hand)
+    assert all(u.role is rev.DatasetRole.DEVELOPMENT and u.window.scope == "sports:nfl:moneyline" for u in hand)
+    assert all("NOT A CONFIRMED VIEW" in u.note for u in hand)
+    assert max(u.window.end_utc for u in hand) == "2026-09-29T02:09:50Z"
     header = own.read_text(encoding="utf-8").splitlines()[0]
     own.write_text(header + "\n", encoding="utf-8")  # a copy in tmp_path; the committed log is never touched
     assert se.outcome_access(protocol, root)["state"] == "NO_LABEL_VIEW_LOGGED"

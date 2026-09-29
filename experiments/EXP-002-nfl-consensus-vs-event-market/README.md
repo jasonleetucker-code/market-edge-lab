@@ -91,6 +91,17 @@ edge, and no sports model or strategy is operational or authorized.
     - Consequence: pilot T-60m data are DEVELOPMENT only and never relabelled untouched. Evaluation starts after
       #124 deploys (freeze proposal §4).
 
+- 2026-09-29 (VF Writer A, coordinator instruction). The possible pre-#124 T-60m label exposure window is
+  closed.
+  - #124 was merged as `29a37d7` and deployed on production at 2026-09-29T02:09:50Z, per the coordinator.
+  - The follow-up hand-recorded event `eu-f4954194ccbea8817aef73d4343122bb` extends
+    `eu-7f8e61282393c0bf2258b4bc90dd92c7` to that time. It keeps the same fields: DEVELOPMENT, `viewed_labels`
+    null, NOT A CONFIRMED VIEW.
+  - The untouched evaluation window can start only after 2026-09-29T02:09:50Z and after the freeze is recorded
+    (freeze proposal §4).
+  - Production gate v3 at deploy: INSUFFICIENT_DATA (15 admissible T-6h games < 20; 1 NFL week < 4). Gate v2 is
+    also INSUFFICIENT_DATA. Both are coordinator readings; the status stays DRAFT.
+
 ## Owner decisions
 
 - 2026-09-26: owner decisions recorded (`docs/owner/2026-09-26-owner-decisions-economics-backup.md`): minimum useful effect $1,000/year (continuation bar beyond the pilot, not a pilot requirement); 6 owner hours through 2026-10-22; the +8 h extension returns to the owner. Status stays DRAFT.

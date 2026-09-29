@@ -75,7 +75,7 @@ establish that **pairing works**. They do not establish independent games, a clu
 |---|---|---|---|
 | Development pilot | kickoffs 2026-09-27 → 2026-10-19 | **Unchanged.** The first captures were T-24h on 2026-09-26 17:00Z (HANDOFF), so the start matches. DEVELOPMENT role; every look logged. | — |
 | Freeze | by 2026-10-21 | **Not promised.** E0 (mid markout) cannot be frozen: gate v3 has no pass. An E1 freeze needs review of §3, a sourced tie count, the A.C timing calibration (label-free, logged as FEATURE_INSPECTION) and this PR's Terminal fix deployed. The earliest realistic decision is the owner's freeze review on 2026-10-22 (2 approved hours). | Directive §7E: the standard is not lowered to meet the date |
-| Evaluation (untouched) | kickoffs from 2026-10-22 through week 18 (about 2027-01-10) | **Starts at the first kickoff after both the freeze is recorded and the #124 Terminal fix is deployed**, whatever that date is. If the freeze is recorded by 2026-10-21, that is 2026-10-22. Games between 2026-10-22 and a later freeze are **not** added to the untouched window, even if unviewed. The new start date goes into the freeze record. | Conservative; no retroactive holdout claim |
+| Evaluation (untouched) | kickoffs from 2026-10-22 through week 18 (about 2027-01-10) | **Starts at the first kickoff after both the freeze is recorded and the #124 Terminal fix deploy (2026-09-29T02:09:50Z, production REVISION 29a37d7)**, whatever that date is. If the freeze is recorded by 2026-10-21, that is 2026-10-22. Games between 2026-10-22 and a later freeze are **not** added to the untouched window, even if unviewed. The new start date goes into the freeze record. | Conservative; no retroactive holdout claim |
 | Pilot label look (markout SD, placebo, E1 SD) | after the A.C timing freeze | Unchanged order. Logged as LABEL_RESULT_INSPECTION, DEVELOPMENT; those games are permanently excluded from evaluation. | A.G step 5 |
 
 **Evidence exposure as known on 2026-09-29.**
@@ -84,8 +84,8 @@ establish that **pairing works**. They do not establish independent games, a clu
   were T-24h rows, status counts, `report --summary` with labels hidden, and the label-free v2 gate.
 - **Possible, unlogged label exposure.** The Terminal's Family A capacity panel showed the "latest paired book".
   That could be a T-60m book, whose ask and depth are a price-only EXP-002 label.
-  - This was possible for pilot games from the first captures on 2026-09-26 until #124 deploys. This PR stops
-    it.
+  - This was possible for pilot games from the first captures on 2026-09-26 until the #124 deploy at
+    2026-09-29T02:09:50Z (REVISION 29a37d7). #124 stopped it.
   - Whether anyone viewed such a book is **UNKNOWN**.
   - The Polymarket US related-market T-60m captures on the Data sources tab are a possible correlated proxy. The
     coordinator records that in HANDOFF for a follow-up.
@@ -96,8 +96,9 @@ establish that **pairing works**. They do not establish independent games, a clu
   - `viewed_labels` null (unknown), `viewed_results` false, `influenced_tuning` false to the coordinator's
     knowledge.
 
-  The event's window ends at its record time, 2026-09-29T01:16:30Z. A follow-up event with the #124 deploy time
-  must extend it.
+  That event's window ended at its record time, 2026-09-29T01:16:30Z. The follow-up event
+  `eu-f4954194ccbea8817aef73d4343122bb` (appended 2026-09-29, same fields and labelling, NOT A CONFIRMED VIEW)
+  extends it to the #124 deploy, **2026-09-29T02:09:50Z**, and closes the window.
 - **Availability counts (NIT, noted rather than hidden).** The report's and the Terminal's join and attrition
   counts still say whether a T-60m pair or book existed (pairing status and stage). That is weak label
   information: a missing or unusable T-60m book can reflect market events. T-60m **prices, sizes, depth and
@@ -106,8 +107,8 @@ establish that **pairing works**. They do not establish independent games, a clu
 - **Consequence: pilot-window T-60m data must be treated as potentially exposed.**
   - They are DEVELOPMENT only, as they already were.
   - They can **never be relabelled untouched**.
-  - The **evaluation window must start after the #124 fix deploys**, and after the freeze is recorded, whichever
-    is later.
+  - The **evaluation window must start after 2026-09-29T02:09:50Z** (the #124 deploy) and after the freeze is
+    recorded, whichever is later. No kickoff at or before that time can be in the untouched window.
   - The A.C timing calibration record must state "T-60m book prices possibly seen (UNKNOWN, unlogged Terminal
     display)" rather than certify that no label was in view.
 - **This session** viewed **no real EXP-002 data**, only SYNTHETIC fixtures and simulations.
@@ -121,6 +122,6 @@ establish that **pairing works**. They do not establish independent games, a clu
 4. KXNFLGAME fees verified for any after-fee figure (episode threshold, economic hurdle). The gross E1 test can
    be frozen without them, but no net claim can be made.
 5. This PR merged and deployed (the Terminal label display fix) before the first evaluation-window T-60m
-   capture. A follow-up evidence-use event must then extend the hand-recorded exposure window to the deploy
-   time.
+   capture. DONE: deployed 2026-09-29T02:09:50Z (REVISION 29a37d7), and the exposure window was closed by
+   `eu-f4954194ccbea8817aef73d4343122bb`.
 6. The owner's freeze review (2026-10-22), within the 6 approved hours.
