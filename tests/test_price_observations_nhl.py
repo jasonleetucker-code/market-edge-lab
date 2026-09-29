@@ -595,15 +595,17 @@ def test_the_heaviest_day_through_plan_and_capture_stays_inside_every_bound(stor
                                     clock.now.isoformat(), 1, 1)
 
     monkeypatch.setattr(po, "fetch_json_result", fake)
-    tick = datetime(2026, 10, 13, 8, 5, tzinfo=UTC)
+    last = max(c for c, _, _ in day)
+    settle = po.next_observe_tick(last + po.NHL_SETTLEMENT_AFTER_PUCK)
+    # Every tick at which something is due (idle ticks send nothing), then the game day's settled read.
+    ticks = sorted({po._t(t["target_utc"]) for t in nhl_targets(store)}) + [settle]
     per_run = []
-    while tick < datetime(2026, 10, 14, 12, 0, tzinfo=UTC):
+    for tick in ticks:
         before = len(calls)
         clock.now = tick + timedelta(seconds=20)
         plan(store, tick)
         capture(store, clock)
         per_run.append(len(calls) - before)
-        tick += timedelta(minutes=15)
     assert max(per_run) <= po.NHL_RUN_GET_SHARE
     books = [t for t in nhl_targets(store) if detail(t)["nhl_role"] == "book"]
     assert {t["state"] for t in books} == {"CAPTURED"}
@@ -739,3 +741,23 @@ def test_install_writes_no_nhl_switch_when_none_was_set_and_refuses_an_invalid_o
     assert result.returncode == 0 and "EDGE_LAB_KALSHI_NHL_CAPTURE" not in result.stdout  # the default (off)
     bad = _run_env_section(tmp_path, "NWS_USER_AGENT=ua (x@y.z)\nEDGE_LAB_KALSHI_NHL_CAPTURE=yes\n")
     assert bad.returncode != 0 and "must be on or off" in bad.stderr
+
+
+def test_an_nhl_target_of_another_hockey_family_is_never_fetched(store, monkeypatch):
+    tick = datetime(2026, 10, 1, 16, 5, tzinfo=UTC)
+    t = po.custom_target(venue="kalshi", native_market_id="KXNHLTOTAL-26OCT01BUFCBJ-6", at=tick,
+                         native_event_id="KXNHLTOTAL-26OCT01BUFCBJ")
+    t.update(target_id=t["target_id"] + f"|{po.NHL_ORIGIN}:T-6h", origin=po.NHL_ORIGIN,
+             detail={"nhl_role": "book", "horizon": "T-6h"}, planned_at_utc=po._iso(tick - timedelta(hours=1)))
+    assert store.plan_price_target(t)
+    clock = Clock(tick + timedelta(seconds=20))
+    api = Api(clock, routes())
+    monkeypatch.setattr(po, "fetch_json_result", api)
+    _, report = capture(store, clock)
+    assert api.calls == [] and report["nhl_held"][t["target_id"]].startswith("NHL_FAMILY_NOT_ADMITTED")
+
+
+def test_every_ordered_team_pair_splits_uniquely():
+    for a in nhl.KALSHI_ABBRS:
+        for b in nhl.KALSHI_ABBRS - {a}:
+            assert nhl.split_teams(a + b) == ((a, b), None)

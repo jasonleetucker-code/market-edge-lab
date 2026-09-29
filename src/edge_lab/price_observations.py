@@ -1013,6 +1013,9 @@ def capture(store: SnapshotStore, *, clock: Clock | None = None, sleep: Sleep = 
         nhl_due = [t for t in due if is_nhl_target(t)]
         if nhl_due:
             held = _sports_holds(store, nhl_due, NHL_POLICY, nhl_on)
+            for t in nhl_due:  # scope guard: only KXNHLGAME is ever fetched for NHL (any other family fails closed)
+                if t["target_id"] not in held and str(t["native_market_id"]).split("-", 1)[0] != NHL_SERIES:
+                    held[t["target_id"]] = f"NHL_FAMILY_NOT_ADMITTED: {t['native_market_id']} is not {NHL_SERIES}"
             for t in nhl_due:  # recorded now, with the actual cause; never attempted
                 if t["target_id"] in held:
                     store.record_price_observations([_base_row(run_id, _attempt_id(run_id, t["target_id"]), t,
@@ -2106,7 +2109,7 @@ def plan_nhl_targets(store: SnapshotStore, now: datetime
                 tick, shift = pick
                 deadline = min(tick + NHL_TARGET_WINDOW, commence - NHL_MIN_LEAD)
                 missed = None
-                if deadline <= now:
+                if deadline < now:  # the capture's own rule: due until the deadline itself
                     missed = (f"NOT_COLLECTED_BEFORE_ACTIVATION: the {horizon} deadline {_iso(deadline)} passed before "
                               "the first NHL plan; never captured late" if activation is None or activation > deadline
                               else f"NOT_PLANNED_BEFORE_DEADLINE: the {horizon} deadline {_iso(deadline)} passed "
