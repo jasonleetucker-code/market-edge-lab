@@ -6,3 +6,4 @@ The expiry is a UTC date no more than 7 days out. An expired row is not a live c
 
 | Claim | Agent | Branch | Paths | Expires |
 |---|---|---|---|---|
+| Coordinator: HANDOFF 2026-09-29 (E1 + label proxies) and closing evidence events | Claude (laptop coordinator) | docs/handoff-2026-09-29b | HANDOFF.md, experiments/EXP-002-nfl-consensus-vs-event-market/evidence_use.jsonl | 2026-10-06 |
