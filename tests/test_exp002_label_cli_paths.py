@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import io
 import json
+import re
 import shutil
 import socket
 from contextlib import redirect_stdout
@@ -45,13 +46,24 @@ def no_network(monkeypatch):
 @pytest.fixture(autouse=True)
 def fixture_clock(monkeypatch):
     monkeypatch.setattr(se, "_clock", lambda: datetime(2026, 11, 1, tzinfo=UTC))
+    monkeypatch.setattr(po, "_now", lambda: datetime(2026, 11, 1, tzinfo=UTC))  # `observe status` now_utc
+
+
+_ISO_TIME = re.compile(r"\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?")
+_HEX_ID = re.compile(r"\b[0-9a-f]{8,}(?:-[0-9a-f]{4,})*\b")
+
+
+def _scrub(text: str) -> str:
+    """`text` with ISO timestamps and hex / uuid ids replaced before a figure's substring check: a recorded-at time
+    (wall clock, microseconds) or a random id may contain a figure's digits without being one."""
+    return _HEX_ID.sub("<id>", _ISO_TIME.sub("<time>", text))
 
 
 def _run(fn, argv) -> tuple[int, str]:
     buf = io.StringIO()
     with redirect_stdout(buf):
         code = fn(argv)
-    return code, buf.getvalue()
+    return code, _scrub(buf.getvalue())
 
 
 # ================================================================== 1. sports_evidence report: related-market proxies
@@ -102,7 +114,7 @@ def _pm_store(tmp_path: Path) -> tuple[Path, datetime]:
 def test_the_report_withholds_related_market_label_proxies_everywhere(tmp_path):
     path, now = _pm_store(tmp_path)
     rep = se.build_report(SnapshotStore.open_readonly(path), as_of=now)
-    text = json.dumps(rep)
+    text = _scrub(json.dumps(rep))
     assert T60 not in text and LATE not in text  # neither the T-60m nor the post-cutoff capture's price
     rows = {(r["event_id"], r["horizon"]): r for r in rep["rows"]}
     t60 = rows[("fxsyn002", "T-60m")]["related_not_equivalent"]
@@ -117,7 +129,7 @@ def test_the_report_withholds_related_market_label_proxies_everywhere(tmp_path):
     assert code == 0 and T60 not in out and LATE not in out and PRE in out
     code, out = _run(se.main, ["report", "--db", str(path), "--as-of", now.isoformat(), "--out",
                                str(tmp_path / "rep.json")])
-    written = (tmp_path / "rep.json").read_text(encoding="utf-8")
+    written = _scrub((tmp_path / "rep.json").read_text(encoding="utf-8"))
     assert code == 0 and T60 not in written and LATE not in written and PRE in written
     code, out = _run(se.main, ["report", "--db", str(path), "--as-of", now.isoformat(), "--summary"])
     assert code == 0 and T60 not in out and LATE not in out
@@ -273,12 +285,12 @@ def test_market_history_withholds_nfl_label_books_and_keeps_pre_decision_books(t
     assert hist[ids["t60_crossed"]]["miss_reason"] == "BOOK_ANOMALY: withheld (EXP-002 label)"
     missed = hist[ids["t60_missed"]]
     assert missed["miss_reason"] == "EXPIRED: withheld (EXP-002 label)" and missed["collection_status"] == "MISSED"
-    text = json.dumps(list(hist.values()))
+    text = _scrub(json.dumps(list(hist.values())))
     for price in LABEL_PRICES:
         assert price not in text, price
     settle = po.market_history(store, "kalshi:KXNFLGAME")
     assert len(settle) == 1 and settle[0]["miss_reason"] == "SETTLEMENT_METADATA_READ: withheld (EXP-002 label)"
-    assert "NYG result" not in json.dumps(settle) and settle[0]["exp002_label"].startswith("HIDDEN")
+    assert "NYG result" not in _scrub(json.dumps(settle)) and settle[0]["exp002_label"].startswith("HIDDEN")
 
 
 def test_status_reduces_nfl_label_miss_reasons_and_the_cli_shows_no_label(tmp_path, monkeypatch):
@@ -332,3 +344,26 @@ def test_the_nfl_rule_fails_closed_and_leaves_other_markets_alone():
     assert po.nfl_label_withheld(None, at_utc=None, **kw)  # a KXNFLGAME row without the planner's detail
     assert not po.nfl_label_withheld(None, venue="kalshi", native_market_id="KXHIGHNY-26OCT04-B67.5", at_utc=None)
     assert not po.nfl_label_withheld(None, venue="polymarket", native_market_id="KXNFLGAME-x", at_utc=None)
+
+
+def test_any_kalshi_nfl_series_without_planner_detail_fails_closed(tmp_path):
+    # A manual custom target on another Kalshi NFL series (KXNFLSPREAD-style) near kickoff: no stored horizon, so
+    # its figures are withheld; a KXHIGHNY custom row in the same store is untouched.
+    store = SnapshotStore(tmp_path / "spread.sqlite3")
+    run = "SYNTHETIC-spread"
+    store.start_run(run)
+    spread = po.custom_target(venue="kalshi", native_market_id="KXNFLSPREAD-26OCT04ARINYG-NYG3",
+                              at=KICKOFF - timedelta(minutes=58), native_event_id="KXNFLSPREAD-26OCT04ARINYG")
+    hi = po.custom_target(venue="kalshi", native_market_id="KXHIGHNY-26OCT04-B67.5", at=KICKOFF - timedelta(hours=30))
+    for t, p in ((spread, "0.6123"), (hi, "0.3311")):
+        store.plan_price_target({"planned_at_utc": po._iso(KICKOFF - timedelta(days=2)), **t})
+        _row(store, run, t, status="CAPTURED", at=_t(t["target_utc"]), bid=p, ask=p)
+    store.finish_run(run, status="succeeded")
+    ro = SnapshotStore.open_readonly(store.path)
+    (row,) = po.market_history(ro, spread["market_id"])
+    assert not set(po.NFL_LABEL_FIELDS) & set(row) and row["exp002_label"].startswith("HIDDEN")
+    assert "0.6123" not in _scrub(json.dumps(row))
+    (plain,) = po.market_history(ro, hi["market_id"])
+    assert plain["bid"] == plain["ask"] == "0.3311" and "exp002_label" not in plain
+    assert po.nfl_label_withheld(None, venue="kalshi", native_market_id="KXNFLSPREAD-x", at_utc=None)
+    assert not po.nfl_label_withheld(None, venue="kalshi", native_market_id="KXHIGHNY-x", at_utc=None)

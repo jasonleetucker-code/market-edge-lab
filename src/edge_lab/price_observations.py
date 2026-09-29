@@ -1162,21 +1162,28 @@ def status(store: SnapshotStore, *, now: datetime,
 # depth and price grid and reduces the reason to its code; `status` does the same to a missed target's reason.
 # Status, timing, snapshot ids and counts stay: they say whether a book was read, never what it priced. The horizon
 # and kickoff come from the planner's stored target detail (`plan_nfl_targets`: `nfl_role`, `odds_offset`,
-# `commence_utc`); a KXNFLGAME row without that detail has an unknown horizon and is withheld (fails closed). Every
+# `commence_utc`); any other Kalshi NFL row (a `KXNFL` series without that detail, e.g. a manual custom target on
+# KXNFLGAME or KXNFLSPREAD) has an unknown horizon and is withheld (fails closed). Every
 # other row (EXP-001 / KXHIGHNY, ADR 0030 observations) is unchanged. There is no reveal path here; the stored rows
 # are unchanged (raw evidence).
 NFL_PRE_DECISION_OFFSETS = ("T-24h", "T-6h")
 NFL_DECISION_OFFSET = "T-6h"
 NFL_LABEL_FIELDS = ("bid", "ask", "ask_size", "depth", "price_grid")
-NFL_LABEL_HIDDEN = ("HIDDEN (EXP-002 label: a KXNFLGAME book at T-60m or after the T-6h decision cutoff, or a "
-                    "settlement read; its prices, sizes, depth and result are not shown here)")
+NFL_LABEL_HIDDEN = ("HIDDEN (EXP-002 label: a Kalshi NFL book at T-60m, after the T-6h decision cutoff or at an "
+                    "unknown horizon, or a settlement read; its prices, sizes, depth and result are not shown here)")
+NFL_SERIES_PREFIX = "KXNFL"  # every Kalshi NFL series (KXNFLGAME, KXNFLSPREAD, ...): fail closed without detail
 NFL_LABEL_REASON = "withheld (EXP-002 label)"
 _REASON_CODE = re.compile(r"^([A-Z][A-Z0-9_]*):")
 
 
 def nfl_decision_cutoff(commence_utc: Any) -> datetime | None:
     """EXP-002's T-6h decision cutoff of a game: `odds_schedule.deadline` of its T-6h Odds target under the Odds
-    runner's default `PilotConfig` (the cutoff `sports_evidence` uses). None when the kickoff is unknown."""
+    runner's default `PilotConfig` (the cutoff `sports_evidence` uses). None when the kickoff is unknown.
+
+    The kickoff is the one stored in the book target's detail when it was planned. If a game were later moved much
+    earlier, its real cutoff would move earlier too and a book between the two cutoffs would be shown. That matters
+    only for a T-6h book near its cutoff; a T-24h book is received about 18 h before it, so a reschedule of that size
+    is needed before it could matter. Documented rather than handled."""
     from .odds_schedule import DEFAULT_OFFSETS, CaptureTarget, PilotConfig, deadline
 
     start = _t(commence_utc)
@@ -1191,11 +1198,12 @@ def nfl_label_withheld(target: Any, *, venue: Any, native_market_id: Any, at_utc
     """True when an observation's figures (received at `at_utc`) or a target's reason are EXP-002 labels for
     display: an NFL pairing target whose role is not a book (a settlement read), whose horizon is not T-24h / T-6h
     (T-60m or unknown), or whose receipt is after the game's T-6h decision cutoff (an unknown kickoff or receipt
-    fails closed); and any other KXNFLGAME row (no stored horizon: fails closed). A row with no receipt holds no
-    figure. False for every other market."""
+    fails closed; the cutoff uses the kickoff stored at planning, see `nfl_decision_cutoff`); and any other Kalshi
+    NFL row (`KXNFL` series, no stored horizon: fails closed). A row with no receipt holds no figure. False for every
+    other market (EXP-001 / KXHIGHNY and ADR 0030 rows are never touched)."""
     nfl_origin = target is not None and is_nfl_target(target)
     if not nfl_origin:
-        return str(venue or "") == "kalshi" and str(native_market_id or "").startswith(NFL_SERIES)
+        return str(venue or "") == "kalshi" and str(native_market_id or "").startswith(NFL_SERIES_PREFIX)
     d = _detail(target)
     if d.get("nfl_role") != NFL_ROLE_BOOK or d.get("odds_offset") not in NFL_PRE_DECISION_OFFSETS:
         return True
