@@ -2,11 +2,18 @@
 
 **Status:** research for freeze blocker 2 (`EXP002_FREEZE_PROPOSAL.md` §5). 2026-09-29, Writer A, from `main` at
 `2f2d9c4`. **Recommendations are PROPOSED only.** Nothing is frozen. `protocol.toml`, the freeze proposal (never
-edited in place), the code and EXP-002 data are unchanged. **No EXP-002 outcome, label or book was viewed.** The
-only Kalshi data read is public market *metadata*: listing times and final settlements of past KXNFLGAME markets.
+edited in place), the code and EXP-002 data are unchanged.
+
+**No EXP-002 capture (book, odds or pair) was viewed.** The public settlements and NFL.com standings read here
+cover 2026 weeks 1–3, so they include DEVELOPMENT-pilot game outcomes (kickoffs from 2026-09-27). They were read
+in aggregate for non-binary settlements and tie counts only. No evaluation-window game had kicked off. This is
+recorded as evidence-use event `eu-622b393fce9cb7a4da0e105a1d9b13bc` (LABEL_RESULT_INSPECTION, DEVELOPMENT,
+window 2026-09-27T00:00Z to 2026-09-29T00:15Z). The pilot games contribute 0 events to either count.
+
+The only Kalshi data read is public market metadata: listing times and final settlements of KXNFLGAME markets.
 The owner decides at the freeze review (2026-10-22).
 
-Status words follow `RESEARCH_UNBLOCKING_DECISIONS.md`:
+Status words used in this document:
 - **VERIFIED**: checked against a cited primary or official source, fetched and hashed below;
 - **UNVERIFIED**: secondary or inferred;
 - **PROPOSED**: a recommendation.
@@ -36,7 +43,7 @@ Status words follow `RESEARCH_UNBLOCKING_DECISIONS.md`:
 
 ## 1. The contract states the bounds cover (VERIFIED)
 
-Contract terms (FOOTBALLGAMEWIN, as recorded in `EXP002_FREEZE_PROPOSAL.md` §2 and A.D; re-read 2026-09-29):
+Contract terms (FOOTBALLGAMEWIN, `rules_evidence/FOOTBALLGAMEWIN_contract_terms_read-2026-09-25.pdf`, Venue Change clause; A.D agrees). The freeze proposal v1 §2 wording 'a venue or home/away change' is broader than the terms; freeze proposal v2 should correct it.
 - **A tie after overtime** pays `$1/(tied teams)`, rounded down, which is **$0.50**.
 - **The fallback F:** Kalshi pays "the last fair price" (or "last fair market price"), a discretionary
   `F ∈ [0, 1]`, when a game is:
@@ -130,10 +137,10 @@ conclusions do not change.
   - No official per-game tie model was found.
   - US books do not normally list an NFL three-way moneyline (secondary sources say a tie is usually a push on the
     two-way line). **No published sportsbook tie price was found: UNKNOWN.**
-- **Why heterogeneity matters little here.** The tie term moves `c_low` by `t·(p − 0.5)`, which is zero at a
-  pick'em. The games whose t might exceed 1% are exactly those with `p ≈ 0.5`. At `|p − 0.5| = 0.1`, even
-  `t = 2%` moves `c_low` by 0.2¢. At a heavy favourite (`p ≥ 0.75`), `c_low` moves by at most `0.25·t`, and the
-  tie risk there is the least.
+- **Why heterogeneity matters little here.** The tie term lowers `c_low` by `t·max(p − 0.5, 0)`, which is zero
+  at a pick'em. The games whose t might exceed 1% are exactly those with `p ≈ 0.5`. At `p − 0.5 = 0.1`, even
+  `t = 2%` lowers `c_low` by 0.2¢. At a heavy favourite (`p ≥ 0.75`), the tie term lowers `c_low` by between
+  `0.25·t` and `0.5·t`, but that is where t is smallest.
 - **The 2025 both-possession rule** could change the tie rate in either direction (for example, a team matching
   an opening touchdown may go for two). One season (1 tie in 272) cannot show it. This is why `t_max = 0.02` is
   proposed as a registered sensitivity.
@@ -227,14 +234,21 @@ year) are planned options within 48 h and the same week, so they are not F.
 
 | Parameter | PROPOSED | Rationale | Registered sensitivity |
 |---|---|---|---|
-| `t_max` | **0.01** (unchanged) | Above the exact 99% bound of the 10-minute-OT era (0.73%). Per-game heterogeneity (near-pick'em games up to about 1–2%) enters `c_low` through `t·(p − 0.5)`, which is small exactly where t is large (§2.3). | `t_max = 0.02` (the new-OT-rule era is 1/320; its 95% bound is 1.48%) |
+| `t_max` | **0.01** (unchanged) | Above the exact 99% bound of the 10-minute-OT era (0.73%). Per-game heterogeneity (near-pick'em games up to about 1–2%) lowers `c_low` by `t·max(p − 0.5, 0)`, which is small exactly where t is large (§2.3). | `t_max = 0.02` (the new-OT-rule era is 1/320; its 95% bound is 1.48%) |
 | `u_max` | **0.01** (**changed** from 0.005) | The full 2017–2025 record, pandemic seasons included, gives 14/2,384 events; the 95% bound is 0.92% and the 99% bound 1.07%. `0.005` holds only when 2020 (and 2021) are excluded, a regime assumption that cannot be verified ex ante. | `u_max = 0.005` (the non-pandemic-era bound) |
+
+**The two bounds are set at different confidence levels.** `t_max = 0.01` clears the 99% bound (0.73%).
+`u_max = 0.01` clears the 95% bound but not the 99% bound (1.07%); unlike `t_max`, it is set at the 95% level.
+Choosing 99% for both would give `u_max ≈ 0.011`.
+
+At one level (99%), `0.005` fails even without 2020: the ex-2020 99% bound is 0.616%. It passes at 99% only when
+2021 is excluded too (0.453%). At 95%, the ex-2020 bound is 0.494%, so 0.005 passes only just.
 
 Both remain ex-ante, frozen with the protocol, and never fitted to outcomes.
 
 `t_max + u_max = 0.02 ≤ 1`, which is valid for `tie_adjusted_interval`.
 
-## 5. Effect on E1 (analytic; no data viewed)
+## 5. Effect on E1 (analytic; no EXP-002 capture viewed)
 
 E1 enters when `c_low − ask ≥ θ` (θ = 1¢). Moving `u_max` from 0.005 to 0.01 changes `c_low` by `−0.005·p`:
 
@@ -251,12 +265,15 @@ continuous, so this band is under half a tick wide.
 The count is label-free: E1 entry uses T-6h information only (`EXP002_E1_ENDPOINT.md`). The coordinator can obtain
 it on production by running the E1 endpoint **without** `--with-results`, once with
 `--e1-tie-bound 0.01 --e1-postponement-bound 0.005` and once with `... 0.01 ... 0.01`, and reporting the two entry
-counts. **Not run here:** this task has no production access, and no EXP-002 data was viewed.
+counts. **Not run here:** this task has no production access, and no EXP-002 capture was viewed.
 
 ## 6. Sources (fetched 2026-09-29, UTC)
 
 Raw pages were saved to the session scratchpad and are **not committed**: third-party pages of about 200–700 KB
-each. Their sha256 is recorded so the exact bytes can be re-identified.
+each. Their sha256 is recorded below.
+
+The standings hashes reproduce on re-fetch. The news pages S1–S12 are dynamic: a re-fetch returns different
+bytes, so they are identified by URL, `datePublished` and the facts quoted in §3.2.
 
 **NFL.com standings (coordinator fetch, about 17:50Z; hashes re-verified by me):**
 `https://www.nfl.com/standings/league/<year>/reg`
@@ -304,9 +321,9 @@ each. Their sha256 is recorded so the exact bytes can be re-identified.
 | Request | sha256 |
 |---|---|
 | `GET https://api.elections.kalshi.com/trade-api/v2/markets?series_ticker=KXNFLGAME&status=settled&limit=1000` (194 markets) | `dcba2382f624222fa473a27523e638762c0339d25c02442f08a35193284d8cfe` |
-| `GET .../events?series_ticker=KXNFLGAME&status=settled&with_nested_markets=true&limit=200`, page 1 | `83608a50…` |
-| same, page 2 | `01f7441d…` |
-| same, page 3 (429 events in all; 2025 events carry no nested markets) | `e5c4dad1…` |
+| `GET .../events?series_ticker=KXNFLGAME&status=settled&with_nested_markets=true&limit=200`, page 1 | `83608a50a1ab77d65ce179103d8e5dc7aeccc63701bd7b61e318b2852e8087d0` |
+| same, page 2 | `01f7441d683d21e24ae5b7d04e0214b2a9a9666391b5715c48714d5fccca9c3b` |
+| same, page 3 (429 events in all; 2025 events carry no nested markets) | `e5c4dad120d2f30c2a175361cdd58618ef76ad6c2a12c8c51a427c2d1874427f` |
 | `GET .../historical/markets?series_ticker=KXNFLGAME&limit=1000` (666 markets, the 2025–26 season) | `efd4e6411d10765ef590732a46e4f3625a0ec5481b82ae122c6753d33ccca79d` |
 
 A seventh probe, `markets?...&max_close_ts=` (0 markets), is not used.
@@ -322,8 +339,8 @@ There is no fair-price settlement.
 
 | Source | sha256 |
 |---|---|
-| Wikipedia wikitext, `https://en.wikipedia.org/w/index.php?title=<year>_NFL_season&action=raw`, 2017–2026 (18:28Z); used 2020 / 2021 / 2022 | `2e496dce…` / `615c320e…` / `6e5d737e…` |
-| Wikipedia, "List of canceled and rescheduled NFL games" (18:29Z) | `69523c1b…` |
+| Wikipedia wikitext, `https://en.wikipedia.org/w/index.php?title=<year>_NFL_season&action=raw`, 2017–2026 (18:28Z); used 2020 / 2021 / 2022 | 2020 `2e496dce382de397248ac747b44bf6e24d92d0162947fa6661c2980f92737bdf` / 2021 `615c320e19e87f510f052ca5ba6fc5817afeafa164452ae24fc17b01f19f604e` / 2022 `6e5d737e2ba1a1b1dd6a6ecbed6f92fded5095e9c616c31a45a0d40dc48efd6c` |
+| Wikipedia, "List of canceled and rescheduled NFL games" (18:29Z) | `69523c1bc88fd6bcc464cbbd63773bfadcd3fe614f99acab82c0fcb4bc753d34` |
 | inpredictable.com, "What's a tie worth in the NFL?" (18:31Z) | `18f7da85f34854f409221286ae5faa8d121537071e0d8291efefe50769cbccd5` |
 | theScore, `https://www.thescore.com/nfl/news/3155047` | `24583f885893d9dda7225268bda0fd2d11e96339ea75eae68b9fb7c13d26e155` |
 
@@ -335,9 +352,10 @@ identify it.
 - **The listing-lead rule is counterfactual for 2017–2022.** KXNFLGAME did not exist then, and Kalshi's batch
   timing can change. Uncertain cases are counted.
 - **The "48 hours of its originally scheduled date" clause.** Whether it is measured from the kickoff time or the
-  calendar date is UNVERIFIED. #20 (48.5 h) is counted either way. Measured from the date, some moves under 48 h
-  from kickoff could also exceed it. The only such case here (#4, +26.7 h Sunday to Monday) stays within 48 h of
-  either reading of Sunday's date end.
+  end of the original date is UNVERIFIED.
+  - #6, #20, #21 and #22 are 48.5–54 h from kickoff but 41–43 h from the end of the original date. They are
+    counted either way. Under a date-end reading the certain count would fall from 11 to 7.
+  - #4 (+26.7 h) is within 48 h under both readings.
 - **Kalshi's actual handling of a post-listing reschedule has never been observed** for KXNFLGAME. There were no
   such events in 2025–26. It is assumed to follow the terms.
 - **The exhaustive negative for 2019, 2023, 2024, 2025 and 2026 rests on secondary season pages.** For 2025 it is
