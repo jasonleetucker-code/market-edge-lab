@@ -1176,8 +1176,9 @@ def _gate_access(acc: Any) -> str:
         return c.txt(None, reason="outcome access not recorded")
     state = acc.get("state")
     label = ACCESS_TEXT.get(str(state), str(state))
-    if state == "LABEL_VIEWS_LOGGED":
-        label = (f"{pr.count(acc.get('label_views'))} logged label view(s) · latest "
+    if state in ("LABEL_VIEWS_LOGGED", "POSSIBLE_LABEL_EXPOSURE_LOGGED"):
+        label = (f"{pr.count(acc.get('label_views') or 0)} logged label view(s) · "
+                 f"{pr.count(acc.get('possible_label_exposures') or 0)} possible (unconfirmed) exposure(s) · latest "
                  f"{pr.datetime_et(acc.get('latest_label_view_utc')) or 'time not recorded'} · "
                  f"{', '.join(acc.get('roles') or []) or 'role not recorded'}")
     return c.txt(label) + _sub("the gate reads no label; this page shows none · the log records declared access only")

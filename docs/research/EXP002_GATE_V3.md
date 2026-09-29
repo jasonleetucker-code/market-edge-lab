@@ -259,5 +259,6 @@ freeze eligibility separate and always "Not eligible".
 
 The Terminal's "latest paired book" no longer shows a T-60m book. A T-60m book is EXP-002's markout label,
 and the Terminal is not a logged consumer of labels. Before this change the capacity panel could show a T-60m
-ask and depth for pilot games. Any such viewing was unlogged, so pilot T-60m label exposure is **UNKNOWN**
-(see `EXP002_FREEZE_PROPOSAL.md` §4).
+ask and depth for pilot games. Any such viewing was unlogged, so pilot T-60m label exposure is **UNKNOWN**. It is
+hand-recorded as a possible exposure in EXP-002's evidence-use log (`EXP002_FREEZE_PROPOSAL.md` §4). The gate
+line's outcome-access field shows such records as "possible (unconfirmed)", apart from confirmed label views.

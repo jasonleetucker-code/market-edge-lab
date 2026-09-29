@@ -82,8 +82,14 @@ edge, and no sports model or strategy is operational or authorized.
   - **Terminal.** The Family A section shows the gate v3 line, with freeze eligibility separate and never
     eligible. The "latest paired book" no longer shows a T-60m book (a markout label). Such a display was
     possible and unlogged before, so pilot T-60m label exposure is UNKNOWN (freeze proposal §4).
-  - **Data looked at:** none real. Only SYNTHETIC fixtures and simulations were used. Nothing is appended to
-    `evidence_use.jsonl`.
+  - **Data looked at:** none real. Only SYNTHETIC fixtures and simulations were used.
+  - **Evidence-use log.** One hand-recorded POSSIBLE exposure was appended, at the coordinator's instruction:
+    `eu-7f8e61282393c0bf2258b4bc90dd92c7`.
+    - What it covers: the pilot T-60m KXNFLGAME books from 2026-09-26, which the pre-#124 Terminal could
+      display. Whether anyone viewed them is unknown.
+    - Fields: role DEVELOPMENT, `viewed_labels` null, `influenced_tuning` false.
+    - Consequence: pilot T-60m data are DEVELOPMENT only and never relabelled untouched. Evaluation starts after
+      #124 deploys (freeze proposal §4).
 
 ## Owner decisions
 

@@ -2523,9 +2523,15 @@ def outcome_access(protocol: Mapping[str, Any], experiments_root: Path | None = 
     except Exception as exc:  # noqa: BLE001 - an unreadable log is unknown access, never "none"
         return {"state": "UNREADABLE", "detail": f"evidence-use log unreadable: {type(exc).__name__}"}
     views = [u for u in log.uses if u.viewed_labels or u.viewed_results or u.action is rev.Action.LABEL_RESULT_INSPECTION]
+    # A view recorded with viewed_labels unknown (None) and no results shown is a POSSIBLE exposure (for example the
+    # hand-recorded pre-#124 Terminal display), counted apart and never read as "none".
+    confirmed = [u for u in views if u.viewed_labels or u.viewed_results]
     latest = max(views, key=lambda u: u.action_time_utc, default=None)
-    return {"state": "LABEL_VIEWS_LOGGED" if views else "NO_LABEL_VIEW_LOGGED", "experiment_id": experiment_id,
-            "log_started_utc": log.started_at_utc, "logged_uses": len(log.uses), "label_views": len(views),
+    state = ("LABEL_VIEWS_LOGGED" if confirmed else "POSSIBLE_LABEL_EXPOSURE_LOGGED" if views
+             else "NO_LABEL_VIEW_LOGGED")
+    return {"state": state, "experiment_id": experiment_id,
+            "log_started_utc": log.started_at_utc, "logged_uses": len(log.uses), "label_views": len(confirmed),
+            "possible_label_exposures": len(views) - len(confirmed),
             "latest_label_view_utc": None if latest is None else latest.action_time_utc,
             "latest_label_view_role": None if latest is None else latest.role.value,
             "roles": sorted({u.role.value for u in views}),

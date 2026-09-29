@@ -114,6 +114,10 @@ def test_stale_evidence_and_logged_labels_are_named():
         "state": "LABEL_VIEWS_LOGGED", "label_views": 2, "latest_label_view_utc": "2026-10-20T01:00:00Z",
         "roles": ["DEVELOPMENT"]}), "POPULATED"))
     assert "2 logged label view(s)" in logged and "DEVELOPMENT" in logged
+    possible = plain(research._ev_exp002_gate(_line(outcome_access={
+        "state": "POSSIBLE_LABEL_EXPOSURE_LOGGED", "label_views": 0, "possible_label_exposures": 1,
+        "latest_label_view_utc": "2026-09-29T01:16:30Z", "roles": ["DEVELOPMENT"]}), "POPULATED"))
+    assert "0 logged label view(s) · 1 possible (unconfirmed) exposure(s)" in possible
     unknown = plain(research._ev_exp002_gate(_line(outcome_access={"state": "NO_LOG"}), "POPULATED"))
     assert "access unknown" in unknown
     blocked = plain(research._ev_exp002_gate(_line(outcome_access={"state": "NO_PROTOCOL"}), "POPULATED"))

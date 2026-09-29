@@ -164,6 +164,18 @@ def test_small_and_empty_samples_are_insufficient_data_never_a_verdict():
     assert any("admissible T-6h games" in x for x in few["insufficient"])
 
 
+def test_an_empty_log_reads_no_label_view_and_the_committed_exposure_record_is_unconfirmed(tmp_path):
+    root, own = t2._registry_copy(tmp_path)
+    protocol = se.protocol_status(root)
+    uses = rev.read_log(own).uses
+    hand = [u for u in uses if u.actor == "coordinator (recorded by VF Writer A)"]
+    assert len(hand) == 1 and hand[0].viewed_labels is None and hand[0].influenced_tuning is False
+    assert hand[0].role is rev.DatasetRole.DEVELOPMENT and hand[0].window.scope == "sports:nfl:moneyline"
+    header = own.read_text(encoding="utf-8").splitlines()[0]
+    own.write_text(header + "\n", encoding="utf-8")  # a copy in tmp_path; the committed log is never touched
+    assert se.outcome_access(protocol, root)["state"] == "NO_LABEL_VIEW_LOGGED"
+
+
 def test_book_states_and_attrition_reconcile():
     rows = [
         _row("ok", "w1"),
@@ -244,12 +256,17 @@ def test_the_gate_line_reports_logged_label_access_and_keeps_freeze_separate(tmp
     protocol = se.protocol_status(root)
     line = se.exp002_gate_line(store, as_of=now, protocol=protocol, experiments_root=root, resamples=100)
     assert line["state"] == "OK" and line["diagnostic_only"] and line["label_free"]
-    assert line["outcome_access"]["state"] == "NO_LABEL_VIEW_LOGGED"
+    # The committed log holds one hand-recorded POSSIBLE exposure (the pre-#124 Terminal display; viewed_labels
+    # unknown): counted apart from confirmed views and never read as "no access".
+    first = line["outcome_access"]
+    assert first["state"] == "POSSIBLE_LABEL_EXPOSURE_LOGGED" and first["label_views"] == 0
+    assert first["possible_label_exposures"] >= 1 and first["roles"] == ["DEVELOPMENT"]
     assert line["freeze"]["state"] == "NOT_ELIGIBLE"
     measured = se.measure_exp002(store, as_of=now, results=True, experiments_root=root)
     se.record_markout_view(measured, log=own, actor="test", code_version="abc123", experiments_root=root)
     after = se.outcome_access(protocol, root)
     assert after["state"] == "LABEL_VIEWS_LOGGED" and after["label_views"] == 1 and after["roles"] == ["DEVELOPMENT"]
+    assert after["possible_label_exposures"] == first["possible_label_exposures"]
     assert rev.read_log(own).uses[-1].action is rev.Action.LABEL_RESULT_INSPECTION
     assert se.outcome_access({"state": "NOT_REGISTERED"}, root)["state"] == "NO_PROTOCOL"
 
@@ -261,7 +278,7 @@ def test_the_terminal_view_carries_the_gate_line_and_hides_t60m_prices(tmp_path)
     family = view["family_a"]
     gate = family["exp002_gate"]
     assert gate["state"] == "OK" and gate["version"] == se.GATE_V3_VERSION and gate["freeze"]["state"] == "NOT_ELIGIBLE"
-    assert gate["outcome_access"]["state"] == "NO_LABEL_VIEW_LOGGED"
+    assert gate["outcome_access"]["state"] == "POSSIBLE_LABEL_EXPOSURE_LOGGED"  # the committed hand record
     assert family["capacity"]["latest"]["horizon"] in ("T-24h", "T-6h")  # a T-60m book is a label: not shown
     # a label view logged after the first render shows on the next one (the log is read per view, not cached)
     measured = se.measure_exp002(SnapshotStore.open_readonly(path), as_of=now, results=True, experiments_root=root)
