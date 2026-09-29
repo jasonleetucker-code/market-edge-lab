@@ -32,5 +32,6 @@ Under the 2026-09-25 Economic Evidence v1 directive (#96):
 
 Under the 2026-09-25 Research Unblocking directive:
 - 0037: fill-mode labels v2: first detection is zero-latency, the best observation is a hindsight upper bound (#111).
+- 0038: in-play foundation (#122, offline): evidence contract, pure position policy, hold-vs-exit replay; native/bot inventory reservation; stale inputs never liquidate (#125).
 
-New decisions start at 0038.
+New decisions start at 0039.
