@@ -87,6 +87,7 @@ column lists which issues each primitive serves.
 | #83 | External capital: investor unit/NAV accounting and fee governance | **LATER / deferred 2026-09-25 (#96)** | Durable intent kept. Outside investor capital is not authorized; no implementation until an edge and a legal structure exist. |
 | #93 | Bootstrap Capital Mode: grow a small bankroll without reckless leverage | **Preserved 2026-09-25 (#96); principles NOW inside the economic screen** | Capital-days, return on deployed vs total capital, lockup, idle cash and capacity are reported by `research_economics.py`. No strategy class is assigned without evidence; no amount is an approved bankroll; #32's 168-hour policy stays intact. |
 | #122 | In-play sports: dynamic exits, re-entry and position sizing with evidence-gated automation | **NOW (offline foundation, 2026-09-28)**; NEXT: a separately approved bounded in-play evidence pilot; LATER: state-aware exits, re-entry/ADD, richer models; BLOCKED: automated account actions | Directive `docs/owner/2026-09-28-exp002-validation-inplay-foundation-directive.md`. First question: for identical initial positions, does a specified in-game exit (full or partial) beat holding after costs or on a declared risk objective? Offline only now: source/API feasibility, an in-play evidence contract, a pure HOLD/REDUCE/EXIT `position_policy`, deterministic hold-vs-exit replay with isolated accounting, synthetic nulls and a read-only Terminal view. **No research slot is claimed** (the #96 two-family limit holds; EXP-003's pause frees nothing automatically). Real in-play evaluation needs an authorized slot transition and an id from the registry. No in-play acquisition, orders, account reads or credentials; the pregame 295/week approval does not extend. EXP-002's budget is not #122's. |
+| #134 | NHL prospective evidence: preserve opening-season sportsbook and event-market data | **NOW (DATA_COLLECTION / DEVELOPMENT_ONLY, 2026-09-29)**; NEXT: a stable NHL stream and coverage review; LATER: a separately allocated, preregistered hockey experiment; #122 chooses its in-play sport by evidence | Directive `docs/owner/2026-09-29-nhl-prospective-evidence-directive.md`. Odds API `icehockey_nhl`, h2h only (T-60m first), under the one shared quota ledger and the 450 ceiling, NFL first. Kalshi `KXNHLGAME` only, with its own request bound. Extends `odds_schedule` (a sport-aware planner, NHL-A) and `price_observations` (schedule-driven NHL targets, NHL-B). No second ledger, scheduler, freshness system or dashboard. **Not EXP-002; no research slot claimed.** Opening night 2026-09-29: manual Kalshi observations only; the Odds horizons are MISSED (NOT_COLLECTED_BEFORE_ACTIVATION). |
 
 ## Roadmap re-run 2026-09-25: #96 evidence-to-economics reset (Economic Evidence v1)
 
@@ -339,6 +340,31 @@ Related owner records that are not ideas:
   its own branch and file claim. It does not touch Gate 3 files.
 
 ## Review log
+
+- **2026-09-29 (afternoon): #134 NHL prospective evidence: re-plan.**
+  - **Priority:** NOW, because opening-week point-in-time data is perishable. It does not outrank EXP-001
+    protected operations, NFL guarantees or EXP-002 correctness blockers.
+  - **Shared primitives (no fork):**
+    - `odds_schedule` / `odds_pilot` become sport-aware, with one combined monthly proof and one ledger (NHL-A).
+    - `price_observations` gains schedule-driven KXNHLGAME targets beside the NFL pairing (NHL-B).
+    - `freshness_fabric` gains a separate NHL identity.
+    - The Terminal Data sources tab gets a compact NHL block.
+  - **Dependencies:** NHL-B's Kalshi targets read NHL-A's quota-free NHL discovery. Activation (NHL-C) needs both
+    merged, then a gated deploy.
+  - **Budget finding (measured 2026-09-29, before NHL-A):**
+    - September: 45 credits spent, 455 remaining.
+    - October, NFL only: the projected worst case is 450 credits (expected 270), because the NFL worst case
+      reserves undiscovered weeks. So NHL Odds coverage in early October is expected to be small until that
+      reservation releases.
+    - NHL-A quantifies this exactly. The owner options go in a decision packet; no agent chooses one.
+  - **Overlap:** #122 (hockey is a candidate in-play sport; no in-play collection starts), #5, #9, #29, #50,
+    #74, #86, #96 (no slot claimed).
+  - **Classification:**
+    - NOW: NHL-A and NHL-B, then NHL-C activation.
+    - NEXT: an NHL coverage review; the EXP-002 sourced tie and not-played count.
+    - LATER: a hockey experiment, with its own slot and protocol.
+    - BLOCKED (owner): any paid tier or ceiling change.
+  - **Roadmap effect:** the 2026-10-22 EXP-002 freeze review is unchanged. NHL does not touch the EXP-002 sample.
 
 - **2026-09-29: EXP-002 validation foundation + #122 offline foundation: re-plan.**
   - **Outcome:**
