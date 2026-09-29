@@ -1630,7 +1630,13 @@ LABEL_BOOK_HIDDEN = ("HIDDEN (EXP-002 label: a T-60m book's prices, sizes and de
                      "--with-results run)")
 
 
+LABEL_BOOK_REASON = "T-60m book withheld (label)"
+_SIDE_REASON = re.compile(r"^([A-Z_]+) \[(.+?)\]: ")  # the row-level copy of a side's reason (`_row`)
+
+
 def _hide_label_books(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """T-60m rows without their book prices, sizes, depth, ladder and free-text side reasons (a crossed book's
+    anomaly quotes its bids; a malformed book's reason carries parser text). Stages and counts are kept."""
     out = []
     for r in rows:
         if r.get("horizon") != TARGET_HORIZON or not r.get("sides"):
@@ -1641,8 +1647,13 @@ def _hide_label_books(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
             hidden = {k: v for k, v in side.items() if k not in LABEL_BOOK_FIELDS}
             if len(hidden) != len(side):
                 hidden["label_book"] = LABEL_BOOK_HIDDEN
+            if hidden.get("reasons"):
+                stage = hidden.get("stage")
+                hidden["reasons"] = [f"{getattr(stage, 'value', stage) or 'NO_STAGE'}: {LABEL_BOOK_REASON}"]
             sides[team] = hidden
-        out.append({**r, "sides": sides})
+        reasons = [(f"{m.group(1)} [{m.group(2)}]: {LABEL_BOOK_REASON}" if (m := _SIDE_REASON.match(str(x))) else x)
+                   for x in r.get("reasons") or []]
+        out.append({**r, "sides": sides, "reasons": list(dict.fromkeys(reasons))})
     return out
 
 

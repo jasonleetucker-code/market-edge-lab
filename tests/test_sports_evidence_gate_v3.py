@@ -309,6 +309,42 @@ def test_the_full_report_hides_t60m_book_prices_unless_the_view_is_logged(tmp_pa
     assert any(s.get("yes_ask") is not None for s in t60_logged) and logged["evidence_use"] == "APPENDED"
 
 
+def test_a_crossed_t60m_book_leaks_no_price_through_its_reasons(tmp_path, capsys):
+    from decimal import Decimal
+
+    from edge_lab.dashboard import sports_fixtures as sf
+    from edge_lab.odds_schedule import iso_z
+
+    path, now, _ = t2.build_store(tmp_path)
+    rows = se.build_report(SnapshotStore.open_readonly(path), as_of=now, results=True)["rows"]
+    target = next(r for r in rows if r["horizon"] == "T-60m" and (r.get("kalshi") or {}).get("tickers"))
+    ticker = sorted(target["kalshi"]["tickers"].values())[0]
+    at = datetime.fromisoformat(target["odds"]["received_utc"].replace("Z", "+00:00")) + timedelta(seconds=30)
+    store = SnapshotStore(path)
+    store.start_run("SYNTHETIC-crossed-t60m")
+    store.save_snapshot(run_id="SYNTHETIC-crossed-t60m", source=se.KALSHI, kind="orderbook", entity_id=ticker,
+                        url=f"{sf.KALSHI_API}/markets/{ticker}/orderbook?depth=100",
+                        payload=sf._book(Decimal("0.61"), crossed=True), fetched_at_utc=iso_z(at),
+                        source_id="kalshi_public")
+    store.finish_run("SYNTHETIC-crossed-t60m", status="succeeded")
+    logged = se.build_report(SnapshotStore.open_readonly(path), as_of=now, results=True)
+    crossed = [s for r in logged["rows"] if r["event_id"] == target["event_id"] and r["horizon"] == "T-60m"
+               for s in r["sides"].values() if any("crossed book" in x for x in s.get("reasons") or [])]
+    assert crossed  # the fixture really produced a crossed T-60m book whose reason quotes its bids
+    root, _ = t2._registry_copy(tmp_path)
+    assert se.main(["report", "--db", str(path), "--as-of", now.isoformat(), "--experiments", str(root)]) == 0
+    text = capsys.readouterr().out
+    assert "crossed book" not in text and "0.62" not in text  # neither the anomaly nor the crossed YES bid
+    shown = json.loads(text)
+    row = next(r for r in shown["rows"] if r["event_id"] == target["event_id"] and r["horizon"] == "T-60m")
+    side = next(s for s in row["sides"].values() if s["ticker"] == ticker)
+    assert side["stage"] == "KALSHI_BOOK_UNUSABLE" and side["reasons"] == [
+        f"KALSHI_BOOK_UNUSABLE: {se.LABEL_BOOK_REASON}"]
+    assert f"KALSHI_BOOK_UNUSABLE [{side['team']}]: {se.LABEL_BOOK_REASON}" in row["reasons"]
+    view = se.terminal_view(path, now=now, experiments_root=root)
+    assert "crossed book" not in json.dumps(view, default=str)
+
+
 def test_a_gate_error_is_a_state_not_a_crash(tmp_path, monkeypatch):
     path, now, _ = t2.build_store(tmp_path)
 
