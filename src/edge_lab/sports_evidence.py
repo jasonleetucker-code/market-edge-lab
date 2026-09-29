@@ -106,6 +106,7 @@ from . import research_evidence as rev
 from .forward import eastern_offset
 from .freshness import Freshness, assess, combine, parse_utc
 from .odds_schedule import CaptureTarget, PilotConfig, deadline, effective_due
+from .odds_schedule import is_label_proxy as odds_is_label_proxy
 from .provenance import canonical_json, sha256_hex
 from .sources import get_source
 
@@ -1659,13 +1660,56 @@ def _hide_related_proxies(entries: Any) -> Any:
     return out
 
 
+# The sportsbook consensus of a T-60m (or post-cutoff) row is a label proxy too: it tracks the Kalshi T-60m book that
+# is E1's exit label (PR D; `odds_consensus.withhold_label_proxies` for the other displays; one rule,
+# `odds_schedule.is_label_proxy`). Without a logged --with-results run, these Odds-derived figures are withheld.
+ODDS_PROXY_FIELDS = ("probabilities", "dispersion")
+SIDE_ODDS_PROXY_FIELDS = ("consensus_probability", "tie_adjusted_fair_interval")
+
+
+def _hide_odds_proxy(r: dict[str, Any]) -> dict[str, Any]:
+    """One row's sportsbook figures for a view that logs no label access: when the row's horizon and odds receipt
+    make it an EXP-002 label proxy (T-60m, an unknown horizon, or received after the game's T-6h decision cutoff),
+    its consensus probabilities and dispersion, each side's consensus probability and tie-adjusted interval, and
+    the free text of its odds reasons are withheld; the odds stage, receipt, snapshot, hashes, book counts and
+    freshness stay. Anything else is returned unchanged."""
+    odds = r.get("odds") if isinstance(r.get("odds"), dict) else {}
+    if not odds_is_label_proxy(r.get("horizon"), r.get("commence_utc"), odds.get("received_utc")):
+        return r
+    stage = odds.get("stage")
+    code = getattr(stage, "value", stage)
+    new_odds = {k: v for k, v in odds.items() if k not in ODDS_PROXY_FIELDS}
+    if new_odds.get("reasons"):
+        new_odds["reasons"] = [f"{code or 'NO_STAGE'}: {odds_consensus.LABEL_PROXY_REASON}"]
+    if new_odds != odds:
+        new_odds["label_proxy"] = odds_consensus.LABEL_PROXY_HIDDEN
+    sides = {}
+    for team, side in (r.get("sides") or {}).items():
+        kept = {k: v for k, v in side.items() if k not in SIDE_ODDS_PROXY_FIELDS}
+        if len(kept) != len(side):
+            kept["odds_label_proxy"] = odds_consensus.LABEL_PROXY_HIDDEN
+        sides[team] = kept
+    reasons = list(r.get("reasons") or [])
+    if code:
+        reasons = list(dict.fromkeys(f"{code}: {odds_consensus.LABEL_PROXY_REASON}" if str(x).startswith(f"{code}: ")
+                                     else x for x in reasons))
+    if new_odds == odds and sides == (r.get("sides") or {}) and reasons == list(r.get("reasons") or []):
+        return r
+    out = {**r, "sides": sides, "reasons": reasons}
+    if "odds" in r:
+        out["odds"] = new_odds
+    return out
+
+
 def _hide_label_books(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Report rows for a view that logs no label access. Every row: related-market captures that are EXP-002 label
-    proxies lose their prices (`_hide_related_proxies`). T-60m rows also lose their book prices, sizes, depth,
-    ladder and free-text side reasons (a crossed book's anomaly quotes its bids; a malformed book's reason carries
-    parser text). Stages and counts are kept."""
+    proxies lose their prices (`_hide_related_proxies`), and a label-proxy row's sportsbook figures are withheld
+    (`_hide_odds_proxy`). T-60m rows also lose their book prices, sizes, depth, ladder and free-text side reasons
+    (a crossed book's anomaly quotes its bids; a malformed book's reason carries parser text). Stages and counts
+    are kept."""
     out = []
     for r in rows:
+        r = _hide_odds_proxy(r)
         if "related_not_equivalent" in r:
             r = {**r, "related_not_equivalent": _hide_related_proxies(r["related_not_equivalent"])}
         if r.get("horizon") != TARGET_HORIZON or not r.get("sides"):
