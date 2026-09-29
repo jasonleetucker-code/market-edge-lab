@@ -259,16 +259,18 @@ def test_the_gate_line_reports_logged_label_access_and_keeps_freeze_separate(tmp
     protocol = se.protocol_status(root)
     line = se.exp002_gate_line(store, as_of=now, protocol=protocol, experiments_root=root, resamples=100)
     assert line["state"] == "OK" and line["diagnostic_only"] and line["label_free"]
-    # The committed log holds one hand-recorded POSSIBLE exposure (the pre-#124 Terminal display; viewed_labels
-    # unknown): counted apart from confirmed views and never read as "no access".
+    # The committed log holds hand-recorded POSSIBLE exposures (viewed_labels unknown: counted apart from confirmed
+    # views and never read as "no access") and, since #138, one confirmed DEVELOPMENT label view (the aggregate read
+    # of public 2026 settlements and standings for the tie / not-played bounds).
     first = line["outcome_access"]
-    assert first["state"] == "POSSIBLE_LABEL_EXPOSURE_LOGGED" and first["label_views"] == 0
+    assert first["state"] == "LABEL_VIEWS_LOGGED" and first["label_views"] >= 1
     assert first["possible_label_exposures"] >= 1 and first["roles"] == ["DEVELOPMENT"]
     assert line["freeze"]["state"] == "NOT_ELIGIBLE"
     measured = se.measure_exp002(store, as_of=now, results=True, experiments_root=root)
     se.record_markout_view(measured, log=own, actor="test", code_version="abc123", experiments_root=root)
     after = se.outcome_access(protocol, root)
-    assert after["state"] == "LABEL_VIEWS_LOGGED" and after["label_views"] == 1 and after["roles"] == ["DEVELOPMENT"]
+    assert after["state"] == "LABEL_VIEWS_LOGGED" and after["label_views"] == first["label_views"] + 1
+    assert after["roles"] == ["DEVELOPMENT"]
     assert after["possible_label_exposures"] == first["possible_label_exposures"]
     assert rev.read_log(own).uses[-1].action is rev.Action.LABEL_RESULT_INSPECTION
     assert se.outcome_access({"state": "NOT_REGISTERED"}, root)["state"] == "NO_PROTOCOL"
@@ -281,13 +283,14 @@ def test_the_terminal_view_carries_the_gate_line_and_hides_t60m_prices(tmp_path)
     family = view["family_a"]
     gate = family["exp002_gate"]
     assert gate["state"] == "OK" and gate["version"] == se.GATE_V3_VERSION and gate["freeze"]["state"] == "NOT_ELIGIBLE"
-    assert gate["outcome_access"]["state"] == "POSSIBLE_LABEL_EXPOSURE_LOGGED"  # the committed hand record
+    assert gate["outcome_access"]["state"] == "LABEL_VIEWS_LOGGED"  # the committed hand records (#126, #138)
+    before = gate["outcome_access"]["label_views"]
     assert family["capacity"]["latest"]["horizon"] in ("T-24h", "T-6h")  # a T-60m book is a label: not shown
     # a label view logged after the first render shows on the next one (the log is read per view, not cached)
     measured = se.measure_exp002(SnapshotStore.open_readonly(path), as_of=now, results=True, experiments_root=root)
     se.record_markout_view(measured, log=own, actor="test", code_version="abc123", experiments_root=root)
     again = se.terminal_view(path, now=now, experiments_root=root)["family_a"]["exp002_gate"]
-    assert again["outcome_access"]["state"] == "LABEL_VIEWS_LOGGED"
+    assert again["outcome_access"]["state"] == "LABEL_VIEWS_LOGGED" and again["outcome_access"]["label_views"] == before + 1
 
 
 def test_the_full_report_hides_t60m_book_prices_unless_the_view_is_logged(tmp_path, capsys):
