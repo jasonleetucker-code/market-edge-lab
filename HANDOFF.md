@@ -44,14 +44,14 @@ EVIDENCE:
     - 12 of 20 manual opening-night Kalshi rows.
     - Scheduled Kalshi: FLA@CAR T-60m and VAN@EDM T-6h (both team markets each).
     - Odds API: FLA@CAR T-60m h2h (1 credit).
-    - 6 opening-night T-6h Kalshi horizons are MISSED NOT_COLLECTED_BEFORE_ACTIVATION. Nothing was captured late
+    - 3 opening-night games' Kalshi T-6h (6 team-market targets) are MISSED NOT_COLLECTED_BEFORE_ACTIVATION. Nothing was captured late
       or relabelled.
   - Odds credits: September spent 45 (NFL) + NHL so far 1. The September NHL admission is 6 slots, at most 6
     credits.
-  - October NHL Odds coverage is back-loaded by NFL's worst-case reservation: 0 on Oct 1–4, then released
-    weekly, about 103 of 118 T-60m slots on the planner's model. Kalshi NHL is unaffected.
+  - October NHL Odds coverage is back-loaded by NFL's worst-case reservation: no NHL T-60m from the late
+    Sep 30 game through Oct 3 (15 slots SKIPPED_BUDGET), first capture Oct 4, then released weekly, about 103 of 118 T-60m slots on the planner's model. Kalshi NHL is unaffected.
   - EXP-002 (freeze blocker 2, PROPOSED; the freeze review decides):
-    - ties: 8 in 2,383 games since 2017 (official NFL.com standings);
+    - ties: 8 in 2,383 games, 2017–2025 (official NFL.com standings);
     - fallback-F events: 14 in 2,384 (conservative).
     - Proposed t_max 0.01 and u_max 0.01. The earlier u_max of 0.005 holds only if pandemic seasons are excluded.
     - Evidence event eu-622b393f records the aggregate read of public 2026 settlements and standings covering
@@ -64,6 +64,8 @@ UNRESOLVED:
     - Odds API NHL team names were verified only by tonight's 0-unmapped dry run.
     - The 19:00-game Odds (T-25m) and Kalshi (T-85m) read times are about 60 min apart; packet decision 2.
     - The evening opening-night captures after 16:18 ET are not yet verified in this record.
+    - The Odds API lists NHL commence times about 10 min after NHL.com's, so Odds "T-60m" is about T-50m of the
+      official start (recorded; provider data is not altered).
   - EXP-002 freeze blockers remaining:
     - review of the E1 design;
     - the A.C timing calibration (label-free, logged);
@@ -73,15 +75,21 @@ UNRESOLVED:
     - Freeze proposal v2 should correct §2's "venue or home/away change" wording (the terms' Venue Change clause is
       narrower).
   - From the earlier packets: Kalshi message revision 2 NOT SENT; data rights UNRESOLVED.
-  - Routine: O1 weekly pull and F09 by about 2026-10-03; DST check after 2026-11-01; fee re-checks Kalshi 10-23,
-    Polymarket US 10-24.
+  - EXP-002: reading `settlement_value_dollars` as the YES payoff of a tie is partly supported (#138 saw the
+    2025 GB–DAL tie settle at 0.50) but no KXNFLGAME fallback-F settlement has been observed.
+  - Routine:
+    - O1 weekly pull and F09 by about 2026-10-03 (a retention apply refuses after 8 days without F09);
+    - retention dry run and apply at the owner's cadence;
+    - DST check after 2026-11-01;
+    - fee re-checks Kalshi 10-23, Polymarket US 10-24.
+  - ntfy deferred by the owner.
 BLOCKERS (owner-only):
   1. docs/owner/2026-09-29-nhl-decision-packet.md:
      - October NHL Odds coverage, options (a)-(d); the default is (a);
      - the shared protected-window contract (decision 2).
   2. docs/owner/2026-09-29-vf-decision-packet.md: Kalshi message revision 2 and channel; the data-rights review;
      the optional in-play pilot.
-NEXT ACTION: verify tonight's remaining NHL captures (the 18:35–21:40 ET slots). Then do the EXP-002 A.C timing
+NEXT ACTION: verify tonight's remaining NHL captures (the 16:35–21:40 ET slots). Then do the EXP-002 A.C timing
   calibration (label-free, logged FEATURE_INSPECTION), and propose a shared protected-window contract for NHL
   Odds and Kalshi reads.
 ```
@@ -99,8 +107,8 @@ NEXT ACTION: verify tonight's remaining NHL captures (the 18:35–21:40 ET slots
 | 04:40 UTC | edgelab-backup | verified backups of the evidence DB and the shadow ledger |
 | always | edgelab-dashboard | read-only dashboard, tailnet-only (Tailscale Serve) |
 | after shadow/settlement/any failure alert | edgelab-notify | relays new outbox events and unit failures to ntfy (fixed headlines) |
-| every 15 min | edgelab-odds | game-relative NFL odds capture (T-24h/T-6h/T-60m) under the 450-credit budget; enabled 2026-09-24 13:40Z; a paid call only for an admitted slot |
-| :05, :20, :35, :50 | edgelab-observe | ADR 0030 Option A: plan later/closing-price targets, then bounded capture only when due; deferred in protected windows; enabled 2026-09-24 20:32Z; since 2026-09-25 also Kalshi KXNFLGAME books after each Odds NFL capture (owner-approved #110, `EDGE_LAB_KALSHI_NFL_CAPTURE=off` pauses it) |
+| every 15 min | edgelab-odds | game-relative NFL odds capture (T-24h/T-6h/T-60m) under the 450-credit budget; enabled 2026-09-24 13:40Z; a paid call only for an admitted slot; since 2026-09-29 15:12 ET also NHL `icehockey_nhl` h2h T-60m, admitted only after NFL's worst case (`EDGE_LAB_ODDS_NHL`, ADR 0039) |
+| :05, :20, :35, :50 | edgelab-observe | ADR 0030 Option A: plan later/closing-price targets, then bounded capture only when due; deferred in protected windows; enabled 2026-09-24 20:32Z; since 2026-09-25 also Kalshi KXNFLGAME books after each Odds NFL capture (owner-approved #110, `EDGE_LAB_KALSHI_NFL_CAPTURE=off` pauses it); since 2026-09-29 15:38 ET also schedule-driven KXNHLGAME T-6h/T-60m books (ADR 0040, `EDGE_LAB_KALSHI_NHL_CAPTURE`) |
 | 04:57:45 UTC | edgelab-observe-close | the KXHIGHNY close-window capture (close 05:00:00Z; `observe status` → `close_tick_alignment`); enabled 2026-09-24 20:32Z |
 | every 5 min (:01, :06, ...) | edgelab-freshness | Freshness Fabric v1 supervisor (ADR 0031): network-free; writes `freshness.json`; supervises every schedule, controls none |
 | :10, :25, :40, :55 | edgelab-pm-sports | Polymarket US NFL research book captures at T-24h/T-6h/T-60m (ADR 0032; owner risk decision); related, never equivalent |

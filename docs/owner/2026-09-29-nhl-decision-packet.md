@@ -28,8 +28,8 @@ Kalshi NHL coverage is **not** affected: it uses no Odds credits.
 Options (the owner picks one; the default, if no decision is made, is **(a)**):
 - **(a) Accept back-loaded NHL sportsbook coverage.** No change. Early-October games have Kalshi evidence but no
   sportsbook line, recorded as SKIPPED_BUDGET.
-- **(b) An evidence-backed seasonal NFL worst case for October.** October has no NFL Saturday games; the planner's
-  example of 7 groups a week gives NHL 118 of 118. This keeps NFL's guarantee **only if** the bound is proven from
+- **(b) An evidence-backed seasonal NFL worst case for October.** If October has no NFL Saturday games (not yet verified), an illustrative
+  bound of 7 groups a week would give NHL 118 of 118 (`NHL_ODDS_BUDGET_2026-10.md`; illustration only). This keeps NFL's guarantee **only if** the bound is proven from
   the published NFL schedule. It needs a reviewed PR and must stay a true upper bound. This is technical work, but
   it changes an NFL guarantee assumption, so the owner should agree to it.
 - **(c) Reduce NFL's lowest-priority class (T-24h)** to free credits. This trades NFL evidence for NHL evidence.
@@ -52,7 +52,7 @@ Options:
 - **(a) Leave as is** and record the gap. This is the default.
 - **(b) One shared protected-window contract** for both collectors. For example, both read 19:00 games at
   17:35 ET, which is T-85m. This is a technical change needing a reviewed PR. The directive already asks for
-  "protected windows = ONE shared operational contract", so this is recommended as the next technical follow-up.
+  one shared operational contract for protected windows, so this is recommended as the next technical follow-up.
   It changes no NFL behaviour unless NFL is included explicitly.
 
 ## Decision 3 (optional): a hockey experiment
