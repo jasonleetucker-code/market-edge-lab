@@ -159,7 +159,9 @@ horizons (it may then need to withhold T-60m books, as EXP-002 does for NFL).
 
 ### Activation dependency on NHL-A, and the NHL-C runbook
 
-Kalshi NHL planning reads only the stored NHL discovery, which NHL-A (#137, ADR 0039) writes. As reviewed on #137:
+Kalshi NHL planning reads only the stored NHL discovery, which NHL-A (#137, ADR 0039, merged 7e0b81d) writes.
+`tests/test_price_observations_nhl_with_odds_pilot.py` runs the planner on a discovery written by
+`odds_pilot.run_tick` itself. As merged in #137:
 - `odds run --sport icehockey_nhl` returns DISABLED **before discovery** unless `EDGE_LAB_ODDS_NHL=on` (and the Odds
   key is present), so no discovery is stored while NHL-A is off;
 - `edgelab-odds.service` is `Type=oneshot` with the NFL `ExecStart` first: when the NFL line exits non-zero, the NHL
