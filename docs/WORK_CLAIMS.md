@@ -6,4 +6,3 @@ The expiry is a UTC date no more than 7 days out. An expired row is not a live c
 
 | Claim | Agent | Branch | Paths | Expires |
 |---|---|---|---|---|
-| EXP-002 Polymarket T-60m label proxy: review fixes (#130) | Claude (Writer B) | feat/exp002-pm-label-proxy | src/edge_lab/dashboard/**, src/edge_lab/polymarket*.py (display only), docs/design/UI_CONTRACT.md, tests/test_dashboard*.py, tests/test_polymarket*.py, tests/browser/fixture_states.py | 2026-10-06 |
