@@ -1409,7 +1409,7 @@ def coverage_status(db_path: str | Path, *, now: datetime, settings: RunnerSetti
 
 
 def status(db_path: str | Path, ledger_path: str | Path, settings: RunnerSettings = RunnerSettings(), *,
-           clock: Clock = _real_clock) -> tuple[int, dict[str, Any]]:
+           clock: Clock = _real_clock, environ: Mapping[str, str] | None = None) -> tuple[int, dict[str, Any]]:
     """`odds status`: the sport's dashboard state and its coverage. Read-only and network-free."""
     now = clock()
     ledger_path = Path(ledger_path)
@@ -1419,5 +1419,5 @@ def status(db_path: str | Path, ledger_path: str | Path, settings: RunnerSetting
               "source": dashboard_status(db_path, ledger_path, state_path, now=now, settings=settings)}
     pol = settings.policy
     if pol is not None and pol.switch_env is not None:
-        report["switch"] = {"env": pol.switch_env, "on": switch_on(pol, os.environ)}
+        report["switch"] = {"env": pol.switch_env, "on": switch_on(pol, _environ(environ))}
     return 0, report
