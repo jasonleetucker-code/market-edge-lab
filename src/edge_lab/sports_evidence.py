@@ -2706,6 +2706,21 @@ def e1_entries(rows: Sequence[Mapping[str, Any]], policy: JoinPolicy, *, bounds_
     }
 
 
+def e1_bounds_problem(bounds: Any) -> str | None:
+    """Why caller-declared E1 bounds (tie, postponement) are invalid, or None when they are usable: each a finite
+    Decimal in [0, 1] and their sum at most 1 (otherwise `tie_adjusted_interval` has no interval)."""
+    if not isinstance(bounds, (tuple, list)) or len(bounds) != 2:
+        return "give exactly two bounds (tie, postponement)"
+    for name, value in zip(("tie", "postponement"), bounds):
+        if not isinstance(value, Decimal) or not value.is_finite():
+            return f"the {name} bound is not a finite number"
+        if not Decimal(0) <= value <= Decimal(1):
+            return f"the {name} bound {value} is outside [0, 1]"
+    if bounds[0] + bounds[1] > 1:
+        return f"tie + postponement = {bounds[0] + bounds[1]} exceeds 1"
+    return None
+
+
 def e1_entry_summary(entries: Mapping[str, Any]) -> dict[str, Any]:
     """The label-free E1 output: entry counts by T-6h reason and the operational inputs. No per-game row, exit,
     P&L, settlement or T-60m availability (those are labels, shown only by the logged results path)."""
@@ -2775,14 +2790,17 @@ def _e1_settlement(ticker: str, catalog: KalshiCatalog, as_of: datetime) -> dict
 def _wild_cluster_bounds(pairs: Sequence[tuple[str, float]], *, seed: int, resamples: int,
                          q: float = 0.9) -> dict[str, Any]:
     """One-sided 90% lower and upper bounds for a mean, by a wild cluster bootstrap with Rademacher weights over
-    NFL-week clusters (proposal row 4, A.G): mean* = mean + sum_g w_g S_g / n, S_g the week's residual sum. Every
+    NFL-week clusters (proposal row 4, A.G): mean* = mean + sum_g w_g S_g / n, S_g the week's residual sum. The
+    bounds are the basic (reflected) bootstrap: lower = mean - q90(mean* - mean), upper = mean - q10(mean* - mean)
+    (the same as the percentile bounds when the deviations are symmetric, as they are when enumerated). Every
     sign pattern is enumerated when 2^G <= E1_WILD_ENUMERATE_MAX (exact, seed unused); otherwise `resamples`
     patterns are drawn with the fixed seed. Descriptive: no test is made from it before a freeze."""
     by_week: dict[str, list[float]] = {}
     for week, value in pairs:
         by_week.setdefault(week, []).append(value)
     weeks, n = sorted(by_week), len(pairs)
-    out: dict[str, Any] = {"method": "wild cluster bootstrap, Rademacher weights, NFL-week clusters, percentile",
+    out: dict[str, Any] = {"method": "wild cluster bootstrap, Rademacher weights, NFL-week clusters, basic (reflected) "
+                                     "bounds: mean - q90 and mean - q10 of the deviations mean* - mean",
                            "clusters": len(weeks), "seed": seed, "level": q}
     if n < 2 or len(weeks) < 2:
         return {**out, "state": "INSUFFICIENT_CLUSTERS", "lower_90_one_sided": None, "upper_90_one_sided": None,
@@ -3029,6 +3047,9 @@ def measure_exp002(store: Any, *, as_of: datetime, results: bool = False, min_ef
     gate_v3 = noise_gate_v3(gate_v3_observations(rows, policy), min_effect=min_effect)
     e1_policy, e1_source = policy, None
     if e1_bounds is not None:
+        problem = e1_bounds_problem(e1_bounds)
+        if problem:
+            raise ValueError(f"E1 bounds: {problem}")
         e1_policy = replace(policy, tie_probability_bound=e1_bounds[0], postponement_probability_bound=e1_bounds[1])
         e1_source = ("CALLER_DECLARED_CANDIDATE: given for this run (the proposal's PROPOSED t_max / u_max, row 1); "
                      "not frozen, not a protocol value")
@@ -3423,10 +3444,9 @@ def _main_exp002(args: argparse.Namespace, parser: argparse.ArgumentParser) -> i
         parser.error("--e1-tie-bound and --e1-postponement-bound go together")
     if args.e1_tie_bound is not None:
         e1_bounds = (_dec(args.e1_tie_bound), _dec(args.e1_postponement_bound))
-        try:
-            JoinPolicy(tie_probability_bound=e1_bounds[0], postponement_probability_bound=e1_bounds[1])
-        except ValueError as exc:
-            parser.error(f"E1 bounds: {exc}")
+        problem = e1_bounds_problem(e1_bounds)
+        if problem:  # refused before the store opens: an invalid bound must never spend a logged look
+            parser.error(f"E1 bounds: {problem}")
     if args.with_results and not (args.evidence_log and args.actor and args.code_version):
         print(json.dumps({"command": name, "state": "REFUSED",
                           "detail": "--with-results reads EXP-002 labels (the first T-60m books): give --evidence-log, "

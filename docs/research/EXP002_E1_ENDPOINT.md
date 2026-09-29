@@ -40,6 +40,8 @@ measurement version moves to `exp002-measurement-v3`, which adds the `e1` key. E
    - A caller can declare candidate bounds for E1 only, with `measure_exp002(e1_bounds=...)` or
      `exp002 --e1-tie-bound T --e1-postponement-bound U`. Examples are the proposal's PROPOSED t_max = 0.01 and
      u_max = 0.005.
+   - Declared bounds must each be a finite number in [0, 1] with a sum of at most 1. Anything else is refused
+     before the store opens, so an invalid bound can never spend a logged look.
    - Declared bounds are recorded in the output as `CALLER_DECLARED_CANDIDATE` and in the evidence-log note of a
      results run. They never reach the gates, whose policy is unchanged.
 2. **Pairing is judged per side.** A side is entered only if both of these hold:
@@ -100,8 +102,10 @@ measurement version moves to `exp002-measurement-v3`, which adds the `e1` key. E
     - Trades per week is trades ÷ weeks with a due T-6h game, and is also given per week.
 11. **Bootstrap.** The wild cluster bootstrap enumerates every Rademacher sign pattern exactly when there are at
     most 12 weeks. With more weeks it samples 2,000 patterns with the fixed seed 20260926. Below 10 weeks it is
-    flagged `COARSE_FEW_CLUSTERS`, because only 2^G patterns exist. The bounds are percentile bounds. They are
-    descriptive, and they are not compared with δ_min.
+    flagged `COARSE_FEW_CLUSTERS`, because only 2^G patterns exist. The bounds are basic (reflected) bootstrap
+    bounds: lower = mean − q90(mean* − mean) and upper = mean − q10(mean* − mean). With exact enumeration the
+    deviations are symmetric, so these equal the percentile bounds. They are descriptive, and they are not compared
+    with δ_min.
 12. **Secondary (b)** covers every trade whose settlement is final, whatever its exit basis.
 
 ## 3. Label safety

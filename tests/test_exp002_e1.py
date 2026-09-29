@@ -234,12 +234,13 @@ SPECS = [
 ]
 
 
-def build_e1_store(tmp_path: Path, *, labels: bool = True) -> tuple[Path, datetime, dict]:
+def build_e1_store(tmp_path: Path, *, labels: bool = True, specs: list | None = None) -> tuple[Path, datetime, dict]:
     """Eight games over two NFL weeks. Every T-6h side is paired AT_OR_AFTER_ODDS (a book 60 s after the odds)
     with the home ask at 0.55 and the away ask at 0.45. `labels=False` writes no T-60m book and no settlement:
-    the label-free output must not change."""
+    the label-free output must not change. `specs` replaces SPECS (same shape)."""
+    specs = SPECS if specs is None else specs
     games = [sf.Game(f"fxe1{i:02d}", TEAMS[2 * (i % 4)], TEAMS[2 * (i % 4) + 1], KICKOFF + timedelta(days=7 * (i // 4)),
-                     D("0.60")) for i in range(len(SPECS))]
+                     D("0.60")) for i in range(len(specs))]
     now = max(g.commence for g in games) + timedelta(hours=8)
     store = SnapshotStore(tmp_path / ("e1.sqlite3" if labels else "e1-nolabels.sqlite3"))
     sf.write_pairing_fixture(store, games=games, now=now, books=False, settle=False)
@@ -247,8 +248,8 @@ def build_e1_store(tmp_path: Path, *, labels: bool = True) -> tuple[Path, dateti
     run = "SYNTHETIC-e1-books"
     store.start_run(run)
     ids = {"T-6h": set(), "T-60m": set(), "first": {}, "second": set(), "games": {g.event_id: s[0] for g, s in
-                                                                                     zip(games, SPECS)}}
-    spec_of = {g.event_id: s for g, s in zip(games, SPECS)}
+                                                                                     zip(games, specs)}}
+    spec_of = {g.event_id: s for g, s in zip(games, specs)}
     for r in rows:
         received = r["odds"].get("received_utc")
         tickers = (r.get("kalshi") or {}).get("tickers") or {}
@@ -276,7 +277,7 @@ def build_e1_store(tmp_path: Path, *, labels: bool = True) -> tuple[Path, dateti
                     else:
                         ids["second"].add(sid)
     if labels:
-        for g, (_, _, settle) in zip(games, SPECS):
+        for g, (_, _, settle) in zip(games, specs):
             if settle is None:
                 continue
             status, result, value = settle
@@ -525,7 +526,37 @@ def test_cli_e1_bounds_go_together_and_are_validated(tmp_path, capsys):
         se.main(base + ["--e1-tie-bound", "0.01"])
     with pytest.raises(SystemExit):
         se.main(base + ["--e1-tie-bound", "1.5", "--e1-postponement-bound", "0.005"])
+    # refused before the store opens (a missing store would otherwise answer NO_STORE with exit 1)
+    missing = ["exp002", "--db", str(tmp_path / "absent.sqlite3"), "--as-of", iso_z(now)]
+    for tie, post in (("abc", "0.005"), ("0.01", "NaN"), ("-0.01", "0.005"), ("0.6", "0.6"), ("inf", "0"),
+                      ("0.01", "")):
+        with pytest.raises(SystemExit) as refused:
+            se.main(missing + ["--e1-tie-bound", tie, "--e1-postponement-bound", post, "--with-results"])
+        assert refused.value.code == 2, (tie, post)
+        assert "E1 bounds" in capsys.readouterr().err, (tie, post)
+    assert se.e1_bounds_problem((D("0.5"), D("0.5"))) is None  # a sum of exactly 1 is allowed
+    assert se.e1_bounds_problem((D("0.6"), D("0.6"))).startswith("tie + postponement")
+    with pytest.raises(ValueError, match="E1 bounds"):
+        se.measure_exp002(SnapshotStore.open_readonly(path), as_of=now, e1_bounds=(None, D("0.005")))
     capsys.readouterr()
+
+
+def test_the_recorded_window_covers_e1_games_the_markout_does_not_show(tmp_path):
+    # Week 2's home markets have no T-60m book: the markout shows only week 1, while E1 still scores the week-2
+    # trades (missing exits at settlement), so the logged window must reach week 2's kickoff.
+    specs = SPECS[:4] + [(name, [], settle) for name, _, settle in SPECS[4:]]
+    path, now, ids = build_e1_store(tmp_path, specs=specs)
+    root, own = _registry_copy(tmp_path)
+    measured = se.measure_exp002(SnapshotStore.open_readonly(path), as_of=now, results=True, e1_bounds=BOUNDS,
+                                 experiments_root=root)
+    markout_kickoffs = {g["commence_utc"] for g in measured["markout"]["games"]}
+    e1_kickoffs = {g["commence_utc"] for g in measured["e1"]["games"]}
+    assert markout_kickoffs and max(e1_kickoffs) > max(markout_kickoffs)  # E1 reaches beyond the markout
+    week2 = [g for g in measured["e1"]["games"] if g["commence_utc"] == max(e1_kickoffs)]
+    assert week2 and all(g["missing_exit"] == "NO_T60_BOOK" for g in week2)
+    se.record_markout_view(measured, log=own, actor="test", code_version="abc123", experiments_root=root)
+    window = rev.read_log(own).uses[-1].window
+    assert window.start_utc == min(markout_kickoffs | e1_kickoffs) and window.end_utc == max(e1_kickoffs)
 
 
 def test_cli_out_summary_names_the_e1_state(tmp_path):
