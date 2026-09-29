@@ -661,3 +661,162 @@ def test_at_most_100_requests_per_minute_per_run():
     assert req.attempts == ps.MAX_REQUESTS_PER_MINUTE + 1
     assert issubclass(ps.RequestRateCapReached, ps.RequestBudgetExhausted)  # deferred, never FAILED
     assert ps.MAX_REQUESTS_PER_MINUTE == 100 and 60 / ps.PACER_INTERVAL_S <= ps.MAX_REQUESTS_PER_MINUTE
+
+
+# --------------------------------------------------------------------------- EXP-002 label proxy (display)
+#
+# A related market's book at T-60m, or received after EXP-002's T-6h decision cutoff, is a proxy for the Kalshi
+# T-60m label books (docs/research/EXP002_FREEZE_PROPOSAL.md §4): the read-only views withhold its figures.
+
+PROXY_BID, PROXY_ASK, PROXY_QTY = "0.4125", "0.4175", "777.0000"  # SYNTHETIC: absent from every recorded body
+
+
+def _proxy_book() -> bytes:
+    """The recorded KC-MIA book with SYNTHETIC top levels (so a leak of the T-60m figures is detectable)."""
+    raw = json.loads(BOOK_KC_MIA.read_bytes())
+    data = {k: v for k, v in raw["marketData"].items() if k != "stats"}
+    data["bids"] = [{"px": {"value": PROXY_BID, "currency": "USD"}, "qty": PROXY_QTY}]
+    data["offers"] = [{"px": {"value": PROXY_ASK, "currency": "USD"}, "qty": PROXY_QTY}]
+    return json.dumps({"marketData": data}).encode()
+
+
+def _capture_at(db: Path, at: datetime, body: bytes, monkeypatch) -> dict:
+    from edge_lab import http as pm_http
+
+    class _At(datetime):  # the fetch layer stamps receipt with the wall clock: pin it
+        @classmethod
+        def now(cls, tz=None):
+            return at + timedelta(seconds=20)
+    _fresh_catalog_at(db, at - timedelta(hours=2))
+    with monkeypatch.context() as m:
+        m.setattr(pm_http, "datetime", _At)
+        code, report = ps.run_capture(db, clock=lambda: at, sleep=lambda s: None, opener=ScriptedOpener(body),
+                                      access_decision=ALLOW)
+    assert code == 0 and report["by_status"] == {"CAPTURED": 1}, report
+    return report
+
+
+def test_the_decision_cutoff_is_never_later_than_the_odds_t6h_deadline():
+    """Kickoff 17:00Z: moved 15 min earlier, T-6h at 10:45Z, + the 30-min late tolerance = 11:15Z. For every
+    Polymarket kickoff and every Odds kickoff within the relation's tolerance, the cutoff is never later than
+    the Odds T-6h target's own deadline (quiet-window shifts included)."""
+    from edge_lab.odds_schedule import CaptureTarget, PilotConfig, deadline
+
+    assert ps.decision_cutoff("2026-09-27T17:00:00Z") == datetime(2026, 9, 27, 11, 15, tzinfo=UTC)
+    assert ps.decision_cutoff(None) is None and ps.decision_cutoff("not a time") is None
+    base = datetime(2026, 10, 4, 12, 0, tzinfo=UTC)
+    for step in range(0, 24 * 12):  # every 5 minutes over a day: crosses the 17:40-18:35 ET quiet window
+        pm_kick = base + timedelta(minutes=5 * step)
+        cutoff = ps.decision_cutoff(pm_kick.isoformat())
+        for delta in (-15, -10, -5, 0, 5, 10, 15):
+            kick = pm_kick + timedelta(minutes=delta)
+            odds = CaptureTarget("x", "americanfootball_nfl", "e", "T-6h", 2, kick, kick - timedelta(hours=6))
+            assert cutoff <= deadline(odds, PilotConfig()), (pm_kick, delta)
+
+
+@pytest.mark.parametrize("offset,received,hidden", [
+    ("T-24h", "2026-09-26T17:00:20Z", False),
+    ("T-6h", "2026-09-27T11:00:25Z", False),
+    ("T-6h", "2026-09-27T11:15:00Z", False),  # at the cutoff
+    ("T-6h", "2026-09-27T11:15:01Z", True),  # after the T-6h decision cutoff
+    ("T-24h", "2026-09-27T12:00:00Z", True),
+    ("T-60m", "2026-09-27T16:00:20Z", True),
+    ("T-60m", None, True),  # the horizon alone withholds it
+    ("T-2h", "2026-09-27T10:00:00Z", True),  # a horizon this code does not know fails closed
+    ("T-6h", "garbage", True),
+    ("T-6h", None, False),  # nothing received: no figure exists
+])
+def test_which_captures_are_a_label_proxy(offset, received, hidden):
+    assert ps.is_label_proxy(offset, "2026-09-27T17:00:00Z", received) is hidden
+    assert ps.is_label_proxy("T-6h", None, "2026-09-26T17:00:20Z") is True  # unknown kickoff fails closed
+
+
+def test_withholding_keeps_status_timing_and_the_reason_code_only():
+    row = {"target_id": "t", "status": "NOT_EXECUTABLE",
+           "reason": "BOOK_ANOMALY: crossed book: bid 0.4225 >= offer 0.4175",
+           "received_at_utc": "2026-09-27T16:00:20Z", "source_timestamp_utc": "2026-09-27T16:00:19Z",
+           "book_state": "MARKET_STATE_OPEN", "freshness": "fresh", "snapshot_id": 7, "deviation_s": 20.0,
+           "yes_bid": None, "yes_bid_size": None, "yes_ask": None, "yes_ask_size": None, "depth_json": None}
+    out = ps.withhold_label_proxy(row, offset_label="T-60m", game_start_utc="2026-09-27T17:00:00Z")
+    assert out["reason"] == "BOOK_ANOMALY: withheld (EXP-002 label proxy)" and "0.42" not in json.dumps(out)
+    assert out["label_proxy"] == ps.LABEL_PROXY_HIDDEN and not set(ps.LABEL_PROXY_FIELDS) & set(out)
+    for key in ("status", "received_at_utc", "source_timestamp_utc", "book_state", "freshness", "snapshot_id",
+                "deviation_s"):
+        assert out[key] == row[key], key
+    marker = ps.LABEL_PROXY_HIDDEN
+    for name in ("EXP-002", "T-60m", "T-6h"):
+        marker = marker.replace(name, "")
+    assert not any(ch.isdigit() for ch in marker)  # the marker itself carries no figure
+    free = ps.withhold_label_proxy({**row, "reason": "no code here 0.42"}, offset_label="T-60m",
+                                   game_start_utc="2026-09-27T17:00:00Z")
+    assert free["reason"] == ps.LABEL_PROXY_REASON
+    early = {**row, "status": "CAPTURED", "reason": None, "received_at_utc": "2026-09-27T11:00:25Z",
+             "yes_bid": "0.3050"}
+    kept = ps.withhold_label_proxy(early, offset_label="T-6h", game_start_utc="2026-09-27T17:00:00Z")
+    assert kept == early  # T-6h before the cutoff: unchanged
+    late = ps.withhold_label_proxy(row, offset_label="T-6h", game_start_utc="2026-09-27T17:00:00Z")
+    assert late["label_proxy"] == ps.LABEL_PROXY_HIDDEN  # a T-6h target read after the cutoff is withheld too
+
+
+def test_t60m_captures_are_withheld_from_the_views_and_the_cli(tmp_path, capsys, monkeypatch):
+    """Real bytes at T-24h and T-6h, a SYNTHETIC-priced book at T-60m: the views and `pm-sports status`
+    show the pre-decision figures and withhold the T-60m ones; counts, states and timing are unchanged and
+    the stored rows keep every figure (raw evidence is immutable)."""
+    db = _discovered(tmp_path, odds_at=NOW)
+    for at, body in ((datetime(2026, 9, 26, 17, 0, tzinfo=UTC), BOOK_KC_MIA.read_bytes()),
+                     (datetime(2026, 9, 27, 11, 0, tzinfo=UTC), BOOK_KC_MIA.read_bytes()),
+                     (datetime(2026, 9, 27, 16, 0, tzinfo=UTC), _proxy_book())):
+        _capture_at(db, at, body, monkeypatch)
+    store = SnapshotStore.open_readonly(db)
+    stored = {t["offset_label"]: store.pm_sports_observations(target_id=t["target_id"])[-1]
+              for t in store.pm_sports_targets(market_slug=KC_MIA)}
+    assert stored["T-60m"]["yes_bid"] == PROXY_BID and stored["T-60m"]["yes_ask"] == PROXY_ASK  # stored as received
+    assert stored["T-24h"]["yes_bid"] == stored["T-6h"]["yes_bid"] == "0.8500"
+
+    history = {t["offset"]: t for t in ps.market_history(store, KC_MIA)}
+    assert [history[o]["state"] for o in ("T-24h", "T-6h", "T-60m")] == ["CAPTURED"] * 3
+    for o in ("T-24h", "T-6h"):
+        a = history[o]["attempts"][-1]
+        assert a["yes_bid"] == "0.8500" and a["yes_ask"] == "0.8550" and "label_proxy" not in a
+        assert a["depth_json"] is not None
+    hidden = history["T-60m"]["attempts"][-1]
+    assert hidden["label_proxy"] == ps.LABEL_PROXY_HIDDEN and not set(ps.LABEL_PROXY_FIELDS) & set(hidden)
+    assert hidden["status"] == "CAPTURED" and hidden["received_at_utc"] == stored["T-60m"]["received_at_utc"]
+    assert hidden["freshness"] == "fresh" and hidden["book_state"] == "MARKET_STATE_OPEN"
+
+    later = datetime(2026, 9, 27, 16, 30, tzinfo=UTC)
+    view = ps.related_markets(store, now=later)
+    latest = view["events"]["e_kc_mia"]["markets"][0]["latest_capture"]
+    assert latest["offset"] == "T-60m" and latest["label_proxy"] == ps.LABEL_PROXY_HIDDEN
+    assert latest["received_at_utc"] == stored["T-60m"]["received_at_utc"] and latest["freshness"] == "fresh"
+    assert not set(ps.LABEL_PROXY_FIELDS) & set(latest)
+
+    monkeypatch.setattr(ps, "OWNER_ACCESS_DECISION", None)  # no clock-driven network run from a test
+    assert ps.main(["status", "--db", str(db), "--market", KC_MIA]) == 0
+    out = capsys.readouterr().out
+    for figure in (PROXY_BID, PROXY_ASK, PROXY_QTY, "41.25", "41.75", "777"):
+        assert figure not in out, figure  # no reveal path in the CLI either
+    assert "0.8500" in out and ps.LABEL_PROXY_HIDDEN in out
+    tv = json.dumps(ps.terminal_view(db, now=later, access_decision=ALLOW), default=str)
+    assert PROXY_BID not in tv and PROXY_ASK not in tv and PROXY_QTY not in tv
+
+
+def test_a_withheld_targets_miss_reason_is_its_code_everywhere(tmp_path):
+    """Review NIT 3: `status().recent_misses` and the fabric's `recent_misses` reduce a T-60m target's MISSED
+    reason to its code, as `market_history` does; a pre-decision target's reason stays in full."""
+    db = _discovered(tmp_path, odds_at=_due_clock_for_kc() - timedelta(hours=1))
+    at = datetime(2026, 9, 27, 16, 40, tzinfo=UTC)  # past every KC-MIA deadline: all three are MISSED
+    _fresh_catalog_at(db, at - timedelta(hours=2))
+    ps.run_capture(db, clock=lambda: at, opener=ScriptedOpener(), access_decision=ALLOW)
+    store = SnapshotStore.open_readonly(db)
+    withheld = f"NOT_CAPTURED_BY_DEADLINE: {ps.LABEL_PROXY_REASON}"
+    misses = {m["target_id"]: m["reason"] for m in ps.status(store, now=at, access_decision=ALLOW)["recent_misses"]}
+    kc = {tid.split(":")[2]: reason for tid, reason in misses.items() if KC_MIA in tid}
+    assert kc["T-60m"] == withheld
+    assert kc["T-6h"].startswith("NOT_CAPTURED_BY_DEADLINE: no capture in [") and kc["T-6h"] != withheld
+    history = {t["offset"]: t["attempts"][-1]["reason"] for t in ps.market_history(store, KC_MIA)}
+    assert history["T-60m"] == withheld and history["T-6h"] == kc["T-6h"]
+    _, cap = ps.freshness_records(store, now=at, access_decision=ALLOW)
+    t60 = [m for m in cap["recent_misses"] if KC_MIA in m and ":T-60m:" in m]
+    assert t60 and all(m.endswith(f": {withheld}") for m in t60)
+    assert ps.withhold_reason(None, offset_label="T-60m", game_start_utc=None) is None

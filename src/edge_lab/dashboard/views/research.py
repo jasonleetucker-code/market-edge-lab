@@ -793,19 +793,49 @@ def _pm_fresh(value: Any) -> str:
                         kind=pr.INFO_K if fresh == "FRESH" else pr.state_word(fresh).kind)
 
 
+# EXP-002 label proxy: the pilot's views withhold a capture at T-60m or after the T-6h decision cutoff
+# (`polymarket_sports.withhold_label_proxy` marks it `label_proxy`). Its status, receipt and freshness are shown;
+# its prices, sizes and depth are not, and the Terminal has no path that reveals them.
+PM_HIDDEN = "PM_CAPTURE_LABEL_PROXY"
+PM_HIDDEN_NOTE = ("prices, sizes and depth withheld: a capture at T-60m or after the T-6h decision is a proxy for "
+                  "EXP-002's labels and is never shown here")
+
+
+def _pm_hidden(cap: Any) -> bool:
+    return isinstance(cap, dict) and "label_proxy" in cap
+
+
+def _pm_quote(a: Any, key: str) -> str:
+    """One attempt's YES bid or ask cell: the price, "none", or Hidden for a label-proxy capture."""
+    if _pm_hidden(a):
+        return c.state_text(PM_HIDDEN, label="Hidden")
+    return c.num(pr.cents(_pm(a, key)), reason="none")
+
+
+def _pm_quote_text(cap: Any) -> str:
+    """The "bid · ask" text of one latest capture in the All events table."""
+    if _pm_hidden(cap):
+        return pr.state_word(PM_HIDDEN).label
+    return f"{pr.cents(_pm(cap, 'yes_bid')) or '—'} · {pr.cents(_pm(cap, 'yes_ask')) or '—'}"
+
+
 def _pm_capture(cap: Any, source: str, now: Any) -> str:
     if not isinstance(cap, dict):
         return c.na("no research book captured yet")
-    bid, ask = pr.cents(cap.get("yes_bid")), pr.cents(cap.get("yes_ask"))
     received = cap.get("received_at_utc")
     ago = pr.age_text(received, now)
+    tail = (_sub(f"received {pr.datetime_et(received) or 'at an unrecorded time'}" + (f" ({ago})" if ago else "")
+                 + " · research capture, not current")
+            + _pm_fresh(cap.get("freshness")) + _sub("within its target window")
+            + _sub(f"{_pm(cap, 'label') or 'research book capture'} · {source}"))
+    if _pm_hidden(cap):
+        offset = cap.get("offset") if isinstance(cap.get("offset"), str) else "horizon not recorded"
+        return c.state_text(PM_HIDDEN) + _sub(f"{offset} capture · {PM_HIDDEN_NOTE}") + tail
+    bid, ask = pr.cents(cap.get("yes_bid")), pr.cents(cap.get("yes_ask"))
     return (c.num(f"YES bid {bid or '—'}") + " · " + c.num(f"YES ask {ask or '—'}")
             + _sub(f"sizes {pr.quantity(cap.get('yes_bid_size')) or '—'} / {pr.quantity(cap.get('yes_ask_size')) or '—'} "
                    "contracts")
-            + _sub(f"received {pr.datetime_et(received) or 'at an unrecorded time'}" + (f" ({ago})" if ago else "")
-                   + " · research capture, not current")
-            + _pm_fresh(cap.get("freshness")) + _sub("within its target window")
-            + _sub(f"{_pm(cap, 'label') or 'research book capture'} · {source}"))
+            + tail)
 
 
 def _pm_targets(history: Any) -> str:
@@ -842,8 +872,7 @@ def pm_market_block(m: Any, source: str, history: Any, now: Any) -> str:
     attempts_html = (f'<p class="meta">{esc(source)} · {esc(PM_RESEARCH)}</p>' + c.table(
         ["target", "status", "received", "YES bid", "YES ask", "freshness at capture", "reason"],
         [[c.code(a.get("target_id")), _pm_state("PM_TARGET", a.get("status")),
-          esc(pr.datetime_et(a.get("received_at_utc")) or "—"), c.num(pr.cents(a.get("yes_bid")), reason="none"),
-          c.num(pr.cents(a.get("yes_ask")), reason="none"),
+          esc(pr.datetime_et(a.get("received_at_utc")) or "—"), _pm_quote(a, "yes_bid"), _pm_quote(a, "yes_ask"),
           _pm_fresh(a.get("freshness")) if a.get("received_at_utc") else c.na("nothing received"),
           esc(d.scrub_paths(a.get("reason")) or "—")] for a in attempts],
         wrap=(6,), caption=f"Capture attempts · {source} · {PM_RESEARCH}", empty="no attempt recorded")
@@ -970,8 +999,7 @@ def _pm_view(view: Any, now: Any, event_ids: Any, histories: Any) -> str:
              c.state_text(pm_event_state(e, catalog_state)[0], label=pm_event_state(e, catalog_state)[1].label,
                           kind=pm_event_state(e, catalog_state)[1].kind),
              c.ul([str(_pm(m, "market_slug")) for m in _pm_list(_pm(e, "markets"))], empty="—"),
-             esc(" / ".join(f"{pr.cents(_pm(_pm(m, 'latest_capture'), 'yes_bid')) or '—'} · "
-                            f"{pr.cents(_pm(_pm(m, 'latest_capture'), 'yes_ask')) or '—'}" for m in captures(e)) or "—"),
+             esc(" / ".join(_pm_quote_text(_pm(m, "latest_capture")) for m in captures(e)) or "—"),
              esc(" / ".join(pr.datetime_et(_pm(_pm(m, "latest_capture"), "received_at_utc")) or "—"
                             for m in captures(e)) or "—"),
              " ".join(_pm_fresh(_pm(_pm(m, "latest_capture"), "freshness")) for m in captures(e)) or c.na("no capture")]

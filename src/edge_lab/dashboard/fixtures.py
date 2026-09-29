@@ -491,12 +491,15 @@ def synthetic_freshness() -> dict[str, Any]:
 # SYNTHETIC Polymarket US views in `polymarket_sports.terminal_view`'s shape (pm-sports-status/1). Every
 # relationship, reason and check is the real `polymarket_sports.relate` over SYNTHETIC markets and events.
 PM_NOW = "2026-09-24T21:00:00+00:00"
+PM_PROXY_NOW = "2026-09-27T16:30:00+00:00"  # the label-proxy state: 30 min before the SYNTHETIC kickoff
 
 
 def synthetic_pm_views() -> dict[str, Any]:
     """name -> (a `data.Loaded` of `data.pm_sports_view`, histories by market): populated (related with a
     capture, ambiguous, none in a complete listing), partial listing, no scan, stale, gate blocked,
-    capture failed and missed, error, source unavailable."""
+    capture failed and missed, error, source unavailable, and `label_proxy` (T-24h and T-6h captures shown,
+    the T-60m capture and a crossed T-60m book withheld by the pilot's own `withhold_label_proxy`; render it at
+    `PM_PROXY_NOW`)."""
     from datetime import datetime, timezone
 
     from .. import polymarket_sports as ps
@@ -556,6 +559,26 @@ def synthetic_pm_views() -> dict[str, Any]:
          "attempts": [{"target_id": "nfl:demo-nfl-1:T-6h", "status": "FAILED", "reason": "SYNTHETIC: BOOK_FAILED: HTTP 503"},
                       {"target_id": "nfl:demo-nfl-1:T-6h", "status": "CAPTURED", **capture}]},
         {"target_id": "nfl:demo-nfl-1:T-60m", "offset": "T-60m", "state": "PLANNED", "attempts": []}]}
+    # EXP-002 label proxy: every capture passes through the pilot's own display rule, as `market_history` does.
+    start = "2026-09-27T17:00:00Z"
+
+    def attempt(offset: str, received: str, status: str = "CAPTURED", reason: str | None = None,
+                bid: str | None = None, ask: str | None = None) -> dict:
+        row = {"target_id": f"nfl:demo-nfl-1:{offset}", "status": status, "reason": reason,
+               "received_at_utc": received, "source_timestamp_utc": received, "book_state": "MARKET_STATE_OPEN",
+               "snapshot_id": 902, "freshness": "fresh", "yes_bid": bid, "yes_bid_size": "1250.00" if bid else None,
+               "yes_ask": ask, "yes_ask_size": "1310.00" if ask else None, "depth_json": None}
+        return ps.withhold_label_proxy(row, offset_label=offset, game_start_utc=start)
+    proxy_attempts = {
+        "T-24h": [attempt("T-24h", "2026-09-26T17:00:20Z", bid="0.3050", ask="0.3100")],
+        "T-6h": [attempt("T-6h", "2026-09-27T11:00:25Z", bid="0.3200", ask="0.3250")],
+        "T-60m": [attempt("T-60m", "2026-09-27T15:55:10Z", "NOT_EXECUTABLE",
+                          "BOOK_ANOMALY: crossed book: bid 0.4225 >= offer 0.4175"),
+                  attempt("T-60m", "2026-09-27T16:00:30Z", bid="0.4125", ask="0.4175")]}
+    proxy_history = {"demo-nfl-1": [{"target_id": f"nfl:demo-nfl-1:{o}", "offset": o, "state": "CAPTURED",
+                                     "attempts": a} for o, a in proxy_attempts.items()]}
+    proxy_cap = {**{k: v for k, v in proxy_attempts["T-60m"][-1].items() if k not in ("status", "reason")},
+                 "offset": "T-60m", "label": ps.RESEARCH_LABEL, "executable": False}
     ok = d.OK
     return {
         "populated": (d.Loaded(ok, view(catalog("FILTER_COMPLETE"))), history),
@@ -568,6 +591,7 @@ def synthetic_pm_views() -> dict[str, Any]:
         "blocked": (d.Loaded(ok, view(catalog("FILTER_COMPLETE"), access="BLOCKED_TERMS_REVIEW")), history),
         "error": (d.Loaded(d.ERROR, message="OperationalError: database disk image is malformed"), None),
         "unavailable": (d.Loaded(d.NO_DATA, message="no evidence database configured (--db)"), None),
+        "label_proxy": (d.Loaded(ok, view(catalog("FILTER_COMPLETE"), cap=proxy_cap)), proxy_history),
     }
 
 

@@ -197,8 +197,10 @@ def test_gallery_shows_the_polymarket_states():
         for needle in ("Polymarket US related markets (related with a capture", "Partial listing · absence is not evidence",
                        "No Polymarket US scan yet", "Polymarket US listing is stale",
                        "Polymarket US pilot blocked: terms review",
-                       "Polymarket US related markets unavailable (read error)"):
+                       "Polymarket US related markets unavailable (read error)",
+                       "EXP-002 label proxy: T-60m capture hidden", "Hidden · EXP-002 label proxy"):
             assert needle in text, needle
+        assert "41.25" not in body and "41.75" not in body  # the synthetic T-60m figures never render
     finally:
         shutil.rmtree(root, ignore_errors=True)
 
@@ -297,3 +299,104 @@ def test_the_coverage_code_is_translated(pm):
     text = plain(section(page(pm)))
     assert "coverage: a filtered listing (never the full catalog)" in text
 
+
+
+# --------------------------------------------------------------------------- EXP-002 label proxy
+#
+# A related market's capture at T-60m (or after the T-6h decision cutoff) is a proxy for EXP-002's Kalshi T-60m
+# label books (docs/research/EXP002_FREEZE_PROPOSAL.md §4): the Terminal shows that it was read, never its figures.
+
+ATL_GB = "aec-nfl-atl-gb-2026-09-24"
+PROXY_BID, PROXY_ASK, PROXY_QTY = fixture_states.PM_PROXY_BID, fixture_states.PM_PROXY_ASK, fixture_states.PM_PROXY_QTY
+PROXY_SHOWN = ("41.25", "41.75", "0.4125", "0.4175", "777")  # how those figures would render, raw or formatted
+AFTER_T60M = fixture_states.PM_PROXY_NOW  # ATL@GB kicks off at 00:15Z on Sep 25
+
+
+@pytest.fixture
+def pm_t60m():
+    """The committed browser state `polymarket_label_proxy`: the ATL@GB T-6h capture (real bytes) and its
+    T-60m capture at 19:15 ET with SYNTHETIC top levels (`fixture_states.pm_t60m_capture`)."""
+    cfg, root = fixture_states.polymarket_label_proxy()
+    yield cfg
+    shutil.rmtree(root, ignore_errors=True)
+
+
+def test_the_label_proxy_browser_state_is_registered():
+    assert fixture_states.BUILDERS["polymarket_label_proxy"] is fixture_states.polymarket_label_proxy
+    assert PROXY_BID == "0.4125" and PROXY_ASK == "0.4175" and PROXY_QTY == "777.0000"
+
+
+def _atl_gb(view: dict) -> dict:
+    return next(m for e in view["related"]["events"].values() for m in e["markets"] if m["market_slug"] == ATL_GB)
+
+
+def test_the_view_model_withholds_the_t60m_capture(pm_t60m):
+    ctx = d.Context(pm_t60m)
+    latest = _atl_gb(ctx.pm_sports.value)["latest_capture"]
+    assert latest["offset"] == "T-60m" and latest["label_proxy"] == ps.LABEL_PROXY_HIDDEN
+    assert not set(ps.LABEL_PROXY_FIELDS) & set(latest) and latest["received_at_utc"].startswith("2026-09-24T23:15")
+    history = {t["offset"]: t for t in d.pm_market_history(ctx, [ATL_GB]).value[ATL_GB]}
+    shown = history["T-6h"]["attempts"][-1]
+    assert shown["yes_bid"] == "0.3050" and shown["yes_ask"] == "0.3100" and "label_proxy" not in shown
+    hidden = history["T-60m"]["attempts"][-1]
+    assert hidden["status"] == "CAPTURED" and hidden["label_proxy"] == ps.LABEL_PROXY_HIDDEN
+    assert not set(ps.LABEL_PROXY_FIELDS) & set(hidden)
+
+
+def test_the_data_sources_page_never_shows_t60m_figures(pm_t60m):
+    body = page(pm_t60m)
+    for figure in PROXY_SHOWN:
+        assert figure not in body, figure  # anywhere on the tab: section, tables, disclosures
+    html = section(body)
+    text = plain(html)
+    latest = html[html.index("Latest research book"):html.index("Capture targets")]
+    assert "Hidden · EXP-002 label proxy" in plain(latest) and "T-60m capture" in plain(latest)
+    assert "¢" not in latest and "contracts" not in plain(latest)  # no price and no size line
+    assert "received Sep 24, 7:15 PM EDT" in plain(latest) and "Fresh at capture" in plain(latest)
+    assert ps.ATTRIBUTION in plain(latest)
+    rows = {r: plain(r) for r in re.findall(r"<tr>.*?</tr>", html, re.S)}
+    t6h = [p for p in rows.values() if f"nfl:{ATL_GB}:T-6h" in p]
+    t60 = [(h, p) for h, p in rows.items() if f"nfl:{ATL_GB}:T-60m" in p]
+    assert t6h and "30.5¢" in t6h[0] and "31¢" in t6h[0]  # the pre-decision capture stays visible
+    assert t60 and all("¢" not in p and p.count("Hidden") == 2 for _, p in t60)
+    assert all('title="code: PM_CAPTURE_LABEL_PROXY"' in h for h, _ in t60)
+    everything = html[html.index("All Odds API events"):]
+    assert "Hidden · EXP-002 label proxy" in plain(everything)
+    assert "T-6h Captured" in text and "T-60m Captured" in text
+    assert "k-ok" not in html
+
+
+def test_hiding_changes_figures_only_never_counts_or_states(pm_t60m, monkeypatch):
+    """The same page with the rule switched off shows the T-60m figures (so the fixture would leak) and
+    otherwise the same targets, attempts, states and receipts."""
+    hidden = section(page(pm_t60m))
+    monkeypatch.setattr(ps, "is_label_proxy", lambda *a: False)
+    shown = section(page(pm_t60m))
+    assert "41.25¢" in shown and "41.75¢" in shown
+    assert len(re.findall(r"<tr>", hidden)) == len(re.findall(r"<tr>", shown))
+    for pattern in (r"T-\d+[hm] [A-Z][a-z]+(?: · [a-z ]+)?", r"Sep \d+, \d+:\d+ [AP]M EDT", r"Fresh at capture"):
+        found = re.findall(pattern, plain(hidden))
+        assert found and found == re.findall(pattern, plain(shown)), pattern
+
+
+@pytest.mark.parametrize("key", ["populated", "partial", "no_scan", "stale", "blocked", "error", "unavailable"])
+def test_the_other_states_are_unchanged(key):
+    """Pre-decision captures (the synthetic T-6h one) and the empty, stale, blocked and error states carry no
+    hidden marker; the stale capture still shows its figures."""
+    loaded, history = fixtures.synthetic_pm_views()[key]
+    text = plain(research.pm_related_body(loaded, NOW, ("DEMO-NFL-1", "DEMO-NFL-2", "DEMO-NFL-3"), history))
+    assert "EXP-002 label proxy" not in text
+    if key in ("populated", "partial", "stale", "blocked"):
+        assert "YES bid 30.5¢ · YES ask 31¢" in text
+
+
+def test_the_label_proxy_fixture_state():
+    loaded, history = fixtures.synthetic_pm_views()["label_proxy"]
+    now = datetime.fromisoformat(fixtures.PM_PROXY_NOW)
+    html = research.pm_related_body(loaded, now, ("DEMO-NFL-1",), history)
+    text = plain(html)
+    for needle in ("Hidden · EXP-002 label proxy", "T-60m capture", "30.5¢", "32.5¢",
+                   "BOOK_ANOMALY: withheld (EXP-002 label proxy)", "T-24h Captured", "T-6h Captured", "T-60m Captured"):
+        assert needle in text, needle
+    for figure in ("41.25", "41.75", "42.25", "0.42", "0.41"):
+        assert figure not in html, figure
