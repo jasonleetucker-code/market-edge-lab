@@ -601,9 +601,27 @@ def plan_work(store: SnapshotStore, decisions: Sequence[DecisionRecord], now: da
     return n + capture_work(store, now)["overdue"]
 
 
+def _nhl_schedule_not_current_at(store: SnapshotStore, t: Any, deadline: datetime,
+                                 cache: dict[datetime, str | None]) -> str | None:
+    """For an NHL book target that expires unattempted: NOT_CAPTURED_SCHEDULE_STALE when, at its deadline (point in
+    time), the newest NHL discovery was stale, missing or unreadable, so the capture deferred it (ADR 0040). None
+    otherwise, or for any other target."""
+    if _detail(t).get("nhl_role") != NHL_ROLE_BOOK or t["state"] is not None:
+        return None
+    if deadline not in cache:
+        from .sports_nhl import read_schedule
+
+        schedule = read_schedule(store, deadline, max_age=NHL_SCHEDULE_MAX_AGE)
+        cache[deadline] = None if schedule.usable else (
+            f"NOT_CAPTURED_SCHEDULE_STALE: at the deadline {_iso(deadline)} the NHL schedule was {schedule.state} "
+            "(no book is read without a current schedule); never captured late")
+    return cache[deadline]
+
+
 def expire(store: SnapshotStore, run_id: str, now: datetime) -> list[dict[str, str]]:
     """Mark every open target whose deadline has passed MISSED, with its reason."""
     missed = []
+    stale_at: dict[datetime, str | None] = {}  # NHL: the schedule's state at a deadline, read once per deadline
     for t in store.price_targets():
         if t["state"] not in (None, "FAILED") or t["phase"] in BACKFILL_PHASES:
             continue  # decision/recheck are settled by the backfill from their own captures
@@ -611,8 +629,11 @@ def expire(store: SnapshotStore, run_id: str, now: datetime) -> list[dict[str, s
         if deadline is None or now <= deadline:
             continue
         on_plan = _detail(t).get("missed_on_plan") if t["origin"] == NHL_ORIGIN else None
+        stale = _nhl_schedule_not_current_at(store, t, deadline, stale_at) if t["origin"] == NHL_ORIGIN else None
         if on_plan and _t(t["planned_at_utc"]) and _t(t["planned_at_utc"]) > deadline:
             reason = str(on_plan)  # NHL: e.g. NOT_COLLECTED_BEFORE_ACTIVATION (ADR 0040); never captured late
+        elif stale:
+            reason = stale  # NHL: the capture deferred this book because the schedule was not current (ADR 0040)
         elif _t(t["planned_at_utc"]) and _t(t["planned_at_utc"]) > deadline:
             reason = f"PLANNED_AFTER_DEADLINE: planned {t['planned_at_utc']}, deadline {t['deadline_utc']}"
         elif t["state"] == "FAILED":
@@ -2034,6 +2055,7 @@ def plan_nhl_targets(store: SnapshotStore, now: datetime
                           "detail": schedule.detail}
     existing = [t for t in store.price_targets() if is_nhl_target(t)]
     known = {t["target_id"] for t in existing}
+    stored = {t["target_id"]: t for t in existing}
     activation = min((_t(t["planned_at_utc"]) for t in existing if _t(t["planned_at_utc"])), default=None)
     by_horizon: dict[tuple[str, str], list[Any]] = {}
     originals: dict[str, datetime] = {}
@@ -2175,12 +2197,18 @@ def plan_nhl_targets(store: SnapshotStore, now: datetime
                                            native_event_id=event)
                     # The id carries the puck drop it was planned for: a reschedule, even one that keeps the same tick,
                     # gets new ids instead of colliding with the superseded ones.
-                    target.update(target_id=f"{target['target_id']}|{NHL_ORIGIN}:{horizon}:{_iso(commence)}",
-                                  origin=NHL_ORIGIN, deadline_utc=_iso(deadline), detail=detail)
+                    base = f"{target['target_id']}|{NHL_ORIGIN}:{horizon}:{_iso(commence)}"
+                    # A game that left the schedule (or moved) and came back: when every stored target of this id and
+                    # its revisions is a supersession closure that never sent a GET, re-plan under the next revision
+                    # (`:r<n>`, n = superseded predecessors). Deterministic; anything else stays a reported collision.
+                    chain = [row for tid, row in stored.items() if tid == base or tid.startswith(f"{base}:r")]
+                    if chain and all(str(row["state_reason"] or "").startswith("SUPERSEDED") and row["state"] == "MISSED"
+                                     and int(row["attempts"] or 0) <= 1 for row in chain):
+                        base = f"{base}:r{len(chain)}"
+                    target.update(target_id=base, origin=NHL_ORIGIN, deadline_utc=_iso(deadline), detail=detail)
                     if target["target_id"] in known:
                         skip(target["target_id"], "TARGET_ID_COLLISION: an NHL target with this id is already stored "
-                                                  "(e.g. a game moved back to a time it was superseded from); not "
-                                                  "planned again")
+                                                  "and was attempted or is still open; not planned again")
                         continue
                     known.add(target["target_id"])
                     new.append(target)
