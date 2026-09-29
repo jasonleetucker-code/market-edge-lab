@@ -1160,6 +1160,93 @@ def _ev_screen(screen: Any) -> str:
               "</p>")
 
 
+GATE_TEXT = {  # sports_evidence gate v3 verdicts, in plain words; nothing here is a pass
+    "INSUFFICIENT_EVIDENCE": "Spreads cannot bound latent, stale or shared book error, so the bias of the markout is "
+                             "not bounded (assumption W is not identified from these observations).",
+    "INSUFFICIENT_DATA": "Too few admissible T-6h games or NFL weeks for any bound.",
+    "FAIL": "The two team books quote as one (mirror quoting): the cross-book design removes none of the bias.",
+}
+ACCESS_TEXT = {"NO_LABEL_VIEW_LOGGED": "No label access recorded", "LABEL_VIEWS_LOGGED": "Label views recorded",
+               "NO_LOG": "No evidence-use log · access unknown", "NO_PROTOCOL": "No protocol registered",
+               "UNREADABLE": "Evidence-use log unreadable · access unknown"}
+
+
+def _gate_access(acc: Any) -> str:
+    if not isinstance(acc, dict):
+        return c.txt(None, reason="outcome access not recorded")
+    state = acc.get("state")
+    label = ACCESS_TEXT.get(str(state), str(state))
+    if state in ("LABEL_VIEWS_LOGGED", "POSSIBLE_LABEL_EXPOSURE_LOGGED"):
+        label = (f"{pr.count(acc.get('label_views') or 0)} logged label view(s) · "
+                 f"{pr.count(acc.get('possible_label_exposures') or 0)} possible (unconfirmed) exposure(s) · latest "
+                 f"recorded {pr.datetime_et(acc.get('latest_label_view_utc')) or 'time not recorded'} · "
+                 f"{', '.join(acc.get('roles') or []) or 'role not recorded'}")
+    return c.txt(label) + _sub("the gate reads no label; this page shows none · the log records declared access only")
+
+
+def _ev_exp002_gate(g: Any, family_state: str) -> str:
+    """The EXP-002 gate line (UI_CONTRACT §8 Family A; owner directive 2026-09-28 §21A): gate v3's version, as-of,
+    input horizons, admissible count, diagnostics, outcome access, the insufficiency or failure reason and a
+    diagnostic-only flag, with freeze eligibility shown separately. Never green and never "ready to freeze"."""
+    if not isinstance(g, dict):
+        return c.facts([("EXP-002 pre-freeze gate", c.txt(None, reason="not computed by this build")
+                         + _sub("gate status not available in this view"))], wide=True, text_cols=(0,))
+    if g.get("state") != "OK":
+        return c.facts([("EXP-002 pre-freeze gate", _pm_badge("EV_GATE", "ERROR") + _sub(
+            f"{g.get('version') or 'gate'} could not be computed: {g.get('detail') or 'no detail'}")),
+                        ("Freeze eligibility", _pm_badge("EV_FREEZE", "NOT_ELIGIBLE")
+                         + _sub("no gate result: not eligible"))], wide=True, text_cols=(0, 1))
+    verdict = str(g.get("verdict") or "UNKNOWN")
+    counts = g.get("counts") if isinstance(g.get("counts"), dict) else {}
+    est = g.get("estimates") if isinstance(g.get("estimates"), dict) else {}
+    horizons = g.get("input_horizons") if isinstance(g.get("input_horizons"), dict) else {}
+    freeze = g.get("freeze") if isinstance(g.get("freeze"), dict) else {}
+    reasons = [str(x) for x in (g.get("insufficient") or [])]
+    why = "; ".join(reasons) if verdict == "INSUFFICIENT_DATA" and reasons else GATE_TEXT.get(verdict, verdict)
+    stale = " · evidence stale: nothing here is current" if family_state == "STALE" else ""
+    line = c.facts([
+        ("EXP-002 pre-freeze gate", _pm_badge("EV_GATE", verdict)
+         + _sub(f"{g.get('version')} · diagnostic only · as of {pr.datetime_et(g.get('as_of_utc')) or '—'} · inputs "
+                f"{horizons.get('bound') or '—'} (bound), {', '.join(horizons.get('diagnostics') or []) or '—'} "
+                f"(diagnostics){stale}")
+         + _sub(f"{pr.count(counts.get('admissible_games')) or '0'} admissible T-6h game(s) of "
+                f"{pr.count(counts.get('t6_due')) or '0'} due · {pr.count(counts.get('weeks')) or '0'} NFL week(s)")
+         + _sub(why)),
+        ("Outcome access", _gate_access(g.get("outcome_access"))),
+        ("Freeze eligibility", _pm_badge("EV_FREEZE", freeze.get("state") or "NOT_ELIGIBLE")
+         + _sub("separate from the gate: a diagnostic is never freeze eligibility")
+         + _sub((freeze.get("reasons") or ["no reason recorded"])[0])),
+    ], wide=True, text_cols=(0, 1, 2))
+    table = c.table(
+        ["delta_min", "tolerable bias", "bound, upper 90%", "bound state", "verdict"],
+        [[c.num(pr.cents(r.get("min_effect"))), c.num(pr.cents(r.get("tolerable_bias"))),
+          c.num(pr.cents(r.get("bound_upper_90")), reason="not estimable"),
+          esc(str(r.get("bound_state") or "").replace("_", " ").capitalize()), _pm_state("EV_GATE", r.get("verdict"))]
+         for r in (g.get("by_candidate_min_effect") or []) if isinstance(r, dict)],
+        wrap=(3,), right=(0, 1, 2),
+        caption="Conditional bias bound per candidate delta_min (delta_min is not frozen)")
+    spreads = est.get("spreads_t6") if isinstance(est.get("spreads_t6"), dict) else {}
+    details = c.kv([
+        ("counts", esc(f"due T-6h {counts.get('t6_due', '—')} · admissible {counts.get('admissible_games', '—')} · not "
+                       f"paired {counts.get('t6_not_paired', '—')} · one-sided or empty "
+                       f"{counts.get('t6_book_one_sided_or_empty', '—')} · locked {counts.get('t6_book_locked', '—')} · "
+                       f"crossed {counts.get('t6_book_crossed', '—')} · no consensus {counts.get('t6_no_consensus', '—')}"
+                       f" · book-before-odds sides {counts.get('t6_admissible_book_before_odds', '—')} "
+                       "(comparability only) · wide books (3¢ or more) " f"{counts.get('wide_books', '—')}")),
+        ("T-6h spreads", esc(f"median {pr.cents(spreads.get('median')) or '—'} · max {pr.cents(spreads.get('max')) or '—'}"
+                             f" over {spreads.get('n', 0)} books")),
+        ("gaps inside the spread", c.num(pr.percent(est.get("share_gaps_within_spread")), reason="no admissible game")
+         + _sub(f"gap SD {pr.cents(est.get('gap_sd')) or '—'} (consensus minus Kalshi mid, both books)")),
+        ("same-capture dispersion", esc(f"{counts.get('dispersion_pairs', 0)} pairs · zero in "
+                                        f"{pr.percent(est.get('share_dispersion_zero')) or '—'} · mirror quoting "
+                                        f"{'yes' if est.get('mirror_quoting') else 'no'}")),
+        ("why a spread is not a bound", esc(g.get("not_a_bound") or "")),
+        ("not identifiable here", c.ul(g.get("unidentified") or [], empty="none recorded")),
+        ("freeze blockers", c.ul(freeze.get("reasons") or [], empty="none recorded")),
+    ])
+    return line + c.disclosure(f"EXP-002 gate {g.get('version')} details (diagnostic only)", table + details)
+
+
 def _ev_family_a(v: dict, now: Any) -> str:
     state = str(v.get("state") or "UNKNOWN")
     word = pr.prefixed_word("EV_STATE", state)
@@ -1217,6 +1304,7 @@ def _ev_family_a(v: dict, now: Any) -> str:
         ("Next action", c.txt(v.get("next_action"), reason="none recorded") + _sub(
             f"blocker: {v['blocker']}" if v.get("blocker") else None)),
     ], wide=True, text_cols=tuple(range(11))))
+    out.append(_ev_exp002_gate(v.get("exp002_gate"), state))
     out.append(c.disclosure(f"Join diagnostics over {pr.count(den.get('targets_due')) or '—'} due horizons", c.table(
         ["stage", "excluded", "remaining", "kind", "meaning"],
         [[esc(str(w.get("stage")).replace("_", " ").capitalize()), c.num(pr.count(w.get("excluded"))),

@@ -1,0 +1,96 @@
+{
+ "files": [
+  {
+   "class": "API_DOCUMENTATION",
+   "committed": true,
+   "file": "docs_api-reference_market_get-series.md",
+   "retrieved_utc": "2026-09-29T00:24:30Z..00:25:41Z (docs retrieval window)",
+   "sha256": "74294221fc55330d9d708de6fcdd4cd39a82266e4887433e66165b110a375821",
+   "source": "https://docs.kalshi.com/api-reference/market/get-series.md"
+  },
+  {
+   "class": "API_DOCUMENTATION",
+   "committed": true,
+   "file": "docs_api-reference_events_get-event-fee-changes.md",
+   "retrieved_utc": "2026-09-29T00:24:30Z..00:25:41Z (docs retrieval window)",
+   "sha256": "3e73a93cb9473fe7600c80e3d6bde533e3cc3ed31d44dc5a6d56896b95ad136b",
+   "source": "https://docs.kalshi.com/api-reference/events/get-event-fee-changes.md"
+  },
+  {
+   "class": "API_DOCUMENTATION",
+   "committed": true,
+   "file": "docs_api-reference_exchange_get-series-fee-changes.md",
+   "retrieved_utc": "2026-09-29T00:24:30Z..00:25:41Z (docs retrieval window)",
+   "sha256": "aad2b14936d53ad7b6d99ac9535bf13793839a13d68abd141d92c7f42142df55",
+   "source": "https://docs.kalshi.com/api-reference/exchange/get-series-fee-changes.md"
+  },
+  {
+   "class": "API_DOCUMENTATION",
+   "committed": true,
+   "file": "docs_api-reference_events_get-event.md",
+   "retrieved_utc": "2026-09-29T00:24:30Z..00:25:41Z (docs retrieval window)",
+   "sha256": "32178799b06c636f31f68e386e73ddf87e5714e134a93aa7587d45a69616188b",
+   "source": "https://docs.kalshi.com/api-reference/events/get-event.md"
+  },
+  {
+   "class": "API_DOCUMENTATION",
+   "committed": true,
+   "file": "docs_api-reference_market_get-market.md",
+   "retrieved_utc": "2026-09-29T00:24:30Z..00:25:41Z (docs retrieval window)",
+   "sha256": "dbf71bd2222e46405f5068aa80665b96a902efc7761008de418e08e69a55daae",
+   "source": "https://docs.kalshi.com/api-reference/market/get-market.md"
+  },
+  {
+   "class": "API_DOCUMENTATION",
+   "committed": true,
+   "file": "docs_getting_started_fee_rounding.md",
+   "retrieved_utc": "2026-09-29T00:24:30Z..00:25:41Z (docs retrieval window)",
+   "sha256": "9d0b6e4c6b84253fc9161a82efaa8c428ef50d8fc4571119cf12343063842bdc",
+   "source": "https://docs.kalshi.com/getting_started/fee_rounding.md"
+  },
+  {
+   "class": "BLOCKED (HTTP 429 Vercel Security Checkpoint; not retried, not bypassed)",
+   "committed": true,
+   "file": "kalshi-fee-schedule_current_2026-09-29T002418Z_HTTP429.headers.txt",
+   "retrieved_utc": "2026-09-29T00:24:18Z",
+   "sha256": "4ba4e997f0b6edaaedfbcb9acfa0d0140507f7ee572542f7172a7c657a1f0385",
+   "source": "https://kalshi.com/docs/kalshi-fee-schedule.pdf"
+  },
+  {
+   "class": "API_DOCUMENTATION (215 KB; not committed: the Aug 20/22, 2026 maker-fee entries are quoted in the record)",
+   "committed": false,
+   "file": "docs_changelog_index.md",
+   "retrieved_utc": "2026-09-29T00:25:41Z",
+   "sha256": "751a09a072656dba88a463c27490cdee8bb217953df60900ec1e2259f3bb5f38",
+   "source": "https://docs.kalshi.com/changelog/index.md"
+  },
+  {
+   "class": "GOVERNING_DOCUMENT (same sha256 as the 2026-09-25 read; not committed)",
+   "committed": false,
+   "file": "rulebook_v1.29.pdf",
+   "retrieved_utc": "2026-09-29T00:27:12Z",
+   "sha256": "3b6d4ffd5b32330d3466179d4cae610372d07511123c9976bc6cbb1b5185240b",
+   "source": "KalshiEX Rulebook v1.29 (kalshi-public-docs S3 URL in rules_evidence/MANIFEST.md)"
+  },
+  {
+   "class": "HELP_ARTICLE (no formula or sports example)",
+   "committed": false,
+   "file": "help_fees_13823805_article.txt",
+   "retrieved_utc": "2026-09-29T00:26:02Z..00:27:38Z (help retrieval window)",
+   "sha256": "a2cc7fca2df91eb33016a4084890b4496d855b995daaf9e4e9399f2920c109c7",
+   "source": "https://help.kalshi.com/en/articles/13823805 (Fees)"
+  },
+  {
+   "class": "GOVERNING_DOCUMENT text extraction (derived; poppler pdftotext 4.00)",
+   "committed": false,
+   "file": "repo_pdf_2026-07-07_layout.txt",
+   "retrieved_utc": "2026-09-29 (before 00:24Z)",
+   "sha256": "6bf80e0869e4ed379ddf6b97c46f02537603a342e474839202bf83cb7d3814a1",
+   "source": "pdftotext -layout of experiments/EXP-001-kxhighny-nws-vs-market/fee_verification/kalshi-fee-schedule_effective-2026-07-07_received-2026-09-23.pdf"
+  }
+ ],
+ "purpose": "KXNFLGAME fee-semantics verification from public official documents (owner directive 2026-09-28 section 9). No Kalshi API endpoint was called; past API data are the repo's own captures (tests/fixtures/sports_evidence/).",
+ "record": "docs/research/EXP002_FEE_VERIFICATION.md",
+ "retrieved_by": "VF Writer A research subagent (read-only), 2026-09-29 UTC",
+ "verdict": "NOT RESOLVED: KXNFLGAME stays FEE_UNSUPPORTED; no fee_schedules verification record added"
+}
