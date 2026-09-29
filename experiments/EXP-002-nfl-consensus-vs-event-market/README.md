@@ -67,6 +67,24 @@ edge, and no sports model or strategy is operational or authorized.
     no `sports:nfl:moneyline` data was viewed and nothing is appended to `evidence_use.jsonl`. The
     inventory itself is logged in EXP-003's log, because the store holds KXHIGHNY rows.
 
+- 2026-09-28 (VF Writer A, owner directive 2026-09-28 §7–§9, §21A). The status stays DRAFT; nothing is
+  frozen.
+  - **Gate v3** (`exp002-noise-gate-v3`, `docs/research/EXP002_GATE_V3.md`). The spread-based noise candidate
+    failed its adversarial validation, with false-PASS up to 98% while the bias exceeded the tolerable level.
+    v3 therefore has no PASS state (FAIL / INSUFFICIENT_DATA / INSUFFICIENT_EVIDENCE), and a freeze of the
+    mid-based markout stays blocked. v2, the cross-book endpoint, the placebo, join v2 and logged label access
+    are unchanged.
+  - **Freeze settings proposed** (`docs/research/EXP002_FREEZE_PROPOSAL.md`, v1). They include an executable
+    round-trip primary endpoint that needs no noise gate. PROPOSED; review required; chosen with no EXP-002
+    data viewed.
+  - **Fees** (`docs/research/EXP002_FEE_VERIFICATION.md`, captures in `fee_evidence/`). NOT RESOLVED:
+    KXNFLGAME stays FEE_UNSUPPORTED, and no fee record was added. The Kalshi message remains NOT SENT.
+  - **Terminal.** The Family A section shows the gate v3 line, with freeze eligibility separate and never
+    eligible. The "latest paired book" no longer shows a T-60m book (a markout label). Such a display was
+    possible and unlogged before, so pilot T-60m label exposure is UNKNOWN (freeze proposal §4).
+  - **Data looked at:** none real. Only SYNTHETIC fixtures and simulations were used. Nothing is appended to
+    `evidence_use.jsonl`.
+
 ## Owner decisions
 
 - 2026-09-26: owner decisions recorded (`docs/owner/2026-09-26-owner-decisions-economics-backup.md`): minimum useful effect $1,000/year (continuation bar beyond the pilot, not a pilot requirement); 6 owner hours through 2026-10-22; the +8 h extension returns to the owner. Status stays DRAFT.

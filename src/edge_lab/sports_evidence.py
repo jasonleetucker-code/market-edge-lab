@@ -65,8 +65,8 @@ Clusters for later statistics: the game (Odds event id) and the NFL week (Tuesda
 Delayed-signal and placebo control references are listed per row for the protocol to use; this module
 computes no statistic from them.
 
-**EXP-002 measurement** (`measure_exp002`, `exp002-measurement-v1`): the label-free pre-freeze noise gate (it
-never loads a T-60m book) and the cross-book markout endpoint (it reads the first T-60m book of each market, a
+**EXP-002 measurement** (`measure_exp002`, `exp002-measurement-v2`): the label-free pre-freeze noise gates v2 and v3 (they
+never load a T-60m book) and the cross-book markout endpoint (it reads the first T-60m book of each market, a
 label, so it runs only in a logged results path). See the section "EXP-002 measurement" below.
 
 CLI (read-only): `python -m edge_lab.sports_evidence report --db <path> [--as-of ISO] [--out FILE]` and
@@ -1682,7 +1682,8 @@ def build_report(store: Any, *, as_of: datetime, policy: JoinPolicy = JoinPolicy
 #   label, so it runs only in a logged results path (`measure_exp002(results=True)`; the CLI's
 #   `exp002 --with-results` records the view first). Nothing here is an edge claim or a frozen statistic.
 
-MEASUREMENT_VERSION = "exp002-measurement-v1"
+# v2 (2026-09-28): the output adds `gate_v3` beside the unchanged v2 gate; v1 outputs keep their own version.
+MEASUREMENT_VERSION = "exp002-measurement-v2"
 GATE_VERSION = "exp002-noise-gate-v2"
 MARKOUT_VERSION = "exp002-cross-book-markout-v1"
 GATE_HORIZONS = ("T-24h", "T-6h")
@@ -2177,6 +2178,375 @@ def _roll_sensitivity(games: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
             "sigma2_home": s2h, "sigma2_away": s2a, "var_dispersion_t6": var_d, "rho_hat": rho}
 
 
+# --------------------------------------------------------------------------- EXP-002 gate v3 (2026-09-28)
+#
+# Owner directive 2026-09-28 §7 (docs/owner/2026-09-28-exp002-validation-inplay-foundation-directive.md) and
+# docs/research/EXP002_GATE_V3.md. The spread-based noise scale of A.I option (ii) was a CANDIDATE needing
+# validation. The adversarial simulation (`scripts/research_power_sensitivity.py --gate-v3-validation`) shows
+# that it passes at far more than 10% while the true bias exceeds the tolerable level (sticky, stale and
+# shared-upstream quotes), because a quoted spread is not a bound on latent error, staleness or common
+# market-maker noise. So gate v3 does not estimate a noise scale from spreads. It computes the one bound that
+# spreads CAN support, and only under a stated, untestable assumption:
+#
+#   (W) within-spread: each book's reverting mid error |e| = |mid - V| is at most half its quoted spread, where V
+#       is the value the book's price later reverts around (the latent martingale of the A.A null);
+#   (I) the consensus deviation w = c - V is independent of the books' errors at the decision time;
+#   (R) the T-60m error is mean-zero given the T-6h information, or persists with a coefficient in [0, 1].
+#
+# Under (W), (I), (R) and the A.A null (the latent value is a martingale that the consensus does not predict), the
+# bias of one half of the cross-book statistic, E[sign(c - H6)(A1 - A6)], is at most E[s_A * 1{|c - H6| <= s_H}]:
+# sign(w - e_H) differs from sign(w) only when w lies between 0 and e_H, E[sign(w) e_A] = 0 under (I), |e_A| <=
+# s_A / 2 under (W), and |w| <= |e_H| implies |c - H6| = |w - e_H| <= s_H. No distribution, density or noise
+# correlation is assumed (the worst case, perfectly shared error, is allowed). The bound is label-free: T-6h
+# features only.
+#
+# (W) cannot be checked from these observations. A stale or sticky quote, or an error shared by both team books
+# (one market maker, one upstream source), puts V outside the quoted spread without changing any spread, any
+# same-capture dispersion or any T-6h gap. Hence the verdict is never PASS:
+#   FAIL                  the data refute the cross-book premise (mirror quoting: the two books are one quote);
+#   INSUFFICIENT_DATA     the sample floors are not met;
+#   INSUFFICIENT_EVIDENCE otherwise. Its bound state says whether even the conditional bound reaches the tolerable
+#                         bias (then spreads cannot bound it at all) or stays below it (then it rests on (W),
+#                         which the data cannot identify).
+# A diagnostic below the tolerable level is never freeze eligibility. v2 (`noise_gate`) and its results stay as
+# they were.
+
+GATE_V3_VERSION = "exp002-noise-gate-v3"
+GATE_V3_HORIZONS = (SIGNAL_HORIZON, PRIOR_HORIZON)  # T-6h: the bound; T-24h: dispersion diagnostics only
+# Sample floors (implementation parameters, not research thresholds; they gate INSUFFICIENT_DATA only):
+# 20 admissible T-6h games as in v2, and four NFL weeks so the week-cluster bootstrap has more than 27 distinct
+# resamples (three weeks give 3^3 = 27).
+GATE_V3_MIN_GAMES, GATE_V3_MIN_WEEKS = 20, 4
+V3_FAIL, V3_INSUFFICIENT_DATA, V3_INSUFFICIENT_EVIDENCE = "FAIL", "INSUFFICIENT_DATA", "INSUFFICIENT_EVIDENCE"
+V3_BOUND_AT_OR_ABOVE = "CONDITIONAL_BOUND_AT_OR_ABOVE_TOLERABLE"
+V3_BOUND_BELOW = "CONDITIONAL_BOUND_BELOW_TOLERABLE_BUT_ASSUMPTION_W_UNIDENTIFIED"
+V3_BOUND_UNKNOWN = "CONDITIONAL_BOUND_NOT_ESTIMABLE"
+WIDE_SPREAD = 0.03  # display only: a book at or above 3 cents is counted as wide; nothing is excluded for it
+V3_NOT_A_BOUND = ("A quoted spread is not a bound on latent pricing error, staleness or common market-maker noise: "
+                  "a stale, sticky or commonly mispriced quote can be 1 cent wide while the value it later reverts "
+                  "around lies outside it.")
+V3_ASSUMPTIONS = {
+    "W": "within-spread: |mid - V| <= spread / 2 for each T-6h book (V = the value the price later reverts around); "
+         "NOT identified from these observations",
+    "I": "the consensus deviation c - V is independent of the T-6h book errors; not testable without V",
+    "R": "the T-60m book error is mean-zero given T-6h information, or persists with a coefficient in [0, 1]; "
+         "needs later prices (labels) to check",
+    "N": "the A.A null: the latent value is a martingale the consensus does not predict (the hypothesis under test)",
+}
+V3_UNIDENTIFIED = (
+    "a reverting error shared by both team books (one market maker or one upstream source): it cancels in the "
+    "same-capture dispersion H - (1 - away mid) and leaves every spread unchanged",
+    "staleness: Kalshi books carry no per-level update time, so one capture cannot tell a current quote from a stale "
+    "one (receipt time is the only clock)",
+    "latent error beyond the quoted spread: only later prices (T-60m books, labels) or dense repeats show it",
+    "the split between reversion and momentum between T-6h and T-60m (needs later prices)",
+    "the distribution of the error inside the spread (uniform, two-point or skewed): v3 assumes none",
+    "week-level dependence (ICC) from four or fewer weeks: the bootstrap reflects it only as far as the weeks allow",
+)
+V3_PERMITTED = ("diagnostic reporting of the label-free spread, gap and dispersion distributions",
+                "stating the size of the conditional bound under assumption W, labelled conditional",
+                "planning a smaller question, an altered design or a bounded acquisition proposal")
+V3_NOT_PERMITTED = ("freeze eligibility or a freeze decision", "promotion of any EXP-002 state",
+                    "a claim that the markout is unbiased", "tuning an estimator, floor or multiplier until it passes")
+
+
+@dataclass(frozen=True)
+class GateV3Game:
+    """One admissible T-6h game, in home-team units (A = 1 - away mid): the inputs of the markout's sign."""
+
+    week: str
+    game: str
+    h_mid: float
+    h_spread: float
+    a_mid: float
+    a_spread: float
+    c: float  # consensus value of the home YES contract (the markout's `c`)
+    c_prime: float  # 1 - consensus value of the away YES contract (the markout's `c'`)
+    timing: tuple[str | None, str | None]
+    capture_skew_seconds: int | None
+
+
+@dataclass(frozen=True)
+class GateV3Observations:
+    games: tuple[GateV3Game, ...]
+    dispersions: tuple[tuple[str, str, str, float], ...]  # (horizon, week, game, H - A) same capture
+    spreads: tuple[tuple[str, float], ...]  # (horizon, spread) of every two-sided paired book
+    counts: dict[str, int]
+
+
+def _book_state(side: Mapping[str, Any]) -> str:
+    b, a = _dec(side.get("yes_bid")), _dec(side.get("yes_ask"))
+    if b is None or a is None:
+        return "ONE_SIDED_OR_EMPTY"
+    if b == a:
+        return "LOCKED"
+    if b > a:
+        return "CROSSED"
+    return "TWO_SIDED"
+
+
+def gate_v3_observations(rows: Sequence[Mapping[str, Any]], policy: JoinPolicy = JoinPolicy()) -> GateV3Observations:
+    """The gate's inputs from T-6h and T-24h rows only (the join's own feature fields; no book is read here).
+    Every due T-6h row lands in exactly one count; nothing outside `GATE_V3_HORIZONS` is looked at."""
+    counts = {"rows_other_horizon_ignored": 0, "t6_due": 0, "t6_not_yet_due_or_superseded": 0,
+              "t6_not_paired": 0, "t6_book_one_sided_or_empty": 0, "t6_book_locked": 0, "t6_book_crossed": 0,
+              "t6_no_consensus": 0, "t6_admissible": 0, "t6_admissible_book_at_or_after_odds": 0,
+              "t6_admissible_book_before_odds": 0, "t6_admissible_book_timing_unknown": 0,
+              "t24_due_paired": 0, "dispersion_pairs": 0, "not_same_capture": 0, "wide_books": 0}
+    games: list[GateV3Game] = []
+    disp: list[tuple[str, str, str, float]] = []
+    spreads: list[tuple[str, float]] = []
+    for r in rows:
+        horizon = r.get("horizon")
+        if horizon not in GATE_V3_HORIZONS:
+            counts["rows_other_horizon_ignored"] += 1
+            continue
+        if r.get("status") in (SUPERSEDED, NOT_YET_DUE):
+            if horizon == SIGNAL_HORIZON:
+                counts["t6_not_yet_due_or_superseded"] += 1
+            continue
+        if horizon == SIGNAL_HORIZON:
+            counts["t6_due"] += 1
+        sides = r.get("sides") or {}
+        home, away = sides.get(r.get("home_team")), sides.get(r.get("away_team"))
+        if r.get("status") != PAIRED or home is None or away is None:
+            if horizon == SIGNAL_HORIZON:
+                counts["t6_not_paired"] += 1
+            continue
+        states = (_book_state(home), _book_state(away))
+        if states != ("TWO_SIDED", "TWO_SIDED"):
+            if horizon == SIGNAL_HORIZON:
+                worst = next(s for s in ("CROSSED", "LOCKED", "ONE_SIDED_OR_EMPTY") if s in states)
+                counts[f"t6_book_{worst.lower()}"] += 1
+            continue
+        h, am = _mid(home.get("yes_bid"), home.get("yes_ask")), _mid(away.get("yes_bid"), away.get("yes_ask"))
+        sh, sa = _spread(home.get("yes_bid"), home.get("yes_ask")), _spread(away.get("yes_bid"), away.get("yes_ask"))
+        a = 1 - am
+        week, game = r["week_cluster"], r["event_id"]
+        for s in (sh, sa):
+            spreads.append((horizon, s))
+            counts["wide_books"] += s >= WIDE_SPREAD - 1e-12
+        rh, ra = parse_utc(home.get("book_received_utc")), parse_utc(away.get("book_received_utc"))
+        skew = None if rh is None or ra is None else int(abs((rh - ra).total_seconds()))
+        if skew is None or skew > SAME_CAPTURE_MAX.total_seconds():
+            counts["not_same_capture"] += 1
+        else:
+            disp.append((horizon, week, game, h - a))
+            counts["dispersion_pairs"] += 1
+        if horizon == PRIOR_HORIZON:
+            counts["t24_due_paired"] += 1
+            continue
+        c, _ = _contract_value(home, policy)
+        c_away, _ = _contract_value(away, policy)
+        if c is None or c_away is None:
+            counts["t6_no_consensus"] += 1
+            continue
+        timing = (home.get("book_timing"), away.get("book_timing"))
+        for t in timing:
+            key = {BOOK_AT_OR_AFTER_ODDS: "at_or_after_odds", BOOK_BEFORE_ODDS: "before_odds"}.get(t, "timing_unknown")
+            counts[f"t6_admissible_book_{key}"] += 1
+        counts["t6_admissible"] += 1
+        games.append(GateV3Game(week, game, h, sh, a, sa, c, 1 - c_away, timing, skew))
+    return GateV3Observations(tuple(games), tuple(disp), tuple(spreads), counts)
+
+
+def v3_bias_bound_terms(games: Sequence[GateV3Game]) -> list[tuple[str, str, float]]:
+    """Per game: 1/2 [s_A 1{|c - H6| <= s_H} + s_H 1{|c' - A6| <= s_A}], the conditional bound on the bias of the
+    two halves of the cross-book statistic under (W), (I) and (R). Probability units; (week, game, term)."""
+    eps = 1e-12  # float guard: a gap equal to the spread counts as inside
+    return [(g.week, g.game, 0.5 * (g.a_spread * (abs(g.c - g.h_mid) <= g.h_spread + eps)
+                                     + g.h_spread * (abs(g.c_prime - g.a_mid) <= g.a_spread + eps))) for g in games]
+
+
+def _mean_upper(terms: Sequence[tuple[str, str, float]], *, key: int, seed: int, resamples: int,
+                q: float = 0.9) -> float | None:
+    """One-sided upper `q` percentile of the mean of `terms`, resampling whole clusters (`key` 0: weeks, 1: games).
+    None with fewer than two clusters."""
+    clusters = sorted({t[key] for t in terms})
+    if len(clusters) < 2:
+        return None
+    by = {c: [t[2] for t in terms if t[key] == c] for c in clusters}
+    rng = random.Random(seed)
+    means = []
+    for _ in range(resamples):
+        pooled = [v for _ in clusters for v in by[clusters[rng.randrange(len(clusters))]]]
+        means.append(sum(pooled) / len(pooled))
+    means.sort()
+    return means[min(len(means) - 1, max(0, math.ceil(q * len(means)) - 1))]
+
+
+def _quantiles(values: Sequence[float]) -> dict[str, float | None]:
+    if not values:
+        return {"n": 0, "min": None, "median": None, "max": None}
+    v = sorted(values)
+    return {"n": len(v), "min": v[0], "median": statistics.median(v), "max": v[-1]}
+
+
+def noise_gate_v3(obs: GateV3Observations, *, min_effect: float | None = None,
+                  candidates: Sequence[float] = CANDIDATE_MIN_EFFECTS, seed: int = GATE_BOOTSTRAP_SEED,
+                  resamples: int = GATE_BOOTSTRAP_RESAMPLES) -> dict[str, Any]:
+    """Gate v3 (see the section comment). Never PASS; `freeze_eligible` is always False; `diagnostic_only` True."""
+    games = obs.games
+    weeks = sorted({g.week for g in games})
+    terms = v3_bias_bound_terms(games)
+    bound = sum(t[2] for t in terms) / len(terms) if terms else None
+    upper_week = _mean_upper(terms, key=0, seed=seed, resamples=resamples)
+    upper_game = _mean_upper(terms, key=1, seed=seed, resamples=resamples)
+    upper = None if upper_week is None or upper_game is None else max(upper_week, upper_game)
+    disp6 = [d[3] for d in obs.dispersions if d[0] == SIGNAL_HORIZON]
+    disp_all = [d[3] for d in obs.dispersions]
+    var_d = statistics.variance(disp_all) if len(disp_all) >= 2 else None
+    mirror = var_d is not None and len(disp_all) >= GATE_MIN_PAIRS and var_d <= MIRROR_VARIANCE
+    gaps = [g.c - g.h_mid for g in games] + [g.c_prime - g.a_mid for g in games]
+    inside = sum(abs(g.c - g.h_mid) <= g.h_spread + 1e-12 for g in games) + sum(
+        abs(g.c_prime - g.a_mid) <= g.a_spread + 1e-12 for g in games)
+    insufficient = []
+    if len(games) < GATE_V3_MIN_GAMES:
+        insufficient.append(f"{len(games)} admissible T-6h games < {GATE_V3_MIN_GAMES}")
+    if len(weeks) < GATE_V3_MIN_WEEKS:
+        insufficient.append(f"{len(weeks)} NFL week(s) < {GATE_V3_MIN_WEEKS}: no week-cluster bound")
+    if upper is None and not insufficient:
+        insufficient.append("the week- or game-cluster bound is not estimable")
+    due = obs.counts.get("t6_due", 0)
+    admissible_share = None if not due else len(games) / due
+
+    def verdict(delta: float) -> dict[str, Any]:
+        tolerable = TOLERABLE_FRACTION * delta
+        state = V3_BOUND_UNKNOWN if upper is None else (V3_BOUND_BELOW if upper < tolerable else V3_BOUND_AT_OR_ABOVE)
+        row = {"min_effect": delta, "tolerable_bias": tolerable, "bound_upper_90": upper, "bound_state": state,
+               "freeze_eligible": False}
+        if mirror:
+            return {**row, "verdict": V3_FAIL, "why": "MIRROR_QUOTING: same-capture cross-book dispersion is zero, so "
+                                                      "the two team books are one quote and the cross-book design "
+                                                      "removes none of the reversion bias"}
+        if insufficient:
+            return {**row, "verdict": V3_INSUFFICIENT_DATA, "why": "; ".join(insufficient)}
+        if state == V3_BOUND_AT_OR_ABOVE:
+            why = (f"even under assumption W the spread-based bias bound (upper 90% {upper:.4f}) is at or above the "
+                   f"tolerable {tolerable:.4f} (1/4 of delta_min): spreads cannot bound the bias at this delta_min")
+        else:
+            why = (f"the spread-based bias bound (upper 90% {upper:.4f}) is below the tolerable {tolerable:.4f} ONLY "
+                   "under assumption W (value within the quoted spread), which these observations cannot identify; "
+                   + V3_NOT_A_BOUND)
+        return {**row, "verdict": V3_INSUFFICIENT_EVIDENCE, "why": why}
+
+    table = [verdict(d) for d in candidates]
+    chosen = verdict(min_effect) if min_effect is not None else None
+    overall = V3_FAIL if mirror else (V3_INSUFFICIENT_DATA if insufficient else V3_INSUFFICIENT_EVIDENCE)
+    return {
+        "version": GATE_V3_VERSION, "label_free": True, "diagnostic_only": True,
+        "reads": "the join's T-6h paired rows (bid, ask, consensus, book timing and receipt) and T-24h paired rows "
+                 "(dispersion and spreads only); no book payload beyond the join's features, never a T-60m book, and "
+                 "a catalog without settled listing fields",
+        "input_horizons": {"bound": SIGNAL_HORIZON, "diagnostics": list(GATE_V3_HORIZONS)},
+        "verdict": overall, "min_effect": min_effect,
+        "min_effect_state": "SUPPLIED" if min_effect is not None else "UNKNOWN: frozen only at preregistration",
+        "freeze_eligible": False,
+        "freeze_ineligible_reason": ("gate v3 has no PASS state: spreads cannot identify latent, stale or common "
+                                     "book error (docs/research/EXP002_GATE_V3.md); a diagnostic is never freeze "
+                                     "eligibility"),
+        "verdict_for_min_effect": chosen, "by_candidate_min_effect": table,
+        "estimates": {"bias_bound_mean": bound, "bias_bound_upper_90": upper, "bias_bound_upper_90_week": upper_week,
+                      "bias_bound_upper_90_game": upper_game,
+                      "share_gaps_within_spread": None if not gaps else inside / len(gaps),
+                      "gap_sd": statistics.stdev(gaps) if len(gaps) >= 2 else None,
+                      "var_dispersion": var_d, "var_dispersion_t6": statistics.variance(disp6) if len(disp6) >= 2
+                      else None, "mirror_quoting": mirror,
+                      "share_dispersion_zero": None if not disp_all else sum(abs(x) < 1e-9 for x in disp_all) / len(disp_all),
+                      "spreads_t6": _quantiles([s for h, s in obs.spreads if h == SIGNAL_HORIZON]),
+                      "spreads_t24": _quantiles([s for h, s in obs.spreads if h == PRIOR_HORIZON]),
+                      "admissible_share_of_due_t6": admissible_share},
+        "counts": {**obs.counts, "weeks": len(weeks), "admissible_games": len(games)},
+        "insufficient": insufficient,
+        "not_a_bound": V3_NOT_A_BOUND,
+        "assumptions": V3_ASSUMPTIONS, "unidentified": list(V3_UNIDENTIFIED),
+        "permitted_uses": list(V3_PERMITTED), "not_permitted": list(V3_NOT_PERMITTED),
+        "method": {
+            "bound": "B = mean over admissible T-6h games of 1/2 [s_A 1{|c - H6| <= s_H} + s_H 1{|c' - A6| <= s_A}] "
+                     "(probability units; H, A home-team mids, s their quoted spreads, c and c' the markout's consensus "
+                     "values). Under W, I, R and the null, |bias of the cross-book markout| <= B. No distribution, "
+                     "density or noise correlation is assumed; a shared (perfectly correlated) error is allowed",
+            "uncertainty": f"one-sided 90% percentile of a week-cluster and a game-cluster bootstrap of B (seed {seed}, "
+                           f"{resamples} resamples each); the larger is used",
+            "tolerable": f"{TOLERABLE_FRACTION} x delta_min (A.A); delta_min UNKNOWN until the protocol freezes it",
+            "floors": {"admissible_games": GATE_V3_MIN_GAMES, "weeks": GATE_V3_MIN_WEEKS,
+                       "mirror_min_pairs": GATE_MIN_PAIRS},
+            "books": "locked, crossed and one-sided T-6h books are excluded and counted (no mid); a book missing a "
+                     "side or a horizon without a pair is counted as not paired (join stages keep the reason); stale "
+                     "books never pair (the join's 5-min book age at the decision time); BEFORE_ODDS pairs enter, as "
+                     "they enter the markout (comparability-only: never an executable price)",
+            "validation": "scripts/research_power_sensitivity.py --gate-v3-validation (independent simulation seeds; "
+                          "false-pass rates in docs/research/EXP002_GATE_V3.md)",
+        },
+    }
+
+
+def exp002_gate_line(store: Any, *, as_of: datetime, rows: Sequence[Mapping[str, Any]] | None = None,
+                     policy: JoinPolicy = JoinPolicy(), protocol: Mapping[str, Any] | None = None,
+                     experiments_root: Path | None = None, resamples: int = GATE_BOOTSTRAP_RESAMPLES) -> dict[str, Any]:
+    """The EXP-002 gate line for the Terminal (UI_CONTRACT §8 Family A): gate v3 over the T-6h / T-24h rows of an
+    existing report (or a gate-only join), the evidence-use log's outcome-access status, and freeze eligibility
+    kept separate. Label-free. Never raises: an error is a state."""
+    try:
+        if rows is None:
+            rows = _join(store, as_of, policy, results=False, horizons=GATE_HORIZONS, drop_settled=True)[0]
+        gate = noise_gate_v3(gate_v3_observations([r for r in rows if r.get("horizon") in GATE_V3_HORIZONS], policy),
+                             resamples=resamples)
+    except Exception as exc:  # noqa: BLE001 - shown as an error state
+        return {"state": "ERROR", "version": GATE_V3_VERSION, "as_of_utc": _iso(as_of),
+                "detail": f"{type(exc).__name__}: {str(exc).splitlines()[0][:160] if str(exc) else ''}"}
+    protocol = protocol if protocol is not None else protocol_status(experiments_root)
+    return {"state": "OK", "version": GATE_V3_VERSION, "as_of_utc": _iso(as_of), "verdict": gate["verdict"],
+            "input_horizons": gate["input_horizons"], "counts": gate["counts"], "estimates": gate["estimates"],
+            "by_candidate_min_effect": gate["by_candidate_min_effect"], "insufficient": gate["insufficient"],
+            "diagnostic_only": True, "label_free": True, "not_a_bound": gate["not_a_bound"],
+            "unidentified": gate["unidentified"],
+            "outcome_access": outcome_access(protocol, experiments_root),
+            "freeze": freeze_eligibility(gate, protocol)}
+
+
+def outcome_access(protocol: Mapping[str, Any], experiments_root: Path | None = None) -> dict[str, Any]:
+    """EXP-002's logged label access (its own evidence-use log): how many logged views showed labels or results,
+    the latest, and the roles. It records declared access only (the log's own limitation)."""
+    experiment_id = protocol.get("experiment_id")
+    if not experiment_id:
+        return {"state": "NO_PROTOCOL", "detail": "no Family A experiment is registered, so there is no log to read"}
+    try:
+        log_path = None
+        for path in registry.discover(experiments_root or REPO_EXPERIMENTS):
+            exp = registry.load(path)
+            if exp.id == experiment_id:
+                log_path = exp.path.parent / rev.LOG_NAME
+        if log_path is None or not log_path.exists():
+            return {"state": "NO_LOG", "detail": f"{experiment_id} has no evidence-use log: access is UNKNOWN"}
+        log = rev.read_log(log_path)
+    except Exception as exc:  # noqa: BLE001 - an unreadable log is unknown access, never "none"
+        return {"state": "UNREADABLE", "detail": f"evidence-use log unreadable: {type(exc).__name__}"}
+    views = [u for u in log.uses if u.viewed_labels or u.viewed_results or u.action is rev.Action.LABEL_RESULT_INSPECTION]
+    latest = max(views, key=lambda u: u.action_time_utc, default=None)
+    return {"state": "LABEL_VIEWS_LOGGED" if views else "NO_LABEL_VIEW_LOGGED", "experiment_id": experiment_id,
+            "log_started_utc": log.started_at_utc, "logged_uses": len(log.uses), "label_views": len(views),
+            "latest_label_view_utc": None if latest is None else latest.action_time_utc,
+            "latest_label_view_role": None if latest is None else latest.role.value,
+            "roles": sorted({u.role.value for u in views}),
+            "limitation": "declared access only: a log cannot prove nobody viewed the data another way"}
+
+
+def freeze_eligibility(gate: Mapping[str, Any], protocol: Mapping[str, Any]) -> dict[str, Any]:
+    """Freeze eligibility, kept apart from the gate's diagnostic verdict. Always NOT_ELIGIBLE today: gate v3 has no
+    PASS state; the reasons list every open blocker the repository itself records."""
+    reasons = [f"gate {gate.get('version')} verdict {gate.get('verdict')}: no gate state authorizes a freeze"]
+    state = protocol.get("state")
+    if state != "DRAFT":
+        reasons.append(f"protocol state {state}")
+    else:
+        reasons.append(f"{protocol.get('experiment_id')} is DRAFT with {len(protocol.get('unsettled_fields') or [])} "
+                       "decision field(s) UNKNOWN or MISSING (delta_min, episode, tie bounds among them)")
+    reasons.append("KXNFLGAME fees FEE_UNSUPPORTED (fee_schedules non-standard series)")
+    reasons.append("freeze needs an owner-reviewed design that can identify the bias (docs/research/EXP002_GATE_V3.md)")
+    return {"state": "NOT_ELIGIBLE", "reasons": reasons}
+
+
 def measure_exp002(store: Any, *, as_of: datetime, results: bool = False, min_effect: float | None = None,
                    policy: JoinPolicy = JoinPolicy(), experiments_root: Path | None = None) -> dict[str, Any]:
     """The EXP-002 measurement over one read-only store. The gate always runs and is label-free: the join is
@@ -2190,6 +2560,7 @@ def measure_exp002(store: Any, *, as_of: datetime, results: bool = False, min_ef
     reader = BookMids(payloads)
     gate = noise_gate(gate_observations(rows, catalog, reader), min_effect=min_effect)
     gate_reads = list(reader.read)
+    gate_v3 = noise_gate_v3(gate_v3_observations(rows, policy), min_effect=min_effect)
     markout: dict[str, Any]
     if results:
         markout = markout_endpoint(rows, targets, catalog, reader, as_of=as_of, policy=policy)
@@ -2201,7 +2572,7 @@ def measure_exp002(store: Any, *, as_of: datetime, results: bool = False, min_ef
             "join_version": JOIN_VERSION, "consensus_version": odds_consensus.CONSENSUS_VERSION,
             "policy": policy.to_dict(), "as_of_utc": _iso(as_of), "protocol": protocol,
             "labels": "INCLUDED (a logged --with-results run)" if results else "HIDDEN",
-            "gate": gate, "gate_books_read": gate_reads, "markout": markout,
+            "gate": gate, "gate_books_read": gate_reads, "gate_v3": gate_v3, "markout": markout,
             "economics_note": "economics inputs are unchanged: only book-at-or-after-odds pairs feed them "
                               "(build_report); BEFORE_ODDS pairs are comparability-only and counted"}
     plain = _plain(body)
@@ -2211,7 +2582,7 @@ def measure_exp002(store: Any, *, as_of: datetime, results: bool = False, min_ef
 
 # --------------------------------------------------------------------------- Terminal view
 
-_VIEW_CACHE: "OrderedDict[tuple, dict[str, Any]]" = OrderedDict()
+_VIEW_CACHE: "OrderedDict[tuple, dict[str, Any]]" = OrderedDict()  # key -> {"report": ..., "gate": ...}
 VIEW_CACHE_MAX = 8
 
 
@@ -2304,7 +2675,10 @@ def view_from_report(report: Mapping[str, Any], now: datetime) -> dict[str, Any]
     rows = report["rows"]
     join = report["join"]
     paired = [(r, t, s) for r in rows for t, s in r["sides"].items() if s.get("stage") is None]
-    latest = max(paired, key=lambda x: (x[2]["decision_utc"], x[2]["ticker"]), default=None)
+    # A T-60m book is EXP-002's markout label (a later price is an outcome too): the Terminal is not a logged
+    # consumer of labels, so the "latest paired book" shown is the latest pre-label (T-24h / T-6h) one.
+    shown = [x for x in paired if x[0].get("horizon") != TARGET_HORIZON]
+    latest = max(shown, key=lambda x: (x[2]["decision_utc"], x[2]["ticker"]), default=None)
     sides = [s for r in rows for s in r["sides"].values()]
     rel = next((s["relation"] for s in sides if s.get("relation", {}).get("tier")), None)
     books = [s for s in sides if s.get("book_snapshot_id")]
@@ -2363,15 +2737,26 @@ def terminal_view(db_path: str | Path, *, now: datetime, experiments_root: Path 
     try:
         store = SnapshotStore.open_readonly(path)
         key = _view_key(store, now, experiments_root)
-        report = _VIEW_CACHE.get(key)
-        if report is None:
+        cached = _VIEW_CACHE.get(key)
+        if cached is None:
             report = build_report(store, as_of=now, experiments_root=experiments_root, results=False)
-            _VIEW_CACHE[key] = report
+            # The EXP-002 gate line reads only the report's T-6h / T-24h rows (label-free), memoized with it.
+            gate = exp002_gate_line(store, as_of=now, rows=report["rows"], protocol=report["protocol"],
+                                    experiments_root=experiments_root)
+            gate.pop("outcome_access", None)
+            cached = _VIEW_CACHE[key] = {"report": report, "gate": gate}
             while len(_VIEW_CACHE) > VIEW_CACHE_MAX:
                 _VIEW_CACHE.popitem(last=False)
         else:
             _VIEW_CACHE.move_to_end(key)
-        return {**base, "state": "OK", "family_a": view_from_report(report, now)}
+        report = cached["report"]
+        family = view_from_report(report, now)
+        # Outcome access is read from the evidence-use log on every view: a newly logged label view must show.
+        gate = dict(cached["gate"])
+        if gate.get("state") == "OK":
+            gate["outcome_access"] = outcome_access(report["protocol"], experiments_root)
+        family["exp002_gate"] = gate
+        return {**base, "state": "OK", "family_a": family}
     except ReadOnlyStoreError as exc:
         return {**base, "state": "NO_STORE", "detail": str(exc).splitlines()[0][:200] if str(exc) else "unreadable"}
     except Exception as exc:  # noqa: BLE001 - shown as an error state, never raised into the page
@@ -2581,7 +2966,8 @@ def _main_exp002(args: argparse.Namespace, parser: argparse.ArgumentParser) -> i
     if args.out:
         _write_atomic(Path(args.out), text + "\n")
         print(json.dumps({"command": name, "state": "WRITTEN", "out": args.out, "output_sha256": out["output_sha256"],
-                          "gate_verdict": out["gate"]["verdict"]}))
+                          "gate_verdict": out["gate"]["verdict"], "gate_v3_verdict": out["gate_v3"]["verdict"],
+                          "freeze_eligible": False}))
     else:
         sys.stdout.write(text + "\n")
     return 0
