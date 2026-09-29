@@ -559,10 +559,14 @@ directive), and the screenshots that justify it.
   the existing page-head, badge, state-text, status-line, section, facts, row, table, kv, list, disclosure and
   empty/blocked/error/unavailable components; no new component, token, CSS or `presentation.STATES` word (plain
   labels are passed to `badge` / `state_text`, codes stay in the title). Money is signed but uncoloured because
-  every figure is a fixture or synthetic replay. The research tab does not link it yet: that one-line link
-  belongs in `views/research.py` after #124 merges. Screenshots: `demo` state `/experiments/inplay` and
-  `/gallery/inplay` at 360x800, 390x844, 768x1024, 1440x900 and 1920x1080 (Chromium), 360x800 and 1440x900 at
-  200% root text with every disclosure open, the `early` state (production shape: not authorized) at 360x800 and
-  1440x900, and `/experiments/inplay` in both states at 390x844 and 1440x900 (WebKit) (`tests/browser/capture.py`):
-  20 shots, 0 with overflow, clipping, low contrast or foreign requests; Chromium and WebKit emulation, not a
-  physical phone; reviewed locally by the author and described in the PR (not attached).
+  every figure is a fixture or synthetic replay. The Research tab links it with one "In-play research"
+  section after Economic evidence · B (a coordinator-granted exception to the claim row). Screenshots
+  (`tests/browser/capture.py`), 24 shots, 0 with overflow, clipping, low contrast or foreign requests:
+  - Chromium, `demo` state: `/experiments/inplay` and `/gallery/inplay` at 360x800, 390x844, 768x1024,
+    1440x900 and 1920x1080, and at 360x800 and 1440x900 with 200% root text and every disclosure open;
+  - Chromium, `early` state (production shape: not authorized): `/experiments/inplay` at 360x800 and 1440x900;
+  - WebKit: `/experiments/inplay` in both states at 390x844 and 1440x900;
+  - Chromium: `/experiments` (the Research tab link) in both states at 360x800 and 1440x900.
+
+  This is Chromium and WebKit emulation, not a physical phone. The shots were reviewed locally by the
+  author, described in the PR and not attached.
