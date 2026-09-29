@@ -70,7 +70,8 @@ def test_demo_page_renders_the_fixture_replay(demo):
     assert status.startswith("200")
     for text in ("Fixture replay · not live", "Position · simulated", "Policy proposal", "Exit · proposal only",
                  "Proposed · not sent", "Hold versus exit", "SYNTHETIC cohort", "not evidence of an edge",
-                 "Net proceeds (not profit)", "a displayed bid is not a fill", "Blocker and approval"):
+                 "Net proceeds (not profit)", "a displayed bid is not a fill", "Blocker and approval",
+                 "Resting sale never placed", "none: a policy replay with modelled latency"):
         assert text in body, text
     assert "after-cost figure unavailable: fee unknown" in body  # KXNFLGAME fees: never shown as a number
     assert 'class="num pos"' not in body and 'class="num neg"' not in body  # nothing coloured as a result

@@ -168,9 +168,12 @@ def comparison_section(view: dict[str, Any]) -> str:
     for a in comp.get("arms") or []:
         title = ARM_LABELS.get((a.get("arm"), a.get("semantics")), f"{a.get('arm')} · {a.get('semantics')}")
         incomplete = a.get("incomplete") or 0
+        not_placed = a.get("not_placed") or 0
         aside = c.state_text("INPLAY_ENTRIES", label=f"{a.get('complete')}/{a.get('entries')} complete",
-                             kind="warn" if incomplete else "nd")
+                             kind="warn" if incomplete or not_placed else "nd")
         is_hold = a.get("arm") == "HOLD"
+        placed = ([("Resting sale never placed", c.num(pr.count(not_placed), reason="not recorded"))]
+                  if a.get("semantics") == "PREPLACED_LIMIT" else [])
         facts = c.facts([
             ("Replay P&L (gross)", _money(a.get("pnl_gross"), "incomplete entries: not valued", signed=True)),
             ("Replay P&L (net)", _money(a.get("pnl_net"), FEE_UNKNOWN, signed=True)),
@@ -180,7 +183,7 @@ def comparison_section(view: dict[str, Any]) -> str:
              _money(a.get("change_vs_hold_net"), FEE_UNKNOWN, signed=True)),
             ("Worst entry (gross)", _money(a.get("worst_entry_pnl_gross"), "no complete entry", signed=True)),
             ("Best entry (gross)", _money(a.get("best_entry_pnl_gross"), "no complete entry", signed=True)),
-        ])
+        ] + placed)
         rows.append(c.row(esc(title), sub=f"{a.get('entries')} entries · {a.get('clusters')} clusters",
                           aside=aside, body=facts))
     diag = view.get("diagnostics") or []
@@ -194,6 +197,8 @@ def comparison_section(view: dict[str, Any]) -> str:
         ("cohort", c.code(comp.get("cohort_id"))), ("cohort sha256", c.code(comp.get("cohort_sha256"))),
         ("cohort label", esc(comp.get("label"))), ("config variant", c.code(comp.get("config_variant"))),
         ("fill rule", c.code(comp.get("fill_rule"))), ("fee model", c.code(comp.get("fee_model"))),
+        ("diagnostic mode", c.code(comp.get("diagnostic_mode")) if comp.get("diagnostic_mode") else
+         esc("none: a policy replay with modelled latency")),
         ("fee claim basis", c.code(comp.get("fee_claim_basis"))), ("replay", c.code(comp.get("replay_version"))),
         ("notes", c.ul(comp.get("notes") or [])),
     ]))

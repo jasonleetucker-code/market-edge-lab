@@ -138,11 +138,13 @@ def _comparison(report: rp.ReplayReport) -> dict[str, Any]:
              "change_vs_hold_gross": _s(a.change_vs_hold_gross), "change_vs_hold_net": _s(a.change_vs_hold_net),
              "worst_entry_pnl_gross": a.risk.get("per_entry_pnl_gross_min"),
              "best_entry_pnl_gross": a.risk.get("per_entry_pnl_gross_max"),
-             "pnl_gross_pstdev": a.risk.get("per_entry_pnl_gross_pstdev"), "clusters": a.clusters} for a in report.arms]
+             "pnl_gross_pstdev": a.risk.get("per_entry_pnl_gross_pstdev"), "clusters": a.clusters,
+             "not_placed": a.not_placed} for a in report.arms]
     return {"cohort_id": report.cohort_id, "cohort_sha256": report.cohort_sha256, "data_kind": report.data_kind,
             "label": report.label, "config_variant": report.config_variant, "fill_rule": report.fill_rule,
             "fee_model": report.fee_model, "fee_claim_basis": report.fee_claim_basis,
-            "replay_version": report.version, "arms": arms, "notes": list(report.notes)}
+            "replay_version": report.version, "diagnostic_mode": report.diagnostic_mode, "arms": arms,
+            "notes": list(report.notes)}
 
 
 def _diagnostics(report: rp.ReplayReport) -> list[dict[str, Any]]:
