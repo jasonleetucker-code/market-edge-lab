@@ -89,6 +89,12 @@ OPTION_B_NOTE = ("No window qualified. A.C step 3: freeze [-5,+10] and record it
                  "(b), capturing the Kalshi book in the same run as the odds (a runner change that needs review).")
 
 
+def in_pilot_weeks(commence_utc: datetime) -> bool:
+    """True when the game's ET kickoff date is within the development pilot weeks (PILOT_FIRST_ET..PILOT_LAST_ET,
+    inclusive). The one predicate the calibration filters on."""
+    return PILOT_FIRST_ET <= se.et_date(commence_utc) <= PILOT_LAST_ET
+
+
 class TimingRefused(RuntimeError):
     """The calibration cannot be computed without its output depending on data it must not read (a truncated
     catalog or target list: the caps count T-60m rows). Nothing is shown and nothing is logged."""
@@ -162,7 +168,7 @@ def timing_observations(store: Any, *, as_of: datetime, windows: Sequence[Window
         if horizon not in HORIZONS:  # T-60m rows are skipped before anything about them is looked at
             continue
         t = se._capture_target(r)
-        if not PILOT_FIRST_ET <= se.et_date(t.commence_utc) <= PILOT_LAST_ET:
+        if not in_pilot_weeks(t.commence_utc):
             continue  # outside the development pilot weeks (A.C step 1): never read, counted or logged
         cutoff = deadline(t, cfg)
         if cutoff > as_of:

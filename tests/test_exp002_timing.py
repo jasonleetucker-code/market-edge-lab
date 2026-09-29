@@ -440,3 +440,14 @@ def test_a_truncated_catalog_refuses_with_no_counts(tmp_path, monkeypatch):
     assert code == 2 and out["state"] == "REFUSED" and "windows_tried" not in text and "TRUNCATED" not in text
     assert not re.search(r"\d", out["detail"].replace("T-60m", "").replace("T-24h", ""))  # no count leaks
     assert len(rev.read_log(own).uses) == before  # nothing shown, nothing logged
+
+
+@pytest.mark.parametrize("kickoff, inside", [
+    ("2026-09-27T03:59:00Z", False),  # 2026-09-26 23:59 EDT: before the pilot
+    ("2026-09-27T04:00:00Z", True),   # 2026-09-27 00:00 EDT: the first pilot date
+    ("2026-10-20T00:15:00Z", True),   # Monday night 2026-10-19 20:15 EDT: the last pilot date
+    ("2026-10-20T03:59:00Z", True),   # 2026-10-19 23:59 EDT
+    ("2026-10-20T04:00:00Z", False),  # 2026-10-20 00:00 EDT: after the pilot
+])
+def test_the_pilot_filter_boundaries_are_et_kickoff_dates(kickoff, inside):
+    assert tm.in_pilot_weeks(se.parse_utc(kickoff)) is inside
