@@ -495,6 +495,13 @@ STATES: dict[str, StateWord] = {
     "EV_FILL_DEPTH_UNKNOWN": StateWord("Depth unknown · truncated", WARN_K),
     "EV_FILL_INVALID_BOOK": StateWord("Invalid book", ERR_K),
     "EV_FILL_CONSERVATIVE_CAP": StateWord("Over the conservative cap", WARN_K),
+    # EXP-002 pre-freeze gate v3 (sports_evidence.noise_gate_v3) and freeze eligibility: no state is green; a gate
+    # verdict is a diagnostic and freeze eligibility is separate (owner directive 2026-09-28 §21A).
+    "EV_GATE_INSUFFICIENT_EVIDENCE": StateWord("Insufficient evidence", WARN_K),
+    "EV_GATE_INSUFFICIENT_DATA": StateWord("Insufficient data", WARN_K),
+    "EV_GATE_FAIL": StateWord("Fail · premise refuted", WARN_K),
+    "EV_GATE_ERROR": StateWord("Gate error", ERR_K),
+    "EV_FREEZE_NOT_ELIGIBLE": StateWord("Not eligible", WARN_K),
     "EV_SCREEN_INSUFFICIENT_EVIDENCE": StateWord("Insufficient evidence", WARN_K),
     "EV_SCREEN_ECONOMICALLY_UNVIABLE": StateWord("Economically unviable", WARN_K),
     "EV_SCREEN_BELOW_MINIMUM_USEFUL": StateWord("Below minimum useful", WARN_K),

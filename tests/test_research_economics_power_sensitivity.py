@@ -146,4 +146,7 @@ def test_the_script_is_stdlib_only_and_has_no_network_path():
     imported = {a.name.split(".")[0] for node in ast.walk(tree) if isinstance(node, ast.Import) for a in node.names}
     imported |= {node.module.split(".")[0] for node in ast.walk(tree)
                  if isinstance(node, ast.ImportFrom) and node.module}
-    assert imported <= {"__future__", "argparse", "json", "math", "random", "dataclasses", "statistics"}
+    # `--gate-v3-validation` imports the gate under test from this repository (edge_lab.sports_evidence, which
+    # makes no request on import); everything else is the standard library.
+    assert imported <= {"__future__", "argparse", "json", "math", "random", "dataclasses", "statistics", "sys",
+                        "pathlib", "edge_lab"}

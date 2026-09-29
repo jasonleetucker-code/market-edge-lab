@@ -1369,7 +1369,11 @@ def economic_evidence_a(ctx: Context) -> Loaded:
         return Loaded(NO_DATA, message=f"evidence database not readable here ({detail or 'missing'})")
     if view.get("state") != "OK" or not isinstance(view.get("family_a"), dict):
         return Loaded(ERROR, message=detail or "the paired-evidence view could not be read")
-    return Loaded(OK, view["family_a"])
+    family = view["family_a"]
+    gate = family.get("exp002_gate")
+    if isinstance(gate, dict) and gate.get("detail"):  # the EXP-002 gate line's error text: no local paths
+        family = {**family, "exp002_gate": {**gate, "detail": scrub_paths(str(gate["detail"]), ctx.config)}}
+    return Loaded(OK, family)
 
 
 PAYOFF_EXPERIMENT = "EXP-003"
