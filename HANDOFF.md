@@ -29,7 +29,7 @@ EVIDENCE:
       - Invalid E1 bounds are refused before the store opens.
     - #130 (e0d3330): Polymarket US related-market captures at T-60m, or after a game's T-6h decision
       cutoff, are withheld on the Terminal and in `pm-sports status`. UI_CONTRACT 2026-09-29
-      amendment (a)-(c) records the section 8 gate-line clause.
+      amendment: (a) the section 8 gate-line clause; (c) the Polymarket label-proxy state.
     - #131 (0d1e210): the remaining CLI label paths are closed:
       - `sports_evidence report` related proxies;
       - `observe status --market kalshi:KXNFL...` T-60m and post-cutoff books and settlement reads
@@ -55,8 +55,9 @@ EVIDENCE:
     - measurement v3; gates v2 and v3 both INSUFFICIENT_DATA;
     - E1: 0 entries, all BOUNDS_UNDECLARED (the protocol leaves t_max and u_max UNKNOWN);
     - T-6h AT_OR_AFTER_ODDS pairing yield 15/16 = 0.9375 (week of 09-22).
-  - EXP-002 evidence-use log: four hand-recorded POSSIBLE exposures, none a confirmed view; check-frozen
+  - EXP-002 evidence-use log: six hand-recorded POSSIBLE exposures, none a confirmed view; check-frozen
     and validate pass:
+    - eu-7f8e6128… and eu-f4954194… (#124/#126): the Terminal T-60m book, 2026-09-26 to 02:09:50Z;
     - eu-4defeb1a…: Polymarket T-60m on the Terminal and pm-sports status, 2026-09-26 to 13:16:16Z;
     - eu-1b511255…: its closing follow-up for the CLI paths, to 14:24:17Z;
     - eu-9a3aeaf3…: Odds T-60m consensus, 2026-09-24 to 14:36:08Z;
