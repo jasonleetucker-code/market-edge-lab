@@ -100,6 +100,7 @@ from urllib.parse import parse_qs, urlsplit
 
 from . import experiments as registry
 from . import fee_schedules, kalshi_quotes, odds_consensus
+from . import polymarket_sports as pms
 from . import research_economics as rec
 from . import research_evidence as rev
 from .forward import eastern_offset
@@ -1014,7 +1015,10 @@ def _capture_target(r: Mapping[str, Any]) -> CaptureTarget:
 
 
 def _pm_related(store: Any, as_of: datetime) -> dict[str, list[dict[str, Any]]]:
-    """Polymarket US captures of markets related (never equivalent) to each Odds event, by event."""
+    """Polymarket US captures of markets related (never equivalent) to each Odds event, by event. Each entry says
+    whether it is an EXP-002 label proxy (`polymarket_sports.is_label_proxy`: a capture at T-60m, at an unknown
+    horizon, or received after the game's T-6h decision cutoff); such an entry's price is withheld from the report
+    unless a logged --with-results run shows it (`_hide_label_books`)."""
     by_target = {}
     for t in store.pm_sports_targets():
         t = dict(t)
@@ -1031,6 +1035,8 @@ def _pm_related(store: Any, as_of: datetime) -> dict[str, list[dict[str, Any]]]:
         out.setdefault(native, []).append({
             "market_slug": t["market_slug"], "observation_id": o["id"], "received_utc": _iso(received),
             "snapshot_id": o.get("snapshot_id"), "yes_ask": o.get("yes_ask"), "relation": REL_RELATED,
+            "offset_label": t.get("offset_label"), "game_start_utc": t.get("game_start_utc"),
+            "is_label_proxy": pms.is_label_proxy(t.get("offset_label"), t.get("game_start_utc"), _iso(received)),
             "use": "stored, listed, never compared: a related market cannot support an equivalent-payoff claim"})
     return out
 
@@ -1638,11 +1644,30 @@ LABEL_BOOK_REASON = "T-60m book withheld (label)"
 _SIDE_REASON = re.compile(r"^([A-Z_]+) \[(.+?)\]: ")  # the row-level copy of a side's reason (`_row`)
 
 
+def _hide_related_proxies(entries: Any) -> Any:
+    """Related-market (Polymarket US) captures for display: a label proxy loses its price, size and depth fields
+    (`polymarket_sports.LABEL_PROXY_FIELDS`) and says so; a pre-decision capture is unchanged. An entry whose proxy
+    state is missing is treated as a proxy (fails closed)."""
+    if not isinstance(entries, list):
+        return entries
+    out = []
+    for x in entries:
+        if isinstance(x, Mapping) and x.get("is_label_proxy") is not False:
+            x = {k: v for k, v in x.items() if k not in pms.LABEL_PROXY_FIELDS}
+            x["label_proxy"] = pms.LABEL_PROXY_HIDDEN
+        out.append(x)
+    return out
+
+
 def _hide_label_books(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """T-60m rows without their book prices, sizes, depth, ladder and free-text side reasons (a crossed book's
-    anomaly quotes its bids; a malformed book's reason carries parser text). Stages and counts are kept."""
+    """Report rows for a view that logs no label access. Every row: related-market captures that are EXP-002 label
+    proxies lose their prices (`_hide_related_proxies`). T-60m rows also lose their book prices, sizes, depth,
+    ladder and free-text side reasons (a crossed book's anomaly quotes its bids; a malformed book's reason carries
+    parser text). Stages and counts are kept."""
     out = []
     for r in rows:
+        if "related_not_equivalent" in r:
+            r = {**r, "related_not_equivalent": _hide_related_proxies(r["related_not_equivalent"])}
         if r.get("horizon") != TARGET_HORIZON or not r.get("sides"):
             out.append(r)
             continue
@@ -3284,14 +3309,17 @@ def record_results_view(report: Mapping[str, Any], *, log: Path, actor: str, cod
     event in the given evidence-use log (`research_evidence.record_use`), with the protocol's prohibited
     inputs and label scopes enforced. Raises `research_evidence.EvidenceError` (ProhibitedInput included)
     when it cannot be logged; the caller then shows nothing."""
-    shown = sorted(r["commence_utc"] for r in report["rows"]
-                   if isinstance(r.get("outcome"), dict) and r.get("commence_utc"))
+    shown = sorted({r["commence_utc"] for r in report["rows"] if r.get("commence_utc") and (
+        isinstance(r.get("outcome"), dict)
+        or any(isinstance(x, Mapping) and x.get("is_label_proxy") is not False
+               for x in r.get("related_not_equivalent") or []))})
     return _record_label_view(
         report.get("protocol") or {}, shown, as_of_utc=report["as_of_utc"], sha=report["output_sha256"], log=log,
         actor=actor, code_version=code_version, experiments_root=experiments_root, now=now,
         dataset_id="sports_evidence:nfl_paired_report", dataset_version=JOIN_VERSION,
         tool="python -m edge_lab.sports_evidence report --with-results",
-        note=f"paired-evidence report as of {report['as_of_utc']}; outcome states and results shown")
+        note=f"paired-evidence report as of {report['as_of_utc']}; outcome states and results shown, with T-60m "
+             "Kalshi book prices and related-market (Polymarket US) label-proxy capture prices")
 
 
 def record_markout_view(measurement: Mapping[str, Any], *, log: Path, actor: str, code_version: str,
