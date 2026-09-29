@@ -47,7 +47,7 @@ import os
 import sys
 import uuid
 from contextlib import closing
-from dataclasses import dataclass, fields, is_dataclass, replace
+from dataclasses import dataclass, field, fields, is_dataclass, replace
 from datetime import datetime, timezone
 from decimal import Decimal, localcontext
 from enum import Enum
@@ -55,7 +55,7 @@ from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 from urllib.parse import parse_qs, urlsplit
 
-from . import odds_api
+from . import odds_api, odds_schedule
 from .freshness import Freshness, assess, combine, parse_utc
 from .provenance import canonical_json, sha256_hex
 from .sources import get_source
@@ -204,6 +204,9 @@ class EventConsensus:
     unsupported: tuple[UnsupportedGroup, ...]
     capture_targets: tuple[CaptureTarget, ...]
     freshness_at_receipt: Freshness = Freshness.UNKNOWN  # worst of its propositions; UNKNOWN when none
+    # Set only on a display copy whose figures are withheld (`withhold_label_proxies`): the HIDDEN marker and
+    # the counts. Omitted from the output when None, so every other result (and its hash) is unchanged.
+    label_proxy: Mapping[str, Any] | None = field(default=None, metadata={"omit_none": True})
 
 
 @dataclass(frozen=True)
@@ -267,7 +270,8 @@ def _plain(value: Any) -> Any:
     if isinstance(value, Decimal):
         return _dec(value)
     if is_dataclass(value) and not isinstance(value, type):
-        return {f.name: _plain(getattr(value, f.name)) for f in fields(value)}
+        return {f.name: _plain(getattr(value, f.name)) for f in fields(value)
+                if not (f.metadata.get("omit_none") and getattr(value, f.name) is None)}
     if isinstance(value, Mapping):
         return {str(k): _plain(v) for k, v in value.items()}
     if isinstance(value, (list, tuple)):
@@ -662,6 +666,67 @@ def build_artifact(results: Sequence[SnapshotConsensus], *, selection: Mapping[s
     return body
 
 
+# --------------------------------------------------------------------------- EXP-002 label proxy (display)
+#
+# A sportsbook consensus received after an NFL game's T-6h decision cutoff (or captured for its T-60m target) tracks
+# the Kalshi T-60m book that is EXP-002's label (docs/research/EXP002_FREEZE_PROPOSAL.md §4). The displays of this
+# module's results (the `odds consensus` CLI and the Terminal's "Consensus at this capture") withhold such an
+# event's probabilities, prices, lines and de-vigs, and the free text of its parse problems (an invalid price is
+# quoted). The one rule is `odds_schedule.is_label_proxy`, judged on the Odds event's own kickoff (no tolerance:
+# the same source). Status, receipt, freshness, book and proposition counts stay; the stored snapshots and the
+# builders `sports_evidence` uses are unchanged. There is no reveal path in these displays.
+LABEL_PROXY_SPORTS = ("americanfootball_nfl",)  # EXP-002's scope (sports:nfl:moneyline); other sports unaffected
+LABEL_PROXY_HIDDEN = ("HIDDEN (EXP-002 label proxy: a sportsbook capture at T-60m or after the T-6h decision "
+                      "cutoff; its probabilities, prices, lines and de-vigs are not shown here)")
+LABEL_PROXY_REASON = "withheld (EXP-002 label proxy)"
+
+
+def is_label_proxy_event(event: EventConsensus, received_at_utc: Any, snapshot_sport: str | None = None) -> bool:
+    """One event of one capture: an NFL event (or one whose sport is not stated) received after its own T-6h
+    decision cutoff, or captured for a target whose horizon is not pre-decision (T-60m, or unknown)."""
+    sport = event.sport_key or snapshot_sport
+    if sport is not None and sport not in LABEL_PROXY_SPORTS:
+        return False
+    if any(t.offset not in odds_schedule.PRE_DECISION_OFFSETS for t in event.capture_targets):
+        return True
+    return odds_schedule.after_decision(event.commence_time_utc, received_at_utc)
+
+
+def _reduced(problems: Sequence[str], natives: set[str]) -> tuple[str, ...]:
+    out: list[str] = []
+    for p in problems:
+        hit = next((n for n in natives if p.startswith(f"PARSE: {n}/") or p.startswith(f"PARSE: {n}:")), None)
+        text = f"PARSE: {hit}: {LABEL_PROXY_REASON}" if hit is not None else p
+        if text not in out:
+            out.append(text)
+    return tuple(out)
+
+
+def withhold_label_proxies(result: SnapshotConsensus | None) -> SnapshotConsensus | None:
+    """A display copy of one result: every label-proxy event keeps its identity, teams, kickoff, capture targets,
+    book count and freshness, and loses its propositions and unsupported groups (their counts are kept in
+    `label_proxy`); parse problems naming it keep only their code. Re-sealed, so `output_sha256` is the hash of
+    what is shown. Anything else is returned unchanged."""
+    if result is None or not result.events:
+        return result
+    hidden: set[str] = set()
+    events = []
+    for e in result.events:
+        if not is_label_proxy_event(e, result.received_at_utc, result.sport):
+            events.append(e)
+            continue
+        hidden.add(e.event_id)
+        events.append(replace(e, propositions=(), unsupported=(), label_proxy={
+            "state": LABEL_PROXY_HIDDEN, "propositions": len(e.propositions),
+            "supported_propositions": sum(p.status is ConsensusStatus.SUPPORTED for p in e.propositions),
+            "unsupported_groups": len(e.unsupported)}))
+    if not hidden:
+        return result
+    newer = tuple(replace(u, problems=_reduced(u.problems, hidden)) for u in result.newer_unusable)
+    return _sealed(replace(result, events=tuple(events), problems=_reduced(result.problems, hidden),
+                           newer_unusable=newer))
+
+
 # --------------------------------------------------------------------------- CLI
 
 
@@ -679,7 +744,8 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="edge-lab odds consensus",
         description="RESEARCH BENCHMARK - NOT EXECUTABLE. Sportsbook consensus from stored Odds API snapshots (ADR 0033). "
-                    "Opens the evidence store read-only; no network; no credits.")
+                    "Opens the evidence store read-only; no network; no credits. An NFL event read at T-60m or after "
+                    "its T-6h decision cutoff is withheld (EXP-002 label proxy); there is no option to show it.")
     parser.add_argument("--db", default="data/edge_lab.sqlite3")
     pick = parser.add_mutually_exclusive_group()
     pick.add_argument("--snapshot", type=int, help="one stored odds snapshot id")
@@ -725,6 +791,7 @@ def main(argv: list[str] | None = None) -> int:
     except ValueError as exc:
         print(json.dumps({"command": "odds consensus", "state": "INVALID", "detail": str(exc)}))
         return 2
+    results = tuple(r for r in (withhold_label_proxies(x) for x in results) if r is not None)
     text = json.dumps(build_artifact(results, selection=selection), sort_keys=True, indent=2)
     if args.out:
         _write_atomic(Path(args.out), text + "\n")

@@ -106,6 +106,7 @@ from . import research_evidence as rev
 from .forward import eastern_offset
 from .freshness import Freshness, assess, combine, parse_utc
 from .odds_schedule import CaptureTarget, PilotConfig, deadline, effective_due
+from .odds_schedule import is_label_proxy as odds_is_label_proxy
 from .provenance import canonical_json, sha256_hex
 from .sources import get_source
 
@@ -1659,13 +1660,66 @@ def _hide_related_proxies(entries: Any) -> Any:
     return out
 
 
+# The sportsbook consensus of a T-60m (or post-cutoff) row is a label proxy too: it tracks the Kalshi T-60m book that
+# is E1's exit label (PR D; `odds_consensus.withhold_label_proxies` for the other displays; one rule,
+# `odds_schedule.is_label_proxy`). Without a logged --with-results run, these Odds-derived figures are withheld.
+ODDS_PROXY_FIELDS = ("probabilities", "dispersion")
+SIDE_ODDS_PROXY_FIELDS = ("consensus_probability", "tie_adjusted_fair_interval")
+# Only this stage's reasons quote provider text about the capture's offers (`_h2h`'s unsupported groups); every other
+# odds reason is a fixed phrase, a state or a time (not captured, event absent, received after the cutoff, a failed
+# integrity check, stale books), so it carries no figure and is kept as written.
+_ODDS_FIGURE_STAGES = ("CONSENSUS_NOT_SUPPORTED",)
+ODDS_HASH_NOTE = ("output_sha256 is the hash of the stored benchmark (every event, before withholding), not of the "
+                  "values shown")
+
+
+def _hide_odds_proxy(r: dict[str, Any]) -> dict[str, Any]:
+    """One row's sportsbook figures for a view that logs no label access: when the row's horizon and odds receipt
+    make it an EXP-002 label proxy (T-60m, an unknown horizon, or received after the game's T-6h decision cutoff),
+    its consensus probabilities and dispersion, each side's consensus probability and tie-adjusted interval, and
+    the free text of the odds reasons that quote the capture's offers (`_ODDS_FIGURE_STAGES`) are withheld; the
+    odds stage, receipt, snapshot, hashes (`ODDS_HASH_NOTE`), book counts and freshness stay. Anything else is
+    returned unchanged."""
+    odds = r.get("odds") if isinstance(r.get("odds"), dict) else {}
+    if not odds_is_label_proxy(r.get("horizon"), r.get("commence_utc"), odds.get("received_utc")):
+        return r
+    stage = odds.get("stage")
+    code = getattr(stage, "value", stage)
+    new_odds = {k: v for k, v in odds.items() if k not in ODDS_PROXY_FIELDS}
+    figures_in_reasons = code in _ODDS_FIGURE_STAGES
+    if new_odds.get("reasons") and figures_in_reasons:
+        new_odds["reasons"] = [f"{code}: {odds_consensus.LABEL_PROXY_REASON}"]
+    if new_odds != odds:
+        new_odds["label_proxy"] = odds_consensus.LABEL_PROXY_HIDDEN
+        if new_odds.get("output_sha256"):
+            new_odds["output_sha256_note"] = ODDS_HASH_NOTE
+    sides = {}
+    for team, side in (r.get("sides") or {}).items():
+        kept = {k: v for k, v in side.items() if k not in SIDE_ODDS_PROXY_FIELDS}
+        if len(kept) != len(side):
+            kept["odds_label_proxy"] = odds_consensus.LABEL_PROXY_HIDDEN
+        sides[team] = kept
+    reasons = list(r.get("reasons") or [])
+    if figures_in_reasons:
+        reasons = list(dict.fromkeys(f"{code}: {odds_consensus.LABEL_PROXY_REASON}" if str(x).startswith(f"{code}: ")
+                                     else x for x in reasons))
+    if new_odds == odds and sides == (r.get("sides") or {}) and reasons == list(r.get("reasons") or []):
+        return r
+    out = {**r, "sides": sides, "reasons": reasons}
+    if "odds" in r:
+        out["odds"] = new_odds
+    return out
+
+
 def _hide_label_books(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Report rows for a view that logs no label access. Every row: related-market captures that are EXP-002 label
-    proxies lose their prices (`_hide_related_proxies`). T-60m rows also lose their book prices, sizes, depth,
-    ladder and free-text side reasons (a crossed book's anomaly quotes its bids; a malformed book's reason carries
-    parser text). Stages and counts are kept."""
+    proxies lose their prices (`_hide_related_proxies`), and a label-proxy row's sportsbook figures are withheld
+    (`_hide_odds_proxy`). T-60m rows also lose their book prices, sizes, depth, ladder and free-text side reasons
+    (a crossed book's anomaly quotes its bids; a malformed book's reason carries parser text). Stages and counts
+    are kept."""
     out = []
     for r in rows:
+        r = _hide_odds_proxy(r)
         if "related_not_equivalent" in r:
             r = {**r, "related_not_equivalent": _hide_related_proxies(r["related_not_equivalent"])}
         if r.get("horizon") != TARGET_HORIZON or not r.get("sides"):
@@ -3303,6 +3357,13 @@ def _clock() -> datetime:
     return datetime.now(UTC)
 
 
+def _odds_proxy_shown(r: Mapping[str, Any]) -> bool:
+    """A row of a logged report that shows a T-60m / post-cutoff sportsbook consensus (an EXP-002 label proxy)."""
+    odds = r.get("odds") if isinstance(r.get("odds"), Mapping) else {}
+    return bool(odds.get("probabilities")) and odds_is_label_proxy(r.get("horizon"), r.get("commence_utc"),
+                                                                   odds.get("received_utc"))
+
+
 def record_results_view(report: Mapping[str, Any], *, log: Path, actor: str, code_version: str,
                         experiments_root: Path | None = None, now: datetime | None = None) -> str:
     """Log a report run that shows outcome labels, before anything is printed: one LABEL_RESULT_INSPECTION
@@ -3312,14 +3373,16 @@ def record_results_view(report: Mapping[str, Any], *, log: Path, actor: str, cod
     shown = sorted({r["commence_utc"] for r in report["rows"] if r.get("commence_utc") and (
         isinstance(r.get("outcome"), dict)
         or any(isinstance(x, Mapping) and x.get("is_label_proxy") is not False
-               for x in r.get("related_not_equivalent") or []))})
+               for x in r.get("related_not_equivalent") or [])
+        or _odds_proxy_shown(r))})
     return _record_label_view(
         report.get("protocol") or {}, shown, as_of_utc=report["as_of_utc"], sha=report["output_sha256"], log=log,
         actor=actor, code_version=code_version, experiments_root=experiments_root, now=now,
         dataset_id="sports_evidence:nfl_paired_report", dataset_version=JOIN_VERSION,
         tool="python -m edge_lab.sports_evidence report --with-results",
         note=f"paired-evidence report as of {report['as_of_utc']}; outcome states and results shown, with T-60m "
-             "Kalshi book prices and related-market (Polymarket US) label-proxy capture prices")
+             "Kalshi book prices, related-market (Polymarket US) label-proxy capture prices and the T-60m / "
+             "post-cutoff sportsbook consensus")
 
 
 def record_markout_view(measurement: Mapping[str, Any], *, log: Path, actor: str, code_version: str,

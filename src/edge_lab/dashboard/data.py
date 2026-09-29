@@ -1184,7 +1184,8 @@ def odds_consensus_at_capture(ctx: Context, event_id: str, received_utc: Any) ->
     evidence database or the contract is unavailable, or the receipt time is unknown; ERROR on a read
     failure. Called only for the captured rows a page shows (each call parses one event of one
     snapshot, plus newer unusable ones), and memoized until an odds snapshot received by `as_of` is
-    added. Nothing here computes a probability."""
+    added. Nothing here computes a probability. A label-proxy event (EXP-002: T-60m, or received after the
+    T-6h decision cutoff) comes back withheld (`odds_consensus.withhold_label_proxies`)."""
     import importlib
 
     if ctx.store.status != OK:
@@ -1208,7 +1209,9 @@ def odds_consensus_at_capture(ctx: Context, event_id: str, received_utc: Any) ->
         if key in _CONSENSUS:
             _CONSENSUS.move_to_end(key)
             return Loaded(OK, _CONSENSUS[key])
-        result = module.consensus_for_event(store, str(event_id), at)
+        # EXP-002 label proxy: the module's own display rule withholds an NFL event read after its T-6h
+        # decision cutoff (or for a T-60m target); the Terminal has no path that reveals it.
+        result = module.withhold_label_proxies(module.consensus_for_event(store, str(event_id), at))
     except Exception as exc:  # noqa: BLE001 - shown as an error state on this row only
         return Loaded(ERROR, message=short_error(exc, ctx.config))
     _CONSENSUS[key] = result

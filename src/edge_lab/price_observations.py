@@ -67,6 +67,9 @@ from .forward import DeadlineExceeded, LockBusy, exclusive_lock
 from .freshness import Freshness, parse_utc
 from .http import HttpFetchError, Pacer, fetch_json_result
 from .kalshi import PACER as KALSHI_PACER, SOURCE as KALSHI_SOURCE, event_ticker_of
+from .odds_schedule import DECISION_OFFSET as ODDS_DECISION_OFFSET
+from .odds_schedule import PRE_DECISION_OFFSETS as ODDS_PRE_DECISION_OFFSETS
+from .odds_schedule import decision_cutoff as odds_decision_cutoff
 from .opportunity import DepthLadder, ExecutableQuote, PriceGrid
 from .provenance import bytes_sha256
 from .sources import get_source
@@ -1166,8 +1169,8 @@ def status(store: SnapshotStore, *, now: datetime,
 # KXNFLGAME or KXNFLSPREAD) has an unknown horizon and is withheld (fails closed). Every
 # other row (EXP-001 / KXHIGHNY, ADR 0030 observations) is unchanged. There is no reveal path here; the stored rows
 # are unchanged (raw evidence).
-NFL_PRE_DECISION_OFFSETS = ("T-24h", "T-6h")
-NFL_DECISION_OFFSET = "T-6h"
+NFL_PRE_DECISION_OFFSETS = ODDS_PRE_DECISION_OFFSETS  # odds_schedule owns the EXP-002 decision horizon
+NFL_DECISION_OFFSET = ODDS_DECISION_OFFSET
 NFL_LABEL_FIELDS = ("bid", "ask", "ask_size", "depth", "price_grid")
 NFL_LABEL_HIDDEN = ("HIDDEN (EXP-002 label: a Kalshi NFL book at T-60m, after the T-6h decision cutoff or at an "
                     "unknown horizon, or a settlement read; its prices, sizes, depth and result are not shown here)")
@@ -1177,21 +1180,15 @@ _REASON_CODE = re.compile(r"^([A-Z][A-Z0-9_]*):")
 
 
 def nfl_decision_cutoff(commence_utc: Any) -> datetime | None:
-    """EXP-002's T-6h decision cutoff of a game: `odds_schedule.deadline` of its T-6h Odds target under the Odds
-    runner's default `PilotConfig` (the cutoff `sports_evidence` uses). None when the kickoff is unknown.
+    """EXP-002's T-6h decision cutoff of a game: `odds_schedule.decision_cutoff` (the one rule: `deadline` of its T-6h
+    Odds target under the Odds runner's default `PilotConfig`, the cutoff `sports_evidence` uses), at the stored
+    kickoff with no tolerance. None when the kickoff is unknown.
 
     The kickoff is the one stored in the book target's detail when it was planned. If a game were later moved much
     earlier, its real cutoff would move earlier too and a book between the two cutoffs would be shown. That matters
     only for a T-6h book near its cutoff; a T-24h book is received about 18 h before it, so a reschedule of that size
     is needed before it could matter. Documented rather than handled."""
-    from .odds_schedule import DEFAULT_OFFSETS, CaptureTarget, PilotConfig, deadline
-
-    start = _t(commence_utc)
-    if start is None:
-        return None
-    off = next(o for o in DEFAULT_OFFSETS if o.label == NFL_DECISION_OFFSET)
-    return deadline(CaptureTarget("", NFL_SPORT, "", off.label, off.priority, start, start - off.before),
-                    PilotConfig())
+    return odds_decision_cutoff(commence_utc)
 
 
 def nfl_label_withheld(target: Any, *, venue: Any, native_market_id: Any, at_utc: Any) -> bool:
