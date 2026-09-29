@@ -23,8 +23,11 @@ from . import common as cm
 
 MODE_LABELS = {"FIXTURE": "Fixture replay · not live", "SYNTHETIC_REPLAY": "Synthetic replay · not live",
                "NOT_AUTHORIZED": "No in-play source authorized"}
-STATE_WORDS = {  # (label, kind): nothing is green; a populated fixture is information, not success
-    "POPULATED": ("Fixture evidence", "info"), "EMPTY": ("No evidence in journal", "nd"),
+# A populated view is labelled by where its evidence came from (the mode), never a fixed word.
+POPULATED_WORDS = {"FIXTURE": "Fixture evidence", "SYNTHETIC_REPLAY": "Synthetic evidence",
+                   "RECORDED": "Recorded evidence"}
+STATE_WORDS = {  # (label, kind): nothing is green; a populated view is information, not success
+    "POPULATED": ("Evidence of unknown origin", "warn"), "EMPTY": ("No evidence in journal", "nd"),
     "STALE": ("Stale book — not actionable", "warn"), "PARTIAL": ("Partial evidence", "warn"),
     "UNSUPPORTED": ("Policy unsupported", "nd"), "PAUSED": ("Market paused", "warn"),
     "ERROR": ("Data unavailable", "err"), "NOT_AUTHORIZED": ("Not authorized", "warn"),
@@ -67,19 +70,39 @@ def _seconds(value: Any, reason: str) -> str:
     return c.num(None if v is None else f"{v.normalize():f} s", reason=reason)
 
 
+def state_words(mode: Any) -> dict[str, tuple[str, str]]:
+    """STATE_WORDS with the populated label taken from the mode (fixture, synthetic replay, recorded)."""
+    words = dict(STATE_WORDS)
+    if mode in POPULATED_WORDS:
+        words["POPULATED"] = (POPULATED_WORDS[mode], "info")
+    return words
+
+
 def header(view: dict[str, Any]) -> str:
     mode, state = view.get("mode"), view.get("state")
+    words = state_words(mode)
     capsules = (_badge({k: (v, "warn") for k, v in MODE_LABELS.items()}, mode, "INPLAY_MODE") + " "
-                + _badge(STATE_WORDS, state, "INPLAY_STATE"))
-    label, kind = STATE_WORDS.get(state, ("Unknown state", "warn"))
+                + _badge(words, state, "INPLAY_STATE"))
+    label, kind = words.get(state, ("Unknown state", "warn"))
     kind = {"info": "info", "warn": "warn", "err": "err"}.get(kind, "nd")
     top = f'<p class="meta">{esc(view.get("label") or "")}</p><p>{capsules}</p>'
     if state in ("ERROR", "NOT_AUTHORIZED"):  # the error or blocked state below carries the detail once
         return top
     as_of = view.get("as_of_utc")
-    clock =(f"Replay clock {pr.datetime_et(as_of)} (the fixture's time, not now)." if as_of else
+    clock = (f"Replay clock {pr.datetime_et(as_of)} (the fixture's time, not now)." if as_of else
              "No replay clock: nothing was replayed.")
     return top + c.status_line(kind, label, f"{view.get('detail') or ''} {clock}".strip())
+
+
+CAVEAT_PREFIXES = ("FEE_UNKNOWN",)  # caveats on a proposal's figures, not the reason for the proposal
+
+
+def primary_reason(reasons: list[str]) -> str | None:
+    """The reason the decision was taken: the first reason that is not a figure caveat (FEE_UNKNOWN),
+    so an EXIT reads TARGET_REACHED and a block reads its blocking reason. A caveat is shown only when
+    it is the only reason. Every reason stays listed in Policy details."""
+    decisive = [r for r in reasons if not r.startswith(CAVEAT_PREFIXES)]
+    return (decisive or reasons or [None])[0]
 
 
 def position_section(view: dict[str, Any]) -> str:
@@ -133,8 +156,10 @@ def policy_section(view: dict[str, Any]) -> str:
         ("Limit", c.num(pr.cents(pol.get("limit_price")), reason="no limit")),
         ("Execution assumption", c.txt((pol.get("execution") or "").replace("_", " ").lower() or None,
                                        reason="none")),
-        ("Primary reason", c.txt(reasons[0] if reasons else None, reason="no reason recorded")),
-    ], text_cols=(4, 5))
+        ("Primary reason", c.txt(primary_reason(reasons), reason="no reason recorded")),
+        ("Other reasons", c.txt(f"{len(reasons) - 1} more in Policy details" if len(reasons) > 1 else "none",
+                                reason="none")),
+    ], text_cols=(4, 5, 6))
     size = pr.count(pr.dec(est.get("quantity")))
     estimate = c.facts([
         ("Contracts", c.num(size, reason="no inventory")),
@@ -202,9 +227,13 @@ def comparison_section(view: dict[str, Any]) -> str:
         ("fee claim basis", c.code(comp.get("fee_claim_basis"))), ("replay", c.code(comp.get("replay_version"))),
         ("notes", c.ul(comp.get("notes") or [])),
     ]))
-    meta = f"{comp.get('data_kind')} cohort · identical entries in every arm · not evidence of an edge"
-    return c.section("Hold versus exit", '<ul class="rows">' + "".join(rows) + "</ul>" + details, meta=meta,
-                     sid="ip-cmp", flush=True)
+    scope = comp.get("scope_note") or "A separate replay cohort, not this contract."
+    # the scope is body text (section meta is hidden on phones), read before any arm; a padded section
+    # body keeps it aligned, and its rows still run edge to edge
+    note = f'<p class="note">{esc(scope)}</p>'
+    meta = "Identical entries in every arm · not evidence of an edge"
+    return c.section("Hold versus exit", note + '<ul class="rows">' + "".join(rows) + "</ul>" + details,
+                     meta=meta, sid="ip-cmp")
 
 
 def authority_section(view: dict[str, Any]) -> str:

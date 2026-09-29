@@ -199,7 +199,8 @@ def build_view(*, mode: Mode, market_ticker: str, game_label: str, transitions: 
         detail = ("The book is awaiting resync." if state.status is not ev.BookStatus.VALID else
                   "Gaps, failures or incomplete entries in the window; they are kept, not dropped.")
     else:
-        vstate, detail = ViewState.POPULATED, "Fixture evidence reconstructed; every figure is a research estimate."
+        vstate, detail = ViewState.POPULATED, (f"Evidence reconstructed from a {data_kind.value.lower()} journal; every "
+                                               "figure is a research estimate.")
 
     out = _base(vstate, mode, as_of.isoformat(), detail)
     out["contract"] = {"market_id": f"kalshi:{market_ticker}", "native_id": market_ticker, "game": game_label,
@@ -227,6 +228,10 @@ def build_view(*, mode: Mode, market_ticker: str, game_label: str, transitions: 
     ]
     if report is not None:
         out["comparison"] = _comparison(report)
+        games = len(cohort.entries)
+        # the replay's cohort is its own set of games: say so beside a contract it does not describe
+        out["comparison"]["scope_note"] = (f"A {report.data_kind.lower()} cohort of {games} game"
+                                           f"{'' if games == 1 else 's'}, not this contract ({market_ticker}).")
         out["diagnostics"] = _diagnostics(report)
         out["after_cost_claim"] = report.after_cost_claim
         out["after_cost_reason"] = report.after_cost_reason

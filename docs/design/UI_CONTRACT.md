@@ -300,13 +300,13 @@ fee verification, venue registry and full receipt in disclosures.
 **In-play research `/experiments/inplay`** (#122; nav Research & Data; no global item) — the
 `inplay_view` contract (inplay-view/1) as: label "IN-PLAY RESEARCH · NOT LIVE · NOT AN EDGE CLAIM",
 a mode capsule (Fixture replay · not live, Synthetic replay · not live, No in-play source authorized;
-never LIVE) and a state capsule; a status line with the replay clock ("the fixture's time, not now");
+never LIVE) and a state capsule whose populated word follows the mode (Fixture, Synthetic or Recorded evidence); a status line with the replay clock ("the fixture's time, not now");
 Position · simulated (contract, game, book reconstruction state and age at the replay clock, coverage,
 market state, simulated initial / remaining inventory, reserved by resting sales; reconstruction details
 and every kept failure in a disclosure); Policy proposal (action "· proposal only", decision "Proposed ·
-not sent" or "Blocked · no new risk", quantity, limit, execution assumption, primary reason; exit proceeds
+not sent" or "Blocked · no new risk", quantity, limit, execution assumption, primary reason (the decision's own reason, never the fee caveat; every reason in Policy details); exit proceeds
 estimate at size with gross at displayed bids, fees, net "not profit" — unknown fees read "after-cost
-figure unavailable", never a number); Hold versus exit (one row per arm and execution semantics with
+figure unavailable", never a number); Hold versus exit (a note first: "A synthetic cohort of N games, not this contract (<ticker>)"; then one row per arm and execution semantics with
 replay P&L gross and net, change vs hold, worst and best entry — signed, never coloured; oracle diagnostics
 and provenance in a disclosure); Blocker and approval (authority, the pilot "PROPOSED, NOT APPROVED",
 blocker; assumptions in a disclosure). Production reads "No in-play source is authorized". No balance,

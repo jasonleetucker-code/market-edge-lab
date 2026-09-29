@@ -69,7 +69,7 @@ def test_demo_page_renders_the_fixture_replay(demo):
     status, body = get(demo, "/experiments/inplay")
     assert status.startswith("200")
     for text in ("Fixture replay · not live", "Position · simulated", "Policy proposal", "Exit · proposal only",
-                 "Proposed · not sent", "Hold versus exit", "SYNTHETIC cohort", "not evidence of an edge",
+                 "Proposed · not sent", "Hold versus exit", "synthetic cohort of 12 games", "not evidence of an edge",
                  "Net proceeds (not profit)", "a displayed bid is not a fill", "Blocker and approval",
                  "Resting sale never placed", "none: a policy replay with modelled latency"):
         assert text in body, text
@@ -121,6 +121,79 @@ def test_error_state_renders_on_the_page(monkeypatch, prod):
     monkeypatch.setattr(iv, "not_authorized_view", lambda: {"schema": "other"})
     status, body = get(prod, "/experiments/inplay")
     assert status.startswith("200") and "Data unavailable" in body
+
+
+# ------------------------------------------------------------------ review of #127 (NITs 1-4, 6)
+
+
+def test_the_replay_cohort_is_labelled_as_not_this_contract(demo):
+    view = iv.fixture_view("populated")
+    note = view["comparison"]["scope_note"]
+    assert note == "A synthetic cohort of 12 games, not this contract (KXNFLGAME-FIXTURE-HOME)."
+    body = get(demo, "/experiments/inplay")[1]
+    assert note in body
+    # the note sits in the Hold versus exit section, before its first arm
+    section = body[body.index("Hold versus exit"):]
+    assert section.index(note) < section.index("Hold to settlement")
+
+
+def test_primary_reason_is_the_decisions_own_reason_not_the_fee_caveat():
+    view = iv.fixture_view("populated")
+    reasons = view["policy"]["reasons"]
+    assert reasons[0].startswith("FEE_UNKNOWN")  # the evaluator lists the caveat first
+    assert ip.primary_reason(reasons).startswith("TARGET_REACHED")
+    body = ip.inplay_body(view)
+    facts = body[body.index("Primary reason"):body.index("Other reasons")]
+    assert "TARGET_REACHED" in facts and "FEE_UNKNOWN" not in facts
+    assert f"{len(reasons) - 1} more in Policy details" in body
+    for r in reasons:  # every reason stays visible in the disclosure
+        assert r.split(":")[0] in body
+    stale = iv.fixture_view("stale")["policy"]["reasons"]
+    assert ip.primary_reason(stale).startswith("BOOK_STALE")  # a block reads its blocking reason
+    assert ip.primary_reason(["FEE_UNKNOWN: only"]) == "FEE_UNKNOWN: only"
+    assert ip.primary_reason([]) is None
+
+
+@pytest.mark.parametrize("mode,label", [("FIXTURE", "Fixture evidence"), ("SYNTHETIC_REPLAY", "Synthetic evidence"),
+                                        ("RECORDED", "Recorded evidence"), ("SOMETHING_ELSE",
+                                                                            "Evidence of unknown origin")])
+def test_the_populated_capsule_follows_the_mode(mode, label):
+    view = {**iv.fixture_view("populated"), "mode": mode}
+    head = ip.header(view)
+    capsule = re.search(r'title="code: INPLAY_STATE_POPULATED">.*?</svg>([^<]*)</span>', head)
+    assert capsule and capsule.group(1) == label
+    status = re.search(r'class="statusline-text">.*?</div>', head, re.S).group(0)
+    assert label in status  # the status line's title follows the mode too
+    assert "Fixture evidence" not in iv.fixture_view("populated")["detail"]  # no fixed word in the contract
+
+
+def test_header_source_has_no_spacing_nit():
+    import inspect
+    assert "clock =(" not in inspect.getsource(ip.header)
+
+
+def test_rendering_every_inplay_page_makes_no_network_call_and_writes_nothing(monkeypatch, tmp_path, demo, prod):
+    import socket
+    import edge_lab.http as http_module
+
+    def boom(*a, **k):
+        raise AssertionError("network attempted while rendering")
+
+    monkeypatch.setattr(socket, "socket", boom)
+    monkeypatch.setattr(socket, "create_connection", boom)
+    monkeypatch.setattr(http_module, "_default_opener", boom)
+    monkeypatch.chdir(tmp_path)
+    repo = __import__("pathlib").Path(__file__).resolve().parents[1]
+    watched = [repo / "experiments", repo / "src" / "edge_lab"]
+    before = {p: p.stat().st_mtime_ns for d in watched for p in d.rglob("*") if p.is_file()
+              and "__pycache__" not in p.parts}
+    for app, path in [(prod, "/experiments/inplay"), (prod, "/experiments"), (demo, "/experiments/inplay"),
+                      (demo, "/gallery/inplay")]:
+        assert get(app, path)[0].startswith("200"), path
+    assert list(tmp_path.iterdir()) == []
+    after = {p: p.stat().st_mtime_ns for d in watched for p in d.rglob("*") if p.is_file()
+             and "__pycache__" not in p.parts}
+    assert after == before
 
 
 def test_the_research_tab_links_the_page(prod):
