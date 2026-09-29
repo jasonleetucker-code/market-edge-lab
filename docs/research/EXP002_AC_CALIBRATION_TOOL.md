@@ -101,14 +101,16 @@ book prices possibly seen (UNKNOWN, unlogged Terminal display)".
 A **due T-6h pair** is a due T-6h target side whose odds capture is usable and whose market is mapped by the cutoff.
 Only the window decides whether such a side is kept.
 
-**Upstream losses.** Sides lost upstream are counted per side (two per game) in `coverage`, split by stage:
-- odds not captured;
-- capture unusable;
-- consensus not supported;
-- odds not fresh;
-- market not mapped.
+**Upstream losses.** In `coverage.by_horizon`, the stage counts are **per target** (one per game and horizon),
+not per side:
+- `odds_not_captured`;
+- `odds_capture_unusable`;
+- `consensus_not_supported`;
+- `odds_not_fresh`;
+- `not_mapped`.
 
-They are the same for every window. Each window also reports **kept / all due T-6h sides**, with those losses in the
+Only `sides_lost_upstream` counts **sides**: two per such target, one per team market. The code is unchanged; this
+text states what it counts. Upstream losses are the same for every window. Each window also reports **kept / all due T-6h sides**, with those losses in the
 denominator.
 
 **Short-interval drift.** The absolute YES-mid change between consecutive books of one market and horizon at most
