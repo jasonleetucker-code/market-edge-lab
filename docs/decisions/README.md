@@ -39,8 +39,12 @@ Under the 2026-09-29 NHL prospective-evidence directive (#134):
   monthly proof; NHL h2h prepared behind `EDGE_LAB_ODDS_NHL` (NHL-A).
 - 0040: Kalshi KXNHLGAME prospective evidence: schedule-driven T-6h / T-60m books under its own bound (727 GETs a week), after EXP-001 and NFL, off until activation; outcomes withheld (#136).
 
+Under roadmap package R2 (#145):
+- 0041: source and game-state contracts (clock uncertainty, declared incorporated state, decision validity,
+  bidirectional fixture-fed source leadership) and fill-conditioned economics by execution mode (offline).
+
 Under the 2026-09-30 roadmap integration and RFQ feasibility directive (#145, PR #147):
 - 0042: the RFQ research lifecycle contract: pure and fixture-fed; private quotes stay UNAVAILABLE, requested size is
   not volume, accepts are not fills, and collateral is never shared across legs; no participation (R4, PR B).
 
-New decisions start at 0043 (0041 is PR A's).
+New decisions start at 0043.

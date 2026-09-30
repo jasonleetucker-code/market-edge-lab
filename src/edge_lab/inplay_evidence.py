@@ -46,6 +46,12 @@ journalled beside the data and appear in `coverage_report`. A window with no usa
 reported as such, never dropped.
 
 Nothing here prices, sizes or submits anything. Synthetic fixtures are labelled synthetic.
+
+**Source and game-state intelligence** (`source-state-v1`, R2 / ADR 0041, the last section) adds:
+- clock readings with precision and uncertainty;
+- source families, context and declared incorporated state;
+- decision validity against later game state, and latency stages;
+- `EvidenceStatus`, and a bidirectional, fixture-fed source-leadership report.
 """
 
 from __future__ import annotations
@@ -60,7 +66,7 @@ from pathlib import Path
 from typing import Any, Iterable, Iterator, Mapping, Sequence
 
 from .fee_schedules import valid_price
-from .freshness import parse_utc
+from .freshness import Freshness, assess, parse_utc
 from .opportunity import DepthLadder, DepthLevel, DepthStatus, OutcomeFinality, walk_ladder
 
 CONTRACT_VERSION = "inplay-evidence-v1"
@@ -875,3 +881,796 @@ def replay_book_journal(path: Path, market_ticker: str, *, scope: SeqScope = Seq
         recon.apply(msg)
     state = recon.books.get(market_ticker) or BookState(market_ticker)
     return state, tuple(recon.transitions.get(market_ticker, ())), tuple(failures), parse_failures, data_kind
+
+
+# =========================================================================== source and game-state intelligence
+#
+# source-state-v1 (R2, #145; ADR 0041). Everything above this line is unchanged and keeps its behaviour.
+# This section adds what the in-play contract lacked for "which source knew what, when, about which
+# game state":
+# - clock readings with precision and uncertainty;
+# - source-family identity (or UNKNOWN) and context (sport / market / phase / regime);
+# - the state version a quote is *declared* to incorporate;
+# - decision validity against later state, and latency stages;
+# - an evidence-status vocabulary and a bidirectional source-leadership report.
+# It applies to pregame observations too; only the game-state journal it reads is in-play specific.
+# Pure: no clock is read, nothing is fetched or written.
+#
+# Rules:
+# - A game clock is not UTC. `ClockReading` accepts only timezone-aware UTC instants.
+# - Receipt order never proves incorporation: a quote received after a scoreboard change is not known
+#   to reflect it. Only a source's own declaration makes the incorporated state KNOWN.
+# - Corrections append; nothing earlier is overwritten (`GameJournal`, `ObservationLog`).
+# - A material new event invalidates a dependent recommendation until it is recomputed. The result is
+#   a policy state (INVALIDATED / REVIEW_REQUIRED), never an order, a cancellation or a liquidation.
+# - Unmeasured latency is None, never 0.
+
+SOURCE_STATE_VERSION = "source-state-v1"
+UNKNOWN_FAMILY = "UNKNOWN"
+
+
+class EvidenceStatus(str, Enum):
+    """Whether the thing a figure describes happened. One vocabulary for observations, fills and economics.
+
+    It is not `DataKind`, which says where the *input* came from (generated, hand-written, recorded).
+    The two are orthogonal: a SIMULATED fill replays RECORDED books, a HYPOTHETICAL quote is computed
+    from RECORDED quotes, and UNAVAILABLE has no input at all. `check_evidence` ties them together: only
+    RECORDED input can be ACTUAL, so a fixture or a synthetic series can never pass as something that
+    happened."""
+
+    ACTUAL = "ACTUAL"  # it happened and we observed it (a captured quote, an own fill on an account)
+    SIMULATED = "SIMULATED"  # produced by a replay, a simulator or a fixture; never presented as actual
+    HYPOTHETICAL = "HYPOTHETICAL"  # would have been: a quote or decision that was never sent
+    UNAVAILABLE = "UNAVAILABLE"  # exists but is not observable to us (others' private quotes and fills)
+
+
+def check_evidence(data_kind: DataKind | None, status: EvidenceStatus) -> None:
+    """Refuse a status its input cannot support. ACTUAL needs RECORDED input; UNAVAILABLE has no input
+    (None); every other status needs one."""
+    if status is EvidenceStatus.UNAVAILABLE:
+        if data_kind is not None:
+            raise ValueError("UNAVAILABLE evidence has no input data")
+        return
+    if not isinstance(data_kind, DataKind):
+        raise ValueError(f"{status.value} evidence needs a DataKind for its input")
+    if status is EvidenceStatus.ACTUAL and data_kind is not DataKind.RECORDED:
+        raise ValueError(f"{data_kind.value} input cannot be ACTUAL evidence: only RECORDED input shows something "
+                         "happened")
+
+
+class ClockOrigin(str, Enum):
+    SOURCE = "SOURCE"  # the source's own publication stamp
+    LOCAL = "LOCAL"  # a clock on our host (receipt, processing, decision)
+
+
+@dataclass(frozen=True)
+class ClockReading:
+    """One UTC reading with its resolution and error bound.
+
+    - `precision`: the stamp's resolution (1 s for a whole-second stamp). The true instant is within
+      `precision` of the stamp either way (truncation or rounding is not assumed).
+    - `uncertainty`: a bound on this clock's error against true UTC; None is UNKNOWN (unbounded).
+    - `clock_id`: readings from one clock share its error, so they can be ordered by precision alone.
+
+    A naive time or a game clock ("Q4 02:13") is refused: it is not a UTC instant."""
+
+    utc: str
+    origin: ClockOrigin
+    clock_id: str
+    precision: timedelta
+    uncertainty: timedelta | None
+
+    def __post_init__(self) -> None:
+        if parse_utc(self.utc) is None:
+            raise ValueError(f"{self.utc!r} is not a timezone-aware UTC instant (a naive time or a game clock is "
+                             "not UTC)")
+        if not isinstance(self.precision, timedelta) or self.precision < timedelta(0):
+            raise ValueError("precision must be a non-negative timedelta")
+        if self.uncertainty is not None and (not isinstance(self.uncertainty, timedelta)
+                                             or self.uncertainty < timedelta(0)):
+            raise ValueError("uncertainty must be a non-negative timedelta or None (UNKNOWN)")
+        if not self.clock_id:
+            raise ValueError("clock_id is required: readings are only comparable per clock")
+
+    @property
+    def at(self) -> datetime:
+        return parse_utc(self.utc)
+
+    def interval(self, *, same_clock: bool = False) -> tuple[datetime, datetime] | None:
+        """Where the true instant lies. Against another reading of the same clock only precision
+        matters; otherwise the clock's error bound too, and an UNKNOWN bound gives None."""
+        if same_clock:
+            half = self.precision
+        elif self.uncertainty is None:
+            return None
+        else:
+            half = self.precision + self.uncertainty
+        return self.at - half, self.at + half
+
+
+class Ordering(str, Enum):
+    BEFORE = "BEFORE"
+    AFTER = "AFTER"
+    UNORDERED = "UNORDERED"  # the intervals overlap, or an error bound is unknown
+
+
+def clock_order(a: ClockReading, b: ClockReading) -> Ordering:
+    """Whether `a` is provably before or after `b`. Overlapping uncertainty is UNORDERED, never a tie
+    broken by the point stamps."""
+    same = a.clock_id == b.clock_id
+    ia, ib = a.interval(same_clock=same), b.interval(same_clock=same)
+    if ia is None or ib is None:
+        return Ordering.UNORDERED
+    if ia[1] < ib[0]:
+        return Ordering.BEFORE
+    if ib[1] < ia[0]:
+        return Ordering.AFTER
+    return Ordering.UNORDERED
+
+
+# --------------------------------------------------------------------------- latency stages
+
+
+class LatencyStage(str, Enum):
+    UPSTREAM = "UPSTREAM"  # real-world event -> source publication
+    TRANSPORT = "TRANSPORT"  # source publication -> our receipt
+    PARSE = "PARSE"  # receipt -> normalized observation
+    MODEL = "MODEL"  # observation -> estimate or recommendation
+    RISK = "RISK"  # recommendation -> risk and state revalidation
+    VENUE = "VENUE"  # an order leaves -> venue acknowledgement (future; no order exists)
+
+
+@dataclass(frozen=True)
+class LatencyMeasurement:
+    value: timedelta
+    uncertainty: timedelta | None  # None: unknown error bound
+    method: str  # how it was measured, e.g. "receipt - source publication"
+
+    @property
+    def clock_inconsistent(self) -> bool:
+        """A negative duration beyond its error bound: the clocks disagree and the figure is unusable.
+        An unknown bound cannot excuse a negative value."""
+        return self.value + (self.uncertainty or timedelta(0)) < timedelta(0)
+
+
+@dataclass(frozen=True)
+class LatencyBreakdown:
+    """Per-stage latency. An unmeasured stage is None, never 0. A total exists only when every
+    requested stage was measured and none is clock-inconsistent."""
+
+    stages: tuple[tuple[LatencyStage, LatencyMeasurement], ...] = ()
+
+    def __post_init__(self) -> None:
+        names = [s for s, _ in self.stages]
+        if len(names) != len(set(names)):
+            raise ValueError("a latency stage is measured once per breakdown")
+
+    def get(self, stage: LatencyStage) -> LatencyMeasurement | None:
+        return dict(self.stages).get(stage)
+
+    def unmeasured(self) -> tuple[LatencyStage, ...]:
+        have = {s for s, _ in self.stages}
+        return tuple(s for s in LatencyStage if s not in have)
+
+    def total(self, stages: Sequence[LatencyStage] = tuple(LatencyStage)) -> timedelta | None:
+        values = [self.get(s) for s in stages]
+        if any(v is None or v.clock_inconsistent for v in values):
+            return None
+        return sum((v.value for v in values), timedelta(0))
+
+
+def measure_between(start: ClockReading | None, end: ClockReading | None, method: str) -> LatencyMeasurement | None:
+    """`end - start` with its error bound, or None when either reading is missing. Two readings of
+    one clock carry only their precision; across clocks an unknown bound stays unknown."""
+    if start is None or end is None:
+        return None
+    if start.clock_id == end.clock_id:
+        err: timedelta | None = start.precision + end.precision
+    elif start.uncertainty is None or end.uncertainty is None:
+        err = None
+    else:
+        err = start.precision + end.precision + start.uncertainty + end.uncertainty
+    return LatencyMeasurement(end.at - start.at, err, method)
+
+
+# --------------------------------------------------------------------------- source observations
+
+
+class Phase(str, Enum):
+    PREGAME = "PREGAME"
+    LIVE = "LIVE"
+    BREAK = "BREAK"  # halftime, intermission, a review stoppage
+    POSTGAME = "POSTGAME"
+    UNKNOWN = "UNKNOWN"
+
+
+@dataclass(frozen=True)
+class SourceContext:
+    """The conditions a lead/lag or economics figure is conditional on. None is UNKNOWN."""
+
+    sport: str | None
+    market: str | None
+    phase: Phase = Phase.UNKNOWN
+    regime: str | None = None  # a declared label, e.g. "REGULAR_SEASON" or "PLAYOFF"
+
+
+class StateKnowledge(str, Enum):
+    KNOWN = "KNOWN"  # the source declared which state version it reflects
+    UNKNOWN = "UNKNOWN"  # it did not: receipt order is no substitute
+
+
+@dataclass(frozen=True)
+class SourceObservation:
+    """One observation (a quote, a line, a book, a score) with the context needed to use it honestly."""
+
+    observation_id: str
+    source_id: str
+    event_id: str
+    received: ClockReading
+    context: SourceContext
+    evidence: EvidenceStatus
+    data_kind: DataKind
+    source_family: str = UNKNOWN_FAMILY
+    upstream_ids: tuple[str, ...] = ()  # feeds this source is known to draw on (shared-source dependence)
+    source_event_ref: str | None = None
+    published: ClockReading | None = None  # the source's own stamp; None is UNKNOWN
+    processed: ClockReading | None = None
+    incorporated_state_version: str | None = None  # declared by the source itself, never inferred
+    incorporated_state_basis: str | None = None  # the documented field that declares it
+    corrects: str | None = None  # observation_id this one corrects
+    latency: LatencyBreakdown = LatencyBreakdown()
+
+    def __post_init__(self) -> None:
+        check_evidence(self.data_kind, self.evidence)
+        if self.received.origin is not ClockOrigin.LOCAL:
+            raise ValueError("receipt is a local clock reading")
+        if self.published is not None and self.published.origin is not ClockOrigin.SOURCE:
+            raise ValueError("publication is a source clock reading")
+        if (self.incorporated_state_version is None) != (self.incorporated_state_basis is None):
+            raise ValueError("an incorporated state version needs the documented basis that declares it, and a "
+                             "basis without a version declares nothing")
+        if self.published is not None and clock_order(self.published, self.received) is Ordering.AFTER:
+            raise ValueError("FUTURE_PUBLICATION: the source stamp is provably after our receipt; the clocks are "
+                             "inconsistent")
+        if self.processed is not None and clock_order(self.processed, self.received) is Ordering.BEFORE:
+            raise ValueError("processing cannot precede receipt")
+        if not self.source_family:
+            raise ValueError(f"source_family is required; use {UNKNOWN_FAMILY!r} when it is not known")
+
+    @property
+    def state_knowledge(self) -> StateKnowledge:
+        return StateKnowledge.KNOWN if self.incorporated_state_version is not None else StateKnowledge.UNKNOWN
+
+    def content(self) -> tuple:
+        return (self.source_id, self.event_id, self.published, self.incorporated_state_version, self.evidence,
+                self.data_kind, self.context, self.corrects)
+
+
+def content_freshness(obs: SourceObservation, *, now: datetime, max_age: timedelta) -> Freshness:
+    """Freshness of what the observation *says*, not of when it arrived.
+
+    Judged on the source's publication stamp, at the earliest instant the stamp allows. Without a
+    stamp, or with an unknown error bound, the content age is UNKNOWN; but a receipt already older
+    than `max_age` proves staleness, because receipt bounds the content's age from below. A book
+    received a second ago but published ten minutes ago is STALE."""
+    if parse_utc(now) is None:
+        raise ValueError("now must be timezone-aware")
+    by_receipt = assess(obs.received.utc, max_age=max_age, now=now)
+    interval = None if obs.published is None else obs.published.interval()
+    if interval is None:
+        return Freshness.STALE if by_receipt is Freshness.STALE else Freshness.UNKNOWN
+    return assess(interval[0], max_age=max_age, now=now)
+
+
+class StateRelation(str, Enum):
+    INCORPORATES = "INCORPORATES"  # the source declared this exact state version
+    CANNOT_INCORPORATE = "CANNOT_INCORPORATE"  # published provably before the event could have happened
+    UNKNOWN = "UNKNOWN"  # anything else, including "received after the scoreboard changed"
+
+
+def state_relation(obs: SourceObservation, state: GameState, *,
+                   event_not_before: ClockReading | None) -> StateRelation:
+    """Does `obs` reflect `state`? Only a declaration says yes.
+
+    `event_not_before` must be a provable *lower* bound on when the event behind `state` happened,
+    for example the time of the previous state that the event followed. A scoreboard's publication
+    time is not one: it is an upper bound (the event happened at or before it). A publication provably
+    before that lower bound cannot reflect the event: CANNOT_INCORPORATE. Receipt order is never used:
+    arriving after a touchdown was seen does not make a quote reflect it. Everything else is UNKNOWN."""
+    if obs.incorporated_state_version is not None and obs.incorporated_state_version == state.observation_id:
+        return StateRelation.INCORPORATES
+    if obs.published is not None and event_not_before is not None and \
+            clock_order(obs.published, event_not_before) is Ordering.BEFORE:
+        return StateRelation.CANNOT_INCORPORATE
+    return StateRelation.UNKNOWN
+
+
+class LogEntry(str, Enum):
+    NEW = "NEW"
+    DUPLICATE = "DUPLICATE"  # same id, same content: kept, counted, the first observation unchanged
+    CORRECTION = "CORRECTION"  # a new id that names the one it corrects; the original stays
+
+
+@dataclass(frozen=True)
+class ObservationLog:
+    """Append-only source observations. A correction is a new observation; nothing is overwritten."""
+
+    entries: tuple[tuple[LogEntry, SourceObservation], ...] = ()
+
+    def append(self, obs: SourceObservation) -> "ObservationLog":
+        prior = next((o for _, o in self.entries if o.observation_id == obs.observation_id), None)
+        if prior is not None:
+            if prior.content() != obs.content():
+                raise ValueError(f"OVERWRITE_REFUSED: {obs.observation_id} already holds different content; a "
+                                 "correction is a new observation that names the one it corrects")
+            return replace(self, entries=self.entries + ((LogEntry.DUPLICATE, obs),))
+        if obs.corrects is not None:
+            if not any(o.observation_id == obs.corrects for _, o in self.entries):
+                raise ValueError(f"{obs.observation_id} corrects {obs.corrects}, which this log has not seen")
+            return replace(self, entries=self.entries + ((LogEntry.CORRECTION, obs),))
+        return replace(self, entries=self.entries + ((LogEntry.NEW, obs),))
+
+    def originals(self) -> tuple[SourceObservation, ...]:
+        return tuple(o for k, o in self.entries if k is not LogEntry.DUPLICATE)
+
+
+# --------------------------------------------------------------------------- decision validity
+
+
+# Fields whose change makes a recommendation that depended on the old state obsolete. A policy may
+# declare its own; the clock text is excluded by default (it moves every second).
+DEFAULT_MATERIAL_FIELDS = ("home_score", "away_score", "period", "possession", "game_status", "finality")
+
+
+class ValidityStatus(str, Enum):
+    VALID = "VALID"
+    INVALIDATED = "INVALIDATED"  # recompute before any use; never an order or a liquidation
+    REVIEW_REQUIRED = "REVIEW_REQUIRED"  # the state it depends on cannot be established
+
+
+class RevalidationReason(str, Enum):
+    MATERIAL_STATE_CHANGE = "MATERIAL_STATE_CHANGE"
+    STATE_CORRECTED = "STATE_CORRECTED"
+    STATE_UNKNOWN = "STATE_UNKNOWN"  # no version, or an unreadable update arrived after it
+    STATE_VERSION_NOT_FOUND = "STATE_VERSION_NOT_FOUND"
+    FUTURE_STATE_REFERENCE = "FUTURE_STATE_REFERENCE"  # names a state it had not seen by its as-of
+    OUT_OF_ORDER_STATE = "OUT_OF_ORDER_STATE"  # an update with an earlier source time arrived after it
+    DECISION_EXPIRED = "DECISION_EXPIRED"
+    AS_OF_IN_FUTURE = "AS_OF_IN_FUTURE"
+
+
+INVALIDATING = frozenset({RevalidationReason.MATERIAL_STATE_CHANGE, RevalidationReason.STATE_CORRECTED,
+                          RevalidationReason.DECISION_EXPIRED})
+
+
+@dataclass(frozen=True)
+class DecisionStamp:
+    """What a recommendation was computed on: its version, its information cutoff and, when it
+    depends on game state, the exact state version (a `GameState.observation_id`)."""
+
+    decision_id: str
+    decision_version: str
+    as_of_utc: str
+    requires_state: bool
+    state_version: str | None = None  # None with requires_state: the state is UNKNOWN
+    expires_at_utc: str | None = None
+
+    def __post_init__(self) -> None:
+        if parse_utc(self.as_of_utc) is None:
+            raise ValueError("as_of_utc must be timezone-aware")
+        if self.expires_at_utc is not None and parse_utc(self.expires_at_utc) is None:
+            raise ValueError("expires_at_utc must be timezone-aware or None")
+
+
+@dataclass(frozen=True)
+class StateValidity:
+    decision_id: str
+    status: ValidityStatus
+    reasons: tuple[tuple[RevalidationReason, str], ...]
+    checked_at_utc: str
+    state_version: str | None
+    superseded_by: tuple[str, ...] = ()  # observation ids that invalidated it
+    non_material_updates: int = 0
+    authorizes_execution: bool = False  # a validity result is never an instruction to act
+
+    def __post_init__(self) -> None:
+        if self.authorizes_execution:
+            raise ValueError("a validity result cannot authorize execution")
+
+    @property
+    def usable(self) -> bool:
+        return self.status is ValidityStatus.VALID
+
+
+def _corrections_of(journal: GameJournal, version: str) -> set[str]:
+    """Every observation id that corrects `version`, directly or through a chain of corrections."""
+    out: set[str] = set()
+    frontier = {version}
+    while frontier:
+        nxt = {s.observation_id for k, s in journal.entries
+               if k is JournalEntry.CORRECTION and s.corrects in frontier} - out
+        out |= nxt
+        frontier = nxt
+    return out
+
+
+def decision_validity(stamp: DecisionStamp, journal: GameJournal, *, at: datetime | str,
+                      material_fields: Sequence[str] = DEFAULT_MATERIAL_FIELDS) -> StateValidity:
+    """Is a recommendation still valid at `at`, given every game-state observation first seen by then?
+
+    Only observations first observed at or before `at` count: nothing later can be known. The result is
+    - INVALIDATED when the depended-on state was corrected, a later observation differs in a material
+      field, or the decision expired;
+    - REVIEW_REQUIRED when the state cannot be established: no version, a version not in the journal,
+      a version the decision could not have seen by its as-of, an unreadable later update, or an
+      update that arrived after it with an earlier source time and different content.
+    It is a policy state. It never cancels, sells or submits anything."""
+    now = parse_utc(at)
+    if now is None:
+        raise ValueError("at must be timezone-aware")
+    unknown_fields = [f for f in material_fields if f not in GameState.__dataclass_fields__]
+    if unknown_fields:
+        raise ValueError(f"unknown material fields {unknown_fields}")
+    reasons: list[tuple[RevalidationReason, str]] = []
+    superseded: list[str] = []
+    non_material = 0
+    as_of = parse_utc(stamp.as_of_utc)
+    if as_of > now:
+        reasons.append((RevalidationReason.AS_OF_IN_FUTURE, f"as-of {stamp.as_of_utc} is after {now.isoformat()}"))
+    if stamp.expires_at_utc is not None and now >= parse_utc(stamp.expires_at_utc):
+        reasons.append((RevalidationReason.DECISION_EXPIRED, f"expired {stamp.expires_at_utc}"))
+    if stamp.requires_state:
+        seen = [(k, s) for k, s in journal.entries
+                if k is not JournalEntry.DUPLICATE and parse_utc(s.stamps.first_observed_utc) <= now]
+        dep = None if stamp.state_version is None else \
+            next((s for _, s in seen if s.observation_id == stamp.state_version), None)
+        if stamp.state_version is None:
+            reasons.append((RevalidationReason.STATE_UNKNOWN, "the decision depends on game state but names no version"))
+        elif dep is None:
+            reasons.append((RevalidationReason.STATE_VERSION_NOT_FOUND,
+                            f"{stamp.state_version} is not in the journal as seen at {now.isoformat()}"))
+        else:
+            dep_first = parse_utc(dep.stamps.first_observed_utc)
+            if dep.status is not GameStateStatus.OBSERVED:
+                reasons.append((RevalidationReason.STATE_UNKNOWN,
+                                f"{dep.observation_id} is {dep.status.value}: the decision rests on an unreadable state"))
+            if dep_first > as_of:
+                reasons.append((RevalidationReason.FUTURE_STATE_REFERENCE,
+                                f"{dep.observation_id} was first observed {dep.stamps.first_observed_utc}, after the "
+                                f"decision's as-of {stamp.as_of_utc}"))
+            fixes = _corrections_of(journal, dep.observation_id)
+            dep_src = parse_utc(dep.stamps.source_ts_utc)
+            # "later" is by first-observed time, as in `game_state_as_of`; journal position only breaks ties
+            order = {s.observation_id: (parse_utc(s.stamps.first_observed_utc), i) for i, (_, s) in enumerate(seen)}
+            dep_key = order[dep.observation_id]
+            for kind, s in seen:
+                if s.observation_id in fixes:
+                    reasons.append((RevalidationReason.STATE_CORRECTED, f"{s.observation_id} corrects the state"))
+                    superseded.append(s.observation_id)
+                    continue
+                if order[s.observation_id] <= dep_key:
+                    continue  # first observed no later than the depended-on state
+                if s.status is not GameStateStatus.OBSERVED:
+                    reasons.append((RevalidationReason.STATE_UNKNOWN,
+                                    f"{s.observation_id} arrived after the state and is {s.status.value}"))
+                    continue
+                changed = [f for f in material_fields if getattr(s, f) != getattr(dep, f)]
+                src = parse_utc(s.stamps.source_ts_utc)
+                if dep_src is not None and src is not None and src < dep_src:
+                    if changed:
+                        reasons.append((RevalidationReason.OUT_OF_ORDER_STATE,
+                                        f"{s.observation_id} (source {s.stamps.source_ts_utc}) arrived after the state "
+                                        f"(source {dep.stamps.source_ts_utc}) and differs in {changed}"))
+                    continue
+                if changed:
+                    reasons.append((RevalidationReason.MATERIAL_STATE_CHANGE,
+                                    f"{s.observation_id} changed {changed} (first observed {s.stamps.first_observed_utc})"))
+                    superseded.append(s.observation_id)
+                else:
+                    non_material += 1
+    if any(r in INVALIDATING for r, _ in reasons):
+        status = ValidityStatus.INVALIDATED
+    elif reasons:
+        status = ValidityStatus.REVIEW_REQUIRED
+    else:
+        status = ValidityStatus.VALID
+    return StateValidity(stamp.decision_id, status, tuple(reasons), now.isoformat(), stamp.state_version,
+                         tuple(superseded), non_material)
+
+
+# --------------------------------------------------------------------------- source leadership (both directions)
+
+
+class LeadershipStatus(str, Enum):
+    REPORTED = "REPORTED"  # counts in both directions; not a causal or permanent ranking
+    INSUFFICIENT_RESOLUTION = "INSUFFICIENT_RESOLUTION"  # captures or clocks too coarse for the question
+    INSUFFICIENT_EVIDENCE = "INSUFFICIENT_EVIDENCE"  # resolvable, but too few ordered co-moves
+
+
+class Dependence(str, Enum):
+    INDEPENDENT_AS_DECLARED = "INDEPENDENT_AS_DECLARED"  # different declared families, no shared upstream
+    SHARED_SOURCE = "SHARED_SOURCE"  # same family or a shared upstream: co-movement may be propagation
+    UNKNOWN = "UNKNOWN"  # a family is UNKNOWN
+
+
+@dataclass(frozen=True)
+class QuotePoint:
+    observation_id: str
+    at: ClockReading  # the clock the series is ordered by (see `SourceSeries.clock_basis`)
+    bid: Decimal | None
+    ask: Decimal | None
+
+
+# The leadership report is fixture- and synthetic-fed in this batch (R2). Stored NFL pilot pairs must not
+# be read before the single logged EXP-002 A.C timing run, and no kickoff on or after the EXP-002 holdout
+# boundary may be read at all; real captured series also need an allocated experiment id and an
+# evidence-use record. So `SourceSeries` refuses, whatever its kind:
+# - RECORDED input;
+# - an event whose kickoff is at or after this instant (2026-10-22 00:00 America/New_York);
+# - a point whose latest possible true time (`interval()[1]`) is at or after it. With an unknown clock
+#   error bound, the latest possible time is taken as the stamp plus precision plus
+#   `LEADERSHIP_UNKNOWN_CLOCK_MARGIN`.
+LEADERSHIP_REFUSED_FROM_UTC = "2026-10-22T04:00:00+00:00"
+LEADERSHIP_UNKNOWN_CLOCK_MARGIN = timedelta(hours=24)
+BASIS_ORIGIN = {"PUBLISHED": ClockOrigin.SOURCE, "RECEIVED": ClockOrigin.LOCAL}
+
+
+def _latest_possible(reading: ClockReading) -> datetime:
+    iv = reading.interval()
+    return iv[1] if iv is not None else reading.at + reading.precision + LEADERSHIP_UNKNOWN_CLOCK_MARGIN
+
+
+@dataclass(frozen=True)
+class SourceSeries:
+    """One source's quotes on one event, ordered by one declared clock basis."""
+
+    source_id: str
+    source_family: str
+    context: SourceContext
+    clock_basis: str  # "PUBLISHED" (source clock) or "RECEIVED" (our clock): every point must carry it
+    points: tuple[QuotePoint, ...]
+    data_kind: DataKind
+    event_id: str
+    kickoff_utc: str
+    upstream_ids: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        if self.clock_basis not in BASIS_ORIGIN:
+            raise ValueError("clock_basis is PUBLISHED or RECEIVED")
+        wrong = [p.observation_id for p in self.points if p.at.origin is not BASIS_ORIGIN[self.clock_basis]]
+        if wrong:
+            raise ValueError(f"a {self.clock_basis} series carries {BASIS_ORIGIN[self.clock_basis].value} readings only; "
+                             f"these are not: {wrong[:3]}")
+        if not self.source_family:
+            raise ValueError(f"source_family is required; use {UNKNOWN_FAMILY!r}")
+        if not self.event_id:
+            raise ValueError("event_id is required")
+        if not isinstance(self.data_kind, DataKind):
+            raise ValueError("data_kind is required")
+        if self.data_kind is DataKind.RECORDED:
+            raise ValueError("RECORDED series are refused in R2: the leadership report is fixture- and synthetic-fed. "
+                             "Stored NFL pilot pairs wait for the single logged A.C run, and real series need an "
+                             "allocated experiment id and an evidence-use record")
+        limit = parse_utc(LEADERSHIP_REFUSED_FROM_UTC)
+        kickoff = parse_utc(self.kickoff_utc)
+        if kickoff is None:
+            raise ValueError("kickoff_utc must be timezone-aware")
+        if kickoff >= limit:
+            raise ValueError(f"kickoff {self.kickoff_utc} is at or after {LEADERSHIP_REFUSED_FROM_UTC} (the EXP-002 "
+                             "holdout boundary): refused")
+        late = [p.observation_id for p in self.points if _latest_possible(p.at) >= limit]
+        if late:
+            raise ValueError(f"points whose true time may be at or after {LEADERSHIP_REFUSED_FROM_UTC} (the EXP-002 "
+                             f"holdout boundary) are refused: {late[:3]}")
+
+
+@dataclass(frozen=True)
+class PriceMove:
+    source_id: str
+    direction: int  # +1 up, -1 down
+    size: Decimal  # mid change
+    window: tuple[datetime, datetime]  # the move happened somewhere between the two captures
+    from_observation: str
+    to_observation: str
+
+
+@dataclass(frozen=True)
+class LeadershipReport:
+    version: str
+    status: LeadershipStatus
+    a_source: str
+    b_source: str
+    event_id: str
+    clock_basis: str
+    a_context: SourceContext
+    b_context: SourceContext
+    dependence: Dependence
+    moves_a: int | None
+    moves_b: int | None
+    a_first: int | None  # unambiguous co-moves where a provably moved first
+    b_first: int | None  # and the other direction, always reported alongside
+    unordered: int | None  # overlapping windows: no order is claimed
+    ambiguous: int | None  # a move with more than one candidate partner: no order is claimed
+    unmatched_a: int | None
+    unmatched_b: int | None
+    median_capture_gap_a: timedelta | None
+    median_capture_gap_b: timedelta | None
+    required_resolution: timedelta
+    variants_tested: int  # research exposure: every variant tried counts
+    noise_rejected_a: int
+    noise_rejected_b: int
+    one_sided_skipped_a: int  # one-sided or empty quotes bridged over, not dropped silently
+    one_sided_skipped_b: int
+    out_of_order_points: int
+    reasons: tuple[str, ...]
+    not_a_causal_claim: str = ("Counts of which source moved first, in both directions, under the stated capture "
+                               "resolution, clock uncertainty and dependence. Not causal price discovery, not a "
+                               "permanent ranking, and not an input to any frozen baseline or weight.")
+
+
+def _median_gap(points: Sequence[QuotePoint]) -> timedelta | None:
+    if len(points) < 2:
+        return None
+    gaps = sorted(points[i + 1].at.at - points[i].at.at for i in range(len(points) - 1))
+    return gaps[len(gaps) // 2]
+
+
+def _moves(series: SourceSeries, threshold: Decimal, same_clock: bool) -> tuple[list[PriceMove], int, int]:
+    """Moves that clear bid/ask noise, between consecutive *two-sided* quotes. A one-sided or empty
+    quote is no evidence of a price, so it is bridged over: the move's window then runs from the last
+    two-sided quote before it to the next one after it, and the skipped quote is counted. The new
+    two-sided quote must lie wholly above (or below) the old one and the mid move by at least
+    `threshold`. Returns (moves, rejected as noise, one-sided skipped)."""
+    two_sided = [p for p in series.points if p.bid is not None and p.ask is not None]
+    skipped = len(series.points) - len(two_sided)
+    out, noise = [], 0
+    for prev, cur in zip(two_sided, two_sided[1:]):
+        d_mid = (cur.bid + cur.ask - prev.bid - prev.ask) / 2
+        if abs(d_mid) < threshold:
+            continue
+        if not (cur.bid > prev.ask or cur.ask < prev.bid):
+            noise += 1  # the bands overlap: inside bid/ask noise
+            continue
+        lo, hi = prev.at.interval(same_clock=same_clock), cur.at.interval(same_clock=same_clock)
+        out.append(PriceMove(series.source_id, 1 if d_mid > 0 else -1, abs(d_mid), (lo[0], hi[1]),
+                             prev.observation_id, cur.observation_id))
+    return out, noise, skipped
+
+
+def _near(m: PriceMove, n: PriceMove, window: timedelta) -> bool:
+    return m.direction == n.direction and n.window[0] - m.window[1] <= window and m.window[0] - n.window[1] <= window
+
+
+def _pair_key(m: PriceMove, n: PriceMove) -> tuple:
+    """An ordering of candidate pairs that does not depend on which series is passed first."""
+    mid_m = m.window[0] + (m.window[1] - m.window[0]) / 2
+    mid_n = n.window[0] + (n.window[1] - n.window[0]) / 2
+    gap = abs((mid_m - mid_n).total_seconds())
+    starts = tuple(sorted((m.window[0], n.window[0])))
+    ids = tuple(sorted(((m.source_id, m.from_observation, m.to_observation),
+                        (n.source_id, n.from_observation, n.to_observation))))
+    return gap, starts, ids
+
+
+def source_leadership(a: SourceSeries, b: SourceSeries, *, move_threshold: Decimal, match_window: timedelta,
+                      required_resolution: timedelta, variants_tested: int, min_ordered: int) -> LeadershipReport:
+    """Which source moved first, counted in both directions, over two timestamped quote series.
+
+    Pure and fixture-fed: it takes quotes only (it has no outcome, settlement or label input) and
+    reads no stored data. In this batch it accepts SYNTHETIC and FIXTURE series only: `SourceSeries`
+    refuses RECORDED input, any kickoff on or after `LEADERSHIP_REFUSED_FROM_UTC` (2026-10-22 00:00 ET)
+    and any point whose true time may fall on or after it. It must not read stored NFL pilot pairs
+    before the single logged EXP-002 A.C run, and it never changes the EXP-002 baseline or its weights.
+    Both series must be on the same event and the same clock basis.
+
+    Honest refusals are results:
+    - INSUFFICIENT_RESOLUTION when the median capture gap of either series, or the clock interval of
+      any point, exceeds `required_resolution`, or when a cross-clock error bound is UNKNOWN. Sparse
+      pregame snapshots are the expected case.
+    - INSUFFICIENT_EVIDENCE when fewer than `min_ordered` co-moves are ordered.
+
+    Matching is symmetric: swapping the arguments swaps `a_first` and `b_first` and changes nothing
+    else. Candidate pairs (same direction, windows within `match_window`) are matched one-to-one in an
+    order that does not depend on the argument order. A move with more than one candidate partner is
+    AMBIGUOUS and gets no direction. Otherwise a pair is A-first only when A's window ends strictly
+    before B's begins, and the reverse; overlapping windows are UNORDERED. A move's window runs from
+    the two-sided capture before it to the one that shows it, widened by clock uncertainty. Moves
+    inside bid/ask noise are rejected and counted. Shared or unknown source families are reported as
+    dependence. `variants_tested` (at least 1) is how many parameter variants were tried on this
+    question; it is part of the result."""
+    if isinstance(variants_tested, bool) or not isinstance(variants_tested, int) or variants_tested < 1:
+        raise ValueError("variants_tested is the count of variants tried (>= 1); it is part of the result")
+    if move_threshold <= 0 or required_resolution <= timedelta(0) or match_window < timedelta(0) or min_ordered < 1:
+        raise ValueError("thresholds must be positive")
+    if a.data_kind is not b.data_kind:
+        raise ValueError("series of different data kinds are not compared")
+    if a.clock_basis != b.clock_basis:
+        raise ValueError(f"series on different clock bases ({a.clock_basis} vs {b.clock_basis}) are not compared: a "
+                         "publication stamp and a receipt stamp differ by transport latency")
+    if a.event_id != b.event_id:
+        raise ValueError(f"series on different events ({a.event_id} vs {b.event_id}) are not compared")
+    reasons: list[str] = []
+    fam_a, fam_b = a.source_family, b.source_family
+    if (fam_a != UNKNOWN_FAMILY and fam_a == fam_b) or set(a.upstream_ids) & set(b.upstream_ids):
+        dependence = Dependence.SHARED_SOURCE
+        reasons.append("SHARED_SOURCE: same family or a shared upstream; co-movement may be one source propagating, "
+                       "not independent discovery")
+    elif UNKNOWN_FAMILY in (fam_a, fam_b):
+        dependence = Dependence.UNKNOWN
+        reasons.append("DEPENDENCE_UNKNOWN: a source family is UNKNOWN")
+    else:
+        dependence = Dependence.INDEPENDENT_AS_DECLARED
+    # each series is ordered by its own clock; arrival-order reversals are counted, not trusted
+    out_of_order = 0
+    ordered = []
+    for s in (a, b):
+        pts = list(s.points)
+        out_of_order += sum(1 for p, q in zip(pts, pts[1:]) if q.at.at < p.at.at)
+        ordered.append(replace(s, points=tuple(sorted(pts, key=lambda p: (p.at.at, p.observation_id)))))
+    a, b = ordered
+    if out_of_order:
+        reasons.append(f"OUT_OF_ORDER: {out_of_order} point(s) arrived after a later-stamped one; ordered by their "
+                       "own clock")
+    gap_a, gap_b = _median_gap(a.points), _median_gap(b.points)
+    same_clock = bool(a.points and b.points) and len({p.at.clock_id for p in a.points + b.points}) == 1
+    resolution: list[str] = []
+    for name, s, gap in (("a", a, gap_a), ("b", b, gap_b)):
+        if gap is None:
+            resolution.append(f"{name}: fewer than two captures")
+        elif gap > required_resolution:
+            resolution.append(f"{name}: median capture gap {gap} > required resolution {required_resolution}")
+        for p in s.points:
+            iv = p.at.interval(same_clock=same_clock)
+            if iv is None:
+                resolution.append(f"{name}: {p.observation_id} has an UNKNOWN clock error bound across clocks")
+                break
+            if iv[1] - iv[0] > required_resolution:
+                resolution.append(f"{name}: {p.observation_id} clock interval {iv[1] - iv[0]} > required resolution")
+                break
+    common = dict(a_source=a.source_id, b_source=b.source_id, event_id=a.event_id, clock_basis=a.clock_basis,
+                  a_context=a.context, b_context=b.context, dependence=dependence, median_capture_gap_a=gap_a,
+                  median_capture_gap_b=gap_b, required_resolution=required_resolution,
+                  variants_tested=variants_tested, out_of_order_points=out_of_order)
+    if resolution:
+        return LeadershipReport(SOURCE_STATE_VERSION, LeadershipStatus.INSUFFICIENT_RESOLUTION, moves_a=None,
+                                moves_b=None, a_first=None, b_first=None, unordered=None, ambiguous=None,
+                                unmatched_a=None, unmatched_b=None, noise_rejected_a=0, noise_rejected_b=0,
+                                one_sided_skipped_a=0, one_sided_skipped_b=0,
+                                reasons=tuple(reasons + [f"INSUFFICIENT_RESOLUTION: {r}" for r in resolution]),
+                                **common)
+    moves_a, noise_a, skip_a = _moves(a, move_threshold, same_clock)
+    moves_b, noise_b, skip_b = _moves(b, move_threshold, same_clock)
+    if skip_a or skip_b:
+        reasons.append(f"ONE_SIDED_BRIDGED: {skip_a} (a) and {skip_b} (b) one-sided or empty quote(s) carried no price; "
+                       "moves across them span the gap")
+    cand = [(i, j) for i, m in enumerate(moves_a) for j, n in enumerate(moves_b) if _near(m, n, match_window)]
+    deg_a = {i: sum(1 for x, _ in cand if x == i) for i in range(len(moves_a))}
+    deg_b = {j: sum(1 for _, y in cand if y == j) for j in range(len(moves_b))}
+    used_a: set[int] = set()
+    used_b: set[int] = set()
+    a_first = b_first = unordered = ambiguous = 0
+    for i, j in sorted(cand, key=lambda c: _pair_key(moves_a[c[0]], moves_b[c[1]])):
+        if i in used_a or j in used_b:
+            continue
+        used_a.add(i)
+        used_b.add(j)
+        m, n = moves_a[i], moves_b[j]
+        if deg_a[i] > 1 or deg_b[j] > 1:
+            ambiguous += 1
+        elif m.window[1] < n.window[0]:
+            a_first += 1
+        elif n.window[1] < m.window[0]:
+            b_first += 1
+        else:
+            unordered += 1
+    if ambiguous:
+        reasons.append(f"AMBIGUOUS: {ambiguous} co-move(s) had more than one candidate partner; no direction claimed")
+    status = LeadershipStatus.REPORTED
+    if a_first + b_first < min_ordered:
+        status = LeadershipStatus.INSUFFICIENT_EVIDENCE
+        reasons.append(f"INSUFFICIENT_EVIDENCE: {a_first + b_first} ordered co-move(s) < {min_ordered}")
+    return LeadershipReport(SOURCE_STATE_VERSION, status, moves_a=len(moves_a), moves_b=len(moves_b),
+                            a_first=a_first, b_first=b_first, unordered=unordered, ambiguous=ambiguous,
+                            unmatched_a=len(moves_a) - len(used_a), unmatched_b=len(moves_b) - len(used_b),
+                            noise_rejected_a=noise_a, noise_rejected_b=noise_b, one_sided_skipped_a=skip_a,
+                            one_sided_skipped_b=skip_b, reasons=tuple(reasons), **common)

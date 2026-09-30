@@ -423,3 +423,121 @@ def test_synthetic_generator_is_deterministic_and_labelled():
     with pytest.raises(ValueError):
         R.synthetic_martingale_cohort(seed=1, games=1, start=D("0.35"))
     assert replace(a).sha256 == a.sha256
+
+
+# ------------------------------------------------------------------ game-state validity (source-state-v1, ADR 0041)
+
+
+def _state(seconds, home=0, away=0, event="e0"):
+    from edge_lab.inplay_evidence import GameState, GameStateStatus, Stamps
+
+    return GameState("G1", "scores", event, Stamps(at(seconds), at(seconds)), GameStateStatus.OBSERVED,
+                     f"raw-{event}-{seconds}", home_score=home, away_score=away, period="Q4")
+
+
+def _journal(*states):
+    from edge_lab.inplay_evidence import GameJournal
+
+    j = GameJournal("G1")
+    for s in states:
+        j = j.append(s)
+    return j
+
+
+def test_a_recommendation_invalidated_before_submission_sends_nothing():
+    # The bot sees the 0.70 bid at 60 s; a touchdown against YES is first seen at 60.5 s, before its order
+    # would leave at 61 s. The book at 62 s has not caught up yet (0.72).
+    books = [bk(0, [("0.30", "100")]), bk(60, [("0.70", "100")]), bk(62, [("0.72", "100")]),
+             bk(90, [("0.30", "100")])]
+    touchdown = _journal(_state(-5), _state(60.5, away=7, event="td"))
+    plain = R.replay(cohort(entry(books)), cfg())
+    with_state = R.replay(cohort(replace(entry(books), state_journal=touchdown)), cfg())
+    blind = res(plain, "G1", Arm.FULL_EXIT, Semantics.BOT_TRIGGERED)
+    aware = res(with_state, "G1", Arm.FULL_EXIT, Semantics.BOT_TRIGGERED)
+    assert blind.sold == D(100) and blind.invalidated_before_submit == 0  # no journal: exactly as before
+    assert aware.invalidated_before_submit == 1 and aware.sold == 0
+    assert any(n.startswith("RECOMMENDATION_INVALIDATED_BEFORE_SUBMIT") and "MATERIAL_STATE_CHANGE" in n
+               for n in aware.notes)
+    assert aware.reconciliation == () and with_state.cohort_sha256 != plain.cohort_sha256
+
+
+def test_a_state_change_after_the_order_left_cannot_recall_it():
+    books = [bk(0, [("0.30", "100")]), bk(60, [("0.70", "100")]), bk(62, [("0.70", "100")])]
+    late = _journal(_state(-5), _state(61.5, away=7, event="td"))  # seen after submission (61 s)
+    rep = R.replay(cohort(replace(entry(books), state_journal=late)), cfg())
+    bot = res(rep, "G1", Arm.FULL_EXIT, Semantics.BOT_TRIGGERED)
+    assert bot.state_changed_in_flight == 1 and bot.invalidated_before_submit == 0
+    assert bot.sold == D(100)  # it had already left: the IOC meets the book at arrival
+    assert any(n.startswith("STATE_CHANGED_IN_FLIGHT") for n in bot.notes)
+
+
+def test_a_preplaced_limit_is_not_a_bot_reactive_exit():
+    # A touchdown for YES at 60.5 s moves the bids to 0.85. The resting sale at 0.70 cannot react and is
+    # lifted (adverse selection); the bot decides on the new state and sells at the price at arrival.
+    books = [bk(0, [("0.30", "100")]), bk(62, [("0.85", "100")]), bk(64, [("0.86", "100")])]
+    td_for = _journal(_state(-5), _state(60.5, home=7, event="td"))
+    rep = R.replay(cohort(replace(entry(books, "1"), state_journal=td_for)), cfg())
+    rest = res(rep, "G1", Arm.FULL_EXIT, Semantics.PREPLACED_LIMIT)
+    bot = res(rep, "G1", Arm.FULL_EXIT, Semantics.BOT_TRIGGERED)
+    hold = res(rep, "G1", Arm.HOLD, None)
+    assert rest.placed and rest.sold == D(100) and rest.gross_proceeds == D("70.00")
+    assert rest.fills_after_state_change == 1
+    assert any(n.startswith("RESTING_FILL_AFTER_STATE_CHANGE") for n in rest.notes)
+    assert bot.sold == D(100) and bot.gross_proceeds == D("86.00") and bot.fills_after_state_change == 0
+    assert hold.pnl_gross == D("70.00") and rest.pnl_gross == D("40.00") and bot.pnl_gross == D("56.00")
+    # the two semantics stay separate arms; neither is a HINDSIGHT figure
+    oracle = next(d for d in rep.diagnostics if d.label == "HINDSIGHT_UPPER_BOUND" and d.arm is Arm.FULL_EXIT)
+    assert oracle.gross_proceeds == D("86.00") and all(a.arm is not None for a in rep.arms)
+
+
+def test_a_state_journal_with_no_change_leaves_every_arm_unchanged():
+    quiet = _journal(_state(-5))
+    base = R.replay(cohort(entry(REACH, "0")), cfg())
+    same = R.replay(cohort(replace(entry(REACH, "0"), state_journal=quiet)), cfg())
+    for a, b in zip(base.entries, same.entries):
+        assert (a.sold, a.pnl_gross, a.pnl_net) == (b.sold, b.pnl_gross, b.pnl_net)
+        assert b.invalidated_before_submit == b.state_changed_in_flight == b.fills_after_state_change == 0
+
+
+
+def test_the_cohort_hash_covers_the_parsed_state_and_is_unchanged_without_a_journal():
+    from edge_lab.inplay_evidence import GameJournal, GameState, GameStateStatus, Stamps
+
+    def g(first, home, raw):
+        return GameState("G1", "scores", f"e{first}", Stamps(at(first), at(first)), GameStateStatus.OBSERVED, raw,
+                         home_score=home, away_score=0, period="Q1")
+
+    same_raw_0 = GameJournal("G1").append(g(5, 0, "rawA")).append(g(61, 0, "rawB"))
+    same_raw_7 = GameJournal("G1").append(g(5, 0, "rawA")).append(g(61, 7, "rawB"))  # same raw hash, new score
+    c0 = cohort(replace(entry(REACH, "0"), state_journal=same_raw_0))
+    c7 = cohort(replace(entry(REACH, "0"), state_journal=same_raw_7))
+    assert c0.sha256 != c7.sha256
+    # no journal: the hash is exactly the pre-R2 one (books and entries only)
+    import hashlib
+    import json as _json
+
+    plain = cohort(entry(REACH, "0"))
+    h = hashlib.sha256(_json.dumps([plain.cohort_id, plain.data_kind.value, plain.label, str(plain.starting_capital),
+                                    plain.horizon_utc, plain.rules_version]).encode())
+    for e in plain.entries:
+        h.update(_json.dumps([e.game_id, e.cluster_id, e.market_id, str(e.quantity), str(e.entry_price),
+                              str(e.entry_cost), e.entry_at_utc, e.side, str(e.settlement.value), e.settlement.final,
+                              e.settlement.at_utc]).encode())
+        for b in e.books:
+            h.update(f"{b.receipt_utc}|{b.status.value}|{b.trading_state.value}|{b.truncated}|{b.evidence_id}|"
+                     f"{';'.join(f'{p}:{q}' for p, q in b.bids)}\n".encode())
+    assert plain.sha256 == h.hexdigest()
+
+
+def test_the_first_state_after_placement_is_chosen_by_first_observed_time():
+    from edge_lab.inplay_evidence import GameJournal
+
+    late, early = _state(40, event="late"), _state(20, event="early")
+    j = GameJournal("G1").append(late).append(early)  # appended out of first-observed order
+    assert R._first_state_after(j, parse_dt(at(10))).observation_id == early.observation_id
+
+
+def parse_dt(value):
+    from edge_lab.freshness import parse_utc
+
+    return parse_utc(value)
