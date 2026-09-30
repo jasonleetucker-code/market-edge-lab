@@ -4,7 +4,7 @@
 owner directive recorded in `docs/EXECUTION_PLAN.md` (PR #147): "PR B (R4): an RFQ feasibility
 packet from public documentation, and an optional pure fixture-fed lifecycle component". Spec:
 PR #146, `docs/strategy/CLAUDE_SPORTS_INTELLIGENCE_RFQ_V1.md` §10–§12 and
-`docs/strategy/DELIVERY_ROADMAP.md` R4 (both unmerged when this was written).
+`docs/strategy/DELIVERY_ROADMAP.md` R4 (merged in PR #146).
 
 This document authorizes nothing. No RFQ was created, no quote sent, accepted or confirmed, no
 channel subscribed, no credential created or used, no account read. An RFQ quote is an
@@ -97,7 +97,7 @@ session), **requester**, **quoter**, **private** (the venue only, or another mem
 | Fee-inclusive vs principal-only target size | Size is given as contracts **or** a target cost. By default the target caps principal plus the requester's taker fee; `target_cost_excludes_fees: true` sizes principal only, fee on top; contract-sized RFQs are never reduced for fees (S1, S5). The channel's `rfq_created` has no `target_cost_excludes_fees` field (S2). | requester; parties (derived `yes/no_contracts_offered_fp`) | For target-cost RFQs, neither the contract count nor the fee mode. The derived counts appear only in quote events. | VERIFIED; the observer gap is VERIFIED by omission |
 | Full-request obligations and partial acceptance | The guide: quotes are for the full RFQ size; quoters do not specify a size (S1). REST Accept takes only `accepted_side` (S10). **But** FIX AcceptQuote has an optional quantity to accept, and the `quote_accepted` example accepts 50 of 100 offered (S4, S2). See C1. | parties | Nothing. | UNVERIFIED (conflict C1). Plan conservatively: full-size obligation, no guaranteed partial acceptance |
 | Quote replacement and expiry | A new quote on the same RFQ replaces the maker's earlier one (S1); FIX says a new quote cancels the maker's quote on the same *market* (S4, C4). A maker can delete a quote so it "can no longer be accepted" (S12). No quote time-to-live is documented. An unconfirmed accepted quote is "voided" after the window (S4). RFQs close when deleted, expired or executed (S1 errors); the RFQ lifetime is not documented; FIX can send an unsolicited EXPIRED (S4). | parties; `rfq_deleted` to all | RFQ closings (with a deleted time, no reason). | VERIFIED that replacement and expiry exist; durations UNKNOWN |
-| Acceptance → maker confirmation → execution | Accept, then maker confirm within the window, then an execution timer, then orders enter the book; fills in fill records (S1). REST quote statuses: open, accepted, confirmed, executed, cancelled (S8). `quote_executed` means orders were placed, not filled (S2). There is no channel event for confirmation; confirmation is visible in REST status (S8) and FIX (S4). | parties | Nothing. | VERIFIED |
+| Acceptance → maker confirmation → execution | Accept, then maker confirm within the window, then an execution timer, then orders enter the book; fills in fill records (S1). REST quote statuses: open, accepted, confirmed, executed, cancelled (S8). `quote_executed` means orders were placed, not filled (S2). There is no channel event for confirmation; confirmation is visible in REST status (S8) and FIX (S4). **The channel's `quote_accepted` carries no acceptance timestamp** (only the optional envelope `sending_ts_ms`, when Kalshi queued the message); the REST quote has `accepted_ts` (S8). A replay that needs the acceptance time from the channel must use its own receipt time, labelled as such. | parties | Nothing. | VERIFIED |
 | Timing classes and the binding point | Standard: 30 s to confirm, 15 s execution timer. High Volatility Markets (every combo): 3 s and 1 s (S1). FIX states a flat 30 s (C2). Binding point: maker confirmation (S1). | public docs; which non-combo markets are HVM is not listed | The HVM flag for combos (all of them). Which other markets are HVM: UNKNOWN. | VERIFIED (with conflict C2) |
 | Collateral | RFQ actions can fail with `INSUFFICIENT_BALANCE` (S1), and FIX RFQ creation with `INSUFFICIENT_CREDIT` (S4). Collateral checks run inside each matching engine; collateral must be preallocated per exchange shard; combos moved to shard 1 (S17). When collateral is reserved for an open quote (at quote time or only at confirmation) is not documented. | private | Nothing. | Partly VERIFIED; quote-time reservation UNKNOWN |
 | Common-leg exposure | Each combo is its own market; legs are listed per RFQ (S2). Nothing in the docs nets exposure across combos that share a leg. | parties (own) | Leg overlap across requested combos, through the authenticated channel. | VERIFIED that no netting is documented; treat as none |
@@ -111,7 +111,7 @@ each and never the convenient one.
 
 | # | Conflict | Sources | Conservative handling |
 |---|---|---|---|
-| C1 | Quotes are for the full size and REST Accept has no quantity, **vs** FIX AcceptQuote's optional quantity and a `quote_accepted` example accepting 50 of 100 | S1, S10 vs S4, S2 | Reserve the full offered size; never assume partial acceptance is available or guaranteed |
+| C1 | Quotes are for the full size and REST Accept has no quantity, **vs** FIX AcceptQuote's optional quantity and a `quote_accepted` example accepting 50 of 100 | S1, S10 vs S4, S2 | Reserve the full offered size; never assume partial acceptance is available or guaranteed. More than one distinct acceptance of a quote is UNKNOWN. Limitation: two identical acceptances without any timestamp are indistinguishable from a redelivery and collapse into one |
 | C2 | Confirmation window 30 s standard / 3 s HVM, **vs** FIX's flat 30 s | S1 vs S4 | Use the guide's per-class table; a lapsed window releases nothing |
 | C3 | Maker prices in FIX are whole cents 1–99, **vs** REST dollar strings on the market's grid (sub-cent on some grids) | S4 vs S9, S1 | Do not assume a quote grid; combos use their own price structure |
 | C4 | Replacement is per RFQ (guide) **vs** per market (FIX) | S1 vs S4 | Replace per (maker, RFQ); an ambiguous order of two quotes keeps both reserved |
@@ -121,7 +121,7 @@ each and never the convenient one.
 | C8 | The requester "accepts one side of the best-priced quote" (S1), **vs** accept-by-id for any quote (S10) and FIX's `PreferBetterQuote`, where the accepted quote may differ from the one named (S4) | S1 vs S10, S4 | A maker's quote can be accepted without being the best; a quote id in an acceptance may not be the one we priced |
 | C9 | RFQs are "broadcast to all makers" (S1), **vs** sent to all users by default (S2) | S1 vs S2 | Visibility to a non-maker account is UNKNOWN until observed under authority |
 | C10 | Creator id example is a 64-hex digest in one event and `comm_abc123` in another | S2 | Treat ids as opaque strings |
-| C11 | RFQ status is only open/closed (S6), **vs** close reasons deleted/expired/executed (S1) and FIX EXPIRED (S4); whether `rfq_deleted` fires on expiry or execution is not stated | S6 vs S1, S4 | A closed RFQ has an UNKNOWN reason unless a quote on it executed |
+| C11 | RFQ status is only open/closed (S6), **vs** close reasons deleted/expired/executed (S1) and FIX EXPIRED (S4); whether `rfq_deleted` fires on expiry or execution is not stated | S6 vs S1, S4 | A closed RFQ has an UNKNOWN reason; it releases no quote reservation (`RFQ_CLOSED_REASON_UNKNOWN`). Only the quote's own cancelled status releases |
 | C12 | A lapsed confirmation "voids" the quote (S4), but no REST status says voided | S4 vs S8 | Voided is treated as CANCELLED only when a cancelled status is observed |
 | C13 | Combo RFQs "include" the collection and legs (S1), but REST Create RFQ takes only a market ticker (combo created first, S14), while FIX resolves or creates the combo from legs (S4) | S1, S5, S14, S4 | Requester-side creation is out of scope; legs are read from events |
 | C14 | REST `accepted_side` is "the side of the quote to accept"; FIX maps BUY to the maker's NO quote and SELL to the maker's YES quote. The REST side's effect on the requester's own position is not stated | S10 vs S4 | The requester reserves the worse of `bid` and `1 − bid` |
@@ -133,7 +133,9 @@ The `communications` channel ignores market specification (S2: "Market specifica
 ignored"). A subscriber therefore receives **every** `rfq_created` and `rfq_deleted` on the
 exchange, whatever it keeps locally. A budget must bound received messages, not the NFL/NHL rows
 kept afterwards. `rfq_research.observe` enforces that: `max_messages` counts every received
-message before the `keep` filter, and over the bound the batch is refused whole.
+message before the `keep` filter, reads at most one message past the bound, and refuses the batch
+whole (reported as `">N"`). The `keep` filter applies only to the public RFQ events; our own quote
+events and fills are always kept, so a sport filter can never hide our own exposure.
 
 Documented numbers:
 - **Sharding:** `shard_factor` 1–100 and `shard_key` (0 ≤ key < factor) split the channel's
@@ -212,8 +214,14 @@ it (§5).
   days.
 - Collateral must sit on the combo shard (shard 1, S17), apart from other cash. That is cash
   fragmentation.
+- `rfq_research.obligations` releases a reservation only when the quote's own cancelled status is
+  observed. A closed RFQ, a replacement, a lapsed window or a missing event releases nothing,
+  and any own fill that cannot be attributed to a quote blocks every release. A requester
+  obligation exists whenever a quote on our RFQ may bind (accepted, confirmed, executed or
+  unknown), with the worst case over both sides when the accepted side is not known.
 - `rfq_research.reserve_simultaneous` sums obligations per exchange index, never nets shared
-  legs, and fails closed on unknown principal or shard.
+  legs, and fails closed on an unknown or negative principal, a negative fee allowance or an
+  unknown shard.
 
 **Illustrative arithmetic only (not a forecast):**
 - Suppose a 100-contract combo quote is $0.02 inside a *correct* fair value. The gross is $2 per

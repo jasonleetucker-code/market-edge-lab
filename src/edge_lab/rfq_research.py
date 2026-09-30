@@ -18,16 +18,19 @@ documentation does not define is UNSUPPORTED or UNKNOWN here, never a convenient
 - **Quantities are layered.** Requested size is a demand upper bound. An accept notification,
   a maker confirmation and a `quote_executed` ("orders are placed") are not fills. Only fill
   records give filled quantity.
-- **Binding point.** Documented: once the maker confirms, neither party can withdraw. Before
-  that the maker may let the confirmation window pass.
+- **Binding point.** Documented: once the maker confirms, neither party can withdraw.
 - **Order independence.** State is derived from the *set* of distinct events, so duplicates and
-  out-of-order delivery give the same answer. Contradictory terminal evidence is UNKNOWN.
+  out-of-order delivery give the same answer. Contradictory evidence is UNKNOWN.
 - **Conservative exposure.** An own quote or RFQ keeps its worst-case principal reserved until
-  a documented terminal state is observed. Silence (a lapsed window, a missing event) releases
-  nothing. Simultaneous obligations are summed; shared combo legs never share collateral.
+  the quote's own CANCELLED status is observed. A closed RFQ, a replacement, a lapsed window or a
+  missing event releases nothing, and any own fill that cannot be attributed blocks every release.
+  Simultaneous obligations are summed; shared combo legs never share collateral.
+- **Currency needs evidence.** "This quote is current" needs a caller-stated observation time
+  within `max_age` and gap-free channel sequence numbers; otherwise OBSERVATION_STALE_OR_GAPPED.
 - **Input bound.** The communications channel ignores market filtering, so the bound applies to
-  every received message, before any local filter. Over the bound the whole batch is refused,
-  never truncated.
+  every received message, before any local filter, and is checked without reading past it. Over
+  the bound the whole batch is refused, never truncated. The local filter applies only to the
+  public RFQ events; our own party events and fills are always kept.
 - **Fees.** No RFQ or combo fee is verified. A fee-inclusive size needs a caller-supplied fee
   function; without one it is FEE_UNSUPPORTED.
 
@@ -41,6 +44,7 @@ from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
 from decimal import ROUND_FLOOR, Decimal, InvalidOperation
 from enum import Enum
+from itertools import islice
 from types import MappingProxyType
 from typing import Any, Callable, Iterable, Mapping
 
@@ -84,7 +88,7 @@ class Kind(str, Enum):
     RFQ_CREATED = "rfq_created"  # communications channel, every subscriber
     RFQ_DELETED = "rfq_deleted"  # communications channel, every subscriber
     QUOTE_CREATED = "quote_created"  # communications channel, parties only
-    QUOTE_ACCEPTED = "quote_accepted"  # communications channel, parties only
+    QUOTE_ACCEPTED = "quote_accepted"  # communications channel, parties only; carries no acceptance time
     QUOTE_EXECUTED = "quote_executed"  # communications channel, parties only: orders placed, not fills
     # Not channel events. Fixture adapters for REST quote status (`confirmed`, `cancelled`) and for
     # the member's own fill records (`GET /portfolio/fills`, the `fill` channel).
@@ -93,22 +97,24 @@ class Kind(str, Enum):
     FILL = "fill"
 
 
-PARTY_ONLY = frozenset({Kind.QUOTE_CREATED, Kind.QUOTE_ACCEPTED, Kind.QUOTE_EXECUTED,
-                        Kind.QUOTE_CONFIRMED, Kind.QUOTE_CANCELLED, Kind.FILL})
+PUBLIC_KINDS = frozenset({Kind.RFQ_CREATED, Kind.RFQ_DELETED})
+PARTY_ONLY = frozenset(Kind) - PUBLIC_KINDS
 
 
 class QuoteState(str, Enum):
     OPEN = "OPEN"
     ACCEPTED = "ACCEPTED"  # requester accepted; the maker has not confirmed: not binding on the maker
     CONFIRMED = "CONFIRMED"  # binding: neither party can withdraw (documented)
-    ORDERS_PLACED = "ORDERS_PLACED"  # `quote_executed`: orders entered, fills not established
-    CANCELLED = "CANCELLED"
-    REPLACED = "REPLACED"  # the same maker quoted this RFQ again later (documented replacement)
-    RFQ_CLOSED = "RFQ_CLOSED"  # the RFQ was deleted/closed before any acceptance
+    ORDERS_PLACED = "ORDERS_PLACED"  # `quote_executed` or a fill: orders entered
+    CANCELLED = "CANCELLED"  # the quote's own terminal status: the only releasing state
+    REPLACED = "REPLACED"  # a later quote by the same maker exists; still reserved until CANCELLED is seen
+    RFQ_CLOSED_REASON_UNKNOWN = "RFQ_CLOSED_REASON_UNKNOWN"  # rfq_deleted seen; this quote's fate unknown
     UNKNOWN = "UNKNOWN"  # contradictory or undocumented evidence
 
 
-RELEASED_STATES = frozenset({QuoteState.CANCELLED, QuoteState.REPLACED, QuoteState.RFQ_CLOSED})
+RELEASED_STATES = frozenset({QuoteState.CANCELLED})
+REQUESTER_BOUND_STATES = frozenset({QuoteState.ACCEPTED, QuoteState.CONFIRMED, QuoteState.ORDERS_PLACED,
+                                    QuoteState.UNKNOWN})
 
 
 class SizeMode(str, Enum):
@@ -132,6 +138,11 @@ def _dec(value: Any) -> Decimal | None:
     return d if d.is_finite() else None
 
 
+def _nonneg(value: Any) -> Decimal | None:
+    d = _dec(value)
+    return d if d is not None and d >= 0 else None
+
+
 # --------------------------------------------------------------------------- events
 
 
@@ -144,8 +155,9 @@ class Leg:
 
 @dataclass(frozen=True)
 class RfqEvent:
-    """One received message, normalised. `key` is content-derived (transport sid/seq/sending time
-    excluded), so a redelivered message is the same event."""
+    """One received message, normalised. `key` is content-derived: the transport fields (sid, seq,
+    sending_ts_ms) and our own receipt stamp (`received_at_utc`) are excluded, so a redelivered
+    message is the same event. Two genuinely separate but identical messages also collapse (C1)."""
 
     kind: Kind | None  # None: an undocumented message type (kept and counted, never used)
     raw_type: str
@@ -155,7 +167,10 @@ class RfqEvent:
     rfq_creator_id: str | None
     quote_creator_id: str | None
     market_ticker: str | None
-    at_utc: datetime | None
+    at_utc: datetime | None  # a documented venue timestamp in the message, if any
+    received_at_utc: datetime | None = None  # the caller's receipt time: local, not a venue time
+    sid: int | None = None
+    seq: int | None = None
     contracts: Decimal | None = None  # RFQ contracts_fp; a fill's count_fp
     target_cost: Decimal | None = None
     target_cost_excludes_fees: bool | None = None
@@ -171,14 +186,22 @@ class RfqEvent:
     malformed: bool = False
 
 
-_TRANSPORT_FIELDS = ("sid", "seq", "sending_ts_ms")
-_TIME_FIELDS = ("created_ts", "deleted_ts", "accepted_ts", "confirmed_ts", "executed_ts", "cancelled_ts",
-                "created_time")
+_NOT_CONTENT = ("sid", "seq", "sending_ts_ms", "received_at_utc")
+# Documented venue timestamps. `quote_accepted` has none (its acceptance time is taken from the
+# caller's receipt stamp); REST quote status carries confirmed_ts / cancelled_ts; fills created_time.
+_TIME_FIELDS = ("created_ts", "deleted_ts", "confirmed_ts", "executed_ts", "cancelled_ts", "created_time")
+_SIZE_FIELDS = ("contracts_fp", "count_fp", "target_cost_dollars", "rfq_target_cost_dollars",
+                "yes_contracts_offered_fp", "no_contracts_offered_fp", "contracts_accepted_fp")
+
+
+def _int(value: Any) -> int | None:
+    return value if isinstance(value, int) and not isinstance(value, bool) else None
 
 
 def parse_message(raw: Mapping[str, Any]) -> RfqEvent:
     """Normalise one documented message (`{"type": ..., "msg": {...}}`). Never raises on content:
-    an undocumented type has `kind` None and a message missing its identifiers is `malformed`."""
+    an undocumented type has `kind` None; a message missing its identifiers, with a bid outside
+    [0, 1] or with a negative size is `malformed`. An unparseable value is None (unknown)."""
     raw_type = str(raw.get("type", ""))
     msg = raw.get("msg") if isinstance(raw.get("msg"), Mapping) else {}
     try:
@@ -186,35 +209,45 @@ def parse_message(raw: Mapping[str, Any]) -> RfqEvent:
     except ValueError:
         kind = None
     key = payload_sha256({"type": raw_type, "msg": msg,
-                          **{k: v for k, v in raw.items() if k not in _TRANSPORT_FIELDS + ("type", "msg")}})
+                          **{k: v for k, v in raw.items() if k not in _NOT_CONTENT + ("type", "msg")}})
     at = next((parse_utc(msg.get(f)) for f in _TIME_FIELDS if msg.get(f) is not None), None)
-    is_rfq_kind = kind in (Kind.RFQ_CREATED, Kind.RFQ_DELETED)
+    is_rfq_kind = kind in PUBLIC_KINDS
     rfq_id = msg.get("id") if is_rfq_kind else msg.get("rfq_id")
-    legs: list[Leg] = []
     malformed = False
+    legs: list[Leg] = []
     for leg in msg.get("mve_selected_legs") or ():
         if not isinstance(leg, Mapping) or leg.get("side") not in ("yes", "no") \
                 or not leg.get("market_ticker") or not leg.get("event_ticker"):
             malformed = True
             continue
         legs.append(Leg(str(leg["event_ticker"]), str(leg["market_ticker"]), str(leg["side"])))
+    for name in ("yes_bid_dollars", "no_bid_dollars"):
+        bid = _dec(msg.get(name))
+        if bid is not None and not ZERO <= bid <= ONE:
+            malformed = True
+    for name in _SIZE_FIELDS:
+        size = _dec(msg.get(name))
+        if size is not None and size < 0:
+            malformed = True
     excl = msg.get("target_cost_excludes_fees")
     event = RfqEvent(
         kind=kind, raw_type=raw_type, key=key,
         rfq_id=None if rfq_id is None else str(rfq_id),
-        quote_id=None if msg.get("quote_id") is None else str(msg.get("quote_id")),
+        quote_id=_s(msg.get("quote_id")),
         rfq_creator_id=_s(msg.get("creator_id") if is_rfq_kind else msg.get("rfq_creator_id")),
         quote_creator_id=_s(msg.get("quote_creator_id")),
         market_ticker=_s(msg.get("market_ticker")), at_utc=at,
-        contracts=_dec(msg.get("contracts_fp") if kind is not Kind.FILL else msg.get("count_fp")),
-        target_cost=_dec(msg.get("target_cost_dollars", msg.get("rfq_target_cost_dollars"))),
+        received_at_utc=parse_utc(raw.get("received_at_utc")),
+        sid=_int(raw.get("sid")), seq=_int(raw.get("seq")),
+        contracts=_nonneg(msg.get("contracts_fp") if kind is not Kind.FILL else msg.get("count_fp")),
+        target_cost=_nonneg(msg.get("target_cost_dollars", msg.get("rfq_target_cost_dollars"))),
         target_cost_excludes_fees=excl if isinstance(excl, bool) else None,
         legs=tuple(legs),
-        yes_bid=_dec(msg.get("yes_bid_dollars")), no_bid=_dec(msg.get("no_bid_dollars")),
-        yes_contracts_offered=_dec(msg.get("yes_contracts_offered_fp")),
-        no_contracts_offered=_dec(msg.get("no_contracts_offered_fp")),
+        yes_bid=_nonneg(msg.get("yes_bid_dollars")), no_bid=_nonneg(msg.get("no_bid_dollars")),
+        yes_contracts_offered=_nonneg(msg.get("yes_contracts_offered_fp")),
+        no_contracts_offered=_nonneg(msg.get("no_contracts_offered_fp")),
         accepted_side=msg.get("accepted_side") if msg.get("accepted_side") in ("yes", "no") else None,
-        contracts_accepted=_dec(msg.get("contracts_accepted_fp")),
+        contracts_accepted=_nonneg(msg.get("contracts_accepted_fp")),
         order_id=_s(msg.get("order_id")), fill_id=_s(msg.get("fill_id")),
         malformed=malformed,
     )
@@ -257,11 +290,11 @@ class QuoteView:
     yes_contracts: Decimal | None
     no_contracts: Decimal | None
     created_at_utc: datetime | None
-    accepted_side: str | None
-    accepted_at_utc: datetime | None
+    accepted_side: str | None  # only when exactly one acceptance was seen
+    accepted_received_at_utc: datetime | None  # our receipt of the acceptance, not a venue time
     contracts_accepted_notified: Decimal | None
     order_ids: tuple[str, ...]
-    filled_contracts: Decimal | None  # None: no fill record observed (not zero)
+    filled_contracts: Decimal | None  # None: no usable fill record observed (not zero)
 
 
 @dataclass(frozen=True)
@@ -281,7 +314,7 @@ class RfqView:
 @dataclass(frozen=True)
 class ObservationReport:
     status: str  # OK | REFUSED_INPUT_BOUND | REFUSED_NOT_AUTHENTICATED
-    received_messages: int  # every message received, before any local filter
+    received_messages: str  # every message received before any local filter; ">N" when refused over the bound
     kept_messages: int
     duplicate_messages: int
     undocumented_messages: tuple[str, ...]
@@ -292,18 +325,33 @@ class ObservationReport:
     requested_contracts_upper_bound: Decimal | None = None  # contracts-sized RFQs only
     requested_target_cost_dollars: Decimal | None = None  # target-cost RFQs: not convertible without a price
     accepted_contracts_notified: Decimal | None = None  # own quotes and RFQs only; not a fill
-    filled_contracts: Decimal | None = None  # own fills only; None when none were observed
-    unattributed_fills: int = 0  # own fill records matching no observed quote_executed order id
+    filled_contracts: Decimal | None = None  # own fills only; None when none are usable
+    unattributed_fills: int = 0  # own fill ids matching no observed quote_executed order id
+    conflicting_fills: tuple[str, ...] = ()  # fill ids seen with differing payloads: UNKNOWN
+    seq_gaps: int | None = None  # missing channel sequence numbers; None: no sequence evidence
     other_parties_fills: Visibility = Visibility.UNAVAILABLE
     competitor_quote_prices: Visibility = Visibility.UNAVAILABLE
     queue_rank: Visibility = Visibility.UNSUPPORTED  # RFQ quotes have no documented queue or rank
 
 
-def _refused(status: str, received: int) -> ObservationReport:
+def _refused(status: str, received: str) -> ObservationReport:
     return ObservationReport(status=status, received_messages=received, kept_messages=0, duplicate_messages=0,
-                             undocumented_messages=(), malformed_messages=0, not_addressed_to_observer=0,
-                             requested_contracts_upper_bound=None, requested_target_cost_dollars=None,
-                             accepted_contracts_notified=None, filled_contracts=None)
+                             undocumented_messages=(), malformed_messages=0, not_addressed_to_observer=0)
+
+
+def _seq_gaps(events: Iterable[RfqEvent]) -> int | None:
+    by_sid: dict[int | None, set[int]] = {}
+    for e in events:
+        if e.seq is not None:
+            by_sid.setdefault(e.sid, set()).add(e.seq)
+    if not by_sid:
+        return None
+    return sum(max(seqs) - min(seqs) + 1 - len(seqs) for seqs in by_sid.values())
+
+
+def _unique(values: Iterable[Any]) -> Any:
+    found = {v for v in values if v is not None}
+    return next(iter(found)) if len(found) == 1 else None
 
 
 def observe(messages: Iterable[Mapping[str, Any]], observer: Observer, *, max_messages: int,
@@ -311,61 +359,68 @@ def observe(messages: Iterable[Mapping[str, Any]], observer: Observer, *, max_me
             timing_class: Mapping[str, TimingClass] | None = None) -> ObservationReport:
     """Fold received messages into per-RFQ and per-quote views for `observer`.
 
-    `max_messages` bounds everything received (the channel ignores market filtering), checked
-    before `keep` filters locally. Over the bound the batch is refused whole. `timing_class`
+    `max_messages` bounds everything received (the channel ignores market filtering). At most
+    `max_messages + 1` items are read from `messages`; over the bound the batch is refused whole.
+    `keep` filters only public RFQ events; party events and fills are always kept. `timing_class`
     maps a market ticker to its documented class; a combo (MVE legs present) is always HVM."""
     if not isinstance(max_messages, int) or isinstance(max_messages, bool) or max_messages < 0:
         raise RfqResearchError("max_messages must be a non-negative whole number")
-    received = list(messages)
+    received = list(islice(iter(messages), max_messages + 1))
     if len(received) > max_messages:
-        return _refused("REFUSED_INPUT_BOUND", len(received))
+        return _refused("REFUSED_INPUT_BOUND", f">{max_messages}")
     if not observer.authenticated:
-        return _refused("REFUSED_NOT_AUTHENTICATED", len(received))
+        return _refused("REFUSED_NOT_AUTHENTICATED", str(len(received)))
 
+    parsed: list[RfqEvent] = []
     seen: dict[str, RfqEvent] = {}
+    receipt: dict[str, datetime] = {}
     duplicates = malformed = foreign = 0
     undocumented: list[str] = []
     for raw in received:
         event = parse_message(raw) if isinstance(raw, Mapping) else None
-        if event is None:
+        if event is None or event.malformed:
             malformed += 1
             continue
         if event.kind is None:
             undocumented.append(event.raw_type)
             continue
-        if event.malformed:
-            malformed += 1
-            continue
+        parsed.append(event)
+        if event.received_at_utc is not None:
+            prev = receipt.get(event.key)
+            receipt[event.key] = event.received_at_utc if prev is None else min(prev, event.received_at_utc)
         if event.key in seen:
             duplicates += 1
             continue
         seen[event.key] = event
-    # Sorted by content key: every later "first" choice is independent of arrival order.
-    events = sorted((e for e in seen.values() if keep is None or keep(e)), key=lambda e: e.key)
+    # Sorted by content key: every later choice is independent of arrival order.
+    events = sorted((replace(e, received_at_utc=receipt.get(e.key)) for e in seen.values()
+                     if e.kind not in PUBLIC_KINDS or keep is None or keep(e)), key=lambda e: e.key)
 
     me = observer.comm_id
     rfq_events: dict[str, list[RfqEvent]] = {}
     quote_events: dict[str, list[RfqEvent]] = {}
-    fills: list[RfqEvent] = []
+    fills_by_id: dict[str, list[RfqEvent]] = {}
     for e in events:
         if e.kind is Kind.FILL:
-            fills.append(e)  # the member's own fill records only; matched to quotes by order id
-        elif e.kind in (Kind.RFQ_CREATED, Kind.RFQ_DELETED):
+            fills_by_id.setdefault(e.fill_id, []).append(e)  # own fill records; one fill id, one fill
+        elif e.kind in PUBLIC_KINDS:
             rfq_events.setdefault(e.rfq_id, []).append(e)
         else:
             quote_events.setdefault(e.quote_id, []).append(e)
+    conflicting = tuple(sorted(fid for fid, fs in fills_by_id.items() if len(fs) > 1))
+    fills_by_order: dict[str, list[RfqEvent]] = {}
+    for fid, fs in fills_by_id.items():
+        fills_by_order.setdefault(fs[0].order_id, []).append(fs[0])  # conflicting ones are flagged below
 
-    # Who created each RFQ, from any event that names it (the creator always sees their own id).
-    rfq_creator: dict[str, str] = {}
-    for e in events:
-        if e.rfq_id and e.rfq_creator_id and e.rfq_creator_id != "0":
-            rfq_creator.setdefault(e.rfq_id, e.rfq_creator_id)
+    rfq_creator: dict[str, str | None] = {}
+    for rid in {e.rfq_id for e in events if e.rfq_id}:
+        rfq_creator[rid] = _unique(e.rfq_creator_id for e in events
+                                   if e.rfq_id == rid and e.rfq_creator_id not in (None, "0"))
 
-    quotes: dict[str, QuoteView] = {}
     drafts: dict[str, dict[str, Any]] = {}
     for qid, evs in quote_events.items():
-        rfq_id = next((e.rfq_id for e in evs if e.rfq_id), None)
-        maker = next((e.quote_creator_id for e in evs if e.quote_creator_id), None)
+        rfq_id = _unique(e.rfq_id for e in evs)
+        maker = _unique(e.quote_creator_id for e in evs)
         own = maker == me
         on_own_rfq = rfq_creator.get(rfq_id) == me
         if not (own or on_own_rfq):
@@ -393,37 +448,36 @@ def observe(messages: Iterable[Mapping[str, Any]], observer: Observer, *, max_me
                             target_cost=src.target_cost, size_mode=mode, legs=legs, timing_class=tclass,
                             competitor_quote_prices=Visibility.VISIBLE if own else Visibility.UNAVAILABLE)
 
-    fills_by_order: dict[str, list[RfqEvent]] = {}
-    for f in fills:
-        fills_by_order.setdefault(f.order_id, []).append(f)
-
     # Replacement: a maker's later quote on the same RFQ replaces its earlier one (documented).
-    latest: dict[tuple[str | None, str | None], list[tuple[datetime | None, str]]] = {}
+    peers_of: dict[tuple[str | None, str | None], list[tuple[datetime | None, str]]] = {}
     for qid, d in drafts.items():
         created_at = next((e.at_utc for e in d["evs"] if e.kind is Kind.QUOTE_CREATED), None)
-        latest.setdefault((d["rfq_id"], d["maker"]), []).append((created_at, qid))
+        peers_of.setdefault((d["rfq_id"], d["maker"]), []).append((created_at, qid))
 
+    quotes: dict[str, QuoteView] = {}
     for qid, d in drafts.items():
         evs: list[RfqEvent] = d["evs"]
         kinds = {e.kind for e in evs}
         created = next((e for e in evs if e.kind is Kind.QUOTE_CREATED), None)
         accepted = [e for e in evs if e.kind is Kind.QUOTE_ACCEPTED]
-        executed = [e for e in evs if e.kind is Kind.QUOTE_EXECUTED]
-        order_ids = tuple(sorted({e.order_id for e in executed if e.order_id}))
+        order_ids = tuple(sorted({e.order_id for e in evs if e.kind is Kind.QUOTE_EXECUTED and e.order_id}))
         own_fills = [f for o in order_ids for f in fills_by_order.get(o, ())]
-        filled = sum((f.contracts for f in own_fills if f.contracts is not None), ZERO) if own_fills else None
-        reasons: list[str] = []
-        sides = {e.accepted_side for e in accepted if e.accepted_side}
+        fill_conflict = any(f.fill_id in conflicting for f in own_fills)
+        filled = (None if not own_fills or fill_conflict or any(f.contracts is None for f in own_fills)
+                  else sum((f.contracts for f in own_fills), ZERO))
         rfq = rfqs.get(d["rfq_id"])
         created_at = created.at_utc if created else None
-        peers = latest[(d["rfq_id"], d["maker"])]
+        peers = peers_of[(d["rfq_id"], d["maker"])]
         newer = [q for t, q in peers if q != qid and t is not None and created_at is not None and t > created_at]
         tied = [q for t, q in peers if q != qid and (t is None or created_at is None or t == created_at)]
         progressed = kinds & {Kind.QUOTE_ACCEPTED, Kind.QUOTE_CONFIRMED, Kind.QUOTE_EXECUTED}
+        reasons: list[str] = []
 
-        if len(sides) > 1:
-            state, reasons = QuoteState.UNKNOWN, ["CONTRADICTORY_ACCEPTED_SIDES"]
-        elif Kind.QUOTE_CANCELLED in kinds and (kinds & {Kind.QUOTE_CONFIRMED, Kind.QUOTE_EXECUTED}):
+        if len(accepted) > 1:
+            state, reasons = QuoteState.UNKNOWN, ["MULTIPLE_ACCEPTANCES"]  # partial acceptance is C1
+        elif fill_conflict:
+            state, reasons = QuoteState.UNKNOWN, ["FILL_RECORD_CONFLICT"]
+        elif Kind.QUOTE_CANCELLED in kinds and (kinds & {Kind.QUOTE_CONFIRMED, Kind.QUOTE_EXECUTED} or own_fills):
             state, reasons = QuoteState.UNKNOWN, ["CANCELLED_AND_BINDING_EVIDENCE_CONFLICT"]
         elif Kind.QUOTE_EXECUTED in kinds or own_fills:
             state = QuoteState.ORDERS_PLACED
@@ -436,7 +490,7 @@ def observe(messages: Iterable[Mapping[str, Any]], observer: Observer, *, max_me
         elif newer:
             state, reasons = QuoteState.REPLACED, [f"REPLACED_BY:{sorted(newer)[0]}"]
         elif rfq is not None and rfq.open is False:
-            state, reasons = QuoteState.RFQ_CLOSED, ["RFQ_CLOSED_BEFORE_ACCEPTANCE"]
+            state, reasons = QuoteState.RFQ_CLOSED_REASON_UNKNOWN, ["RFQ_CLOSED_NO_QUOTE_TERMINAL_STATUS"]
         elif created is not None:
             state = QuoteState.OPEN
         else:
@@ -444,54 +498,71 @@ def observe(messages: Iterable[Mapping[str, Any]], observer: Observer, *, max_me
         if tied and not progressed and state is QuoteState.OPEN:
             reasons.append("REPLACEMENT_ORDER_AMBIGUOUS")
         src = created or evs[0]
-        acc = accepted[0] if accepted else None
+        acc = accepted[0] if len(accepted) == 1 else None
         quotes[qid] = QuoteView(
             quote_id=qid, rfq_id=d["rfq_id"], own=d["own"], on_own_rfq=d["on_own_rfq"], state=state,
             reasons=tuple(reasons), yes_bid=src.yes_bid, no_bid=src.no_bid,
             yes_contracts=src.yes_contracts_offered, no_contracts=src.no_contracts_offered,
             created_at_utc=created_at, accepted_side=acc.accepted_side if acc else None,
-            accepted_at_utc=min((e.at_utc for e in accepted if e.at_utc), default=None),
+            accepted_received_at_utc=acc.received_at_utc if acc else None,
             contracts_accepted_notified=acc.contracts_accepted if acc else None,
             order_ids=order_ids, filled_contracts=filled)
 
     attributed = {o for q in quotes.values() for o in q.order_ids}
     contract_rfqs = [r for r in rfqs.values() if r.size_mode is SizeMode.CONTRACTS]
     cost_rfqs = [r for r in rfqs.values() if r.target_cost is not None]
-    notified = [q.contracts_accepted_notified for q in quotes.values() if q.accepted_side]
-    fill_counts = [q.filled_contracts for q in quotes.values() if q.filled_contracts is not None]
+    accepting = [q for q in quotes.values() if Kind.QUOTE_ACCEPTED in {e.kind for e in drafts[q.quote_id]["evs"]}]
+    notified = [q.contracts_accepted_notified for q in accepting]
+    usable_fills = [q.filled_contracts for q in quotes.values() if q.order_ids and q.filled_contracts is not None]
     return ObservationReport(
-        status="OK", received_messages=len(received), kept_messages=len(events), duplicate_messages=duplicates,
-        undocumented_messages=tuple(sorted(undocumented)), malformed_messages=malformed, not_addressed_to_observer=foreign,
-        rfqs=MappingProxyType(rfqs), quotes=MappingProxyType(quotes),
+        status="OK", received_messages=str(len(received)), kept_messages=len(events), duplicate_messages=duplicates,
+        undocumented_messages=tuple(sorted(undocumented)), malformed_messages=malformed,
+        not_addressed_to_observer=foreign, rfqs=MappingProxyType(rfqs), quotes=MappingProxyType(quotes),
         requested_contracts_upper_bound=sum((r.requested_contracts for r in contract_rfqs), ZERO)
         if contract_rfqs else None,
         requested_target_cost_dollars=sum((r.target_cost for r in cost_rfqs), ZERO) if cost_rfqs else None,
         accepted_contracts_notified=(sum(notified, ZERO) if notified and all(n is not None for n in notified)
                                      else None),
-        filled_contracts=sum(fill_counts, ZERO) if fill_counts else None,
-        unattributed_fills=sum(1 for f in fills if f.order_id not in attributed),
+        filled_contracts=None if conflicting or not usable_fills else sum(usable_fills, ZERO),
+        unattributed_fills=sum(1 for fs in fills_by_id.values() if fs[0].order_id not in attributed),
+        conflicting_fills=conflicting, seq_gaps=_seq_gaps(parsed),
     )
 
 
 # --------------------------------------------------------------------------- quote currency
 
 
-def quote_is_current(quote_id: str, report: ObservationReport, *, now: datetime) -> tuple[bool, str]:
+def _observation_problem(report: ObservationReport, at: datetime, observed_through_utc: Any,
+                         max_age: timedelta) -> bool:
+    through = parse_utc(observed_through_utc)
+    return (report.status != "OK" or report.seq_gaps is None or report.seq_gaps > 0 or through is None
+            or through > at or at - through > max_age)
+
+
+def quote_is_current(quote_id: str, report: ObservationReport, *, now: datetime, observed_through_utc: Any,
+                     max_age: timedelta) -> tuple[bool, str]:
     """Whether a quote is still a live object at `now`. A research fact, never permission to act.
-    Replaced, cancelled, closed, lapsed or unknown quotes are not current and cannot be reused."""
+
+    `observed_through_utc` is the caller's statement of how far the stream was received. Without
+    it within `max_age` of `now`, and without gap-free sequence numbers, nothing is current.
+    Replaced, cancelled, closed, lapsed or unknown quotes are never current and cannot be reused."""
     at = parse_utc(now)
     if at is None:
         raise RfqResearchError("now must be timezone-aware")
+    if _observation_problem(report, at, observed_through_utc, max_age):
+        return False, "OBSERVATION_STALE_OR_GAPPED"
     q = report.quotes.get(quote_id)
     if q is None:
         return False, "QUOTE_NOT_OBSERVED"
     rfq = report.rfqs.get(q.rfq_id)
     if q.state is QuoteState.ACCEPTED:
         tclass = None if rfq is None else rfq.timing_class
-        if tclass is None or q.accepted_at_utc is None:
+        if tclass is None or q.accepted_received_at_utc is None:
             return False, "ACCEPTED_CONFIRMATION_WINDOW_UNKNOWN"
-        if at - q.accepted_at_utc > CONFIRMATION_WINDOW[tclass]:
-            return False, "CONFIRMATION_WINDOW_ELAPSED"  # documented as voided; nothing is released by it
+        if at - q.accepted_received_at_utc > CONFIRMATION_WINDOW[tclass]:
+            # Measured from our receipt (the message has no acceptance time): the venue's window may
+            # have ended earlier. Documented as voided; nothing is released by it.
+            return False, "CONFIRMATION_WINDOW_ELAPSED"
         return False, "ACCEPTED_AWAITING_CONFIRMATION"
     if q.state is not QuoteState.OPEN:
         return False, q.state.value
@@ -515,9 +586,10 @@ class HypotheticalQuote:
 
 
 def hypothetical_check(h: HypotheticalQuote, report: ObservationReport, *, current_state_version: str | None,
-                       now: datetime, max_age: timedelta) -> tuple[str, ...]:
+                       now: datetime, max_age: timedelta, observed_through_utc: Any) -> tuple[str, ...]:
     """Every reason the hypothetical price is not usable, in order. Never empty: the last reason is
-    always PARTICIPATION_NOT_AUTHORIZED. A changed or unknown state invalidates the price."""
+    always PARTICIPATION_NOT_AUTHORIZED. A changed or unknown state invalidates the price, and so
+    does a stale or gapped view of the RFQ stream."""
     at = parse_utc(now)
     if at is None:
         raise RfqResearchError("now must be timezone-aware")
@@ -529,6 +601,8 @@ def hypothetical_check(h: HypotheticalQuote, report: ObservationReport, *, curre
     priced = parse_utc(h.priced_at_utc)
     if priced is None or priced > at or at - priced > max_age:
         out.append("PRICE_STALE")
+    if _observation_problem(report, at, observed_through_utc, max_age):
+        out.append("OBSERVATION_STALE_OR_GAPPED")
     rfq = report.rfqs.get(h.rfq_id)
     if rfq is None or rfq.open is not True:
         out.append("RFQ_NOT_KNOWN_OPEN")
@@ -552,7 +626,7 @@ class SizeResult:
     principal: Decimal | None
     fee: Decimal | None  # None: unknown (FEE_UNSUPPORTED), never zero
     total_debit: Decimal | None
-    status: str  # OK | FEE_UNSUPPORTED | INVALID
+    status: str  # OK | FEE_UNSUPPORTED | BELOW_MIN_SIZE | INVALID
     derivation: str = "RECONSTRUCTED: 0.01-contract floor; the venue's own rounding is not documented"
 
 
@@ -562,15 +636,18 @@ def derive_contracts(target_cost: Decimal, price: Decimal, mode: SizeMode, *,
 
     Principal-only: target / price, fee charged on top. Fee-inclusive (the default mode): the
     largest count whose principal plus taker fee fits in the target, which needs a verified fee
-    function (`fee_for(contracts, price)`); without one the count is FEE_UNSUPPORTED."""
+    function (`fee_for(contracts, price)`); without one the count is FEE_UNSUPPORTED. A negative
+    fee is unknown. A target too small for one 0.01-contract step is BELOW_MIN_SIZE."""
     t, p = _dec(target_cost), _dec(price)
     if mode is SizeMode.CONTRACTS:
         raise RfqResearchError("CONTRACTS-sized RFQs are not derived from a target cost")
     if t is None or p is None or t <= 0 or p <= 0 or p >= 1:
         return SizeResult(mode, None, None, None, None, "INVALID")
     cap = (t / p).quantize(CONTRACT_STEP, rounding=ROUND_FLOOR)
+    if cap < CONTRACT_STEP:
+        return SizeResult(mode, None, None, None, None, "BELOW_MIN_SIZE")
     if mode is SizeMode.TARGET_COST_PRINCIPAL_ONLY:
-        fee = None if fee_for is None else _dec(fee_for(cap, p))
+        fee = None if fee_for is None else _nonneg(fee_for(cap, p))
         principal = cap * p
         return SizeResult(mode, cap, principal, fee, None if fee is None else principal + fee,
                           "OK" if fee is not None else "FEE_UNSUPPORTED")
@@ -582,15 +659,15 @@ def derive_contracts(target_cost: Decimal, price: Decimal, mode: SizeMode, *,
     while lo <= hi:
         mid = (lo + hi) // 2
         c = mid * CONTRACT_STEP
-        fee = _dec(fee_for(c, p))
-        if fee is None or fee < 0:
+        fee = _nonneg(fee_for(c, p))
+        if fee is None:
             return SizeResult(mode, None, None, None, None, "FEE_UNSUPPORTED")
         if c * p + fee <= t:
             best, lo = (c, fee), mid + 1
         else:
             hi = mid - 1
     if best is None:
-        return SizeResult(mode, ZERO, ZERO, ZERO, ZERO, "OK")
+        return SizeResult(mode, None, None, None, None, "BELOW_MIN_SIZE")
     c, fee = best
     return SizeResult(mode, c, c * p, fee, c * p + fee, "OK")
 
@@ -618,43 +695,49 @@ def _max_known(values: Iterable[Decimal | None]) -> Decimal | None:
     return None if not vals or any(v is None for v in vals) else max(vals)
 
 
+def _times(price: Decimal | None, size: Decimal | None) -> Decimal | None:
+    return None if price is None or size is None else price * size
+
+
 def obligations(report: ObservationReport, *, exchange_index: Mapping[str, int] | None = None
                 ) -> tuple[Obligation, ...]:
-    """Worst-case principal per own quote (as maker) and per own RFQ with an accepted quote (as
-    requester). Released only in a documented terminal state (cancelled, replaced, RFQ closed
-    before acceptance). A lapsed confirmation window, a missing event or UNKNOWN releases nothing.
+    """Worst-case principal per own quote (as maker) and per own RFQ with a quote that may bind
+    (as requester). Released only when the quote's own CANCELLED status is observed and no own
+    fill is unattributed or conflicting. A closed RFQ, a replacement, a lapsed confirmation window,
+    a missing event or UNKNOWN releases nothing. A fill releases nothing (settlement is not modelled).
 
     Maker: it buys YES at yes_bid or NO at no_bid, for the full offered size; worst of the two.
-    An own quote on an RFQ that closed with no acceptance seen is released: a maker quote cannot
-    bind without the maker's own confirmation. A fill releases nothing (settlement is not modelled).
     Requester: the mapping from `accepted_side` to the requester's own contract is not settled by
-    the docs (REST vs FIX wording), so the worst of `bid` and `1 - bid` is reserved."""
+    the docs (REST vs FIX wording), so the worst of `bid` and `1 - bid` is reserved for the
+    accepted side; when the side is not known from exactly one acceptance, the worst over both."""
     idx = exchange_index or {}
+    release_blocked = report.unattributed_fills > 0 or bool(report.conflicting_fills)
     out: list[Obligation] = []
     for q in report.quotes.values():
-        if q.state in RELEASED_STATES:
+        if q.state in RELEASED_STATES and not release_blocked:
             continue
         rfq = report.rfqs.get(q.rfq_id)
         legs = () if rfq is None else rfq.legs
-        market = None if rfq is None else rfq.market_ticker
-        ex = idx.get(market or "")
+        ex = idx.get((None if rfq is None else rfq.market_ticker) or "")
         rfq_size = None if rfq is None else rfq.requested_contracts
         size_y = q.yes_contracts if q.yes_contracts is not None else rfq_size
         size_n = q.no_contracts if q.no_contracts is not None else rfq_size
+        note = "; release blocked by an unattributed or conflicting own fill" if q.state in RELEASED_STATES else ""
         if q.own:
-            parts = []
-            for bid, size in ((q.yes_bid, size_y), (q.no_bid, size_n)):
-                if bid is not None and bid == 0:
-                    continue  # a declined side cannot be accepted
-                parts.append(None if bid is None or size is None else bid * size)
+            parts = [_times(bid, size) for bid, size in ((q.yes_bid, size_y), (q.no_bid, size_n))
+                     if bid is None or bid != 0]  # a declined side cannot be accepted
             out.append(Obligation(q.quote_id, q.rfq_id, "QUOTER", q.state, _max_known(parts), ex, legs,
-                                  "worst side at full offered size"))
-        if q.on_own_rfq and q.accepted_side:
-            bid = q.yes_bid if q.accepted_side == "yes" else q.no_bid
-            size = size_y if q.accepted_side == "yes" else size_n
-            principal = None if bid is None or size is None else max(bid, ONE - bid) * size
+                                  "worst side at full offered size" + note))
+        if q.on_own_rfq and (q.state in REQUESTER_BOUND_STATES or (q.state in RELEASED_STATES and release_blocked)):
+            yb, nb = q.yes_bid, q.no_bid
+            y = _times(None if yb is None else max(yb, ONE - yb), size_y)
+            n = _times(None if nb is None else max(nb, ONE - nb), size_n)
+            if q.accepted_side is not None and q.state is not QuoteState.UNKNOWN:
+                principal, why = (y if q.accepted_side == "yes" else n), "accepted side: worst of bid and 1 - bid"
+            else:
+                principal, why = _max_known((y, n)), "accepted side unknown: worst over both sides"
             out.append(Obligation(f"{q.quote_id}:requester", q.rfq_id, "REQUESTER", q.state, principal, ex, legs,
-                                  "accepted-side mapping unresolved: worst of bid and 1 - bid"))
+                                  why + note))
     return tuple(sorted(out, key=lambda o: o.source_id))
 
 
@@ -671,24 +754,26 @@ def reserve_simultaneous(obligs: Iterable[Obligation], available_by_index: Mappi
                          fee_allowance: Callable[[Obligation], Decimal | None] | None = None) -> Reservation:
     """Can every obligation be met at once? Obligations are summed per exchange index (collateral
     is preallocated per shard; combos live on their own shard). Nothing is netted: two quotes that
-    share a combo leg each keep their full reservation, and the shared leg is reported."""
-    items = list(obligs)
+    share a combo leg each keep their full reservation, and the shared leg is reported. A negative
+    or missing principal, a negative fee allowance or an unknown shard is EXPOSURE_UNKNOWN."""
     required: dict[int, Decimal] = {}
     unknown: list[str] = []
     fee_missing = False
     legs: dict[tuple[str, str], list[str]] = {}
-    for o in items:
+    for o in obligs:
         for leg in o.legs:
             legs.setdefault((leg.market_ticker, leg.side), []).append(o.source_id)
-        if o.principal is None or o.exchange_index is None:
+        principal = _nonneg(o.principal)
+        raw_fee = None if fee_allowance is None else fee_allowance(o)
+        fee = _nonneg(raw_fee)
+        if principal is None or o.exchange_index is None or (raw_fee is not None and fee is None):
             unknown.append(o.source_id)
             continue
-        fee = None if fee_allowance is None else _dec(fee_allowance(o))
         if fee is None:
             fee_missing = True
-        required[o.exchange_index] = required.get(o.exchange_index, ZERO) + o.principal + (fee or ZERO)
-    shortfalls = {i: need - (_dec(available_by_index.get(i)) or ZERO) for i, need in required.items()
-                  if need > (_dec(available_by_index.get(i)) or ZERO)}
+        required[o.exchange_index] = required.get(o.exchange_index, ZERO) + principal + (fee or ZERO)
+    available = {i: _nonneg(available_by_index.get(i)) or ZERO for i in required}
+    shortfalls = {i: need - available[i] for i, need in required.items() if need > available[i]}
     status = ("EXPOSURE_UNKNOWN" if unknown else "INSUFFICIENT_COLLATERAL" if shortfalls
               else "FEE_UNSUPPORTED" if fee_missing else "OK")
     return Reservation(status, MappingProxyType(required), MappingProxyType(shortfalls), tuple(sorted(unknown)),

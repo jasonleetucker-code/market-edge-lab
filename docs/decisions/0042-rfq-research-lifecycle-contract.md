@@ -32,21 +32,30 @@ Add `src/edge_lab/rfq_research.py`, a pure, stdlib-only, network-free module:
     and reordering do not change it.
   - Contradictory terminal evidence gives UNKNOWN.
   - Party-only events addressed to other parties are counted and never used.
-  - The bound counts every received message before local filtering, and the whole batch is refused over it.
+  - The bound counts every received message before local filtering; at most one message past it is read, and the
+    whole batch is refused over it (reported as `">N"`).
+  - The local filter applies only to public RFQ events; our own quote events and fills are always kept.
+  - Malformed input (a bid outside [0, 1], a negative size) is counted and never used. One fill id seen with differing
+    payloads is a conflicting fill: never double-counted, its quote UNKNOWN.
+  - The channel's `quote_accepted` carries no acceptance time; the caller's receipt stamp is used, labelled as such.
 - **Quantity layers stay separate:** requested (a demand upper bound), accepted-notified, orders placed, filled (fill
   records only).
 - **Visibility:** competitor quote prices, other parties' fills and acceptance are UNAVAILABLE. A queue rank is
   UNSUPPORTED (undocumented).
-- **`quote_is_current`:** replaced, cancelled, closed, lapsed-window and ambiguous quotes cannot be reused.
+- **`quote_is_current`:** replaced, cancelled, closed, lapsed-window and ambiguous quotes cannot be reused. Nothing
+  is current without a caller-stated observation time within `max_age` and gap-free channel sequence numbers
+  (OBSERVATION_STALE_OR_GAPPED).
 - **`hypothetical_check`:** a changed or unknown state version invalidates a would-be price. Its last reason is always
   PARTICIPATION_NOT_AUTHORIZED, tied to `venues.KALSHI.execution_authorized`.
 - **`derive_contracts`:** principal-only and fee-inclusive target-cost sizing. Fee-inclusive sizing needs a
   caller-supplied fee function; without one it is FEE_UNSUPPORTED.
 - **`obligations` / `reserve_simultaneous`:**
   - worst-case principal per own quote (maker: the worse side at full size);
-  - per own accepted RFQ (requester: the worse of `bid` and `1 − bid`, because the side mapping is a documentation
-    conflict);
-  - released only in documented terminal states;
+  - per quote on an own RFQ that may bind: accepted, confirmed, executed or unknown (requester: the worse of `bid` and
+    `1 − bid` for a known side, because the side mapping is a documentation conflict; the worst over both sides
+    otherwise);
+  - released only when the quote's own CANCELLED status is observed; a closed RFQ, a replacement or silence releases
+    nothing, and an unattributed or conflicting own fill blocks every release;
   - summed per exchange index with no netting across shared legs;
   - fail closed on unknown principal or shard.
 
@@ -65,7 +74,8 @@ is PR C's integration. The research note records the recommended stages.
 ## Tradeoffs
 
 - Worst-case reservations overstate the capital needed when the venue would net or partially accept. That is
-  intended until C1 and the collateral timing are answered.
+  intended until C1 and the collateral timing are answered. Keeping replaced quotes and quotes on closed RFQs reserved
+  until their own cancellation is seen overstates it further; a lost event must never free collateral.
 - Fixture adapters for REST status and fills are our own normalisation, labelled as such. A real feed needs a reviewed
   parser against captured payloads.
 
