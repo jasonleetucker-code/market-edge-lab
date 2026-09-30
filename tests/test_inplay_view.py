@@ -21,7 +21,8 @@ def views():
 def test_every_variant_has_its_state(views):
     assert {k: v["state"] for k, v in views.items()} == {
         "populated": "POPULATED", "empty": "EMPTY", "stale": "STALE", "partial": "PARTIAL", "resync": "PARTIAL",
-        "unsupported": "UNSUPPORTED", "paused": "PAUSED", "error": "ERROR", "not_authorized": "NOT_AUTHORIZED"}
+        "unsupported": "UNSUPPORTED", "paused": "PAUSED", "error": "ERROR", "not_authorized": "NOT_AUTHORIZED",
+        "invalidated": "POPULATED", "state_unknown": "POPULATED"}
     for v in views.values():
         assert v["schema"] == iv.VIEW_SCHEMA and v["mode"] != "LIVE" and "NOT LIVE" in v["label"]
         json.dumps(v)  # plain data: the Terminal only formats it

@@ -64,7 +64,7 @@ def _base(state: ViewState, mode: Mode, as_of: str | None, detail: str) -> dict[
             "detail": detail, "authority": AUTHORITY, "pilot": PILOT_STATUS, "contract": None, "source": None,
             "inventory": None, "policy": None, "exit_estimate": None, "comparison": None, "diagnostics": [],
             "assumptions": [], "after_cost_claim": False, "after_cost_reason": "no replay evaluated",
-            "blocker": None}
+            "blocker": None, "source_state": None, "fill_economics": None}
 
 
 def not_authorized_view() -> dict[str, Any]:
@@ -164,8 +164,11 @@ def build_view(*, mode: Mode, market_ticker: str, game_label: str, transitions: 
                window_start: datetime, trading: ev.TradingState, inventory: pp.Inventory,
                orders: Sequence[pp.RestingOrder], policy: pp.PositionPolicy, fee_model: pp.FeeModel,
                rules_version: str | None, cohort: rp.Cohort | None, replay_config: rp.ReplayConfig | None,
-               data_kind: ev.DataKind) -> dict[str, Any]:
-    """One view from journalled evidence, a simulated inventory, a frozen policy and a replay."""
+               data_kind: ev.DataKind, state_variant: str | None = None) -> dict[str, Any]:
+    """One view from journalled evidence, a simulated inventory, a frozen policy and a replay.
+
+    With `state_variant` (FIXTURE game states, `source_state_section`), the policy decision is checked against
+    the game state it depends on: a material new event makes it BLOCKED for review, never a sale."""
     if mode is Mode.NOT_AUTHORIZED:
         raise ValueError("use not_authorized_view()")
     if data_kind is ev.DataKind.RECORDED:
@@ -178,8 +181,13 @@ def build_view(*, mode: Mode, market_ticker: str, game_label: str, transitions: 
     book = pp.SaleBook(f"kalshi:{market_ticker}", inventory.side, state.yes_bids if inventory.side == "YES"
                        else state.no_bids, False, state.status, trading, state.last_applied_receipt_utc,
                        f"journal:{market_ticker}:seq{state.last_seq}", data_kind)
+    source_state, validity = None, None
+    if state_variant is not None:
+        source_state, validity = source_state_section(
+            variant=state_variant, as_of=as_of, book_state=state, data_kind=data_kind, max_age=policy.max_book_age,
+            decision_id=f"inplay:{policy.policy_id}:{as_of.isoformat()}")
     decision = pp.evaluate(as_of=as_of, inventory=inventory, orders=orders, book=book, fee_model=fee_model,
-                           policy=policy, rules_version=rules_version)
+                           policy=policy, rules_version=rules_version, state_validity=validity)
     reserved = decision.provenance.get("reserved")
     report = rp.replay(cohort, replay_config) if cohort is not None and replay_config is not None else None
 
@@ -237,6 +245,8 @@ def build_view(*, mode: Mode, market_ticker: str, game_label: str, transitions: 
         out["after_cost_reason"] = report.after_cost_reason
         out["assumptions"].append(f"Replay latencies: decision {replay_config.decision_latency.total_seconds():g} s, "
                                   f"arrival {_arrival_text(replay_config)}; fill rule {replay_config.fill_rule.value}.")
+    out["source_state"] = source_state
+    out["fill_economics"] = fill_economics_section(cohort, report)
     out["blocker"] = ("Real in-play evidence needs owner approval of the pilot, the data-rights decision, a reviewed "
                       "recorder and a research slot; until then only fixtures and synthetic cohorts are shown.")
     return out
@@ -319,7 +329,8 @@ def fixture_view(variant: str = "populated") -> dict[str, Any]:
         return error_view("FIXTURE: the journal header is not inplay-journal-v1 (read refused, nothing shown).")
     if variant == "not_authorized":
         return not_authorized_view()
-    journal = {"empty": "empty", "partial": "gap", "resync": "awaiting_resync"}.get(variant, "clean")
+    journal = {"empty": "empty", "partial": "gap", "resync": "awaiting_resync"}.get(variant, "clean")  # also the
+    # clean journal for "invalidated" and "state_unknown", whose game states differ (`_fixture_states`)
     msgs, failures, parse_failures = _journal(journal)
     _, transitions = ev.reconstruct(FIXTURE_TICKER, msgs)
     as_of = _T0 + timedelta(seconds=3006 if variant != "stale" else 3300)
@@ -336,8 +347,165 @@ def fixture_view(variant: str = "populated") -> dict[str, Any]:
                       transitions=transitions, failures=failures, parse_failures=parse_failures, as_of=as_of,
                       window_start=_T0, trading=trading, inventory=inventory, orders=(), policy=policy,
                       fee_model=fee_model, rules_version="fixture-rules-v1", cohort=cohort,
-                      replay_config=cfg if cohort is not None else None, data_kind=ev.DataKind.FIXTURE)
+                      replay_config=cfg if cohort is not None else None, data_kind=ev.DataKind.FIXTURE,
+                      state_variant=variant)
 
 
 FIXTURE_VARIANTS = ("populated", "empty", "stale", "partial", "resync", "unsupported", "paused", "error",
-                    "not_authorized")
+                    "not_authorized", "invalidated", "state_unknown")
+
+
+# --------------------------------------------------------------------------- source, state and fill economics (PR C)
+#
+# Compact displays of the R2 contracts (ADR 0041), fed only by the fixture journal and the synthetic replay. No
+# source-comparison widget is built here: nothing compares two sources' prices, so the EXP-002 label-proxy cutoff
+# (`odds_schedule.is_label_proxy`) is never reached, and no NFL pilot quote is read.
+
+_LOCAL_CLOCK = "fixture:host"
+_SOURCE_CLOCK = "fixture:kalshi-ts_ms"
+
+
+def _latency_rows(breakdown: ev.LatencyBreakdown) -> list[dict[str, Any]]:
+    out = []
+    for stage in ev.LatencyStage:
+        m = breakdown.get(stage)
+        out.append({"stage": stage.value, "seconds": None if m is None else _s(Decimal(str(m.value.total_seconds()))),
+                    "uncertainty_seconds": None if m is None or m.uncertainty is None
+                    else _s(Decimal(str(m.uncertainty.total_seconds()))),
+                    "measured": m is not None, "method": None if m is None else m.method,
+                    "clock_inconsistent": bool(m is not None and m.clock_inconsistent)})
+    return out
+
+
+def _fixture_states(variant: str, as_of: datetime) -> ev.GameJournal:
+    """FIXTURE game states: Q4 0-0, then (per variant) a touchdown or an unreadable update seen 5 s before the
+    replay clock, after the policy decided on the earlier state."""
+    def state(seconds_before: float, home: int, event: str, status=ev.GameStateStatus.OBSERVED) -> ev.GameState:
+        at = (as_of - timedelta(seconds=seconds_before)).isoformat()
+        return ev.GameState("FIXTURE-GAME", "fixture:scores", event, ev.Stamps(at, at), status,
+                            f"fixture-{event}", home_score=None if status is not ev.GameStateStatus.OBSERVED else home,
+                            away_score=None if status is not ev.GameStateStatus.OBSERVED else 0, period="Q4",
+                            game_clock_text="Q4 02:13")
+    journal = ev.GameJournal("FIXTURE-GAME").append(state(120, 0, "e1"))
+    if variant == "invalidated":
+        journal = journal.append(state(5, 7, "e2"))
+    elif variant == "state_unknown":
+        journal = journal.append(state(5, 0, "e3", ev.GameStateStatus.UNSUPPORTED_OR_UNMAPPED))
+    return journal
+
+
+DECISION_LAG = timedelta(seconds=20)  # the fixture policy computed its proposal on the state seen 20 s earlier
+
+
+def source_state_section(*, variant: str, as_of: datetime, book_state: ev.BookState, data_kind: ev.DataKind,
+                         max_age: timedelta, decision_id: str) -> tuple[dict[str, Any], ev.StateValidity]:
+    """Source, state and clock validity for the fixture book (inplay_evidence source-state-v1)."""
+    received = parse_utc(book_state.last_applied_receipt_utc)
+    published = parse_utc(book_state.last_source_ts_utc)
+    evidence = ev.EvidenceStatus.SIMULATED  # fixture input can never be ACTUAL (check_evidence)
+    ctx = ev.SourceContext("NFL", "moneyline (FIXTURE)", ev.Phase.LIVE, "FIXTURE")
+    obs = None
+    if received is not None:
+        rec = ev.ClockReading(received.isoformat(), ev.ClockOrigin.LOCAL, _LOCAL_CLOCK, timedelta(milliseconds=1),
+                              timedelta(milliseconds=50))
+        pub = None if published is None else ev.ClockReading(published.isoformat(), ev.ClockOrigin.SOURCE,
+                                                             _SOURCE_CLOCK, timedelta(milliseconds=1), None)
+        latency = ev.LatencyBreakdown(tuple((stage, m) for stage, m in (
+            (ev.LatencyStage.TRANSPORT, ev.measure_between(pub, rec, "receipt - venue ts_ms")),) if m is not None))
+        obs = ev.SourceObservation(f"fixture:book:{book_state.last_seq}", "fixture:kalshi-book", "FIXTURE-GAME", rec,
+                                   ctx, evidence, data_kind, source_family="FIXTURE_EXCHANGE", published=pub,
+                                   latency=latency)
+    journal = _fixture_states(variant, as_of)
+    decided_at = as_of - DECISION_LAG
+    dep = ev.game_state_as_of(journal, decided_at)
+    stamp = ev.DecisionStamp(decision_id, "inplay-fixed-target-v1", decided_at.isoformat(), True,
+                             None if dep is None else dep.observation_id)
+    validity = ev.decision_validity(stamp, journal, at=as_of)
+    freshness = None if obs is None else ev.content_freshness(obs, now=as_of, max_age=max_age)
+    section = {
+        "contract_version": ev.SOURCE_STATE_VERSION,
+        "evidence_status": evidence.value, "data_kind": data_kind.value,
+        "source_id": None if obs is None else obs.source_id,
+        "source_family": None if obs is None else obs.source_family,
+        "context": {"sport": ctx.sport, "market": ctx.market, "phase": ctx.phase.value, "regime": ctx.regime},
+        "received_utc": None if obs is None else obs.received.utc,
+        # precision 1 ms + clock bound 50 ms (the fixture host clock); None when no book was received
+        "received_uncertainty_seconds": None if obs is None else "0.051",
+        "published_utc": None if obs is None or obs.published is None else obs.published.utc,
+        "published_uncertainty": "UNKNOWN" if obs is not None and obs.published is not None else None,
+        "content_freshness": None if freshness is None else freshness.value,
+        "incorporated_state": None if obs is None else obs.state_knowledge.value,
+        "latency": [] if obs is None else _latency_rows(obs.latency),
+        "decision": {"decision_id": decision_id, "as_of_utc": stamp.as_of_utc, "state_version": stamp.state_version,
+                     "checked_at_utc": validity.checked_at_utc, "status": validity.status.value,
+                     "reasons": [f"{r.value}: {d}" for r, d in validity.reasons],
+                     "superseded_by": list(validity.superseded_by),
+                     "non_material_updates": validity.non_material_updates},
+        "game_clock_note": "The game clock (Q4 02:13) is game time, not UTC; it orders nothing here.",
+        "note": ("A quote's incorporated game state is UNKNOWN unless its source declares it; arriving after a "
+                 "scoreboard change does not make a quote reflect it."),
+    }
+    return section, validity
+
+
+def _cohort_fills(cohort: rp.Cohort, report: rp.ReplayReport, arm: rp.Arm, semantics: rp.Semantics | None):
+    """Simulated fills of one arm: each entry's purchase, and its sale when one filled (mode by semantics)."""
+    from . import research_economics as re_
+
+    kind = ev.DataKind(report.data_kind)
+    mode = {rp.Semantics.PREPLACED_LIMIT: re_.ExecutionMode.BOOK_MAKER}.get(semantics, re_.ExecutionMode.TAKER)
+    results = {r.game_id: r for r in report.entries if r.arm is arm and r.semantics is semantics}
+    fills, resolutions = [], {}
+    ctx = ev.SourceContext("NFL", "synthetic YES", ev.Phase.LIVE, "SYNTHETIC")
+    for e in cohort.entries:
+        entry_fee = None if e.entry_cost is None else e.entry_cost - e.quantity * e.entry_price
+        fills.append(re_.Fill(f"{e.game_id}:buy", re_.ExecutionMode.TAKER, ev.EvidenceStatus.SIMULATED, kind,
+                              e.market_id, "BUY", e.quantity, e.entry_price, entry_fee, e.entry_at_utc, ctx,
+                              exposure_keys=(e.cluster_id,), season="SYNTHETIC", peak=False))
+        r = results.get(e.game_id)
+        if r is not None and r.sold > 0 and r.last_fill_at_utc is not None:
+            fills.append(re_.Fill(f"{e.game_id}:sell", mode, ev.EvidenceStatus.SIMULATED, kind, e.market_id, "SELL",
+                                  r.sold, r.gross_proceeds / r.sold, r.fees, r.last_fill_at_utc, ctx,
+                                  exposure_keys=(e.cluster_id,), season="SYNTHETIC", peak=False))
+        s = e.settlement
+        resolutions[e.market_id] = re_.Resolution(s.value if s.final else None, s.at_utc)
+    return fills, resolutions
+
+
+def fill_economics_section(cohort: rp.Cohort | None, report: rp.ReplayReport | None) -> dict[str, Any]:
+    """Fill-conditioned economics per arm, from the synthetic replay only (there is no real fill)."""
+    from . import research_economics as re_
+
+    if cohort is None or report is None:
+        return {"state": "NOT_EVALUATED", "detail": "No cohort was replayed, so there are no simulated fills.",
+                "rows": [], "rfq": "RFQ: not evaluated (no RFQ source; the RFQ packet is #148)."}
+    start = min(parse_utc(e.entry_at_utc) for e in cohort.entries)
+    rows = []
+    for arm, sem in ((rp.Arm.HOLD, None), (rp.Arm.FULL_EXIT, rp.Semantics.BOT_TRIGGERED),
+                     (rp.Arm.FULL_EXIT, rp.Semantics.PREPLACED_LIMIT)):
+        label = {None: "Hold to settlement", rp.Semantics.BOT_TRIGGERED: "Full exit · bot-triggered (taker)",
+                 rp.Semantics.PREPLACED_LIMIT: "Full exit · preplaced limit (book maker)"}[sem]
+        try:
+            fills, res = _cohort_fills(cohort, report, arm, sem)
+            r = re_.fill_economics(fills, resolutions=res, window_start_utc=start.isoformat(),
+                                   window_end_utc=cohort.horizon_utc, total_capital=cohort.starting_capital,
+                                   fixed_cash_costs=re_.Labeled.unknown("no fixed cash cost recorded for a synthetic "
+                                                                        "cohort"),
+                                   owner_hours=re_.Labeled.unknown("not tracked for a synthetic cohort"),
+                                   turnover_basis=re_.TurnoverBasis.TOTAL_CAPITAL)
+        except ValueError as exc:
+            rows.append({"arm": label, "state": "ERROR", "detail": str(exc)})
+            continue
+        modes = sorted({g.key[0] for g in r.groups})
+        rows.append({"arm": label, "state": "POPULATED", "modes": modes, "evidence": r.evidence,
+                     "data_kind": r.data_kind, "fills": r.fills, "notional": _s(r.notional),
+                     "gross": _s(r.total_gross), "fees": _s(r.fees), "net": _s(r.net_contribution),
+                     "peak_collateral": _s(r.peak_collateral), "capital_days": _s(r.capital_days),
+                     "return_on_deployed": _s(r.return_on_deployed), "turnover": _s(r.turnover),
+                     "turnover_basis": r.turnover_basis, "open_positions": len(r.open_positions),
+                     "missing": [x.split(":", 1)[0] for x in r.reasons if not x.startswith("MODES_SEPARATE")],
+                     "reasons": list(r.reasons)})
+    return {"state": "POPULATED" if all(x["state"] == "POPULATED" for x in rows) else "PARTIAL",
+            "detail": (f"Simulated fills of a {report.data_kind.lower()} cohort ({len(cohort.entries)} games); "
+                       "fill-conditioned-economics-v1. Not a real fill, not an edge."),
+            "rows": rows, "rfq": "RFQ: not evaluated (no RFQ source; the RFQ packet is #148)."}

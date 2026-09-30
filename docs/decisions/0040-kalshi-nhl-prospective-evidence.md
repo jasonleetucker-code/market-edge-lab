@@ -141,6 +141,9 @@ the real plan and capture path (every run ≤ 24 GETs, 97 GETs in total).
   verification record covers KXNHLGAME; nothing is priced and no fee is set to 0. Note for the fee owner:
   `fee_schedules.schedule_for("kalshi", "KXNHLGAME")` routes to the general quadratic schedule because KXNHLGAME is
   not on the captured non-standard list; this collector never calls it.
+  *Update 2026-09-30 (PR C): `schedule_for` now returns FEE_UNSUPPORTED for KXNHLGAME through the explicit
+  not-proven-standard map (`fee_schedules.not_proven_standard`; `docs/research/CURRENT_BLOCKERS.md`). The text
+  above records the state when this ADR was written.*
 - Units: $1.00-notional binary contracts, dollar prices, `linear_cent` grid (as NFL records them).
 
 ### Outcomes are labels, pregame books are features

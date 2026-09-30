@@ -310,15 +310,23 @@ a mode capsule (Fixture replay · not live, Synthetic replay · not live, No in-
 never LIVE) and a state capsule whose populated word follows the mode (Fixture, Synthetic or Recorded evidence); a status line with the replay clock ("the fixture's time, not now");
 Position · simulated (contract, game, book reconstruction state and age at the replay clock, coverage,
 market state, simulated initial / remaining inventory, reserved by resting sales; reconstruction details
-and every kept failure in a disclosure); Policy proposal (action "· proposal only", decision "Proposed ·
+and every kept failure in a disclosure); Source and state validity (2026-09-30: evidence status and data kind,
+source and source family, content age by publication clock, the game state the quote is declared to reflect —
+"Unknown: not declared by the source" otherwise — and decision validity "Valid at replay clock", "Invalidated ·
+recompute" or "Review required" with its reason code; clocks, context, all reasons and a latency-stage table where
+unmeasured is not zero in a disclosure; the game clock is never shown as a time); Policy proposal (action "· proposal only", decision "Proposed ·
 not sent" or "Blocked · no new risk", quantity, limit, execution assumption, primary reason (the decision's own reason, never the fee caveat; every reason in Policy details); exit proceeds
 estimate at size with gross at displayed bids, fees, net "not profit" — unknown fees read "after-cost
 figure unavailable", never a number); Hold versus exit (a note first: "A synthetic cohort of N games, not this contract (<ticker>)"; then one row per arm and execution semantics with
 replay P&L gross and net, change vs hold, worst and best entry — signed, never coloured; oracle diagnostics
-and provenance in a disclosure); Blocker and approval (authority, the pilot "PROPOSED, NOT APPROVED",
+and provenance in a disclosure); Fill-conditioned economics (2026-09-30: one row per arm with its execution mode
+— taker, book maker — evidence "Simulated · not actual", simulated fills, gross and net (fee unknown reads
+"after-cost figure unavailable"), peak collateral, return on deployed, turnover of total capital as a multiple,
+and the missing denominators named in the row subtitle; RFQ reads "not evaluated"; reasons in a disclosure);
+Blocker and approval (authority, the pilot "PROPOSED, NOT APPROVED",
 blocker; assumptions in a disclosure). Production reads "No in-play source is authorized". No balance,
 edge score, input or trade control. States: populated, empty, stale, partial, unsupported, paused, error,
-not authorized; `/gallery/inplay` (demo only) renders each from fixtures.
+not authorized, invalidated, state unknown; `/gallery/inplay` (demo only) renders each from fixtures.
 
 **Alerts `/alerts`** — Needs attention, Standing conditions, Recent notifications, Tests,
 verification checks and diagnostics, Expired; delivery state stated honestly (recorded locally;
@@ -669,3 +677,50 @@ directive), and the screenshots that justify it.
 
     Element shots of the NHL section were reviewed in Chromium at 390 and 1440 px. This is emulation, not a physical
     phone. The shots were reviewed locally by the author, described in the PR and not attached.
+
+- **2026-09-30 — Source/state validity, fill-conditioned economics, current blockers and contract exceptions.**
+  Approved by the owner directive of 2026-09-30 (`docs/owner/2026-09-30-roadmap-integration-sports-intelligence-rfq-directive.md`,
+  "PR C": compact displays in the existing Terminal components) and the coordinator's PR C assignment; the spec is
+  `docs/strategy/CLAUDE_SPORTS_INTELLIGENCE_RFQ_V1.md` §13. No token, theme, navigation item or new component.
+  - §8 In-play research gains two sections, composed from the existing facts, rows, state text, tables and
+    disclosures: "Source and state validity" after Position, and "Fill-conditioned economics" after Hold versus
+    exit (wording above). The policy proposal is now checked against the game state it depends on: an invalidated
+    or unreadable state reads "Blocked · no new risk" with a reason code (STATE_INVALIDATED: MATERIAL_STATE_CHANGE),
+    never a sale. Two gallery states are added: invalidated and state unknown. Phases print in words ("in game"):
+    the page never prints the word for a live feed. Production still reads "No in-play source is authorized" and
+    shows neither section.
+  - §8 Research & Data: Data sources gains "Current blockers" before "Fee schedule verification", from
+    `current_blockers` (the one register; `docs/research/CURRENT_BLOCKERS.md` generates its table from it). One
+    row per open item: title; scope, resolver, trigger (or "overdue since …") and "owner action needed" or "owner
+    approval needed" in the subtitle; one status word, never green. The next item leads; verified, unknown,
+    resolver and sources sit in a disclosure. States: populated, empty ("No research blocker recorded"), all closed
+    ("No open blocker"), stale ("Register needs re-checking": reconciled over 14 days ago, or overdue), error and
+    not installed (both "Blocker register unavailable", never "nothing open"), unrecognized status (neutral, code
+    kept).
+  - §8 Research & Data: Data sources gains "RFQ feasibility" after Current blockers, from
+    `rfq_research.FEASIBILITY_MATRIX` (kept equal to `docs/research/RFQ_FEASIBILITY_2026-09.md` by a test). It
+    shows:
+    - a blocked state, "Decision: Narrow · no RFQ participation" ("Competitor quotes and fills are never shown");
+    - counts per capability state (Documented, Private to the parties, Unavailable to us, Unknown) and the number of
+      open owner decisions;
+    - in disclosures, each capability with its state and note, and the owner decisions D1–D6 ("none taken here").
+
+    No price, profit, competitor figure or control. States: populated, stale ("Documentation needs re-reading" after
+    30 days), error and not installed ("RFQ feasibility unavailable"), unrecognized state (neutral).
+  - §8 Terminal: the collapsed System & evidence opens with "Next research blocker or approval", one line with a
+    link to Current blockers. Page order and the summary band are unchanged.
+  - §8 Market detail: Rules & evidence gains "contract exceptions (recorded summary, not the rules)" for series
+    with a recorded summary (KXNFLGAME, KXNHLGAME): tie, fair-price fallback, shootout, with each case's status.
+    Other series show nothing new. No fixture state renders a sports market detail page; the row is covered by
+    render tests (`tests/test_dashboard_blockers.py`), not screenshots.
+  - §5 Formatting gains `presentation.ratio` (a multiple of a named denominator: "1.44×").
+  - Label protection: no source-comparison widget is added. Nothing here reads NFL pilot quotes, T-60m label proxies
+    or post-cutoff prices; any future comparison widget must use `odds_schedule.is_label_proxy`.
+  - Screenshots, re-captured on the review-round head (Chromium; reproducible with `MSYS_NO_PATHCONV=1 python tests/browser/capture.py --states early demo
+    --pages / "/experiments?tab=sources" /experiments/inplay /gallery/inplay --viewports 360x800 390x844 1440x900`
+    at `--text-scale 1.0` and `2.0`, plus `--open-details` for `demo` at 390x844 and 1440x900): 52 shots, 0 with
+    overflow, clipping, low contrast or foreign requests. Element shots of the new sections (including RFQ
+    feasibility) at 390x844 and 1440x900 were reviewed locally by the author. The 200% text evidence is the
+    capture.py audit. Two review fixes followed: blocker rows carry one
+    status word, because a second badge squeezed the title at 390 px; and turnover prints as a multiple, not 12
+    decimals. Emulation, not a physical phone; described in the PR, not attached.

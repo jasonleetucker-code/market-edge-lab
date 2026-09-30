@@ -1605,3 +1605,73 @@ def inplay_fixture_views(ctx: Context) -> Loaded:
         return Loaded(ERROR, message=short_error(exc, ctx.config))
     checked = {k: _inplay_checked(module, v) for k, v in views.items()}
     return Loaded(OK, checked)
+
+
+# --------------------------------------------------------------------------- current research blockers (PR C, R1)
+
+BLOCKERS_MODULE = "edge_lab.current_blockers"
+
+
+def current_blockers(ctx: Context) -> Loaded:
+    """The reconciled research-blocker register (`current_blockers`, docs/research/CURRENT_BLOCKERS.md),
+    with each item's staleness at `ctx.now`. An inconsistent register is an error state, never a partial list."""
+    module, missing = _optional_module(BLOCKERS_MODULE, "the current-blocker register is not installed in this build",
+                                       ctx)
+    if missing is not None:
+        return missing
+    try:
+        problems = module.validate()
+        if problems:
+            return Loaded(ERROR, message="the blocker register is inconsistent: " + "; ".join(problems)[:180])
+        items = [{"id": b.blocker_id, "title": b.title, "scope": b.scope, "status": b.status.value,
+                  "verified": b.verified, "unknown": b.unknown, "resolver": b.resolver.value,
+                  "resolver_detail": b.resolver_detail, "trigger": b.trigger, "sources": list(b.sources),
+                  "owner": b.owner.value, "due_utc": b.due_utc,
+                  "reviewed_at_utc": b.reviewed_at_utc, "stale": module.is_stale(b, ctx.now),
+                  "overdue_since_utc": b.due_utc if module.is_overdue(b, ctx.now) else None,
+                  "open": b in module.open_blockers()} for b in module.BLOCKERS]
+        nxt = module.next_blocker(ctx.now)
+    except Exception as exc:  # noqa: BLE001 - shown as an error state, never a failed page
+        return Loaded(ERROR, message=short_error(exc, ctx.config))
+    # an empty register loads fine (OK, no items); NO_DATA is kept for a register that is not installed
+    return Loaded(OK, {"version": module.REGISTER_VERSION, "items": items,
+                       "last_reconciled": module.LAST_RECONCILED,
+                       "next": None if nxt is None else nxt.blocker_id,
+                       "document": "docs/research/CURRENT_BLOCKERS.md"})
+
+
+def contract_exceptions(native_id: str | None) -> list[dict[str, str]] | None:
+    """The recorded contract-exception summary for a market's series (tie, fallback, shootout), or None."""
+    try:
+        from .. import current_blockers
+    except ImportError:
+        return None
+    found = current_blockers.exceptions_for(native_id)
+    return None if found is None else [{"case": x.case, "status": x.status, "summary": x.summary, "source": x.source}
+                                       for x in found]
+
+
+RFQ_MODULE = "edge_lab.rfq_research"
+RFQ_DOCS_MAX_AGE = timedelta(days=30)
+
+
+def rfq_feasibility(ctx: Context) -> Loaded:
+    """The R4 RFQ feasibility summary (`rfq_research.FEASIBILITY_MATRIX`, docs/research/RFQ_FEASIBILITY_2026-09.md):
+    per-capability documented / private / unavailable / unknown, the decision and the owner decisions. Static
+    research facts; nothing is observed, quoted or connected."""
+    module, missing = _optional_module(RFQ_MODULE, "the RFQ research module is not installed in this build", ctx)
+    if missing is not None:
+        return missing
+    try:
+        rows = [{"item": r.item, "state": r.state.value, "note": r.note} for r in module.FEASIBILITY_MATRIX]
+        decisions = [{"id": i, "text": t} for i, t in module.OWNER_DECISIONS]
+        fetched = parse_utc(module.RFQ_DOCS_FETCHED_UTC)
+        if not rows or not decisions or fetched is None:
+            return Loaded(ERROR, message="the RFQ feasibility summary is incomplete")
+    except Exception as exc:  # noqa: BLE001 - shown as an error state, never a failed page
+        return Loaded(ERROR, message=short_error(exc, ctx.config))
+    return Loaded(OK, {"decision": module.FEASIBILITY_DECISION, "rows": rows, "owner_decisions": decisions,
+                       "docs_fetched_utc": module.RFQ_DOCS_FETCHED_UTC,
+                       "docs_stale": ctx.now - fetched > RFQ_DOCS_MAX_AGE,
+                       "document": module.FEASIBILITY_DOCUMENT,
+                       "participation_authorized": bool(module.KALSHI.execution_authorized)})

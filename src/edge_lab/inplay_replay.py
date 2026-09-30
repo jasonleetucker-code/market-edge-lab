@@ -272,6 +272,7 @@ class ReplayLedger:
         self.settlement_fee: Decimal | None = Decimal(0)
         self.acquired = False
         self.events: list[str] = []
+        self.last_fill_utc: str | None = None  # the receipt time of the book the latest sale filled on
 
     @property
     def reserved(self) -> Decimal:
@@ -413,6 +414,7 @@ class EntryResult:
     invalidated_before_submit: int = 0  # BOT: recommendations dropped because the state changed first
     state_changed_in_flight: int = 0  # BOT: the state changed after the order left; it still executed
     fills_after_state_change: int = 0  # PREPLACED: resting fills after a material state change
+    last_fill_at_utc: str | None = None  # receipt time of the book the last sale filled on; None: nothing sold
 
 
 @dataclass(frozen=True)
@@ -618,6 +620,7 @@ def _run_bot(cohort: Cohort, entry: CohortEntry, cfg: ReplayConfig, arm: Arm, le
         for n, (price, size) in enumerate(walk.levels):
             ledger.fill(fill_id=f"{entry.game_id}:bot:{_book_key(fill_book, idx)}:{n}", quantity=size, price=price,
                         fee=cfg.fee_model.sale_fee(size, price))
+            ledger.last_fill_utc = fill_book.receipt_utc
         if qty < d.quantity:
             notes.append(f"IOC_PARTIAL {qty} of {d.quantity} at {fill_book.receipt_utc}")
     return attempts
@@ -682,6 +685,7 @@ def _run_preplaced(cohort: Cohort, entry: CohortEntry, cfg: ReplayConfig, arm: A
         if new > 0:
             ledger.fill(fill_id=f"{entry.game_id}:rest:{_book_key(book, i)}", quantity=new, price=limit,
                         fee=cfg.fee_model.sale_fee(new, limit), order_id=order_id)
+            ledger.last_fill_utc = book.receipt_utc
             filled_upto += new
             if rest_stamp is not None and at >= parse_utc(rest_stamp.as_of_utc):
                 after = decision_validity(rest_stamp, journal, at=at)
@@ -765,7 +769,8 @@ def replay_entry(cohort: Cohort, entry: CohortEntry, cfg: ReplayConfig, arm: Arm
         gross_proceeds=ledger.gross_proceeds, fees=fees, net_proceeds=ledger.net_proceeds,
         settlement_cash=ledger.settlement_cash, pnl_gross=ledger.pnl_gross(), pnl_net=ledger.pnl_net(),
         attempts=attempts, touches_not_filled=touches, placed=placed, duplicate_receipts=duplicate_receipts,
-        notes=tuple(notes), reconciliation=tuple(ledger.reconcile()), **counts)
+        notes=tuple(notes), reconciliation=tuple(ledger.reconcile()), last_fill_at_utc=ledger.last_fill_utc,
+        **counts)
 
 
 def _summ(results: Sequence[EntryResult], hold: Sequence[EntryResult] | None, arm: Arm,

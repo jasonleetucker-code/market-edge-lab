@@ -204,3 +204,85 @@ def test_the_research_tab_links_the_page(prod):
 def test_only_get_and_head(prod):
     assert get(prod, "/experiments/inplay", method="POST")[0].startswith("405")
     assert get(prod, "/experiments/inplay", method="HEAD")[0].startswith("200")
+
+
+# ------------------------------------------------------------------ source/state validity and fill economics (PR C)
+
+
+def _sec(html: str, sid: str) -> str:
+    m = re.search(rf'aria-labelledby="{sid}".*?</section>', html, re.S)
+    assert m, sid
+    return m.group(0)
+
+
+def test_source_state_section_populated_is_simulated_fixture_evidence_and_valid():
+    html = ip.source_state_section(iv.fixture_view("populated"))
+    for text in ("Simulated · not actual", "Fixture input", "fixture:kalshi-book", "FIXTURE_EXCHANGE",
+                 "Unknown age: source clock bound unknown", "Unknown: not declared by the source",
+                 "Valid at replay clock", "no later material state", "Latency stages (unmeasured is not zero)",
+                 "in game", "game time, not UTC"):
+        assert text in html, text
+    assert "LIVE" not in html and _no_live(html)
+
+
+def test_an_invalidated_decision_is_blocked_with_its_reason():
+    v = iv.fixture_view("invalidated")
+    ss = ip.source_state_section(v)
+    assert "Invalidated · recompute" in ss and "MATERIAL_STATE_CHANGE" in ss
+    pol = ip.policy_section(v)
+    assert "Blocked · no new risk" in pol and "STATE_INVALIDATED" in pol and "Exit · proposal only" not in pol
+
+
+def test_an_unreadable_state_update_needs_review():
+    v = iv.fixture_view("state_unknown")
+    assert "Review required" in ip.source_state_section(v) and "STATE_UNKNOWN" in ip.source_state_section(v)
+    assert "STATE_REVIEW_REQUIRED" in ip.policy_section(v)
+
+
+def test_stale_content_and_not_evaluated_states():
+    assert "Stale — not actionable" in ip.source_state_section(iv.fixture_view("stale"))
+    unevaluated = dict(iv.fixture_view("populated"), source_state=None, fill_economics=None)
+    assert "Not evaluated" in ip.source_state_section(unevaluated)
+    assert "Not evaluated" in ip.economics_section(unevaluated)
+    assert "Not evaluated" in ip.economics_section(iv.fixture_view("unsupported"))  # no cohort replayed
+
+
+def test_fill_economics_keeps_modes_apart_and_names_missing_denominators():
+    rows = {r["arm"]: r for r in iv.fixture_view("populated")["fill_economics"]["rows"]}
+    assert rows["Hold to settlement"]["modes"] == ["TAKER"]
+    assert rows["Full exit · bot-triggered (taker)"]["modes"] == ["TAKER"]
+    assert rows["Full exit · preplaced limit (book maker)"]["modes"] == ["BOOK_MAKER", "TAKER"]  # entry is a take
+    assert all(r["evidence"] == "SIMULATED" and "FEE_SCOPE_UNKNOWN" in r["missing"] for r in rows.values())
+    html = ip.economics_section(iv.fixture_view("populated"))
+    for arm, mode in (("Hold to settlement", "taker"), ("Full exit · bot-triggered (taker)", "taker"),
+                      ("Full exit · preplaced limit (book maker)", "book maker + taker")):
+        row = html[html.index(arm):]
+        assert re.search(r"<dt>Mode</dt><dd[^>]*>(?:<[^>]+>)*" + re.escape(mode) + "<", row[:row.index("</dl>")]), arm
+    for text in ("Hold to settlement", "Full exit · bot-triggered (taker)", "Full exit · preplaced limit (book maker)",
+                 "book maker", "taker", "fees unknown: net blocked", "after-cost figure unavailable: fee unknown",
+                 "Simulated fills only", "RFQ: not evaluated", "Not a real fill, not an edge"):
+        assert text in html, text
+    assert 'class="num pos"' not in html and 'class="num neg"' not in html and _no_live(html)
+    _read_only(html)
+
+
+def test_a_refused_economics_row_is_an_error_state():
+    v = iv.fixture_view("populated")
+    fe = dict(v["fill_economics"], rows=[{"arm": "Hold to settlement", "state": "ERROR",
+                                          "detail": "CAPITAL_OVERCOMMITTED at 2026-10-04: cash balance -1 < 0"}],
+              state="PARTIAL")
+    html = ip.economics_section(dict(v, fill_economics=fe))
+    assert "Economics refused" in html and "CAPITAL_OVERCOMMITTED" in html and "Refused" in html
+
+
+def test_the_demo_page_shows_both_new_sections_in_order(demo):
+    body = get(demo, "/experiments/inplay")[1]
+    order = [body.index(x) for x in ('id="ip-pos"', 'id="ip-ss"', 'id="ip-pol"', 'id="ip-cmp"', 'id="ip-econ"',
+                                     'id="ip-auth"')]
+    assert order == sorted(order)
+    assert "Source and state validity" in _sec(body, "ip-ss") and "Fill-conditioned economics" in _sec(body, "ip-econ")
+
+
+def test_production_shows_no_state_or_economics_sections(prod):
+    body = get(prod, "/experiments/inplay")[1]
+    assert "Not authorized" in body and 'id="ip-ss"' not in body and 'id="ip-econ"' not in body

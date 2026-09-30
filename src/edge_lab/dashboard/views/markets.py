@@ -431,6 +431,11 @@ def rules_section(row: pr.MarketRow) -> str:
              ("close time (UTC)", esc(row.close_time_utc)), ("target date", esc(row.target_date))]
     for side, q in sorted(row.quotes.items()):
         pairs.append((f"{side} quote evidence", c.code(q.evidence_id) + " " + esc(f"{q.phase} · {q.received_at_utc}")))
+    exceptions = d.contract_exceptions(row.native_id)
+    if exceptions is not None:  # sports series only: how the payoff can differ from the sporting result
+        pairs.append(("contract exceptions (recorded summary, not the rules)", c.ul(
+            [f"{x['case']} — {x['status'].replace('_', ' ').lower()}: {x['summary']} ({x['source']})"
+             for x in exceptions])))
     return c.disclosure("Rules & evidence", c.kv(pairs), boxed=True)
 
 

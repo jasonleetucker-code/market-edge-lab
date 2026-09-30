@@ -166,7 +166,7 @@ def status_panel(ctx: d.Context) -> str:
 
 def system(ctx: d.Context) -> str:
     """Collapsed System & evidence: every source field, blocker and account detail, with codes."""
-    parts = []
+    parts = [next_blocker(ctx)]
     blockers = cm.blockers_cached(ctx)
     parts.append("<h3 class=\"eyebrow\">Blockers and warnings</h3>" + c.ul(blockers, empty="none"))
     s = ctx.collector_status
@@ -222,6 +222,26 @@ def system(ctx: d.Context) -> str:
         parts.append(account_detail(view))
     return c.disclosure("System & evidence", "".join(parts), boxed=True).replace(
         '<details class="disclosure boxed"', '<details id="system" class="disclosure boxed ws-system"', 1)
+
+
+def next_blocker(ctx: d.Context) -> str:
+    """The next research blocker or owner approval (current_blockers), one line; the register is on Data sources."""
+    head = '<h3 class="eyebrow">Next research blocker or approval</h3>'
+    loaded = d.current_blockers(ctx)
+    link = '<a href="/experiments?tab=sources#blk-h">Current blockers</a>'
+    if loaded.status == d.ERROR:
+        return head + c.error_state("Blocker register unavailable", loaded.message)
+    if loaded.status != d.OK:  # not installed: unavailable, never "nothing open"
+        return head + c.unavailable("Blocker register unavailable", loaded.message)
+    nxt = next((x for x in loaded.value["items"] if x["id"] == loaded.value["next"]), None)
+    if nxt is None:
+        return head + f'<p class="note">No open research blocker is recorded. {link}</p>'
+    who = {"ACTION": "owner action needed", "APPROVAL": "owner approval needed"}.get(
+        nxt["owner"], f"resolver: {nxt['resolver'].lower()}")
+    when = (f"overdue since {pr.datetime_et(nxt['overdue_since_utc'])}" if nxt["overdue_since_utc"]
+            else nxt["trigger"])
+    return head + (f'<p class="note">{esc(nxt["title"])} — {esc(when)}; {esc(who)}'
+                   f'{" (stale: re-check)" if nxt["stale"] else ""}. {link}</p>')
 
 
 def receipt_detail(ctx: d.Context, *, days: bool = False) -> str:

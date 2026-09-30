@@ -67,6 +67,8 @@ goalie-confirmation effects, in-play via #122). **No decision is needed now.**
   They are recorded RULES_UNRESOLVED.
 - **Fees:** FEE_UNSUPPORTED, and never set to 0. `fee_schedules` routes KXNHLGAME to the general quadratic schedule
   (UNVERIFIED); this is left for the fee owner to review.
+  *Update 2026-09-30 (PR C): KXNHLGAME now routes to FEE_UNSUPPORTED (`fee_schedules.not_proven_standard`),
+  consistent with KXNFLGAME; see `docs/research/CURRENT_BLOCKERS.md`.*
 - **Opening night, 2026-09-29:**
   - 20 manual Kalshi observations (phase `custom`, origin `manual`);
   - scheduled Odds and Kalshi captures only for horizons still in the future at activation;
