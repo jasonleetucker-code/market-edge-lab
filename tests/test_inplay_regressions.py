@@ -12,10 +12,11 @@ from pathlib import Path
 
 import pytest
 
-from edge_lab import inplay_evidence, inplay_replay, position_policy
+from edge_lab import inplay_evidence, inplay_replay, inplay_view, position_policy
 
 SRC = Path(__file__).resolve().parents[1] / "src" / "edge_lab"
-MODULES = {"inplay_evidence": inplay_evidence, "inplay_replay": inplay_replay, "position_policy": position_policy}
+MODULES = {"inplay_evidence": inplay_evidence, "inplay_replay": inplay_replay, "position_policy": position_policy,
+           "inplay_view": inplay_view}  # the consumer the Terminal formats, held to the same boundary
 FIXTURE = Path(__file__).parent / "fixtures" / "inplay" / "ws_orderbook_journal_fixture.jsonl"
 
 NETWORK = {"socket", "ssl", "http", "urllib", "asyncio", "websockets", "websocket", "requests", "httpx", "aiohttp",
@@ -23,6 +24,11 @@ NETWORK = {"socket", "ssl", "http", "urllib", "asyncio", "websockets", "websocke
            "edge_lab.notify_ntfy"}
 STORAGE = {"sqlite3", "shelve", "edge_lab.storage", "edge_lab.shadow_ledger", "edge_lab.ledger_anchor",
            "edge_lab.backup", "edge_lab.research_evidence", "edge_lab.daily"}
+# Owners of protected outcomes, label proxies and pilot evidence (EXP-001/EXP-002, NFL/NHL captures). The offline
+# in-play path never reads them, so no replay or view can expose a protected label or markout.
+PROTECTED = {"edge_lab.sports_evidence", "edge_lab.exp002_timing", "edge_lab.odds_schedule",
+             "edge_lab.price_observations", "edge_lab.odds_consensus", "edge_lab.experiments", "edge_lab.settlement",
+             "edge_lab.forward"}
 
 
 def _imports(name: str) -> set[str]:
@@ -34,6 +40,8 @@ def _imports(name: str) -> set[str]:
         elif isinstance(node, ast.ImportFrom):
             base = ("edge_lab." if node.level else "") + (node.module or "")
             out.add(base)
+            if node.module is None:  # `from . import x` names the module x itself
+                out.update(base + a.name for a in node.names)
     return out
 
 
@@ -53,6 +61,12 @@ def test_no_production_storage_or_ledger_imports(name):
     assert not found & STORAGE, found & STORAGE
     text = (SRC / f"{name}.py").read_text(encoding="utf-8")
     assert "/var/lib" not in text and "edge_lab.sqlite3" not in text and ".write_text(" not in text
+
+
+@pytest.mark.parametrize("name", sorted(MODULES))
+def test_no_protected_label_or_outcome_imports(name):
+    found = _imports(name)
+    assert not found & PROTECTED, found & PROTECTED
 
 
 @pytest.mark.parametrize("name", sorted(MODULES))
