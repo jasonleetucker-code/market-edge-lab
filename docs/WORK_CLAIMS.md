@@ -6,4 +6,3 @@ The expiry is a UTC date no more than 7 days out. An expired row is not a live c
 
 | Claim | Agent | Branch | Paths | Expires |
 |---|---|---|---|---|
-| Complete delivery roadmap and podcast integration #145 | ChatGPT | docs/complete-roadmap-podcast-145 | docs/OWNER_IDEAS.md; docs/strategy/DELIVERY_ROADMAP.md; docs/strategy/CLAUDE_SPORTS_INTELLIGENCE_RFQ_V1.md; docs/strategy/archive/OWNER_IDEAS_pre_podcast_2026-09-29.md; docs/WORK_CLAIMS.md own row | 2026-10-06 |
