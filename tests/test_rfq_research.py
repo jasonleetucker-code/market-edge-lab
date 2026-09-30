@@ -9,6 +9,7 @@ from decimal import ROUND_CEILING, Decimal
 import pytest
 
 from edge_lab import rfq_research as rr, venues
+from edge_lab.execution_ticket import HELD_OBLIGATION_STATES, ObligationState
 from edge_lab.rfq_research import (
     HypotheticalQuote, Kind, Observer, QuoteState, SizeMode, TimingClass, Visibility, derive_contracts,
     hypothetical_check, obligations, observe, quote_is_current, reserve_simultaneous,
@@ -388,6 +389,7 @@ def test_an_unattributed_own_fill_blocks_every_release():
     assert obligations(run(base)) == ()
     (ob,) = obligations(run(base + [fill("f1", "ord-lost", "10.00")]), exchange_index=IDX)
     assert ob.state is QuoteState.CANCELLED and "release blocked" in ob.reason
+    assert ob.obligation_state is ObligationState.UNKNOWN
 
 
 # ------------------------------------------------------------------ requester obligations
@@ -450,8 +452,9 @@ def test_requests_sharing_legs_cannot_reuse_the_same_collateral():
     assert [o.principal for o in obs] == [Decimal("60.0000"), Decimal("60.0000")]
     zero_fee = dict(fee_allowance=lambda o: Decimal("0"))
     res = reserve_simultaneous(obs, {1: Decimal("100")}, **zero_fee)
-    assert res.status == "INSUFFICIENT_COLLATERAL" and res.required_by_index[1] == Decimal("120.0000")
-    assert res.common_legs[(LEG_SHARED[1], "yes")] == ("qA", "qB")
+    assert res.status == "INSUFFICIENT_COLLATERAL" and res.by_index[1].required == Decimal("120.0000")
+    assert res.by_index[1].by_key[f"leg:{LEG_SHARED[1]}:yes"] == Decimal("120.0000")  # never netted
+    assert any(r.startswith("INSUFFICIENT_CASH") for r in res.by_index[1].reasons)
     # Cash on another exchange index does not help: collateral is preallocated per shard.
     assert reserve_simultaneous(obs, {0: Decimal("1000"), 1: Decimal("100")}, **zero_fee).status == \
         "INSUFFICIENT_COLLATERAL"
@@ -462,9 +465,9 @@ def test_requests_sharing_legs_cannot_reuse_the_same_collateral():
 def test_negative_principal_or_fee_allowance_is_unknown_not_a_credit():
     rep = run([rfq_created("r1", REQ_X), quote_created("q1", "r1", ME, REQ_X)])
     (ob,) = obligations(rep, exchange_index=IDX)
-    negative = rr.Obligation("neg", "r1", "QUOTER", QuoteState.OPEN, Decimal("-500"), 0, (), "synthetic")
-    assert reserve_simultaneous([ob, negative], {0: Decimal("60")},
-                                fee_allowance=lambda o: Decimal(0)).status == "EXPOSURE_UNKNOWN"
+    with pytest.raises(rr.RfqResearchError):  # refused, as the canonical primitive refuses it
+        rr.Obligation("neg", "r1", "QUOTER", QuoteState.OPEN, ObligationState.OUTSTANDING, Decimal("-500"), 0, (),
+                      MKT, "synthetic")
     assert reserve_simultaneous([ob], {0: Decimal("1000")},
                                 fee_allowance=lambda o: Decimal("-100")).status == "EXPOSURE_UNKNOWN"
 
@@ -472,7 +475,30 @@ def test_negative_principal_or_fee_allowance_is_unknown_not_a_credit():
 def test_unknown_exchange_index_or_principal_fails_closed():
     rep = run([rfq_created("r1", REQ_X), quote_created("q1", "r1", ME, REQ_X)])
     res = reserve_simultaneous(obligations(rep), {0: Decimal("1000")}, fee_allowance=lambda o: Decimal("0"))
-    assert res.status == "EXPOSURE_UNKNOWN" and res.unknown == ("q1",)
+    assert res.status == "EXPOSURE_UNKNOWN" and res.unknown_shard == ("q1",)
+    unknown_principal = obligations(run([rfq_created("r1", REQ_X, target="30.00"),
+                                         quote_created("q1", "r1", ME, REQ_X, size=None)]), exchange_index=IDX)
+    res2 = reserve_simultaneous(unknown_principal, {0: Decimal("1000")}, fee_allowance=lambda o: Decimal("0"))
+    assert res2.status == "EXPOSURE_UNKNOWN" and res2.by_index[0].required is None
+    assert res2.by_index[0].by_key[f"market:{MKT}"] is None  # unknown stays unknown per key, never 0
+    assert reserve_simultaneous(obligations(run([rfq_created("r1", REQ_X), quote_created("q1", "r1", ME, REQ_X)]),
+                                            exchange_index=IDX), {}, fee_allowance=lambda o: Decimal("0")
+                                ).status == "CASH_UNKNOWN"
+
+
+def test_rfq_states_map_conservatively_onto_the_canonical_obligation_states():
+    m = rr.OBLIGATION_STATE
+    assert m[QuoteState.CANCELLED] is ObligationState.RELEASED
+    assert all(m[s] in HELD_OBLIGATION_STATES for s in QuoteState if s is not QuoteState.CANCELLED)
+    assert m[QuoteState.RFQ_CLOSED_REASON_UNKNOWN] is ObligationState.UNKNOWN
+    assert m[QuoteState.REPLACED] is ObligationState.CANCEL_REQUESTED
+    assert m[QuoteState.CONFIRMED] is m[QuoteState.ORDERS_PLACED] is ObligationState.BOUND
+    cancelled = run([rfq_created("r1", REQ_X), quote_created("q1", "r1", ME, REQ_X),
+                     quote_status("quote_cancelled", "q1", "r1", ME, REQ_X)])
+    (released,) = obligations(cancelled, exchange_index=IDX, include_released=True)
+    assert released.obligation_state is ObligationState.RELEASED
+    res = reserve_simultaneous([released], {0: Decimal("0")}, fee_allowance=lambda o: Decimal("0"))
+    assert res.status == "OK" and res.by_index[0].required == Decimal("0")  # the canonical owner frees it
 
 
 # ------------------------------------------------------------------ input bound and local filter

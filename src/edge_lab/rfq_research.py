@@ -24,7 +24,9 @@ documentation does not define is UNSUPPORTED or UNKNOWN here, never a convenient
 - **Conservative exposure.** An own quote or RFQ keeps its worst-case principal reserved until
   the quote's own CANCELLED status is observed. A closed RFQ, a replacement, a lapsed window or a
   missing event releases nothing, and any own fill that cannot be attributed blocks every release.
-  Simultaneous obligations are summed; shared combo legs never share collateral.
+  Simultaneous obligations are reserved through the canonical owner,
+  `execution_ticket.reserve_simultaneous_obligations`, per exchange index; shared combo legs never
+  share collateral.
 - **Currency needs evidence.** "This quote is current" needs a caller-stated observation time
   within `max_age` and gap-free channel sequence numbers; otherwise OBSERVATION_STALE_OR_GAPPED.
 - **Input bound.** The communications channel ignores market filtering, so the bound applies to
@@ -50,6 +52,10 @@ from typing import Any, Callable, Iterable, Mapping
 
 from .freshness import parse_utc
 from .provenance import payload_sha256
+from .execution_ticket import HELD_OBLIGATION_STATES, ObligationState
+from .execution_ticket import Obligation as CanonicalObligation
+from .execution_ticket import ObligationReservation as CanonicalReservation
+from .execution_ticket import reserve_simultaneous_obligations
 from .venues import KALSHI
 
 RFQ_DOCS_FETCHED_UTC = "2026-09-30T02:26:52Z"
@@ -673,21 +679,52 @@ def derive_contracts(target_cost: Decimal, price: Decimal, mode: SizeMode, *,
 
 
 # --------------------------------------------------------------------------- exposure and collateral
+#
+# This module derives each obligation's worst-case principal and maps RFQ lifecycle states onto the
+# canonical `execution_ticket.ObligationState`. Reservation itself (held states, no netting, unknown
+# stays unknown, the cash comparison) is delegated to `execution_ticket.reserve_simultaneous_obligations`.
+
+# Conservative mapping. Only a quote's own observed cancellation frees anything.
+OBLIGATION_STATE = MappingProxyType({
+    QuoteState.OPEN: ObligationState.OUTSTANDING,
+    QuoteState.ACCEPTED: ObligationState.OUTSTANDING,  # can still bind at the maker's confirmation
+    QuoteState.CONFIRMED: ObligationState.BOUND,
+    QuoteState.ORDERS_PLACED: ObligationState.BOUND,
+    QuoteState.CANCELLED: ObligationState.RELEASED,
+    QuoteState.REPLACED: ObligationState.CANCEL_REQUESTED,  # superseded, but no cancellation observed
+    QuoteState.RFQ_CLOSED_REASON_UNKNOWN: ObligationState.UNKNOWN,
+    QuoteState.UNKNOWN: ObligationState.UNKNOWN,
+})
 
 
 @dataclass(frozen=True)
 class Obligation:
-    """Worst-case principal an own quote or RFQ could require. `principal` None is unknown and
-    fails closed. Fees are not included (FEE_UNSUPPORTED) unless the caller adds an allowance."""
+    """Worst-case principal an own quote or RFQ could require, before fees. `principal` None is
+    unknown and fails closed; a negative or non-finite value is refused (as the canonical primitive
+    refuses it). Fees are not included (FEE_UNSUPPORTED) unless the caller adds an allowance."""
 
     source_id: str
     rfq_id: str
     role: str  # QUOTER | REQUESTER
     state: QuoteState
+    obligation_state: ObligationState
     principal: Decimal | None
     exchange_index: int | None
     legs: tuple[Leg, ...]
+    market_ticker: str | None
     reason: str
+
+    def __post_init__(self) -> None:
+        v = self.principal
+        if v is not None and (not isinstance(v, Decimal) or not v.is_finite() or v < 0):
+            raise RfqResearchError(f"principal must be a finite, non-negative Decimal or None, not {v!r}")
+
+    @property
+    def exposure_keys(self) -> tuple[str, ...]:
+        """Shared-exposure keys: each combo leg, or the market itself for a single-market RFQ."""
+        if self.legs:
+            return tuple(sorted({f"leg:{leg.market_ticker}:{leg.side}" for leg in self.legs}))
+        return () if self.market_ticker is None else (f"market:{self.market_ticker}",)
 
 
 def _max_known(values: Iterable[Decimal | None]) -> Decimal | None:
@@ -699,12 +736,13 @@ def _times(price: Decimal | None, size: Decimal | None) -> Decimal | None:
     return None if price is None or size is None else price * size
 
 
-def obligations(report: ObservationReport, *, exchange_index: Mapping[str, int] | None = None
-                ) -> tuple[Obligation, ...]:
+def obligations(report: ObservationReport, *, exchange_index: Mapping[str, int] | None = None,
+                include_released: bool = False) -> tuple[Obligation, ...]:
     """Worst-case principal per own quote (as maker) and per own RFQ with a quote that may bind
-    (as requester). Released only when the quote's own CANCELLED status is observed and no own
-    fill is unattributed or conflicting. A closed RFQ, a replacement, a lapsed confirmation window,
-    a missing event or UNKNOWN releases nothing. A fill releases nothing (settlement is not modelled).
+    (as requester), each with its canonical `ObligationState`. Only held obligations are returned
+    unless `include_released`. A quote's own CANCELLED status maps to RELEASED; if any own fill is
+    unattributed or conflicting it maps to UNKNOWN instead, so nothing is freed. A closed RFQ, a
+    replacement, a lapsed confirmation window or a missing event frees nothing.
 
     Maker: it buys YES at yes_bid or NO at no_bid, for the full offered size; worst of the two.
     Requester: the mapping from `accepted_side` to the requester's own contract is not settled by
@@ -714,21 +752,24 @@ def obligations(report: ObservationReport, *, exchange_index: Mapping[str, int] 
     release_blocked = report.unattributed_fills > 0 or bool(report.conflicting_fills)
     out: list[Obligation] = []
     for q in report.quotes.values():
-        if q.state in RELEASED_STATES and not release_blocked:
-            continue
+        ostate = OBLIGATION_STATE[q.state]
+        note = ""
+        if ostate is ObligationState.RELEASED and release_blocked:
+            ostate, note = ObligationState.UNKNOWN, "; release blocked by an unattributed or conflicting own fill"
         rfq = report.rfqs.get(q.rfq_id)
         legs = () if rfq is None else rfq.legs
-        ex = idx.get((None if rfq is None else rfq.market_ticker) or "")
+        market = None if rfq is None else rfq.market_ticker
+        ex = idx.get(market or "")
         rfq_size = None if rfq is None else rfq.requested_contracts
         size_y = q.yes_contracts if q.yes_contracts is not None else rfq_size
         size_n = q.no_contracts if q.no_contracts is not None else rfq_size
-        note = "; release blocked by an unattributed or conflicting own fill" if q.state in RELEASED_STATES else ""
         if q.own:
             parts = [_times(bid, size) for bid, size in ((q.yes_bid, size_y), (q.no_bid, size_n))
                      if bid is None or bid != 0]  # a declined side cannot be accepted
-            out.append(Obligation(q.quote_id, q.rfq_id, "QUOTER", q.state, _max_known(parts), ex, legs,
-                                  "worst side at full offered size" + note))
-        if q.on_own_rfq and (q.state in REQUESTER_BOUND_STATES or (q.state in RELEASED_STATES and release_blocked)):
+            out.append(Obligation(q.quote_id, q.rfq_id, "QUOTER", q.state, ostate, _max_known(parts), ex, legs,
+                                  market, "worst side at full offered size" + note))
+        may_bind = q.state in REQUESTER_BOUND_STATES or (q.state in RELEASED_STATES and release_blocked)
+        if q.on_own_rfq and may_bind:
             yb, nb = q.yes_bid, q.no_bid
             y = _times(None if yb is None else max(yb, ONE - yb), size_y)
             n = _times(None if nb is None else max(nb, ONE - nb), size_n)
@@ -736,45 +777,65 @@ def obligations(report: ObservationReport, *, exchange_index: Mapping[str, int] 
                 principal, why = (y if q.accepted_side == "yes" else n), "accepted side: worst of bid and 1 - bid"
             else:
                 principal, why = _max_known((y, n)), "accepted side unknown: worst over both sides"
-            out.append(Obligation(f"{q.quote_id}:requester", q.rfq_id, "REQUESTER", q.state, principal, ex, legs,
-                                  why + note))
-    return tuple(sorted(out, key=lambda o: o.source_id))
+            out.append(Obligation(f"{q.quote_id}:requester", q.rfq_id, "REQUESTER", q.state, ostate, principal,
+                                  ex, legs, market, why + note))
+    kept = [o for o in out if include_released or o.obligation_state in HELD_OBLIGATION_STATES]
+    return tuple(sorted(kept, key=lambda o: o.source_id))
 
 
 @dataclass(frozen=True)
 class Reservation:
-    status: str  # OK | INSUFFICIENT_COLLATERAL | EXPOSURE_UNKNOWN | FEE_UNSUPPORTED
-    required_by_index: Mapping[int, Decimal]
-    shortfalls: Mapping[int, Decimal]
-    unknown: tuple[str, ...]
-    common_legs: Mapping[tuple[str, str], tuple[str, ...]]  # (market, side) -> obligations using it
+    """Per exchange index, the canonical reservation of every held obligation at once."""
+
+    status: str  # OK | EXPOSURE_UNKNOWN | CASH_UNKNOWN | INSUFFICIENT_COLLATERAL | FEE_UNSUPPORTED
+    by_index: Mapping[int, CanonicalReservation]
+    unknown_shard: tuple[str, ...]  # obligations whose exchange index is unknown
+    fee_unknown: tuple[str, ...]  # obligations with no fee allowance (principal only)
 
 
-def reserve_simultaneous(obligs: Iterable[Obligation], available_by_index: Mapping[int, Decimal], *,
+def reserve_simultaneous(obligs: Iterable[Obligation], available_by_index: Mapping[int, Decimal | None], *,
                          fee_allowance: Callable[[Obligation], Decimal | None] | None = None) -> Reservation:
-    """Can every obligation be met at once? Obligations are summed per exchange index (collateral
-    is preallocated per shard; combos live on their own shard). Nothing is netted: two quotes that
-    share a combo leg each keep their full reservation, and the shared leg is reported. A negative
-    or missing principal, a negative fee allowance or an unknown shard is EXPOSURE_UNKNOWN."""
-    required: dict[int, Decimal] = {}
-    unknown: list[str] = []
-    fee_missing = False
-    legs: dict[tuple[str, str], list[str]] = {}
+    """A thin adapter onto `execution_ticket.reserve_simultaneous_obligations`, applied per exchange
+    index because collateral is preallocated per shard (combos live on their own shard).
+
+    Each obligation becomes a canonical `Obligation` whose worst case is principal plus the fee
+    allowance. A missing fee allowance leaves principal only and makes the result FEE_UNSUPPORTED; a
+    negative or non-finite allowance makes that worst case unknown. The canonical primitive decides
+    what is held, never nets shared legs (its `by_key`), keeps unknown unknown and compares with cash.
+    An unknown exchange index is EXPOSURE_UNKNOWN."""
+    groups: dict[int, list[CanonicalObligation]] = {}
+    unknown_shard: list[str] = []
+    fee_unknown: list[str] = []
     for o in obligs:
-        for leg in o.legs:
-            legs.setdefault((leg.market_ticker, leg.side), []).append(o.source_id)
-        principal = _nonneg(o.principal)
+        if o.exchange_index is None:
+            unknown_shard.append(o.source_id)
+            continue
         raw_fee = None if fee_allowance is None else fee_allowance(o)
         fee = _nonneg(raw_fee)
-        if principal is None or o.exchange_index is None or (raw_fee is not None and fee is None):
-            unknown.append(o.source_id)
+        if raw_fee is None:
+            fee_unknown.append(o.source_id)
+        worst = (None if o.principal is None or (raw_fee is not None and fee is None)
+                 else o.principal + (fee or ZERO))
+        groups.setdefault(o.exchange_index, []).append(
+            CanonicalObligation(o.source_id, o.obligation_state, worst, o.exposure_keys))
+    by_index: dict[int, CanonicalReservation] = {}
+    asked: list[CanonicalReservation] = []
+    for i, group in sorted(groups.items()):
+        held = [c for c in group if c.state in HELD_OBLIGATION_STATES]
+        if not held:  # nothing held on this shard: nothing to fit
+            by_index[i] = reserve_simultaneous_obligations(tuple(group), available_cash=available_by_index.get(i))
             continue
-        if fee is None:
-            fee_missing = True
-        required[o.exchange_index] = required.get(o.exchange_index, ZERO) + principal + (fee or ZERO)
-    available = {i: _nonneg(available_by_index.get(i)) or ZERO for i in required}
-    shortfalls = {i: need - available[i] for i, need in required.items() if need > available[i]}
-    status = ("EXPOSURE_UNKNOWN" if unknown else "INSUFFICIENT_COLLATERAL" if shortfalls
-              else "FEE_UNSUPPORTED" if fee_missing else "OK")
-    return Reservation(status, MappingProxyType(required), MappingProxyType(shortfalls), tuple(sorted(unknown)),
-                       MappingProxyType({k: tuple(sorted(v)) for k, v in legs.items() if len(v) > 1}))
+        # The last held obligation is the canonical "candidate": allowed means all of them fit at once.
+        rest = tuple(c for c in group if c is not held[-1])
+        by_index[i] = reserve_simultaneous_obligations(rest, available_cash=available_by_index.get(i),
+                                                       candidate=held[-1])
+        asked.append(by_index[i])
+    if unknown_shard or any(r.required is None for r in by_index.values()):
+        status = "EXPOSURE_UNKNOWN"
+    elif any(any(x.startswith("CASH_UNKNOWN") for x in r.reasons) for r in asked):
+        status = "CASH_UNKNOWN"
+    elif not all(r.new_risk_allowed for r in asked):
+        status = "INSUFFICIENT_COLLATERAL"
+    else:
+        status = "FEE_UNSUPPORTED" if fee_unknown else "OK"
+    return Reservation(status, MappingProxyType(by_index), tuple(sorted(unknown_shard)), tuple(sorted(fee_unknown)))

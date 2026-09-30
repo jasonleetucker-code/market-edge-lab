@@ -49,15 +49,20 @@ Add `src/edge_lab/rfq_research.py`, a pure, stdlib-only, network-free module:
   PARTICIPATION_NOT_AUTHORIZED, tied to `venues.KALSHI.execution_authorized`.
 - **`derive_contracts`:** principal-only and fee-inclusive target-cost sizing. Fee-inclusive sizing needs a
   caller-supplied fee function; without one it is FEE_UNSUPPORTED.
-- **`obligations` / `reserve_simultaneous`:**
+- **`obligations`** (RFQ-specific derivation, kept here):
   - worst-case principal per own quote (maker: the worse side at full size);
   - per quote on an own RFQ that may bind: accepted, confirmed, executed or unknown (requester: the worse of `bid` and
     `1 − bid` for a known side, because the side mapping is a documentation conflict; the worst over both sides
     otherwise);
-  - released only when the quote's own CANCELLED status is observed; a closed RFQ, a replacement or silence releases
-    nothing, and an unattributed or conflicting own fill blocks every release;
-  - summed per exchange index with no netting across shared legs;
-  - fail closed on unknown principal or shard.
+  - each mapped conservatively onto the canonical `execution_ticket.ObligationState`: OPEN and ACCEPTED are
+    OUTSTANDING, CONFIRMED and ORDERS_PLACED are BOUND, REPLACED is CANCEL_REQUESTED, RFQ_CLOSED_REASON_UNKNOWN and
+    UNKNOWN are UNKNOWN, and only the quote's own observed CANCELLED is RELEASED. An unattributed or conflicting own
+    fill turns RELEASED into UNKNOWN, so nothing is freed.
+- **Reservation is delegated.** `reserve_simultaneous` is a thin adapter onto the canonical owner,
+  `execution_ticket.reserve_simultaneous_obligations` (PR #149, ADR 0041). It is applied per exchange index, because
+  collateral is preallocated per shard. The canonical primitive decides what is held, never nets shared legs (its
+  `by_key`), keeps unknown unknown and compares with cash. The adapter adds only the per-shard grouping, the fee
+  allowance (none: FEE_UNSUPPORTED; negative: unknown) and EXPOSURE_UNKNOWN for an unknown shard.
 
 `venues.py` is not changed. Adding RFQ capabilities would add a row per venue to the Terminal's coverage table, which
 is PR C's integration. The research note records the recommended stages.

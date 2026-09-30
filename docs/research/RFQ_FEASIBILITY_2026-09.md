@@ -219,9 +219,11 @@ it (§5).
   and any own fill that cannot be attributed to a quote blocks every release. A requester
   obligation exists whenever a quote on our RFQ may bind (accepted, confirmed, executed or
   unknown), with the worst case over both sides when the accepted side is not known.
-- `rfq_research.reserve_simultaneous` sums obligations per exchange index, never nets shared
-  legs, and fails closed on an unknown or negative principal, a negative fee allowance or an
-  unknown shard.
+- Reservation is delegated to the canonical owner, `execution_ticket.reserve_simultaneous_obligations`
+  (ADR 0041). `rfq_research` maps its RFQ states onto the canonical obligation states (only an
+  observed cancellation is RELEASED) and applies the primitive per exchange index. The primitive
+  never nets shared legs and keeps an unknown worst case unknown. An unknown shard, an unknown
+  principal or a negative fee allowance is EXPOSURE_UNKNOWN, and a negative principal is refused.
 
 **Illustrative arithmetic only (not a forecast):**
 - Suppose a 100-contract combo quote is $0.02 inside a *correct* fair value. The gross is $2 per
@@ -265,7 +267,7 @@ Future test fixtures (for the stage-2 model; none built now):
 - complements and nesting (A and not-A; "wins by 7+" inside "wins");
 - positive and negative dependence (same-game favourite plus over; favourite plus underdog prop);
 - Fréchet-bound violations flagged, never priced through;
-- duplicate exposure: the same leg in several open quotes (`reserve_simultaneous` common legs);
+- duplicate exposure: the same leg in several open quotes (the canonical reservation's per-key sums);
 - tie, void and refund legs;
 - uncertain parameters: the dependence interval widens the quote or refuses it.
 
