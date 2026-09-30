@@ -31,7 +31,7 @@ access events and holds no market data. Every EXP-002 fact below comes from a ci
 | E1 (§3 rows 3–5, 11) | Implemented as research code, `exp002-e1-roundtrip-v1` (#129), with conservative readings (§4). Still PROPOSED | `EXP002_E1_ENDPOINT.md` |
 | A.C timing calibration | The tool is built and deployed (#142, #143). It runs once, logged, at a fixed point in the sequence (§5) | `EXP002_AC_CALIBRATION_TOOL.md` |
 | §3 row 14, variant budget | V0 is the only confirmatory test; the challengers are descriptive; the A.C windows are disclosed outside the Holm family (§5.2) | E1 review C8 |
-| §3 rows 3–5, 11, 12, 15 (E1 design) | Revised per the independent E1 design review: test method, α, cluster floor, exit ladder, fallback flag, screen framing, economic threshold, diagnostics, one pilot look, evaluation guard | `EXP002_E1_DESIGN_REVIEW.md` (#154), C1–C14 |
+| §3 rows 3–5, 11, 12, 15 (E1 design) | Revised per the independent E1 design review: test method, α, cluster floor, exit ladder, fallback flag, screen framing, economic threshold, diagnostics, one pilot look, evaluation guard | `EXP002_E1_DESIGN_REVIEW.md` (#154 at `f3cf76f`), C1–C14 |
 | §4 evidence exposure | Seven hand-recorded evidence-use events, all closed (§6.2) | `experiments/EXP-002-*/evidence_use.jsonl` |
 | §5 blockers | Updated list and timeline (§8) | this document |
 | — | The E1 design review, incorporated (§E1 review) | #154 |
@@ -79,8 +79,8 @@ Rows marked "unchanged" restate v1 in substance; v1 §3 holds the full text and 
 |---|---|---|---|---|
 | 1 | Tie and not-played payoff bounds | In `V = (1 − t − u)·p + 0.50·t + u·F`, F ∈ [0, 1], every state stays in the sample. **`t_max = 0.01`**, set at the **99%** level: it clears the exact one-sided 99% Poisson bound of the 10-minute-overtime era, 8 ties in 2,383 games = 0.73%. Registered sensitivity `t_max = 0.02` (the 2025+ both-possess rule has 1 tie in 320 games; 95% bound 1.48%). **`u_max = 0.01`**, set at the **95%** level, **not 99%**: 14 conservative F events in 2,384 scheduled games (2017–2025, pandemic seasons included) give a 95% bound of 0.92% and a 99% bound of 1.07%. Registered sensitivity `u_max = 0.005`, which holds only if 2020 (and, at 99%, 2021) are excluded, a regime assumption that cannot be verified ex ante. | `u_max` 0.005 → 0.01; both now sourced | owner review |
 | 2 | Suspended-game rule conflict | Absorbed in `u`: both texts pay a value in [0, 1]. Recorded as UNRESOLVED; Kalshi message Q9 (NOT SENT) | unchanged | — |
-| 3 | Primary endpoint | **"E1 gross information-transfer screen (zero-latency displayed quotes)"** under FIRST_DETECTION_ZERO_LATENCY (C6). Entry: T-6h, from AT_OR_AFTER_ODDS pairs, when `c_low(side) − ask ≥ θ` with displayed ask depth ≥ 1, at most one side per game. **Exit ladder (C4):** (i) the own market's first T-60m bid with displayed depth ≥ 1; else (ii) synthetically at `1 − ask` of the other team market's first T-60m book in the same window, depth ≥ 1 (exact in a win, a loss and a tie; it differs only in fallback-F states, probability ≤ u_max); else (iii) the settlement payoff. Exit-at-0 stays a sensitivity. The screen is necessary for an economic claim, not sufficient. | PROPOSED: the name (C6) and the exit ladder (C4); the rest unchanged; implemented except exit (ii) (§4) | code for C4 before the pilot look (§8) |
-| 4 | Direction rule and test | One-sided, H₀: E[gross P&L] ≤ 0; game units; NFL-week clusters; θ = 1¢ frozen before any label. **Test (C1):** the exact **restricted, studentized** wild cluster (sign-flip) test: Rademacher weights with the null imposed, the cluster-robust t of the trade-weighted mean, every one of the 2^G patterns enumerated (G ≤ 12; above that, 9,999 seeded draws), ties counted against rejection. Below 6 weeks (descriptive bounds only), Webb six-point weights with 9,999 seeded draws. Bounds come from **inverting the same test**. The implemented `_wild_cluster_bounds` stays as a descriptive interval labelled "unrestricted, anti-conservative at few clusters"; the t on week means (G − 1 df) is a cross-check. **Level (C2):** one-sided **α = 0.05** for the confirmatory test, at the final analysis only; the one-sided **90%** level only for the futility bound. | PROPOSED: the method (C1) and α (C2) | code for C1 (§8) |
+| 3 | Primary endpoint | **"E1 gross information-transfer screen (zero-latency displayed quotes)"** under FIRST_DETECTION_ZERO_LATENCY (C6). Entry: T-6h, from AT_OR_AFTER_ODDS pairs, when `c_low(side) − ask ≥ θ` with displayed ask depth ≥ 1, at most one side per game. **Exit ladder (C4):** (i) the own market's first T-60m bid with displayed depth ≥ 1; else (ii) synthetically at `1 − ask` of the other team market's first T-60m book in the same window, depth ≥ 1 (exact in a win, a loss and a tie, where the tie payout follows the VERIFIED terms and the `settlement_value_dollars` field reading is UNVERIFIED; it differs only in fallback-F states, probability ≤ u_max); else (iii) the settlement payoff. Exit-at-0 stays a sensitivity. The screen is necessary for an economic claim, not sufficient. | PROPOSED: the name (C6) and the exit ladder (C4); the rest unchanged; implemented except exit (ii) (§4) | code for C4 before the pilot look (§8) |
+| 4 | Direction rule and test | One-sided, H₀: E[gross P&L] ≤ 0; game units; NFL-week clusters; θ = 1¢ frozen before any label. **Test (C1), for G ≥ 6 weeks:** the exact **restricted, studentized** wild cluster (sign-flip) test: Rademacher weights with the null imposed, the cluster-robust t of the trade-weighted mean, every one of the 2^G patterns enumerated (G ≤ 12; above that, 9,999 seeded draws), ties counted against rejection. Bounds come from **inverting the same test**. **For G < 6 there is no confirmatory inference:** the result is INSUFFICIENT_EVIDENCE. **Webb weights are not used at any G.** The implemented `_wild_cluster_bounds` stays as a descriptive interval labelled "unrestricted, anti-conservative at few clusters"; the t on week means (G − 1 df) is a cross-check. **Level (C2):** one-sided **α = 0.05** for the confirmatory test, at the final analysis only; the one-sided **90%** level only for the futility bound. | PROPOSED: the method (C1) and α (C2) | code for C1 (§8) |
 | 5 | Secondary endpoints and diagnostics | (a) the mid-based cross-book markout and placebo, "not bias-bounded", descriptive; (b) hold-to-settlement gross of the E1 trades; (c) the attrition waterfall. **New, all descriptive:** the counts and shares of the three exit bases, flagged `SETTLEMENT_VARIANCE_DOMINANT` if the settlement basis exceeds 5% of scored trades (a flag, not an endpoint switch) (C5); the share of entries with displayed ask depth ≥ 10 and ≥ 250, and E1 at 10 contracts on the ladder (C11); the E1 mean less one tick, a label-free single-book anomaly flag at entry with E1 P&L split by it, and the share of exits whose own bid exceeds `1 − ask_other` at the same capture (C12); the skewness of E1 P&L, and G reported beside the calendar weeks (review §3). Every output says the entry margin is **not** an edge estimate (winner's curse; C12). | PROPOSED: C5, C11, C12 | code (§8) |
 | 6 | Maximum input ages | Odds ≤ 10 min; Kalshi book ≤ 5 min; sportsbook `last_update` ≤ 10 min (CURRENT) | unchanged | — |
 | 7 | Pair-skew semantics | Join v2 window [−5, +10] min, provisional; E1 admits AT_OR_AFTER_ODDS only | unchanged; the A.C run proposes the window (§5) | A.C run |
@@ -91,7 +91,7 @@ Rows marked "unchanged" restate v1 in substance; v1 §3 holds the full text and 
 | 12 | Independent clusters and episodes | `min_independent_clusters` = max(8, ⌈weeks needed at ICC 0.10⌉) from the pilot E1 SD, **counting only weeks with at least one scored trade** (C3). The freeze record states that with 2^G patterns **no rejection is possible below 5 weeks at α = 0.05, or below 6 weeks at α = 0.05/3**. `min_episodes_for_scenario` = 20 over ≥ 4 weeks. | PROPOSED: the C3 wording | pilot look |
 | 13 | Development and evaluation windows | §6 | restated with the exposure record | — |
 | 14 | Variants | **V0 is the only confirmatory test (C8).** The T-24h decision and θ = 2¢ are reported descriptively. The three A.C windows are disclosed as label-free design choices, outside the Holm family (§5.2). The E0→E1 change is a design revision made with no data viewed and does not count. | PROPOSED: C8; supersedes v1's "V0 + ≤ 2 challengers" | owner review (§5.2) |
-| 15 | Futility | **Operational** (at the review): as in v1. **Statistical:** one interim on 2026-11-30, **futility-only and non-binding** (C6): STATISTICAL_FUTILITY if the inverted-test (C1) one-sided 90% upper bound is below δ_min. **Economic:** once fees are verified, ECONOMICALLY_UNVIABLE compares the E1 upper bound with δ_econ,hold (C7); until then it cannot be evaluated. | PROPOSED: C1, C6, C7 | fees for the economic rule |
+| 15 | Futility | **Operational** (at the review): as in v1. **Statistical:** one interim on 2026-11-30, **futility-only and non-binding** (C6): STATISTICAL_FUTILITY if the one-sided 90% upper bound is below δ_min. At G ≥ 6 that bound inverts the restricted test (C1). At G = 4–5 it is the one-sided 90% upper bound of a **t-test on the week means with G − 1 df**, flagged `COARSE_FEW_CLUSTERS`; it can support a futility recommendation only, never efficacy (C1). **Economic:** once fees are verified, ECONOMICALLY_UNVIABLE compares the E1 upper bound with δ_econ,hold (C7); until then it cannot be evaluated. | PROPOSED: C1, C6, C7 | fees for the economic rule |
 | 16 | Continuation | Only with a named missing observation, its cash cost and owner hours approved at the review. **The +8 h is not granted.** | unchanged | owner |
 
 ### 3.1 Effect of the bounds on E1 entries (analytic; nothing run)
@@ -155,9 +155,10 @@ diagnostics (C11, C12) and the evaluation-window guard (C14). They need a later,
 
 ## §E1 review: the independent design review, incorporated
 
-Source: `docs/research/EXP002_E1_DESIGN_REVIEW.md` (`exp002-e1-design-review-v1`, PR #154), an independent
-methodology review written from `main` at `e8703d7` with no EXP-002 data viewed. Its numbers come from repository
-documents and from seeded SYNTHETIC simulations (`exp002-e1-review-sim-v1`, `exp002-e1-review-bias-v1`). Every
+Source: `docs/research/EXP002_E1_DESIGN_REVIEW.md` (`exp002-e1-design-review-v1`, PR #154 at its final head
+`f3cf76f`, after its fact-check), an independent methodology review written from `main` at `e8703d7` with no EXP-002
+data viewed. Its numbers come from repository documents and from seeded SYNTHETIC simulations
+(`exp002-e1-review-sim-v2`, which corrects the Webb studentization of v1, and `exp002-e1-review-bias-v1`). Every
 change below is **PROPOSED**; this proposal adopts all of them, and the owner's review decides.
 
 **Verdict: ACCEPT_WITH_CHANGES.** E1 is acceptable as EXP-002's primary endpoint, framed and frozen as a **gross
@@ -176,19 +177,28 @@ Rademacher wild cluster bootstrap (`WCU_rad`) over-rejects a true null:
 | 8 | 11.7–16.1% | 6.6–9.1% | 7.9–10.7% | 3.0–5.9% |
 | 12 | 11.5–13.0% | 6.8–7.9% | 9.3–10.8% | 4.5–5.5% |
 
-Normal and 3%-fallback rows, ranges over ICC 0–0.20. The futility direction is as bad: with the implemented method,
-"upper 90% bound < δ_min" fires 13–17% of the time at 4 weeks when the true effect equals δ_min. The small-sample
-scaling helps only partly, and Webb weights alone do not fix it; imposing the null does. With left-skewed news jumps,
-every method, the restricted ones included, over-rejects: 10–15% at a nominal 10% and 5–8% at 5% for G ≥ 6.
+Normal and 3%-fallback rows, ranges over ICC 0–0.20. For G ≥ 6 the restricted tests run **7.9–10.8%** at a
+nominal 10% and 3.0–6.1% at 5%. The futility direction is as bad for the implemented method: "upper 90% bound <
+δ_min" fires 13–17% of the time at 4 weeks when the true effect equals δ_min. The small-sample scaling helps only
+partly; imposing the null fixes it.
+
+Below 6 clusters (sim v2):
+- **Webb weights, correctly studentized, over-reject at G = 4:** `WCR_t_webb` rejects **10.5–13.1%** at a nominal
+  10% and 4.9–6.5% at 5% (11.3–14.4% and 6.3–7.4% skewed). At G ≥ 6 they add nothing.
+- **The t on week means (G − 1 df) is the only method near nominal at G = 4:** 8.3–10.5% at 10%, 2.8–5.5% at 5%, and
+  a false-futility rate of 6.3–10.6% at 10%. G = 5 was not simulated.
+
+With left-skewed news jumps, every method, the restricted ones included, over-rejects: 10–15% at a nominal 10% and
+5–8% at 5% for G ≥ 6.
 
 **The changes (each PROPOSED, with the row it changes):**
 
 | C | Change | Row |
 |---|---|---|
-| C1 | Confirmatory test: the exact restricted, studentized sign-flip test by NFL week (Rademacher, enumerated; Webb weights below 6 weeks); bounds by inverting the same test. The implemented bootstrap stays descriptive. | 4 |
+| C1 | For G ≥ 6: the exact restricted, studentized, enumerated Rademacher sign-flip test by NFL week, with bounds from inverting the same test. For G < 6: no confirmatory inference (INSUFFICIENT_EVIDENCE); an interim futility bound at G = 4–5 uses the one-sided 90% upper bound of the t on week means (G − 1 df), flagged `COARSE_FEW_CLUSTERS`, futility only. No Webb weights at any G. The implemented bootstrap stays descriptive. | 4, 15 |
 | C2 | One-sided α = 0.05 for the confirmatory test; 90% only for futility. | 4 |
 | C3 | Keep the floor of 8 weeks, counting weeks with a scored trade; no rejection is possible below 5 weeks (α = 0.05) or 6 (α = 0.05/3). | 12 |
-| C4 | Exit ladder: the own bid, then synthetic `1 − ask` on the other team, then settlement. Decided before the pilot label look or not at all. | 3 |
+| C4 | Exit ladder: the own bid, then synthetic `1 − ask` on the other team, then settlement. Exit (ii) is exact in a win, a loss and a tie: the tie payout follows the VERIFIED terms, while the `settlement_value_dollars` field reading is UNVERIFIED. Decided before the pilot label look or not at all. | 3 |
 | C5 | Report the exit-basis shares; flag `SETTLEMENT_VARIANCE_DOMINANT` above 5% settlement exits. Synthetic: 3% random missing exits raise the SD from 3.0¢ to 8.6¢, 10% to 15.0¢. | 5 |
 | C6 | Name E1 a screen. δ_min = 1¢ stays its statistical threshold. The 2026-11-30 interim is futility-only and non-binding. | 3, 11, 15 |
 | C7 | δ_econ as a fee formula now; numbers once fees are verified. δ_min = 1¢ is below every break-even. | 11, 15 |
@@ -362,7 +372,8 @@ label-free E1 entry count in the `[θ, θ + 0.005·p)` band (§3.1; information 
 - `docs/research/CURRENT_BLOCKERS.md` (#150)
 - `docs/research/EXP002_E1_ENDPOINT.md` (#129)
 - `docs/research/EXP002_AC_CALIBRATION_TOOL.md` (#142, #143)
-- `docs/research/EXP002_E1_DESIGN_REVIEW.md` (#154, `exp002-e1-design-review-v1`)
+- `docs/research/EXP002_E1_DESIGN_REVIEW.md` (#154 at its final head `f3cf76f`, `exp002-e1-design-review-v1`,
+  simulation `exp002-e1-review-sim-v2`)
 - `docs/research/RESEARCH_UNBLOCKING_DECISIONS.md` (A.C, A.D, A.H)
 - `docs/research/EXP002_FEE_VERIFICATION.md`
 - `experiments/EXP-002-nfl-consensus-vs-event-market/rules_evidence/` (terms PDF, MANIFEST)
