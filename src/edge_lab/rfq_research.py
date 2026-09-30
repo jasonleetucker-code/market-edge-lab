@@ -802,22 +802,29 @@ def reserve_simultaneous(obligs: Iterable[Obligation], available_by_index: Mappi
     allowance. A missing fee allowance leaves principal only and makes the result FEE_UNSUPPORTED; a
     negative or non-finite allowance makes that worst case unknown. The canonical primitive decides
     what is held, never nets shared legs (its `by_key`), keeps unknown unknown and compares with cash.
-    An unknown exchange index is EXPOSURE_UNKNOWN."""
+    An unknown exchange index is EXPOSURE_UNKNOWN, and that obligation is added to every shard with an
+    unknown worst case, so every shard's `required` (and any key it shares) is None too. Fee gaps are
+    recorded only for held obligations."""
     groups: dict[int, list[CanonicalObligation]] = {}
-    unknown_shard: list[str] = []
+    unknown_shard: list[Obligation] = []
     fee_unknown: list[str] = []
     for o in obligs:
         if o.exchange_index is None:
-            unknown_shard.append(o.source_id)
+            unknown_shard.append(o)
             continue
         raw_fee = None if fee_allowance is None else fee_allowance(o)
         fee = _nonneg(raw_fee)
-        if raw_fee is None:
-            fee_unknown.append(o.source_id)
+        if raw_fee is None and o.obligation_state in HELD_OBLIGATION_STATES:
+            fee_unknown.append(o.source_id)  # a released obligation needs no fee allowance
         worst = (None if o.principal is None or (raw_fee is not None and fee is None)
                  else o.principal + (fee or ZERO))
         groups.setdefault(o.exchange_index, []).append(
             CanonicalObligation(o.source_id, o.obligation_state, worst, o.exposure_keys))
+    # An obligation on an unknown shard could sit on any shard: it joins every shard's group with an
+    # unknown worst case, so no shard's total or shared-key sum can look known without it.
+    for group in groups.values():
+        group.extend(CanonicalObligation(o.source_id, o.obligation_state, None, o.exposure_keys)
+                     for o in unknown_shard)
     by_index: dict[int, CanonicalReservation] = {}
     asked: list[CanonicalReservation] = []
     for i, group in sorted(groups.items()):
@@ -838,4 +845,5 @@ def reserve_simultaneous(obligs: Iterable[Obligation], available_by_index: Mappi
         status = "INSUFFICIENT_COLLATERAL"
     else:
         status = "FEE_UNSUPPORTED" if fee_unknown else "OK"
-    return Reservation(status, MappingProxyType(by_index), tuple(sorted(unknown_shard)), tuple(sorted(fee_unknown)))
+    return Reservation(status, MappingProxyType(by_index), tuple(sorted(o.source_id for o in unknown_shard)),
+                       tuple(sorted(fee_unknown)))

@@ -486,6 +486,29 @@ def test_unknown_exchange_index_or_principal_fails_closed():
                                 ).status == "CASH_UNKNOWN"
 
 
+def test_an_unknown_shard_obligation_makes_every_shard_and_shared_key_unknown():
+    a = rfq_created("rA", REQ_X, market="KXMVE-A", legs=[LEG_SHARED, ("E2", "E2-M", "yes")])
+    b = rfq_created("rB", REQ_X, market="KXMVE-B", legs=[LEG_SHARED, ("E3", "E3-M", "no")], seq=2)
+    rep = run([a, b, quote_created("qA", "rA", ME, REQ_X, yes="0.50", no="0", market="KXMVE-A"),
+               quote_created("qB", "rB", ME, REQ_X, yes="0.50", no="0", size="1000.00", seq=4, market="KXMVE-B")])
+    obs = obligations(rep, exchange_index={"KXMVE-A": 1})  # rB's shard is unknown; its worst case is 500
+    res = reserve_simultaneous(obs, {1: Decimal("10000")}, fee_allowance=lambda o: Decimal("0"))
+    assert res.status == "EXPOSURE_UNKNOWN" and res.unknown_shard == ("qB",)
+    shard1 = res.by_index[1]
+    assert shard1.required is None and shard1.new_risk_allowed is False  # not 50 and allowed
+    assert shard1.by_key[f"leg:{LEG_SHARED[1]}:yes"] is None
+
+
+def test_released_obligations_need_no_fee_allowance():
+    rep = run([rfq_created("r1", REQ_X), quote_created("q1", "r1", ME, REQ_X),
+               quote_status("quote_cancelled", "q1", "r1", ME, REQ_X)])
+    released = obligations(rep, exchange_index=IDX, include_released=True)
+    res = reserve_simultaneous(released, {0: Decimal("0")})
+    assert res.status == "OK" and res.fee_unknown == ()
+    held = obligations(run([rfq_created("r1", REQ_X), quote_created("q1", "r1", ME, REQ_X)]), exchange_index=IDX)
+    assert reserve_simultaneous(held, {0: Decimal("100")}).fee_unknown == ("q1",)
+
+
 def test_rfq_states_map_conservatively_onto_the_canonical_obligation_states():
     m = rr.OBLIGATION_STATE
     assert m[QuoteState.CANCELLED] is ObligationState.RELEASED
