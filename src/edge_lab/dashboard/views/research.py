@@ -1824,6 +1824,7 @@ def sources_tab(ctx: d.Context) -> str:
                              + f'<div class="pad">{c.disclosure("Source health (latest per source)", detail)}</div>',
                              sid="src-h", flush=True))
     out.append(blockers_section(ctx))
+    out.append(rfq_section(ctx))
     out.append(fees_section(ctx))
     venue_table = c.table(
         ["venue", "kind", "capability", "stage", "auth required", "execution authorized", "evidence"],
@@ -1845,6 +1846,7 @@ BLOCKER_WORDS = {"FEE_UNSUPPORTED": ("Fee unsupported", "warn"), "RULES_UNRESOLV
                  "WAITING_FOR_WINDOW": ("Waiting for its date", "info"),
                  "OWNER_DECISION": ("Owner decision", "warn")}
 RESOLVER_WORDS = {"OWNER": "Owner", "AGENT": "Agent", "VENUE": "Venue answer or document"}
+OWNER_WORDS = {"ACTION": "owner action needed", "APPROVAL": "owner approval needed"}
 
 
 def blocker_word(code: Any) -> str:
@@ -1858,24 +1860,32 @@ def blockers_section(ctx: d.Context) -> str:
     loaded = d.current_blockers(ctx)
     if loaded.status == d.ERROR:
         return c.section(title, c.error_state("Blocker register unavailable", loaded.message), sid="blk-h")
-    if loaded.status != d.OK:
-        return c.section(title, c.empty_state("No research blocker recorded", loaded.message), sid="blk-h")
+    if loaded.status != d.OK:  # not installed: unavailable, never "nothing open"
+        return c.section(title, c.unavailable("Blocker register unavailable", loaded.message), sid="blk-h")
     v = loaded.value
+    if not v["items"]:
+        return c.section(title, c.empty_state("No research blocker recorded",
+                                              "The register loaded and holds no item."), sid="blk-h")
     items = [x for x in v["items"] if x["open"]]
     stale = [x for x in v["items"] if x["stale"]]
+    overdue = [x for x in v["items"] if x["overdue_since_utc"]]
     head = ""
     if stale:
         head = c.status_line("warn", "Register needs re-checking",
-                             f"{len(stale)} item(s) were last reconciled more than 14 days ago; stale is not current.")
+                             f"{len(stale)} item(s) not current: {len(overdue)} overdue, the rest last reconciled more "
+                             "than 14 days ago; stale is not current.")
     if not items:
         return c.section(title, head + c.empty_state("No open blocker", "Every recorded item is closed or recorded "
                                                                         "for information."), sid="blk-h")
     rows = []
     for x in items:  # compact: title, status, who, trigger; everything else is in the disclosure below
         who = RESOLVER_WORDS.get(x["resolver"], x["resolver"])
-        rows.append(c.row(esc(x["title"]), sub=f"{x['scope']} · {who} · {x['trigger']}"
-                          + (" · owner approval needed" if x["owner_approval_needed"] else "")
-                          + (" · stale" if x["stale"] else ""), aside=blocker_word(x["status"])))
+        when = (f"overdue since {pr.datetime_et(x['overdue_since_utc'])}" if x["overdue_since_utc"]
+                else x["trigger"])
+        rows.append(c.row(esc(x["title"]), sub=f"{x['scope']} · {who} · {when}"
+                          + (f" · {OWNER_WORDS[x['owner']]}" if x["owner"] in OWNER_WORDS else "")
+                          + (" · stale" if x["stale"] and not x["overdue_since_utc"] else ""),
+                          aside=blocker_word(x["status"])))
     detail = c.table(["id", "status", "verified", "unknown", "resolver", "sources"],
                      [[c.code(x["id"]), c.code(x["status"]), esc(x["verified"]), esc(x["unknown"]),
                        esc(x["resolver_detail"]), c.ul(x["sources"])] for x in v["items"]], wrap=(2, 3, 4, 5),
@@ -1885,8 +1895,50 @@ def blockers_section(ctx: d.Context) -> str:
             "nothing; owner items need the owner.</p></div>") if nxt else ""
     return c.section(title, head + lead + '<ul class="rows">' + "".join(rows) + "</ul>"
                      + f'<div class="pad">{c.disclosure("Verified, unknown and sources", detail)}'
-                     + f'<p class="note">{esc(v["version"])} · {esc(v["document"])}</p></div>',
+                     + f'<p class="note">{esc(v["version"])} · last reconciled {esc(v["last_reconciled"])} · '
+                       f'{esc(v["document"])}</p></div>',
                      meta=f"{len(items)} open · reconciled from repository evidence", sid="blk-h", flush=True)
+
+
+# RFQ capability states (rfq_research.CapabilityState): nothing is green; unknown codes render neutral
+RFQ_WORDS = {"DOCUMENTED": ("Documented", "info"), "PRIVATE": ("Private to the parties", "nd"),
+             "UNAVAILABLE": ("Unavailable to us", "warn"), "UNKNOWN": ("Unknown", "warn")}
+
+
+def rfq_word(code: Any) -> str:
+    label, kind = RFQ_WORDS.get(code, (f"Unrecognized state ({code})" if code else "Not recorded", "nd"))
+    return c.state_text(f"RFQ_{code}", label=label, kind=kind)
+
+
+def rfq_section(ctx: d.Context) -> str:
+    """RFQ feasibility (R4): what the documentation says we could and could not see. Nothing live, no competitor
+    data, no control. The decision and every owner decision are shown; none is taken here."""
+    title = "RFQ feasibility"
+    loaded = d.rfq_feasibility(ctx)
+    if loaded.status == d.ERROR:
+        return c.section(title, c.error_state("RFQ feasibility unavailable", loaded.message), sid="rfq-h")
+    if loaded.status != d.OK:
+        return c.section(title, c.unavailable("RFQ feasibility unavailable", loaded.message), sid="rfq-h")
+    v = loaded.value
+    counts = {k: sum(1 for r in v["rows"] if r["state"] == k) for k in RFQ_WORDS}
+    head = c.blocked_state(f"Decision: {v['decision'].capitalize()} · no RFQ participation",
+                           "No credential, subscription, RFQ, quote, acceptance or confirmation is authorized. "
+                           "Competitor quotes and fills are never shown: they are private to the parties.")
+    if v["docs_stale"]:
+        head += c.status_line("warn", "Documentation needs re-reading",
+                              f"The RFQ pages were read {pr.datetime_et(v['docs_fetched_utc'])}, more than 30 days "
+                              "ago; stale is not current.")
+    facts = c.facts([(RFQ_WORDS[k][0], c.num(pr.count(n), reason="none")) for k, n in counts.items()]
+                    + [("Owner decisions open", c.num(pr.count(len(v["owner_decisions"])), reason="none"))])
+    matrix = c.table(["capability", "state", "note"],
+                     [[esc(r["item"]), rfq_word(r["state"]), esc(r["note"])] for r in v["rows"]],
+                     wrap=(0, 2), caption="RFQ capability and observability")
+    decisions = c.ul([f"{x['id']}: {x['text']}" for x in v["owner_decisions"]])
+    body = (head + facts + c.disclosure("Capabilities, one by one", matrix)
+            + c.disclosure("Owner decisions D1–D6 (none taken here)", decisions)
+            + f'<p class="note">Documentation read {esc(pr.datetime_et(v["docs_fetched_utc"]))} · '
+              f'{esc(v["document"])}</p>')
+    return c.section(title, body, meta="Public documentation only · research, not participation", sid="rfq-h")
 
 
 def fees_section(ctx: d.Context) -> str:

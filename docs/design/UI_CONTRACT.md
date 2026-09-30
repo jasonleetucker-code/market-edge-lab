@@ -690,11 +690,23 @@ directive), and the screenshots that justify it.
     the page never prints the word for a live feed. Production still reads "No in-play source is authorized" and
     shows neither section.
   - §8 Research & Data: Data sources gains "Current blockers" before "Fee schedule verification", from
-    `current_blockers` (the register behind `docs/research/CURRENT_BLOCKERS_2026-09-30.md`). One row per open item:
-    title; scope, resolver, trigger and "owner approval needed" in the subtitle; one status word, never green. The
-    next item leads; verified, unknown, resolver and sources sit in a disclosure. States: populated, empty ("No
-    research blocker recorded"), all closed ("No open blocker"), stale ("Register needs re-checking" after 14 days),
-    error ("Blocker register unavailable"), unrecognized status (neutral, code kept).
+    `current_blockers` (the one register; `docs/research/CURRENT_BLOCKERS.md` generates its table from it). One
+    row per open item: title; scope, resolver, trigger (or "overdue since …") and "owner action needed" or "owner
+    approval needed" in the subtitle; one status word, never green. The next item leads; verified, unknown,
+    resolver and sources sit in a disclosure. States: populated, empty ("No research blocker recorded"), all closed
+    ("No open blocker"), stale ("Register needs re-checking": reconciled over 14 days ago, or overdue), error and
+    not installed (both "Blocker register unavailable", never "nothing open"), unrecognized status (neutral, code
+    kept).
+  - §8 Research & Data: Data sources gains "RFQ feasibility" after Current blockers, from
+    `rfq_research.FEASIBILITY_MATRIX` (kept equal to `docs/research/RFQ_FEASIBILITY_2026-09.md` by a test). It
+    shows:
+    - a blocked state, "Decision: Narrow · no RFQ participation" ("Competitor quotes and fills are never shown");
+    - counts per capability state (Documented, Private to the parties, Unavailable to us, Unknown) and the number of
+      open owner decisions;
+    - in disclosures, each capability with its state and note, and the owner decisions D1–D6 ("none taken here").
+
+    No price, profit, competitor figure or control. States: populated, stale ("Documentation needs re-reading" after
+    30 days), error and not installed ("RFQ feasibility unavailable"), unrecognized state (neutral).
   - §8 Terminal: the collapsed System & evidence opens with "Next research blocker or approval", one line with a
     link to Current blockers. Page order and the summary band are unchanged.
   - §8 Market detail: Rules & evidence gains "contract exceptions (recorded summary, not the rules)" for series
@@ -704,10 +716,11 @@ directive), and the screenshots that justify it.
   - §5 Formatting gains `presentation.ratio` (a multiple of a named denominator: "1.44×").
   - Label protection: no source-comparison widget is added. Nothing here reads NFL pilot quotes, T-60m label proxies
     or post-cutoff prices; any future comparison widget must use `odds_schedule.is_label_proxy`.
-  - Screenshots (Chromium; reproducible with `MSYS_NO_PATHCONV=1 python tests/browser/capture.py --states early demo
+  - Screenshots, re-captured on the review-round head (Chromium; reproducible with `MSYS_NO_PATHCONV=1 python tests/browser/capture.py --states early demo
     --pages / "/experiments?tab=sources" /experiments/inplay /gallery/inplay --viewports 360x800 390x844 1440x900`
     at `--text-scale 1.0` and `2.0`, plus `--open-details` for `demo` at 390x844 and 1440x900): 52 shots, 0 with
-    overflow, clipping, low contrast or foreign requests. Element shots of the new sections at 390x844, 1440x900 and
-    360x800 with 200% text were reviewed locally by the author. Two review fixes followed: blocker rows carry one
+    overflow, clipping, low contrast or foreign requests. Element shots of the new sections (including RFQ
+    feasibility) at 390x844 and 1440x900 were reviewed locally by the author. The 200% text evidence is the
+    capture.py audit. Two review fixes followed: blocker rows carry one
     status word, because a second badge squeezed the title at 390 px; and turnover prints as a multiple, not 12
     decimals. Emulation, not a physical phone; described in the PR, not attached.

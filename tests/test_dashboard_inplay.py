@@ -248,7 +248,16 @@ def test_stale_content_and_not_evaluated_states():
 
 
 def test_fill_economics_keeps_modes_apart_and_names_missing_denominators():
+    rows = {r["arm"]: r for r in iv.fixture_view("populated")["fill_economics"]["rows"]}
+    assert rows["Hold to settlement"]["modes"] == ["TAKER"]
+    assert rows["Full exit · bot-triggered (taker)"]["modes"] == ["TAKER"]
+    assert rows["Full exit · preplaced limit (book maker)"]["modes"] == ["BOOK_MAKER", "TAKER"]  # entry is a take
+    assert all(r["evidence"] == "SIMULATED" and "FEE_SCOPE_UNKNOWN" in r["missing"] for r in rows.values())
     html = ip.economics_section(iv.fixture_view("populated"))
+    for arm, mode in (("Hold to settlement", "taker"), ("Full exit · bot-triggered (taker)", "taker"),
+                      ("Full exit · preplaced limit (book maker)", "book maker + taker")):
+        row = html[html.index(arm):]
+        assert re.search(r"<dt>Mode</dt><dd[^>]*>(?:<[^>]+>)*" + re.escape(mode) + "<", row[:row.index("</dl>")]), arm
     for text in ("Hold to settlement", "Full exit · bot-triggered (taker)", "Full exit · preplaced limit (book maker)",
                  "book maker", "taker", "fees unknown: net blocked", "after-cost figure unavailable: fee unknown",
                  "Simulated fills only", "RFQ: not evaluated", "Not a real fill, not an edge"):

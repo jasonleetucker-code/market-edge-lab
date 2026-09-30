@@ -30,6 +30,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from decimal import ROUND_CEILING, ROUND_FLOOR, ROUND_HALF_EVEN, Decimal
 from enum import Enum
+from types import MappingProxyType
 from typing import Any, Iterable, Mapping
 
 from . import fees
@@ -684,9 +685,9 @@ def schedule_for(venue: str, scope: str | None = None, *, as_of: datetime | str 
     equals the schedule's theta; `polymarket_us.fee_scope`) and, for a point-in-time replay
     (`as_of`), only from its effective date: an earlier Polymarket US schedule was never
     captured. Every other venue or scope has its own fees and stays unsupported until its
-    own primary evidence is captured. A Kalshi series that extends a listed non-standard series
-    (`nonstandard_family`: KXNHLGAME under KXNHL, KXMVECROSSCATEGORY under KXMVE) is unsupported too:
-    it is never priced by a guessed general schedule. `as_of` does not change Kalshi routing."""
+    own primary evidence is captured. The explicit not-proven-standard map (`not_proven_standard`:
+    KXNHLGAME, and KXMVE* combination series) is unsupported too: those series are never priced by a
+    guessed general schedule. `as_of` does not change Kalshi routing."""
     if venue == "polymarket_us":
         if scope != POLYMARKET_US_EXCHANGE_SCOPE:
             return UnsupportedFeeSchedule(venue, scope, "the market's fee coefficient is unknown or differs from the "
@@ -704,25 +705,39 @@ def schedule_for(venue: str, scope: str | None = None, *, as_of: datetime | str 
         return UnsupportedFeeSchedule(venue, scope, "the Kalshi series is unknown")
     if scope in KALSHI_NONSTANDARD_SERIES:
         return UnsupportedFeeSchedule(venue, scope, "series has a non-standard Kalshi fee schedule (PDF pp.6-11)")
-    family = nonstandard_family(scope)
-    if family is not None:
-        return UnsupportedFeeSchedule(venue, scope, f"series {scope} is in the {family} family, which the PDF's "
-                                                    f"non-standard list names (pp.6-11); {scope} itself has no verified "
+    rule = not_proven_standard(scope)
+    if rule is not None:
+        return UnsupportedFeeSchedule(venue, scope, f"series {scope} is not proven standard ({rule}); it has no verified "
                                                     "schedule, so the general schedule is never guessed for it")
     return KALSHI_QUADRATIC_TAKER_V1
 
 
-def nonstandard_family(scope: str | None) -> str | None:
-    """The longest series on the captured non-standard list that `scope` extends, or None.
+# Series the captured non-standard list does not name, but which are not proven standard either
+# (coordinator decision for PR C, 2026-09-30). An explicit map, deliberately narrow: every other
+# unlisted series routes exactly as before.
+KALSHI_NOT_PROVEN_STANDARD_SERIES = MappingProxyType({
+    "KXNHLGAME": "not on the captured list, and no document shows it uses the general schedule; KXNFLGAME, "
+                 "its NFL counterpart, is listed",
+})
+KALSHI_NOT_PROVEN_STANDARD_PREFIXES = MappingProxyType({
+    "KXMVE": "a combination series: the listed KXMVE entry is the non-standard combination family, and no "
+             "document shows any combination series uses the general schedule",
+})
 
-    The list names series exactly, but a sibling of a listed series is not thereby proven standard:
-    KXNHLGAME is not listed while KXNHL is, and the combination series KXMVECROSSCATEGORY and its
-    kin extend the listed KXMVE. Such a series is FEE_UNSUPPORTED until its own fee is verified.
-    A series with no listed prefix (for example KXHIGHNY) is unaffected."""
+
+def not_proven_standard(scope: str | None) -> str | None:
+    """Why an unlisted Kalshi series is not proven standard, or None when the general routing applies.
+
+    Only the explicit map above: KXNHLGAME, and series starting with KXMVE (combinations). It asserts
+    no family relationship for any other series."""
     if not scope or scope in KALSHI_NONSTANDARD_SERIES:
         return None
-    matches = [s for s in KALSHI_NONSTANDARD_SERIES if scope.startswith(s)]
-    return max(matches, key=len) if matches else None
+    if scope in KALSHI_NOT_PROVEN_STANDARD_SERIES:
+        return KALSHI_NOT_PROVEN_STANDARD_SERIES[scope]
+    for prefix, why in KALSHI_NOT_PROVEN_STANDARD_PREFIXES.items():
+        if scope.startswith(prefix):
+            return why
+    return None
 
 
 def recorded_claim_basis(fills: Iterable[Mapping[str, Any]]) -> ClaimBasis:

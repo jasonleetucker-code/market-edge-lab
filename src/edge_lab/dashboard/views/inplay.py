@@ -294,7 +294,8 @@ def source_state_section(view: dict[str, Any]) -> str:
     ctx_ = ss.get("context") or {}
     detail = c.disclosure("Clocks, context and decision", c.kv([
         ("received (our clock)", c.txt(pr.datetime_et(ss.get("received_utc")), reason="none")
-         + " " + esc(f"± {ss.get('received_uncertainty_seconds')} s")),
+         + (" " + esc(f"± {ss.get('received_uncertainty_seconds')} s") if ss.get("received_uncertainty_seconds")
+            else "")),
         ("published (venue clock)", c.txt(pr.datetime_et(ss.get("published_utc")), reason="not sent")
          + (" " + esc(f"bound {ss.get('published_uncertainty')}") if ss.get("published_uncertainty") else "")),
         ("sport · market · phase · regime", esc(" · ".join(

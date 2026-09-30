@@ -429,7 +429,8 @@ def source_state_section(*, variant: str, as_of: datetime, book_state: ev.BookSt
         "source_family": None if obs is None else obs.source_family,
         "context": {"sport": ctx.sport, "market": ctx.market, "phase": ctx.phase.value, "regime": ctx.regime},
         "received_utc": None if obs is None else obs.received.utc,
-        "received_uncertainty_seconds": "0.051",  # precision 1 ms + clock bound 50 ms (fixture host clock)
+        # precision 1 ms + clock bound 50 ms (the fixture host clock); None when no book was received
+        "received_uncertainty_seconds": None if obs is None else "0.051",
         "published_utc": None if obs is None or obs.published is None else obs.published.utc,
         "published_uncertainty": "UNKNOWN" if obs is not None and obs.published is not None else None,
         "content_freshness": None if freshness is None else freshness.value,

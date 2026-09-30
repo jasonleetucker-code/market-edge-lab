@@ -847,3 +847,67 @@ def reserve_simultaneous(obligs: Iterable[Obligation], available_by_index: Mappi
         status = "FEE_UNSUPPORTED" if fee_unknown else "OK"
     return Reservation(status, MappingProxyType(by_index), tuple(sorted(o.source_id for o in unknown_shard)),
                        tuple(sorted(fee_unknown)))
+
+
+# --------------------------------------------------------------------------- feasibility summary (for the Terminal)
+#
+# A compact, display-only summary of `docs/research/RFQ_FEASIBILITY_2026-09.md` §2 (the capability and
+# observability matrix) and §6 (the decision and the owner decisions). `tests/test_rfq_feasibility_summary.py`
+# keeps every row equal to the document's table, in order. It grants nothing and reads nothing.
+
+
+class CapabilityState(str, Enum):
+    DOCUMENTED = "DOCUMENTED"  # the documentation defines it (observable with the right access)
+    PRIVATE = "PRIVATE"  # exists, but visible only to the parties or the venue: never to an outside observer
+    UNAVAILABLE = "UNAVAILABLE"  # documented, but we cannot observe it under current authority (no credential)
+    UNKNOWN = "UNKNOWN"  # not documented, conflicting, or unresolved
+
+
+@dataclass(frozen=True)
+class CapabilityRow:
+    item: str  # the matrix row's name, exactly as in the document
+    state: CapabilityState
+    note: str
+
+
+FEASIBILITY_DOCUMENT = "docs/research/RFQ_FEASIBILITY_2026-09.md"
+FEASIBILITY_DECISION = "NARROW"
+FEASIBILITY_MATRIX: tuple[CapabilityRow, ...] = (
+    CapabilityRow("Request metadata", CapabilityState.UNAVAILABLE,
+                  "broadcast on an authenticated channel; we hold no credential"),
+    CapabilityRow("Combo definitions and legs", CapabilityState.DOCUMENTED,
+                  "definitions are public reads (a new read scope, not authorized today)"),
+    CapabilityRow("Authentication and actual entitlements", CapabilityState.UNKNOWN,
+                  "whether a read-only key or a non-maker member can subscribe or quote"),
+    CapabilityRow("Storage, training and derived-data rights", CapabilityState.UNKNOWN,
+                  "which terms govern API data is unresolved"),
+    CapabilityRow("Our quotes vs other makers' quotes", CapabilityState.PRIVATE,
+                  "each quote is private between requester and maker; no competitor price is ever shown"),
+    CapabilityRow("Acceptance and fill visibility", CapabilityState.PRIVATE,
+                  "parties only; public block-trade flags are unattributed and unverified"),
+    CapabilityRow("Native quantity and payout", CapabilityState.DOCUMENTED, "0.01-contract steps; $1 binary payout"),
+    CapabilityRow("Fee-inclusive vs principal-only target size", CapabilityState.DOCUMENTED,
+                  "an observer cannot see a target-cost RFQ's fee mode"),
+    CapabilityRow("Full-request obligations and partial acceptance", CapabilityState.UNKNOWN,
+                  "conflict C1: plan for full-size obligations"),
+    CapabilityRow("Quote replacement and expiry", CapabilityState.DOCUMENTED, "durations are not documented"),
+    CapabilityRow("Acceptance → maker confirmation → execution", CapabilityState.DOCUMENTED,
+                  "binding at maker confirmation; execution is not a fill"),
+    CapabilityRow("Timing classes and the binding point", CapabilityState.DOCUMENTED,
+                  "30 s / 3 s confirmation (conflict C2)"),
+    CapabilityRow("Collateral", CapabilityState.UNKNOWN, "when an open quote reserves collateral"),
+    CapabilityRow("Common-leg exposure", CapabilityState.DOCUMENTED, "no netting is documented: treat as none"),
+    CapabilityRow("Account attribution", CapabilityState.DOCUMENTED, "subaccounts; pseudonymous creator ids"),
+    CapabilityRow("Outage, pause, cancel and unknown states", CapabilityState.UNKNOWN,
+                  "RFQ behaviour during pauses is not documented"),
+)
+OWNER_DECISIONS: tuple[tuple[str, str], ...] = (
+    ("D1", "Data rights: read the Developer Agreement signed in, and decide (adds RFQ-stream storage)."),
+    ("D2", "Approve a narrowest-scope Kalshi credential for observe-only `communications`, plus a bounded census. "
+           "Credential creation is not authorized today."),
+    ("D3", "Add the RFQ questions to the Kalshi message (revision 3); sending stays owner-confirmed."),
+    ("D4", "Approve a bounded public read of `is_block_trade` trades as a new read scope (useful only once C7 is "
+           "answered)."),
+    ("D5", "A research slot: RFQ empirical work would be a new family under #96."),
+    ("D6", "Budget: $0 cash for D2 and D4; owner hours unpriced; VPS headroom checked first; no paid tier."),
+)

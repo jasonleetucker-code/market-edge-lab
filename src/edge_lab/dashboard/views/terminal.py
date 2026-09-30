@@ -231,12 +231,16 @@ def next_blocker(ctx: d.Context) -> str:
     link = '<a href="/experiments?tab=sources#blk-h">Current blockers</a>'
     if loaded.status == d.ERROR:
         return head + c.error_state("Blocker register unavailable", loaded.message)
-    nxt = None if loaded.status != d.OK else next((x for x in loaded.value["items"]
-                                                  if x["id"] == loaded.value["next"]), None)
+    if loaded.status != d.OK:  # not installed: unavailable, never "nothing open"
+        return head + c.unavailable("Blocker register unavailable", loaded.message)
+    nxt = next((x for x in loaded.value["items"] if x["id"] == loaded.value["next"]), None)
     if nxt is None:
         return head + f'<p class="note">No open research blocker is recorded. {link}</p>'
-    who = "owner approval needed" if nxt["owner_approval_needed"] else f"resolver: {nxt['resolver'].lower()}"
-    return head + (f'<p class="note">{esc(nxt["title"])} — {esc(nxt["trigger"])}; {esc(who)}'
+    who = {"ACTION": "owner action needed", "APPROVAL": "owner approval needed"}.get(
+        nxt["owner"], f"resolver: {nxt['resolver'].lower()}")
+    when = (f"overdue since {pr.datetime_et(nxt['overdue_since_utc'])}" if nxt["overdue_since_utc"]
+            else nxt["trigger"])
+    return head + (f'<p class="note">{esc(nxt["title"])} — {esc(when)}; {esc(who)}'
                    f'{" (stale: re-check)" if nxt["stale"] else ""}. {link}</p>')
 
 
