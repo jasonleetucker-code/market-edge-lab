@@ -65,11 +65,12 @@ Clusters for later statistics: the game (Odds event id) and the NFL week (Tuesda
 Delayed-signal and placebo control references are listed per row for the protocol to use; this module
 computes no statistic from them.
 
-**EXP-002 measurement** (`measure_exp002`, `exp002-measurement-v3`): the label-free pre-freeze noise gates v2 and v3
+**EXP-002 measurement** (`measure_exp002`, `exp002-measurement-v4`): the label-free pre-freeze noise gates v2 and v3
 (they never load a T-60m book), the cross-book markout endpoint (it reads the first T-60m book of each market, a
 label, so it runs only in a logged results path) and the PROPOSED E1 executable round-trip endpoint (label-free
-entry counts always; exits, settlement and gross P&L only in the logged results path). See the sections "EXP-002
-measurement" and "EXP-002 E1" below.
+entry counts always; exits, settlement and gross P&L only in the logged results path). E1 v2 adds the exact
+restricted sign-flip test, the C4 exit ladder and the C14 evaluation-window guard on the results path. See the
+sections "EXP-002 measurement" and "EXP-002 E1" below.
 
 CLI (read-only): `python -m edge_lab.sports_evidence report --db <path> [--as-of ISO] [--out FILE]` and
 `python -m edge_lab.sports_evidence exp002 --db <path> [--as-of ISO] [--min-effect D] [--e1-tie-bound T
@@ -1747,11 +1748,28 @@ def build_report(store: Any, *, as_of: datetime, policy: JoinPolicy = JoinPolicy
 
     Outcome states and results are labels (EXP-002 [data_roles]), so by default they are hidden everywhere:
     rows, join counts and the protocol OUTCOME stage. `results=True` is for a run whose viewing is logged in
-    the experiment's evidence-use log (the CLI's `--with-results` records it before printing)."""
+    the experiment's evidence-use log (the CLI's `--with-results` records it before printing). With `results=True`
+    the C14 evaluation-window guard applies: the report is built as of min(as_of, EVALUATION_LABEL_CUTOFF), and
+    every game with a kickoff on or after EVALUATION_WINDOW_EARLIEST_ET (or unknown) is refused before anything is
+    shown or logged; a reviewed code change tied to the freeze record's id is required to admit the pre-registered
+    interim and final analyses."""
     if not isinstance(as_of, datetime) or as_of.tzinfo is None:
         raise ValueError("as_of must be a timezone-aware datetime")
     as_of = as_of.astimezone(UTC)
+    guard: dict[str, Any] | None = None
+    requested = as_of
+    if results:  # C14: labels are read only up to the cutoff, whatever as_of says
+        as_of = min(as_of, EVALUATION_LABEL_CUTOFF.astimezone(UTC))
     rows, catalog, payloads, _, targets_truncated = _join(store, as_of, policy, results)
+    if results:  # C14: evaluation-window games are refused, never shown or logged
+        refused = sorted({r.get("event_id") for r in rows if evaluation_window_refused(r)}, key=str)
+        rows = [r for r in rows if not evaluation_window_refused(r)]
+        guard = {"evaluation_window_earliest_et": _iso(EVALUATION_WINDOW_EARLIEST_ET),
+                 "label_cutoff_utc": _iso(EVALUATION_LABEL_CUTOFF), "requested_as_of_utc": _iso(requested),
+                 "label_as_of_utc": _iso(as_of), "games_refused": len(refused),
+                 "rule": "C14: a results report reads labels only up to the cutoff and refuses every game with a "
+                         "kickoff on or after the evaluation window's earliest start (or unknown). Lifting it needs a "
+                         "reviewed code change tied to the freeze record's id"}
     observations = _observations(rows)  # also removes the private ladder objects from the rows
     join = _attrition(rows, results)
     protocol = protocol_status(experiments_root)
@@ -1783,6 +1801,8 @@ def build_report(store: Any, *, as_of: datetime, policy: JoinPolicy = JoinPolicy
         "economics": economics(rows, observations, protocol, join, policy, as_of, [g["stream"] for g in gaps]),
         "rows": rows if results else _hide_label_books(rows),
     }
+    if guard is not None:  # results runs only: a label-free report is byte-identical to before
+        body["evaluation_window_guard"] = guard
     plain = _plain(body)
     plain["output_sha256"] = sha256_hex(canonical_json(plain))
     return plain
@@ -1805,7 +1825,7 @@ def build_report(store: Any, *, as_of: datetime, policy: JoinPolicy = JoinPolicy
 # v2 (2026-09-28): the output adds `gate_v3` beside the unchanged v2 gate; v1 outputs keep their own version.
 # v3 (2026-09-29): the output adds `e1`, the PROPOSED E1 round-trip endpoint (label-free entry counts without
 # results; exits, P&L and settlement only in the logged results path). Every v2 key is unchanged.
-MEASUREMENT_VERSION = "exp002-measurement-v3"
+MEASUREMENT_VERSION = "exp002-measurement-v4"  # v4: E1 v2 and the evaluation-window guard on the results path
 GATE_VERSION = "exp002-noise-gate-v2"
 MARKOUT_VERSION = "exp002-cross-book-markout-v1"
 GATE_HORIZONS = ("T-24h", "T-6h")
@@ -2621,9 +2641,16 @@ def noise_gate_v3(obs: GateV3Observations, *, min_effect: float | None = None,
 #   when that exit is missing, and summarises gross P&L. Exit bids and settlements are EXP-002 labels: only the
 #   logged results path (`measure_exp002(results=True)`; the CLI's `exp002 --with-results`) calls it.
 
-E1_VERSION = "exp002-e1-roundtrip-v1"
+# v2 (2026-09-30; docs/research/EXP002_E1_DESIGN_REVIEW.md C1, C4, C5, C11, C12, C14): the exact restricted
+# sign-flip test and its inverted bounds (the v1 wild cluster bootstrap stays, labelled descriptive); the C4 exit
+# ladder (a synthetic exit on the other team market before the settlement fallback) with exit-basis shares and the
+# SETTLEMENT_VARIANCE_DOMINANT flag; size and execution diagnostics; the evaluation-window guard. v1's exit order
+# (own bid, else settlement) is still reported as `summary.v1_exit_order`, descriptive.
+E1_VERSION = "exp002-e1-roundtrip-v2"
 E1_STATE = "PILOT DESCRIPTIVE — PROPOSED ENDPOINT, NOT FROZEN, NOT A TEST"
-E1_PROPOSAL = "docs/research/EXP002_FREEZE_PROPOSAL.md (exp002-freeze-proposal-v1) §3 rows 3, 4, 5(b), 11, 15"
+E1_PROPOSAL = ("docs/research/EXP002_FREEZE_PROPOSAL.md (exp002-freeze-proposal-v1) §3 rows 3, 4, 5(b), 11, 15; "
+               "docs/research/EXP002_FREEZE_PROPOSAL_V2.md (#155) §3 rows 3, 5; docs/research/EXP002_E1_DESIGN_REVIEW.md "
+               "(#154) C1, C4, C5, C11, C12, C14")
 E1_THETA = Decimal("0.01")  # row 4: one tick beyond the ask; a named constant, never tuned here
 E1_MIN_DEPTH = Decimal(1)  # contracts displayed at the T-6h ask (entry) and at the first T-60m bid (exit)
 E1_QUANTITY = 1  # contracts per trade (row 3)
@@ -2646,6 +2673,15 @@ E1_EXIT_BID, E1_SETTLEMENT_FALLBACK, E1_PENDING = "EXIT_BID", "SETTLEMENT_FALLBA
 E1_MISSING_EXITS = ("NO_T60_TARGET", "NO_T60_BOOK", "UNUSABLE_BOOK", "NO_BID", "BID_DEPTH_MISSING", "BID_DEPTH_BELOW_1")
 E1_EXIT_PENDING = ("T60_WINDOW_OPEN", "NO_T60_TARGET_BEFORE_KICKOFF")
 E1_SETTLEMENT_PENDING = ("SETTLEMENT_NOT_FINAL", "SETTLED_VALUE_UNKNOWN", "SETTLEMENT_CONFLICT")
+E1_EXIT_SYNTHETIC = "EXIT_SYNTHETIC_OTHER_ASK"  # C4 step 2: 1 - the other team market's first T-60m ask
+E1_EXIT_BASES = (E1_EXIT_BID, E1_EXIT_SYNTHETIC, E1_SETTLEMENT_FALLBACK)
+E1_SETTLEMENT_SHARE_FLAG = 0.05  # C5: above this share of scored trades the result carries the flag below
+E1_SETTLEMENT_FLAG = "SETTLEMENT_VARIANCE_DOMINANT"
+E1_DEPTH_SHARES = (Decimal(10), Decimal(250))  # C11: entries whose displayed ask depth reaches these sizes
+E1_DESCRIPTIVE_QUANTITY = Decimal(10)  # C11: the descriptive ladder walk
+E1_TICK = Decimal("0.01")  # C12(a): the crude latency haircut
+E1_NOT_AN_EDGE = ("The entry margin (c_low - ask) is not an edge estimate: the entry rule selects on it (winner's "
+                  "curse, E1 design review §4.1); only realized P&L counts")
 E1_WILD_ENUMERATE_MAX = 4096  # up to 12 week clusters every Rademacher sign pattern is enumerated (exact)
 E1_FEW_CLUSTERS = 10  # below this many weeks the wild cluster bootstrap is coarse (2^G patterns); flagged
 
@@ -2659,7 +2695,7 @@ def _e1_side(row: Mapping[str, Any], team: str | None, role: str, policy: JoinPo
     side = (row.get("sides") or {}).get(team) if team else None
     out: dict[str, Any] = {"team": team, "role": role, "ticker": None if side is None else side.get("ticker"),
                            "book_timing": None if side is None else side.get("book_timing"),
-                           "paired_at_or_after_odds": False, "c_low": None, "ask": None, "margin": None,
+                           "paired_at_or_after_odds": False, "c_low": None, "ask": None, "bid": None, "margin": None,
                            "ask_depth": None}
     if side is None or row.get("status") not in (PAIRED, PARTIAL_PAIR) or side.get("stage") is not None:
         # A join failure. The stale ones (odds not fresh at receipt, a book stale or undated at the decision time)
@@ -2680,6 +2716,7 @@ def _e1_side(row: Mapping[str, Any], team: str | None, role: str, policy: JoinPo
         return {**out, "reason": E1_STALE}  # stale or unknown inputs fail closed, never enter
     ask = _dec(side.get("yes_ask"))
     out["ask"] = ask
+    out["bid"] = _dec(side.get("yes_bid"))  # T-6h information; the results path's C12(b) anomaly flag reads it
     if ask is None:
         return {**out, "reason": E1_NO_ASK}
     p = _dec(side.get("consensus_probability"))
@@ -2913,20 +2950,291 @@ def _e1_describe(pairs: Sequence[tuple[str, float]], *, seed: int, resamples: in
     return out
 
 
+# --------------------------------------------------------------------------- E1 v2: exact restricted sign-flip test (C1)
+#
+# docs/research/EXP002_E1_DESIGN_REVIEW.md §3 and C1 as revised (#154, head f3cf76f). PROPOSED; no verdict is stated.
+# - G >= 6 week clusters: a restricted (null imposed), studentized (cluster-robust t of the trade-weighted mean)
+#   Rademacher sign-flip test by NFL week, every pattern enumerated; one-sided p for H0: E[gross] <= 0 = the share
+#   of patterns with t* >= t_obs (ties count against rejection); bounds by inverting the same test. Each pattern's
+#   variance is its own: sum_g (w_g Y_g - n_g m*)^2.
+# - G < 6: no confirmatory inference: INSUFFICIENT_EVIDENCE.
+# - G = 4 or 5 only: interim futility information, a one-sided 90% upper bound from a t-test on the G week means
+#   with G - 1 df, flagged COARSE_FEW_CLUSTERS. Futility information only, never efficacy.
+# - No Webb weights at any G.
+# Enumeration is complete up to E1_SIGNFLIP_ENUMERATE_MAX_WEEKS (2^20 patterns, beyond any realistic season); above
+# it, E1_SIGNFLIP_DRAWS seeded Rademacher draws with p = (count + 1) / (draws + 1).
+
+E1_SIGNFLIP_VERSION = "exp002-e1-signflip-v2"  # v2: the revised C1 rule (#154 f3cf76f)
+E1_SIGNFLIP_MIN_WEEKS = 6  # below this: INSUFFICIENT_EVIDENCE, no confirmatory inference
+E1_FUTILITY_WEEK_MEANS_WEEKS = (4, 5)  # interim futility only: the t on week means
+E1_SIGNFLIP_ENUMERATE_MAX_WEEKS = 20  # every Rademacher pattern enumerated up to 2^20
+E1_SIGNFLIP_DRAWS = 9999  # more weeks than that: seeded draws
+E1_SIGNFLIP_LEVELS = (0.05, 0.10)  # one-sided: 0.05 is the efficacy level (C2), 0.10 the futility bound (C6)
+E1_SIGNFLIP_BOUND_TOLERANCE = 1e-6  # dollars per contract (0.0001 cents): the inverted bounds' bisection precision
+# One-sided 90% Student t quantiles for the week-means futility bound (df = G - 1 = 3, 4).
+T_QUANTILE_90 = {3: 1.6377443572159062, 4: 1.5332062740589443}
+
+
+def _signflip_draws(weeks: int, seed: int) -> list[tuple[float, ...]] | None:
+    """None when every pattern is enumerated (up to E1_SIGNFLIP_ENUMERATE_MAX_WEEKS); otherwise seeded draws."""
+    if weeks <= E1_SIGNFLIP_ENUMERATE_MAX_WEEKS:
+        return None
+    rng = random.Random(seed)
+    return [tuple(rng.choice((-1.0, 1.0)) for _ in range(weeks)) for _ in range(E1_SIGNFLIP_DRAWS)]
+
+
+class _SignFlip:
+    """The Rademacher patterns of one set of week clusters, precomputed once and evaluated at any null mu0.
+
+    With y_g(mu0) = Y_g - n_g mu0 and w_g^2 = 1, a pattern's studentized t depends only on
+    A = sum w_g y_g = A0 - mu0 C and B = sum w_g n_g y_g = B0 - mu0 D (C = sum w_g n_g, D = sum w_g n_g^2):
+    t* = A / sqrt(S2 - 2 (A/n) B + (A/n)^2 N2), which is sum_g (w_g y_g - n_g m*)^2 under the root. The observed
+    statistic is the unflipped pattern computed by exactly the same arithmetic, so it ties with itself bit for bit
+    and p can never fall below 1 / 2^G."""
+
+    def __init__(self, clusters: Sequence[Sequence[float]], draws: Sequence[Sequence[float]] | None = None):
+        self.sizes = [len(c) for c in clusters]
+        self.base = [sum(c) for c in clusters]
+        self.n = sum(self.sizes)
+        self.n2 = sum(k * k for k in self.sizes)
+        self.exact = draws is None
+        cols = ([], [], [], [])  # A0, B0, C, D per pattern
+        if draws is None:
+            a0, b0, c, d = [0.0], [0.0], [0.0], [0.0]
+            for y, k in zip(self.base, self.sizes):
+                ky, kk = k * y, float(k * k)
+                a0 = [x + y for x in a0] + [x - y for x in a0]
+                b0 = [x + ky for x in b0] + [x - ky for x in b0]
+                c = [x + k for x in c] + [x - k for x in c]
+                d = [x + kk for x in d] + [x - kk for x in d]
+            cols = (a0, b0, c, d)
+        else:
+            for pattern in draws:
+                cols[0].append(sum(w * y for w, y in zip(pattern, self.base)))
+                cols[1].append(sum(w * k * y for w, k, y in zip(pattern, self.sizes, self.base)))
+                cols[2].append(sum(w * k for w, k in zip(pattern, self.sizes)))
+                cols[3].append(sum(w * k * k for w, k in zip(pattern, self.sizes)))
+        self.cols = cols
+        # the unflipped pattern, by the same sequential arithmetic as the enumeration's first pattern
+        ident = [0.0, 0.0, 0.0, 0.0]
+        for y, k in zip(self.base, self.sizes):
+            ident = [ident[0] + y, ident[1] + k * y, ident[2] + k, ident[3] + float(k * k)]
+        self.identity = tuple(ident)
+
+    def _t(self, a0: float, b0: float, c: float, d: float, mu0: float, s2: float) -> float:
+        a, b = a0 - mu0 * c, b0 - mu0 * d
+        m = a / self.n
+        v = s2 - 2 * m * b + m * m * self.n2
+        if v <= 1e-30:
+            return 0.0 if abs(a) <= 1e-15 else math.copysign(math.inf, a)
+        return a / math.sqrt(v)
+
+    def p(self, mu0: float) -> tuple[float, float]:
+        """(p for H0: mean <= mu0, p for H0: mean >= mu0); ties count against rejection."""
+        s2 = sum((y - k * mu0) ** 2 for y, k in zip(self.base, self.sizes))
+        t_obs = self._t(*self.identity, mu0, s2)
+        eps = 1e-12 * max(1.0, abs(t_obs)) if math.isfinite(t_obs) else 0.0
+        ge = le = 0
+        for a0, b0, c, d in zip(*self.cols):
+            t = self._t(a0, b0, c, d, mu0, s2)
+            ge += t >= t_obs - eps
+            le += t <= t_obs + eps
+        count = len(self.cols[0])
+        return (ge / count, le / count) if self.exact else ((ge + 1) / (count + 1), (le + 1) / (count + 1))
+
+
+def _signflip_p(clusters: Sequence[Sequence[float]], mu0: float,
+                draws: Sequence[Sequence[float]] | None = None) -> tuple[float, float]:
+    """(p for H0: mean <= mu0, p for H0: mean >= mu0), with the null imposed on y - mu0; every Rademacher pattern
+    when `draws` is None (`_SignFlip`)."""
+    return _SignFlip(clusters, draws).p(mu0)
+
+
+def _signflip_invert(clusters: Sequence[Sequence[float]], alpha: float, side: str,
+                     draws: Sequence[Sequence[float]] | None = None, test: "_SignFlip | None" = None) -> float | None:
+    """A one-sided confidence bound by inverting the same test: the lower bound is the smallest mu0 not rejected
+    by the test of H0: mean <= mu0 (side "lower"); the upper bound the largest mu0 not rejected by H0: mean >= mu0.
+    None when no finite bound exists (the smallest achievable p exceeds alpha)."""
+    values = [v for c in clusters for v in c]
+    mean = sum(values) / len(values)
+    k = 0 if side == "lower" else 1
+    test = test or _SignFlip(clusters, draws)
+
+    def not_rejected(mu: float) -> bool:
+        return test.p(mu)[k] > alpha
+
+    inside = mean
+    if not not_rejected(inside):
+        return None
+    step = (max(values) - min(values)) or max(abs(mean), 1e-6)
+    sign = -1.0 if side == "lower" else 1.0
+    outside = None
+    for _ in range(80):
+        candidate = mean + sign * step
+        if not not_rejected(candidate):
+            outside = candidate
+            break
+        inside, step = candidate, step * 2
+    if outside is None:
+        return None
+    while abs(outside - inside) > E1_SIGNFLIP_BOUND_TOLERANCE:
+        mid = (inside + outside) / 2
+        if not_rejected(mid):
+            inside = mid
+        else:
+            outside = mid
+    return inside
+
+
+def _e1_week_means_futility(clusters: Sequence[Sequence[float]]) -> dict[str, Any] | None:
+    """Interim futility information for G = 4 or 5 only: the one-sided 90% upper bound of a t-test on the G week
+    means (equal-weighted) with G - 1 df. COARSE_FEW_CLUSTERS; futility information only, never efficacy."""
+    g = len(clusters)
+    if g not in E1_FUTILITY_WEEK_MEANS_WEEKS:
+        return None
+    means = [sum(c) / len(c) for c in clusters]
+    centre = sum(means) / g
+    sd = statistics.stdev(means)
+    return {"flag": "COARSE_FEW_CLUSTERS", "method": f"t-test on the {g} week means, {g - 1} df (equal-weighted)",
+            "mean_of_week_means": centre, "upper_90_one_sided": centre + T_QUANTILE_90[g - 1] * sd / math.sqrt(g),
+            "use": "interim futility information only, never efficacy"}
+
+
+def _t_cdf(x: float, df: int, steps: int = 4000) -> float:
+    """Student t CDF by Simpson integration of the density (stdlib only; accurate to about 1e-9 here)."""
+    if not math.isfinite(x):
+        return 1.0 if x > 0 else 0.0
+    c = math.exp(math.lgamma((df + 1) / 2) - math.lgamma(df / 2)) / math.sqrt(df * math.pi)
+    h = abs(x) / steps
+    total = sum((1 if i in (0, steps) else 4 if i % 2 else 2) * c * (1 + (i * h) ** 2 / df) ** (-(df + 1) / 2)
+                for i in range(steps + 1))
+    area = total * h / 3
+    return 0.5 + area if x >= 0 else 0.5 - area
+
+
+def _e1_week_means_t(clusters: Sequence[Sequence[float]]) -> dict[str, Any] | None:
+    """The reported cross-check (C1): a t-test on the G equal-weighted week means with G - 1 df, one-sided p for
+    H0: mean <= 0. None below 2 weeks or with no spread."""
+    g = len(clusters)
+    if g < 2:
+        return None
+    means = [sum(c) / len(c) for c in clusters]
+    sd = statistics.stdev(means)
+    if sd <= 0:
+        return None
+    t = (sum(means) / g) / (sd / math.sqrt(g))
+    return {"method": f"t-test on the {g} week means, {g - 1} df (equal-weighted)", "t": t, "df": g - 1,
+            "p_value_one_sided": 1 - _t_cdf(t, g - 1), "use": "a reported cross-check, not the confirmatory test"}
+
+
+def e1_signflip(pairs: Sequence[tuple[str, float]], *, seed: int = 20261022) -> dict[str, Any]:
+    """C1 (revised): the exact restricted studentized Rademacher sign-flip test by NFL week of the trade-weighted
+    mean gross for G >= 6, with the one-sided p for H0: E[gross] <= 0 and the bounds by inverting the same test;
+    INSUFFICIENT_EVIDENCE below 6 weeks, with the week-means futility bound at 4 or 5. Numbers only: no verdict."""
+    by_week: dict[str, list[float]] = {}
+    for week, value in pairs:
+        by_week.setdefault(week, []).append(value)
+    weeks = sorted(by_week)
+    clusters = [by_week[w] for w in weeks]
+    g = len(weeks)
+    out: dict[str, Any] = {
+        "version": E1_SIGNFLIP_VERSION, "clusters": g, "trades": len(pairs), "hypothesis": "H0: E[gross] <= 0 (one-sided)",
+        "method": "restricted (null imposed), studentized (cluster-robust t of the trade-weighted mean), Rademacher "
+                  "sign-flip over NFL-week clusters, every pattern enumerated; ties count against rejection; bounds "
+                  "invert the same test; no Webb weights",
+        "min_achievable_p_rademacher": None if g == 0 else 1 / 2 ** g,
+        "no_rejection_possible_at_0_05": None if g == 0 else 1 / 2 ** g > 0.05,
+        "weights": "RADEMACHER", "p_value_one_sided": None, "bounds": {}, "patterns": 0, "exact_enumeration": None,
+        "interim_futility": None, "week_means_cross_check": _e1_week_means_t(clusters), "verdict": E1_NO_VERDICT}
+    if g < E1_SIGNFLIP_MIN_WEEKS:
+        return {**out, "state": "INSUFFICIENT_EVIDENCE",
+                "interim_futility": _e1_week_means_futility(clusters) if len(pairs) >= 2 else None,
+                "note": f"no confirmatory inference with {g} week cluster(s): the test needs at least "
+                        f"{E1_SIGNFLIP_MIN_WEEKS}; with 4 or 5 weeks a coarse futility bound is reported, never efficacy"}
+    draws = _signflip_draws(g, seed)
+    test = _SignFlip(clusters, draws)
+    bounds = {}
+    for alpha in E1_SIGNFLIP_LEVELS:
+        level = f"{round((1 - alpha) * 100)}"
+        bounds[f"lower_{level}_one_sided"] = _signflip_invert(clusters, alpha, "lower", draws, test)
+        bounds[f"upper_{level}_one_sided"] = _signflip_invert(clusters, alpha, "upper", draws, test)
+    return {**out, "state": "COMPUTED", "patterns": 2 ** g if draws is None else len(draws),
+            "exact_enumeration": draws is None, "seed": None if draws is None else seed,
+            "p_value_one_sided": test.p(0.0)[0], "bounds": bounds,
+            "note": "a None bound means no finite bound exists at that level (the smallest achievable p exceeds alpha)"}
+
+
+# --------------------------------------------------------------------------- E1 v2: exit ladder and size (C4, C11)
+
+
+def _e1_other_ask(catalog: KalshiCatalog, payloads: _Payloads, ticker: str | None, start: datetime, end: datetime
+                  ) -> tuple[Decimal | None, Decimal | None, str | None, tuple[datetime, int, str, str] | None]:
+    """(YES ask, ask depth, reason, book) of the OTHER team market's FIRST book in the same T-60m window. Label."""
+    if not ticker:
+        return None, None, "NO_OTHER_MARKET", None
+    book = _first_book(catalog, ticker, start, end)
+    if book is None:
+        return None, None, "NO_OTHER_T60_BOOK", None
+    payload, bad = payloads.payload(book[1])
+    if bad:
+        return None, None, "OTHER_UNUSABLE_BOOK", book
+    quotes = kalshi_quotes.quotes_from_orderbook(ticker, payload, received_at_utc=_iso(book[0]),
+                                                 evidence_id=f"snapshot:{book[1]}")
+    yes = quotes.get("YES")
+    if yes is None or yes.anomaly:
+        return None, None, "OTHER_UNUSABLE_BOOK", book
+    if yes.best_ask is None:
+        return None, None, "OTHER_NO_ASK", book
+    if yes.displayed_size is None:
+        return yes.best_ask, None, "OTHER_ASK_DEPTH_MISSING", book
+    if yes.displayed_size < E1_MIN_DEPTH:
+        return yes.best_ask, yes.displayed_size, "OTHER_ASK_DEPTH_BELOW_1", book
+    return yes.best_ask, yes.displayed_size, None, book
+
+
+def _e1_walk(catalog: KalshiCatalog, payloads: _Payloads, ticker: str, sid: int | None, side: str, quantity: Decimal
+             ) -> tuple[Decimal | None, str]:
+    """Gross cash of taking `quantity` contracts from one stored book: YES asks for an entry (`side` "YES", the
+    cost), YES bids for an exit (`side` "NO": buying NO asks is selling YES into its bids; the proceeds). A walk
+    that is not fully fillable, or that crosses a fractional level (ADR 0036), is NOT_EVALUATED."""
+    if sid is None:
+        return None, "NO_BOOK"
+    payload, bad = payloads.payload(sid)
+    if bad:
+        return None, "UNUSABLE_BOOK"
+    url = next((b[2] for b in catalog.books.get(ticker, []) if b[1] == sid), None)
+    ladder = kalshi_quotes.ladders_from_orderbook(ticker, payload, received_at_utc=None, evidence_id=f"snapshot:{sid}",
+                                                  depth_limit=_depth_limit(url) if url else None).get(side)
+    if ladder is None or ladder.anomaly:
+        return None, "UNUSABLE_BOOK"
+    from .opportunity import walk_ladder
+
+    fill = walk_ladder(ladder, quantity)
+    if fill.gross_cost is None:
+        return None, f"NOT_FILLABLE_{fill.status.value}"
+    if any(level.size != level.size.to_integral_value() for level in fill.takes):
+        return None, "FRACTIONAL_LEVEL"
+    return (fill.gross_cost if side == "YES" else quantity - fill.gross_cost), "OK"
+
+
 def e1_endpoint(entries: Mapping[str, Any], targets: Sequence[Mapping[str, Any]], catalog: KalshiCatalog,
                 payloads: _Payloads, *, as_of: datetime, seed: int = GATE_BOOTSTRAP_SEED,
                 resamples: int = GATE_BOOTSTRAP_RESAMPLES) -> dict[str, Any]:
-    """E1 exits, P&L and summaries (proposal rows 3, 4, 5(b), 15). READS LABELS: the first T-60m book of each
-    traded market and its settlement. Call it only from a logged results path, with a catalog that keeps the settled
-    listing fields.
+    """E1 exits, P&L and summaries (proposal rows 3, 4, 5(b), 15; E1 design review C1, C4, C5, C11, C12). READS
+    LABELS: the first T-60m books of each traded game's two markets and the traded market's settlement. Call it only
+    from a logged results path, with a catalog that keeps the settled listing fields.
 
-    Exit: the FIRST book of the same market received in the T-60m horizon window (the window `markout_endpoint`
-    uses) at its YES bid, with displayed bid depth >= 1. Gross P&L per contract = bid - ask (1 contract, no fee).
-    A missing exit (no T-60m target once kickoff has passed, no book, an unusable book, no bid, bid depth missing or
-    < 1) is scored, never dropped: the primary replaces the bid with the settlement payoff (PENDING, excluded from
-    the mean and never 0, while the settlement is not final); the sensitivity exits at 0. A T-60m window that closes
-    after `as_of` (or a missing T-60m target before kickoff) is PENDING and not scored anywhere. Secondary (b): the
-    hold-to-settlement gross, payoff - ask, of every trade whose settlement is final (descriptive)."""
+    Exit ladder (C4), per trade, the first basis that applies:
+    1. EXIT_BID: the YES bid of the FIRST book of the same market in the T-60m horizon window (the window
+       `markout_endpoint` uses), displayed bid depth >= 1;
+    2. EXIT_SYNTHETIC_OTHER_ASK: 1 - the YES ask of the other team market's FIRST book in the same window, displayed
+       ask depth >= 1 (buying the other side locks $1 in a win, a loss and a tie; it differs only in fallback-F states);
+    3. SETTLEMENT_FALLBACK: the settlement payoff;
+    4. PENDING while the settlement is not final (excluded from the mean, never 0).
+    Gross P&L per contract = exit - ask (1 contract, no fee). The exit-at-0 sensitivity stays (0 - ask whenever the
+    own bid exit is missing). A T-60m window that closes after `as_of` (or a missing T-60m target before kickoff) is
+    PENDING and not scored anywhere. Secondary (b): the hold-to-settlement gross of every trade whose settlement is
+    final (descriptive)."""
     target_of: dict[tuple[str, str], Mapping[str, Any]] = {}
     for t in targets:
         if t.get("state") != "SUPERSEDED":
@@ -2936,10 +3244,16 @@ def e1_endpoint(entries: Mapping[str, Any], targets: Sequence[Mapping[str, Any]]
            "margin_ties_no_trade": entries["counts"]["margin_ties_no_trade"], "trades": 0,
            "exit_pending": {r: 0 for r in E1_EXIT_PENDING}, "exit_determined": 0, "exit_bid": 0,
            "missing_exit": {r: 0 for r in E1_MISSING_EXITS}, "missing_exit_total": 0,
+           "synthetic_exit_scored": 0, "synthetic_exit_unavailable": {},
            "missing_exit_settlement_fallback_scored": 0,
            "missing_exit_settlement_pending": {r: 0 for r in E1_SETTLEMENT_PENDING},
            "scored_primary": 0, "scored_exit_at_0_sensitivity": 0, "hold_to_settlement_final": 0}
-    games, primary, sensitivity, hold = [], [], [], []
+    games, primary, sensitivity, hold, v1_order = [], [], [], [], []
+    anomaly_split: dict[str, list[float]] = {"AGREES": [], "DISAGREES": [], "UNKNOWN": []}
+    cross_checks = {"checked": 0, "own_bid_above_other_implied": 0}
+    depth_counts = {str(q): 0 for q in E1_DEPTH_SHARES}
+    walk10: list[tuple[str, float]] = []
+    walk10_not_evaluated: dict[str, int] = {}
     for g in entries["games"]:
         row: dict[str, Any] = {
             "event_id": g["event_id"], "week": g["week"], "commence_utc": g["commence_utc"],
@@ -2952,12 +3266,23 @@ def e1_endpoint(entries: Mapping[str, Any], targets: Sequence[Mapping[str, Any]]
             continue
         att["trades"] += 1
         ask = e["ask"]
-        row.update(side=e["team"], role=e["role"], ticker=e["ticker"], c_low=e["c_low"], ask6=ask,
-                   margin=e["margin"], ask_depth=e["ask_depth"], t6_book_snapshot_id=e.get("book_snapshot_id"),
-                   t6_decision_utc=e.get("decision_utc"), exit_basis=None, missing_exit=None, pending_reason=None,
-                   exit_value=None, bid_depth=None, t60_book=None, gross=None, gross_exit_at_0=None)
+        other = next((s for role, s in g["sides"].items() if role != e["role"]), None) or {}
+        other_ticker = other.get("ticker")
+        row.update(side=e["team"], role=e["role"], ticker=e["ticker"], other_ticker=other_ticker, c_low=e["c_low"],
+                   ask6=ask, margin=e["margin"], ask_depth=e["ask_depth"], t6_book_snapshot_id=e.get("book_snapshot_id"),
+                   t6_decision_utc=e.get("decision_utc"), exit_basis=None, missing_exit=None, synthetic_exit=None,
+                   pending_reason=None, exit_value=None, bid_depth=None, t60_book=None, t60_other_book=None,
+                   gross=None, gross_exit_at_0=None)
+        for q in E1_DEPTH_SHARES:
+            depth_counts[str(q)] += e["ask_depth"] is not None and e["ask_depth"] >= q
+        # C12(b), label-free at entry: does the other market's same-capture bid agree that the entered side is cheap?
+        other_bid = other.get("bid")
+        flag = ("UNKNOWN" if other_bid is None or e["c_low"] is None else
+                "AGREES" if Decimal(1) - other_bid <= e["c_low"] - E1_THETA else "DISAGREES")
+        row["single_book_anomaly_flag"] = flag
         exit_pending = missing = None
         bid = depth = book = None
+        start = end = None
         t60 = target_of.get((g["event_id"], TARGET_HORIZON))
         commence = parse_utc(g["commence_utc"])
         if t60 is None:
@@ -2987,44 +3312,126 @@ def e1_endpoint(entries: Mapping[str, Any], targets: Sequence[Mapping[str, Any]]
             games.append(row)
             continue
         att["exit_determined"] += 1
+        other_ask = other_depth = other_missing = other_book = None
+        if start is not None:
+            other_ask, other_depth, other_missing, other_book = _e1_other_ask(catalog, payloads, other_ticker, start, end)
+        else:
+            other_missing = "NO_T60_TARGET"
+        if other_book is not None:
+            row["t60_other_book"] = {"snapshot_id": other_book[1], "received_utc": _iso(other_book[0])}
         if missing is None:
             att["exit_bid"] += 1
             row.update(exit_basis=E1_EXIT_BID, exit_value=bid, bid_depth=depth, gross=bid - ask,
                        gross_exit_at_0=bid - ask)
+            v1_order.append((g["week"], float(bid - ask)))
+            if other_missing is None:  # C12(c): a stale exit shows as an own bid above the other market's implied bid
+                cross_checks["checked"] += 1
+                cross_checks["own_bid_above_other_implied"] += bid > Decimal(1) - other_ask
+            if e["ask_depth"] is not None:  # C11: a descriptive 10-contract round trip on the ladders
+                cost, why = _e1_walk(catalog, payloads, e["ticker"], e.get("book_snapshot_id"), "YES",
+                                     E1_DESCRIPTIVE_QUANTITY)
+                proceeds, why_exit = (_e1_walk(catalog, payloads, e["ticker"], book[1], "NO", E1_DESCRIPTIVE_QUANTITY)
+                                      if cost is not None else (None, why))
+                if cost is None or proceeds is None:
+                    reason = why if cost is None else why_exit
+                    walk10_not_evaluated[reason] = walk10_not_evaluated.get(reason, 0) + 1
+                else:
+                    walk10.append((g["week"], float((proceeds - cost) / E1_DESCRIPTIVE_QUANTITY)))
         else:
             att["missing_exit"][missing] += 1
             att["missing_exit_total"] += 1
             row.update(missing_exit=missing, bid_depth=depth, gross_exit_at_0=Decimal(0) - ask)
-            if settlement["payoff"] is None:
-                att["missing_exit_settlement_pending"][settlement["pending_reason"]] += 1
-                row.update(exit_basis=E1_PENDING, pending_reason=settlement["pending_reason"])
+            if settlement["payoff"] is not None:
+                v1_order.append((g["week"], float(settlement["payoff"] - ask)))
+            if other_missing is None:
+                att["synthetic_exit_scored"] += 1
+                value = Decimal(1) - other_ask
+                row.update(exit_basis=E1_EXIT_SYNTHETIC, exit_value=value, gross=value - ask,
+                           synthetic_exit={"other_ask": other_ask, "other_ask_depth": other_depth})
             else:
-                att["missing_exit_settlement_fallback_scored"] += 1
-                row.update(exit_basis=E1_SETTLEMENT_FALLBACK, exit_value=settlement["payoff"],
-                           gross=settlement["payoff"] - ask)
+                att["synthetic_exit_unavailable"][other_missing] = att["synthetic_exit_unavailable"].get(other_missing,
+                                                                                                         0) + 1
+                row["synthetic_exit"] = {"unavailable": other_missing}
+                if settlement["payoff"] is None:
+                    att["missing_exit_settlement_pending"][settlement["pending_reason"]] += 1
+                    row.update(exit_basis=E1_PENDING, pending_reason=settlement["pending_reason"])
+                else:
+                    att["missing_exit_settlement_fallback_scored"] += 1
+                    row.update(exit_basis=E1_SETTLEMENT_FALLBACK, exit_value=settlement["payoff"],
+                               gross=settlement["payoff"] - ask)
         if row["gross"] is not None:
             primary.append((g["week"], float(row["gross"])))
+            anomaly_split[flag].append(float(row["gross"]))
         sensitivity.append((g["week"], float(row["gross_exit_at_0"])))
         games.append(row)
     att["scored_primary"], att["scored_exit_at_0_sensitivity"] = len(primary), len(sensitivity)
+    scored_bases = {b: sum(1 for x in games if x.get("exit_basis") == b and x.get("gross") is not None)
+                    for b in E1_EXIT_BASES}
+    settlement_share = (None if not primary else scored_bases[E1_SETTLEMENT_FALLBACK] / len(primary))
+    primary_summary = _e1_describe(primary, seed=seed, resamples=resamples)
+    primary_summary["week_cluster_bounds"]["label"] = ("DESCRIPTIVE ONLY: unrestricted wild cluster bootstrap, "
+                                                       "anti-conservative at few clusters (E1 design review §3)")
+    primary_summary["sign_flip_test"] = e1_signflip(primary)
+    mean = primary_summary["mean_gross"]
+    values = [v for _, v in primary]
+    m2 = None if len(values) < 3 else sum((v - mean) ** 2 for v in values) / len(values)
+    skewness = (None if not m2 else sum((v - mean) ** 3 for v in values) / len(values) / m2 ** 1.5)
+    trades = att["trades"]
     return {
         "version": E1_VERSION, "state": E1_STATE, "proposal": E1_PROPOSAL,
-        "label_reads": "the FIRST book of each traded market in the T-60m horizon window (its YES bid and bid size) and "
-                       "the market's settlement: EXP-002 labels, logged results path only",
-        "fill_assumption": E1_FILL, "costs": E1_COSTS,
-        "statistic": "gross P&L per contract = bid1 - ask6 (1 contract); a missing exit is scored at the settlement "
-                     "payoff (primary) and at 0 (sensitivity), never dropped",
+        "label_reads": "the FIRST book of each traded game's two markets in the T-60m horizon window (the traded "
+                       "market's YES bid and bid size, the other market's YES ask and ask size) and the traded "
+                       "market's settlement: EXP-002 labels, logged results path only",
+        "fill_assumption": E1_FILL, "costs": E1_COSTS, "entry_margin_note": E1_NOT_AN_EDGE,
+        "statistic": "gross P&L per contract = exit - ask6 (1 contract); the exit ladder is own bid, then 1 - the other "
+                     "market's ask, then the settlement payoff; the exit-at-0 sensitivity scores 0 whenever the own "
+                     "bid exit is missing; never dropped",
         "rule": {**entries["rule"],
-                 "exit": "the YES bid of the first book of the same market in the T-60m window, displayed depth >= 1"},
+                 "exit": "C4 ladder: (1) the YES bid of the first book of the same market in the T-60m window, "
+                         "displayed depth >= 1; (2) 1 - the YES ask of the other team market's first book in the same "
+                         "window, displayed depth >= 1; (3) the settlement payoff; else PENDING"},
         "bounds": entries["bounds"], "games": games, "attrition": att, "entry_counts": entries["counts"],
         "sides_by_reason": entries["sides_by_reason"], "bounds_undeclared": entries["bounds_undeclared"],
+        "exit_bases": {
+            "counts": scored_bases,
+            "shares": {b: (None if not primary else n / len(primary)) for b, n in scored_bases.items()},
+            "settlement_share_threshold": E1_SETTLEMENT_SHARE_FLAG,
+            "flags": [E1_SETTLEMENT_FLAG] if settlement_share is not None and settlement_share > E1_SETTLEMENT_SHARE_FLAG
+            else [],
+            "note": "C5: a flag, not an endpoint switch"},
         "summary": {
-            "primary": _e1_describe(primary, seed=seed, resamples=resamples),
+            "primary": primary_summary,
             "sensitivity_exit_at_0": _e1_describe(sensitivity, seed=seed, resamples=resamples, bounds=False),
+            "v1_exit_order": {**_e1_describe(v1_order, seed=seed, resamples=resamples, bounds=False),
+                              "use": "descriptive, for comparability with exp002-e1-roundtrip-v1: own bid, else the "
+                                     "settlement payoff (no synthetic exit)"},
             "secondary_hold_to_settlement": {
                 **_e1_describe(hold, seed=seed, resamples=resamples, bounds=False),
                 "use": "secondary (b), descriptive: every trade whose settlement is final, held to its payoff"},
             "trades_by_week": entries["operational_futility_inputs"]["entries_per_week"]["by_week"]},
+        "size": {  # C11, results path only
+            "entry_ask_depth_shares": {f"at_least_{q}": (None if not trades else depth_counts[q] / trades)
+                                       for q in depth_counts},
+            "e1_10_contracts": {**_e1_describe(walk10, seed=seed, resamples=resamples, bounds=False),
+                                "not_evaluated": walk10_not_evaluated,
+                                "use": "descriptive: 10 contracts walked on the T-6h ask ladder and the first T-60m "
+                                       "bid ladder of own-bid exits only; NOT_EVALUATED when not fully fillable or a "
+                                       "fractional level is crossed (ADR 0036)"}},
+        "execution_diagnostics": {  # C12, descriptive
+            "mean_less_one_tick": None if mean is None else mean - float(E1_TICK),
+            "skewness_primary": skewness,  # freeze proposal v2 row 5: sign-flip validity needs symmetry
+            "weeks": {"with_scored_trade": primary_summary["weeks"],
+                      "calendar_with_due_t6": entries["operational_futility_inputs"]["entries_per_week"][
+                          "weeks_with_due_t6"],
+                      "note": "G for every rule counts weeks with at least one scored trade (review §3.3)"},
+            "single_book_anomaly_split": {k: {"n": len(v), "mean_gross": (sum(v) / len(v)) if v else None}
+                                          for k, v in anomaly_split.items()},
+            "exit_cross_check": {**cross_checks,
+                                 "share": (None if not cross_checks["checked"] else
+                                           cross_checks["own_bid_above_other_implied"] / cross_checks["checked"]),
+                                 "meaning": "own-bid exits whose bid exceeds 1 - the other market's ask at the same "
+                                            "T-60m capture: a cross-market inconsistency that marks a stale exit"},
+            "entry_margin_note": E1_NOT_AN_EDGE},
         "operational_futility_inputs": entries["operational_futility_inputs"],
         "verdict": E1_NO_VERDICT, "freeze_eligible": False,
     }
@@ -3102,6 +3509,27 @@ def freeze_eligibility(gate: Mapping[str, Any], protocol: Mapping[str, Any]) -> 
     return {"state": "NOT_ELIGIBLE", "reasons": reasons}
 
 
+# C14 (E1 design review §6, C13, C14): no results run may read an evaluation-window label. The evaluation window
+# starts after the freeze and not before the 2026-10-22 review; until a freeze record and a reviewed code change say
+# otherwise, the results path refuses every game whose kickoff is on or after this instant, before any label is
+# read or anything is logged, and it reads labels only up to EVALUATION_LABEL_CUTOFF (the earliest instant an
+# evaluation-window game's T-60m capture can occur, less a margin), so no evaluation-window book or settlement is
+# ever loaded, whatever --as-of says. The guard covers both label paths: `measure_exp002(results=True)` (exp002
+# --with-results: the markout and E1) and `build_report(results=True)` (report --with-results). Admitting the
+# pre-registered interim (2026-11-30, futility only) and final analyses needs a reviewed code change tied to the
+# freeze record's id; no flag, argument or environment variable lifts it.
+EVALUATION_WINDOW_EARLIEST_ET = datetime(2026, 10, 22, 0, 0, tzinfo=timezone(timedelta(hours=-4)))  # EDT
+EVALUATION_WINDOW_LABEL_LEAD = timedelta(hours=2)  # covers the T-60m capture lead plus its early tolerance
+EVALUATION_LABEL_CUTOFF = EVALUATION_WINDOW_EARLIEST_ET - EVALUATION_WINDOW_LABEL_LEAD
+
+
+def evaluation_window_refused(row: Mapping[str, Any]) -> bool:
+    """True when a row's game may be in the evaluation window: its kickoff is on or after
+    EVALUATION_WINDOW_EARLIEST_ET, or unknown (fail closed)."""
+    kickoff = parse_utc(row.get("commence_utc"))
+    return kickoff is None or kickoff >= EVALUATION_WINDOW_EARLIEST_ET
+
+
 def measure_exp002(store: Any, *, as_of: datetime, results: bool = False, min_effect: float | None = None,
                    policy: JoinPolicy = JoinPolicy(), experiments_root: Path | None = None,
                    e1_bounds: tuple[Decimal, Decimal] | None = None) -> dict[str, Any]:
@@ -3132,12 +3560,26 @@ def measure_exp002(store: Any, *, as_of: datetime, results: bool = False, min_ef
         e1_policy = replace(policy, tie_probability_bound=e1_bounds[0], postponement_probability_bound=e1_bounds[1])
         e1_source = ("CALLER_DECLARED_CANDIDATE: given for this run (the proposal's PROPOSED t_max / u_max, row 1); "
                      "not frozen, not a protocol value")
-    entries = e1_entries(rows, e1_policy, bounds_source=e1_source)
     markout: dict[str, Any]
+    guard: dict[str, Any] | None = None
     if results:
-        markout = markout_endpoint(rows, targets, catalog, reader, as_of=as_of, policy=policy)
-        e1 = e1_endpoint(entries, targets, kalshi_catalog(store, as_of, payloads), payloads, as_of=as_of)
+        # C14, before any label is read: drop every evaluation-window game from the label-free rows, and read
+        # labels only up to the cutoff.
+        refused = sorted({r.get("event_id") for r in rows if evaluation_window_refused(r)}, key=str)
+        kept = [r for r in rows if not evaluation_window_refused(r)]
+        label_as_of = min(as_of, EVALUATION_LABEL_CUTOFF)
+        guard = {"evaluation_window_earliest_et": _iso(EVALUATION_WINDOW_EARLIEST_ET),
+                 "label_cutoff_utc": _iso(EVALUATION_LABEL_CUTOFF), "label_as_of_utc": _iso(label_as_of),
+                 "games_refused": len(refused),
+                 "rule": "C14: games with a kickoff on or after the evaluation window's earliest start (or an unknown "
+                         "kickoff) are refused before any label is read; labels are read only up to the cutoff. "
+                         "Lifting it needs a freeze record and a reviewed code change"}
+        entries = e1_entries(kept, e1_policy, bounds_source=e1_source)
+        markout = markout_endpoint(kept, targets, catalog, reader, as_of=label_as_of, policy=policy)
+        e1 = e1_endpoint(entries, targets, kalshi_catalog(store, label_as_of, payloads), payloads, as_of=label_as_of)
+        e1["evaluation_window_guard"] = guard
     else:
+        entries = e1_entries(rows, e1_policy, bounds_source=e1_source)
         markout = {"state": "HIDDEN", "detail": "the markout reads the first T-60m book (an EXP-002 label); it is "
                                                 "shown only by a logged run (exp002 --with-results)"}
         e1 = e1_entry_summary(entries)
@@ -3147,6 +3589,7 @@ def measure_exp002(store: Any, *, as_of: datetime, results: bool = False, min_ef
             "policy": policy.to_dict(), "as_of_utc": _iso(as_of), "protocol": protocol,
             "labels": "INCLUDED (a logged --with-results run)" if results else "HIDDEN",
             "gate": gate, "gate_books_read": gate_reads, "gate_v3": gate_v3, "markout": markout, "e1": e1,
+            "evaluation_window_guard": guard,
             "economics_note": "economics inputs are unchanged: only book-at-or-after-odds pairs feed them "
                               "(build_report); BEFORE_ODDS pairs are comparability-only and counted"}
     plain = _plain(body)
@@ -3401,8 +3844,10 @@ def record_markout_view(measurement: Mapping[str, Any], *, log: Path, actor: str
         tool="python -m edge_lab.sports_evidence exp002 --with-results",
         note=f"EXP-002 measurement as of {measurement['as_of_utc']}; cross-book markout (first T-60m books) and "
              f"placebo shown; E1 {E1_VERSION} (PROPOSED, not frozen) shown: exit bids and bid depth at the first "
-             "T-60m books, settlement payoffs, gross P&L per trade, the exit-at-0 sensitivity, hold-to-settlement "
-             f"gross and exit attrition, with E1 bounds tie={bounds.get('tie_probability_bound')} "
+             "T-60m books, the other market's first T-60m asks (synthetic exits), settlement payoffs, gross P&L per "
+             "trade, the sign-flip test and bounds, exit-basis shares, size and execution diagnostics, the exit-at-0 "
+             "sensitivity, hold-to-settlement gross and exit attrition; evaluation-window games refused (C14, label "
+             f"cutoff {_iso(EVALUATION_LABEL_CUTOFF)}), with E1 bounds tie={bounds.get('tie_probability_bound')} "
              f"postponement={bounds.get('postponement_probability_bound')}; development data",
         role=rev.DatasetRole.DEVELOPMENT)
 

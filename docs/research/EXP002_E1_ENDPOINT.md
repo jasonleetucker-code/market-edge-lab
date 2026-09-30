@@ -1,4 +1,24 @@
-# EXP-002 E1 executable round-trip endpoint: implementation (`exp002-e1-roundtrip-v1`, 2026-09-29)
+# EXP-002 E1 executable round-trip endpoint: implementation (`exp002-e1-roundtrip-v2`, 2026-09-30; v1 2026-09-29)
+
+## v2 (2026-09-30): the E1 design review's code-level changes (PROPOSED; no EXP-002 data viewed)
+
+Source: `docs/research/EXP002_E1_DESIGN_REVIEW.md` §7 (C1, C4, C5, C11, C12, C14) and `EXP002_FREEZE_PROPOSAL_V2.md`.
+Both are PROPOSED; nothing here freezes anything. Tests use SYNTHETIC fixtures only. The measurement version moves to
+`exp002-measurement-v4` (adds `evaluation_window_guard`); E1 moves to `exp002-e1-roundtrip-v2`.
+
+| Change | Code | What v1 did |
+|---|---|---|
+| C1 (as revised in #154, head f3cf76f): for **G ≥ 6** week clusters, the exact restricted, studentized Rademacher sign-flip test by NFL week, every pattern enumerated (up to 20 weeks; seeded draws beyond, past any realistic season); one-sided p for H0: E[gross] ≤ 0; one-sided 95% and 90% bounds by inverting the same test. For **G < 6**: INSUFFICIENT_EVIDENCE, no confirmatory inference. For **G = 4–5** only: a one-sided 90% upper bound from a t-test on the G week means (G − 1 df), flagged COARSE_FEW_CLUSTERS, futility information only, never efficacy. No Webb weights at any G. Always: `min_achievable_p_rademacher` = 1/2^G and `no_rejection_possible_at_0_05`, and the t on week means (G − 1 df) as a reported cross-check. Enumeration is exact up to 20 weeks (the review permits draws above 12). No verdict | `e1_signflip`, `summary.primary.sign_flip_test` | the unrestricted wild cluster bootstrap only; kept as `week_cluster_bounds`, now labelled "DESCRIPTIVE ONLY" |
+| C4: exit ladder: own first T-60m bid (depth ≥ 1), else 1 − the other team market's first T-60m ask in the same window (depth ≥ 1), else the settlement payoff, else PENDING; each trade records its basis; the exit-at-0 sensitivity stays | `e1_endpoint`, `_e1_other_ask` | own bid, else settlement; still reported as `summary.v1_exit_order` (descriptive) |
+| C5: counts and shares of the three exit bases; `SETTLEMENT_VARIANCE_DOMINANT` when the settlement share of scored trades exceeds 5% (a flag, not an endpoint switch) | `exit_bases` | not reported |
+| C11 (results path only): the share of entries with displayed ask depth ≥ 10 and ≥ 250; a descriptive 10-contract E1 on the ladders (own-bid exits; NOT_EVALUATED when not fillable or a fractional level is crossed) | `size` | not reported |
+| C12 (results path only, descriptive): the mean less one tick; the single-book anomaly flag at entry (the other market's same-capture T-6h bid) with P&L split by it; the exit cross-check (own bid above 1 − the other market's ask at the same T-60m capture); the skewness of the primary P&L and G beside the calendar weeks (freeze proposal v2 row 5); "the entry margin is not an edge estimate" in every E1 output | `execution_diagnostics`, `entry_margin_note` | not reported |
+| C14: **both label paths** — `exp002 --with-results` (`measure_exp002(results=True)`: the markout and E1) and `report --with-results` (`build_report(results=True)`) — refuse every game whose kickoff is on or after `EVALUATION_WINDOW_EARLIEST_ET` (2026-10-22 00:00 ET) or unknown, before any label is shown or logged, and read labels only up to `EVALUATION_LABEL_CUTOFF` (the window start less 2 h; the report is built as of the cutoff). Admitting the pre-registered interim (2026-11-30, futility only) and final analyses needs a reviewed code change tied to the freeze record's id; no flag, argument or environment variable lifts it | `evaluation_window_refused`, `measure_exp002`, `build_report` | nothing capped a results run |
+
+Label safety is unchanged: the label-free path reads no T-60m book or outcome; the results path records its evidence
+first and shows nothing if the record fails; the synthetic exit reads the other team's T-60m book only on the results
+path.
+
 
 **E1 is PROPOSED, not frozen.** This is research code for the E1 endpoint that
 `EXP002_FREEZE_PROPOSAL.md` (`exp002-freeze-proposal-v1`) proposes in §3 rows 3, 4, 5(b), 11 and 15. That
