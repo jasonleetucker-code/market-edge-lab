@@ -261,3 +261,55 @@ def test_hold_to_settlement_needs_no_book_and_zero_inventory_is_no_position():
     d = run(policy=policy(PolicyKind.HOLD_TO_SETTLEMENT, ExecutionAssumption.NONE, target=None), book=None)
     assert d.action is Action.HOLD and d.status is DecisionStatus.PROPOSED
     assert run(inventory=inv("0")).status is DecisionStatus.NO_POSITION
+
+
+# ------------------------------------------------------------------ state validity (source-state-v1, ADR 0041)
+
+
+def _journal_and_states():
+    from edge_lab.inplay_evidence import GameJournal, GameState, GameStateStatus, Stamps
+
+    def state(seconds_before, home, event):
+        at = (NOW - timedelta(seconds=seconds_before)).isoformat()
+        return GameState("G1", "scores", event, Stamps(at, at), GameStateStatus.OBSERVED, f"raw-{event}",
+                         home_score=home, away_score=0, period="Q4")
+
+    s0, touchdown = state(60, 0, "e1"), state(2, 7, "e2")
+    return GameJournal("G1").append(s0).append(touchdown), s0, touchdown
+
+
+def test_a_recommendation_on_a_superseded_state_is_blocked_for_review_and_sells_nothing():
+    from edge_lab.inplay_evidence import DecisionStamp, ValidityStatus, decision_validity
+
+    journal, s0, touchdown = _journal_and_states()
+    stale = decision_validity(DecisionStamp("pd", "1", NOW.isoformat(), True, s0.observation_id), journal, at=NOW)
+    assert stale.status is ValidityStatus.INVALIDATED
+    d = run(state_validity=stale)
+    assert d.status is DecisionStatus.BLOCKED and d.action is None and d.quantity == 0
+    assert d.review_required and d.no_new_risk and not d.authorizes_execution
+    assert any(r.startswith("STATE_INVALIDATED: MATERIAL_STATE_CHANGE") for r in d.reasons)
+    assert any(r.startswith("RECOMPUTE_REQUIRED") for r in d.reasons)
+    assert d.provenance["state_validity"] == "INVALIDATED"
+    current = decision_validity(DecisionStamp("pd", "1", NOW.isoformat(), True, touchdown.observation_id), journal,
+                                at=NOW)
+    assert run(state_validity=current).action is Action.EXIT  # recomputed on the current state: proposes again
+
+
+def test_unknown_state_needs_review_and_a_validity_from_another_instant_is_not_reused():
+    from edge_lab.inplay_evidence import DecisionStamp, decision_validity
+
+    journal, s0, _ = _journal_and_states()
+    unknown = decision_validity(DecisionStamp("pd", "1", NOW.isoformat(), True, None), journal, at=NOW)
+    d = run(state_validity=unknown)
+    assert d.status is DecisionStatus.BLOCKED and any(r.startswith("STATE_REVIEW_REQUIRED") for r in d.reasons)
+    earlier = NOW - timedelta(seconds=30)
+    old_check = decision_validity(DecisionStamp("pd", "1", earlier.isoformat(), True, s0.observation_id), journal,
+                                  at=earlier)
+    assert old_check.usable  # valid when checked, but that was 30 s before this decision
+    d2 = run(state_validity=old_check)
+    assert d2.status is DecisionStatus.BLOCKED and d2.reasons[0].startswith("STATE_VALIDITY_NOT_AT_AS_OF")
+
+
+def test_without_a_state_validity_the_decision_is_unchanged():
+    assert run().decision_id == run(state_validity=None).decision_id
+    assert "state_validity" not in run().provenance
