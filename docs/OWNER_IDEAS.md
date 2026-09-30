@@ -50,6 +50,7 @@ The previous complete index, shared-owner table, roadmap reruns, domain-readines
 | #83 | Outside capital, unit/NAV accounting and fee governance | LATER/BLOCKED; simulated design then legal/entity/custody/tax/venue and owner approval. Separate investor gains from manager compensation; no friend-money pooling now |
 | #33 | Notifications / SMS / ntfy | Existing outbox/relay; SMS blocked on provider approval; phone delivery unresolved and owner-deferred for current research. Reliable alert/incident path required before unattended live; no new test/send from this plan |
 | #96 | Evidence-to-economics reset | Governing strategy: evidence, after-cost dollars, executable size, capacity and survival before breadth. Full roadmap does not mean every experiment active together |
+| #152 | Architecture reconciliation and bounded evidence-path hardening (owner directive, 2026-09-30) | Existing architecture kept. External ideas classified by access and usefulness in [the reconciliation note](engineering/ARCHITECTURE_RECONCILIATION_2026-09-30.md); only the controlled defect loop is adopted (AGENT_OPERATING_SYSTEM §1). The in-play file → consumer path is verified, and two provenance gaps are fixed in `inplay_evidence.py` (PR pending owner merge). NEXT: R3a in-play journal identity and point-in-time slicing (needs a scope entry, see R3). Rejected without a measured need: memory DB, second scheduler, graph framework, agent platform, Steward transplant, behavioural-eval harness (ADR 0006). Not runtime authority |
 
 ## Shared primitives (one canonical owner each)
 
@@ -78,7 +79,7 @@ Extend the owner named here; never fork it into a feature-specific copy. `PLANNE
 | Research economics | `src/edge_lab/research_economics.py` | BUILT (episodes, capital-days, deployed vs total return, fixed cash cost, fill-mode labels v2 ADR 0037). #145 taker/maker/RFQ modes, actual vs simulated fills, fill-conditioned markouts, the funnel and seasonal scenarios are BUILT (fill-conditioned-economics-v1, ADR 0041); owner hours stay unpriced unless the owner supplies a rate | #96 #93 #6 #32 #145 |
 | Same-venue payoff-constraint evaluator | `src/edge_lab/payoff_constraints.py` | BUILT (ADR 0036; deterministic logical relations, not a joint-probability model; EXP-003 PAUSED) | #96 #5 #9 #30 #145 |
 | In-play position policy | `src/edge_lab/position_policy.py` | BUILT offline (ADR 0038; HOLD/REDUCE/EXIT; no account transport) | #122 #6 #145 |
-| In-play evidence and replay | `src/edge_lab/inplay_evidence.py` | BUILT offline (ADR 0038; inplay_replay.py and inplay_view.py subordinate; no recorder). #145 state-version, source-family, clock-uncertainty and latency fields BUILT (source-state-v1, ADR 0041) | #122 #145 #50 |
+| In-play evidence and replay | `src/edge_lab/inplay_evidence.py` | BUILT offline (ADR 0038; inplay_replay.py and inplay_view.py subordinate; no recorder). #145 state-version, source-family, clock-uncertainty and latency fields BUILT (source-state-v1, ADR 0041). A journal's data kind comes from its header, and a book's venue stamp is its last applied message's own (#152). Journal content identity through the consumer: NEXT (R3a) | #122 #145 #50 #152 |
 | RFQ research and lifecycle fixtures (joint pricing PLANNED later) | `src/edge_lab/rfq_research.py` | BUILT (PR B, ADR 0042: pure, fixture-fed observation and exposure contract; reuses venues (execution never authorized), provenance and freshness, and reserves through execution_ticket's canonical obligation primitive; RFQ stages stay separate from execution_ticket orders; payoff_constraints stays the logical-relation owner; joint pricing PLANNED later (R7); no gateway or generic pricing engine) | #145 #30 |
 | Shadow / live ledger boundary | `src/edge_lab/shadow_ledger.py` | BUILT (shadow only; ledger_anchor.py checkpoints, F09) | #6 #3 #32 |
 | Risk engine | `src/edge_lab/risk.py` | BUILT (limits, capital release, withdrawal contract) | #6 #3 |
@@ -105,4 +106,29 @@ Entries before 2026-09-29 (evening), with their classifications and supersession
   - **Safe parallel lanes:** two writers (PR A shared contracts; PR B RFQ packet), PR C after both; independent reviewer.
   - **Roadmap effect (2026-10-22 plan):** date unchanged; the checkpoint adds a scoped RFQ feasibility result and offline in-play extensions; no freeze, verdict or live date promised.
   - **Classification:** NOW: PR A/B/C offline scope. NEXT: `inplay-source-pilot-1` decision; R5 offline-only lifecycle (needs its own scope entry). LATER: R6–R9, R11. BLOCKED (owner/access): authenticated RFQ observation, any quote/acceptance, empirical joint pricing and in-play evaluation (slot, rights, budget), paid data, live (R10).
+  - No gate change. No order, credential, stream, schedule, budget change, paid service or message.
+
+- **2026-09-30: #152 architecture reconciliation and bounded hardening: re-plan.**
+  - **Priority:** R0 evidence integrity on the R2/R3 in-play path. Below the R1 owner and venue blockers. No new package.
+  - **Dependencies:**
+    - the existing `inplay_evidence`, `inplay_view`, `position_policy`, `inplay_replay`, `research_economics` and
+      `freshness` owners;
+    - `docs/AGENT_OPERATING_SYSTEM.md`;
+    - ADR 0006.
+    - Scope record: EXECUTION_PLAN, 2026-09-30 architecture-reconciliation entry.
+  - **Overlap / supersession:** overlaps #36 (selective external reuse) for idea intake, without superseding it. It
+    extends the #122 offline foundation and the #4 process through AOS §1, "Defects". It supersedes nothing.
+  - **Shared infrastructure:** none new. It extends existing owners only: no memory database, second scheduler,
+    graph framework, agent platform or eval harness.
+  - **Can this ride an already-needed shared primitive?** Yes. R3a (journal identity through `inplay_view`) is the
+    same attribution the future recorder (R3 → R6) and the #50 learning history need. Building it once in
+    `inplay_evidence` serves all three.
+  - **Safe parallel lanes:** one writer (this PR), plus a read-only researcher and a read-only reviewer.
+  - **Roadmap effect (2026-10-22 plan):** date unchanged. The checkpoint gains verified provenance on the offline
+    in-play path. No freeze, verdict or live date is promised.
+  - **Classification:**
+    - NOW: this bounded slice.
+    - NEXT: R3a, then the `inplay-source-pilot-1` refresh (each needs its scope entry).
+    - LATER: behavioural agent evals (ADR 0006 triggers).
+    - BLOCKED (owner): any recorder, capture, rights change or research slot.
   - No gate change. No order, credential, stream, schedule, budget change, paid service or message.
