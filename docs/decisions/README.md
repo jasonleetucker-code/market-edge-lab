@@ -43,4 +43,8 @@ Under roadmap package R2 (#145):
 - 0041: source and game-state contracts (clock uncertainty, declared incorporated state, decision validity,
   bidirectional fixture-fed source leadership) and fill-conditioned economics by execution mode (offline).
 
-New decisions start at 0042.
+Under the 2026-09-30 roadmap integration and RFQ feasibility directive (#145, PR #147):
+- 0042: the RFQ research lifecycle contract: pure and fixture-fed; private quotes stay UNAVAILABLE, requested size is
+  not volume, accepts are not fills, and collateral is never shared across legs; no participation (R4, PR B).
+
+New decisions start at 0043.
