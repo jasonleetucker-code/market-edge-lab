@@ -1134,8 +1134,10 @@ class Fill:
             raise ValueError("price is dollars per contract strictly inside (0, 1)")
         if self.fee is not None and (not isinstance(self.fee, Decimal) or self.fee < 0):
             raise ValueError("fee must be a non-negative Decimal or None (unknown)")
-        if self.fee_included_in_price and self.fee not in (None, Decimal(0)):
-            raise ValueError("DOUBLE_FEE: the price already includes the fee; a separate fee would subtract it twice")
+        if self.fee_included_in_price:
+            if self.fee not in (None, Decimal(0)):
+                raise ValueError("DOUBLE_FEE: the price already includes the fee; a separate fee would subtract it twice")
+            object.__setattr__(self, "fee", Decimal(0))  # known: it is inside the price
         for name in ("rebate", "promotion"):
             v = getattr(self, name)
             if not isinstance(v, Decimal) or v < 0:
@@ -1164,6 +1166,10 @@ class Resolution:
 
     value: Decimal | None
     at_utc: str | None
+
+    def __post_init__(self) -> None:
+        if self.value is not None and (not isinstance(self.value, Decimal) or not Decimal(0) <= self.value <= 1):
+            raise ValueError(f"a binary contract pays between 0 and 1 per contract, not {self.value!r}")
 
 
 @dataclass(frozen=True)
@@ -1246,7 +1252,10 @@ def _capital_returns(contribution: Decimal | None, capital_days: Decimal, window
 
 
 def _locked(cash: Decimal, quantity: Decimal) -> Decimal:
-    """Cash at risk on one binary instrument: the worst of its two settlement outcomes (payout 0 or 1)."""
+    """Cash at risk on one open binary instrument: the worst of its two settlement outcomes (payout 0
+    or 1). A flat or settled instrument holds no collateral; its result is realized cash."""
+    if quantity == 0:
+        return Decimal(0)
     return max(Decimal(0), -min(cash, cash + quantity))
 
 
@@ -1255,9 +1264,14 @@ def fill_economics(fills: Sequence[Fill], *, resolutions: Mapping[str, Resolutio
                    turnover_basis: TurnoverBasis) -> FillEconomicsReport:
     """Economics conditional on the fills that happened (or, labelled SIMULATED, would have).
 
+    Capital is a cash balance: `total_capital` plus realized results (flat or settled instruments, net
+    of every known fee) minus the collateral of open instruments. A realized loss is gone whether it
+    came from a settlement or a closing trade, so a later fill cannot re-spend it, and a flat or settled
+    instrument deploys nothing. The balance may never go below zero.
+
     Refuses, rather than reports, a fill set that double counts: two different fills under one id,
-    a displayed depth consumed beyond its size, collateral beyond `total_capital` at any instant, or
-    ACTUAL and SIMULATED fills together. An identical repeated fill is applied once and counted."""
+    a displayed depth consumed beyond its size, a negative cash balance at any instant, or ACTUAL and
+    SIMULATED fills together. An identical repeated fill is applied once and counted."""
     start, end = _time(window_start_utc, "window start"), _time(window_end_utc, "window end")
     if end <= start:
         raise ValueError("the window must have positive length")
@@ -1314,20 +1328,33 @@ def fill_economics(fills: Sequence[Fill], *, resolutions: Mapping[str, Resolutio
     settled: set[str] = set()
     capital_days = Decimal(0)
     peak = Decimal(0)
-    cursor, current = start, Decimal(0)
+    cursor, current = start, Decimal(0)  # current: collateral of open instruments
+    balance = total_capital  # capital + realized results - open collateral - fees paid
+
+    def standing(inst: str) -> Decimal:
+        """This instrument's effect on the cash balance: its realized result when flat or settled, minus
+        its collateral while open."""
+        if inst in settled:
+            return cash[inst] + qty[inst] * resolutions[inst].value
+        return cash[inst] if qty[inst] == 0 else -_locked(cash[inst], qty[inst])
+
     for at, kind, inst, f in events:
         capital_days += current * Decimal((at - cursor).total_seconds()) / Decimal(86400)
         cursor = at
-        current -= _locked(cash[inst], qty[inst])  # this instrument's collateral before the event
+        balance -= standing(inst)
+        current -= _locked(cash[inst], qty[inst]) if inst not in settled else Decimal(0)
         if kind == 0:
             cash[inst] += f.cash
             qty[inst] += f.signed_quantity
-            current += _locked(cash[inst], qty[inst])
+            balance -= f.fee or Decimal(0)  # an unknown fee cannot be charged here; FEE_SCOPE_UNKNOWN blocks net
         else:
-            settled.add(inst)  # settled: its collateral comes back
-        if current > total_capital:
-            raise ValueError(f"CAPITAL_OVERCOMMITTED at {at.isoformat()}: collateral {current} > capital "
-                             f"{total_capital}; one unit of capital is never used twice")
+            settled.add(inst)  # settled: its collateral comes back with the result
+        balance += standing(inst)
+        current += _locked(cash[inst], qty[inst]) if inst not in settled else Decimal(0)
+        if balance < 0:
+            raise ValueError(f"CAPITAL_OVERCOMMITTED at {at.isoformat()}: cash balance {balance} < 0 (capital "
+                             f"{total_capital}, open collateral {current}); capital lost or committed is never "
+                             "spent again")
         peak = max(peak, current)
     capital_days += current * Decimal((end - cursor).total_seconds()) / Decimal(86400)
     # P&L: settled or flat instruments are realized; the rest stay open
@@ -1508,6 +1535,8 @@ class FunnelRecord:
     request_id: str
     mode: ExecutionMode
     context: SourceContext
+    evidence: EvidenceStatus  # ACTUAL (recorded), SIMULATED, HYPOTHETICAL or UNAVAILABLE (others' flow)
+    data_kind: DataKind | None  # None only for UNAVAILABLE
     eligible: bool | None = None
     hypothetical_quote: bool | None = None
     own_quote: bool | None = None
@@ -1519,6 +1548,9 @@ class FunnelRecord:
     peak: bool | None = None
 
     def __post_init__(self) -> None:
+        check_evidence(self.data_kind, self.evidence)
+        if self.own_quote is True and self.evidence in (EvidenceStatus.HYPOTHETICAL, EvidenceStatus.UNAVAILABLE):
+            raise ValueError(f"{self.request_id}: a {self.evidence.value} record has no own quote")
         if self.own_quote is False or self.own_quote is None:
             for later in ("accepted", "confirmed", "filled"):
                 if getattr(self, later) is True and self.mode is not ExecutionMode.TAKER:
@@ -1532,9 +1564,12 @@ class FunnelRecord:
 class FunnelReport:
     records: int
     stages: dict[str, dict[str, int]]  # stage -> {"yes", "no", "unknown"}
-    own_fill_rate: Decimal | None  # filled / own quotes, only when no own quote's outcome is UNKNOWN
+    own_fill_rate: Decimal | None  # ACTUAL own quotes only, and only when no outcome is UNKNOWN
     own_fill_rate_reason: str
     by_mode: dict[str, int]
+    by_evidence: dict[str, int]
+    simulated_own_fill_rate: Decimal | None  # SIMULATED own quotes: a simulator's output, never an execution probability
+    simulated_own_fill_rate_reason: str
     note: str = ("Requests observed are an upper bound on demand, not fills. Hypothetical quotes earn nothing. UNKNOWN "
                  "outcomes are not nonfills, and no execution probability exists without evidence.")
 
@@ -1546,16 +1581,22 @@ def funnel_report(records: Sequence[FunnelRecord]) -> FunnelReport:
         vals = [getattr(r, name) for r in records]
         stages[stage.value] = {"yes": sum(1 for v in vals if v is True), "no": sum(1 for v in vals if v is False),
                                "unknown": sum(1 for v in vals if v is None)}
-    quoted = [r for r in records if r.own_quote is True]
-    if not quoted:
-        rate, why = None, "NO_OWN_QUOTES: hypothetical quotes give no execution probability"
-    elif any(r.filled is None for r in quoted):
-        rate, why = None, (f"UNKNOWN_OUTCOMES: {sum(1 for r in quoted if r.filled is None)} own quote(s) have an "
-                           "unobservable outcome; no execution probability without evidence")
-    else:
-        rate = (Decimal(sum(1 for r in quoted if r.filled)) / len(quoted)).quantize(_Q)
-        why = f"{len(quoted)} own quote(s), every outcome observed"
+    def rate_of(quoted: list[FunnelRecord], what: str) -> tuple[Decimal | None, str]:
+        if not quoted:
+            return None, f"NO_{what}_OWN_QUOTES: hypothetical quotes give no execution probability"
+        if any(r.filled is None for r in quoted):
+            return None, (f"UNKNOWN_OUTCOMES: {sum(1 for r in quoted if r.filled is None)} own quote(s) have an "
+                          "unobservable outcome; no execution probability without evidence")
+        return (Decimal(sum(1 for r in quoted if r.filled)) / len(quoted)).quantize(_Q), \
+            f"{len(quoted)} {what} own quote(s), every outcome observed"
+
+    rate, why = rate_of([r for r in records if r.own_quote is True and r.evidence is EvidenceStatus.ACTUAL], "ACTUAL")
+    sim, sim_why = rate_of([r for r in records if r.own_quote is True and r.evidence is EvidenceStatus.SIMULATED],
+                           "SIMULATED")
     by_mode: dict[str, int] = {}
+    by_evidence: dict[str, int] = {}
     for r in records:
         by_mode[r.mode.value] = by_mode.get(r.mode.value, 0) + 1
-    return FunnelReport(len(records), stages, rate, why, by_mode)
+        by_evidence[r.evidence.value] = by_evidence.get(r.evidence.value, 0) + 1
+    return FunnelReport(len(records), stages, rate, why, by_mode, by_evidence, sim,
+                        sim_why + ("; SIMULATED: a simulator's output, not an execution probability" if sim else ""))

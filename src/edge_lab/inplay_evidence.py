@@ -1164,18 +1164,23 @@ def content_freshness(obs: SourceObservation, *, now: datetime, max_age: timedel
 
 class StateRelation(str, Enum):
     INCORPORATES = "INCORPORATES"  # the source declared this exact state version
-    CANNOT_INCORPORATE = "CANNOT_INCORPORATE"  # published provably before the state existed
+    CANNOT_INCORPORATE = "CANNOT_INCORPORATE"  # published provably before the event could have happened
     UNKNOWN = "UNKNOWN"  # anything else, including "received after the scoreboard changed"
 
 
-def state_relation(obs: SourceObservation, state: GameState, *, state_time: ClockReading | None) -> StateRelation:
-    """Does `obs` reflect `state`? Only a declaration says yes. A publication provably before the
-    state's own time says no. Receipt order is never used: arriving after a touchdown was seen does
-    not make a quote reflect it."""
+def state_relation(obs: SourceObservation, state: GameState, *,
+                   event_not_before: ClockReading | None) -> StateRelation:
+    """Does `obs` reflect `state`? Only a declaration says yes.
+
+    `event_not_before` must be a provable *lower* bound on when the event behind `state` happened,
+    for example the time of the previous state that the event followed. A scoreboard's publication
+    time is not one: it is an upper bound (the event happened at or before it). A publication provably
+    before that lower bound cannot reflect the event: CANNOT_INCORPORATE. Receipt order is never used:
+    arriving after a touchdown was seen does not make a quote reflect it. Everything else is UNKNOWN."""
     if obs.incorporated_state_version is not None and obs.incorporated_state_version == state.observation_id:
         return StateRelation.INCORPORATES
-    if obs.published is not None and state_time is not None and \
-            clock_order(obs.published, state_time) is Ordering.BEFORE:
+    if obs.published is not None and event_not_before is not None and \
+            clock_order(obs.published, event_not_before) is Ordering.BEFORE:
         return StateRelation.CANNOT_INCORPORATE
     return StateRelation.UNKNOWN
 
@@ -1335,14 +1340,16 @@ def decision_validity(stamp: DecisionStamp, journal: GameJournal, *, at: datetim
                                 f"decision's as-of {stamp.as_of_utc}"))
             fixes = _corrections_of(journal, dep.observation_id)
             dep_src = parse_utc(dep.stamps.source_ts_utc)
-            dep_index = next(i for i, (_, s) in enumerate(seen) if s.observation_id == dep.observation_id)
-            for i, (kind, s) in enumerate(seen):
+            # "later" is by first-observed time, as in `game_state_as_of`; journal position only breaks ties
+            order = {s.observation_id: (parse_utc(s.stamps.first_observed_utc), i) for i, (_, s) in enumerate(seen)}
+            dep_key = order[dep.observation_id]
+            for kind, s in seen:
                 if s.observation_id in fixes:
                     reasons.append((RevalidationReason.STATE_CORRECTED, f"{s.observation_id} corrects the state"))
                     superseded.append(s.observation_id)
                     continue
-                if i <= dep_index:
-                    continue  # arrived no later than the depended-on state
+                if order[s.observation_id] <= dep_key:
+                    continue  # first observed no later than the depended-on state
                 if s.status is not GameStateStatus.OBSERVED:
                     reasons.append((RevalidationReason.STATE_UNKNOWN,
                                     f"{s.observation_id} arrived after the state and is {s.status.value}"))
@@ -1395,28 +1402,49 @@ class QuotePoint:
 
 
 # The leadership report is fixture- and synthetic-fed in this batch (R2). Stored NFL pilot pairs must not
-# be read before the single logged EXP-002 A.C timing run, and no kickoff on or after the EXP-002
-# holdout boundary may be read at all; real captured series also need an allocated experiment id and an
-# evidence-use record. So a RECORDED series is refused, and no point may be dated at or after this
-# instant (2026-10-22 00:00 America/New_York), whatever its kind.
+# be read before the single logged EXP-002 A.C timing run, and no kickoff on or after the EXP-002 holdout
+# boundary may be read at all; real captured series also need an allocated experiment id and an
+# evidence-use record. So `SourceSeries` refuses, whatever its kind:
+# - RECORDED input;
+# - an event whose kickoff is at or after this instant (2026-10-22 00:00 America/New_York);
+# - a point whose latest possible true time (`interval()[1]`) is at or after it. With an unknown clock
+#   error bound, the latest possible time is taken as the stamp plus precision plus
+#   `LEADERSHIP_UNKNOWN_CLOCK_MARGIN`.
 LEADERSHIP_REFUSED_FROM_UTC = "2026-10-22T04:00:00+00:00"
+LEADERSHIP_UNKNOWN_CLOCK_MARGIN = timedelta(hours=24)
+BASIS_ORIGIN = {"PUBLISHED": ClockOrigin.SOURCE, "RECEIVED": ClockOrigin.LOCAL}
+
+
+def _latest_possible(reading: ClockReading) -> datetime:
+    iv = reading.interval()
+    return iv[1] if iv is not None else reading.at + reading.precision + LEADERSHIP_UNKNOWN_CLOCK_MARGIN
 
 
 @dataclass(frozen=True)
 class SourceSeries:
+    """One source's quotes on one event, ordered by one declared clock basis."""
+
     source_id: str
     source_family: str
     context: SourceContext
-    clock_basis: str  # "PUBLISHED" or "RECEIVED": which clock the points carry
+    clock_basis: str  # "PUBLISHED" (source clock) or "RECEIVED" (our clock): every point must carry it
     points: tuple[QuotePoint, ...]
     data_kind: DataKind
+    event_id: str
+    kickoff_utc: str
     upstream_ids: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
-        if self.clock_basis not in ("PUBLISHED", "RECEIVED"):
+        if self.clock_basis not in BASIS_ORIGIN:
             raise ValueError("clock_basis is PUBLISHED or RECEIVED")
+        wrong = [p.observation_id for p in self.points if p.at.origin is not BASIS_ORIGIN[self.clock_basis]]
+        if wrong:
+            raise ValueError(f"a {self.clock_basis} series carries {BASIS_ORIGIN[self.clock_basis].value} readings only; "
+                             f"these are not: {wrong[:3]}")
         if not self.source_family:
             raise ValueError(f"source_family is required; use {UNKNOWN_FAMILY!r}")
+        if not self.event_id:
+            raise ValueError("event_id is required")
         if not isinstance(self.data_kind, DataKind):
             raise ValueError("data_kind is required")
         if self.data_kind is DataKind.RECORDED:
@@ -1424,10 +1452,16 @@ class SourceSeries:
                              "Stored NFL pilot pairs wait for the single logged A.C run, and real series need an "
                              "allocated experiment id and an evidence-use record")
         limit = parse_utc(LEADERSHIP_REFUSED_FROM_UTC)
-        late = [p.observation_id for p in self.points if p.at.at >= limit]
+        kickoff = parse_utc(self.kickoff_utc)
+        if kickoff is None:
+            raise ValueError("kickoff_utc must be timezone-aware")
+        if kickoff >= limit:
+            raise ValueError(f"kickoff {self.kickoff_utc} is at or after {LEADERSHIP_REFUSED_FROM_UTC} (the EXP-002 "
+                             "holdout boundary): refused")
+        late = [p.observation_id for p in self.points if _latest_possible(p.at) >= limit]
         if late:
-            raise ValueError(f"points at or after {LEADERSHIP_REFUSED_FROM_UTC} (the EXP-002 holdout boundary) are "
-                             f"refused: {late[:3]}")
+            raise ValueError(f"points whose true time may be at or after {LEADERSHIP_REFUSED_FROM_UTC} (the EXP-002 "
+                             f"holdout boundary) are refused: {late[:3]}")
 
 
 @dataclass(frozen=True)
@@ -1446,14 +1480,17 @@ class LeadershipReport:
     status: LeadershipStatus
     a_source: str
     b_source: str
+    event_id: str
+    clock_basis: str
     a_context: SourceContext
     b_context: SourceContext
     dependence: Dependence
     moves_a: int | None
     moves_b: int | None
-    a_first: int | None  # co-moves where a provably moved first
+    a_first: int | None  # unambiguous co-moves where a provably moved first
     b_first: int | None  # and the other direction, always reported alongside
     unordered: int | None  # overlapping windows: no order is claimed
+    ambiguous: int | None  # a move with more than one candidate partner: no order is claimed
     unmatched_a: int | None
     unmatched_b: int | None
     median_capture_gap_a: timedelta | None
@@ -1462,6 +1499,8 @@ class LeadershipReport:
     variants_tested: int  # research exposure: every variant tried counts
     noise_rejected_a: int
     noise_rejected_b: int
+    one_sided_skipped_a: int  # one-sided or empty quotes bridged over, not dropped silently
+    one_sided_skipped_b: int
     out_of_order_points: int
     reasons: tuple[str, ...]
     not_a_causal_claim: str = ("Counts of which source moved first, in both directions, under the stated capture "
@@ -1476,15 +1515,16 @@ def _median_gap(points: Sequence[QuotePoint]) -> timedelta | None:
     return gaps[len(gaps) // 2]
 
 
-def _moves(series: SourceSeries, threshold: Decimal, same_clock: bool) -> tuple[list[PriceMove], int]:
-    """Moves that clear bid/ask noise: the new two-sided quote lies wholly above (or below) the old
-    one and the mid moved by at least `threshold`. A one-sided or missing quote is no evidence of a
-    move. Returns (moves, rejected as noise)."""
+def _moves(series: SourceSeries, threshold: Decimal, same_clock: bool) -> tuple[list[PriceMove], int, int]:
+    """Moves that clear bid/ask noise, between consecutive *two-sided* quotes. A one-sided or empty
+    quote is no evidence of a price, so it is bridged over: the move's window then runs from the last
+    two-sided quote before it to the next one after it, and the skipped quote is counted. The new
+    two-sided quote must lie wholly above (or below) the old one and the mid move by at least
+    `threshold`. Returns (moves, rejected as noise, one-sided skipped)."""
+    two_sided = [p for p in series.points if p.bid is not None and p.ask is not None]
+    skipped = len(series.points) - len(two_sided)
     out, noise = [], 0
-    pts = series.points
-    for prev, cur in zip(pts, pts[1:]):
-        if None in (prev.bid, prev.ask, cur.bid, cur.ask):
-            continue
+    for prev, cur in zip(two_sided, two_sided[1:]):
         d_mid = (cur.bid + cur.ask - prev.bid - prev.ask) / 2
         if abs(d_mid) < threshold:
             continue
@@ -1494,7 +1534,22 @@ def _moves(series: SourceSeries, threshold: Decimal, same_clock: bool) -> tuple[
         lo, hi = prev.at.interval(same_clock=same_clock), cur.at.interval(same_clock=same_clock)
         out.append(PriceMove(series.source_id, 1 if d_mid > 0 else -1, abs(d_mid), (lo[0], hi[1]),
                              prev.observation_id, cur.observation_id))
-    return out, noise
+    return out, noise, skipped
+
+
+def _near(m: PriceMove, n: PriceMove, window: timedelta) -> bool:
+    return m.direction == n.direction and n.window[0] - m.window[1] <= window and m.window[0] - n.window[1] <= window
+
+
+def _pair_key(m: PriceMove, n: PriceMove) -> tuple:
+    """An ordering of candidate pairs that does not depend on which series is passed first."""
+    mid_m = m.window[0] + (m.window[1] - m.window[0]) / 2
+    mid_n = n.window[0] + (n.window[1] - n.window[0]) / 2
+    gap = abs((mid_m - mid_n).total_seconds())
+    starts = tuple(sorted((m.window[0], n.window[0])))
+    ids = tuple(sorted(((m.source_id, m.from_observation, m.to_observation),
+                        (n.source_id, n.from_observation, n.to_observation))))
+    return gap, starts, ids
 
 
 def source_leadership(a: SourceSeries, b: SourceSeries, *, move_threshold: Decimal, match_window: timedelta,
@@ -1502,28 +1557,38 @@ def source_leadership(a: SourceSeries, b: SourceSeries, *, move_threshold: Decim
     """Which source moved first, counted in both directions, over two timestamped quote series.
 
     Pure and fixture-fed: it takes quotes only (it has no outcome, settlement or label input) and
-    reads no stored data. In this batch it accepts SYNTHETIC and FIXTURE series only
-    (`SourceSeries` refuses RECORDED input and any point on or after `LEADERSHIP_REFUSED_FROM_UTC`):
-    it must not read stored NFL pilot pairs before the single logged EXP-002 A.C run, nor any kickoff
-    on or after 2026-10-22, and it never changes the EXP-002 baseline or its weights.
+    reads no stored data. In this batch it accepts SYNTHETIC and FIXTURE series only: `SourceSeries`
+    refuses RECORDED input, any kickoff on or after `LEADERSHIP_REFUSED_FROM_UTC` (2026-10-22 00:00 ET)
+    and any point whose true time may fall on or after it. It must not read stored NFL pilot pairs
+    before the single logged EXP-002 A.C run, and it never changes the EXP-002 baseline or its weights.
+    Both series must be on the same event and the same clock basis.
+
     Honest refusals are results:
     - INSUFFICIENT_RESOLUTION when the median capture gap of either series, or the clock interval of
       any point, exceeds `required_resolution`, or when a cross-clock error bound is UNKNOWN. Sparse
       pregame snapshots are the expected case.
     - INSUFFICIENT_EVIDENCE when fewer than `min_ordered` co-moves are ordered.
 
-    A co-move is one move in each series, in the same direction, whose windows lie within
-    `match_window`. It is A-first only when A's window ends strictly before B's begins, and the
-    reverse; otherwise UNORDERED. A move's window runs from the capture before it to the capture that
-    shows it, widened by clock uncertainty. Moves inside bid/ask noise are rejected and counted.
-    Shared or unknown source families are reported as dependence, never ignored. `variants_tested`
-    (at least 1) is how many parameter variants were tried on this question; it is part of the result."""
+    Matching is symmetric: swapping the arguments swaps `a_first` and `b_first` and changes nothing
+    else. Candidate pairs (same direction, windows within `match_window`) are matched one-to-one in an
+    order that does not depend on the argument order. A move with more than one candidate partner is
+    AMBIGUOUS and gets no direction. Otherwise a pair is A-first only when A's window ends strictly
+    before B's begins, and the reverse; overlapping windows are UNORDERED. A move's window runs from
+    the two-sided capture before it to the one that shows it, widened by clock uncertainty. Moves
+    inside bid/ask noise are rejected and counted. Shared or unknown source families are reported as
+    dependence. `variants_tested` (at least 1) is how many parameter variants were tried on this
+    question; it is part of the result."""
     if isinstance(variants_tested, bool) or not isinstance(variants_tested, int) or variants_tested < 1:
         raise ValueError("variants_tested is the count of variants tried (>= 1); it is part of the result")
     if move_threshold <= 0 or required_resolution <= timedelta(0) or match_window < timedelta(0) or min_ordered < 1:
         raise ValueError("thresholds must be positive")
     if a.data_kind is not b.data_kind:
         raise ValueError("series of different data kinds are not compared")
+    if a.clock_basis != b.clock_basis:
+        raise ValueError(f"series on different clock bases ({a.clock_basis} vs {b.clock_basis}) are not compared: a "
+                         "publication stamp and a receipt stamp differ by transport latency")
+    if a.event_id != b.event_id:
+        raise ValueError(f"series on different events ({a.event_id} vs {b.event_id}) are not compared")
     reasons: list[str] = []
     fam_a, fam_b = a.source_family, b.source_family
     if (fam_a != UNKNOWN_FAMILY and fam_a == fam_b) or set(a.upstream_ids) & set(b.upstream_ids):
@@ -1562,39 +1627,50 @@ def source_leadership(a: SourceSeries, b: SourceSeries, *, move_threshold: Decim
             if iv[1] - iv[0] > required_resolution:
                 resolution.append(f"{name}: {p.observation_id} clock interval {iv[1] - iv[0]} > required resolution")
                 break
-    common = dict(a_source=a.source_id, b_source=b.source_id, a_context=a.context, b_context=b.context,
-                  dependence=dependence, median_capture_gap_a=gap_a, median_capture_gap_b=gap_b,
-                  required_resolution=required_resolution, variants_tested=variants_tested,
-                  out_of_order_points=out_of_order)
+    common = dict(a_source=a.source_id, b_source=b.source_id, event_id=a.event_id, clock_basis=a.clock_basis,
+                  a_context=a.context, b_context=b.context, dependence=dependence, median_capture_gap_a=gap_a,
+                  median_capture_gap_b=gap_b, required_resolution=required_resolution,
+                  variants_tested=variants_tested, out_of_order_points=out_of_order)
     if resolution:
         return LeadershipReport(SOURCE_STATE_VERSION, LeadershipStatus.INSUFFICIENT_RESOLUTION, moves_a=None,
-                                moves_b=None, a_first=None, b_first=None, unordered=None, unmatched_a=None,
-                                unmatched_b=None, noise_rejected_a=0, noise_rejected_b=0,
+                                moves_b=None, a_first=None, b_first=None, unordered=None, ambiguous=None,
+                                unmatched_a=None, unmatched_b=None, noise_rejected_a=0, noise_rejected_b=0,
+                                one_sided_skipped_a=0, one_sided_skipped_b=0,
                                 reasons=tuple(reasons + [f"INSUFFICIENT_RESOLUTION: {r}" for r in resolution]),
                                 **common)
-    moves_a, noise_a = _moves(a, move_threshold, same_clock)
-    moves_b, noise_b = _moves(b, move_threshold, same_clock)
-    used: set[int] = set()
-    a_first = b_first = unordered = unmatched_a = 0
-    for m in sorted(moves_a, key=lambda m: m.window[0]):
-        candidates = [(i, n) for i, n in enumerate(moves_b) if i not in used and n.direction == m.direction
-                      and n.window[0] - m.window[1] <= match_window and m.window[0] - n.window[1] <= match_window]
-        if not candidates:
-            unmatched_a += 1
+    moves_a, noise_a, skip_a = _moves(a, move_threshold, same_clock)
+    moves_b, noise_b, skip_b = _moves(b, move_threshold, same_clock)
+    if skip_a or skip_b:
+        reasons.append(f"ONE_SIDED_BRIDGED: {skip_a} (a) and {skip_b} (b) one-sided or empty quote(s) carried no price; "
+                       "moves across them span the gap")
+    cand = [(i, j) for i, m in enumerate(moves_a) for j, n in enumerate(moves_b) if _near(m, n, match_window)]
+    deg_a = {i: sum(1 for x, _ in cand if x == i) for i in range(len(moves_a))}
+    deg_b = {j: sum(1 for _, y in cand if y == j) for j in range(len(moves_b))}
+    used_a: set[int] = set()
+    used_b: set[int] = set()
+    a_first = b_first = unordered = ambiguous = 0
+    for i, j in sorted(cand, key=lambda c: _pair_key(moves_a[c[0]], moves_b[c[1]])):
+        if i in used_a or j in used_b:
             continue
-        i, n = min(candidates, key=lambda c: (abs((c[1].window[0] - m.window[0]).total_seconds()), c[0]))
-        used.add(i)
-        if m.window[1] < n.window[0]:
+        used_a.add(i)
+        used_b.add(j)
+        m, n = moves_a[i], moves_b[j]
+        if deg_a[i] > 1 or deg_b[j] > 1:
+            ambiguous += 1
+        elif m.window[1] < n.window[0]:
             a_first += 1
         elif n.window[1] < m.window[0]:
             b_first += 1
         else:
             unordered += 1
+    if ambiguous:
+        reasons.append(f"AMBIGUOUS: {ambiguous} co-move(s) had more than one candidate partner; no direction claimed")
     status = LeadershipStatus.REPORTED
     if a_first + b_first < min_ordered:
         status = LeadershipStatus.INSUFFICIENT_EVIDENCE
         reasons.append(f"INSUFFICIENT_EVIDENCE: {a_first + b_first} ordered co-move(s) < {min_ordered}")
     return LeadershipReport(SOURCE_STATE_VERSION, status, moves_a=len(moves_a), moves_b=len(moves_b),
-                            a_first=a_first, b_first=b_first, unordered=unordered, unmatched_a=unmatched_a,
-                            unmatched_b=len(moves_b) - len(used), noise_rejected_a=noise_a, noise_rejected_b=noise_b,
-                            reasons=tuple(reasons), **common)
+                            a_first=a_first, b_first=b_first, unordered=unordered, ambiguous=ambiguous,
+                            unmatched_a=len(moves_a) - len(used_a), unmatched_b=len(moves_b) - len(used_b),
+                            noise_rejected_a=noise_a, noise_rejected_b=noise_b, one_sided_skipped_a=skip_a,
+                            one_sided_skipped_b=skip_b, reasons=tuple(reasons), **common)

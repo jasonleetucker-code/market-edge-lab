@@ -33,50 +33,68 @@ Extend the existing owners. No new module is added.
 | `inplay_evidence.py` (`source-state-v1` section) | `ClockReading` (precision, uncertainty, `clock_id`), `clock_order` (UNORDERED on overlap); `LatencyBreakdown` (six stages, unmeasured = None); `SourceObservation` (source family or UNKNOWN, context, declared incorporated state, `EvidenceStatus` + `DataKind`); `ObservationLog` (append-only); `content_freshness`; `state_relation`; `decision_validity`; `source_leadership` | It already owns the separate clocks (`Stamps`), the append-only `GameJournal` and `DataKind`. Source and state validity are the same evidence contract, one level up |
 | `position_policy.py` | `evaluate(state_validity=...)`: a non-VALID state gives BLOCKED with `review_required` | It is the single position-policy owner (ADR 0038) |
 | `inplay_replay.py` | optional `CohortEntry.state_journal`. The bot arm revalidates at submission; the pre-placed arm counts `fills_after_state_change` | It is the hold-vs-exit replay owner. Without a journal, results and cohort hashes are unchanged |
-| `research_economics.py` (`fill-conditioned-economics-v1` section) | `ExecutionMode`, `Fill`, `fill_economics`, `markouts`, `liquidation_value`, `seasonal_scenario`, `FunnelRecord`/`funnel_report`; `_capital_returns` shared with `replay` | It is the canonical economics owner. The capital-return arithmetic is shared, not copied. The episode screen's outputs are unchanged |
-| `execution_ticket.py` | pure `reserve_simultaneous_obligations` | It extends ADR 0035 item 3 (reservation) for obligations that bind at the counterparty's choice |
+| `research_economics.py` (`fill-conditioned-economics-v1` section) | `ExecutionMode`, `Fill`, `Resolution`, `fill_economics`, `markouts`, `liquidation_value`, `seasonal_scenario`, `FunnelRecord`/`funnel_report`; `_capital_returns` shared with `replay` | It is the canonical economics owner. The capital-return arithmetic is shared, not copied. The episode screen's outputs are unchanged |
+| `execution_ticket.py` | pure `Obligation` and `reserve_simultaneous_obligations`: the **one** reservation primitive (RFQ research, #148, calls it rather than keeping its own) | It extends ADR 0035 item 3 (reservation) for obligations that bind at the counterparty's choice |
 
 ### Rules
 
-- **A game clock is not UTC.** `ClockReading` refuses naive and non-UTC text.
+- **A game clock is not UTC.** `ClockReading` accepts only an ISO-8601 instant with a UTC offset (any
+  offset is converted to UTC). It refuses a naive time and any other text, such as a game clock.
 - **Receipt order never proves incorporation.** Only a source's own documented declaration makes the
-  incorporated state KNOWN. A publication provably before the event makes it CANNOT_INCORPORATE.
-  Everything else is UNKNOWN.
+  incorporated state KNOWN. CANNOT_INCORPORATE needs a publication provably before a *lower* bound on
+  the event's time (`event_not_before`, for example the previous state's time). A scoreboard's
+  publication time is an upper bound on the event, never that lower bound. Everything else is UNKNOWN.
 - **Content freshness uses the publication clock.** A book received a second ago but published ten
   minutes ago is STALE. Without a stamp, freshness is UNKNOWN, unless the receipt alone already
   proves it is stale.
 - **Corrections append.** `ObservationLog` refuses to overwrite and links each correction.
 - **Invalidation is a policy state.** A material new event, a correction, an unreadable later update
   or an out-of-order update makes a dependent recommendation INVALIDATED or REVIEW_REQUIRED. It
-  never becomes an order, a cancellation or a liquidation.
+  never becomes an order, a cancellation or a liquidation. "Later" means later first-observed time,
+  whatever the journal's append order. `evaluate` refuses a validity computed for another state
+  version or at another instant.
 - **Two vocabularies, different meanings.** `EvidenceStatus` (ACTUAL / SIMULATED / HYPOTHETICAL /
   UNAVAILABLE) says whether the thing happened. `DataKind` says where the input came from. They are
   orthogonal: a SIMULATED fill can replay RECORDED books. `check_evidence` ties them together: ACTUAL
   needs RECORDED input, and UNAVAILABLE has none.
 - **Source leadership is reported in both directions and names no winner.**
-  - Moves must clear bid/ask noise.
+  - Both series must be on the same event and the same clock basis (PUBLISHED or RECEIVED), and every
+    point's clock origin must match that basis.
+  - Moves must clear bid/ask noise. One-sided quotes are bridged over and counted, never dropped silently.
+  - Matching is symmetric: swapping the arguments swaps the two directional counts and nothing else.
+    A move with more than one candidate partner is AMBIGUOUS and gets no direction.
   - Co-moves whose windows overlap, after capture spacing and clock uncertainty, are UNORDERED.
   - Shared or unknown families are reported as dependence.
   - The count of variants tried is a required input and part of the result.
   - Sparse captures give INSUFFICIENT_RESOLUTION.
-- **The leadership report is fixture- and synthetic-fed in this batch.** `SourceSeries` refuses
-  RECORDED input and any point at or after 2026-10-22 00:00 ET (`LEADERSHIP_REFUSED_FROM_UTC`).
-  Stored NFL pilot pairs are not read before the single logged EXP-002 A.C timing run. No kickoff on
-  or after 2026-10-22 is read. It has no outcome or label input.
+- **The leadership report is fixture- and synthetic-fed in this batch.** `SourceSeries` carries its
+  `event_id` and `kickoff_utc`, and refuses:
+  - RECORDED input;
+  - a kickoff at or after 2026-10-22 00:00 ET (`LEADERSHIP_REFUSED_FROM_UTC`);
+  - a point whose latest possible true time (`interval()[1]`) is at or after it. With an unknown clock
+    bound, that is the stamp plus precision plus 24 hours.
+
+  Stored NFL pilot pairs are not read before the single logged EXP-002 A.C timing run. It has no
+  outcome or label input.
 - **Fill-conditioned economics.**
   - Modes are separate groups. P&L is attributed to a group only when an instrument's fills all sit
     in it.
   - ACTUAL and SIMULATED fills are never mixed.
   - P&L is a cash change, and residual inventory is never valued at 0.
   - Fees count once, and a fee inside the price refuses a second one.
-  - A reused displayed depth, or collateral beyond capital, is refused.
+  - Capital is a cash balance: capital plus realized results, minus fees paid and open collateral. It
+    may never go negative. A realized loss is gone whether it came from settlement or a closing trade,
+    and a flat or settled instrument deploys nothing, so both exit paths give the same capital-days
+    and returns.
+  - A reused displayed depth is refused, and so is a settlement value outside [0, 1].
   - Rebates, promotions and fixed cash costs are separate lines, and unsubsidized net is always shown.
   - Owner hours stay unpriced.
   - A markout needs a declared horizon and benchmark, is signed by direction, and is not liquidation
     profit.
   - Peak windows are never annualized.
-  - In the funnel, UNKNOWN is not a nonfill, and no execution probability exists without observed
-    outcomes.
+  - In the funnel, UNKNOWN is not a nonfill. Each record carries its evidence status and data kind.
+    An own fill rate comes only from ACTUAL own quotes with every outcome observed. A simulated rate
+    is reported apart, labelled as a simulator's output.
 
 ## Alternatives considered
 

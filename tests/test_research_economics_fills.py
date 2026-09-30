@@ -91,8 +91,8 @@ def _informed(seed, n):
         hypothetical_edge += D(10) * D("0.02")  # every quote looks attractive against our own estimate
         inst = f"M{i}"
         side = "SELL" if p > ask else ("BUY" if p < bid else None)  # the informed taker picks us off
-        funnel.append(FunnelRecord(inst, ExecutionMode.BOOK_MAKER, CTX, eligible=True, hypothetical_quote=True,
-                                   own_quote=True, filled=side is not None))
+        funnel.append(FunnelRecord(inst, ExecutionMode.BOOK_MAKER, CTX, EvidenceStatus.SIMULATED, DataKind.SYNTHETIC,
+                                   eligible=True, hypothetical_quote=True, own_quote=True, filled=side is not None))
         if side is None:
             continue
         price = ask if side == "SELL" else bid
@@ -110,8 +110,10 @@ def test_informed_traders_accepting_attractive_quotes_produce_a_loss():
     marks = E.markouts(fills, bench, MarkoutSpec(timedelta(minutes=60), "SYNTHETIC_TRUE_PROBABILITY"))
     assert all(m.value < 0 for m in marks) and all(not m.is_liquidation_profit for m in marks)
     f = E.funnel_report(funnel)
-    assert f.stages["FILLED"]["no"] > 0 and f.own_fill_rate is not None  # every outcome observed here
-    assert f.own_fill_rate == (D(len(fills)) / 6000).quantize(D("1e-12"))
+    assert f.stages["FILLED"]["no"] > 0
+    assert f.own_fill_rate is None  # no ACTUAL own quote: a simulator's rate is not an execution probability
+    assert f.simulated_own_fill_rate == (D(len(fills)) / 6000).quantize(D("1e-12"))
+    assert "not an execution probability" in f.simulated_own_fill_rate_reason
 
 
 # ------------------------------------------------------------------ 3. a nonfill earns no spread; unknown is not a nonfill
@@ -124,23 +126,32 @@ def test_a_nonfill_cannot_earn_spread_and_hypothetical_quotes_are_not_fills():
         fill("u", "M", "SELL", "10", "0.55", evidence=EvidenceStatus.UNAVAILABLE, kind=None)
     r = econ([], {})
     assert r.fills == 0 and r.total_gross == 0 and r.net_contribution == 0 and r.notional == 0
-    records = [FunnelRecord("r1", ExecutionMode.RFQ, CTX, eligible=True, hypothetical_quote=True, own_quote=False),
-               FunnelRecord("r2", ExecutionMode.RFQ, CTX, eligible=True, hypothetical_quote=True, own_quote=None)]
+    hyp = (EvidenceStatus.HYPOTHETICAL, DataKind.SYNTHETIC)
+    records = [FunnelRecord("r1", ExecutionMode.RFQ, CTX, *hyp, eligible=True, hypothetical_quote=True, own_quote=False),
+               FunnelRecord("r2", ExecutionMode.RFQ, CTX, *hyp, eligible=True, hypothetical_quote=True, own_quote=None)]
     f = E.funnel_report(records)
-    assert f.own_fill_rate is None and f.own_fill_rate_reason.startswith("NO_OWN_QUOTES")
+    assert f.own_fill_rate is None and f.own_fill_rate_reason.startswith("NO_ACTUAL_OWN_QUOTES")
+    with pytest.raises(ValueError, match="has no own quote"):
+        FunnelRecord("r3", ExecutionMode.RFQ, CTX, *hyp, own_quote=True)
     assert f.stages["ACCEPTED"] == {"yes": 0, "no": 0, "unknown": 2}  # unobservable, never "not accepted"
 
 
 def test_unknown_outcomes_give_no_execution_probability():
-    records = [FunnelRecord("a", ExecutionMode.BOOK_MAKER, CTX, own_quote=True, filled=True),
-               FunnelRecord("b", ExecutionMode.BOOK_MAKER, CTX, own_quote=True, filled=None)]
+    act = (EvidenceStatus.ACTUAL, DataKind.RECORDED)
+    records = [FunnelRecord("a", ExecutionMode.BOOK_MAKER, CTX, *act, own_quote=True, filled=True),
+               FunnelRecord("b", ExecutionMode.BOOK_MAKER, CTX, *act, own_quote=True, filled=None)]
     f = E.funnel_report(records)
     assert f.own_fill_rate is None and f.own_fill_rate_reason.startswith("UNKNOWN_OUTCOMES")
     assert f.stages["FILLED"] == {"yes": 1, "no": 0, "unknown": 1}
     with pytest.raises(ValueError, match="someone else's flow"):
-        FunnelRecord("c", ExecutionMode.RFQ, CTX, own_quote=False, accepted=True)
+        FunnelRecord("c", ExecutionMode.RFQ, CTX, *act, own_quote=False, accepted=True)
     with pytest.raises(ValueError, match="accepted is not filled"):
-        FunnelRecord("d", ExecutionMode.RFQ, CTX, own_quote=True, accepted=True, confirmed=False, filled=True)
+        FunnelRecord("d", ExecutionMode.RFQ, CTX, *act, own_quote=True, accepted=True, confirmed=False, filled=True)
+    with pytest.raises(ValueError, match="cannot be ACTUAL"):
+        FunnelRecord("e", ExecutionMode.RFQ, CTX, EvidenceStatus.ACTUAL, DataKind.FIXTURE)
+    observed = E.funnel_report([FunnelRecord("a", ExecutionMode.BOOK_MAKER, CTX, *act, own_quote=True, filled=True),
+                                FunnelRecord("b", ExecutionMode.BOOK_MAKER, CTX, *act, own_quote=True, filled=False)])
+    assert observed.own_fill_rate == D("0.5") and observed.by_evidence == {"ACTUAL": 2}
 
 
 # ------------------------------------------------------------------ 4. a copied price is not the original portfolio
@@ -287,3 +298,62 @@ def test_a_favourable_markout_is_not_liquidation_profit():
         MarkoutSpec(timedelta(0), "MID")
     with pytest.raises(ValueError):
         MarkoutSpec(timedelta(minutes=5), "")
+
+
+
+# ------------------------------------------------------------------ review fixes
+
+
+def test_capital_lost_at_settlement_is_not_spent_again():
+    fills = [fill("f1", "M1", "BUY", "200", "0.50", minute=0), fill("f2", "M2", "BUY", "200", "0.50", minute=120)]
+    with pytest.raises(ValueError, match="CAPITAL_OVERCOMMITTED"):
+        econ(fills, {"M1": settle(0, 60), "M2": settle(0, 180)}, capital="100", days=1)
+    # the same second buy is fine when the first position won its capital back
+    r = econ(fills, {"M1": settle(1, 60), "M2": settle(0, 180)}, capital="100", days=1)
+    assert r.total_gross == D("0")
+
+
+def test_a_realized_loss_is_the_same_by_settlement_or_by_closing_trade():
+    round_trip = [fill("g1", "M1", "BUY", "100", "0.50", minute=0), fill("g2", "M1", "SELL", "100", "0.10", minute=60)]
+    settled = [fill("h1", "M1", "BUY", "100", "0.50", minute=0)]
+    a = econ(round_trip, {}, capital="100", days=1)
+    b = econ(settled, {"M1": Resolution(D("0.10"), at(60))}, capital="100", days=1)
+    assert a.net_contribution == b.net_contribution == D("-40.00")
+    assert a.capital_days == b.capital_days and a.average_deployed == b.average_deployed
+    assert a.return_on_deployed == b.return_on_deployed and a.return_on_total == b.return_on_total
+    assert a.open_positions == b.open_positions == ()
+    for base, extra in ((round_trip, {}), (settled, {"M1": Resolution(D("0.10"), at(60))})):
+        with pytest.raises(ValueError, match="CAPITAL_OVERCOMMITTED"):  # 60 left, a 95 buy does not fit
+            econ(base + [fill("z", "M3", "BUY", "190", "0.50", minute=120)], extra, capital="100", days=1)
+        econ(base + [fill("z", "M3", "BUY", "120", "0.50", minute=120)], extra, capital="100", days=1)
+
+
+def test_resolution_is_a_binary_payout_and_a_fee_inside_the_price_is_known():
+    for bad in ("5", "-0.1", "1.01"):
+        with pytest.raises(ValueError, match="between 0 and 1"):
+            Resolution(D(bad), at(1))
+    inside = fill("f", "M", "BUY", "10", "0.41", fee=None, fee_included_in_price=True)
+    assert inside.fee == D(0)
+    r = econ([inside], {"M": settle(1, 60)})
+    assert r.fees == D(0) and r.net_contribution == D("5.90")
+
+
+def test_adverse_selection_holds_in_a_mixed_informed_and_uninformed_population():
+    rng = random.Random(3)
+    fills, res, bench = [], {}, {}
+    for i in range(6000):
+        p = _price(rng, 25, 75)
+        m = p + D(rng.randint(-8, 8)) / 100
+        bid, ask = m - D("0.02"), m + D("0.02")
+        if rng.random() < 0.5:  # informed: trades only when our quote is wrong in its favour
+            side = "SELL" if p > ask else ("BUY" if p < bid else None)
+        else:  # uninformed: hits either side at random
+            side = rng.choice(("SELL", "BUY"))
+        if side is None:
+            continue
+        fills.append(fill(f"f{i}", f"M{i}", side, "10", ask if side == "SELL" else bid, minute=i))
+        res[f"M{i}"] = settle(1 if rng.random() < float(p) else 0, i + 60)
+        bench[f"f{i}"] = p
+    marks = E.markouts(fills, bench, MarkoutSpec(timedelta(minutes=60), "SYNTHETIC_TRUE_PROBABILITY"))
+    assert sum(m.value for m in marks) < 0  # the informed half costs more than the spread earns on the rest
+    assert econ(fills, res, days=6).total_gross < 0

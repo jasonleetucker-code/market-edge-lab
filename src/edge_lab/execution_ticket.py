@@ -429,10 +429,27 @@ HELD_OBLIGATION_STATES = frozenset({ObligationState.OUTSTANDING, ObligationState
 
 @dataclass(frozen=True)
 class Obligation:
+    """One obligation that may bind: a resting order, an RFQ quote (either role) or a bound position.
+
+    `worst_case_loss` is supplied by the caller: the most cash this obligation can cost at full size
+    (the principal at risk, with any fee allowance the caller includes). None is UNKNOWN and fails
+    closed (EXPOSURE_UNKNOWN); it is never 0. A negative or non-finite value is refused. This is the
+    canonical reservation primitive: RFQ research (#148) and the future executor call it rather than
+    keeping their own."""
+
     obligation_id: str
     state: ObligationState
-    worst_case_loss: Decimal | None  # at full size; None or invalid is unknown and fails closed
+    worst_case_loss: Decimal | None
     exposure_keys: tuple[str, ...] = ()  # a game, a player, a combo leg shared with other obligations
+
+    def __post_init__(self) -> None:
+        if not self.obligation_id:
+            raise ValueError("obligation_id is required")
+        if not isinstance(self.state, ObligationState):
+            raise ValueError("state must be an ObligationState")
+        v = self.worst_case_loss
+        if v is not None and (isinstance(v, bool) or not isinstance(v, Decimal) or not v.is_finite() or v < 0):
+            raise ValueError(f"worst_case_loss must be a finite, non-negative Decimal or None (unknown), not {v!r}")
 
 
 @dataclass(frozen=True)
@@ -448,9 +465,15 @@ def reserve_simultaneous_obligations(obligations: tuple[Obligation, ...], *, ava
                                      candidate: Obligation | None = None) -> ObligationReservation:
     """What must be reserved if every held obligation binds at once, and whether `candidate` fits too.
 
-    Conservative by construction: no netting between obligations (their joint payoff is not known
-    here), no partial acceptance, no credit for a cancel request, and an unknown worst case or unknown
-    cash blocks new risk. Pure: it holds and changes nothing."""
+    Held: OUTSTANDING, CANCEL_REQUESTED, UNKNOWN and BOUND; only RELEASED frees anything. Conservative
+    by construction:
+    - no netting between obligations, even on shared legs or common collateral (their joint payoff is
+      not known here); `by_key` shows the sum per shared key;
+    - no partial acceptance, and no credit for a cancel request;
+    - an unknown worst case (EXPOSURE_UNKNOWN) or unknown cash (CASH_UNKNOWN) gives `required` or
+      `new_risk_allowed` that fail closed; nothing unknown becomes 0.
+    Without a candidate, `new_risk_allowed` is False (nothing was asked). Pure: it holds and changes
+    nothing."""
     reasons: list[str] = []
     ids = [o.obligation_id for o in obligations] + ([candidate.obligation_id] if candidate else [])
     if len(ids) != len(set(ids)):
@@ -460,7 +483,7 @@ def reserve_simultaneous_obligations(obligations: tuple[Obligation, ...], *, ava
     by_key: dict[str, Decimal] = {}
     required: Decimal | None = None
     if unknown:
-        reasons.append(f"WORST_CASE_UNKNOWN: {unknown[:3]}; no new risk")
+        reasons.append(f"EXPOSURE_UNKNOWN: worst case of {unknown[:3]} is unknown; no new risk")
     else:
         required = sum((o.worst_case_loss for o in held), Decimal(0))
         for o in held:

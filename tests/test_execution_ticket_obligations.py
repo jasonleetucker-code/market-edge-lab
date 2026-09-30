@@ -39,9 +39,22 @@ def test_a_cancel_request_and_an_unknown_state_stay_reserved_and_only_release_fr
 
 def test_unknown_worst_case_or_unknown_cash_blocks_new_risk():
     r = reserve_simultaneous_obligations((ob("a", None),), available_cash=D("1000"), candidate=ob("b", "1"))
-    assert r.required is None and not r.new_risk_allowed and r.reasons[0].startswith("WORST_CASE_UNKNOWN")
+    assert r.required is None and not r.new_risk_allowed and r.reasons[0].startswith("EXPOSURE_UNKNOWN")
     r2 = reserve_simultaneous_obligations((ob("a", "1"),), available_cash=None, candidate=ob("b", "1"))
     assert not r2.new_risk_allowed and any(x.startswith("CASH_UNKNOWN") for x in r2.reasons)
     assert not reserve_simultaneous_obligations((), available_cash=D("5")).new_risk_allowed  # no candidate
     with pytest.raises(ValueError):
         reserve_simultaneous_obligations((ob("a", "1"), ob("a", "2")), available_cash=D("5"))
+
+
+
+def test_negative_or_invalid_worst_cases_are_refused_never_netted():
+    for bad in (D("-1"), D("NaN"), D("Infinity"), 5, True):
+        with pytest.raises(ValueError, match="worst_case_loss"):
+            Obligation("x", S.OUTSTANDING, bad)
+    with pytest.raises(ValueError):
+        Obligation("x", "OUTSTANDING", D("1"))
+    # two quotes on the same leg and collateral: both reserve in full, whatever side they are on
+    same_leg = (ob("yes-side", "30", keys=("leg:A",)), ob("no-side", "70", keys=("leg:A",)))
+    r = reserve_simultaneous_obligations(same_leg, available_cash=D("99"), candidate=ob("c", "0"))
+    assert r.required == D("100") and r.by_key == {"leg:A": D("100")} and not r.new_risk_allowed

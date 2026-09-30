@@ -497,3 +497,47 @@ def test_a_state_journal_with_no_change_leaves_every_arm_unchanged():
     for a, b in zip(base.entries, same.entries):
         assert (a.sold, a.pnl_gross, a.pnl_net) == (b.sold, b.pnl_gross, b.pnl_net)
         assert b.invalidated_before_submit == b.state_changed_in_flight == b.fills_after_state_change == 0
+
+
+
+def test_the_cohort_hash_covers_the_parsed_state_and_is_unchanged_without_a_journal():
+    from edge_lab.inplay_evidence import GameJournal, GameState, GameStateStatus, Stamps
+
+    def g(first, home, raw):
+        return GameState("G1", "scores", f"e{first}", Stamps(at(first), at(first)), GameStateStatus.OBSERVED, raw,
+                         home_score=home, away_score=0, period="Q1")
+
+    same_raw_0 = GameJournal("G1").append(g(5, 0, "rawA")).append(g(61, 0, "rawB"))
+    same_raw_7 = GameJournal("G1").append(g(5, 0, "rawA")).append(g(61, 7, "rawB"))  # same raw hash, new score
+    c0 = cohort(replace(entry(REACH, "0"), state_journal=same_raw_0))
+    c7 = cohort(replace(entry(REACH, "0"), state_journal=same_raw_7))
+    assert c0.sha256 != c7.sha256
+    # no journal: the hash is exactly the pre-R2 one (books and entries only)
+    import hashlib
+    import json as _json
+
+    plain = cohort(entry(REACH, "0"))
+    h = hashlib.sha256(_json.dumps([plain.cohort_id, plain.data_kind.value, plain.label, str(plain.starting_capital),
+                                    plain.horizon_utc, plain.rules_version]).encode())
+    for e in plain.entries:
+        h.update(_json.dumps([e.game_id, e.cluster_id, e.market_id, str(e.quantity), str(e.entry_price),
+                              str(e.entry_cost), e.entry_at_utc, e.side, str(e.settlement.value), e.settlement.final,
+                              e.settlement.at_utc]).encode())
+        for b in e.books:
+            h.update(f"{b.receipt_utc}|{b.status.value}|{b.trading_state.value}|{b.truncated}|{b.evidence_id}|"
+                     f"{';'.join(f'{p}:{q}' for p, q in b.bids)}\n".encode())
+    assert plain.sha256 == h.hexdigest()
+
+
+def test_the_first_state_after_placement_is_chosen_by_first_observed_time():
+    from edge_lab.inplay_evidence import GameJournal
+
+    late, early = _state(40, event="late"), _state(20, event="early")
+    j = GameJournal("G1").append(late).append(early)  # appended out of first-observed order
+    assert R._first_state_after(j, parse_dt(at(10))).observation_id == early.observation_id
+
+
+def parse_dt(value):
+    from edge_lab.freshness import parse_utc
+
+    return parse_utc(value)

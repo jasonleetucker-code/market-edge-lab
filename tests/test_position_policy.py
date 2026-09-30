@@ -313,3 +313,18 @@ def test_unknown_state_needs_review_and_a_validity_from_another_instant_is_not_r
 def test_without_a_state_validity_the_decision_is_unchanged():
     assert run().decision_id == run(state_validity=None).decision_id
     assert "state_validity" not in run().provenance
+
+
+
+def test_a_validity_for_another_state_version_is_refused():
+    from edge_lab.inplay_evidence import DecisionStamp, decision_validity
+
+    journal, s0, touchdown = _journal_and_states()
+    current = decision_validity(DecisionStamp("pd", "1", NOW.isoformat(), True, touchdown.observation_id), journal,
+                                at=NOW)
+    gs_other = pp.GameStateInput(NOW.isoformat(), {"home_score": 0}, version=s0.observation_id)
+    d = run(state_validity=current, game_state=gs_other)
+    assert d.status is DecisionStatus.BLOCKED and d.reasons[0].startswith("STATE_VALIDITY_MISMATCH")
+    gs_same = pp.GameStateInput(NOW.isoformat(), {"home_score": 7}, version=touchdown.observation_id)
+    assert run(state_validity=current, game_state=gs_same).action is Action.EXIT
+    assert run(state_validity=current).provenance["state_validity_decision"] == "pd"

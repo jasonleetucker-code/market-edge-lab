@@ -191,7 +191,9 @@ class Cohort:
                          f"{';'.join(f'{p}:{q}' for p, q in b.bids)}\n".encode())
             if e.state_journal is not None:  # only when present, so cohorts without one hash as before
                 for kind, s in e.state_journal.entries:
-                    h.update(f"state|{kind.value}|{s.observation_id}|{s.stamps.first_observed_utc}\n".encode())
+                    h.update(json.dumps(["state", kind.value, s.observation_id, s.stamps.first_observed_utc,
+                                         s.stamps.source_ts_utc, s.status.value, s.corrects,
+                                         [v.value if isinstance(v, Enum) else v for v in s.content()]]).encode())
         return h.hexdigest()
 
 
@@ -624,8 +626,10 @@ def _run_bot(cohort: Cohort, entry: CohortEntry, cfg: ReplayConfig, arm: Arm, le
 def _first_state_after(journal: GameJournal, at: datetime):
     """The first readable game state first observed after `at`: the baseline for a resting order
     placed before any state was seen."""
-    return next((s for k, s in journal.entries if k is not JournalEntry.DUPLICATE
-                 and s.status is GameStateStatus.OBSERVED and parse_utc(s.stamps.first_observed_utc) > at), None)
+    later = [(parse_utc(s.stamps.first_observed_utc), i, s) for i, (k, s) in enumerate(journal.entries)
+             if k is not JournalEntry.DUPLICATE and s.status is GameStateStatus.OBSERVED
+             and parse_utc(s.stamps.first_observed_utc) > at]
+    return min(later, key=lambda x: (x[0], x[1]))[2] if later else None  # by first-observed time, not position
 
 
 def _run_preplaced(cohort: Cohort, entry: CohortEntry, cfg: ReplayConfig, arm: Arm, ledger: ReplayLedger,

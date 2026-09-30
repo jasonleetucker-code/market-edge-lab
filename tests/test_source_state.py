@@ -117,16 +117,28 @@ def test_stale_data_that_was_just_received_is_stale():
 
 
 def test_unknown_incorporated_state_is_never_inferred_from_receipt_order():
+    previous = gs(95)  # the last state before the touchdown: the event happened after it was seen
     touchdown = gs(100, home=7)
+    after_previous = local(95)  # a provable lower bound on the touchdown's time
     quote = obs(received=101)  # received after the scoreboard changed
     assert quote.state_knowledge is StateKnowledge.UNKNOWN
-    assert ev.state_relation(quote, touchdown, state_time=source(99)) is StateRelation.UNKNOWN
+    assert ev.state_relation(quote, touchdown, event_not_before=after_previous) is StateRelation.UNKNOWN
     declared = obs(received=101, version=touchdown.observation_id)
     assert declared.state_knowledge is StateKnowledge.KNOWN
-    assert ev.state_relation(declared, touchdown, state_time=source(99)) is StateRelation.INCORPORATES
-    # published provably before the event: it cannot reflect it, even though it arrived after
+    assert ev.state_relation(declared, touchdown, event_not_before=after_previous) is StateRelation.INCORPORATES
+    # published provably before the event could have happened: it cannot reflect it, though it arrived after
     early = obs(received=101, published=90)
-    assert ev.state_relation(early, touchdown, state_time=source(99)) is StateRelation.CANNOT_INCORPORATE
+    assert ev.state_relation(early, touchdown, event_not_before=after_previous) is StateRelation.CANNOT_INCORPORATE
+    assert previous.home_score == 0
+
+
+def test_a_scoreboard_publication_time_is_not_a_lower_bound_on_the_event():
+    # The touchdown was published by the scoreboard at 10 s; it may have happened any time after the
+    # previous state (seen at 5 s). A book published at 8 s may already reflect it: UNKNOWN, never CANNOT.
+    touchdown = gs(12, home=7, src_ts=10)
+    book = obs(received=9.5, published=8)
+    assert ev.state_relation(book, touchdown, event_not_before=local(5)) is StateRelation.UNKNOWN
+    assert ev.state_relation(book, touchdown, event_not_before=None) is StateRelation.UNKNOWN
     # a version without its documented basis declares nothing
     with pytest.raises(ValueError, match="documented basis"):
         SourceObservation("q", "s", "G1", local(1), CTX, EvidenceStatus.SIMULATED, DataKind.FIXTURE,
@@ -180,6 +192,17 @@ def test_duplicate_state_changes_nothing_and_a_correction_invalidates():
     v = ev.decision_validity(stamp(s0, as_of=t(15)), j2, at=t(30))
     assert v.status is ValidityStatus.INVALIDATED
     assert any(r is RevalidationReason.STATE_CORRECTED for r, _ in v.reasons)
+
+
+def test_a_journal_out_of_first_observed_order_still_invalidates():
+    early, td = gs(10, home=0), gs(15, home=7, event="e2")
+    j = GameJournal("G1").append(td).append(early)  # appended out of first-observed order
+    assert ev.game_state_as_of(j, t(20)).observation_id == td.observation_id
+    v = ev.decision_validity(stamp(early, as_of=t(11)), j, at=t(20))
+    assert v.status is ValidityStatus.INVALIDATED and v.superseded_by == (td.observation_id,)
+    # and a state first observed before the depended-on one is not "later", whatever its position
+    v2 = ev.decision_validity(stamp(td, as_of=t(16)), j, at=t(20))
+    assert v2.status is ValidityStatus.VALID
 
 
 def test_reversed_event_order_needs_review_and_is_not_read_as_new_state():
@@ -262,12 +285,15 @@ def test_unmeasured_latency_is_none_never_zero():
 # ------------------------------------------------------------------ source leadership, both directions
 
 
+KICK = "2026-10-04T17:00:00+00:00"
+
+
 def series(sid, family, mids, *, gap=1.0, start=0.0, clock="host:laptop", spread="0.02", upstream=(),
            uncertainty=timedelta(milliseconds=50), precision=MS):
     pts = tuple(QuotePoint(f"{sid}-{i}", ClockReading(t(start + i * gap), ClockOrigin.LOCAL, clock, precision,
                                                       uncertainty),
                            D(m) - D(spread) / 2, D(m) + D(spread) / 2) for i, m in enumerate(mids))
-    return SourceSeries(sid, family, CTX, "RECEIVED", pts, DataKind.FIXTURE, upstream)
+    return SourceSeries(sid, family, CTX, "RECEIVED", pts, DataKind.FIXTURE, "G1", KICK, upstream)
 
 
 KW = dict(move_threshold=D("0.03"), match_window=timedelta(seconds=5), required_resolution=timedelta(seconds=2),
@@ -327,7 +353,8 @@ def test_bid_ask_noise_is_not_a_move():
 
 def test_reversed_arrival_order_is_counted_and_ordered_by_the_source_clock():
     a = series("a", "EXCHANGE", A_LEADS)
-    shuffled = SourceSeries("a", "EXCHANGE", CTX, "RECEIVED", tuple(reversed(a.points)), DataKind.FIXTURE)
+    shuffled = SourceSeries("a", "EXCHANGE", CTX, "RECEIVED", tuple(reversed(a.points)), DataKind.FIXTURE, "G1",
+                            KICK)
     r = ev.source_leadership(shuffled, series("b", "BOOK", B_LAGS), **KW)
     assert r.out_of_order_points == len(a.points) - 1
     assert (r.a_first, r.b_first) == (2, 0)
@@ -341,7 +368,8 @@ def test_research_exposure_is_required_and_reported():
 
 
 def test_synthetic_and_fixture_series_are_not_compared():
-    syn = SourceSeries("b", "BOOK", CTX, "RECEIVED", series("b", "BOOK", B_LAGS).points, DataKind.SYNTHETIC)
+    syn = SourceSeries("b", "BOOK", CTX, "RECEIVED", series("b", "BOOK", B_LAGS).points, DataKind.SYNTHETIC, "G1",
+                       KICK)
     with pytest.raises(ValueError, match="data kinds"):
         ev.source_leadership(series("a", "X", A_LEADS), syn, **KW)
 
@@ -349,15 +377,32 @@ def test_synthetic_and_fixture_series_are_not_compared():
 def test_recorded_series_and_holdout_dates_are_refused_in_this_batch():
     pts = series("b", "BOOK", B_LAGS).points
     with pytest.raises(ValueError, match="RECORDED series are refused"):
-        SourceSeries("b", "BOOK", CTX, "RECEIVED", pts, DataKind.RECORDED)
+        SourceSeries("b", "BOOK", CTX, "RECEIVED", pts, DataKind.RECORDED, "G1", KICK)
     late = (QuotePoint("late", ClockReading("2026-10-22T04:00:00+00:00", ClockOrigin.LOCAL, "c", MS, None),
                        D("0.4"), D("0.5")),)
     for kind in (DataKind.FIXTURE, DataKind.SYNTHETIC):
         with pytest.raises(ValueError, match="holdout boundary"):
-            SourceSeries("b", "BOOK", CTX, "RECEIVED", late, kind)
-    just_before = (QuotePoint("ok", ClockReading("2026-10-22T03:59:59+00:00", ClockOrigin.LOCAL, "c", MS, None),
+            SourceSeries("b", "BOOK", CTX, "RECEIVED", late, kind, "G1", KICK)
+    just_before = (QuotePoint("ok", ClockReading("2026-10-22T03:59:59+00:00", ClockOrigin.LOCAL, "c", MS, MS),
                               D("0.4"), D("0.5")),)
-    SourceSeries("b", "BOOK", CTX, "RECEIVED", just_before, DataKind.FIXTURE)
+    SourceSeries("b", "BOOK", CTX, "RECEIVED", just_before, DataKind.FIXTURE, "G1", KICK)
+    # an unknown clock bound leaves the latest possible time open: it must clear the margin
+    unbounded = (QuotePoint("u", ClockReading("2026-10-21T12:00:00+00:00", ClockOrigin.LOCAL, "c", MS, None),
+                            D("0.4"), D("0.5")),)
+    with pytest.raises(ValueError, match="holdout boundary"):
+        SourceSeries("b", "BOOK", CTX, "RECEIVED", unbounded, DataKind.FIXTURE, "G1", KICK)
+    # an interval that reaches the boundary is refused even when the stamp is before it
+    spanning = (QuotePoint("s", ClockReading("2026-10-22T03:59:59+00:00", ClockOrigin.LOCAL, "c", SEC,
+                                             timedelta(hours=1)), D("0.4"), D("0.5")),)
+    with pytest.raises(ValueError, match="holdout boundary"):
+        SourceSeries("b", "BOOK", CTX, "RECEIVED", spanning, DataKind.FIXTURE, "G1", KICK)
+    # a pregame point for an event kicking off on or after the boundary is refused by the kickoff
+    early_point = (QuotePoint("p", ClockReading("2026-10-20T12:00:00+00:00", ClockOrigin.LOCAL, "c", MS, SEC),
+                              D("0.4"), D("0.5")),)
+    for kickoff in ("2026-10-22T04:00:00+00:00", "2026-10-22T00:00:00-04:00", "2026-10-25T17:00:00+00:00"):
+        with pytest.raises(ValueError, match="kickoff"):
+            SourceSeries("b", "BOOK", CTX, "RECEIVED", early_point, DataKind.FIXTURE, "G9", kickoff)
+    SourceSeries("b", "BOOK", CTX, "RECEIVED", early_point, DataKind.FIXTURE, "G9", "2026-10-21T23:59:59-04:00")
 
 
 def test_evidence_status_is_tied_to_the_input_kind():
@@ -393,3 +438,65 @@ def test_a_decision_on_an_unreadable_state_needs_review():
     unmapped = GameState("G1", "scores", "e1", Stamps(t(10), t(10)), GameStateStatus.UNSUPPORTED_OR_UNMAPPED, "x")
     v = ev.decision_validity(stamp(unmapped, as_of=t(15)), journal(unmapped), at=t(20))
     assert v.status is ValidityStatus.REVIEW_REQUIRED and v.reasons[0][0] is RevalidationReason.STATE_UNKNOWN
+
+
+
+# ------------------------------------------------------------------ review fixes: symmetry, clock basis, events
+
+
+def test_swapping_the_arguments_mirrors_the_report():
+    import random
+
+    rng = random.Random(20260930)
+    for trial in range(200):
+        def rand_series(sid):
+            mids, m = [], 50
+            for _ in range(rng.randint(3, 14)):
+                m = min(90, max(10, m + rng.choice((-10, 0, 0, 10))))
+                mids.append(f"{m / 100:.2f}")
+            return series(sid, sid.upper(), mids, gap=rng.choice((0.5, 1.0, 1.5)), start=rng.choice((0.0, 0.3, 1.1)))
+
+        a, b = rand_series("a"), rand_series("b")
+        kw = {**KW, "match_window": timedelta(seconds=rng.choice((1, 3, 10))), "min_ordered": 1}
+        r1, r2 = ev.source_leadership(a, b, **kw), ev.source_leadership(b, a, **kw)
+        assert r1.status is r2.status, trial
+        assert (r1.a_first, r1.b_first) == (r2.b_first, r2.a_first), trial
+        assert (r1.unordered, r1.ambiguous) == (r2.unordered, r2.ambiguous), trial
+        assert (r1.unmatched_a, r1.unmatched_b) == (r2.unmatched_b, r2.unmatched_a), trial
+
+
+def test_a_move_with_two_candidate_partners_is_ambiguous_not_directional():
+    a = series("a", "X", ["0.50", "0.60", "0.60", "0.60", "0.70", "0.70", "0.70", "0.70"])  # up at 0-1 s and 3-4 s
+    b = series("b", "Y", ["0.50", "0.50", "0.50", "0.50", "0.50", "0.60", "0.60", "0.60"])  # up at 4-5 s
+    kw = {**KW, "match_window": timedelta(seconds=10), "min_ordered": 1}
+    r1, r2 = ev.source_leadership(a, b, **kw), ev.source_leadership(b, a, **kw)
+    assert (r1.a_first, r1.b_first, r1.ambiguous) == (0, 0, 1) == (r2.b_first, r2.a_first, r2.ambiguous)
+    assert r1.status is r2.status is LeadershipStatus.INSUFFICIENT_EVIDENCE
+
+
+def test_series_on_different_clock_bases_or_events_are_not_compared():
+    pub = tuple(QuotePoint(p.observation_id, ClockReading(p.at.utc, ClockOrigin.SOURCE, "src:a", MS,
+                                                          timedelta(milliseconds=50)), p.bid, p.ask)
+                for p in series("a", "X", A_LEADS).points)
+    published = SourceSeries("a", "X", CTX, "PUBLISHED", pub, DataKind.FIXTURE, "G1", KICK)
+    with pytest.raises(ValueError, match="clock bases"):
+        ev.source_leadership(published, series("b", "Y", B_LAGS), **KW)
+    with pytest.raises(ValueError, match="carries SOURCE readings only"):
+        SourceSeries("a", "X", CTX, "PUBLISHED", series("a", "X", A_LEADS).points, DataKind.FIXTURE, "G1", KICK)
+    other_event = SourceSeries("b", "Y", CTX, "RECEIVED", series("b", "Y", B_LAGS).points, DataKind.FIXTURE, "G2",
+                               KICK)
+    with pytest.raises(ValueError, match="different events"):
+        ev.source_leadership(series("a", "X", A_LEADS), other_event, **KW)
+    r = ev.source_leadership(series("a", "X", A_LEADS), series("b", "Y", B_LAGS), **KW)
+    assert r.clock_basis == "RECEIVED" and r.event_id == "G1"
+
+
+def test_one_sided_quotes_are_bridged_and_counted_not_dropped():
+    mids = ["0.50", "0.50", None, "0.60", "0.60", "0.60", "0.60", "0.60"]
+    pts = tuple(QuotePoint(f"a-{i}", local(i), None if m is None else D(m) - D("0.01"),
+                           None if m is None else D(m) + D("0.01")) for i, m in enumerate(mids))
+    a = SourceSeries("a", "X", CTX, "RECEIVED", pts, DataKind.FIXTURE, "G1", KICK)
+    b = series("b", "Y", ["0.50", "0.50", "0.50", "0.50", "0.50", "0.50", "0.60", "0.60"])
+    r = ev.source_leadership(a, b, **{**KW, "min_ordered": 1})
+    assert r.moves_a == 1 and r.one_sided_skipped_a == 1 and r.a_first == 1  # the move spans 1-3 s
+    assert any(x.startswith("ONE_SIDED_BRIDGED") for x in r.reasons)

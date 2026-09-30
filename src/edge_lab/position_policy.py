@@ -235,6 +235,7 @@ class PositionPolicy:
 class GameStateInput:
     as_of_utc: str | None
     fields: Mapping[str, Any] = field(default_factory=dict)
+    version: str | None = None  # the `GameState.observation_id` these fields come from, when known
 
 
 @dataclass(frozen=True)
@@ -397,6 +398,12 @@ def evaluate(*, as_of: datetime, inventory: Inventory | None, orders: Sequence[R
     if state_validity is not None:
         prov["state_version"] = state_validity.state_version
         prov["state_validity"] = state_validity.status.value
+        prov["state_validity_decision"] = state_validity.decision_id
+        if game_state is not None and game_state.version is not None \
+                and game_state.version != state_validity.state_version:
+            reasons.append(f"STATE_VALIDITY_MISMATCH: validity is for state {state_validity.state_version}, the game "
+                           f"state supplied is {game_state.version}")
+            return decide(DecisionStatus.BLOCKED, None)
         checked = parse_utc(state_validity.checked_at_utc)
         if checked is None or checked != at:
             reasons.append(f"STATE_VALIDITY_NOT_AT_AS_OF: checked at {state_validity.checked_at_utc}, decision as of "
