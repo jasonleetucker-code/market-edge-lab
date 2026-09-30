@@ -3,14 +3,14 @@
 This is the live state of the repository. Each session overwrites it; it is not a history
 (git log is the history). Format: `AI_INSTRUCTIONS.md` → Handoff format.
 
-_Last updated: 2026-09-29 ~16:40 America/New_York (VPS clock) by the laptop Claude coordinator
+_Last updated: 2026-09-29 ~22:00 America/New_York (VPS clock) by the laptop Claude coordinator
 session. It covered the owner directive of 2026-09-29 (`docs/owner/2026-09-29-nhl-prospective-evidence-directive.md`,
 issue #134): EXP-002 correctness continuation plus bounded NHL prospective evidence. The earlier 2026-09-29 state
 (E1 and label proxies) is in git history (#133)._
 
 ```
 STATUS: DONE for the buildable scope. NHL prospective collection is BUILT, DEPLOYED and ACTIVE (production
-  fb2f5fd). EXP-002 freeze blocker 2 has sourced counts (PROPOSED values). The owner decisions are open in
+  23b7b3b). Opening night was captured for every horizon still ahead at activation. EXP-002 freeze blocker 2 has sourced counts (PROPOSED values). The owner decisions are open in
   docs/owner/2026-09-29-nhl-decision-packet.md and docs/owner/2026-09-29-vf-decision-packet.md.
 ACCEPTANCE: the 2026-09-29 directive:
   A. EXP-002: continue the pre-freeze blockers in dependency order; no weakening; no NHL mixing.
@@ -21,6 +21,13 @@ ACCEPTANCE: the 2026-09-29 directive:
      - No paid plan, timer, credentials or in-play.
 EVIDENCE:
   - MERGED (independent review; review fixes; exact-head CI green on 3.11/3.12; reconciled with main):
+    - #140 (f754fe9): the NHL-C activation record and the NHL owner decision packet.
+    - #141 (98a31c2): CI pytest job timeout raised from 10 to 20 min (a slow runner hit 10 min).
+    - #142 (5b1e5ff) and #143 (23b7b3b): the EXP-002 A.C timing-calibration tool, `sports_evidence exp002-timing`.
+      - Label-free: T-24h/T-6h only, pilot weeks 09-27..10-19 ET only.
+      - It logs a FEATURE_INSPECTION event (influenced_tuning true) before showing anything, and refuses on
+        truncation.
+      - Not run yet: it runs once, on production, after the pilot weeks (about 2026-10-19).
     - #135 (2f2d9c4): directive record, EXECUTION_PLAN entry, OWNER_IDEAS #134 re-plan.
     - #138 (5f2095d): EXP-002 sourced tie / not-played counts (docs/research/EXP002_TIE_NOTPLAYED_BOUNDS.md),
       summarized under EXP-002 below.
@@ -36,18 +43,22 @@ EVIDENCE:
     - #139 (fb2f5fd): a game that drops out of discovery and returns is re-planned (`:r<n>` ids).
       NOT_CAPTURED_SCHEDULE_STALE; both-switch install test.
   - DEPLOYED with /root/deploy.sh (preflight PASS, backups verified before and after, fail-closed PASS,
-    0 failed units, 13 timers): 7e0b81d 15:10 ET, c9a2406 15:36 ET, fb2f5fd 16:31 ET.
+    0 failed units, 13 timers): 7e0b81d 15:10 ET, c9a2406 15:36 ET, fb2f5fd 16:31 ET, 23b7b3b 21:52 ET (#142/#143;
+    the timing tool; both NHL switches kept).
   - ACTIVATED (docs/deploy/NHL_ACTIVATION_2026-09-29.md):
     - EDGE_LAB_ODDS_NHL=on at 15:12 ET. Preview was PROVEN (6 September slots admitted, October none).
-    - EDGE_LAB_KALSHI_NHL_CAPTURE=on at 15:38 ET. The dry run planned 50 targets, 0 unmapped, 0 requests.
-  - OBSERVATIONS CAPTURED (production, verified 16:18 ET):
-    - 12 of 20 manual opening-night Kalshi rows.
-    - Scheduled Kalshi: FLA@CAR T-60m and VAN@EDM T-6h (both team markets each).
-    - Odds API: FLA@CAR T-60m h2h (1 credit).
+    - EDGE_LAB_KALSHI_NHL_CAPTURE=on at 15:38 ET. The dry run would plan 64 targets (16 games), 0 unmapped, 0 requests.
+  - OBSERVATIONS CAPTURED, opening night 2026-09-29 (production, verified 21:50 ET; 0 failed units):
+    - Manual Kalshi: 20 of 20 (phase custom, origin manual).
+    - Scheduled Kalshi T-60m: all 5 games, both team markets (10 of 10). Leads vs the provider commence time:
+      65 min; MTL@TOR 95 min, because of the protected-window shift.
+    - Scheduled Kalshi T-6h: VAN@EDM and CHI@VGK (4 targets).
+    - Odds API T-60m h2h: all 5 games (5 credits).
+    - Storage: 58 NHL snapshots, about 158 KB of payload, plus 74 observation rows. The DB is 16 MB.
     - 3 opening-night games' Kalshi T-6h (6 team-market targets) are MISSED NOT_COLLECTED_BEFORE_ACTIVATION. Nothing was captured late
       or relabelled.
-  - Odds credits: September spent 45 (NFL) + NHL so far 1. The September NHL admission is 6 slots, at most 6
-    credits.
+  - Odds credits: September spent 50 (45 NFL + 5 NHL); the provider reports 450 remaining. One more September
+    NHL slot is admitted (Sep 30, 18:35 ET, 2 games, 1 credit).
   - October NHL Odds coverage is back-loaded by NFL's worst-case reservation: no NHL T-60m from the late
     Sep 30 game through Oct 3 (15 slots SKIPPED_BUDGET), first capture Oct 4, then released weekly, about 103 of 118 T-60m slots on the planner's model. Kalshi NHL is unaffected.
   - EXP-002 (freeze blocker 2, PROPOSED; the freeze review decides):
@@ -63,12 +74,11 @@ UNRESOLVED:
       the fee owner.
     - Odds API NHL team names were verified only by tonight's 0-unmapped dry run.
     - The 19:00-game Odds (T-25m) and Kalshi (T-85m) read times are about 60 min apart; packet decision 2.
-    - The evening opening-night captures after 16:18 ET are not yet verified in this record.
     - The Odds API lists NHL commence times about 10 min after NHL.com's, so Odds "T-60m" is about T-50m of the
       official start (recorded; provider data is not altered).
   - EXP-002 freeze blockers remaining:
     - review of the E1 design;
-    - the A.C timing calibration (label-free, logged);
+    - the A.C timing calibration: the tool is built and deployed (#142); one logged run after 2026-10-19;
     - KXNFLGAME fees;
     - the owner freeze review 2026-10-22.
     - Blocker 2 now has sourced PROPOSED values.
@@ -89,9 +99,9 @@ BLOCKERS (owner-only):
      - the shared protected-window contract (decision 2).
   2. docs/owner/2026-09-29-vf-decision-packet.md: Kalshi message revision 2 and channel; the data-rights review;
      the optional in-play pilot.
-NEXT ACTION: verify tonight's remaining NHL captures (the 16:35–21:40 ET slots). Then do the EXP-002 A.C timing
-  calibration (label-free, logged FEATURE_INSPECTION), and propose a shared protected-window contract for NHL
-  Odds and Kalshi reads.
+NEXT ACTION: watch the first full NHL day (Sep 30: 3 games; the late game's Odds T-60m falls in October and is
+  SKIPPED_BUDGET by design). Run the O1 pull and F09 around 2026-10-03. Run the A.C calibration once after
+  2026-10-19. Propose the shared protected-window contract if the owner picks decision 2(b).
 ```
 
 ## Daily operation (what runs by itself)
