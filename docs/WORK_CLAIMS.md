@@ -6,3 +6,4 @@ The expiry is a UTC date no more than 7 days out. An expired row is not a live c
 
 | Claim | Agent | Branch | Paths | Expires |
 |---|---|---|---|---|
+| Coordinator: HANDOFF 2026-09-30 (roadmap + R2/R4/PR C) | Claude (laptop coordinator) | docs/handoff-2026-09-30 | HANDOFF.md | 2026-10-07 |
