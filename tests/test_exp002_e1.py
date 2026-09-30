@@ -674,6 +674,21 @@ def test_the_interim_futility_bound_is_the_t_on_week_means():
     assert "lower" not in json.dumps(f)  # futility only: no efficacy (lower) bound is ever given
 
 
+def test_the_t_on_week_means_is_reported_as_a_cross_check():
+    import math
+    import statistics
+
+    assert se._t_cdf(1.6377443572159062, 3) == pytest.approx(0.90, abs=1e-8)
+    assert se._t_cdf(-1.5332062740589443, 4) == pytest.approx(0.10, abs=1e-8)
+    clusters = [[0.02, 0.05, -0.01], [0.03], [-0.02, 0.04], [0.01, 0.00, 0.02, -0.01], [0.06, -0.03], [0.02, 0.02]]
+    out = se.e1_signflip([(f"w{i}", v) for i, c in enumerate(clusters) for v in c])
+    means = [sum(c) / len(c) for c in clusters]
+    t = (sum(means) / 6) / (statistics.stdev(means) / math.sqrt(6))
+    x = out["week_means_cross_check"]
+    assert x["df"] == 5 and x["t"] == pytest.approx(t) and 0 < x["p_value_one_sided"] < 0.5
+    assert x["use"].startswith("a reported cross-check")
+
+
 def test_the_bounds_invert_the_same_test():
     clusters = [[0.02, 0.05, -0.01], [0.03], [-0.02, 0.04], [0.01, 0.00, 0.02, -0.01], [0.06, -0.03], [0.02, 0.02],
                 [0.01, 0.03], [-0.01, 0.02, 0.00]]

@@ -3058,6 +3058,33 @@ def _e1_week_means_futility(clusters: Sequence[Sequence[float]]) -> dict[str, An
             "use": "interim futility information only, never efficacy"}
 
 
+def _t_cdf(x: float, df: int, steps: int = 4000) -> float:
+    """Student t CDF by Simpson integration of the density (stdlib only; accurate to about 1e-9 here)."""
+    if not math.isfinite(x):
+        return 1.0 if x > 0 else 0.0
+    c = math.exp(math.lgamma((df + 1) / 2) - math.lgamma(df / 2)) / math.sqrt(df * math.pi)
+    h = abs(x) / steps
+    total = sum((1 if i in (0, steps) else 4 if i % 2 else 2) * c * (1 + (i * h) ** 2 / df) ** (-(df + 1) / 2)
+                for i in range(steps + 1))
+    area = total * h / 3
+    return 0.5 + area if x >= 0 else 0.5 - area
+
+
+def _e1_week_means_t(clusters: Sequence[Sequence[float]]) -> dict[str, Any] | None:
+    """The reported cross-check (C1): a t-test on the G equal-weighted week means with G - 1 df, one-sided p for
+    H0: mean <= 0. None below 2 weeks or with no spread."""
+    g = len(clusters)
+    if g < 2:
+        return None
+    means = [sum(c) / len(c) for c in clusters]
+    sd = statistics.stdev(means)
+    if sd <= 0:
+        return None
+    t = (sum(means) / g) / (sd / math.sqrt(g))
+    return {"method": f"t-test on the {g} week means, {g - 1} df (equal-weighted)", "t": t, "df": g - 1,
+            "p_value_one_sided": 1 - _t_cdf(t, g - 1), "use": "a reported cross-check, not the confirmatory test"}
+
+
 def e1_signflip(pairs: Sequence[tuple[str, float]], *, seed: int = 20261022) -> dict[str, Any]:
     """C1 (revised): the exact restricted studentized Rademacher sign-flip test by NFL week of the trade-weighted
     mean gross for G >= 6, with the one-sided p for H0: E[gross] <= 0 and the bounds by inverting the same test;
@@ -3076,7 +3103,7 @@ def e1_signflip(pairs: Sequence[tuple[str, float]], *, seed: int = 20261022) -> 
         "min_achievable_p_rademacher": None if g == 0 else 1 / 2 ** g,
         "no_rejection_possible_at_0_05": None if g == 0 else 1 / 2 ** g > 0.05,
         "weights": "RADEMACHER", "p_value_one_sided": None, "bounds": {}, "patterns": 0, "exact_enumeration": None,
-        "interim_futility": None, "verdict": E1_NO_VERDICT}
+        "interim_futility": None, "week_means_cross_check": _e1_week_means_t(clusters), "verdict": E1_NO_VERDICT}
     if g < E1_SIGNFLIP_MIN_WEEKS:
         return {**out, "state": "INSUFFICIENT_EVIDENCE",
                 "interim_futility": _e1_week_means_futility(clusters) if len(pairs) >= 2 else None,
