@@ -403,3 +403,79 @@ def pre_submit_checks(ticket: ExecutionTicket, *, now: datetime, market: Market 
         fail(Control.COOLDOWN_ACTIVE, f"{ticket.market_id} within {limits.market_cooldown}")
     fail(Control.EXECUTION_NOT_AUTHORIZED, "execution is disabled for every venue (docs/EXECUTION_PLAN.md)")
     return tuple(out)
+
+
+# ---------------------------------------------------------------- simultaneous obligations (R2, ADR 0041)
+#
+# A pure design helper for the gap in docs/research/EXECUTION_MODES_GAP.md. Resting orders and RFQ quotes
+# are obligations that may bind at any moment and all at once: the counterparty chooses when. So each
+# open obligation reserves its full worst-case loss, simultaneously, with no netting across obligations
+# and no assumed partial acceptance. A cancel request is not a confirmation, and an unknown state stays
+# reserved. It reserves nothing anywhere: it computes what a future executor's atomic reservation
+# (ADR 0035 item 3) would have to hold.
+
+
+class ObligationState(str, Enum):
+    OUTSTANDING = "OUTSTANDING"  # a live quote or resting order: it can bind without our further action
+    CANCEL_REQUESTED = "CANCEL_REQUESTED"  # still reserved: a request is not a confirmation
+    UNKNOWN = "UNKNOWN"  # the answer was lost: quarantined and reserved until reconciled
+    BOUND = "BOUND"  # accepted or filled: now a position, still at risk until settlement
+    RELEASED = "RELEASED"  # cancel confirmed, expired, rejected or settled
+
+
+HELD_OBLIGATION_STATES = frozenset({ObligationState.OUTSTANDING, ObligationState.CANCEL_REQUESTED,
+                                    ObligationState.UNKNOWN, ObligationState.BOUND})
+
+
+@dataclass(frozen=True)
+class Obligation:
+    obligation_id: str
+    state: ObligationState
+    worst_case_loss: Decimal | None  # at full size; None or invalid is unknown and fails closed
+    exposure_keys: tuple[str, ...] = ()  # a game, a player, a combo leg shared with other obligations
+
+
+@dataclass(frozen=True)
+class ObligationReservation:
+    required: Decimal | None  # every held obligation's worst case, summed; None when any is unknown
+    by_key: Mapping[str, Decimal]  # the same sum per shared exposure key
+    held: tuple[str, ...]
+    new_risk_allowed: bool
+    reasons: tuple[str, ...]
+
+
+def reserve_simultaneous_obligations(obligations: tuple[Obligation, ...], *, available_cash: Decimal | None,
+                                     candidate: Obligation | None = None) -> ObligationReservation:
+    """What must be reserved if every held obligation binds at once, and whether `candidate` fits too.
+
+    Conservative by construction: no netting between obligations (their joint payoff is not known
+    here), no partial acceptance, no credit for a cancel request, and an unknown worst case or unknown
+    cash blocks new risk. Pure: it holds and changes nothing."""
+    reasons: list[str] = []
+    ids = [o.obligation_id for o in obligations] + ([candidate.obligation_id] if candidate else [])
+    if len(ids) != len(set(ids)):
+        raise ValueError("obligation ids must be unique")
+    held = [o for o in obligations if o.state in HELD_OBLIGATION_STATES] + ([candidate] if candidate else [])
+    unknown = [o.obligation_id for o in held if not _known_loss(o.worst_case_loss)]
+    by_key: dict[str, Decimal] = {}
+    required: Decimal | None = None
+    if unknown:
+        reasons.append(f"WORST_CASE_UNKNOWN: {unknown[:3]}; no new risk")
+    else:
+        required = sum((o.worst_case_loss for o in held), Decimal(0))
+        for o in held:
+            for k in o.exposure_keys:
+                by_key[k] = by_key.get(k, Decimal(0)) + o.worst_case_loss
+    for o in held:
+        if o.state is ObligationState.CANCEL_REQUESTED:
+            reasons.append(f"CANCEL_NOT_CONFIRMED: {o.obligation_id} stays reserved")
+        elif o.state is ObligationState.UNKNOWN:
+            reasons.append(f"UNKNOWN_STATE_QUARANTINE: {o.obligation_id} stays reserved until reconciled")
+    if not _known_loss(available_cash):
+        reasons.append("CASH_UNKNOWN: available cash is not known; no new risk")
+    allowed = candidate is not None and required is not None and _known_loss(available_cash) \
+        and required <= available_cash
+    if candidate is not None and required is not None and _known_loss(available_cash) and required > available_cash:
+        reasons.append(f"INSUFFICIENT_CASH: {required} needed if every obligation binds at once > {available_cash}")
+    return ObligationReservation(required, MappingProxyType(dict(sorted(by_key.items()))),
+                                 tuple(o.obligation_id for o in held), allowed, tuple(reasons))
