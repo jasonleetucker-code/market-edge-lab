@@ -174,3 +174,11 @@ def test_a_header_that_changes_between_reads_is_refused_not_mixed(tmp_path, monk
     monkeypatch.setattr(ev, "journal_data_kind", lambda _p: ev.DataKind.SYNTHETIC)  # the file was replaced
     with pytest.raises(ValueError, match="header changed"):
         ev.replay_book_journal(path, TICKER)
+
+
+def test_a_header_only_journal_replaced_between_reads_is_refused(tmp_path, monkeypatch):
+    path = _journal(tmp_path, "RECORDED", [])
+    kinds = iter([ev.DataKind.SYNTHETIC, ev.DataKind.RECORDED])  # first read, then the replaced file
+    monkeypatch.setattr(ev, "journal_data_kind", lambda _p: next(kinds))
+    with pytest.raises(ValueError, match="header changed"):
+        ev.replay_book_journal(path, TICKER)

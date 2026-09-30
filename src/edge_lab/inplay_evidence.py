@@ -869,7 +869,9 @@ def replay_book_journal(path: Path, market_ticker: str, *, scope: SeqScope = Seq
     parse errors are returned, not dropped."""
     recon, failures, parse_failures = SubscriptionReconstructor(scope), [], 0
     data_kind = journal_data_kind(path)  # from the header, so a journal with no lines keeps its kind
+    lines_read = 0
     for line in read_journal(path):
+        lines_read += 1
         if line.data_kind is not data_kind:  # the file was replaced between the two reads: refuse, never mix
             raise ValueError(f"{path}: the journal header changed while it was read")
         if line.kind == "failure":
@@ -892,6 +894,8 @@ def replay_book_journal(path: Path, market_ticker: str, *, scope: SeqScope = Seq
             failures.append(SourceFailure(FailureKind.PARSE_ERROR, line.receipt_utc, f"{msg.reason}: {msg.detail}"))
             continue
         recon.apply(msg)
+    if not lines_read and journal_data_kind(path) is not data_kind:  # a header-only journal replaced meanwhile
+        raise ValueError(f"{path}: the journal header changed while it was read")
     state = recon.books.get(market_ticker) or BookState(market_ticker)
     return state, tuple(recon.transitions.get(market_ticker, ())), tuple(failures), parse_failures, data_kind
 
