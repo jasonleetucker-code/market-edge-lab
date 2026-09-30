@@ -1920,6 +1920,11 @@ def rfq_section(ctx: d.Context) -> str:
     if loaded.status != d.OK:
         return c.section(title, c.unavailable("RFQ feasibility unavailable", loaded.message), sid="rfq-h")
     v = loaded.value
+    if v.get("participation_authorized") is not False:  # never expected: fail loudly, never show "no participation"
+        return c.section(title, c.error_state(
+            "Unexpected: execution authorized, review",
+            "The Kalshi venue record says execution is authorized, which no directive grants. Nothing is shown as "
+            "the feasibility decision until this is reviewed."), sid="rfq-h")
     counts = {k: sum(1 for r in v["rows"] if r["state"] == k) for k in RFQ_WORDS}
     head = c.blocked_state(f"Decision: {v['decision'].capitalize()} · no RFQ participation",
                            "No credential, subscription, RFQ, quote, acceptance or confirmation is authorized. "

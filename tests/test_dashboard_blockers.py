@@ -154,3 +154,21 @@ def test_rfq_feasibility_stale_error_unavailable_and_unrecognized_states(monkeyp
     assert "RFQ feasibility unavailable" in sec and "not installed" in sec
     from edge_lab.dashboard.views import research
     assert "Unrecognized state (SOMETHING)" in research.rfq_word("SOMETHING")
+
+
+def test_rfq_section_refuses_to_render_the_decision_if_execution_is_ever_authorized(monkeypatch):
+    from edge_lab import rfq_research
+
+    app = make_app(Config(clock=lambda: NOW))
+    # venues.VenueSpec itself refuses execution_authorized=True; a stand-in simulates a broken record
+    monkeypatch.setattr(rfq_research, "KALSHI", SimpleNamespace(execution_authorized=True))
+    sec = _rfq(get(app, "/experiments", "tab=sources")[1])
+    assert "Unexpected: execution authorized, review" in sec
+    assert "Decision: Narrow" not in sec and "no RFQ participation" not in sec
+    assert d.rfq_feasibility(d.Context(Config(clock=lambda: NOW))).value["participation_authorized"] is True
+
+
+def test_owner_decisions_carry_no_markdown():
+    from edge_lab import rfq_research
+
+    assert not any("`" in text for _, text in rfq_research.OWNER_DECISIONS)

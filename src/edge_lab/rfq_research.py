@@ -903,10 +903,10 @@ FEASIBILITY_MATRIX: tuple[CapabilityRow, ...] = (
 )
 OWNER_DECISIONS: tuple[tuple[str, str], ...] = (
     ("D1", "Data rights: read the Developer Agreement signed in, and decide (adds RFQ-stream storage)."),
-    ("D2", "Approve a narrowest-scope Kalshi credential for observe-only `communications`, plus a bounded census. "
+    ("D2", "Approve a narrowest-scope Kalshi credential for observe-only communications-channel access, plus a bounded census. "
            "Credential creation is not authorized today."),
     ("D3", "Add the RFQ questions to the Kalshi message (revision 3); sending stays owner-confirmed."),
-    ("D4", "Approve a bounded public read of `is_block_trade` trades as a new read scope (useful only once C7 is "
+    ("D4", "Approve a bounded public read of is_block_trade trades as a new read scope (useful only once C7 is "
            "answered)."),
     ("D5", "A research slot: RFQ empirical work would be a new family under #96."),
     ("D6", "Budget: $0 cash for D2 and D4; owner hours unpriced; VPS headroom checked first; no paid tier."),
