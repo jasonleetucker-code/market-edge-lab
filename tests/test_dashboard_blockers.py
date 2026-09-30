@@ -1,0 +1,105 @@
+"""Current blockers on Data sources and the Terminal; contract exceptions on market detail (PR C, UI_CONTRACT §14)."""
+
+from __future__ import annotations
+
+import re
+from dataclasses import replace
+from datetime import datetime, timezone
+from types import SimpleNamespace
+
+import pytest
+
+from edge_lab import current_blockers as cb
+from edge_lab.dashboard import Config, make_app
+from edge_lab.dashboard import data as d
+from edge_lab.dashboard.views import markets
+
+NOW = datetime(2026, 9, 30, 12, tzinfo=timezone.utc)
+
+
+def get(app, path, query=""):
+    out = {}
+
+    def start(status, headers):
+        out["status"] = status
+    body = b"".join(app({"REQUEST_METHOD": "GET", "PATH_INFO": path, "QUERY_STRING": query,
+                         "HTTP_HOST": "localhost"}, start))
+    return out["status"], body.decode("utf-8")
+
+
+def _section(body: str) -> str:
+    m = re.search(r'aria-labelledby="blk-h".*?</section>', body, re.S)
+    assert m, "Current blockers section missing"
+    return m.group(0)
+
+
+def _clean(html: str) -> None:
+    assert "<form" not in html and "<button" not in html and ' style="' not in html
+    for word in ("Buy", "Place order", "Submit", "Edge score", "LIVE"):
+        assert word not in html
+
+
+@pytest.fixture()
+def app():
+    return make_app(Config(clock=lambda: NOW))
+
+
+def test_populated_register_on_data_sources(app):
+    status, body = get(app, "/experiments", "tab=sources")
+    assert status.startswith("200")
+    sec = _section(body)
+    for text in ("Current blockers", "KXNHLGAME fees", "Fee unsupported", "owner approval needed",
+                 "Not sent · owner", "Rules unresolved", "Next: Weekly off-host pull", "current-blockers-v1"):
+        assert text in sec, text
+    assert "Odds API NHL commence times" not in sec.split("Verified, unknown and sources")[0]  # RECORDED: not open
+    _clean(sec)
+
+
+def test_terminal_names_the_next_blocker_in_system_and_evidence(app):
+    status, body = get(app, "/")
+    assert status.startswith("200") and "Next research blocker or approval" in body
+    assert "Weekly off-host pull (O1) and F09" in body and 'href="/experiments?tab=sources#blk-h"' in body
+
+
+def test_stale_register_says_so():
+    app = make_app(Config(clock=lambda: datetime(2026, 10, 20, tzinfo=timezone.utc)))
+    sec = _section(get(app, "/experiments", "tab=sources")[1])
+    assert "Register needs re-checking" in sec and "stale is not current" in sec
+    assert "stale: re-check" in get(app, "/")[1]
+
+
+def test_error_state_when_the_register_is_inconsistent(app, monkeypatch):
+    monkeypatch.setattr(cb, "validate", lambda *a: ["duplicate blocker ids"])
+    sec = _section(get(app, "/experiments", "tab=sources")[1])
+    assert "Blocker register unavailable" in sec and "duplicate blocker ids" in sec
+    assert "Blocker register unavailable" in get(app, "/")[1]
+
+
+def test_empty_and_all_closed_states(app, monkeypatch):
+    first = cb.BLOCKERS[0]
+    monkeypatch.setattr(cb, "BLOCKERS", ())
+    assert "No research blocker recorded" in _section(get(app, "/experiments", "tab=sources")[1])
+    monkeypatch.setattr(cb, "BLOCKERS", (replace(first, status=cb.Status.RECORDED),))
+    assert "No open blocker" in _section(get(app, "/experiments", "tab=sources")[1])
+    assert "No open research blocker is recorded" in get(app, "/")[1]
+
+
+def test_an_unrecognized_status_renders_neutral_with_its_code():
+    from edge_lab.dashboard.views import research
+
+    html = research.blocker_word("SOMETHING_NEW")
+    assert "Unrecognized status (SOMETHING_NEW)" in html and "BLOCKER_SOMETHING_NEW" in html
+
+
+def test_market_detail_rules_show_contract_exceptions_for_sports_series_only():
+    def row(native):
+        return SimpleNamespace(title="t", outcome="o", rules_primary="r", venue="kalshi", market_id=f"kalshi:{native}",
+                               native_id=native, event_id="e", payoff_kind="BINARY", status="active",
+                               close_time_utc=None, target_date=None, quotes={})
+    nhl = markets.rules_section(row("KXNHLGAME-26OCT04BOSTOR-BOS"))
+    assert "contract exceptions (recorded summary, not the rules)" in nhl
+    assert "Shootout — rules unresolved" in nhl and "Tie — rules unresolved" in nhl
+    nfl = markets.rules_section(row("KXNFLGAME-26OCT04BUFNE-BUF"))
+    assert "Tie after overtime — verified" in nfl and "no fallback-F settlement has been observed" in nfl
+    assert "contract exceptions" not in markets.rules_section(row("KXHIGHNY-26SEP30-T70"))
+    assert d.contract_exceptions("KXHIGHNY-26SEP30-T70") is None

@@ -98,6 +98,14 @@ def percent(value: Any, places: int = 1) -> str | None:
     return f"{d * 100:.{places}f}%"
 
 
+def ratio(value: Any, places: int = 2) -> str | None:
+    """A multiple of a stated denominator (turnover): 1.44×. The denominator is named beside it."""
+    d = dec(value)
+    if d is None:
+        return None
+    return f"{d:.{places}f}×"
+
+
 def pp(value: Any) -> str | None:
     """A probability difference in percentage points: +5.2 pp (never "%")."""
     d = dec(value)

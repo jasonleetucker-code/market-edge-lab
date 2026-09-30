@@ -47,6 +47,25 @@ ARM_LABELS = {("HOLD", None): "Hold to settlement", ("FULL_EXIT", "BOT_TRIGGERED
               ("PARTIAL_EXIT", "BOT_TRIGGERED"): "Partial exit · bot-triggered",
               ("PARTIAL_EXIT", "PREPLACED_LIMIT"): "Partial exit · preplaced limit"}
 FEE_UNKNOWN = "after-cost figure unavailable: fee unknown"
+# source-state-v1 (ADR 0041) words: nothing is green; a valid decision is information, not success
+VALIDITY_WORDS = {"VALID": ("Valid at replay clock", "info"),
+                  "INVALIDATED": ("Invalidated · recompute", "warn"),
+                  "REVIEW_REQUIRED": ("Review required", "warn")}
+FRESHNESS_WORDS = {"fresh": ("Fresh by publication time", "info"), "stale": ("Stale — not actionable", "warn"),
+                   "unknown": ("Unknown age: source clock bound unknown", "nd")}
+KNOWLEDGE_WORDS = {"KNOWN": ("Declared by the source", "info"),
+                   "UNKNOWN": ("Unknown: not declared by the source", "nd")}
+EVIDENCE_WORDS = {"ACTUAL": ("Actual", "info"), "SIMULATED": ("Simulated · not actual", "warn"),
+                  "HYPOTHETICAL": ("Hypothetical · never sent", "warn"),
+                  "UNAVAILABLE": ("Unavailable to us", "nd")}
+DATA_KIND_WORDS = {"FIXTURE": ("Fixture input", "warn"), "SYNTHETIC": ("Synthetic input", "warn"),
+                   "RECORDED": ("Recorded input", "info")}
+# Phase enum values in plain words: this page never prints the word for a live feed (none is authorized)
+PHASE_WORDS = {"PREGAME": "pregame", "LIVE": "in game", "BREAK": "break", "POSTGAME": "postgame",
+               "UNKNOWN": "unknown"}
+MISSING_WORDS = {"FEE_SCOPE_UNKNOWN": "fees unknown: net blocked",
+                 "RESIDUAL_INVENTORY": "open inventory: total not known",
+                 "SUBSIDY_MASKS_LOSS": "rebates hide an unsubsidized loss"}
 
 
 def _word(table: dict, code: Any, prefix: str) -> str:
@@ -100,9 +119,18 @@ CAVEAT_PREFIXES = ("FEE_UNKNOWN",)  # caveats on a proposal's figures, not the r
 def primary_reason(reasons: list[str]) -> str | None:
     """The reason the decision was taken: the first reason that is not a figure caveat (FEE_UNKNOWN),
     so an EXIT reads TARGET_REACHED and a block reads its blocking reason. A caveat is shown only when
-    it is the only reason. Every reason stays listed in Policy details."""
+    it is the only reason. A game-state reason shows its codes only (STATE_INVALIDATED:
+    MATERIAL_STATE_CHANGE); its observation ids and times stay in Policy details with every reason."""
     decisive = [r for r in reasons if not r.startswith(CAVEAT_PREFIXES)]
-    return (decisive or reasons or [None])[0]
+    first = (decisive or reasons or [None])[0]
+    return reason_codes(first) if first and first.startswith("STATE_") else first
+
+
+def reason_codes(reason: str | None) -> str | None:
+    """`CODE: SUBCODE: detail` as `CODE: SUBCODE` (the detail is shown in a disclosure)."""
+    if reason is None:
+        return None
+    return ": ".join(reason.split(": ")[:2])
 
 
 def position_section(view: dict[str, Any]) -> str:
@@ -236,6 +264,91 @@ def comparison_section(view: dict[str, Any]) -> str:
                      meta=meta, sid="ip-cmp")
 
 
+def source_state_section(view: dict[str, Any]) -> str:
+    """Source, state and clock validity (inplay_evidence source-state-v1): compact facts, details disclosed."""
+    ss = view.get("source_state")
+    if not ss:
+        return c.section("Source and state validity", c.unavailable(
+            "Not evaluated", "No game-state journal accompanies this view, so no decision was checked against the "
+            "game state."), sid="ip-ss")
+    dec_ = ss.get("decision") or {}
+    reasons = dec_.get("reasons") or []
+    facts = c.facts([
+        ("Evidence", _word(EVIDENCE_WORDS, ss.get("evidence_status"), "EVIDENCE") + " "
+         + _word(DATA_KIND_WORDS, ss.get("data_kind"), "DATA_KIND")),
+        ("Source", c.txt(ss.get("source_id"), reason="no book received")),
+        ("Source family", c.txt(ss.get("source_family"), reason="UNKNOWN")),
+        ("Content age", _word(FRESHNESS_WORDS, ss.get("content_freshness"), "CONTENT_FRESHNESS")
+         if ss.get("content_freshness") else c.na("no book received")),
+        ("Game state in the quote", _word(KNOWLEDGE_WORDS, ss.get("incorporated_state"), "INCORPORATED")
+         if ss.get("incorporated_state") else c.na("no book received")),
+        ("Decision validity", _word(VALIDITY_WORDS, dec_.get("status"), "VALIDITY")),
+        ("Reason", c.txt(reason_codes(reasons[0]).split(": ")[0] if reasons else "no later material state"
+                         if dec_.get("status") == "VALID" else None, reason="none recorded")),
+    ], text_cols=(1, 2, 6))
+    lat = c.table(["stage", "seconds", "± seconds", "method"],
+                  [[esc(x.get("stage")), c.num(x.get("seconds"), reason="not measured"),
+                    c.num(x.get("uncertainty_seconds"), reason="unknown bound" if x.get("measured") else "not measured"),
+                    c.txt(x.get("method"), reason="not measured")] for x in ss.get("latency") or []],
+                  wrap=(3,), caption="Latency stages (unmeasured is not zero)", empty="no book received")
+    ctx_ = ss.get("context") or {}
+    detail = c.disclosure("Clocks, context and decision", c.kv([
+        ("received (our clock)", c.txt(pr.datetime_et(ss.get("received_utc")), reason="none")
+         + " " + esc(f"± {ss.get('received_uncertainty_seconds')} s")),
+        ("published (venue clock)", c.txt(pr.datetime_et(ss.get("published_utc")), reason="not sent")
+         + (" " + esc(f"bound {ss.get('published_uncertainty')}") if ss.get("published_uncertainty") else "")),
+        ("sport · market · phase · regime", esc(" · ".join(
+            PHASE_WORDS.get(ctx_.get(k), "unknown") if k == "phase" else str(ctx_.get(k) or "unknown")
+            for k in ("sport", "market", "phase", "regime")))),
+        ("decision as of", c.txt(pr.datetime_et(dec_.get("as_of_utc")), reason="none")),
+        ("state version", c.code(dec_.get("state_version"))),
+        ("checked at", c.txt(pr.datetime_et(dec_.get("checked_at_utc")), reason="none")),
+        ("superseded by", c.ul(dec_.get("superseded_by") or [], empty="none")),
+        ("all reasons", c.ul(reasons, empty="none")),
+        ("contract", c.code(ss.get("contract_version"))),
+    ]) + lat + f'<p class="note">{esc(ss.get("note") or "")} {esc(ss.get("game_clock_note") or "")}</p>')
+    return c.section("Source and state validity", facts + detail,
+                     meta="A recommendation on an old game state is recomputed, never sent", sid="ip-ss")
+
+
+def economics_section(view: dict[str, Any]) -> str:
+    """Fill-conditioned economics from the synthetic replay's simulated fills, per execution mode."""
+    fe = view.get("fill_economics")
+    if not fe or fe.get("state") == "NOT_EVALUATED":
+        return c.section("Fill-conditioned economics", c.unavailable(
+            "Not evaluated", (fe or {}).get("detail") or "No replay, so no simulated fills."), sid="ip-econ")
+    rows = []
+    for r in fe.get("rows") or []:
+        if r.get("state") == "ERROR":
+            rows.append(c.row(esc(r.get("arm")), aside=c.state_text("ECON_ERROR", label="Refused", kind="err"),
+                              body=c.error_state("Economics refused", r.get("detail") or "")))
+            continue
+        missing = [MISSING_WORDS.get(m, m) for m in r.get("missing") or []]
+        facts = c.facts([
+            ("Mode", c.txt(" + ".join(m.replace("_", " ").lower() for m in r.get("modes") or []) or None,
+                           reason="no fill")),
+            ("Evidence", _word(EVIDENCE_WORDS, r.get("evidence"), "EVIDENCE")),
+            ("Simulated fills", c.num(pr.count(r.get("fills")), reason="none")),
+            ("Gross (simulated)", _money(r.get("gross"), "open inventory: not known", signed=True)),
+            ("Net (simulated)", _money(r.get("net"), FEE_UNKNOWN, signed=True)),
+            ("Peak collateral", _money(r.get("peak_collateral"), "not evaluated")),
+            ("Return on deployed", c.num(pr.percent(r.get("return_on_deployed")), reason="net unknown")),
+            ("Turnover of total capital", c.num(pr.ratio(r.get("turnover")), reason="no capital")),
+        ], text_cols=(0, 1))
+        aside = c.state_text("ECON_MISSING", label=f"{len(missing)} missing" if missing else "All figures known",
+                             kind="warn" if missing else "nd")
+        rows.append(c.row(esc(r.get("arm")), sub="; ".join(missing) or "every denominator known",
+                          aside=aside, body=facts))
+    detail = c.disclosure("Economics details", c.kv(
+        [(str(r.get("arm")), c.ul(r.get("reasons") or [], empty="none")) for r in fe.get("rows") or []]
+        + [("capital-days · notional", c.ul([f"{r.get('arm')}: {r.get('capital_days')} capital-days, notional "
+                                             f"{r.get('notional')}" for r in fe.get("rows") or []
+                                             if r.get("state") == "POPULATED"]))]))
+    note = f'<p class="note">{esc(fe.get("detail") or "")} {esc(fe.get("rfq") or "")}</p>'
+    return c.section("Fill-conditioned economics", note + '<ul class="rows">' + "".join(rows) + "</ul>" + detail,
+                     meta="Simulated fills only · taker and maker kept apart · not an edge", sid="ip-econ")
+
+
 def authority_section(view: dict[str, Any]) -> str:
     body = c.facts([
         ("Authority", c.txt(view.get("authority"), reason="not recorded")),
@@ -261,7 +374,8 @@ def inplay_body(view: dict[str, Any]) -> str:
                                      action=("/experiments", "Research & Data")))
         parts.append(authority_section(view))
         return "".join(parts)
-    parts += [position_section(view), policy_section(view), comparison_section(view), authority_section(view)]
+    parts += [position_section(view), source_state_section(view), policy_section(view), comparison_section(view),
+              economics_section(view), authority_section(view)]
     return "".join(parts)
 
 

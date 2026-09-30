@@ -1823,6 +1823,7 @@ def sources_tab(ctx: d.Context) -> str:
         out.append(c.section("Collected sources", '<ul class="rows">' + "".join(items) + "</ul>"
                              + f'<div class="pad">{c.disclosure("Source health (latest per source)", detail)}</div>',
                              sid="src-h", flush=True))
+    out.append(blockers_section(ctx))
     out.append(fees_section(ctx))
     venue_table = c.table(
         ["venue", "kind", "capability", "stage", "auth required", "execution authorized", "evidence"],
@@ -1835,6 +1836,57 @@ def sources_tab(ctx: d.Context) -> str:
         "not authorized for any venue.") + "</p>" + venue_table, boxed=True))
     out.append(c.disclosure("Pipeline receipt (full)", receipt_detail(ctx, days=True), boxed=True))
     return "".join(out)
+
+
+# Blocker statuses (current_blockers.Status) in plain words; nothing is green, an unknown code renders neutral
+BLOCKER_WORDS = {"FEE_UNSUPPORTED": ("Fee unsupported", "warn"), "RULES_UNRESOLVED": ("Rules unresolved", "warn"),
+                 "UNRESOLVED": ("Unresolved", "warn"), "CORRECTION_PENDING": ("Correction pending", "info"),
+                 "RECORDED": ("Recorded · no action now", "nd"), "NOT_SENT": ("Not sent · owner", "warn"),
+                 "WAITING_FOR_WINDOW": ("Waiting for its date", "info"),
+                 "OWNER_DECISION": ("Owner decision", "warn")}
+RESOLVER_WORDS = {"OWNER": "Owner", "AGENT": "Agent", "VENUE": "Venue answer or document"}
+
+
+def blocker_word(code: Any) -> str:
+    label, kind = BLOCKER_WORDS.get(code, (f"Unrecognized status ({code})" if code else "Not recorded", "nd"))
+    return c.state_text(f"BLOCKER_{code}", label=label, kind=kind)
+
+
+def blockers_section(ctx: d.Context) -> str:
+    """The reconciled research blockers (current_blockers): what is verified, unknown, who resolves it, and when."""
+    title = "Current blockers"
+    loaded = d.current_blockers(ctx)
+    if loaded.status == d.ERROR:
+        return c.section(title, c.error_state("Blocker register unavailable", loaded.message), sid="blk-h")
+    if loaded.status != d.OK:
+        return c.section(title, c.empty_state("No research blocker recorded", loaded.message), sid="blk-h")
+    v = loaded.value
+    items = [x for x in v["items"] if x["open"]]
+    stale = [x for x in v["items"] if x["stale"]]
+    head = ""
+    if stale:
+        head = c.status_line("warn", "Register needs re-checking",
+                             f"{len(stale)} item(s) were last reconciled more than 14 days ago; stale is not current.")
+    if not items:
+        return c.section(title, head + c.empty_state("No open blocker", "Every recorded item is closed or recorded "
+                                                                        "for information."), sid="blk-h")
+    rows = []
+    for x in items:  # compact: title, status, who, trigger; everything else is in the disclosure below
+        who = RESOLVER_WORDS.get(x["resolver"], x["resolver"])
+        rows.append(c.row(esc(x["title"]), sub=f"{x['scope']} · {who} · {x['trigger']}"
+                          + (" · owner approval needed" if x["owner_approval_needed"] else "")
+                          + (" · stale" if x["stale"] else ""), aside=blocker_word(x["status"])))
+    detail = c.table(["id", "status", "verified", "unknown", "resolver", "sources"],
+                     [[c.code(x["id"]), c.code(x["status"]), esc(x["verified"]), esc(x["unknown"]),
+                       esc(x["resolver_detail"]), c.ul(x["sources"])] for x in v["items"]], wrap=(2, 3, 4, 5),
+                     caption="Blocker register")
+    nxt = next((x for x in v["items"] if x["id"] == v["next"]), None)
+    lead = (f'<div class="pad"><p class="note">Next: {esc(nxt["title"])} ({esc(nxt["trigger"])}). The register grants '
+            "nothing; owner items need the owner.</p></div>") if nxt else ""
+    return c.section(title, head + lead + '<ul class="rows">' + "".join(rows) + "</ul>"
+                     + f'<div class="pad">{c.disclosure("Verified, unknown and sources", detail)}'
+                     + f'<p class="note">{esc(v["version"])} · {esc(v["document"])}</p></div>',
+                     meta=f"{len(items)} open · reconciled from repository evidence", sid="blk-h", flush=True)
 
 
 def fees_section(ctx: d.Context) -> str:

@@ -684,7 +684,9 @@ def schedule_for(venue: str, scope: str | None = None, *, as_of: datetime | str 
     equals the schedule's theta; `polymarket_us.fee_scope`) and, for a point-in-time replay
     (`as_of`), only from its effective date: an earlier Polymarket US schedule was never
     captured. Every other venue or scope has its own fees and stays unsupported until its
-    own primary evidence is captured. `as_of` does not change Kalshi routing."""
+    own primary evidence is captured. A Kalshi series that extends a listed non-standard series
+    (`nonstandard_family`: KXNHLGAME under KXNHL, KXMVECROSSCATEGORY under KXMVE) is unsupported too:
+    it is never priced by a guessed general schedule. `as_of` does not change Kalshi routing."""
     if venue == "polymarket_us":
         if scope != POLYMARKET_US_EXCHANGE_SCOPE:
             return UnsupportedFeeSchedule(venue, scope, "the market's fee coefficient is unknown or differs from the "
@@ -702,7 +704,25 @@ def schedule_for(venue: str, scope: str | None = None, *, as_of: datetime | str 
         return UnsupportedFeeSchedule(venue, scope, "the Kalshi series is unknown")
     if scope in KALSHI_NONSTANDARD_SERIES:
         return UnsupportedFeeSchedule(venue, scope, "series has a non-standard Kalshi fee schedule (PDF pp.6-11)")
+    family = nonstandard_family(scope)
+    if family is not None:
+        return UnsupportedFeeSchedule(venue, scope, f"series {scope} is in the {family} family, which the PDF's "
+                                                    f"non-standard list names (pp.6-11); {scope} itself has no verified "
+                                                    "schedule, so the general schedule is never guessed for it")
     return KALSHI_QUADRATIC_TAKER_V1
+
+
+def nonstandard_family(scope: str | None) -> str | None:
+    """The longest series on the captured non-standard list that `scope` extends, or None.
+
+    The list names series exactly, but a sibling of a listed series is not thereby proven standard:
+    KXNHLGAME is not listed while KXNHL is, and the combination series KXMVECROSSCATEGORY and its
+    kin extend the listed KXMVE. Such a series is FEE_UNSUPPORTED until its own fee is verified.
+    A series with no listed prefix (for example KXHIGHNY) is unaffected."""
+    if not scope or scope in KALSHI_NONSTANDARD_SERIES:
+        return None
+    matches = [s for s in KALSHI_NONSTANDARD_SERIES if scope.startswith(s)]
+    return max(matches, key=len) if matches else None
 
 
 def recorded_claim_basis(fills: Iterable[Mapping[str, Any]]) -> ClaimBasis:
