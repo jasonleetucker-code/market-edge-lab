@@ -396,6 +396,11 @@ def test_size_and_execution_diagnostics(tmp_path):
     cross = diag["exit_cross_check"]  # own bids 0.58 and 0.53 vs 1 - 0.42 = 0.58: never above
     assert cross["checked"] == 2 and cross["own_bid_above_other_implied"] == 0 and cross["share"] == 0.0
     assert "not an edge estimate" in diag["entry_margin_note"]
+    primary = [0.03, -0.02, 0.03, -0.55, -0.05]
+    m = sum(primary) / 5
+    m2, m3 = (sum((v - m) ** k for v in primary) / 5 for k in (2, 3))
+    assert diag["skewness_primary"] == pytest.approx(m3 / m2 ** 1.5) and diag["skewness_primary"] < 0
+    assert diag["weeks"]["with_scored_trade"] == 2 and diag["weeks"]["calendar_with_due_t6"] == 2
 
 
 def test_no_t60m_target_is_a_missing_exit_after_kickoff_and_pending_before_it(tmp_path):

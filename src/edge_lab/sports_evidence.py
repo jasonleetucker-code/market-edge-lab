@@ -3328,6 +3328,9 @@ def e1_endpoint(entries: Mapping[str, Any], targets: Sequence[Mapping[str, Any]]
                                                        "anti-conservative at few clusters (E1 design review §3)")
     primary_summary["sign_flip_test"] = e1_signflip(primary)
     mean = primary_summary["mean_gross"]
+    values = [v for _, v in primary]
+    m2 = None if len(values) < 3 else sum((v - mean) ** 2 for v in values) / len(values)
+    skewness = (None if not m2 else sum((v - mean) ** 3 for v in values) / len(values) / m2 ** 1.5)
     trades = att["trades"]
     return {
         "version": E1_VERSION, "state": E1_STATE, "proposal": E1_PROPOSAL,
@@ -3371,6 +3374,11 @@ def e1_endpoint(entries: Mapping[str, Any], targets: Sequence[Mapping[str, Any]]
                                        "fractional level is crossed (ADR 0036)"}},
         "execution_diagnostics": {  # C12, descriptive
             "mean_less_one_tick": None if mean is None else mean - float(E1_TICK),
+            "skewness_primary": skewness,  # freeze proposal v2 row 5: sign-flip validity needs symmetry
+            "weeks": {"with_scored_trade": primary_summary["weeks"],
+                      "calendar_with_due_t6": entries["operational_futility_inputs"]["entries_per_week"][
+                          "weeks_with_due_t6"],
+                      "note": "G for every rule counts weeks with at least one scored trade (review §3.3)"},
             "single_book_anomaly_split": {k: {"n": len(v), "mean_gross": (sum(v) / len(v)) if v else None}
                                           for k, v in anomaly_split.items()},
             "exit_cross_check": {**cross_checks,
