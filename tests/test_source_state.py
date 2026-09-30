@@ -387,3 +387,9 @@ def test_source_state_reads_no_labels_and_no_experiment_data():
     for banned in ("sports_evidence", "exp002_timing", "settlement", "outcome_board", "storage", "research_evidence",
                    "experiments", "odds_consensus"):
         assert not [m for m in imported if m and banned in m], banned
+
+
+def test_a_decision_on_an_unreadable_state_needs_review():
+    unmapped = GameState("G1", "scores", "e1", Stamps(t(10), t(10)), GameStateStatus.UNSUPPORTED_OR_UNMAPPED, "x")
+    v = ev.decision_validity(stamp(unmapped, as_of=t(15)), journal(unmapped), at=t(20))
+    assert v.status is ValidityStatus.REVIEW_REQUIRED and v.reasons[0][0] is RevalidationReason.STATE_UNKNOWN

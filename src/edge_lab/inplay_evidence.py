@@ -1326,6 +1326,9 @@ def decision_validity(stamp: DecisionStamp, journal: GameJournal, *, at: datetim
                             f"{stamp.state_version} is not in the journal as seen at {now.isoformat()}"))
         else:
             dep_first = parse_utc(dep.stamps.first_observed_utc)
+            if dep.status is not GameStateStatus.OBSERVED:
+                reasons.append((RevalidationReason.STATE_UNKNOWN,
+                                f"{dep.observation_id} is {dep.status.value}: the decision rests on an unreadable state"))
             if dep_first > as_of:
                 reasons.append((RevalidationReason.FUTURE_STATE_REFERENCE,
                                 f"{dep.observation_id} was first observed {dep.stamps.first_observed_utc}, after the "
