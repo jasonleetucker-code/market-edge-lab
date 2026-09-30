@@ -57,6 +57,13 @@ Rules:
     owner's minimum.
   - Fewer than two independent clusters is INSUFFICIENT_EVIDENCE.
 
+Fill-conditioned economics (`fill-conditioned-economics-v1`, R2 / ADR 0041, the last section) asks
+what our *fills* earned, per execution mode (TAKER / BOOK_MAKER / RFQ). It separates actual from
+simulated fills and reports, each on its own line:
+- gross and variable-cost-net contribution, rebates and promotions, and fixed cash costs;
+- residual inventory, common exposure, peak collateral, capital-days and turnover;
+- owner hours (unpriced), markouts and the opportunity funnel.
+
 Pure, deterministic, stdlib-only and network-free.
 """
 
@@ -71,6 +78,7 @@ from typing import Any, Iterable, Mapping, Sequence
 
 from .experiments import RESERVED_TEST_EXPERIMENT_IDS as _RESERVED_TEST_IDS
 from .freshness import parse_utc
+from .inplay_evidence import DataKind, EvidenceStatus, SourceContext, check_evidence, walk_bids
 from .opportunity import DepthLadder, DepthStatus, FeeSchedule, PriceGrid, price_depth_fill, walk_ladder
 from .provenance import canonical_json, sha256_hex
 
@@ -623,9 +631,7 @@ def replay(episodes: Sequence[Episode], scenario: CapitalScenario, *, size: Deci
     contribution = None if unknown_edge else sum((f.contribution for f in filled_fills), Decimal(0))
     gross = None if any(f.gross_contribution is None for f in filled_fills) else \
         sum((f.gross_contribution for f in filled_fills), Decimal(0))
-    average_deployed = (capital_days / window_days).quantize(_Q)
-    rod = None if contribution is None or average_deployed == 0 else (contribution / average_deployed).quantize(_Q)
-    rot = None if contribution is None or not total else (contribution / total).quantize(_Q)
+    average_deployed, rod, rot = _capital_returns(contribution, capital_days, window_days, total)
     idle = None if total is None else (total - average_deployed).quantize(_Q)
     if unknown_edge:
         extra_problems.append("contribution UNKNOWN: a filled episode has no net edge (no probability, no EV)")
@@ -1048,3 +1054,508 @@ def _verdict(inputs: ScreenInputs, net: Mapping[str, Labeled], estimable: bool, 
     return Verdict.INSUFFICIENT_EVIDENCE, reasons + [
         f"the band straddles the minimum: conservative lower {cons_lower.value} < minimum {minimum.value} <= "
         f"less-conservative upper {less_upper.value}"]
+
+
+# =========================================================================== fill-conditioned economics
+#
+# fill-conditioned-economics-v1 (R2, #145; ADR 0041). The episode screen above, its verdicts and
+# ECONOMICS_VERSION keep their meaning and outputs; its capital-return arithmetic moved, unchanged,
+# into `_capital_returns`, which this section shares. The screen asks what captured books would have
+# offered. This section asks what *our fills* earned, by execution mode.
+#
+# Rules:
+# - Taking, resting book-making and RFQ quoting are separate modes; a report never pools them into
+#   one ROI without showing each (`FillEconomicsReport.groups`).
+# - ACTUAL and SIMULATED fills are never mixed in one report. HYPOTHETICAL quotes and UNAVAILABLE
+#   private flow are not fills at all: they appear only in the funnel.
+# - P&L is a cash change. Proceeds are not profit, recycled principal is not profit, each fee is
+#   subtracted once, and one displayed depth or one unit of capital is never used twice.
+# - Residual inventory stays open: it is never valued at 0, and an incomplete portfolio has no
+#   total P&L. Closed winners do not erase open losses.
+# - An unknown fee blocks every net figure; gross stays as a labelled diagnostic.
+# - Rebates, promotions and fixed cash costs are separate lines, and unsubsidized P&L is always shown.
+# - Owner hours are hours. They are never priced here.
+# - A markout needs a declared horizon and benchmark and is signed by trade direction. It is not
+#   liquidation profit.
+# - A peak season or tournament window is never annualized over a whole year.
+# - An unobservable funnel outcome is UNKNOWN, never a nonfill, and there is no execution
+#   probability without evidence.
+
+
+FILL_ECONOMICS_VERSION = "fill-conditioned-economics-v1"
+GROSS_DIAGNOSTIC = "GROSS_DIAGNOSTIC: before fees; not a net or after-cost claim"
+
+
+class ExecutionMode(str, Enum):
+    TAKER = "TAKER"  # crossing a displayed quote
+    BOOK_MAKER = "BOOK_MAKER"  # a resting order on the public book, filled by someone else
+    RFQ = "RFQ"  # a quote in reply to a request, accepted and confirmed
+
+
+class TurnoverBasis(str, Enum):
+    AVERAGE_DEPLOYED = "AVERAGE_DEPLOYED"  # notional traded / average collateral deployed in the window
+    TOTAL_CAPITAL = "TOTAL_CAPITAL"  # notional traded / total capital
+
+
+@dataclass(frozen=True)
+class Fill:
+    """One fill of one binary contract (YES units). BUY pays `price`, SELL receives it, per contract."""
+
+    fill_id: str
+    mode: ExecutionMode
+    evidence: EvidenceStatus  # ACTUAL (an own fill on an account) or SIMULATED
+    data_kind: DataKind
+    instrument_id: str
+    side: str  # "BUY" | "SELL" of YES contracts
+    quantity: Decimal
+    price: Decimal
+    fee: Decimal | None  # None: the fee or its scope is unknown
+    at_utc: str
+    context: SourceContext
+    exposure_keys: tuple[str, ...] = ()  # common exposure: the game, a player, a shared combo leg
+    season: str | None = None
+    peak: bool | None = None  # a tournament or peak-season window; None is UNKNOWN
+    rebate: Decimal = Decimal(0)
+    promotion: Decimal = Decimal(0)
+    fee_included_in_price: bool = False  # the price is already all-in: no separate fee may be added
+    liquidity_ref: str | None = None  # the displayed level or quote this fill consumed
+    liquidity_available: Decimal | None = None  # its displayed size
+
+    def __post_init__(self) -> None:
+        if self.evidence not in (EvidenceStatus.ACTUAL, EvidenceStatus.SIMULATED):
+            raise ValueError(f"{self.evidence.value} is not a fill: hypothetical quotes and unavailable private flow "
+                             "belong in the funnel, never in P&L")
+        check_evidence(self.data_kind, self.evidence)
+        if self.side not in ("BUY", "SELL"):
+            raise ValueError("side is BUY or SELL")
+        if not isinstance(self.quantity, Decimal) or not self.quantity.is_finite() or self.quantity <= 0:
+            raise ValueError("quantity must be a positive Decimal")
+        if not isinstance(self.price, Decimal) or not (Decimal(0) < self.price < Decimal(1)):
+            raise ValueError("price is dollars per contract strictly inside (0, 1)")
+        if self.fee is not None and (not isinstance(self.fee, Decimal) or self.fee < 0):
+            raise ValueError("fee must be a non-negative Decimal or None (unknown)")
+        if self.fee_included_in_price and self.fee not in (None, Decimal(0)):
+            raise ValueError("DOUBLE_FEE: the price already includes the fee; a separate fee would subtract it twice")
+        for name in ("rebate", "promotion"):
+            v = getattr(self, name)
+            if not isinstance(v, Decimal) or v < 0:
+                raise ValueError(f"{name} must be a non-negative Decimal")
+        if parse_utc(self.at_utc) is None:
+            raise ValueError("at_utc must be timezone-aware")
+
+    @property
+    def cash(self) -> Decimal:
+        """Gross cash flow of the contracts, before fees: negative for a purchase."""
+        amount = self.quantity * self.price
+        return -amount if self.side == "BUY" else amount
+
+    @property
+    def signed_quantity(self) -> Decimal:
+        return self.quantity if self.side == "BUY" else -self.quantity
+
+    def content(self) -> tuple:
+        return tuple(getattr(self, f) for f in self.__dataclass_fields__)
+
+
+@dataclass(frozen=True)
+class Resolution:
+    """How one instrument settled: payout per YES contract and when the cash came back. A value of
+    None, or no resolution at all, leaves the instrument open (residual inventory)."""
+
+    value: Decimal | None
+    at_utc: str | None
+
+
+@dataclass(frozen=True)
+class OpenPosition:
+    instrument_id: str
+    quantity: Decimal  # signed YES contracts still held
+    cash_to_date: Decimal  # gross cash flow so far; not P&L
+    worst_case_loss: Decimal  # cash that can still be lost at settlement
+    exposure_keys: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class GroupEconomics:
+    """Per mode x evidence context. P&L is attributed only when every fill of an instrument sits in the
+    group; otherwise the group's P&L is None (ATTRIBUTION_MIXED), never split by guesswork."""
+
+    key: tuple[str, ...]  # (mode, sport, phase, regime, season, peak)
+    fills: int
+    notional: Decimal
+    fees: Decimal | None
+    rebates: Decimal
+    promotions: Decimal
+    gross_pnl: Decimal | None
+    net_pnl: Decimal | None  # unsubsidized, after fees
+    notes: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class FillEconomicsReport:
+    version: str
+    evidence: str
+    data_kind: str
+    window_start_utc: str
+    window_end_utc: str
+    fills: int
+    duplicate_fills_ignored: int
+    realized_gross: Decimal  # instruments that are flat or settled
+    total_gross: Decimal | None  # None while any residual inventory is open (never valued at 0)
+    fees: Decimal | None  # every fill's fee once; None when any is unknown
+    net_contribution: Decimal | None  # unsubsidized, after variable costs; None: fees unknown or positions open
+    realized_net: Decimal | None
+    rebates: Decimal
+    promotions: Decimal
+    subsidized_net: Decimal | None  # net plus rebates and promotions, shown beside, never instead
+    unsubsidized_negative: bool | None
+    fixed_cash_costs: Labeled
+    net_after_fixed: Labeled
+    owner_hours: Labeled  # hours; never priced here
+    owner_hours_priced: bool
+    open_positions: tuple[OpenPosition, ...]
+    open_worst_case_loss: Decimal
+    exposure_by_key: dict[str, Decimal]  # worst-case loss sharing each key, summed without netting
+    total_capital: Decimal
+    peak_collateral: Decimal
+    capital_days: Decimal
+    average_deployed: Decimal
+    return_on_deployed: Decimal | None
+    return_on_total: Decimal | None
+    notional: Decimal
+    turnover: Decimal | None
+    turnover_basis: str
+    turnover_denominator: Decimal | None
+    groups: tuple[GroupEconomics, ...]
+    peak_flags: dict[str, int]  # {"peak": n, "off_peak": n, "unknown": n} fills
+    reasons: tuple[str, ...]
+    gross_label: str = GROSS_DIAGNOSTIC
+
+    def to_dict(self) -> dict[str, Any]:
+        return _plain(asdict(self))
+
+
+def _capital_returns(contribution: Decimal | None, capital_days: Decimal, window_days: Decimal,
+                     total: Decimal | None) -> tuple[Decimal, Decimal | None, Decimal | None]:
+    """(average deployed, return on deployed, return on total): the one definition used by `replay`
+    and by `fill_economics`."""
+    average_deployed = (capital_days / window_days).quantize(_Q)
+    rod = None if contribution is None or average_deployed == 0 else (contribution / average_deployed).quantize(_Q)
+    rot = None if contribution is None or not total else (contribution / total).quantize(_Q)
+    return average_deployed, rod, rot
+
+
+def _locked(cash: Decimal, quantity: Decimal) -> Decimal:
+    """Cash at risk on one binary instrument: the worst of its two settlement outcomes (payout 0 or 1)."""
+    return max(Decimal(0), -min(cash, cash + quantity))
+
+
+def fill_economics(fills: Sequence[Fill], *, resolutions: Mapping[str, Resolution], window_start_utc: str,
+                   window_end_utc: str, total_capital: Decimal, fixed_cash_costs: Labeled, owner_hours: Labeled,
+                   turnover_basis: TurnoverBasis) -> FillEconomicsReport:
+    """Economics conditional on the fills that happened (or, labelled SIMULATED, would have).
+
+    Refuses, rather than reports, a fill set that double counts: two different fills under one id,
+    a displayed depth consumed beyond its size, collateral beyond `total_capital` at any instant, or
+    ACTUAL and SIMULATED fills together. An identical repeated fill is applied once and counted."""
+    start, end = _time(window_start_utc, "window start"), _time(window_end_utc, "window end")
+    if end <= start:
+        raise ValueError("the window must have positive length")
+    if not isinstance(total_capital, Decimal) or total_capital <= 0:
+        raise ValueError("total capital must be a positive Decimal")
+    reasons: list[str] = []
+    unique: dict[str, Fill] = {}
+    duplicates = 0
+    for f in fills:
+        prior = unique.get(f.fill_id)
+        if prior is None:
+            unique[f.fill_id] = f
+        elif prior.content() == f.content():
+            duplicates += 1
+        else:
+            raise ValueError(f"DUPLICATE_FILL_ID: {f.fill_id} carries two different fills")
+    rows = sorted(unique.values(), key=lambda f: (_time(f.at_utc, "fill"), f.fill_id))
+    if len({(f.evidence, f.data_kind) for f in rows}) > 1:
+        raise ValueError("ACTUAL and SIMULATED fills (or different input kinds) are reported separately, never mixed")
+    outside = [f.fill_id for f in rows if not start <= _time(f.at_utc, "fill") <= end]
+    if outside:
+        raise ValueError(f"fills outside the window: {outside[:3]}")
+    # one displayed depth, one use
+    depth: dict[str, tuple[Decimal | None, Decimal]] = {}
+    for f in rows:
+        if f.liquidity_ref is None:
+            continue
+        avail, used = depth.get(f.liquidity_ref, (f.liquidity_available, Decimal(0)))
+        if avail != f.liquidity_available:
+            raise ValueError(f"{f.liquidity_ref}: fills disagree about its displayed size")
+        used += f.quantity
+        if avail is not None and used > avail:
+            raise ValueError(f"SHARED_DEPTH_REUSED: {f.liquidity_ref} shows {avail} but fills consumed {used}")
+        depth[f.liquidity_ref] = (avail, used)
+    # timeline of fills and settlements: collateral, capital-days, peak
+    by_inst: dict[str, list[Fill]] = {}
+    for f in rows:
+        by_inst.setdefault(f.instrument_id, []).append(f)
+    settle_at: dict[str, datetime] = {}
+    for inst in by_inst:
+        r = resolutions.get(inst)
+        if r is not None and r.value is not None:
+            at = _time(r.at_utc, f"{inst} resolution") if r.at_utc else None
+            if at is None:
+                raise ValueError(f"{inst}: a settlement value needs its settlement time")
+            if at < _time(by_inst[inst][-1].at_utc, "fill"):
+                raise ValueError(f"{inst}: settled before its last fill")
+            settle_at[inst] = at
+    events = [(_time(f.at_utc, "fill"), 0, f.instrument_id, f) for f in rows]
+    events += [(at, 1, inst, None) for inst, at in settle_at.items() if at <= end]
+    events.sort(key=lambda e: (e[0], e[1], e[2]))
+    cash = {i: Decimal(0) for i in by_inst}
+    qty = {i: Decimal(0) for i in by_inst}
+    settled: set[str] = set()
+    capital_days = Decimal(0)
+    peak = Decimal(0)
+    cursor, current = start, Decimal(0)
+    for at, kind, inst, f in events:
+        capital_days += current * Decimal((at - cursor).total_seconds()) / Decimal(86400)
+        cursor = at
+        current -= _locked(cash[inst], qty[inst])  # this instrument's collateral before the event
+        if kind == 0:
+            cash[inst] += f.cash
+            qty[inst] += f.signed_quantity
+            current += _locked(cash[inst], qty[inst])
+        else:
+            settled.add(inst)  # settled: its collateral comes back
+        if current > total_capital:
+            raise ValueError(f"CAPITAL_OVERCOMMITTED at {at.isoformat()}: collateral {current} > capital "
+                             f"{total_capital}; one unit of capital is never used twice")
+        peak = max(peak, current)
+    capital_days += current * Decimal((end - cursor).total_seconds()) / Decimal(86400)
+    # P&L: settled or flat instruments are realized; the rest stay open
+    realized = Decimal(0)
+    open_positions: list[OpenPosition] = []
+    inst_pnl: dict[str, Decimal | None] = {}
+    for inst, fs in by_inst.items():
+        c = sum((f.cash for f in fs), Decimal(0))
+        q = sum((f.signed_quantity for f in fs), Decimal(0))
+        if inst in settled:
+            pnl = c + q * resolutions[inst].value
+        elif q == 0:
+            pnl = c
+        else:
+            pnl = None
+            keys = tuple(sorted({k for f in fs for k in f.exposure_keys}))
+            open_positions.append(OpenPosition(inst, q, c, _locked(c, q), keys))
+        inst_pnl[inst] = pnl
+        if pnl is not None:
+            realized += pnl
+    if open_positions:
+        reasons.append(f"RESIDUAL_INVENTORY: {len(open_positions)} open position(s); total P&L is not known until they "
+                       "settle (never valued at 0)")
+    fee_values = [f.fee for f in rows]
+    fees = None if any(v is None for v in fee_values) else sum(fee_values, Decimal(0))
+    if fees is None:
+        reasons.append("FEE_SCOPE_UNKNOWN: a fill's fee is unknown, so every net figure is blocked; gross is a "
+                       "labelled diagnostic")
+    total_gross = None if open_positions else realized
+    realized_fees = None if fees is None else sum(
+        (f.fee for f in rows if inst_pnl[f.instrument_id] is not None), Decimal(0))
+    realized_net = None if realized_fees is None else realized - realized_fees
+    net = None if fees is None or total_gross is None else total_gross - fees
+    rebates = sum((f.rebate for f in rows), Decimal(0))
+    promotions = sum((f.promotion for f in rows), Decimal(0))
+    subsidized = None if net is None else net + rebates + promotions
+    unsub_negative = None if net is None else net < 0
+    if unsub_negative and subsidized is not None and subsidized >= 0:
+        reasons.append(f"SUBSIDY_MASKS_LOSS: unsubsidized net {net} < 0; rebates and promotions ({rebates + promotions}) "
+                       "make it look non-negative")
+    after_fixed = (Labeled(net - fixed_cash_costs.value, Basis.ESTIMATED, "unsubsidized net minus fixed cash costs")
+                   if net is not None and fixed_cash_costs.value is not None
+                   else Labeled.unknown("net or fixed cash costs UNKNOWN"))
+    exposure: dict[str, Decimal] = {}
+    for p in open_positions:
+        for k in p.exposure_keys:
+            exposure[k] = exposure.get(k, Decimal(0)) + p.worst_case_loss
+    window_days = Decimal((end - start).total_seconds()) / Decimal(86400)
+    average_deployed, rod, rot = _capital_returns(net, capital_days, window_days, total_capital)
+    notional = sum((f.quantity * f.price for f in rows), Decimal(0))
+    denominator = average_deployed if turnover_basis is TurnoverBasis.AVERAGE_DEPLOYED else total_capital
+    turnover = None if not denominator else (notional / denominator).quantize(_Q)
+    # groups: mode x context; P&L attributed only to instruments wholly inside one group
+    def gkey(f: Fill) -> tuple[str, ...]:
+        c = f.context
+        return (f.mode.value, str(c.sport), c.phase.value, str(c.regime), str(f.season),
+                {True: "PEAK", False: "OFF_PEAK", None: "UNKNOWN"}[f.peak])
+
+    inst_groups = {inst: {gkey(f) for f in fs} for inst, fs in by_inst.items()}
+    groups = []
+    for key in sorted({gkey(f) for f in rows}):
+        members = [f for f in rows if gkey(f) == key]
+        insts = sorted({f.instrument_id for f in members})
+        notes = []
+        mixed = [i for i in insts if len(inst_groups[i]) > 1]
+        if mixed:
+            notes.append(f"ATTRIBUTION_MIXED: {mixed[:3]} traded in more than one group; no P&L is split by guess")
+        pnls = [inst_pnl[i] for i in insts]
+        gross = None if mixed or any(p is None for p in pnls) else sum(pnls, Decimal(0))
+        gfees = None if any(f.fee is None for f in members) else sum((f.fee for f in members), Decimal(0))
+        groups.append(GroupEconomics(key, len(members), sum((f.quantity * f.price for f in members), Decimal(0)),
+                                     gfees, sum((f.rebate for f in members), Decimal(0)),
+                                     sum((f.promotion for f in members), Decimal(0)), gross,
+                                     None if gross is None or gfees is None else gross - gfees, tuple(notes)))
+    if len({f.mode for f in rows}) > 1:
+        reasons.append("MODES_SEPARATE: taking, book-making and RFQ are reported per group; a pooled total is not a "
+                       "per-mode return")
+    flags = {"peak": sum(1 for f in rows if f.peak is True), "off_peak": sum(1 for f in rows if f.peak is False),
+             "unknown": sum(1 for f in rows if f.peak is None)}
+    first = rows[0] if rows else None
+    return FillEconomicsReport(
+        FILL_ECONOMICS_VERSION, first.evidence.value if first else "NONE", first.data_kind.value if first else "NONE",
+        window_start_utc, window_end_utc, len(rows), duplicates, realized, total_gross, fees, net, realized_net,
+        rebates, promotions, subsidized, unsub_negative, fixed_cash_costs, after_fixed, owner_hours, False,
+        tuple(open_positions), sum((p.worst_case_loss for p in open_positions), Decimal(0)), exposure,
+        total_capital, peak, capital_days.quantize(_Q), average_deployed, rod, rot, notional, turnover,
+        turnover_basis.value, denominator, tuple(groups), flags, tuple(reasons))
+
+
+def seasonal_scenario(report: FillEconomicsReport, *, active_days_per_year: Decimal) -> Labeled:
+    """A yearly scenario scaled to the declared active season, never to 365 days by default. A window
+    with any peak-flagged (tournament, playoff) or season-unknown fill is not annualized at all."""
+    if not isinstance(active_days_per_year, Decimal) or not (Decimal(0) < active_days_per_year <= DAYS_PER_YEAR):
+        raise ValueError("active days per year must be in (0, 365]")
+    if report.peak_flags["peak"]:
+        return Labeled.unknown("PEAK_NOT_ANNUALIZED: peak-event throughput does not repeat all year")
+    if report.peak_flags["unknown"]:
+        return Labeled.unknown("SEASON_UNKNOWN: a fill's peak flag is unknown")
+    if report.net_contribution is None:
+        return Labeled.unknown("net contribution UNKNOWN")
+    days = Decimal((_time(report.window_end_utc, "end") - _time(report.window_start_utc, "start")).total_seconds()) \
+        / Decimal(86400)
+    return Labeled((report.net_contribution * active_days_per_year / days).quantize(_Q), Basis.ESTIMATED,
+                   f"SIMPLIFIED SCENARIO: window net x {active_days_per_year} active days / {days.quantize(_Q)} window "
+                   "days, off-peak only; not an income forecast")
+
+
+# --------------------------------------------------------------------------- markouts
+
+
+@dataclass(frozen=True)
+class MarkoutSpec:
+    horizon: timedelta
+    benchmark: str  # declared before looking, e.g. "MID_AT_HORIZON"
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.horizon, timedelta) or self.horizon <= timedelta(0):
+            raise ValueError("a markout needs a positive declared horizon")
+        if not self.benchmark:
+            raise ValueError("a markout needs a declared benchmark")
+
+
+@dataclass(frozen=True)
+class Markout:
+    fill_id: str
+    side: str
+    horizon: timedelta
+    benchmark: str
+    benchmark_price: Decimal | None
+    value: Decimal | None  # signed by trade direction; None when the benchmark is unknown
+    label: str = "MARKOUT: a benchmark move after the fill; not liquidation profit and not realized P&L"
+    is_liquidation_profit: bool = False
+
+
+def markouts(fills: Sequence[Fill], benchmark_at_horizon: Mapping[str, Decimal | None],
+             spec: MarkoutSpec) -> tuple[Markout, ...]:
+    """Per-fill markout against the declared benchmark at fill time plus the horizon (supplied by the
+    caller, keyed by fill id). A BUY gains when the benchmark rises; a SELL when it falls."""
+    out = []
+    for f in fills:
+        bench = benchmark_at_horizon.get(f.fill_id)
+        value = None
+        if bench is not None:
+            value = (bench - f.price) * f.quantity if f.side == "BUY" else (f.price - bench) * f.quantity
+        out.append(Markout(f.fill_id, f.side, spec.horizon, spec.benchmark, bench, value))
+    return tuple(out)
+
+
+def liquidation_value(quantity: Decimal, bids: Sequence[tuple[Decimal, Decimal]]) -> Decimal | None:
+    """Gross cash from selling `quantity` long YES contracts into `bids` (ascending (price, size)) at
+    size, through the canonical sale walk. None when the bids cannot absorb it. Before fees."""
+    walk = walk_bids(bids, quantity)
+    return walk.gross_proceeds
+
+
+# --------------------------------------------------------------------------- opportunity funnel
+
+
+class FunnelStage(str, Enum):
+    REQUEST_OBSERVED = "REQUEST_OBSERVED"
+    ELIGIBLE = "ELIGIBLE"
+    HYPOTHETICAL_QUOTE = "HYPOTHETICAL_QUOTE"
+    OWN_QUOTE = "OWN_QUOTE"  # an actual quote or order we sent (none is authorized today)
+    ACCEPTED = "ACCEPTED"  # where visible
+    CONFIRMED = "CONFIRMED"
+    FILLED = "FILLED"
+    SETTLED = "SETTLED"
+
+
+FUNNEL_FIELDS = ("eligible", "hypothetical_quote", "own_quote", "accepted", "confirmed", "filled", "settled")
+
+
+@dataclass(frozen=True)
+class FunnelRecord:
+    """One observed request or opportunity. Each stage is True, False, or None (UNKNOWN: not observable).
+    An UNKNOWN acceptance or fill is never a nonfill."""
+
+    request_id: str
+    mode: ExecutionMode
+    context: SourceContext
+    eligible: bool | None = None
+    hypothetical_quote: bool | None = None
+    own_quote: bool | None = None
+    accepted: bool | None = None
+    confirmed: bool | None = None
+    filled: bool | None = None
+    settled: bool | None = None
+    season: str | None = None
+    peak: bool | None = None
+
+    def __post_init__(self) -> None:
+        if self.own_quote is False or self.own_quote is None:
+            for later in ("accepted", "confirmed", "filled"):
+                if getattr(self, later) is True and self.mode is not ExecutionMode.TAKER:
+                    raise ValueError(f"{self.request_id}: {later} without an own quote is someone else's flow; record "
+                                     "it as UNAVAILABLE, not as ours")
+        if self.filled is True and self.mode is ExecutionMode.RFQ and self.confirmed is False:
+            raise ValueError(f"{self.request_id}: an RFQ fill needs a confirmation; accepted is not filled")
+
+
+@dataclass(frozen=True)
+class FunnelReport:
+    records: int
+    stages: dict[str, dict[str, int]]  # stage -> {"yes", "no", "unknown"}
+    own_fill_rate: Decimal | None  # filled / own quotes, only when no own quote's outcome is UNKNOWN
+    own_fill_rate_reason: str
+    by_mode: dict[str, int]
+    note: str = ("Requests observed are an upper bound on demand, not fills. Hypothetical quotes earn nothing. UNKNOWN "
+                 "outcomes are not nonfills, and no execution probability exists without evidence.")
+
+
+def funnel_report(records: Sequence[FunnelRecord]) -> FunnelReport:
+    stages: dict[str, dict[str, int]] = {FunnelStage.REQUEST_OBSERVED.value: {"yes": len(records), "no": 0,
+                                                                              "unknown": 0}}
+    for name, stage in zip(FUNNEL_FIELDS, list(FunnelStage)[1:]):
+        vals = [getattr(r, name) for r in records]
+        stages[stage.value] = {"yes": sum(1 for v in vals if v is True), "no": sum(1 for v in vals if v is False),
+                               "unknown": sum(1 for v in vals if v is None)}
+    quoted = [r for r in records if r.own_quote is True]
+    if not quoted:
+        rate, why = None, "NO_OWN_QUOTES: hypothetical quotes give no execution probability"
+    elif any(r.filled is None for r in quoted):
+        rate, why = None, (f"UNKNOWN_OUTCOMES: {sum(1 for r in quoted if r.filled is None)} own quote(s) have an "
+                           "unobservable outcome; no execution probability without evidence")
+    else:
+        rate = (Decimal(sum(1 for r in quoted if r.filled)) / len(quoted)).quantize(_Q)
+        why = f"{len(quoted)} own quote(s), every outcome observed"
+    by_mode: dict[str, int] = {}
+    for r in records:
+        by_mode[r.mode.value] = by_mode.get(r.mode.value, 0) + 1
+    return FunnelReport(len(records), stages, rate, why, by_mode)
