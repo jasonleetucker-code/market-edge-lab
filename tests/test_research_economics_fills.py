@@ -131,6 +131,7 @@ def test_a_nonfill_cannot_earn_spread_and_hypothetical_quotes_are_not_fills():
                FunnelRecord("r2", ExecutionMode.RFQ, CTX, *hyp, eligible=True, hypothetical_quote=True, own_quote=None)]
     f = E.funnel_report(records)
     assert f.own_fill_rate is None and f.own_fill_rate_reason.startswith("NO_ACTUAL_OWN_QUOTES")
+    assert "hypothetical" not in f.own_fill_rate_reason
     with pytest.raises(ValueError, match="has no own quote"):
         FunnelRecord("r3", ExecutionMode.RFQ, CTX, *hyp, own_quote=True)
     assert f.stages["ACCEPTED"] == {"yes": 0, "no": 0, "unknown": 2}  # unobservable, never "not accepted"
@@ -357,3 +358,12 @@ def test_adverse_selection_holds_in_a_mixed_informed_and_uninformed_population()
     marks = E.markouts(fills, bench, MarkoutSpec(timedelta(minutes=60), "SYNTHETIC_TRUE_PROBABILITY"))
     assert sum(m.value for m in marks) < 0  # the informed half costs more than the spread earns on the rest
     assert econ(fills, res, days=6).total_gross < 0
+
+
+
+def test_a_zero_simulated_fill_rate_is_still_labelled_as_a_simulator_output():
+    sim = (EvidenceStatus.SIMULATED, DataKind.SYNTHETIC)
+    f = E.funnel_report([FunnelRecord("a", ExecutionMode.BOOK_MAKER, CTX, *sim, own_quote=True, filled=False),
+                         FunnelRecord("b", ExecutionMode.BOOK_MAKER, CTX, *sim, own_quote=True, filled=False)])
+    assert f.simulated_own_fill_rate == D(0) and f.own_fill_rate is None
+    assert f.simulated_own_fill_rate_reason.endswith("SIMULATED: a simulator's output, not an execution probability")

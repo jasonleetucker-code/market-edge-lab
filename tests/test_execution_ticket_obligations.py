@@ -58,3 +58,14 @@ def test_negative_or_invalid_worst_cases_are_refused_never_netted():
     same_leg = (ob("yes-side", "30", keys=("leg:A",)), ob("no-side", "70", keys=("leg:A",)))
     r = reserve_simultaneous_obligations(same_leg, available_cash=D("99"), candidate=ob("c", "0"))
     assert r.required == D("100") and r.by_key == {"leg:A": D("100")} and not r.new_risk_allowed
+
+
+
+def test_a_key_touched_by_an_unknown_worst_case_is_unknown_not_its_known_part():
+    held = (ob("known", "5", keys=("game:1", "leg:QB")), ob("unknown", None, keys=("game:1",)),
+            ob("elsewhere", "3", keys=("game:2",)))
+    r = reserve_simultaneous_obligations(held, available_cash=D("100"), candidate=ob("c", "1", keys=("game:2",)))
+    assert r.required is None and not r.new_risk_allowed
+    assert r.by_key["game:1"] is None  # 5 known plus an unknown amount is unknown, never 5 and never 0
+    assert r.by_key["leg:QB"] == D("5") and r.by_key["game:2"] == D("4")
+    assert "game:1" in r.by_key  # present, so .get(k, 0) cannot silently read 0

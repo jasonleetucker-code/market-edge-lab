@@ -455,7 +455,9 @@ class Obligation:
 @dataclass(frozen=True)
 class ObligationReservation:
     required: Decimal | None  # every held obligation's worst case, summed; None when any is unknown
-    by_key: Mapping[str, Decimal]  # the same sum per shared exposure key
+    # The same sum per shared exposure key. A key touched by any obligation whose worst case is unknown
+    # maps to None (never a partial sum, never absent), so `by_key.get(k, 0)` cannot read an unknown as 0.
+    by_key: Mapping[str, Decimal | None]
     held: tuple[str, ...]
     new_risk_allowed: bool
     reasons: tuple[str, ...]
@@ -468,7 +470,8 @@ def reserve_simultaneous_obligations(obligations: tuple[Obligation, ...], *, ava
     Held: OUTSTANDING, CANCEL_REQUESTED, UNKNOWN and BOUND; only RELEASED frees anything. Conservative
     by construction:
     - no netting between obligations, even on shared legs or common collateral (their joint payoff is
-      not known here); `by_key` shows the sum per shared key;
+      not known here); `by_key` shows the sum per shared key, and a key touched by an obligation with an
+      unknown worst case maps to None (its total is unknown, not the known part);
     - no partial acceptance, and no credit for a cancel request;
     - an unknown worst case (EXPOSURE_UNKNOWN) or unknown cash (CASH_UNKNOWN) gives `required` or
       `new_risk_allowed` that fail closed; nothing unknown becomes 0.
@@ -480,15 +483,18 @@ def reserve_simultaneous_obligations(obligations: tuple[Obligation, ...], *, ava
         raise ValueError("obligation ids must be unique")
     held = [o for o in obligations if o.state in HELD_OBLIGATION_STATES] + ([candidate] if candidate else [])
     unknown = [o.obligation_id for o in held if not _known_loss(o.worst_case_loss)]
-    by_key: dict[str, Decimal] = {}
+    by_key: dict[str, Decimal | None] = {}
+    for o in held:
+        for k in o.exposure_keys:
+            if o.obligation_id in unknown or (k in by_key and by_key[k] is None):
+                by_key[k] = None  # unknown stays unknown for every key it touches
+            else:
+                by_key[k] = by_key.get(k, Decimal(0)) + o.worst_case_loss
     required: Decimal | None = None
     if unknown:
         reasons.append(f"EXPOSURE_UNKNOWN: worst case of {unknown[:3]} is unknown; no new risk")
     else:
         required = sum((o.worst_case_loss for o in held), Decimal(0))
-        for o in held:
-            for k in o.exposure_keys:
-                by_key[k] = by_key.get(k, Decimal(0)) + o.worst_case_loss
     for o in held:
         if o.state is ObligationState.CANCEL_REQUESTED:
             reasons.append(f"CANCEL_NOT_CONFIRMED: {o.obligation_id} stays reserved")

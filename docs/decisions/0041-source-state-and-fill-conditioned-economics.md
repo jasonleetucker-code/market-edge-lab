@@ -120,6 +120,8 @@ Extend the existing owners. No new module is added.
   declare its own material fields.
 - Refusing capital over-commitment and depth reuse raises rather than reports. A simulation that
   does either has a bug, not a finding.
+- Known limitation: an unknown fee is not charged to `fill_economics`' cash balance, so the capital
+  check can pass where the real fee would not; every net figure is already blocked (FEE_SCOPE_UNKNOWN).
 
 ## What would make us reconsider
 

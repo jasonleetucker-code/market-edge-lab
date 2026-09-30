@@ -1583,7 +1583,7 @@ def funnel_report(records: Sequence[FunnelRecord]) -> FunnelReport:
                                "unknown": sum(1 for v in vals if v is None)}
     def rate_of(quoted: list[FunnelRecord], what: str) -> tuple[Decimal | None, str]:
         if not quoted:
-            return None, f"NO_{what}_OWN_QUOTES: hypothetical quotes give no execution probability"
+            return None, f"NO_{what}_OWN_QUOTES: no {what} own quote was recorded, so there is no {what} fill rate"
         if any(r.filled is None for r in quoted):
             return None, (f"UNKNOWN_OUTCOMES: {sum(1 for r in quoted if r.filled is None)} own quote(s) have an "
                           "unobservable outcome; no execution probability without evidence")
@@ -1599,4 +1599,4 @@ def funnel_report(records: Sequence[FunnelRecord]) -> FunnelReport:
         by_mode[r.mode.value] = by_mode.get(r.mode.value, 0) + 1
         by_evidence[r.evidence.value] = by_evidence.get(r.evidence.value, 0) + 1
     return FunnelReport(len(records), stages, rate, why, by_mode, by_evidence, sim,
-                        sim_why + ("; SIMULATED: a simulator's output, not an execution probability" if sim else ""))
+                        sim_why + ("; SIMULATED: a simulator's output, not an execution probability" if sim is not None else ""))
