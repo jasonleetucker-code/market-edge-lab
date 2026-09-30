@@ -279,6 +279,8 @@ class BookState:
     valid_since_utc: str | None = None  # receipt of the snapshot that started the valid period
     last_receipt_utc: str | None = None  # the last message that touched this book, whatever it did
     last_applied_receipt_utc: str | None = None
+    # the venue stamp of the message last applied (the one received at last_applied_receipt_utc); None when that
+    # message carried none. An earlier message's stamp is never carried to later content, least of all across a resync.
     last_source_ts_utc: str | None = None
     counts: tuple[tuple[str, int], ...] = ()
 
@@ -329,7 +331,7 @@ def apply_message(state: BookState, msg: BookMessage) -> Transition:
         was_unusable = state.status is not BookStatus.VALID and state.status is not BookStatus.NO_VALID_START
         new = replace(seen, sid=msg.sid, last_seq=msg.seq, yes_bids=msg.yes_bids, no_bids=msg.no_bids,
                       valid_since_utc=msg.stamps.receipt_utc, last_applied_receipt_utc=msg.stamps.receipt_utc,
-                      last_source_ts_utc=msg.stamps.source_ts_utc or state.last_source_ts_utc)
+                      last_source_ts_utc=msg.stamps.source_ts_utc)
         if _crossed(msg.yes_bids, msg.no_bids):
             return done(replace(new, status=BookStatus.INVALID_AWAITING_RESYNC, valid_since_utc=None),
                         Applied.CROSSED_BOOK, "snapshot is crossed: best yes bid + best no bid >= 1")
@@ -364,7 +366,7 @@ def apply_message(state: BookState, msg: BookMessage) -> Transition:
     yes = side_levels if msg.side == "yes" else state.yes_bids
     no = side_levels if msg.side == "no" else state.no_bids
     new = replace(seen, last_seq=msg.seq, yes_bids=yes, no_bids=no, last_applied_receipt_utc=msg.stamps.receipt_utc,
-                  last_source_ts_utc=msg.stamps.source_ts_utc or state.last_source_ts_utc)
+                  last_source_ts_utc=msg.stamps.source_ts_utc)
     if _crossed(yes, no):
         return done(replace(new, status=BookStatus.INVALID_AWAITING_RESYNC, valid_since_utc=None), Applied.CROSSED_BOOK,
                     "delta crossed the book")
@@ -816,6 +818,23 @@ class JournalLine:
     extra: Mapping[str, Any] = field(default_factory=dict)
 
 
+def _header_data_kind(header_line: str, path: Path) -> DataKind:
+    try:
+        header = json.loads(header_line)
+    except json.JSONDecodeError:
+        raise ValueError(f"{path}: the first line is not a journal header") from None
+    if not isinstance(header, Mapping) or header.get("journal") != "inplay-journal-v1":
+        raise ValueError(f"{path}: not an inplay-journal-v1 file")
+    return DataKind(header.get("data_kind"))
+
+
+def journal_data_kind(path: Path) -> DataKind:
+    """The journal's declared data kind, from its header alone. A journal with no lines is still that
+    kind: an empty RECORDED journal is RECORDED, never a default."""
+    with Path(path).open("r", encoding="utf-8") as handle:
+        return _header_data_kind(handle.readline(), path)
+
+
 def read_journal(path: Path) -> Iterator[JournalLine]:
     """Read a local JSONL journal. This is the only transport in v1: no socket, no HTTP.
 
@@ -823,14 +842,7 @@ def read_journal(path: Path) -> Iterator[JournalLine]:
     "FIXTURE" | "RECORDED", ...}`. Every later line is `{"receipt_utc", "kind", "body", ...}`.
     A malformed line is yielded as a `failure` of kind PARSE_ERROR, never skipped."""
     with Path(path).open("r", encoding="utf-8") as handle:
-        header_line = handle.readline()
-        try:
-            header = json.loads(header_line)
-        except json.JSONDecodeError:
-            raise ValueError(f"{path}: the first line is not a journal header") from None
-        if not isinstance(header, Mapping) or header.get("journal") != "inplay-journal-v1":
-            raise ValueError(f"{path}: not an inplay-journal-v1 file")
-        data_kind = DataKind(header.get("data_kind"))
+        data_kind = _header_data_kind(handle.readline(), path)
         for n, line in enumerate(handle, start=2):
             if not line.strip():
                 continue
@@ -856,9 +868,12 @@ def replay_book_journal(path: Path, market_ticker: str, *, scope: SeqScope = Seq
     count a whole subscription (`SeqScope`); only `market_ticker`'s book is returned. Failures and
     parse errors are returned, not dropped."""
     recon, failures, parse_failures = SubscriptionReconstructor(scope), [], 0
-    data_kind = DataKind.SYNTHETIC
+    data_kind = journal_data_kind(path)  # from the header, so a journal with no lines keeps its kind
+    lines_read = 0
     for line in read_journal(path):
-        data_kind = line.data_kind
+        lines_read += 1
+        if line.data_kind is not data_kind:  # the file was replaced between the two reads: refuse, never mix
+            raise ValueError(f"{path}: the journal header changed while it was read")
         if line.kind == "failure":
             body = line.body if isinstance(line.body, Mapping) else {}
             try:
@@ -879,6 +894,8 @@ def replay_book_journal(path: Path, market_ticker: str, *, scope: SeqScope = Seq
             failures.append(SourceFailure(FailureKind.PARSE_ERROR, line.receipt_utc, f"{msg.reason}: {msg.detail}"))
             continue
         recon.apply(msg)
+    if not lines_read and journal_data_kind(path) is not data_kind:  # a header-only journal replaced meanwhile
+        raise ValueError(f"{path}: the journal header changed while it was read")
     state = recon.books.get(market_ticker) or BookState(market_ticker)
     return state, tuple(recon.transitions.get(market_ticker, ())), tuple(failures), parse_failures, data_kind
 
