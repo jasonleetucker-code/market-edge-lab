@@ -14,7 +14,7 @@ The long-term $50k–$100k annual after-cost trading-profit objective is aspirat
 
 ## 2. Repository truth at the audit
 
-GitHub showed no open PRs and an empty work-claim table before this documentation branch. Local/unpushed work and VPS state were not directly inspected. `HANDOFF.md` reports production `23b7b3b`, thirteen timers and the following completed work; these are dated coordinator records, not new operational verification by this audit.
+GitHub showed no open PRs and an empty work-claim table before this documentation branch (later: #147 records the 2026-09-30 directive scope in EXECUTION_PLAN). Local/unpushed work and VPS state were not directly inspected. `HANDOFF.md` reports production `23b7b3b`, thirteen timers and the following completed work; these are dated coordinator records, not new operational verification by this audit.
 
 | Existing foundation | Reuse / remaining boundary |
 |---|---|
@@ -22,7 +22,7 @@ GitHub showed no open PRs and an empty work-claim table before this documentatio
 | NFL sportsbook pilot, consensus, Kalshi/Polymarket paired research | Raw/derived/source distinctions, joint quota and label protection already exist. No new consensus engine |
 | EXP-002 E1 round-trip measurement and outcome-proxy closures | Implemented, proposed/gross-only where fees unsupported, DRAFT. Do not resurrect abandoned spread-noise gates or expose T-60m labels |
 | Tie/not-played source study | Proposed t_max/u_max values exist; not approved physical-probability truth or permission to alter protocol |
-| A.C timing calibration tool (#142/#143) | Built/deployed; one logged run after the pilot around Oct 19, not an immediate redo. Unavailable now is a date/evidence prerequisite, not missing code |
+| A.C timing calibration tool (#142/#143) | Built/deployed; one logged run once, after the last pilot-week target (kickoffs through 2026-10-19 ET) has passed and before the 2026-10-21 freeze, not an immediate redo. Unavailable now is a date/evidence prerequisite, not missing code |
 | NHL discovery/odds/books/freshness/Terminal (#134) | Active collection/development only. Opening-night capture completed for eligible horizons. NFL sample remains separate |
 | In-play evidence contract, position_policy, replay and Terminal/ADR 0038 (#122) | Offline foundation built. Inspect before additions; real source-quality capture and empirical policy tests still need scope/rights/slot |
 | Economics, consumed-evidence logs, attrition, sizing challenger | Reuse. Do not create a second learning/risk/ledger subsystem |
@@ -59,14 +59,14 @@ These checks are documentation, not endpoint smoke tests, eligibility, a storage
 
 ## 4. Governing sequencing rules
 
-1. **Operate and preserve evidence continuously within existing authority.** Safety/rights failures block affected use, not a mandate to shut off all approved collection without a decision.
+1. **Operate and preserve evidence continuously within existing authority.** A confirmed safety or rights failure stops the affected use and collection at once (EXECUTION_PLAN: each source's terms respected) and is escalated to the owner; an unresolved question does not by itself stop other approved collection.
 2. **Two active new empirical families at most beside frozen EXP-001.** Current EXP-002 remains protected; paused EXP-003 does not silently assign a slot to #122/RFQ. Offline fixtures and bounded feasibility do not certify an active strategy. New empirical studies need registry, budget and slot decisions.
 3. **Build once; integrate many uses.** Source-state provenance, fees/units, execution quality, capital reservations and operator UI are shared, not duplicated for every sport or RFQ.
 4. **New data needs purpose, rights, timestamp contract, outcome/evaluation use, cost, stop/review date and explicit acquisition authority.** Preserve the existing 450-credit joint Odds ceiling, NFL priority, NFL 295-GET/week and NHL separate bounds; default policy does not become unlimited free access.
 5. **No mandatory giant refactor.** Keep the measured SQLite/stdlib deployment unless workload and recovery evidence justify migration. No Kafka/Kubernetes/general optimizer for its own sake.
 6. **No idle waiting as delivery.** When a future analysis window, owner decision or provider answer blocks a row, finish its safe code/tests/docs and work on a dependency-ready row. Never run a protected analysis early or invent an answer to remove a blocker.
 7. **User interface and operations are acceptance criteria in every relevant package.** Real/empty/stale/error/unsupported/blocked states, mobile/desktop accessibility and no label leaks; no isolated aesthetics lane inventing new themes.
-8. **Live can start when a specific strategy and the operational gate pass, not when every domain below is built.** Conversely, finishing all code does not force trading. No new live authority is granted here.
+8. **Live may be *proposed* once a specific strategy clears its preregistered evidence bar and the operational gate; it starts only on an explicit owner approval recorded in EXECUTION_PLAN (Gate 9), not when every domain below is built.** Conversely, finishing all code does not force trading. No new live authority is granted here.
 
 ## 5. The complete ordered work packages
 
@@ -86,9 +86,9 @@ Maintain protected collection, shared quota, actual receipt/sequence truth, sche
 
 1. Close document-derived fee/rule facts where possible; map remaining disputes precisely. NFL/NHL series, fractional quantities, maker/taker/RFQ scope, cancellation/refund and fallback paths stay separate. Current unsupported scopes never become zero-fee or generic-fee claims.
 2. Keep source-derived tie/not-played bounds PROPOSED until legitimate review. Fix narrower venue-change semantics without inventing new probabilities.
-3. A.C tool is already built: preserve its one-run post-pilot timing around Oct 19. E1 design/economics/freeze remain separately reviewed; no more attempts to force a rejected noise gate to pass.
-4. NHL timing mismatches, actual commence/lead differences, unknown shootout rules and October budget options receive one decision packet. Do not change protected windows or NFL reservation to improve apparent pairing without approval.
-5. Signed-in agreement and final message/channel are owner/access actions; draft unresolved questions once, record answers verbatim when legitimately obtained, do not send twice.
+3. A.C tool is already built: preserve its one-run timing (once, after the last pilot-week target (kickoffs through 2026-10-19 ET) has passed and before the 2026-10-21 freeze). E1 design/economics/freeze remain separately reviewed; no more attempts to force a rejected noise gate to pass.
+4. NHL timing mismatches, actual commence/lead differences, unknown shootout rules and October budget options are in the existing `docs/owner/2026-09-29-nhl-decision-packet.md` (default option (a)); extend it, do not create another. Do not change protected windows or NFL reservation to improve apparent pairing without approval.
+5. Signed-in agreement and final message/channel are owner/access actions; the questions are already drafted (`docs/research/KALSHI_QUESTIONS_2026-09-26.md`, revision 2, NOT SENT); do not redraft or send twice, and record answers verbatim when legitimately obtained.
 
 **Acceptance:** scope-specific capability/fee/rule matrix with sources/effective dates and explicit refusals; safe current code fixes tested; no altered EXP-001/EXP-002 holdout; exact blocker owner and next trigger. This package may be code-complete and evidence-blocked. It does not block offline R2/R4 merely because a provider has not answered.
 
@@ -110,7 +110,7 @@ Extend economics for actual versus simulated fills, fill-conditioned markouts, s
 
 Do not rebuild hold/full-exit/partial-exit replay. Add state-version invalidation and latency/attribution only where missing. Preserve identical entries and capital, residual-inventory settlement, fees and terminal wealth. Released cash is initially idle to isolate exit value; re-entry/additions are a different later experiment. Existing first-detection zero-latency and hindsight bounds remain labeled and cannot pass as executable returns.
 
-Prepare one recommended capture route and fallback, comparing NFL/NHL/NBA readiness without adding all sports. State-only richer feeds are not mandatory for a simple price-exit policy. Document raw-source rights, auth scopes, whole-message input load, hard cap, selected games chosen ex ante, protected jobs, reconnect/gaps, overtime/end rules, retention, cost and stop date. No recorder activation merely because code merges.
+Refresh the existing `inplay-source-pilot-1` proposal (`docs/owner/2026-09-29-vf-decision-packet.md` §C) rather than drafting a new one, comparing NFL/NHL/NBA readiness without adding all sports. State-only richer feeds are not mandatory for a simple price-exit policy. Document raw-source rights, auth scopes, whole-message input load, hard cap, selected games chosen ex ante, protected jobs, reconnect/gaps, overtime/end rules, retention, cost and stop date. No recorder activation merely because code merges.
 
 **Acceptance:** offline regression/null/accounting tests pass; one minimum source-quality approval packet; existing Terminal shows fixture/replay versus captured evidence and actual-size exit economics. No label leaks or actual account claims.
 
@@ -120,7 +120,7 @@ Prepare one recommended capture route and fallback, comparing NFL/NHL/NBA readin
 
 Document per venue/product: request visibility, own versus others' quotes, account/permission requirements, combo definitions, native quantities, fee-inclusive versus principal-only targets, quote-full-size obligations, timing, expiry/replacement/confirmation, subaccount attribution, collateral and eligible metadata. Preserve DOCUMENTED, OBSERVED_AUTHORIZED and UNKNOWN distinctions.
 
-A passive plan may count visible requests and inspect permitted combo definitions. It cannot infer private competitor quotes, win rates, rejected/accepted prices or realized profitability. Broad stream input can be high even if output is filtered to one sport; budget the input. Do not issue live RFQs or executable quotes for data gathering.
+A *future* passive observer, which needs an authenticated connection and therefore credentials and owner approval (not part of R4's first packet), could at most count visible requests and inspect permitted combo definitions. It cannot infer private competitor quotes, win rates, rejected/accepted prices or realized profitability. Broad stream input can be high even if output is filtered to one sport; budget the input. Do not issue live RFQs or executable quotes for data gathering.
 
 Economic screen: request count is an upper demand signal, not fill rate; proposed capturing-share and margin scenarios remain assumptions. Include unknown collateral/costs, sparse opportunities, competition, seasonal change and venue cash fragmentation. Bounded toy fixtures can demonstrate observability and infeasibility; no new empirical family is activated.
 
@@ -128,7 +128,7 @@ Economic screen: request count is an upper demand signal, not fill rate; propose
 
 ### R5 — One-venue order, inventory and capital lifecycle (technical branch; do not wait for every strategy)
 
-**Serves:** #6 #30 #32 #33 #93 #122 #145. **Dependencies:** R1 semantic proof, R2 data contracts and reviewed exact test-only authority; RFQ-specific extension additionally depends on R4.
+**Serves:** #6 #30 #32 #33 #93 #122 #145. **Dependencies:** R1 semantic proof, R2 data contracts and reviewed exact test-only authority (test-only means in-process fakes and fixtures, with no network transport and no credentials; any venue demo/sandbox account, key or authenticated paper order needs a separate owner approval recorded in EXECUTION_PLAN). ADR 0035 is the design being implemented; RFQ-specific extension additionally depends on R4.
 
 Extend execution_ticket/current ADR, not a second risk owner. Durable intents, atomic cash AND inventory reservation, fencing/single execution authority, actual/unknown account state, duplicate/out-of-order event reconciliation, pending/ack/partial/fill/cancel-request/cancel-confirmed/unknown/settled semantics, restart recovery and outstanding native/manual orders. Restrict credentials/withdrawals and isolate model/research processes. No transport initially.
 
@@ -140,7 +140,7 @@ RFQ confirmation and ordinary resting orders have different binding points. Rech
 
 **Serves:** #122 #145. **Dependencies:** R3 plus source/recorder approval, rights and a research-slot decision; actual live use later needs R5/R10.
 
-Start the approved selected-game source-quality pilot, not high-frequency all-sports ingestion. Preserve game/book corrections and absence. Data inspected for engineering are development evidence. Freeze a modest exit comparison and primary risk/economic endpoint before its evaluation. Game/slate clustering, delayed controls, fill bounds, latency, capacity and tail loss determine usefulness; one exciting comeback does not.
+Only after the owner approves `inplay-source-pilot-1` (vf decision packet §C) and a slot/budget decision, run that selected-game pilot, not high-frequency all-sports ingestion. Preserve game/book corrections and absence. Data inspected for engineering are development evidence. Freeze a modest exit comparison and primary risk/economic endpoint before its evaluation. Game/slate clustering, delayed controls, fill bounds, latency, capacity and tail loss determine usefulness; one exciting comeback does not.
 
 Later, only after incremental evidence: a game-state/fair-value challenger with versioned pregame priors; next re-entry or additions with cumulative risk/turnover limits. Do not choose the later historical maximum as an exit or reset losses after a rebound. State-aware market-making is not implied.
 
@@ -185,13 +185,15 @@ Venue queue retains Kalshi, Polymarket US, Novig and other genuinely useful rout
 
 The general instrument selector is built only once two actual expressions justify it, reusing best_price and risk: stock/ETF/option/spread/future/event contract/cash. It is not a gate that must be completed before the first simple trade.
 
+Free keys (FRED/ALFRED, BEA, EIA, Census, Alpaca/Tradier data) are installed by the owner only; broker keys only after the security ADR. SIP, OPRA, CME, CF Benchmarks and paid Odds tiers need the #7 case and owner approval. Funding, margin, shorting, derivatives permissions and order-write credentials are Gates 8–10. Admission uses `research_readiness.py` plus the owner-directed Domain Readiness matrix (states only, no score; last scored 2026-09-24, archive), re-scored at the next gate transition.
+
 **Acceptance per admitted domain:** clean source/outcome lineage, economic screen and chosen protocol, capability-specific execution path, clear stop rule. Unsupported or uneconomic domains are recorded and removed from active effort rather than endlessly engineered.
 
 ### R10 — First authorized live validation and controlled scaling (readiness-triggered branch)
 
 **Serves:** #11 #6 #32 #93 #96; **dependencies:** one legitimately supported strategy, R0/R1/R5, specific account/security/venue/risk/pilot approvals. **Not dependent on:** finishing RFQ, R8 automation, R9 all domains or investor features.
 
-Separate an explicitly authorized operational canary from a strategy pilot. The first proves actual account/order/fee/reconciliation behavior; it does not prove alpha or justify bypassing the research gate. Freeze capital/order/loss/position/timing scope and stop conditions with owner approval. Start tiny, compare live fills/costs to shadow, reconcile before additional exposure, increase only when marginal capital remains productive. No fixed dollar amount or start date is selected here.
+Separate an explicitly authorized operational canary from a strategy pilot. The first proves actual account/order/fee/reconciliation behavior; it does not prove alpha or justify bypassing the research gate. Freeze capital/order/loss/position/timing scope and stop conditions with owner approval. Start tiny, compare live fills/costs to shadow, reconcile before additional exposure, increase only when marginal capital remains productive. No fixed dollar amount or start date is selected here. No domain is pre-selected as first live: EXP-001 weather, sports, public markets or another strategy may go first. The first to clear its own preregistered bar and the common operational gate goes first, and research criteria are never weakened to make one win.
 
 **Acceptance:** verified permissions/units/fees/settlements, actual balances/positions, reliable alert/kill/recovery paths, real execution evidence, acceptable drawdown/correlation/capacity and owner approval for any scaling. Gates remain the repository's 8 paper/shadow, 9 tiny real money, 10 scaling.
 
@@ -233,7 +235,13 @@ Maximum two writers with disjoint paths, plus an independent reviewer. One write
 
 ## 7. Checkpoints, delivery definition and remaining decisions
 
-**Oct 3 routine window:** follow current approved O1/F09 and retention policy when actually due; do not rerun completed actions just to claim progress. **Around Oct 19:** the existing single timing calibration after the pilot, with logged FEATURE_INSPECTION under its protocol. **Oct 22:** owner research/freeze and platform-readiness checkpoint, not an automatic pass, live launch or deadline for finishing every future domain. Preserve the existing EXP-003 review deadline/paused status unless an explicit later decision supersedes it.
+**Oct 3 routine window:** follow current approved O1/F09 and retention policy when actually due; do not rerun completed actions just to claim progress. **After the pilot:** the existing single timing calibration, run once, after the last pilot-week target (kickoffs through 2026-10-19 ET) has passed and before the 2026-10-21 freeze, with logged FEATURE_INSPECTION under its protocol. **Oct 22:** owner research/freeze and platform-readiness checkpoint, not an automatic pass, live launch or deadline for finishing every future domain. Preserve the existing EXP-003 review deadline/paused status unless an explicit later decision supersedes it.
+
+**Dated checkpoints and owner-only gates (carried from the archive):**
+- Fee re-checks: Kalshi by 2026-10-23T13:39:48Z, Polymarket US by 2026-10-24T01:39Z.
+- `close_tick_alignment` DST check after 2026-11-01.
+- EXP-003 current scope is rejected on 2026-11-15 if Q1 or Q4 is unresolved.
+- The Kalshi questions (`docs/research/KALSHI_QUESTIONS_2026-09-26.md`, revision 2) are drafted and NOT SENT; sending needs the owner to confirm the exact final text and channel.
 
 By the October 22 checkpoint, target a fully reconciled current roadmap, current-family decision materials, trustworthy pricing/rights states, complete offline in-play extensions, a scoped RFQ feasibility result, useful operator states and an explicit next authorized evidence step. Unknowns are valid deliverables when their exact resolution/cost is identified.
 
