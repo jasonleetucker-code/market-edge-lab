@@ -6,4 +6,3 @@ The expiry is a UTC date no more than 7 days out. An expired row is not a live c
 
 | Claim | Agent | Branch | Paths | Expires |
 |---|---|---|---|---|
-| EXP-002 E1 design review (freeze blocker 1; independent methodology review; no EXP-002 data viewed) | Claude (laptop) | docs/exp002-e1-design-review | docs/research/EXP002_E1_DESIGN_REVIEW.md (new) | 2026-10-07 |
