@@ -24,8 +24,9 @@ NETWORK = {"socket", "ssl", "http", "urllib", "asyncio", "websockets", "websocke
            "edge_lab.notify_ntfy"}
 STORAGE = {"sqlite3", "shelve", "edge_lab.storage", "edge_lab.shadow_ledger", "edge_lab.ledger_anchor",
            "edge_lab.backup", "edge_lab.research_evidence", "edge_lab.daily"}
-# Owners of protected outcomes, label proxies and pilot evidence (EXP-001/EXP-002, NFL/NHL captures). The offline
-# in-play path never reads them, so no replay or view can expose a protected label or markout.
+# Owners of protected outcomes, label proxies and pilot evidence (EXP-001/EXP-002, NFL/NHL captures). The in-play
+# modules must not import them directly. This checks direct imports only: transitive ones (research_economics ->
+# experiments for a constant) are not covered here.
 PROTECTED = {"edge_lab.sports_evidence", "edge_lab.exp002_timing", "edge_lab.odds_schedule",
              "edge_lab.price_observations", "edge_lab.odds_consensus", "edge_lab.experiments", "edge_lab.settlement",
              "edge_lab.forward"}
@@ -81,7 +82,8 @@ def test_importing_the_modules_opens_no_socket():
     code = ("import socket\n"
             "def boom(*a, **k):\n    raise SystemExit('socket opened on import')\n"
             "socket.socket = boom\nsocket.create_connection = boom\n"
-            "import edge_lab.inplay_evidence, edge_lab.inplay_replay, edge_lab.position_policy\nprint('ok')\n")
+            "import edge_lab.inplay_evidence, edge_lab.inplay_replay, edge_lab.position_policy, edge_lab.inplay_view\n"
+            "print('ok')\n")
     out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True,
                          env={"PYTHONPATH": str(SRC.parent), "SYSTEMROOT": __import__("os").environ.get("SYSTEMROOT", "")})
     assert out.returncode == 0 and out.stdout.strip() == "ok", out.stderr

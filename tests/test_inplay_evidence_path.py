@@ -4,9 +4,9 @@ journal file -> `inplay_evidence.replay_book_journal` (normalized, sequenced evi
 -> `inplay_view.build_view` (freshness, source/state validity, the policy proposal, the replay comparison)
 -> the `inplay-view/1` dict the Terminal formats.
 
-These tests go through the consumer, not only a helper. Every journal is written by the test into its
-own temporary directory: no protected, pilot or production evidence is read, and nothing is written
-anywhere else.
+These tests go through the consumer, not only a helper. Their inputs are the committed hand-written FIXTURE
+journal (read-only) or journals the test writes into its own temporary directory. No protected, pilot or
+production evidence is read, and nothing is written anywhere else.
 """
 
 from __future__ import annotations
@@ -145,7 +145,8 @@ def test_a_resynced_book_does_not_inherit_a_venue_stamp_from_before_the_gap(tmp_
     assert view["source"]["last_source_ts_utc"] is None
     ss = view["source_state"]
     assert ss["published_utc"] is None and ss["published_uncertainty"] is None
-    assert ss["content_freshness"] == Freshness.UNKNOWN.value  # received 5 s ago; its content age is not known
+    # guard, not the regression: the age was UNKNOWN before the fix too (the view's venue clock has no bound)
+    assert ss["content_freshness"] == Freshness.UNKNOWN.value
     transport = next(r for r in ss["latency"] if r["stage"] == "TRANSPORT")
     assert transport["measured"] is False and transport["seconds"] is None  # not a 599 s "transport latency"
 
@@ -166,3 +167,10 @@ def test_a_stamped_message_after_resync_carries_its_own_stamp(tmp_path):
     assert view["source"]["last_source_ts_utc"] == _at(10.9)
     transport = next(r for r in view["source_state"]["latency"] if r["stage"] == "TRANSPORT")
     assert transport["measured"] is True and D(transport["seconds"]) == D("0.1")
+
+
+def test_a_header_that_changes_between_reads_is_refused_not_mixed(tmp_path, monkeypatch):
+    path = _journal(tmp_path, "FIXTURE", [(0, "book", _snap(1, 1))])
+    monkeypatch.setattr(ev, "journal_data_kind", lambda _p: ev.DataKind.SYNTHETIC)  # the file was replaced
+    with pytest.raises(ValueError, match="header changed"):
+        ev.replay_book_journal(path, TICKER)

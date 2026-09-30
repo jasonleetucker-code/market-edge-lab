@@ -50,7 +50,7 @@ The previous complete index, shared-owner table, roadmap reruns, domain-readines
 | #83 | Outside capital, unit/NAV accounting and fee governance | LATER/BLOCKED; simulated design then legal/entity/custody/tax/venue and owner approval. Separate investor gains from manager compensation; no friend-money pooling now |
 | #33 | Notifications / SMS / ntfy | Existing outbox/relay; SMS blocked on provider approval; phone delivery unresolved and owner-deferred for current research. Reliable alert/incident path required before unattended live; no new test/send from this plan |
 | #96 | Evidence-to-economics reset | Governing strategy: evidence, after-cost dollars, executable size, capacity and survival before breadth. Full roadmap does not mean every experiment active together |
-| #152 | Architecture reconciliation and bounded evidence-path hardening (owner directive, 2026-09-30) | Existing architecture kept. External ideas classified by access and usefulness in [the reconciliation note](engineering/ARCHITECTURE_RECONCILIATION_2026-09-30.md); only the controlled defect loop is adopted (AGENT_OPERATING_SYSTEM §1). The in-play file → consumer path is verified, and two provenance gaps are fixed in `inplay_evidence.py` (PR pending owner merge). NEXT: R3a in-play journal identity and point-in-time slicing (needs a scope entry, see R3). Rejected without a measured need: memory DB, second scheduler, graph framework, agent platform, Steward transplant, behavioural-eval harness (ADR 0006). Not runtime authority |
+| #152 | Architecture reconciliation and bounded evidence-path hardening (owner directive, 2026-09-30) | Existing architecture kept. External ideas classified by access and usefulness in [the reconciliation note](engineering/ARCHITECTURE_RECONCILIATION_2026-09-30.md); only the controlled defect loop is adopted (AGENT_OPERATING_SYSTEM §1). The in-play file → consumer path is verified, and two provenance gaps are fixed in `inplay_evidence.py` (PR pending owner merge). NEXT: R3 as recorded (scope entry, then the pilot-proposal refresh); R3a, in-play journal identity and point-in-time slicing, is *proposed* for that scope entry. Rejected without a measured need: memory DB, second scheduler, graph framework, agent platform, Steward transplant, behavioural-eval harness (ADR 0006). Not runtime authority |
 
 ## Shared primitives (one canonical owner each)
 
@@ -128,7 +128,7 @@ Entries before 2026-09-29 (evening), with their classifications and supersession
     in-play path. No freeze, verdict or live date is promised.
   - **Classification:**
     - NOW: this bounded slice.
-    - NEXT: R3a, then the `inplay-source-pilot-1` refresh (each needs its scope entry).
+    - NEXT: R3 (a new scope entry, then the `inplay-source-pilot-1` refresh); R3a is proposed for that entry, unordered.
     - LATER: behavioural agent evals (ADR 0006 triggers).
     - BLOCKED (owner): any recorder, capture, rights change or research slot.
   - No gate change. No order, credential, stream, schedule, budget change, paid service or message.

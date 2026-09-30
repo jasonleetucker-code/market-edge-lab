@@ -620,7 +620,7 @@ be written here when they are made.
 
 - **2026-09-30 (America/New_York), owner directive: architecture reconciliation and bounded hardening.**
   Recorded verbatim in `docs/owner/2026-09-30-architecture-reconciliation-directive.md`.
-  - **Authorized (offline, bounded):**
+  - **Authorized (offline, bounded, for this task (#152) only):**
     - local inspection;
     - regression tests;
     - fixes to demonstrated gaps in existing canonical owners;

@@ -870,6 +870,8 @@ def replay_book_journal(path: Path, market_ticker: str, *, scope: SeqScope = Seq
     recon, failures, parse_failures = SubscriptionReconstructor(scope), [], 0
     data_kind = journal_data_kind(path)  # from the header, so a journal with no lines keeps its kind
     for line in read_journal(path):
+        if line.data_kind is not data_kind:  # the file was replaced between the two reads: refuse, never mix
+            raise ValueError(f"{path}: the journal header changed while it was read")
         if line.kind == "failure":
             body = line.body if isinstance(line.body, Mapping) else {}
             try:

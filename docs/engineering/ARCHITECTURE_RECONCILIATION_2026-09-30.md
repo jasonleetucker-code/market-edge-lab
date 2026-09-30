@@ -49,15 +49,15 @@ evidence store. Per-message `raw_sha256` is the content address today.
 | Criterion | Before | After this PR |
 |---|---|---|
 | Attributable to input hashes, versions and as-of | **Replay: covered.** Cohort hash, config variant, replay, evaluator and policy versions, fee model and as-of (`test_the_cohort_hash_covers_the_parsed_state_and_is_unchanged_without_a_journal`, `test_synthetic_generator_is_deterministic_and_labelled`). **Book path: PARTIAL.** Per-message `raw_sha256` is dropped by `BookState`/`Transition`, and the view's book evidence id `journal:<ticker>:seq<n>` is not content-addressed | Unchanged. **NEXT (R3a, §5):** it changes the `inplay-view/1` contract, so it needs its own UI-contract review |
-| Missing source time never replaced by receipt time | **Messages: covered** (`test_four_clocks_…`). **Books: GAP B.** `BookState.last_source_ts_utc` was carried forward from an earlier message, including across a gap and a resync onto a new subscription | **FIXED.** The field is now the venue stamp of the last applied message, or None. Through the consumer, before the fix a snapshot received 5 s earlier showed a pre-gap `published_utc`, content age STALE and a 599 s TRANSPORT "latency". Fresh-looking data never resulted: the error ran toward stale. But the attribution was false, and a false latency figure would feed the R2 latency research |
+| Missing source time never replaced by receipt time | **Messages: covered** (`test_four_clocks_…`). **Books: GAP B.** `BookState.last_source_ts_utc` was carried forward from an earlier message, including across a gap and a resync onto a new subscription | **FIXED.** The field is now the venue stamp of the last applied message, or None. Through the consumer, before the fix a snapshot received 5 s earlier showed a pre-gap `published_utc` and a measured 599.05 s TRANSPORT "latency". Content age was UNKNOWN before and after, because the view's venue clock has no error bound. No gating changed: BOOK_STALE uses receipt time. The published time was falsely attributed, and the false latency figure would have fed the R2 latency research |
 | Synthetic, fixture and recorded stay distinguishable | Covered (`check_evidence`; Cohort and `build_view` refuse RECORDED) except **GAP A:** `replay_book_journal` defaulted to SYNTHETIC when a journal had no lines, so an empty RECORDED journal passed `build_view`'s RECORDED refusal and was shown as synthetic | **FIXED.** The kind comes from the header (`journal_data_kind`); the consumer refuses. Tests are parametrized over all three kinds |
 | Gaps, corrections, stale input and unknown state refuse through the consumer | Covered: `test_stale_paused_and_resync_views_never_propose_a_sale`, `test_partial_view_keeps_gaps_and_failures`, `test_an_invalidated_decision_is_blocked_with_its_reason`, `test_an_unreadable_state_update_needs_review`, plus the replay-state tests in §2 row 7 | Also through a journal *file* into the consumer (`test_the_fixture_journal_reaches_the_view_with_its_label_coverage_and_refusals`) |
 | Failures and unusable intervals stay in coverage | Covered (§2 row 4) | Also asserted after the file → consumer hop |
 | Pinned inputs, code, config and as-of reproduce the result | Covered for `fixture_view` (`test_fixture_view_is_deterministic`) and the synthetic replay | Also a file → view test on a byte copy of the journal, with the as-of shown to be the replay clock (`test_the_same_pinned_journal_config_and_as_of_reproduce_the_same_view`) |
-| No live writes, network, execution or protected labels | Covered for `inplay_evidence`, `inplay_replay`, `position_policy`. **Not** for the consumer `inplay_view`, and the import checker missed `from . import x` | **Extended (test-only):** `inplay_view` joins the boundary, `from . import x` is resolved, and a new assertion covers protected-label owners (`sports_evidence`, `exp002_timing`, `odds_schedule`, `price_observations`, `odds_consensus`, `experiments`, `settlement`, `forward`). Mutation-checked: adding `from . import sports_evidence` to `inplay_view` fails it |
+| No live writes, network, execution or protected labels | Network, storage and execution direct-import checks covered `inplay_evidence`, `inplay_replay`, `position_policy`. **Not** the consumer `inplay_view`. The checker missed `from . import x`. **No** protected-label check existed for any module | **Extended (test-only, direct imports):** `inplay_view` joins the boundary and the subprocess no-socket import test, `from . import x` is resolved, and a new direct-import assertion covers protected-label owners (`sports_evidence`, `exp002_timing`, `odds_schedule`, `price_observations`, `odds_consensus`, `experiments`, `settlement`, `forward`). Mutation-checked: adding `from . import sports_evidence` to `inplay_view` fails it. **Transitive imports are not covered.** `research_economics` imports `experiments` (the `RESERVED_TEST_EXPERIMENT_IDS` constant), and `position_policy` → `execution_ticket` → `risk` imports `shadow_ledger` (the `AccountState` type). This predates the branch. No protected data or store is read on the in-play path. A transitive `sys.modules` check with a justified allowlist is left for R3a |
 
 **Observed, not changed:** `build_view` takes the last transition even when it was received after `as_of`.
-- This fails closed. The policy refuses with BOOK_STALE ("received after the as-of"), and the view shows STALE, so no
+- This fails closed. The policy refuses with `BOOK_STALE: received <time>` (the receipt is after the as-of), and the view shows STALE, so no
   sale is proposed.
 - But the view's source block then shows the later receipt time, and its detail says "older than".
 - Point-in-time slicing of transitions is the caller's job today. It belongs with R3a.
@@ -139,15 +139,15 @@ detail; a failed retrieval says nothing about an idea's merit.
 - **No new package.** This work sits in R0 (evidence integrity) and on the R2/R3 in-play path. Everything R0–R11
   and its dependencies stay as listed in `DELIVERY_ROADMAP.md` §5–§9.
 - **Next dependency-ready package: R3.**
-  - **R3a** (code, offline, testable now): make the in-play consumer attributable and point-in-time:
+  - **R3a** (proposed; offline code, testable once scoped): make the in-play consumer attributable and point-in-time:
     - carry a journal content digest and the last applied message's `raw_sha256` through `BookState`/`build_view`;
     - slice transitions to the as-of;
     - show both in the existing in-play page under the UI contract, with its states.
-  - Then the documentation-only `inplay-source-pilot-1` refresh onto the R2 contracts.
+  - The documentation-only `inplay-source-pilot-1` refresh onto the R2 contracts, as already recorded in HANDOFF and §9.
 - **Authority for R3a.**
-  - It is offline code of the kind the 2026-09-28 #122 entry covered: evidence contract and read-only Terminal view.
-  - The coordinator's HANDOFF (PR #151) says R3 starts only after a scope entry in `docs/EXECUTION_PLAN.md`. This
-    note does not override that.
+  - R3a is *proposed* for the R3 scope entry that `HANDOFF.md` (#151) and roadmap §9 require before R3 starts.
+  - It needs that new entry. Whether it comes before or after the pilot-proposal refresh is the owner's or
+    coordinator's call when that entry is written.
   - Any capture, recorder activation, rights change or research slot stays BLOCKED on the owner.
 
 ## 6. Compatibility and safety

@@ -303,12 +303,14 @@ ledger. Detail: [`docs/engineering/ARCHITECTURE_RECONCILIATION_2026-09-30.md`](.
   - Two provenance gaps in `inplay_evidence.py` are fixed:
     - an empty RECORDED journal was reported as SYNTHETIC and passed the consumer's RECORDED refusal;
     - a book carried an earlier message's venue stamp across a resync.
-  - `inplay_view` now sits inside the offline and protected-label import boundary.
+  - `inplay_view` now sits inside the offline *direct-import* boundary, and a new direct-import protected-label check
+    covers all four in-play modules. Transitive imports are not checked; see the note, §3.
   - Implementation state: TESTED_LOCALLY on the PR branch. CI, merge and deploy are recorded in the PR.
-- **R3, next dependency-ready package, sharpened.** R3a comes first:
+- **R3 is still the next dependency-ready package**, as in §9 and HANDOFF: first a new scope entry, then the
+  `inplay-source-pilot-1` refresh onto the R2 contracts. This section *proposes* one addition for that scope entry
+  and does not order it: **R3a**, offline code within R3's "latency/attribution only where missing". It covers:
   - the journal content digest and the last applied message hash carried through `BookState`/`build_view`;
   - transitions sliced to the as-of;
   - both shown in the existing in-play page under the UI contract.
 
-  It is offline and needs a scope entry, per the coordinator's HANDOFF. Then the documentation-only
-  `inplay-source-pilot-1` refresh. Capture, recorder, rights and research slot stay BLOCKED on the owner.
+  Capture, recorder, rights and research slot stay BLOCKED on the owner.
