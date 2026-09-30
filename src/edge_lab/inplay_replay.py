@@ -43,6 +43,18 @@ remain as labelled diagnostics.
 
 Real in-play data needs an allocated experiment id and an evidence-use record, so a RECORDED
 cohort is refused in v1. Synthetic cohorts are labelled synthetic.
+
+**Game-state validity** (source-state-v1, ADR 0041). An entry may carry its append-only game-state
+journal (`CohortEntry.state_journal`); without one, every result is exactly as before.
+- **BOT_TRIGGERED** decides on the state it had seen at detection. It revalidates at submission
+  (detection plus `decision_latency`) with `inplay_evidence.decision_validity`. A material new event,
+  a correction or an unreadable update seen by then invalidates the recommendation: nothing is sent
+  (`RECOMMENDATION_INVALIDATED_BEFORE_SUBMIT`), and the bot decides again on a later book. An event
+  seen only after submission cannot recall the order. It is reported as `STATE_CHANGED_IN_FLIGHT`,
+  and the IOC still meets the book at arrival.
+- **PREPLACED_LIMIT** cannot react. A resting sale that fills after a material state change is
+  counted in `fills_after_state_change`: it may be adversely selected, which is what makes a
+  pre-placed limit a different policy from a bot-reactive exit.
 """
 
 from __future__ import annotations
@@ -60,7 +72,10 @@ from typing import Any, Mapping, Sequence
 
 from .fee_schedules import ClaimBasis, valid_price
 from .freshness import parse_utc
-from .inplay_evidence import BookStatus, DataKind, TradingState, depth_at_or_above, walk_bids
+from .inplay_evidence import (
+    BookStatus, DataKind, DecisionStamp, GameJournal, GameStateStatus, JournalEntry, TradingState, decision_validity,
+    depth_at_or_above, game_state_as_of, walk_bids,
+)
 from .opportunity import DepthStatus
 from .position_policy import (
     Action, DecisionStatus, ExecutionAssumption, FeeModel, Inventory, InventoryKind, PolicyKind, PositionPolicy,
@@ -132,6 +147,7 @@ class CohortEntry:
     books: tuple[TimedBook, ...]
     settlement: Settlement
     side: str = "YES"
+    state_journal: GameJournal | None = None  # source-state-v1: the game states first seen, append-only
 
 
 @dataclass(frozen=True)
@@ -173,6 +189,11 @@ class Cohort:
             for b in e.books:
                 h.update(f"{b.receipt_utc}|{b.status.value}|{b.trading_state.value}|{b.truncated}|{b.evidence_id}|"
                          f"{';'.join(f'{p}:{q}' for p, q in b.bids)}\n".encode())
+            if e.state_journal is not None:  # only when present, so cohorts without one hash as before
+                for kind, s in e.state_journal.entries:
+                    h.update(json.dumps(["state", kind.value, s.observation_id, s.stamps.first_observed_utc,
+                                         s.stamps.source_ts_utc, s.status.value, s.corrects,
+                                         [v.value if isinstance(v, Enum) else v for v in s.content()]]).encode())
         return h.hexdigest()
 
 
@@ -389,6 +410,9 @@ class EntryResult:
     duplicate_receipts: int  # books sharing a receipt time with another book of this entry
     notes: tuple[str, ...]
     reconciliation: tuple[str, ...]
+    invalidated_before_submit: int = 0  # BOT: recommendations dropped because the state changed first
+    state_changed_in_flight: int = 0  # BOT: the state changed after the order left; it still executed
+    fills_after_state_change: int = 0  # PREPLACED: resting fills after a material state change
 
 
 @dataclass(frozen=True)
@@ -518,24 +542,56 @@ def _new_ledger(cohort: Cohort, entry: CohortEntry, cfg: ReplayConfig) -> Replay
     return ledger
 
 
+def _state_stamp(journal: GameJournal | None, decision_id: str, version: str, at: datetime) -> DecisionStamp | None:
+    """The state a decision at `at` depends on: the newest game state first seen by then. None when the
+    entry has no journal, or no state had been seen yet (the decision then depends on none)."""
+    if journal is None:
+        return None
+    dep = game_state_as_of(journal, at)
+    if dep is None:
+        return None
+    return DecisionStamp(decision_id, version, at.isoformat(), True, dep.observation_id)
+
+
+def _why(validity) -> str:
+    return "; ".join(f"{r.value}: {d}" for r, d in validity.reasons)
+
+
 def _run_bot(cohort: Cohort, entry: CohortEntry, cfg: ReplayConfig, arm: Arm, ledger: ReplayLedger,
-             notes: list[str]) -> int:
+             notes: list[str], counts: dict[str, int]) -> int:
     policy = _policy(cfg, arm, Semantics.BOT_TRIGGERED)
     books = _books_until(entry, parse_utc(entry.entry_at_utc))
+    journal = entry.state_journal
     attempts, cursor = 0, 0
     while cursor < len(books) and attempts < cfg.max_attempts:
         seen_at, book = books[cursor]
         cursor += 1
+        stamp = _state_stamp(journal, f"{entry.game_id}:bot:{seen_at.isoformat()}", policy.version, seen_at)
         d = evaluate(as_of=seen_at, inventory=_inventory(entry, ledger, book.receipt_utc),
                      orders=(), book=_sale_book(entry, book, cfg, cohort.data_kind), fee_model=cfg.fee_model,
-                     policy=policy, rules_version=cohort.rules_version)
+                     policy=policy, rules_version=cohort.rules_version,
+                     state_validity=None if stamp is None else decision_validity(stamp, journal, at=seen_at))
         if d.status is not DecisionStatus.PROPOSED or d.action not in (Action.REDUCE, Action.EXIT):
             continue
+        if stamp is not None:
+            submit_at = seen_at + cfg.decision_latency
+            before = decision_validity(stamp, journal, at=submit_at)
+            if not before.usable:
+                counts["invalidated_before_submit"] += 1
+                notes.append(f"RECOMMENDATION_INVALIDATED_BEFORE_SUBMIT {submit_at.isoformat()}: {_why(before)}; "
+                             "nothing was sent; the bot decides again on a later book")
+                continue
         attempts += 1
         if cfg.arrival_latency is None:
             notes.append(f"ARRIVAL_UNKNOWN at {book.receipt_utc}: no fill is assumed")
             break
         arrival = seen_at + cfg.decision_latency + cfg.arrival_latency
+        if stamp is not None:
+            in_flight = decision_validity(stamp, journal, at=arrival)
+            if not in_flight.usable:
+                counts["state_changed_in_flight"] += 1
+                notes.append(f"STATE_CHANGED_IN_FLIGHT before {arrival.isoformat()}: {_why(in_flight)}; the order "
+                             "had already left and cannot be recalled; it meets the book at arrival")
         idx = next((i for i in range(cursor - 1, len(books)) if books[i][0] >= arrival), None)
         if idx is None:
             notes.append(f"NO_BOOK_AFTER_ARRIVAL {arrival.isoformat()}")
@@ -567,8 +623,17 @@ def _run_bot(cohort: Cohort, entry: CohortEntry, cfg: ReplayConfig, arm: Arm, le
     return attempts
 
 
+def _first_state_after(journal: GameJournal, at: datetime):
+    """The first readable game state first observed after `at`: the baseline for a resting order
+    placed before any state was seen."""
+    later = [(parse_utc(s.stamps.first_observed_utc), i, s) for i, (k, s) in enumerate(journal.entries)
+             if k is not JournalEntry.DUPLICATE and s.status is GameStateStatus.OBSERVED
+             and parse_utc(s.stamps.first_observed_utc) > at]
+    return min(later, key=lambda x: (x[0], x[1]))[2] if later else None  # by first-observed time, not position
+
+
 def _run_preplaced(cohort: Cohort, entry: CohortEntry, cfg: ReplayConfig, arm: Arm, ledger: ReplayLedger,
-                   notes: list[str]) -> tuple[int, int]:
+                   notes: list[str], counts: dict[str, int]) -> tuple[int, int]:
     policy = _policy(cfg, arm, Semantics.PREPLACED_LIMIT)
     entry_at = parse_utc(entry.entry_at_utc)
     if cfg.arrival_latency is None:
@@ -587,6 +652,14 @@ def _run_preplaced(cohort: Cohort, entry: CohortEntry, cfg: ReplayConfig, arm: A
         return 0, 0
     order_id = f"{entry.game_id}:rest"
     ledger.reserve(order_id, d.quantity)
+    # The resting order cannot react to the game. Its baseline is the state seen at placement, or the first
+    # state seen after it; a fill once that state is invalidated may be adversely selected.
+    journal, rest_stamp = entry.state_journal, None
+    if journal is not None:
+        base = game_state_as_of(journal, placed_at) or _first_state_after(journal, placed_at)
+        if base is not None:
+            rest_stamp = DecisionStamp(order_id, policy.version, base.stamps.first_observed_utc, True,
+                                       base.observation_id)
     limit, filled_upto, touches, cum = d.limit_price, Decimal(0), 0, Decimal(0)
     for i, (at, book) in enumerate(books):
         if at <= placed_at or order_id not in ledger.reservations:  # only books seen after it rests
@@ -610,6 +683,12 @@ def _run_preplaced(cohort: Cohort, entry: CohortEntry, cfg: ReplayConfig, arm: A
             ledger.fill(fill_id=f"{entry.game_id}:rest:{_book_key(book, i)}", quantity=new, price=limit,
                         fee=cfg.fee_model.sale_fee(new, limit), order_id=order_id)
             filled_upto += new
+            if rest_stamp is not None and at >= parse_utc(rest_stamp.as_of_utc):
+                after = decision_validity(rest_stamp, journal, at=at)
+                if not after.usable:
+                    counts["fills_after_state_change"] += 1
+                    notes.append(f"RESTING_FILL_AFTER_STATE_CHANGE at {book.receipt_utc}: {_why(after)}; a pre-placed "
+                                 "limit cannot react, so this fill may be adversely selected")
     if touches:
         notes.append(f"TOUCHES_NOT_FILLS: {touches} book(s) showed bids at the limit; queue position unknown")
     notes.append("MAKER_FEE_BOUND: resting fills are charged the taker sale fee, an upper bound where the "
@@ -656,6 +735,7 @@ def replay_entry(cohort: Cohort, entry: CohortEntry, cfg: ReplayConfig, arm: Arm
     notes: list[str] = []
     attempts = touches = 0
     placed: bool | None = None
+    counts = {"invalidated_before_submit": 0, "state_changed_in_flight": 0, "fills_after_state_change": 0}
     receipts = [b.receipt_utc for b in entry.books]
     duplicate_receipts = len(receipts) - len(set(receipts))
     if duplicate_receipts:
@@ -663,9 +743,9 @@ def replay_entry(cohort: Cohort, entry: CohortEntry, cfg: ReplayConfig, arm: Arm
                      "book identity, so each distinct book can fill once")
     if arm is not Arm.HOLD:
         if semantics is Semantics.BOT_TRIGGERED:
-            attempts = _run_bot(cohort, entry, cfg, arm, ledger, notes)
+            attempts = _run_bot(cohort, entry, cfg, arm, ledger, notes, counts)
         elif semantics is Semantics.PREPLACED_LIMIT:
-            attempts, touches = _run_preplaced(cohort, entry, cfg, arm, ledger, notes)
+            attempts, touches = _run_preplaced(cohort, entry, cfg, arm, ledger, notes, counts)
             placed = attempts > 0
         else:
             raise ValueError("an exit arm needs exactly one execution semantics")
@@ -685,7 +765,7 @@ def replay_entry(cohort: Cohort, entry: CohortEntry, cfg: ReplayConfig, arm: Arm
         gross_proceeds=ledger.gross_proceeds, fees=fees, net_proceeds=ledger.net_proceeds,
         settlement_cash=ledger.settlement_cash, pnl_gross=ledger.pnl_gross(), pnl_net=ledger.pnl_net(),
         attempts=attempts, touches_not_filled=touches, placed=placed, duplicate_receipts=duplicate_receipts,
-        notes=tuple(notes), reconciliation=tuple(ledger.reconcile()))
+        notes=tuple(notes), reconciliation=tuple(ledger.reconcile()), **counts)
 
 
 def _summ(results: Sequence[EntryResult], hold: Sequence[EntryResult] | None, arm: Arm,
