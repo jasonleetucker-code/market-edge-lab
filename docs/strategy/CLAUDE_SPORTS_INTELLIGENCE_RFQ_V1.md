@@ -29,7 +29,7 @@ The latest audit establishes that these are already built; do not commission the
 
 The spread-noise gate failed validation and is not the next fix to revive. The E1 endpoint and timing tool superseded that old next-batch description.
 
-The A.C timing tool runs once, logged, once, after the last pilot-week target (kickoffs through 2026-10-19 ET) has passed and before the 2026-10-21 freeze, according to current protocol. Do not run it early to satisfy this task. The Oct 22 freeze review still requires evidence, fees/rules and owner review; no freeze is promised.
+The A.C timing tool runs once, logged, after the pilot's T-6h weeks (kickoffs through 2026-10-19 ET; about 2026-10-19) and before any pilot markout or E1 result is viewed; its output is a PROPOSED input to the owner's 2026-10-22 freeze review; no freeze is promised, according to current protocol. Do not run it early to satisfy this task. The Oct 22 freeze review still requires evidence, fees/rules and owner review; no freeze is promised.
 
 Current remaining issues include NFL/NHL fee and rule facts, signed-in data rights, final Kalshi message/channel, NHL October quota and protected-window pairing choices. Resolve only what present documentation/current authority permits. An unknown fact is not an owner preference; develop a recommendation instead of asking the owner to invent technical settings.
 
@@ -81,7 +81,7 @@ Maintain the R0–R11 plan in DELIVERY_ROADMAP:
 - R10: tiny canary/strategy pilot/scale once the actual prerequisites pass;
 - R11: outside capital/legal administration and secondary commercial possibilities.
 
-R4 feasibility may run alongside R2. R5 test-only execution readiness (in-process fakes and fixtures only: no network transport, no credentials; any demo/sandbox account or authenticated paper order needs separate owner approval) can progress before a strategy verdict. R9 needs a slot and value case, not completion of RFQ. R10 does NOT wait for all markets, full ML, RFQ or investor features. It DOES require a qualifying strategy, operational safety and explicit owner approval. No arbitrary waiting period or deadline overrides that.
+R4 feasibility may run alongside R2. R5 offline-only execution readiness (in-process fakes and fixtures only: no network transport, no credentials; any demo/sandbox account or authenticated paper order needs separate owner approval) can progress before a strategy verdict once an EXECUTION_PLAN entry scopes it; the 2026-09-30 entry covers only an execution-modes gap note. R9 needs a slot and value case, not completion of RFQ. R10 does NOT wait for all markets, full ML, RFQ or investor features. It DOES require a qualifying strategy, operational safety and explicit owner approval. No arbitrary waiting period or deadline overrides that.
 
 Keep Outcome Board, portfolio/risk, mobile Terminal, source health, security, backups and evidence traceability in each relevant package's acceptance. Do not postpone UI indefinitely or invent a separate design system.
 
@@ -97,7 +97,7 @@ Scope record: EXECUTION_PLAN 2026-09-30 entry (PR #147, merged cd1d265). In this
 
 | Writer | PR | Owns |
 |---|---|---|
-| W1 | A | `src/edge_lab/inplay_evidence.py`, `inplay_replay.py`, `position_policy.py`, `research_economics.py` (additive), pure helpers in `execution_ticket.py`, their tests |
+| W1 | A | `src/edge_lab/inplay_evidence.py`, `inplay_replay.py`, `position_policy.py`, `research_economics.py` (additive), `research_evidence.py` (additive, subordinate source-leadership report), `freshness.py` (additive state-validity only), pure helpers in `execution_ticket.py`, their tests |
 | W2 | B | `docs/research/RFQ_FEASIBILITY_*.md`, optional `src/edge_lab/rfq_research.py`, its tests |
 | W2 | C (after A and B merge) | dashboard views/components, fee/rule docs, DELIVERY_ROADMAP completion ledger |
 
@@ -228,7 +228,7 @@ After the immediate batch, recommend the single next dependency-ready package. D
 
 Run targeted tests then current required full suites, frozen checks and UI checks. No test network calls, provider quota, live store write-probes or credentials. Derive actual CLI commands from current code, not remembered snippets.
 
-Get independent review for temporal/statistical bias, private-data observability, payoff/units, exposure and account semantics. Fix and re-review consequential findings. Merge only under the authority EXECUTION_PLAN records: the standing rule covers docs-only and test-only PRs, and a runtime-code PR needs a recorded directive entry covering that implementation (for this batch, the 2026-09-30 entry). If no grant covers a runtime-code PR, leave it open for the owner. Require exact-head CI and current-main reconciliation. Billing previously blocked Actions but was reported resolved; verify current status, never perpetuate or bypass a stale blocker.
+Get independent review for temporal/statistical bias, private-data observability, payoff/units, exposure and account semantics. Fix and re-review consequential findings. Merge only under the authority EXECUTION_PLAN records: the standing rule covers docs-only and test-only PRs as that rule defines them (no runtime code); a runtime-code PR needs a recorded directive entry covering that implementation and its merge (for this batch, the 2026-09-30 entry records the owner's §18 merge conditions: current-main reconciliation, independent review, exact-head CI). If no grant covers a runtime-code PR, leave it open for the owner. Require exact-head CI and current-main reconciliation. Billing previously blocked Actions but was reported resolved; verify current status, never perpetuate or bypass a stale blocker.
 
 Commit/push bounded branches and open/update PRs with actual test results, acceptance and scope. A PR may appropriately remain open awaiting required review/CI. Do not claim local tests that did not run or make the independent review another author self-check.
 

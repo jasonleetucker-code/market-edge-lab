@@ -610,6 +610,10 @@ be written here when they are made.
   - **Experiments:** EXP-001 frozen; EXP-002 scope unchanged; the #96 two-family limit stands, with no slot
     transfer from the paused EXP-003; the A.C tool is not run before about 2026-10-19.
     EXECUTION_NOT_AUTHORIZED stays enforced.
+  - **Merge and deploy conditions (the directive's §18, owner's words in substance):** commit and push bounded
+    branches; merge only with current-main reconciliation, independent review and required CI green on the
+    exact final head (an old green result never substitutes); deploy only reviewed merged code through the gated
+    runbook; new acquisition and financial transport stay disabled unless separately approved.
 
 ## Standing merge rule: docs-only and test-only PRs
 

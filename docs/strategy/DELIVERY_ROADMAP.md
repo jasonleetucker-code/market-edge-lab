@@ -22,7 +22,7 @@ GitHub showed no open PRs and an empty work-claim table before this documentatio
 | NFL sportsbook pilot, consensus, Kalshi/Polymarket paired research | Raw/derived/source distinctions, joint quota and label protection already exist. No new consensus engine |
 | EXP-002 E1 round-trip measurement and outcome-proxy closures | Implemented, proposed/gross-only where fees unsupported, DRAFT. Do not resurrect abandoned spread-noise gates or expose T-60m labels |
 | Tie/not-played source study | Proposed t_max/u_max values exist; not approved physical-probability truth or permission to alter protocol |
-| A.C timing calibration tool (#142/#143) | Built/deployed; one logged run once, after the last pilot-week target (kickoffs through 2026-10-19 ET) has passed and before the 2026-10-21 freeze, not an immediate redo. Unavailable now is a date/evidence prerequisite, not missing code |
+| A.C timing calibration tool (#142/#143) | Built/deployed, not yet run. It runs once, logged, on production after the pilot's T-6h weeks (kickoffs 2026-09-27 through 2026-10-19 ET; about 2026-10-19) and before any pilot markout or E1 result is viewed (A.G step 5). Its output is a PROPOSED input to the owner's 2026-10-22 freeze review, not a freeze. Not an immediate redo. Unavailable now is a date/evidence prerequisite, not missing code |
 | NHL discovery/odds/books/freshness/Terminal (#134) | Active collection/development only. Opening-night capture completed for eligible horizons. NFL sample remains separate |
 | In-play evidence contract, position_policy, replay and Terminal/ADR 0038 (#122) | Offline foundation built. Inspect before additions; real source-quality capture and empirical policy tests still need scope/rights/slot |
 | Economics, consumed-evidence logs, attrition, sizing challenger | Reuse. Do not create a second learning/risk/ledger subsystem |
@@ -59,7 +59,7 @@ These checks are documentation, not endpoint smoke tests, eligibility, a storage
 
 ## 4. Governing sequencing rules
 
-1. **Operate and preserve evidence continuously within existing authority.** A confirmed safety or rights failure stops the affected use and collection at once (EXECUTION_PLAN: each source's terms respected) and is escalated to the owner; an unresolved question does not by itself stop other approved collection.
+1. **Operate and preserve evidence continuously within existing authority.** A confirmed safety or rights failure stops the affected use and collection at once (EXECUTION_PLAN: each source's terms respected) and is escalated to the owner; an unresolved rights question does not by itself stop already-approved collection, which continues until the owner decides otherwise (vf decision packet §B), but it blocks new uses such as `inplay-source-pilot-1`.
 2. **Two active new empirical families at most beside frozen EXP-001.** Current EXP-002 remains protected; paused EXP-003 does not silently assign a slot to #122/RFQ. Offline fixtures and bounded feasibility do not certify an active strategy. New empirical studies need registry, budget and slot decisions.
 3. **Build once; integrate many uses.** Source-state provenance, fees/units, execution quality, capital reservations and operator UI are shared, not duplicated for every sport or RFQ.
 4. **New data needs purpose, rights, timestamp contract, outcome/evaluation use, cost, stop/review date and explicit acquisition authority.** Preserve the existing 450-credit joint Odds ceiling, NFL priority, NFL 295-GET/week and NHL separate bounds; default policy does not become unlimited free access.
@@ -86,7 +86,7 @@ Maintain protected collection, shared quota, actual receipt/sequence truth, sche
 
 1. Close document-derived fee/rule facts where possible; map remaining disputes precisely. NFL/NHL series, fractional quantities, maker/taker/RFQ scope, cancellation/refund and fallback paths stay separate. Current unsupported scopes never become zero-fee or generic-fee claims.
 2. Keep source-derived tie/not-played bounds PROPOSED until legitimate review. Fix narrower venue-change semantics without inventing new probabilities.
-3. A.C tool is already built: preserve its one-run timing (once, after the last pilot-week target (kickoffs through 2026-10-19 ET) has passed and before the 2026-10-21 freeze). E1 design/economics/freeze remain separately reviewed; no more attempts to force a rejected noise gate to pass.
+3. A.C tool is already built: preserve its one-run timing (once, logged, after the pilot's T-6h weeks (kickoffs through 2026-10-19 ET; about 2026-10-19) and before any pilot markout or E1 result is viewed; its output is a PROPOSED input to the owner's 2026-10-22 freeze review; no freeze is promised). E1 design/economics/freeze remain separately reviewed; no more attempts to force a rejected noise gate to pass.
 4. NHL timing mismatches, actual commence/lead differences, unknown shootout rules and October budget options are in the existing `docs/owner/2026-09-29-nhl-decision-packet.md` (default option (a)); extend it, do not create another. Do not change protected windows or NFL reservation to improve apparent pairing without approval.
 5. Signed-in agreement and final message/channel are owner/access actions; the questions are already drafted (`docs/research/KALSHI_QUESTIONS_2026-09-26.md`, revision 2, NOT SENT); do not redraft or send twice, and record answers verbatim when legitimately obtained.
 
@@ -128,7 +128,7 @@ Economic screen: request count is an upper demand signal, not fill rate; propose
 
 ### R5 — One-venue order, inventory and capital lifecycle (technical branch; do not wait for every strategy)
 
-**Serves:** #6 #30 #32 #33 #93 #122 #145. **Dependencies:** R1 semantic proof, R2 data contracts and reviewed exact test-only authority (test-only means in-process fakes and fixtures, with no network transport and no credentials; any venue demo/sandbox account, key or authenticated paper order needs a separate owner approval recorded in EXECUTION_PLAN). ADR 0035 is the design being implemented; RFQ-specific extension additionally depends on R4.
+**Serves:** #6 #30 #32 #33 #93 #122 #145. **Dependencies:** R1 semantic proof, R2 data contracts and a directive entry scoping R5 as offline-only work (offline-only means in-process fakes and fixtures, no network transport, no credentials; it changes runtime code, so it is not a 'test-only PR' under the standing merge rule; any venue demo/sandbox account, key or authenticated paper order needs separate owner approval recorded in EXECUTION_PLAN). ADR 0035 is the design being implemented; RFQ-specific extension additionally depends on R4.
 
 Extend execution_ticket/current ADR, not a second risk owner. Durable intents, atomic cash AND inventory reservation, fencing/single execution authority, actual/unknown account state, duplicate/out-of-order event reconciliation, pending/ack/partial/fill/cancel-request/cancel-confirmed/unknown/settled semantics, restart recovery and outstanding native/manual orders. Restrict credentials/withdrawals and isolate model/research processes. No transport initially.
 
@@ -140,7 +140,7 @@ RFQ confirmation and ordinary resting orders have different binding points. Rech
 
 **Serves:** #122 #145. **Dependencies:** R3 plus source/recorder approval, rights and a research-slot decision; actual live use later needs R5/R10.
 
-Only after the owner approves `inplay-source-pilot-1` (vf decision packet §C) and a slot/budget decision, run that selected-game pilot, not high-frequency all-sports ingestion. Preserve game/book corrections and absence. Data inspected for engineering are development evidence. Freeze a modest exit comparison and primary risk/economic endpoint before its evaluation. Game/slate clustering, delayed controls, fill bounds, latency, capacity and tail loss determine usefulness; one exciting comeback does not.
+Only after the owner approves `inplay-source-pilot-1` (vf decision packet §C) with the approval recorded in EXECUTION_PLAN, the rights question (§B) is resolved and a reviewed recorder is merged, run that selected-game source-quality pilot, not high-frequency all-sports ingestion; evaluation beyond source quality also needs a slot/budget decision and a registry id. Preserve game/book corrections and absence. Data inspected for engineering are development evidence. Freeze a modest exit comparison and primary risk/economic endpoint before its evaluation. Game/slate clustering, delayed controls, fill bounds, latency, capacity and tail loss determine usefulness; one exciting comeback does not.
 
 Later, only after incremental evidence: a game-state/fair-value challenger with versioned pregame priors; next re-entry or additions with cumulative risk/turnover limits. Do not choose the later historical maximum as an exit or reset losses after a rebound. State-aware market-making is not implied.
 
@@ -235,12 +235,12 @@ Maximum two writers with disjoint paths, plus an independent reviewer. One write
 
 ## 7. Checkpoints, delivery definition and remaining decisions
 
-**Oct 3 routine window:** follow current approved O1/F09 and retention policy when actually due; do not rerun completed actions just to claim progress. **After the pilot:** the existing single timing calibration, run once, after the last pilot-week target (kickoffs through 2026-10-19 ET) has passed and before the 2026-10-21 freeze, with logged FEATURE_INSPECTION under its protocol. **Oct 22:** owner research/freeze and platform-readiness checkpoint, not an automatic pass, live launch or deadline for finishing every future domain. Preserve the existing EXP-003 review deadline/paused status unless an explicit later decision supersedes it.
+**Oct 3 routine window:** follow current approved O1/F09 and retention policy when actually due; do not rerun completed actions just to claim progress. **After the pilot:** the existing single timing calibration, run once, logged, after the pilot's T-6h weeks (kickoffs through 2026-10-19 ET; about 2026-10-19) and before any pilot markout or E1 result is viewed; its output is a PROPOSED input to the owner's 2026-10-22 freeze review; no freeze is promised, with logged FEATURE_INSPECTION under its protocol. **Oct 22:** owner research/freeze and platform-readiness checkpoint, not an automatic pass, live launch or deadline for finishing every future domain. Preserve the existing EXP-003 review deadline/paused status unless an explicit later decision supersedes it.
 
 **Dated checkpoints and owner-only gates (carried from the archive):**
-- Fee re-checks: Kalshi by 2026-10-23T13:39:48Z, Polymarket US by 2026-10-24T01:39Z.
+- Fee re-checks: Kalshi by 2026-10-23T13:39:48Z (add SETTLEMENT_AND_TRANSFER_FEES), Polymarket US by 2026-10-24T01:39:45Z.
 - `close_tick_alignment` DST check after 2026-11-01.
-- EXP-003 current scope is rejected on 2026-11-15 if Q1 or Q4 is unresolved.
+- EXP-003's current scope is rejected on 2026-11-15 if Q1 or Q4 is unresolved or unfavourable (EXECUTION_PLAN 2026-09-26 entry; relies on the PROPOSED emergency-power scoping).
 - The Kalshi questions (`docs/research/KALSHI_QUESTIONS_2026-09-26.md`, revision 2) are drafted and NOT SENT; sending needs the owner to confirm the exact final text and channel.
 
 By the October 22 checkpoint, target a fully reconciled current roadmap, current-family decision materials, trustworthy pricing/rights states, complete offline in-play extensions, a scoped RFQ feasibility result, useful operator states and an explicit next authorized evidence step. Unknowns are valid deliverables when their exact resolution/cost is identified.
@@ -254,3 +254,5 @@ Current owner decisions are carried forward, not reinvented: signed-in data righ
 Repository and current source-document reads were performed. No server/account/stream was accessed and no runtime/model/protocol/credential changed. A local checkout attempt failed because the execution environment could not resolve github.com; local pytest was therefore **not run**. Do not call this change tested locally. Require the exact-head CI and independent coordinator review before merging, particularly because this consolidates planning/ownership history.
 
 The archive must match original blob `b0689cc48dfc8dd127636b67f7b0a3dc1d0e323d`; the final work-claims blob must return to its original value; only the index and new strategy files should differ. Current HANDOFF and EXECUTION_PLAN are deliberately unchanged: production evidence and financial/scheduling authority are not edited by this planning consolidation.
+
+Coordinator review: `python -m pytest tests/invariants -q` passed (127) on `cc994c3` and again on the head carrying the second-round review fixes.

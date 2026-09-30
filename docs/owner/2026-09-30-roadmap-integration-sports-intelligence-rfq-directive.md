@@ -45,6 +45,10 @@ plan) and fix any justified findings.
 **PR C.** Reconcile the current blockers (fees, rules, rights, lead differences) at the document and test level. Add
 compact displays to the existing Terminal components, then track the R0–R11 roadmap.
 
+## Merge and deploy conditions (directive §18)
+
+Commit and push bounded branches. Merge only with current-main reconciliation, the applicable delegation, independent review and required CI green on the exact final head; if CI cannot run, an old green result is never a substitute. Deploy only reviewed merged code under actual authority and the gated runbook. New acquisition and financial transport remain disabled unless separately approved. No watcher or idle loop waits for a future event.
+
 ## Not authorized by this directive (unchanged)
 
 The roadmap is a sequence, not blanket permission. EXECUTION_PLAN and actual owner decisions govern.

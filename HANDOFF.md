@@ -159,8 +159,8 @@ remains MANUAL EMERGENCY FALLBACK ONLY.
 
 - **Remaining calendar days:** 23 (as of 2026-09-29).
 - The binding constraint is now the calendar (at most one valid day per day), not
-  deployment. The ordered roadmap and the Domain Readiness matrix are in
-  `docs/OWNER_IDEAS.md` → Roadmap (re-run 2026-09-24).
+  deployment. The ordered roadmap is `docs/strategy/DELIVERY_ROADMAP.md`; the Domain Readiness matrix
+  (last scored 2026-09-24) is in `docs/strategy/archive/OWNER_IDEAS_pre_podcast_2026-09-29.md`.
 - By 2026-10-22 the system can show:
   - a deployed, verified pipeline;
   - up to about 28 days of point-in-time shadow bookkeeping, claimable only as a lower

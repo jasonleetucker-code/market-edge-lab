@@ -25,7 +25,7 @@ The previous complete index, shared-owner table, roadmap reruns, domain-readines
 |---|---|---|
 | #4 | Durable idea intake / readiness process | DONE/MAINTAIN; keep this index, issue truth and roadmap aligned |
 | #11 | October 22 delivery / live-readiness goal | Cross-cutting checkpoint; software/evidence readiness, not a promised positive verdict or trade date |
-| #3 | Outcome Board / what matters today | Existing backend/view; integrate readable event identity, inventory/risk, outcomes and actual unavailable states; no separate app |
+| #3 | Outcome Board / what matters today | Existing backend/view; integrate readable event identity, inventory/risk, outcomes and actual unavailable states; no separate app; hosting beyond the tailnet and live marks remain unauthorized |
 | #47 | Market Edge Terminal design system | Existing shell/tokens/components; mobile, desktop, accessibility, empty/stale/unsupported/error states accompany every user-visible package |
 | #10 | Private hosting on existing infrastructure | DONE/MAINTAIN; current deployment/runbooks and isolation, no public site exposure implied |
 | #12 | Brisket portability audit (other repository) | Out of Market scope; root SSH hardening is a separate security task, also out of scope for Market missions (archive items 23–24) |
@@ -35,7 +35,7 @@ The previous complete index, shared-owner table, roadmap reruns, domain-readines
 | #134 | NHL prospective evidence | BUILT/ACTIVE per latest handoff (DATA_COLLECTION / DEVELOPMENT_ONLY; Odds `icehockey_nhl` h2h under the joint 450 ledger after NFL's reservation; Kalshi KXNHLGAME only, own request bound). NEXT: coverage review and the NHL decision packet (October coverage, default (a); protected-window contract); fee/shootout rules. LATER: a separately allocated, preregistered hockey experiment. BLOCKED (owner): paid tier or ceiling change. Not EXP-002; no slot claimed |
 | #122 | In-play positions: HOLD/REDUCE/EXIT, then REENTER/ADD | Offline evidence/policy/replay/Terminal foundation BUILT. NEXT: scoped recorder approval and source-quality evidence; state-aware models/re-entry later; live actions BLOCKED. The 295/week pregame approval does not extend to in-play, and EXP-002's budget is not #122's |
 | #145 | Conditional price discovery, RFQ/combos, adverse selection and full roadmap integration | NOW planning and source-backed feasibility; NEXT shared state/latency/attribution additions within granted scope. RFQ observation/quoting/empirical joint pricing require separate access/slot/authority |
-| #30 | Multi-venue identity, best price and unique markets | Existing Kalshi/Polymarket foundations and best-size comparator; fees/rights/equivalence gaps remain. Novig and further routes follow a specific need; one execution route deeply before many |
+| #30 | Multi-venue identity, best price and unique markets | Existing Kalshi/Polymarket foundations and best-size comparator; fees/rights/equivalence gaps remain. Novig and further routes follow a specific need; one execution route deeply before many; Novig live API BLOCKED (credentials); Polymarket US NFL pilot ACTIVE under the owner's risk decision (not a verified grant) |
 | #6 | Bankroll, risk, sizing and withdrawal guidance | Shadow foundation and sizing-v2 challenger exist; evidence/review before operational promotion. Extend one risk owner, never a live shortcut; the withdrawal contract never recommends a draw |
 | #32 | Starter capital horizon / execution preference | Keep STARTER_MAX_7D_V1 and 168-hour venue-tradable-cash meaning; hoped-for early sale does not satisfy it. One-venue order/reservation rehearsal before live |
 | #93 | Bootstrap Capital Mode | NOW inside economics/capacity; separate total/deployed return, turnover, lockup, drawdown and fixed cash cost; actual bankroll not inferred from examples |
@@ -65,10 +65,10 @@ Extend the owner named here; never fork it into a feature-specific copy. `PLANNE
 | Fee models and fee verification | `src/edge_lab/fee_schedules.py` | BUILT (ADR 0017; Polymarket US UNVERIFIED estimate, ADR 0027; KXNFLGAME and KXNHLGAME FEE_UNSUPPORTED). Reuses frozen fees.py; taker, maker and RFQ scopes stay separate | #6 #30 #9 #145 |
 | Model estimates | `src/edge_lab/opportunity.py` | BUILT (ModelEstimate; available models are not inferred from a domain enum) | #5 #9 #32 |
 | Source ingestion, provenance and rights | `src/edge_lab/sources.py` | BUILT (registry fronting storage.py, provenance.py, redaction.py; no second evidence database) | #7 #29 #30 #27 |
-| Freshness orchestration and state validity | `src/edge_lab/freshness.py` | BUILT (v1, ADR 0031; freshness_fabric.py supervisor observes, controls nothing). #145 game-state validity is an additive extension here and in inplay_evidence.py, never a second scheduler | #74 #86 #88 #9 #29 #50 #145 |
+| Freshness orchestration and state validity | `src/edge_lab/freshness.py` | BUILT (v1, ADR 0031; freshness_fabric.py supervisor observes, controls nothing). #145 state-version records live in inplay_evidence.py; freshness.py consumes them for validity, never a second scheduler | #74 #86 #88 #7 #9 #29 #50 #145 |
 | Sportsbook consensus benchmark | `src/edge_lab/odds_consensus.py` | BUILT (ADR 0033; RESEARCH BENCHMARK, NOT EXECUTABLE; EXP-002 frozen baseline, variants are registered) | #9 #5 #29 #82 |
-| Sports odds capture scheduling | `src/edge_lab/odds_schedule.py` | BUILT, ACTIVE (ADR 0029; sport-aware NFL+NHL, one joint 450-credit proof and ledger, NFL first, ADR 0039) | #29 #5 #9 #134 |
-| Later / closing price observations | `src/edge_lab/price_observations.py` | BUILT, ACTIVE (ADR 0030; Kalshi NFL and KXNHLGAME targets, ADR 0040; MISSED stays MISSED) | #74 #50 #30 #9 #134 |
+| Sports odds capture scheduling | `src/edge_lab/odds_schedule.py` | BUILT, ACTIVE (ADR 0029; sport-aware NFL+NHL, one joint 450-credit proof and ledger, NFL first, ADR 0039) | #29 #5 #9 #50 #134 |
+| Later / closing price observations | `src/edge_lab/price_observations.py` | BUILT, ACTIVE (ADR 0030; Kalshi NFL and KXNHLGAME targets, ADR 0040; MISSED stays MISSED) | #74 #50 #30 #9 #29 #134 |
 | Paired sports evidence | `src/edge_lab/sports_evidence.py` | BUILT (join v2; T-60m label-proxy withholding; exp002_timing.py subordinate) | #5 #9 #96 |
 | Per-domain research readiness | `src/edge_lab/research_readiness.py` | BUILT (YES / PARTIAL / NOT_YET / UNKNOWN from real stores; never green by default) | #50 #86 #88 #82 |
 | Release / event calendar | `src/edge_lab/event_calendar.py` | PLANNED (one shared calendar, never one per domain; docs/research/SOURCE_READINESS.md §9) | #86 #88 #74 #82 |
@@ -88,8 +88,8 @@ Extend the owner named here; never fork it into a feature-specific copy. `PLANNE
 | Execution-ticket contract | `src/edge_lab/execution_ticket.py` | BUILT (data contract and pre-submit chain; EXECUTION_NOT_AUTHORIZED always fails; ADR 0035). Durable lifecycle, reservations, fencing and RFQ binding points extend it | #32 #33 #30 #122 #145 |
 | Backup and restore | `src/edge_lab/backup.py` | BUILT (proposed-v1 manual reviewed retention; O1 weekly laptop pull keeps 4; no paid cloud) | #10 #50 |
 | Operator views | `src/edge_lab/dashboard/` | BUILT (read-only; tailnet-only, ADR 0024) | #3 #6 #10 #122 #134 |
-| Design system (Market Edge Terminal v1) | `docs/design/UI_CONTRACT.md` | BUILT (ADR 0025, issue #47) | #47 #3 #6 #9 #30 |
-| Longitudinal learning history | `docs/DATA_PROVENANCE.md` | FOUNDATION BUILT (immutable snapshots, captures, experiment records, rejections, shadow ledger); no duplicate evidence store | #50 #5 #7 #9 #30 |
+| Design system (Market Edge Terminal v1) | `docs/design/UI_CONTRACT.md` | BUILT (ADR 0025, issue #47) | #47 #3 #6 #9 #10 #29 #30 #32 #33 |
+| Longitudinal learning history | `docs/DATA_PROVENANCE.md` | FOUNDATION BUILT (immutable snapshots, captures, experiment records, rejections, shadow ledger); no duplicate evidence store | #50 #5 #7 #9 #27 #29 #30 |
 
 ## Review log
 
@@ -102,5 +102,5 @@ Entries before 2026-09-29 (evening), with their classifications and supersession
   - **Shared infrastructure:** no new owner except the PLANNED `rfq_research.py` (Shared primitives table); no second scheduler, ledger, risk engine, learning engine or evidence store.
   - **Safe parallel lanes:** two writers (PR A shared contracts; PR B RFQ packet), PR C after both; independent reviewer.
   - **Roadmap effect (2026-10-22 plan):** date unchanged; the checkpoint adds a scoped RFQ feasibility result and offline in-play extensions; no freeze, verdict or live date promised.
-  - **Classification:** NOW: PR A/B/C offline scope. NEXT: `inplay-source-pilot-1` decision; R5 test-only lifecycle. LATER: R6–R9, R11. BLOCKED (owner/access): authenticated RFQ observation, any quote/acceptance, empirical joint pricing and in-play evaluation (slot, rights, budget), paid data, live (R10).
+  - **Classification:** NOW: PR A/B/C offline scope. NEXT: `inplay-source-pilot-1` decision; R5 offline-only lifecycle (needs its own scope entry). LATER: R6–R9, R11. BLOCKED (owner/access): authenticated RFQ observation, any quote/acceptance, empirical joint pricing and in-play evaluation (slot, rights, budget), paid data, live (R10).
   - No gate change. No order, credential, stream, schedule, budget change, paid service or message.
