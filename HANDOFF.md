@@ -3,105 +3,91 @@
 This is the live state of the repository. Each session overwrites it; it is not a history
 (git log is the history). Format: `AI_INSTRUCTIONS.md` → Handoff format.
 
-_Last updated: 2026-09-29 ~22:00 America/New_York (VPS clock) by the laptop Claude coordinator
-session. It covered the owner directive of 2026-09-29 (`docs/owner/2026-09-29-nhl-prospective-evidence-directive.md`,
-issue #134): EXP-002 correctness continuation plus bounded NHL prospective evidence. The earlier 2026-09-29 state
-(E1 and label proxies) is in git history (#133)._
+_Last updated: 2026-09-30 ~07:30 America/New_York (VPS clock) by the laptop Claude coordinator session. It covers
+the owner directive of 2026-09-30 (`docs/owner/2026-09-30-roadmap-integration-sports-intelligence-rfq-directive.md`,
+issue #145): complete roadmap integration plus sports intelligence and RFQ feasibility v1. The NHL state of
+2026-09-29 is in git history (#144)._
 
 ```
-STATUS: DONE for the buildable scope. NHL prospective collection is BUILT, DEPLOYED and ACTIVE (production
-  23b7b3b). Opening night was captured for every horizon still ahead at activation. EXP-002 freeze blocker 2 has sourced counts (PROPOSED values). The owner decisions are open in
-  docs/owner/2026-09-29-nhl-decision-packet.md and docs/owner/2026-09-29-vf-decision-packet.md.
-ACCEPTANCE: the 2026-09-29 directive:
-  A. EXP-002: continue the pre-freeze blockers in dependency order; no weakening; no NHL mixing.
-  B. NHL: DATA_COLLECTION / DEVELOPMENT_ONLY.
-     - Odds API icehockey_nhl h2h (T-60m first) under one shared ledger and the 450 ceiling, NFL first.
-     - Kalshi KXNHLGAME only, under its own request bound.
-     - Protected windows, truthful opening night, outcomes separated, private Terminal coverage.
-     - No paid plan, timer, credentials or in-play.
-EVIDENCE:
-  - MERGED (independent review; review fixes; exact-head CI green on 3.11/3.12; reconciled with main):
-    - #140 (f754fe9): the NHL-C activation record and the NHL owner decision packet.
-    - #141 (98a31c2): CI pytest job timeout raised from 10 to 20 min (a slow runner hit 10 min).
-    - #142 (5b1e5ff) and #143 (23b7b3b): the EXP-002 A.C timing-calibration tool, `sports_evidence exp002-timing`.
-      - Label-free: T-24h/T-6h only, pilot weeks 09-27..10-19 ET only.
-      - It logs a FEATURE_INSPECTION event (influenced_tuning true) before showing anything, and refuses on
-        truncation.
-      - Not run yet: it runs once, on production, after the pilot weeks (about 2026-10-19).
-    - #135 (2f2d9c4): directive record, EXECUTION_PLAN entry, OWNER_IDEAS #134 re-plan.
-    - #138 (5f2095d): EXP-002 sourced tie / not-played counts (docs/research/EXP002_TIE_NOTPLAYED_BOUNDS.md),
-      summarized under EXP-002 below.
-    - #137 (7e0b81d): NHL-A. A sport-aware shared Odds planner.
-      - One joint NFL-first monthly proof. NHL gets only what remains after NFL's full worst case.
-      - NHL_WORST_CASE is derived from the published 2026-27 schedule (1,344 games).
-      - Per-sport runner state; odds status with lead bands; smoke limited to the rank-1 sport.
-      - The NFL golden pin is byte-identical. ADR 0039; docs/research/NHL_ODDS_BUDGET_2026-10.md.
-    - #136 (c9a2406): NHL-B. Schedule-driven Kalshi KXNHLGAME T-6h and T-60m targets.
-      - Protected-window shifts are labelled with the real lead. Its own bound: 727 GETs/week at worst.
-      - Reschedule and absence supersession; settlement results withheld; its own freshness identity.
-      - Terminal "Kalshi NHL coverage" block; NFL pin. ADR 0040.
-    - #139 (fb2f5fd): a game that drops out of discovery and returns is re-planned (`:r<n>` ids).
-      NOT_CAPTURED_SCHEDULE_STALE; both-switch install test.
-  - DEPLOYED with /root/deploy.sh (preflight PASS, backups verified before and after, fail-closed PASS,
-    0 failed units, 13 timers): 7e0b81d 15:10 ET, c9a2406 15:36 ET, fb2f5fd 16:31 ET, 23b7b3b 21:52 ET (#142/#143;
-    the timing tool; both NHL switches kept).
-  - ACTIVATED (docs/deploy/NHL_ACTIVATION_2026-09-29.md):
-    - EDGE_LAB_ODDS_NHL=on at 15:12 ET. Preview was PROVEN (6 September slots admitted, October none).
-    - EDGE_LAB_KALSHI_NHL_CAPTURE=on at 15:38 ET. The dry run would plan 64 targets (16 games), 0 unmapped, 0 requests.
-  - OBSERVATIONS CAPTURED, opening night 2026-09-29 (production, verified 21:50 ET; 0 failed units):
-    - Manual Kalshi: 20 of 20 (phase custom, origin manual).
-    - Scheduled Kalshi T-60m: all 5 games, both team markets (10 of 10). Leads vs the provider commence time:
-      65 min; MTL@TOR 95 min, because of the protected-window shift.
-    - Scheduled Kalshi T-6h: VAN@EDM and CHI@VGK (4 targets).
-    - Odds API T-60m h2h: all 5 games (5 credits).
-    - Storage: 58 NHL snapshots, about 158 KB of payload, plus 74 observation rows. The DB is 16 MB.
-    - 3 opening-night games' Kalshi T-6h (6 team-market targets) are MISSED NOT_COLLECTED_BEFORE_ACTIVATION. Nothing was captured late
-      or relabelled.
-  - Odds credits: September spent 50 (45 NFL + 5 NHL); the provider reports 450 remaining. One more September
-    NHL slot is admitted (Sep 30, 18:35 ET, 2 games, 1 credit).
-  - October NHL Odds coverage is back-loaded by NFL's worst-case reservation: no NHL T-60m from the late
-    Sep 30 game through Oct 3 (15 slots SKIPPED_BUDGET), first capture Oct 4, then released weekly, about 103 of 118 T-60m slots on the planner's model. Kalshi NHL is unaffected.
-  - EXP-002 (freeze blocker 2, PROPOSED; the freeze review decides):
-    - ties: 8 in 2,383 games, 2017–2025 (official NFL.com standings);
-    - fallback-F events: 14 in 2,384 (conservative).
-    - Proposed t_max 0.01 and u_max 0.01. The earlier u_max of 0.005 holds only if pandemic seasons are excluded.
-    - Evidence event eu-622b393f records the aggregate read of public 2026 settlements and standings covering
-      DEVELOPMENT pilot games. The Terminal gate line now shows LABEL_VIEWS_LOGGED.
+STATUS: DONE for this batch. The roadmap is consolidated (#146), and PR A/B/C (#149, #148, #150) are merged.
+  Production 14704e3 is DEPLOYED and PRODUCTION_VERIFIED. All new code is offline: no new acquisition,
+  credential, stream or financial transport.
+ACCEPTANCE: the 2026-09-30 directive:
+  - review and integrate #146;
+  - PR A: source, game-state and latency contracts, plus fill-conditioned economics, extending existing owners;
+  - PR B: RFQ feasibility (capability matrix, economics, PROCEED/NARROW/DEFER) with offline lifecycle fixtures;
+  - PR C: current-blocker reconciliation, compact Terminal, R0–R11 ledger;
+  - EXP-001 and EXP-002 unchanged; no authority expansion.
+EVIDENCE (each item: independent review, fixes re-reviewed, exact-head CI green on 3.11/3.12, reconciled):
+  - #147 (cd1d265): directive record and EXECUTION_PLAN entry (offline scope). #146 later added the §18 merge and
+    deploy conditions, and the owner's verbatim delegation "keep going until everything is merged and deployed".
+  - #146 (61e7965; exact head 18fb691): the roadmap consolidation.
+    - Two review rounds. The original head failed CI: OWNER_IDEAS broke the intake and one-owner-per-primitive
+      invariants.
+    - Fixed: OWNER_IDEAS restored to the contract; wording that read as authority removed; the A.C ordering
+      (before any pilot markout; no promised freeze) and dated checkpoints restored.
+    - The archive equals the original blob b0689cc.
+  - #149 (04bf78c; head 5cd1996), PR A (R2): extends inplay_evidence, position_policy, inplay_replay,
+    research_economics and execution_ticket. ADR 0041.
+    - Two review rounds. Blockers fixed:
+      - source-leadership matching that depended on argument order;
+      - mixed clock bases;
+      - journal order;
+      - a publication time used as the event time;
+      - capital re-spent after a loss.
+    - Refactor and no-journal replay are byte-identical (checked by hash).
+  - #148 (519580d; head 28e6dfb), PR B (R4): docs/research/RFQ_FEASIBILITY_2026-09.md, with decision NARROW.
+    - rfq_research.py is pure and fixture-fed, and reserves through execution_ticket (one primitive owner). ADR 0042.
+    - Two review rounds. Blockers fixed: exposure released too early; the requester obligation lost.
+  - #150 (14704e3; head 1cd6dfa), PR C:
+    - Fee routing: `fee_schedules.not_proven_standard` makes KXNHLGAME and KXMVE* FEE_UNSUPPORTED (explicit map;
+      every other series is unchanged).
+    - A single blocker register (current_blockers.py → docs/research/CURRENT_BLOCKERS.md).
+    - Terminal: in-play state-validity and simulated fill-economics sections (gallery only); "Current blockers"
+      and RFQ feasibility on Data sources; next blocker on the Terminal; contract exceptions on market detail.
+    - DELIVERY_ROADMAP §9: the R0–R11 ledger.
+  - DEPLOYED 14704e3 at 07:18 ET via /root/deploy.sh: preflight PASS, backups verified before and after,
+    fail-closed PASS, 0 failed units, 13 timers, both NHL switches kept.
+    Production checks:
+    - /experiments/inplay still reads "No in-play source is authorized", with no fixture sections;
+    - /gallery/inplay returns 404;
+    - Data sources shows the RFQ block ("Decision: Narrow") and "Current blockers" (11 open; next: O1/F09 by
+      about 2026-10-03).
+  - Reviewers ran full suites of about 3,515 tests. One gate7 subprocess timeout under concurrent load was not
+    reproducible (30/30 on rerun). check-frozen is clean on every PR.
 UNRESOLVED:
-  - NHL:
-    - Kalshi shootout and tie semantics are RULES_UNRESOLVED.
-    - KXNHLGAME fees are FEE_UNSUPPORTED; fee_schedules routes it to the general quadratic schedule. That is for
-      the fee owner.
-    - Odds API NHL team names were verified only by tonight's 0-unmapped dry run.
-    - The 19:00-game Odds (T-25m) and Kalshi (T-85m) read times are about 60 min apart; packet decision 2.
-    - The Odds API lists NHL commence times about 10 min after NHL.com's, so Odds "T-60m" is about T-50m of the
-      official start (recorded; provider data is not altered).
-  - EXP-002 freeze blockers remaining:
-    - review of the E1 design;
-    - the A.C timing calibration: the tool is built and deployed (#142); one logged run after 2026-10-19;
+  - EXP-002 freeze blockers:
+    - E1 design review;
+    - the A.C run (once, after the pilot's T-6h weeks to 2026-10-19 ET and before any pilot markout or E1 result
+      is viewed);
     - KXNFLGAME fees;
-    - the owner freeze review 2026-10-22.
-    - Blocker 2 now has sourced PROPOSED values.
-    - Freeze proposal v2 should correct §2's "venue or home/away change" wording (the terms' Venue Change clause is
-      narrower).
-  - From the earlier packets: Kalshi message revision 2 NOT SENT; data rights UNRESOLVED.
-  - EXP-002: reading `settlement_value_dollars` as the YES payoff of a tie is partly supported (#138 saw the
-    2025 GB–DAL tie settle at 0.50) but no KXNFLGAME fallback-F settlement has been observed.
+    - freeze proposal v2 wording (the Venue Change clause);
+    - the owner's 2026-10-22 review.
+  - NHL:
+    - shootout and tie semantics RULES_UNRESOLVED;
+    - KXNHLGAME fees FEE_UNSUPPORTED (routing now explicit, #150);
+    - the October Odds budget (packet decision 1) and the read-time alignment (decision 2).
+  - RFQ (NARROW): its own fees, entitlements, volume, quote lifetimes and pause behaviour are UNKNOWN. There are 15
+    documented contradictions across Kalshi pages. Competitor quotes and fills are unavailable by design.
+  - Rights: which terms govern API data is UNRESOLVED. The Kalshi message revision 2 is NOT SENT.
+  - Fee-schedule PDF re-read got HTTP 429; the 2026-09-23 capture remains the evidence.
   - Routine:
-    - O1 weekly pull and F09 by about 2026-10-03 (a retention apply refuses after 8 days without F09);
-    - retention dry run and apply at the owner's cadence;
+    - O1 weekly pull and F09 by about 2026-10-03;
+    - fee re-checks: Kalshi by 2026-10-23T13:39:48Z, Polymarket US by 2026-10-24T01:39:45Z;
     - DST check after 2026-11-01;
-    - fee re-checks Kalshi 10-23, Polymarket US 10-24.
-  - ntfy deferred by the owner.
+    - EXP-003 scope rejected on 2026-11-15 if Q1 or Q4 is unresolved or unfavourable.
 BLOCKERS (owner-only):
-  1. docs/owner/2026-09-29-nhl-decision-packet.md:
-     - October NHL Odds coverage, options (a)-(d); the default is (a);
-     - the shared protected-window contract (decision 2).
-  2. docs/owner/2026-09-29-vf-decision-packet.md: Kalshi message revision 2 and channel; the data-rights review;
-     the optional in-play pilot.
-NEXT ACTION: watch the first full NHL day (Sep 30: 3 games; the late game's Odds T-60m falls in October and is
-  SKIPPED_BUDGET by design). Run the O1 pull and F09 around 2026-10-03. Run the A.C calibration once after
-  2026-10-19. Propose the shared protected-window contract if the owner picks decision 2(b).
+  1. docs/owner/2026-09-29-vf-decision-packet.md: the data-rights review; Kalshi message revision 2 and channel;
+     `inplay-source-pilot-1` approval.
+  2. docs/owner/2026-09-29-nhl-decision-packet.md: October NHL Odds coverage (default (a)); the shared
+     protected-window contract.
+  3. docs/research/RFQ_FEASIBILITY_2026-09.md D1–D6. Only needed if RFQ research is to go beyond documentation:
+     rights, an observe-only credential (not authorized), questions in revision 3, a public block-trade read scope,
+     a #96 slot, and a budget.
+NEXT ACTION: R3. Refresh the existing `inplay-source-pilot-1` proposal onto the merged R2 contracts: state
+  versions, clock uncertainty, and a latency-stage budget for whole input messages. It stays docs and fixtures only
+  until the owner decides the vf packet §B/§C. It needs a new EXECUTION_PLAN scope entry first. Separately, run O1
+  and F09 around 2026-10-03.
 ```
 
 ## Daily operation (what runs by itself)
