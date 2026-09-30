@@ -4,8 +4,10 @@
 Offline, SYNTHETIC only (hand-built rows and fixture stores; no production data, no network). Pinned here:
 - the entry rule uses T-6h information only (margin >= theta against the side's OWN c_low, displayed depth, one
   side per game, BEFORE_ODDS never entered, stale and undeclared bounds never entered);
-- the exit is the first T-60m bid; every missing exit is scored at settlement (primary) and at 0 (sensitivity),
-  never dropped; an unsettled game or an open T-60m window is PENDING, never 0;
+- the exit ladder (v2, C4): the first T-60m bid, else 1 - the other market's first T-60m ask, else settlement
+  (primary) and 0 (sensitivity), never dropped; an unsettled game or an open T-60m window is PENDING, never 0;
+- the C1 sign-flip test (restricted, studentized, enumerated), its inverted bounds and its size on a seeded synthetic
+  simulation; the C14 evaluation-window guard;
 - label safety: the label-free output never loads a T-60m book or a settlement and is identical whether T-60m
   books and settlements exist or not; the results path is logged before anything is shown;
 - gross only: no fee is applied and no net figure exists.
@@ -220,26 +222,30 @@ def _payload(bid: str | None, bid_size: str, ask: str, ask_size: str = "40") -> 
 
 
 CROSSED = {"orderbook_fp": {"yes_dollars": [["0.6000", "10.00"]], "no_dollars": [["0.5000", "10.00"]]}}
-# Per game (home side): the T-60m books in receipt order, and the home market's settlement listing
-# (status, result, settlement_value_dollars) or None for no settled listing.
+AWAY_T60 = [_payload("0.40", "40", "0.42")]  # the other market's usual first T-60m book: YES ask 0.42, depth 40
+# Per game (home side): the T-60m books in receipt order, the home market's settlement listing (status, result,
+# settlement_value_dollars) or None for no settled listing, and the away (other) market's T-60m books.
 SPECS = [
-    ("exit", [_payload("0.58", "30", "0.60"), _payload("0.70", "30", "0.72")], ("finalized", "yes", "1.0000")),
-    ("no_book", [], ("finalized", "yes", None)),
-    ("no_bid", [_payload(None, "0", "0.60")], ("settled", "no", "0.0000")),
-    ("thin_bid", [_payload("0.58", "0.5", "0.60")], ("finalized", "", "0.5000")),  # a tie at $0.50
-    ("crossed", [CROSSED], ("determined", "yes", None)),  # preliminary: not final -> PENDING
-    ("exit_loss", [_payload("0.53", "5", "0.55")], None),
-    ("value_unknown", [], ("finalized", "", None)),
-    ("conflict", [], ("finalized", "yes", "0.0000")),
+    ("exit", [_payload("0.58", "30", "0.60"), _payload("0.70", "30", "0.72")], ("finalized", "yes", "1.0000"),
+     AWAY_T60),
+    ("no_book", [], ("finalized", "yes", None), AWAY_T60),  # synthetic exit: 1 - 0.42
+    ("no_bid", [_payload(None, "0", "0.60")], ("settled", "no", "0.0000"), []),  # no other book: settlement
+    ("thin_bid", [_payload("0.58", "0.5", "0.60")], ("finalized", "", "0.5000"),  # a tie at $0.50
+     [_payload("0.40", "40", "0.42", ask_size="0.5")]),  # other ask depth < 1: settlement
+    ("crossed", [CROSSED], ("determined", "yes", None), []),  # preliminary: not final -> PENDING
+    ("exit_loss", [_payload("0.53", "5", "0.55")], None, AWAY_T60),
+    ("value_unknown", [], ("finalized", "", None), [CROSSED]),
+    ("conflict", [], ("finalized", "yes", "0.0000"), []),
 ]
 
 
-def build_e1_store(tmp_path: Path, *, labels: bool = True, specs: list | None = None) -> tuple[Path, datetime, dict]:
+def build_e1_store(tmp_path: Path, *, labels: bool = True, specs: list | None = None,
+                   kickoff: datetime = KICKOFF) -> tuple[Path, datetime, dict]:
     """Eight games over two NFL weeks. Every T-6h side is paired AT_OR_AFTER_ODDS (a book 60 s after the odds)
     with the home ask at 0.55 and the away ask at 0.45. `labels=False` writes no T-60m book and no settlement:
-    the label-free output must not change. `specs` replaces SPECS (same shape)."""
+    the label-free output must not change. `specs` replaces SPECS (same shape); `kickoff` moves the first week."""
     specs = SPECS if specs is None else specs
-    games = [sf.Game(f"fxe1{i:02d}", TEAMS[2 * (i % 4)], TEAMS[2 * (i % 4) + 1], KICKOFF + timedelta(days=7 * (i // 4)),
+    games = [sf.Game(f"fxe1{i:02d}", TEAMS[2 * (i % 4)], TEAMS[2 * (i % 4) + 1], kickoff + timedelta(days=7 * (i // 4)),
                      D("0.60")) for i in range(len(specs))]
     now = max(g.commence for g in games) + timedelta(hours=8)
     store = SnapshotStore(tmp_path / ("e1.sqlite3" if labels else "e1-nolabels.sqlite3"))
@@ -264,7 +270,8 @@ def build_e1_store(tmp_path: Path, *, labels: bool = True, specs: list | None = 
             elif not labels:
                 continue
             else:
-                books = spec_of[r["event_id"]][1] if home else [_payload("0.40", "40", "0.42")]
+                spec = spec_of[r["event_id"]]
+                books = spec[1] if home else (spec[3] if len(spec) > 3 else AWAY_T60)
             for k, payload in enumerate(books):
                 sid = store.save_snapshot(run_id=run, source=se.KALSHI, kind="orderbook", entity_id=ticker,
                                           url=f"{sf.KALSHI_API}/markets/{ticker}/orderbook?depth=100", payload=payload,
@@ -277,7 +284,8 @@ def build_e1_store(tmp_path: Path, *, labels: bool = True, specs: list | None = 
                     else:
                         ids["second"].add(sid)
     if labels:
-        for g, (_, _, settle) in zip(games, specs):
+        for g, spec in zip(games, specs):
+            settle = spec[2]
             if settle is None:
                 continue
             status, result, value = settle
@@ -298,59 +306,96 @@ def _by_name(e1: dict, ids: dict) -> dict:
     return {ids["games"][g["event_id"]]: g for g in e1["games"]}
 
 
-def test_the_exit_is_the_first_t60m_bid_and_every_missing_exit_is_scored_never_dropped(tmp_path):
+def test_the_exit_ladder_bid_then_synthetic_then_settlement_and_every_missing_exit_is_scored(tmp_path):
     path, now, ids = build_e1_store(tmp_path)
     out = se.measure_exp002(SnapshotStore.open_readonly(path), as_of=now, results=True, e1_bounds=BOUNDS)
     e1 = out["e1"]
-    assert out["version"] == "exp002-measurement-v3" and e1["version"] == se.E1_VERSION
+    assert out["version"] == "exp002-measurement-v4" and e1["version"] == se.E1_VERSION == "exp002-e1-roundtrip-v2"
     assert e1["state"] == se.E1_STATE and "NOT FROZEN" in e1["state"] and "NOT A TEST" in e1["state"]
     assert e1["freeze_eligible"] is False and e1["verdict"].startswith("NONE")
     assert "FIRST_DETECTION_ZERO_LATENCY" in e1["fill_assumption"]
     assert "a displayed quote is not a proven fill" in e1["fill_assumption"].lower()
+    assert "not an edge estimate" in e1["entry_margin_note"]
     g = _by_name(e1, ids)
     assert all(x["decision"] == se.E1_TRADE and x["role"] == "home" and D(x["ask6"]) == D("0.55") for x in g.values())
-    # EXIT_BID: the first book's bid (0.58), never the later 0.70 book
+    # (1) EXIT_BID: the first book's bid (0.58), never the later 0.70 book
     ex = g["exit"]
     assert ex["exit_basis"] == se.E1_EXIT_BID and D(ex["exit_value"]) == D("0.58") and D(ex["bid_depth"]) == 30
     assert ex["t60_book"]["snapshot_id"] == ids["first"][ex["event_id"]] not in ids["second"]
     assert D(ex["gross"]) == D("0.58") - D("0.55") == D(ex["gross_exit_at_0"])
     assert g["exit_loss"]["exit_basis"] == se.E1_EXIT_BID and D(g["exit_loss"]["gross"]) == D("-0.02")
-    # missing exits, each scored at settlement (primary) and at 0 (sensitivity)
-    expect = {"no_book": ("NO_T60_BOOK", "1", "0.45"), "no_bid": ("NO_BID", "0", "-0.55"),
-              "thin_bid": ("BID_DEPTH_BELOW_1", "0.5", "-0.05")}
-    for name, (reason, payoff, gross) in expect.items():
+    # (2) EXIT_SYNTHETIC_OTHER_ASK: 1 - the other market's first T-60m ask (0.42), depth >= 1
+    nb = g["no_book"]
+    assert nb["missing_exit"] == "NO_T60_BOOK" and nb["exit_basis"] == se.E1_EXIT_SYNTHETIC
+    assert D(nb["exit_value"]) == D("0.58") and D(nb["gross"]) == D("0.03") and D(nb["gross_exit_at_0"]) == D("-0.55")
+    assert D(nb["synthetic_exit"]["other_ask"]) == D("0.42") and nb["t60_other_book"]["snapshot_id"]
+    # (3) SETTLEMENT_FALLBACK when neither market has a usable quote
+    expect = {"no_bid": ("NO_BID", "NO_OTHER_T60_BOOK", "0", "-0.55"),
+              "thin_bid": ("BID_DEPTH_BELOW_1", "OTHER_ASK_DEPTH_BELOW_1", "0.5", "-0.05")}
+    for name, (reason, why_not_synthetic, payoff, gross) in expect.items():
         x = g[name]
         assert x["missing_exit"] == reason and x["exit_basis"] == se.E1_SETTLEMENT_FALLBACK, name
+        assert x["synthetic_exit"] == {"unavailable": why_not_synthetic}, name
         assert D(x["exit_value"]) == D(payoff) and D(x["gross"]) == D(gross), name
         assert D(x["gross_exit_at_0"]) == D("-0.55"), name
-    # unsettled (determined = preliminary), unknown settled value, contradicting value: PENDING, never 0
-    for name, why, missing in (("crossed", "SETTLEMENT_NOT_FINAL", "UNUSABLE_BOOK"),
-                               ("value_unknown", "SETTLED_VALUE_UNKNOWN", "NO_T60_BOOK"),
-                               ("conflict", "SETTLEMENT_CONFLICT", "NO_T60_BOOK")):
+    # (4) PENDING: settlement not final, unknown, contradicting; never 0
+    for name, why, missing, other in (("crossed", "SETTLEMENT_NOT_FINAL", "UNUSABLE_BOOK", "NO_OTHER_T60_BOOK"),
+                                      ("value_unknown", "SETTLED_VALUE_UNKNOWN", "NO_T60_BOOK", "OTHER_UNUSABLE_BOOK"),
+                                      ("conflict", "SETTLEMENT_CONFLICT", "NO_T60_BOOK", "NO_OTHER_T60_BOOK")):
         x = g[name]
         assert x["exit_basis"] == se.E1_PENDING and x["pending_reason"] == why and x["missing_exit"] == missing, name
+        assert x["synthetic_exit"] == {"unavailable": other}, name
         assert x["gross"] is None and D(x["gross_exit_at_0"]) == D("-0.55"), name
     att = e1["attrition"]
     assert att["trades"] == 8 and att["exit_determined"] == 8 and att["exit_bid"] == 2
     assert att["missing_exit"] == {"NO_T60_TARGET": 0, "NO_T60_BOOK": 3, "UNUSABLE_BOOK": 1, "NO_BID": 1,
                                    "BID_DEPTH_MISSING": 0, "BID_DEPTH_BELOW_1": 1}
-    assert att["missing_exit_total"] == 6 == (att["missing_exit_settlement_fallback_scored"]
+    assert att["synthetic_exit_scored"] == 1 and att["missing_exit_settlement_fallback_scored"] == 2
+    assert att["missing_exit_total"] == 6 == (att["synthetic_exit_scored"] + att["missing_exit_settlement_fallback_scored"]
                                               + sum(att["missing_exit_settlement_pending"].values()))
-    assert att["missing_exit_settlement_fallback_scored"] == 3
     assert att["scored_primary"] == 5 and att["scored_exit_at_0_sensitivity"] == 8
+    # C5: exit-basis shares and the settlement flag (2 of 5 scored trades > 5%)
+    bases = e1["exit_bases"]
+    assert bases["counts"] == {se.E1_EXIT_BID: 2, se.E1_EXIT_SYNTHETIC: 1, se.E1_SETTLEMENT_FALLBACK: 2}
+    assert bases["shares"][se.E1_SETTLEMENT_FALLBACK] == pytest.approx(0.4)
+    assert bases["flags"] == [se.E1_SETTLEMENT_FLAG] and "not an endpoint switch" in bases["note"]
     s = e1["summary"]
-    primary = [0.03, -0.02, 0.45, -0.55, -0.05]
+    primary = [0.03, -0.02, 0.03, -0.55, -0.05]
     assert s["primary"]["n"] == 5 and s["primary"]["mean_gross"] == pytest.approx(sum(primary) / 5)
     assert s["primary"]["weeks"] == 2 and s["primary"]["week_cluster_bounds"]["exact_enumeration"]
+    assert s["primary"]["week_cluster_bounds"]["label"].startswith("DESCRIPTIVE ONLY")
+    sf_test = s["primary"]["sign_flip_test"]
+    assert sf_test["state"] == "INSUFFICIENT_EVIDENCE" and sf_test["clusters"] == 2 and sf_test["p_value_one_sided"] is None
+    assert sf_test["no_rejection_possible_at_0_05"] is True and sf_test["min_achievable_p_rademacher"] == 0.25
+    assert sf_test["interim_futility"] is None and sf_test["weights"] == "RADEMACHER"  # 2 weeks: no futility bound
+    assert sf_test["verdict"].startswith("NONE")
+    # v1's exit order (own bid, else settlement) is kept, descriptive
+    assert s["v1_exit_order"]["mean_gross"] == pytest.approx((0.03 - 0.02 + 0.45 - 0.55 - 0.05) / 5)
     sens = [0.03, -0.02] + [-0.55] * 6
     assert s["sensitivity_exit_at_0"]["mean_gross"] == pytest.approx(sum(sens) / 8)
-    # secondary (b): hold to settlement for every trade whose settlement is final (exit / no_book / no_bid / thin_bid)
     hold = s["secondary_hold_to_settlement"]
     assert hold["n"] == 4 and hold["mean_gross"] == pytest.approx((0.45 + 0.45 - 0.55 - 0.05) / 4)
     assert D(g["exit"]["hold_to_settlement_gross"]) == D("0.45") and g["exit_loss"]["hold_to_settlement_gross"] is None
     ops = e1["operational_futility_inputs"]
     assert ops["t6_at_or_after_odds_pairing_yield"] == 1.0 and ops["trade_rate"]["value"] == 1.0
     assert ops["entries_per_week"]["mean"] == 4.0 and ops["entries_per_week"]["weeks_with_due_t6"] == 2
+
+
+def test_size_and_execution_diagnostics(tmp_path):
+    path, now, ids = build_e1_store(tmp_path)
+    e1 = se.measure_exp002(SnapshotStore.open_readonly(path), as_of=now, results=True, e1_bounds=BOUNDS)["e1"]
+    size = e1["size"]
+    assert size["entry_ask_depth_shares"] == {"at_least_10": 1.0, "at_least_250": 0.0}  # every T-6h ask shows 40
+    ten = size["e1_10_contracts"]
+    assert ten["n"] == 1 and ten["mean_gross"] == pytest.approx(0.03)  # "exit": 10 @ 0.55 in, 10 @ 0.58 out
+    assert ten["not_evaluated"] == {"NOT_FILLABLE_INSUFFICIENT_DEPTH": 1}  # "exit_loss": 5 bid contracts only
+    diag = e1["execution_diagnostics"]
+    assert diag["mean_less_one_tick"] == pytest.approx(e1["summary"]["primary"]["mean_gross"] - 0.01)
+    split = diag["single_book_anomaly_split"]  # the away T-6h bid 0.43: 1 - 0.43 <= c_low(home) - theta
+    assert split["AGREES"]["n"] == 5 and split["DISAGREES"]["n"] == 0 and split["UNKNOWN"]["n"] == 0
+    cross = diag["exit_cross_check"]  # own bids 0.58 and 0.53 vs 1 - 0.42 = 0.58: never above
+    assert cross["checked"] == 2 and cross["own_bid_above_other_implied"] == 0 and cross["share"] == 0.0
+    assert "not an edge estimate" in diag["entry_margin_note"]
 
 
 def test_no_t60m_target_is_a_missing_exit_after_kickoff_and_pending_before_it(tmp_path):
@@ -544,7 +589,7 @@ def test_cli_e1_bounds_go_together_and_are_validated(tmp_path, capsys):
 def test_the_recorded_window_covers_e1_games_the_markout_does_not_show(tmp_path):
     # Week 2's home markets have no T-60m book: the markout shows only week 1, while E1 still scores the week-2
     # trades (missing exits at settlement), so the logged window must reach week 2's kickoff.
-    specs = SPECS[:4] + [(name, [], settle) for name, _, settle in SPECS[4:]]
+    specs = SPECS[:4] + [(name, [], settle, *rest) for name, _, settle, *rest in SPECS[4:]]
     path, now, ids = build_e1_store(tmp_path, specs=specs)
     root, own = _registry_copy(tmp_path)
     measured = se.measure_exp002(SnapshotStore.open_readonly(path), as_of=now, results=True, e1_bounds=BOUNDS,
@@ -565,3 +610,194 @@ def test_cli_out_summary_names_the_e1_state(tmp_path):
     assert code == 0 and json.loads(text)["e1_state"] == se.E1_STATE and json.loads(text)["freeze_eligible"] is False
     written = json.loads((tmp_path / "m.json").read_text(encoding="utf-8"))
     assert written["e1"]["bounds_undeclared"] == 16 and "games" not in written["e1"]
+
+
+
+# ================================================================== C1: the exact restricted sign-flip test
+
+
+def _brute_force_p(clusters, mu0=0.0):
+    """An independent hand computation: enumerate every Rademacher pattern and studentize from scratch."""
+    import itertools
+    import math
+
+    def t(sums, sizes):
+        n, total = sum(sizes), sum(sums)
+        m = total / n
+        v = sum((y - k * m) ** 2 for y, k in zip(sums, sizes))
+        return total / math.sqrt(v)
+    sizes = [len(c) for c in clusters]
+    sums = [sum(x - mu0 for x in c) for c in clusters]
+    obs = t(sums, sizes)
+    stars = [t([w * y for w, y in zip(p, sums)], sizes) for p in itertools.product((-1, 1), repeat=len(clusters))]
+    return sum(s >= obs - 1e-12 for s in stars) / len(stars)
+
+
+def test_the_sign_flip_p_matches_a_brute_force_enumeration():
+    clusters = [[0.02, 0.05, -0.01], [0.03], [-0.02, 0.04], [0.01, 0.00, 0.02, -0.01], [0.06, -0.03], [0.02, 0.02]]
+    pairs = [(f"w{i}", v) for i, c in enumerate(clusters) for v in c]
+    out = se.e1_signflip(pairs)
+    assert out["state"] == "COMPUTED" and out["patterns"] == 64 and out["exact_enumeration"] is True
+    assert out["p_value_one_sided"] == pytest.approx(_brute_force_p(clusters))
+    assert se._signflip_p(clusters, 0.013)[0] == pytest.approx(_brute_force_p(clusters, 0.013))
+    # the per-pattern sum shortcut equals studentizing each pattern from its own weighted sums
+    assert se._signflip_p(clusters, -0.004)[0] == pytest.approx(_brute_force_p(clusters, -0.004))
+
+
+def test_the_smallest_achievable_p_is_one_over_two_to_the_g_and_six_weeks_are_needed():
+    for weeks in (6, 7):
+        pairs = [(f"w{i}", v) for i in range(weeks) for v in (0.05 + 0.001 * i, 0.06 + 0.002 * i)]
+        out = se.e1_signflip(pairs)
+        assert out["state"] == "COMPUTED" and out["min_achievable_p_rademacher"] == 1 / 2 ** weeks
+        assert out["p_value_one_sided"] == pytest.approx(1 / 2 ** weeks)  # every week positive: the minimum
+        assert out["no_rejection_possible_at_0_05"] is False
+    for weeks, blocked in ((4, True), (5, False)):
+        pairs = [(f"w{i}", v) for i in range(weeks) for v in (0.05 + 0.001 * i, 0.06 + 0.002 * i)]
+        out = se.e1_signflip(pairs)
+        assert out["state"] == "INSUFFICIENT_EVIDENCE" and out["p_value_one_sided"] is None and out["bounds"] == {}
+        assert out["min_achievable_p_rademacher"] == 1 / 2 ** weeks and out["no_rejection_possible_at_0_05"] is blocked
+        assert out["interim_futility"]["flag"] == "COARSE_FEW_CLUSTERS"
+        assert "never efficacy" in out["interim_futility"]["use"]
+    assert se.e1_signflip([(f"w{i}", 0.01 * i) for i in range(3) for _ in range(2)])["interim_futility"] is None
+
+
+def test_the_interim_futility_bound_is_the_t_on_week_means():
+    import math
+    import statistics
+
+    clusters = [[0.02, 0.04], [-0.01], [0.03, 0.00, 0.01], [0.05]]
+    out = se.e1_signflip([(f"w{i}", v) for i, c in enumerate(clusters) for v in c])
+    means = [sum(c) / len(c) for c in clusters]
+    expect = sum(means) / 4 + 1.6377443572159062 * statistics.stdev(means) / math.sqrt(4)  # t(0.90, 3 df)
+    f = out["interim_futility"]
+    assert f["upper_90_one_sided"] == pytest.approx(expect) and f["method"].startswith("t-test on the 4 week means")
+    assert "lower" not in json.dumps(f)  # futility only: no efficacy (lower) bound is ever given
+
+
+def test_the_bounds_invert_the_same_test():
+    clusters = [[0.02, 0.05, -0.01], [0.03], [-0.02, 0.04], [0.01, 0.00, 0.02, -0.01], [0.06, -0.03], [0.02, 0.02],
+                [0.01, 0.03], [-0.01, 0.02, 0.00]]
+    pairs = [(f"w{i}", v) for i, c in enumerate(clusters) for v in c]
+    out = se.e1_signflip(pairs)
+    mean = sum(v for _, v in pairs) / len(pairs)
+    for level, alpha in (("95", 0.05), ("90", 0.10)):
+        lo, hi = out["bounds"][f"lower_{level}_one_sided"], out["bounds"][f"upper_{level}_one_sided"]
+        assert lo < mean < hi
+        assert se._signflip_p(clusters, lo)[0] > alpha  # the bound itself is not rejected
+        assert se._signflip_p(clusters, lo - 1e-6)[0] <= alpha  # just below it is
+        assert se._signflip_p(clusters, hi)[1] > alpha
+        assert se._signflip_p(clusters, hi + 1e-6)[1] <= alpha
+    assert out["bounds"]["lower_95_one_sided"] <= out["bounds"]["lower_90_one_sided"]
+    assert out["bounds"]["upper_90_one_sided"] <= out["bounds"]["upper_95_one_sided"]
+
+
+def test_every_pattern_is_enumerated_up_to_twenty_weeks_and_draws_are_seeded_beyond():
+    pairs = [(f"w{i:02d}", 0.01 * ((i % 5) - 2) + 0.001 * j) for i in range(14) for j in range(2)]
+    out = se.e1_signflip(pairs)
+    assert out["exact_enumeration"] is True and out["patterns"] == 2 ** 14 and out["seed"] is None
+    assert se._signflip_draws(20, 7) is None
+    draws = se._signflip_draws(21, 7)
+    assert len(draws) == se.E1_SIGNFLIP_DRAWS and draws == se._signflip_draws(21, 7) and len(draws[0]) == 21
+    clusters = [[0.01 * ((i % 5) - 2)] for i in range(21)]
+    assert se._signflip_p(clusters, 0.0, draws) == se._signflip_p(clusters, 0.0, draws)
+
+
+def _sim_pairs(rng, weeks, icc, sigma=3.0):
+    import math
+
+    out = []
+    for g in range(weeks):
+        n = 0
+        while n == 0:
+            n = sum(rng.random() < 0.30 for _ in range(15))
+        a = rng.gauss(0, sigma * math.sqrt(icc / (1 - icc)))
+        out += [(f"w{g:02d}", a + rng.gauss(0, sigma)) for _ in range(n)]
+    return out
+
+
+def test_seeded_size_check_reproduces_the_review_approximately():
+    """SYNTHETIC (E1 design review §3.2, normal rows): under a true mean of 0, the restricted sign-flip test rejects
+    near the nominal 10%, and the unrestricted wild cluster bootstrap it replaces rejects more often."""
+    import random
+
+    for weeks in (6, 8):
+        rng = random.Random(20261022 + weeks)
+        sf_rej = wcu_rej = 0
+        reps = 600
+        for _ in range(reps):
+            pairs = _sim_pairs(rng, weeks, 0.05)
+            by = {}
+            for w, v in pairs:
+                by.setdefault(w, []).append(v)
+            clusters = [by[k] for k in sorted(by)]
+            sf_rej += se._signflip_p(clusters, 0.0)[0] <= 0.10
+            wcu_rej += se._wild_cluster_bounds(pairs, seed=1, resamples=100)["lower_90_one_sided"] > 0
+        assert 0.05 <= sf_rej / reps <= 0.13, (weeks, sf_rej / reps)  # review: 8.2-10.1% (6 weeks), 8.4-10.4% (8)
+        assert wcu_rej > sf_rej, (weeks, wcu_rej, sf_rej)  # review: 13.4-15.2% and 11.7-16.1%
+
+
+# ================================================================== C14: the evaluation-window guard
+
+
+def test_the_evaluation_window_boundary():
+    et = timezone(timedelta(hours=-4))
+    assert se.EVALUATION_WINDOW_EARLIEST_ET == datetime(2026, 10, 22, tzinfo=et)
+    assert not se.evaluation_window_refused({"commence_utc": "2026-10-21T23:59:59-04:00"})
+    assert se.evaluation_window_refused({"commence_utc": "2026-10-22T00:00:00-04:00"})
+    assert se.evaluation_window_refused({"commence_utc": None})  # unknown kickoff: fail closed
+    assert se.EVALUATION_LABEL_CUTOFF == se.EVALUATION_WINDOW_EARLIEST_ET - timedelta(hours=2)
+
+
+def test_evaluation_window_games_are_refused_before_any_label_is_read(tmp_path, monkeypatch):
+    eval_kickoff = datetime(2026, 10, 25, 17, 0, tzinfo=UTC)  # on or after 2026-10-22: the evaluation window
+    path, now, ids = build_e1_store(tmp_path, kickoff=eval_kickoff)
+    read: list[str] = []
+    for name in ("_e1_exit", "_e1_other_ask", "_e1_settlement"):
+        real = getattr(se, name)
+
+        def spy(*a, _real=real, **k):
+            read.append(str(a))
+            return _real(*a, **k)
+        monkeypatch.setattr(se, name, spy)
+    labelled_catalogs = []  # catalogs that keep the settled listing fields (labels)
+    real_catalog = se.kalshi_catalog
+
+    def catalog_spy(store, at, payloads, drop_fields=()):
+        if not drop_fields:
+            labelled_catalogs.append(at)
+        return real_catalog(store, at, payloads, drop_fields)
+    monkeypatch.setattr(se, "kalshi_catalog", catalog_spy)
+    out = se.measure_exp002(SnapshotStore.open_readonly(path), as_of=now, results=True, e1_bounds=BOUNDS)
+    guard = out["evaluation_window_guard"]
+    assert guard["games_refused"] == 8 and out["e1"]["evaluation_window_guard"] == guard
+    assert read == []  # no T-60m book, other book or settlement of a refused game was read
+    assert out["e1"]["games"] == [] and out["e1"]["attrition"]["trades"] == 0
+    assert out["markout"].get("games", []) == []
+    assert labelled_catalogs and all(at <= se.EVALUATION_LABEL_CUTOFF for at in labelled_catalogs)  # capped
+    # the label-free path is untouched: the entries are still counted there
+    free = se.measure_exp002(SnapshotStore.open_readonly(path), as_of=now, results=False, e1_bounds=BOUNDS)
+    assert free["evaluation_window_guard"] is None and free["e1"]["counts"]["entries"] == 8
+
+
+def test_pilot_games_are_still_read_with_labels_capped_at_the_cutoff(tmp_path):
+    path, _, ids = build_e1_store(tmp_path)  # kickoffs 2026-09-27 and 2026-10-04: pilot weeks
+    late = datetime(2026, 11, 1, tzinfo=UTC)  # an as-of inside the evaluation window
+    out = se.measure_exp002(SnapshotStore.open_readonly(path), as_of=late, results=True, e1_bounds=BOUNDS)
+    guard = out["evaluation_window_guard"]
+    assert guard["games_refused"] == 0 and guard["label_as_of_utc"] == se._iso(se.EVALUATION_LABEL_CUTOFF)
+    assert out["e1"]["attrition"]["trades"] == 8 and out["e1"]["exit_bases"]["counts"][se.E1_EXIT_BID] == 2
+
+
+def test_the_cli_refuses_evaluation_window_games_before_logging_them(tmp_path, monkeypatch):
+    eval_kickoff = datetime(2026, 10, 25, 17, 0, tzinfo=UTC)
+    path, now, _ = build_e1_store(tmp_path, kickoff=eval_kickoff)
+    recorded = []
+    real = se.record_markout_view
+    monkeypatch.setattr(se, "record_markout_view", lambda m, **k: recorded.append(m) or "eu-test")
+    code, text = _run(["exp002", "--db", str(path), "--as-of", iso_z(now), "--with-results", "--evidence-log",
+                       str(tmp_path / "log.jsonl"), "--actor", "test", "--code-version", "test",
+                       "--e1-tie-bound", "0.01", "--e1-postponement-bound", "0.005"])
+    assert code == 0 and recorded, text
+    shown = [g for g in recorded[0]["e1"]["games"]] + list((recorded[0]["markout"] or {}).get("games") or [])
+    assert shown == [] and recorded[0]["evaluation_window_guard"]["games_refused"] == 8
+    assert real is not None
