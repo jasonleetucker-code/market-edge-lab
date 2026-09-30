@@ -589,6 +589,28 @@ be written here when they are made.
   - **Not authorized:** orders, account reads, credentials, a gate advance, mixing NHL into EXP-002, or an NHL
     model. EXECUTION_NOT_AUTHORIZED stays enforced.
 
+- **2026-09-30 ~02:20 UTC (2026-09-29 ~22:20 America/New_York), owner directive: complete roadmap integration +
+  sports intelligence & RFQ feasibility v1.** Recorded in
+  `docs/owner/2026-09-30-roadmap-integration-sports-intelligence-rfq-directive.md`; issue #145, PR #146.
+  - **Authorized (offline, bounded):**
+    - review and integration of the #145 roadmap consolidation;
+    - PR A (R2): source, game-state and latency contracts, plus fill-conditioned economics, extending the existing
+      `inplay_*` and `research_economics` owners; #122 gap extensions; an execution-modes gap note;
+    - PR B (R4): an RFQ feasibility packet from public documentation, and an optional pure fixture-fed lifecycle
+      component;
+    - PR C: current-blocker reconciliation at document and test level, compact Terminal integration and R0–R11
+      tracking.
+  - **Constraints:** no network in tests, no credentials, no DB migration.
+  - **Not authorized:**
+    - account or credential access; authenticated streams or subscriptions;
+    - new scheduled collection; any budget, ceiling, request-bound or protected-window change;
+    - paid services; support-message sending;
+    - RFQ creation, quoting, acceptance or confirmation;
+    - orders, funding, margin, outside capital, a gate advance.
+  - **Experiments:** EXP-001 frozen; EXP-002 scope unchanged; the #96 two-family limit stands, with no slot
+    transfer from the paused EXP-003; the A.C tool is not run before about 2026-10-19.
+    EXECUTION_NOT_AUTHORIZED stays enforced.
+
 ## Standing merge rule: docs-only and test-only PRs
 
 Owner rule of 2026-09-22 (verbatim source: `docs/owner/2026-09-22-overnight-build-directive.md`).
