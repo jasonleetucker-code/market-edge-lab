@@ -36,6 +36,8 @@ access events and holds no market data. Every EXP-002 fact below comes from a ci
 | §5 blockers | Updated list and timeline (§8) | this document |
 | — | The E1 design review, incorporated (§E1 review) | #154 |
 
+v1 §2's one-weekend OBSERVATION (1¢ spreads at about +5 min) and v1 §3's note on what the first pairs establish are unchanged and not repeated.
+
 ## 1. APPROVED owner economics (recorded; not re-decided here; identical to v1)
 
 Source: `docs/owner/2026-09-26-owner-decisions-economics-backup.md`, item 1.
@@ -47,14 +49,14 @@ Source: `docs/owner/2026-09-26-owner-decisions-economics-backup.md`, item 1.
 
 The illustrative arithmetic of v1 §1 is unchanged and still UNVERIFIED for KXNFLGAME fees:
 - 1.6¢ per contract after all costs at 250 contracts a game on about 255 games, or 39¢ at 10 contracts;
-- a T-6h→T-60m round trip of about 4.5¢ under the general formula.
+- a T-6h→T-60m round trip of about 4.5¢ under the general formula (including half-spreads; row 11's 3.5¢ is fees only, because E1's gross already pays the spread).
 
 ## 2. Contract facts (corrected)
 
 | Fact | State | Source |
 |---|---|---|
 | KXNFLGAME YES pays $1 on a win (overtime included) and $0 on a loss | VERIFIED | contract terms 2026-09-11; market rules (A.D) |
-| A tie after overtime pays $1/(tied teams), rounded down = $0.50 | VERIFIED. Also observed in production: `KXNFLGAME-25SEP28GBDAL` settled 0.5000 on both team markets | terms; `rules_secondary`; #138 §2.2 (Kalshi public API) |
+| A tie after overtime pays $1/(tied teams), rounded down = $0.50 | VERIFIED. Also observed in Kalshi's public settlement data: `KXNFLGAME-25SEP28GBDAL` settled 0.5000 on both team markets | terms; `rules_secondary`; #138 §2.2 (Kalshi public API) |
 | **Discretionary last fair price F ∈ [0, 1]** when a game is: (a) postponed and not started within 48 hours; (b) suspended or abandoned after kickoff, before 55 minutes of play, and not resumed within 48 hours (unless declared final); (c) forfeited before kickoff; (d) under the Venue Change clause, **moved outside the same scheduling week, or with the home/away designation reversed**; (e) affected by a disqualification or ineligibility before the game starts | VERIFIED (discretionary F) | terms (`rules_evidence/FOOTBALLGAMEWIN_contract_terms_read-2026-09-25.pdf`, sha256 `19578b71…cfca4b`); `rules_evidence/MANIFEST.md`; #138 §1 |
 | **Not F:** a venue change that keeps the designated home and away teams, with the game played within 48 hours of the original date, resolves on the official final result. So does a postponement that starts within 48 hours | VERIFIED | terms, Venue Change and postponement clauses; #138 §1; `CURRENT_BLOCKERS.md` |
 | Suspended after 55 min, not resumed and not declared final | **CONFLICT**: "result as it stands" (terms, Sept) vs "last fair market price" (certification, Feb). Which governs is UNVERIFIED. Absorbed in `u` (§3 row 2) | A.D; question S1 / Kalshi message Q9 (NOT SENT) |
@@ -66,7 +68,7 @@ The illustrative arithmetic of v1 §1 is unchanged and still UNVERIFIED for KXNF
 
 **The wording correction.** v1 §2 listed "a venue or home/away change" as an F trigger. That is broader than the
 terms, whose Venue Change clause sends a game to F only if it is "reversed or if the game is moved outside the
-same scheduling week" (terms PDF, Venue Change). A venue-only move with the designation kept and play within 48
+same scheduling week" (terms PDF, Venue Change; checked word for word against the PDF's text layer). A venue-only move with the designation kept and play within 48
 hours resolves normally. #138 §3 classified the historical venue-only moves (for example 2018 KC @ LAR, 2021 GB @
 NO) as not F. The bounds in §3 row 1 already use this narrower reading, so the correction changes a sentence, not a
 number.
@@ -91,7 +93,7 @@ Rows marked "unchanged" restate v1 in substance; v1 §3 holds the full text and 
 | 12 | Independent clusters and episodes | `min_independent_clusters` = max(8, ⌈weeks needed at ICC 0.10⌉) from the pilot E1 SD, **counting only weeks with at least one scored trade** (C3). The freeze record states that with 2^G patterns **no rejection is possible below 5 weeks at α = 0.05, or below 6 weeks at α = 0.05/3**. `min_episodes_for_scenario` = 20 over ≥ 4 weeks. | PROPOSED: the C3 wording | pilot look |
 | 13 | Development and evaluation windows | §6 | restated with the exposure record | — |
 | 14 | Variants | **V0 is the only confirmatory test (C8).** The T-24h decision and θ = 2¢ are reported descriptively. The three A.C windows are disclosed as label-free design choices, outside the Holm family (§5.2). The E0→E1 change is a design revision made with no data viewed and does not count. | PROPOSED: C8; supersedes v1's "V0 + ≤ 2 challengers" | owner review (§5.2) |
-| 15 | Futility | **Operational** (at the review): as in v1. **Statistical:** one interim on 2026-11-30, **futility-only and non-binding** (C6): STATISTICAL_FUTILITY if the one-sided 90% upper bound is below δ_min. At G ≥ 6 that bound inverts the restricted test (C1). At G = 4–5 it is the one-sided 90% upper bound of a **t-test on the week means with G − 1 df**, flagged `COARSE_FEW_CLUSTERS`; it can support a futility recommendation only, never efficacy (C1). **Economic:** once fees are verified, ECONOMICALLY_UNVIABLE compares the E1 upper bound with δ_econ,hold (C7); until then it cannot be evaluated. | PROPOSED: C1, C6, C7 | fees for the economic rule |
+| 15 | Futility | **Operational** (at the review): as in v1. **Statistical:** one interim on 2026-11-30, **futility-only and non-binding** (C6): STATISTICAL_FUTILITY if the one-sided 90% upper bound is below δ_min. At G ≥ 6 that bound inverts the restricted test (C1). At G = 4–5 it is the one-sided 90% upper bound of a **t-test on the week means with G − 1 df**, flagged `COARSE_FEW_CLUSTERS`; it can support a futility recommendation only, never efficacy (C1). At G ≤ 3 no statistical futility result is computed (INSUFFICIENT_EVIDENCE). **Economic:** v1's rule is kept (ECONOMICALLY_UNVIABLE if the HINDSIGHT_UPPER_BOUND cannot clear fixed cash costs); in addition, once fees are verified, it compares the E1 upper bound with δ_econ,hold (C7). | PROPOSED: C1, C6, C7 | fees for the economic rule |
 | 16 | Continuation | Only with a named missing observation, its cash cost and owner hours approved at the review. **The +8 h is not granted.** | unchanged | owner |
 
 ### 3.1 Effect of the bounds on E1 entries (analytic; nothing run)
@@ -207,8 +209,8 @@ With left-skewed news jumps, every method, the restricted ones included, over-re
 | C10 | Freeze the bounds from the sourced counts only; entry counts per bound are information, not a selector; cite eu-622b393f. | 1; §3.1 |
 | C11 | Size descriptives: the depth ≥ 10 and ≥ 250 shares; E1 at 10 contracts. | 5 |
 | C12 | Execution diagnostics: the mean less one tick; the entry anomaly flag and the P&L split; the stale-exit share; "the entry margin is not an edge". | 5 |
-| C13 | Fix θ, the bounds, the exit order, the method and α, the variant list and δ_min before the pilot look. One logged pilot look, with an explicit `--as-of` before the first evaluation-window T-60m capture, which may set only nuisance quantities: the SD and the exit-basis shares (hence `min_independent_clusters` and the power statement). Any other change after it is a tried variant and is disclosed. | §6.1 |
-| C14 | A later code PR makes `exp002 --with-results` refuse the evaluation window, unless it is the single pre-registered final analysis logged as UNTOUCHED_EVALUATION. Until then C13's procedure holds. List every exposure-closure event (latest 2026-09-29T15:45:00Z). | §6.2; §8 |
+| C13 | Fix θ, the bounds, the exit order, the method and α, the variant list and δ_min before the pilot look. One logged pilot look, with an explicit `--as-of` after the last pilot settlement and before the first T-60m capture of any game kicking off after `PILOT_LAST_ET`, which may set only nuisance quantities: the SD and the exit-basis shares (hence `min_independent_clusters` and the power statement). Any other change after it is a tried variant and is disclosed. | §6.1 |
+| C14 | A later code PR makes `exp002 --with-results` refuse the evaluation window, unless it is the single pre-registered final analysis logged as UNTOUCHED_EVALUATION. Until then C13's procedure holds. List every exposure-closure event (latest 2026-09-29T15:45:00Z). The pre-registered 2026-11-30 futility interim also reads evaluation-window labels, so the guard must admit it too (PROPOSED; for the code PR's review). | §6.2; §8 |
 
 The review's other findings are carried into §8 as risks: zero-latency optimism, power, few clusters and skew,
 economic distance, consensus quality, tie and F semantics, procedural holdout protection, and the review's own
@@ -249,11 +251,10 @@ PROPOSED (C8; this supersedes the earlier draft of this section):
 - The T-24h decision and θ = 2¢ are **reported descriptively**. θ = 2¢ trades a subset of θ = 1¢'s trades, so
   testing it under Holm would be conservative and costly (the MDE rises about 20% at three hypotheses); at 12 weeks
   V0 alone is already marginal.
-- A.H's wording is amended to: a tried timing limit "counts as tried and is disclosed; it enters the Holm family
+- A.H's wording would be amended to (PROPOSED; the A.C tool doc still counts each window against the budget): a tried timing limit "counts as tried and is disclosed; it enters the Holm family
   only if it is tested on outcomes".
 
-**Owner decision at the review.** The alternative is to keep Holm and test both challengers. If the owner prefers
-it, both must be named before the pilot label look. This proposal recommends V0 alone.
+**Owner decision before the pilot look.** The alternative is to keep Holm and test both challengers; if the owner prefers it, both must be named before the pilot label look (C8), which precedes the 2026-10-22 review. This choice, and confirmation of the other C13 pre-look settings, is therefore requested from the owner before the look, within the approved 6 hours; it is not a freeze. If the owner has not decided, the look waits; no default is applied on the owner's behalf. This proposal recommends V0 alone.
 
 ## 6. Windows and evidence exposure (no silent shift)
 
@@ -263,13 +264,13 @@ it, both must be named before the pilot label look. This proposal recommends V0 
 |---|---|---|
 | Development pilot | kickoffs 2026-09-27 → 2026-10-19 ET | **Unchanged.** DEVELOPMENT role; every look logged. |
 | A.C run | after the pilot, before any label look | **Unchanged order**, now with a tool (§5): once, after the pilot's T-6h weeks, before any pilot markout or E1 result. |
-| Pilot label look (E1 SD, trade rate, exit-basis shares) | after the A.C timing freeze | **Once (C13)**, after the A.C run is recorded, with an explicit `--as-of` before the first evaluation-window T-60m capture. Before it, these are fixed and recorded: θ, the bounds, the exit order (C4), the method and α (C1, C2), the variant list (C8) and δ_min. It may set only nuisance quantities: the SD and the exit-basis shares, and hence `min_independent_clusters` and the power statement. Any other change after it is a tried variant and is disclosed. Logged as LABEL_RESULT_INSPECTION, DEVELOPMENT; those games are permanently excluded from evaluation. |
+| Pilot label look (E1 SD, exit-basis shares; the trade rate is label-free) | after the A.C timing freeze | **Once (C13)**, after the A.C run is recorded, with an explicit `--as-of` after the last pilot settlement and before the first T-60m capture of any game kicking off after `PILOT_LAST_ET`. Before it, these are recorded as PROPOSED and confirmed by the owner (not a freeze): θ, the bounds, the exit order (C4), the method and α (C1, C2), the variant list (C8) and δ_min. It may set only nuisance quantities: the SD and the exit-basis shares, and hence `min_independent_clusters` and the power statement. Any other change after it is a tried variant and is disclosed. Logged as LABEL_RESULT_INSPECTION, DEVELOPMENT; those games are permanently excluded from evaluation. |
 | Freeze | not promised; earliest decision at the 2026-10-22 review | **Not promised.** The owner's review on 2026-10-22 decides, within the approved 6 hours. A freeze cannot be recorded before that review, so the v1 case "recorded by 2026-10-21" no longer applies. |
 | Evaluation (untouched) | first kickoff after both the freeze record and 2026-09-29T02:09:50Z | **Unchanged rule.** It starts at the first kickoff after the freeze is recorded (so not before 2026-10-22) **and** after 2026-09-29T02:09:50Z, whichever is later. A game kicking off on 2026-10-22 before the freeze record time is excluded. Games between 2026-10-22 and a later freeze are not added, even if unviewed. The start time goes into the freeze record. It ends at week 18, about 2027-01-10. |
 
 ### 6.2 Evidence-use events recorded since v1
 
-Read from `experiments/EXP-002-nfl-consensus-vs-event-market/evidence_use.jsonl` on 2026-09-30. The log holds a
+Read from `experiments/EXP-002-nfl-consensus-vs-event-market/evidence_use.jsonl` on 2026-09-30 (repository copy; production's log was not read for this document). The log holds a
 header and exactly the seven events below: all LABEL_RESULT_INSPECTION, DEVELOPMENT, scope
 `sports:nfl:moneyline`, `influenced_tuning` false. The first six are **hand-recorded possible exposures, not
 confirmed views** (`viewed_labels` null). The seventh is a deliberate aggregate read (`viewed_labels` true,
@@ -283,7 +284,7 @@ confirmed views** (`viewed_labels` null). The seventh is a deliberate aggregate 
 | `eu-1b511255ce03cd852668a4f124151625` | CLI paths: plain `sports_evidence report` related entries and `observe status --market kalshi:KXNFL…` | 2026-09-26T00:00 → 2026-09-29T14:24:17 | #131 deploy (0d1e210) |
 | `eu-9a3aeaf3f2c6e0c9def3b1a46c8a2edf` | Odds API T-60m / post-cutoff consensus (Terminal, `odds consensus`, plain report rows); a correlated label proxy | 2026-09-24T00:00 → 2026-09-29T14:36:08 | extended by the next event |
 | `eu-d9f8610f10ba4ff51727de34679a2f29` | same, closed at the PR D deploy | 2026-09-24T00:00 → 2026-09-29T15:45:00 | #132 deploy (d508773) |
-| `eu-622b393fce9cb7a4da0e105a1d9b13bc` | Aggregate public read of 2026 KXNFLGAME settlements and NFL.com 2026 standings (T column), for the #138 bounds | 2026-09-27T00:00 → 2026-09-29T00:15:00 | a single read |
+| `eu-622b393fce9cb7a4da0e105a1d9b13bc` | Aggregate public read of 2026 KXNFLGAME settlements and NFL.com 2026 standings (T column), for the #138 bounds | 2026-09-27T00:00 → 2026-09-29T00:15:00 | two one-off public reads (NFL.com ~17:50Z; Kalshi API 18:26–18:27Z, 2026-09-29); no open surface |
 
 The latest closure is **2026-09-29T15:45:00Z** (`eu-d9f8610f…`, the Odds consensus proxy); v1 §4 cited only the #124
 closure at 02:09:50Z (C14).
@@ -298,6 +299,7 @@ closure at 02:09:50Z (C14).
 - Nothing yet stops a results run from reaching evaluation-window labels: `measure_exp002` reads every T-60m book
   and settlement received by `as_of`, which defaults to now. Until the C14 guard exists, the untouched window
   depends on the operator passing `--as-of` (C13, C14).
+- Availability counts remain weak label information (v1 §4, not re-verified here): the report's and the Terminal's join and attrition counts still say whether a T-60m pair or book existed. T-60m prices, sizes, depth and ladders stay hidden unless a logged `--with-results` run shows them.
 
 ## 7. Fees
 
@@ -305,8 +307,7 @@ closure at 02:09:50Z (C14).
   - it is on the captured non-standard fee list (PDF pp.6–11), and no verification record exists;
   - the public Fees help page, read 2026-09-30, defers per-series fees to the PDF;
   - the PDF re-read returned HTTP 429, so the 2026-09-23 capture remains the evidence.
-- The **Kalshi fee re-check is due 2026-10-23T13:39:48Z**, the day after the review. A new record, if any, arrives
-  too late to inform the review, so plan without it.
+- The **Kalshi fee re-check is due by 2026-10-23T13:39:48Z**, when the EXP-001 general-schedule verification record stops supporting claims. It renews that record; it does not by itself verify KXNFLGAME, which still needs a Kalshi answer (Q7) or a new primary document. Plan the review on FEE_UNSUPPORTED.
 - Consequences:
   - the gross E1 test can be frozen without fees, but no net or after-cost claim can be made;
   - the episode threshold (row 8) stays BLOCKED;
@@ -321,8 +322,9 @@ below is cleared by this document.
 | # | Blocker | State (2026-09-30) |
 |---|---|---|
 | 1 | Review of the E1 primary endpoint (§3 rows 3–5, 11) | **Reviewed**: ACCEPT_WITH_CHANGES (#154), C1–C14 adopted here as PROPOSED (§E1 review). E0 cannot be frozen: gate v3 has no pass |
-| 1a | Code for C1 (restricted test), C4 (exit ii), C5 (exit-basis flag), C11 and C12 (descriptives) | **Not built.** PROPOSED order: a reviewed code PR merged before the pilot look, so the look reports the frozen method and the ladder's shares. C4 must be decided before the pilot look or not at all |
-| 1b | C14 evaluation-window guard on `exp002 --with-results` | **Not built** (a later code PR). Needed before the final analysis; until then procedural (`--as-of`, C13) |
+| 1a | Code for C1 (restricted test), C4 (exit ii), C5 (exit-basis flag), C11 and C12 (descriptives) | **Not built.** PROPOSED order: a reviewed code PR merged **and deployed to production** before the pilot look, so the look reports the frozen method and the ladder's shares. C4 must be decided before the pilot look or not at all |
+| 1b | C14 evaluation-window guard on `exp002 --with-results` | **Not built** (a later code PR). Needed before the first evaluation-window results run, the 2026-11-30 interim if a freeze is recorded; it must admit only the pre-registered interim and the final analysis. Until then procedural (`--as-of`, C13) |
+| 1c | Owner choice of the variant list (V0 alone, or Holm with both challengers named) and confirmation of the C13 pre-look settings | **OPEN (owner)**. Needed before the pilot look, which precedes the 2026-10-22 review; no default is applied |
 | 2 | Sourced tie and not-played bounds behind `t_max` / `u_max` | **Sourced** (#138). The values are PROPOSED (§3 row 1) for the owner's review. They are not in `protocol.toml` until a freeze records them |
 | 3 | A.C timing calibration, logged, with the exposure caveat | Tool built and deployed. **Waiting for its window** (§5). δ_min (0.01) is fixed before it runs (C13) |
 | 4 | KXNFLGAME fees for any after-fee figure | **FEE_UNSUPPORTED** (§7). It does not block a gross freeze; it blocks every net claim and row 8 |
@@ -358,11 +360,12 @@ label-free E1 entry count in the `[θ, θ + 0.005·p)` band (§3.1; information 
 |---|---|---|
 | now → 2026-10-19 ET | Pilot capture continues; no label look | collectors (APPROVED) |
 | after the pilot's T-6h weeks (about 2026-10-19/20) | A.C run, once, logged (§5) | coordinator |
-| before the pilot look | Code PR for C1, C4, C5, C11, C12 reviewed and merged; the C13 items fixed and recorded | agents; reviewer |
+| before the pilot look | Code PR for C1, C4, C5, C11, C12 reviewed, merged and deployed; the C13 pre-look settings (θ, bounds, exit order, method and α, variant list including V0-only vs Holm, δ_min) recorded as PROPOSED and confirmed or changed by the owner within the approved hours (not a freeze) | agents; reviewer; owner |
 | after the A.C run is recorded | The one pilot label look (C13), logged, with an explicit `--as-of` | coordinator |
+| after the pilot look | Pilot report to the owner (2 approved hours) | owner |
 | 2026-10-22 | Owner freeze review: freeze, change or stop, within the 6 approved hours | owner |
 | first kickoff after the freeze record (if any) | Evaluation window starts | — |
-| 2026-10-23T13:39:48Z | Kalshi fee re-check due | fee owner |
+| by 2026-10-23T13:39:48Z | Kalshi fee re-check (renews the EXP-001 general-schedule record; not a KXNFLGAME verification) | fee owner |
 | 2026-11-30 | The one statistical interim look, if frozen | — |
 
 ## 9. Sources
