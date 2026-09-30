@@ -95,7 +95,13 @@ with every week's sign positive).
 
 ### 3.2 Synthetic size check
 
-Script and seeds in §8.1 (`exp002-e1-review-sim-v1`). Per-trade gross in cents; weeks G ∈ {4, 6, 8, 12}; trades per
+**Correction (fact-check of PR #154).** The first version of this simulation (`exp002-e1-review-sim-v1`)
+studentized the Webb columns (`WCR_t_webb`) with a fixed `Σ Y_g²`, which is valid only for Rademacher weights
+(w² = 1). v2 computes `Σ (w_g·Y_g − n_g·m*)²` for every weight pattern. Only the `WCR_t_webb` columns change; every
+other column is byte-identical, because the random stream is unchanged. The corrected numbers change the rule for
+fewer than 6 clusters (C1).
+
+Script and seeds in §8.1 (`exp002-e1-review-sim-v2`). Per-trade gross in cents; weeks G ∈ {4, 6, 8, 12}; trades per
 week ~ Binomial(15, 0.30) conditioned on ≥ 1 (mean about 4.5, unequal sizes); a week effect with ICC ∈ {0, 0.05,
 0.10, 0.20}; three idiosyncratic distributions with the true mean exactly 0:
 - **normal**: N(0, 3¢);
@@ -114,54 +120,54 @@ over the four ICC values (and the distributions named).
 
 | G | `WCU_rad` | `WCU_rad_cr1` | `WCU_webb` | `SF_sum` | `SF_mean` | `WCR_t_rad` | `WCR_t_webb` | `T_means` |
 |---|---|---|---|---|---|---|---|---|
-| 4 | 14.3–18.0 | 12.0–14.2 | 15.1–18.4 | 5.7–8.0 | 5.7–8.0 | 5.7–8.0 | 8.3–10.9 | 8.3–10.5 |
-| 6 | 13.4–15.2 | 11.2–13.1 | 13.3–15.3 | 8.2–10.1 | 8.3–10.5 | 8.0–9.9 | 8.6–10.6 | 8.0–10.6 |
-| 8 | 11.7–16.1 | 9.6–13.4 | 12.1–15.9 | 8.4–10.4 | 7.9–10.7 | 8.0–10.3 | 7.6–10.5 | 8.1–10.4 |
+| 4 | 14.3–18.0 | 12.0–14.2 | 15.1–18.4 | 5.7–8.0 | 5.7–8.0 | 5.7–8.0 | 10.5–13.1 | 8.3–10.5 |
+| 6 | 13.4–15.2 | 11.2–13.1 | 13.3–15.3 | 8.2–10.1 | 8.3–10.5 | 8.0–9.9 | 8.8–10.6 | 8.0–10.6 |
+| 8 | 11.7–16.1 | 9.6–13.4 | 12.1–15.9 | 8.4–10.4 | 7.9–10.7 | 8.0–10.3 | 8.1–10.8 | 8.1–10.4 |
 | 12 | 11.5–13.0 | 10.4–11.8 | n/a | 9.3–10.5 | 9.4–10.8 | 9.3–10.6 | n/a | 9.5–10.6 |
 
 **α = 0.10, upper tail, skewed** (range over ICC 0–0.20, in %; nominal 10%)
 
 | G | `WCU_rad` | `WCU_rad_cr1` | `WCU_webb` | `SF_sum` | `SF_mean` | `WCR_t_rad` | `WCR_t_webb` | `T_means` |
 |---|---|---|---|---|---|---|---|---|
-| 4 | 16.6–19.5 | 13.2–16.7 | 17.6–20.7 | 6.8–7.9 | 6.8–7.9 | 6.8–7.9 | 9.9–13.2 | 10.6–12.3 |
-| 6 | 16.5–19.9 | 13.9–18.0 | 16.4–19.4 | 10.2–14.6 | 10.1–14.5 | 10.2–14.5 | 11.6–15.5 | 10.9–14.5 |
-| 8 | 13.8–17.7 | 12.6–16.6 | 13.8–18.3 | 10.8–14.3 | 10.7–14.4 | 10.3–14.1 | 10.7–14.3 | 11.3–14.2 |
+| 4 | 16.6–19.5 | 13.2–16.7 | 17.6–20.7 | 6.8–7.9 | 6.8–7.9 | 6.8–7.9 | 11.3–14.4 | 10.6–12.3 |
+| 6 | 16.5–19.9 | 13.9–18.0 | 16.4–19.4 | 10.2–14.6 | 10.1–14.5 | 10.2–14.5 | 11.3–15.5 | 10.9–14.5 |
+| 8 | 13.8–17.7 | 12.6–16.6 | 13.8–18.3 | 10.8–14.3 | 10.7–14.4 | 10.3–14.1 | 11.0–14.1 | 11.3–14.2 |
 | 12 | 13.1–16.3 | 11.9–15.2 | n/a | 10.8–14.3 | 11.1–14.2 | 10.8–14.2 | n/a | 11.2–14.1 |
 
 **α = 0.10, lower tail (false futility), all three distributions** (range over ICC 0–0.20, in %; nominal 10%)
 
 | G | `WCU_rad` | `WCU_rad_cr1` | `WCU_webb` | `SF_sum` | `SF_mean` | `WCR_t_rad` | `WCR_t_webb` | `T_means` |
 |---|---|---|---|---|---|---|---|---|
-| 4 | 13.2–17.1 | 9.6–13.5 | 13.9–17.9 | 3.3–7.2 | 3.3–7.2 | 3.3–7.2 | 6.9–10.8 | 6.3–10.6 |
-| 6 | 10.7–17.6 | 9.1–14.4 | 10.6–17.0 | 6.5–10.7 | 7.0–10.2 | 6.4–10.4 | 6.7–11.4 | 6.7–11.3 |
-| 8 | 10.2–14.8 | 8.8–12.8 | 10.6–14.6 | 7.1–10.8 | 7.3–10.4 | 6.9–10.4 | 7.7–10.9 | 7.2–10.8 |
+| 4 | 13.2–17.1 | 9.6–13.5 | 13.9–17.9 | 3.3–7.2 | 3.3–7.2 | 3.3–7.2 | 8.2–12.1 | 6.3–10.6 |
+| 6 | 10.7–17.6 | 9.1–14.4 | 10.6–17.0 | 6.5–10.7 | 7.0–10.2 | 6.4–10.4 | 7.2–11.4 | 6.7–11.3 |
+| 8 | 10.2–14.8 | 8.8–12.8 | 10.6–14.6 | 7.1–10.8 | 7.3–10.4 | 6.9–10.4 | 7.8–10.7 | 7.2–10.8 |
 | 12 | 8.8–13.2 | 7.8–12.0 | n/a | 6.9–10.7 | 6.8–10.5 | 6.9–10.5 | n/a | 7.0–10.5 |
 
 **α = 0.05, upper tail (efficacy false positive), normal and fallback** (range over ICC 0–0.20, in %; nominal 5%)
 
 | G | `WCU_rad` | `WCU_rad_cr1` | `WCU_webb` | `SF_sum` | `SF_mean` | `WCR_t_rad` | `WCR_t_webb` | `T_means` |
 |---|---|---|---|---|---|---|---|---|
-| 4 | 10.7–13.4 | 8.2–10.6 | 12.3–14.7 | 0.0–0.0 | 0.0–0.0 | 0.0–0.0 | 2.5–3.9 | 2.8–5.5 |
-| 6 | 8.5–11.1 | 6.6–9.6 | 8.4–10.6 | 3.8–6.1 | 4.1–6.1 | 3.7–5.7 | 2.9–5.9 | 2.4–6.4 |
-| 8 | 6.6–9.1 | 5.2–7.4 | 6.5–9.1 | 3.6–5.9 | 3.0–5.7 | 3.6–5.9 | 3.3–5.0 | 2.3–5.3 |
+| 4 | 10.7–13.4 | 8.2–10.6 | 12.3–14.7 | 0.0–0.0 | 0.0–0.0 | 0.0–0.0 | 4.9–6.5 | 2.8–5.5 |
+| 6 | 8.5–11.1 | 6.6–9.6 | 8.4–10.6 | 3.8–6.1 | 4.1–6.1 | 3.7–5.7 | 4.2–6.7 | 2.4–6.4 |
+| 8 | 6.6–9.1 | 5.2–7.4 | 6.5–9.1 | 3.6–5.9 | 3.0–5.7 | 3.6–5.9 | 3.7–6.3 | 2.3–5.3 |
 | 12 | 6.8–7.9 | 6.0–7.2 | n/a | 4.5–5.5 | 4.5–5.5 | 4.5–5.4 | n/a | 3.8–5.4 |
 
 **α = 0.05, upper tail, skewed** (range over ICC 0–0.20, in %; nominal 5%)
 
 | G | `WCU_rad` | `WCU_rad_cr1` | `WCU_webb` | `SF_sum` | `SF_mean` | `WCR_t_rad` | `WCR_t_webb` | `T_means` |
 |---|---|---|---|---|---|---|---|---|
-| 4 | 12.9–15.4 | 10.8–12.7 | 13.6–16.3 | 0.0–0.0 | 0.0–0.0 | 0.0–0.0 | 4.0–4.9 | 5.3–6.3 |
-| 6 | 11.6–16.1 | 10.1–13.8 | 12.0–15.9 | 5.4–8.2 | 5.0–8.1 | 5.6–8.4 | 5.3–8.5 | 5.8–8.2 |
-| 8 | 9.3–12.8 | 7.5–11.6 | 9.2–12.9 | 5.2–7.6 | 4.7–7.8 | 5.0–7.7 | 4.9–8.0 | 5.1–7.9 |
+| 4 | 12.9–15.4 | 10.8–12.7 | 13.6–16.3 | 0.0–0.0 | 0.0–0.0 | 0.0–0.0 | 6.3–7.4 | 5.3–6.3 |
+| 6 | 11.6–16.1 | 10.1–13.8 | 12.0–15.9 | 5.4–8.2 | 5.0–8.1 | 5.6–8.4 | 6.0–8.9 | 5.8–8.2 |
+| 8 | 9.3–12.8 | 7.5–11.6 | 9.2–12.9 | 5.2–7.6 | 4.7–7.8 | 5.0–7.7 | 5.2–8.3 | 5.1–7.9 |
 | 12 | 8.3–11.5 | 7.3–10.2 | n/a | 5.4–8.1 | 5.9–8.1 | 5.4–8.2 | n/a | 5.9–7.9 |
 
 **α = 0.05, lower tail (false futility), all three distributions** (range over ICC 0–0.20, in %; nominal 5%)
 
 | G | `WCU_rad` | `WCU_rad_cr1` | `WCU_webb` | `SF_sum` | `SF_mean` | `WCR_t_rad` | `WCR_t_webb` | `T_means` |
 |---|---|---|---|---|---|---|---|---|
-| 4 | 9.2–13.0 | 6.0–10.2 | 10.1–13.7 | 0.0–0.0 | 0.0–0.0 | 0.0–0.0 | 1.6–4.5 | 2.5–5.7 |
-| 6 | 7.5–11.5 | 5.4–10.0 | 7.3–11.7 | 2.9–5.3 | 3.1–5.2 | 3.0–5.6 | 2.8–5.5 | 2.1–5.7 |
-| 8 | 5.9–9.5 | 4.8–8.1 | 5.6–9.2 | 3.1–5.1 | 3.0–5.1 | 3.1–5.3 | 3.2–5.4 | 2.7–5.3 |
+| 4 | 9.2–13.0 | 6.0–10.2 | 10.1–13.7 | 0.0–0.0 | 0.0–0.0 | 0.0–0.0 | 3.0–6.4 | 2.5–5.7 |
+| 6 | 7.5–11.5 | 5.4–10.0 | 7.3–11.7 | 2.9–5.3 | 3.1–5.2 | 3.0–5.6 | 3.3–6.0 | 2.1–5.7 |
+| 8 | 5.9–9.5 | 4.8–8.1 | 5.6–9.2 | 3.1–5.1 | 3.0–5.1 | 3.1–5.3 | 3.6–5.7 | 2.7–5.3 |
 | 12 | 3.9–8.0 | 3.2–7.2 | n/a | 2.4–5.4 | 2.6–5.3 | 2.4–5.5 | n/a | 2.2–5.1 |
 
 **Methods.**
@@ -184,19 +190,26 @@ over the four ICC values (and the distributions named).
 - **Webb weights do not fix it.** `WCU_webb` ≈ `WCU_rad` in every row. The defect is the unrestricted resampling
   (the null is not imposed, so the bootstrap variance is the downward-biased CR0 variance), not the weight
   distribution.
-- **Imposing the null fixes it.** The three restricted Rademacher tests (`SF_sum`, `SF_mean`, `WCR_t_rad`) are within
-  8–10.8% at a nominal 10% and 3.0–6.1% at 5% for G ≥ 6 in the normal and fallback rows; they are almost
+- **Imposing the null fixes it.** The three restricted Rademacher tests (`SF_sum`, `SF_mean`, `WCR_t_rad`) reject
+  7.9–10.8% of the time at a nominal 10% and 3.0–6.1% at 5% for G ≥ 6 in the normal and fallback rows; they are almost
   indistinguishable from one another. At G = 4 they are conservative (5.7–8% at 10%) and cannot reject at 5% at all
-  (2^4 = 16 patterns). With Webb weights (`WCR_t_webb`) or the t on week means, G = 4 is close to nominal (8–11% at
-  10%, 2.5–5.5% at 5%).
+  (2^4 = 16 patterns).
+- **Below 6 clusters, correctly studentized Webb weights over-reject.** At G = 4, `WCR_t_webb` rejects 10.5–13.1% at
+  a nominal 10% and 4.9–6.5% at 5% (normal and fallback; 11.3–14.4% and 6.3–7.4% skewed), and its false-futility
+  rate is 8.2–12.1% at 10%. At G ≥ 6 it is close to the Rademacher tests (8.1–10.8% at 10%) and adds nothing.
+- **The t on week means is the only method near nominal at G = 4.** `T_means` rejects 8.3–10.5% at a nominal 10% and
+  2.8–5.5% at 5% (normal and fallback; 10.6–12.3% and 5.3–6.3% skewed), and its false-futility rate is 6.3–10.6% at
+  10%. It tests the week-weighted mean, not the trade-weighted one.
 - **Skewness is a residual risk for every method.** With left-skewed per-trade P&L (10% news jumps), all methods
   over-reject the upper tail: 10–15% at a nominal 10% and 5–8% at 5% for G ≥ 6. The restricted tests are 2–5 points
   better than the implemented one, but none reaches nominal. Exact sign-flip validity needs week contributions that
   are symmetric under H₀, and a 10% news-jump tail breaks that at about 4–5 trades a week. The pilot should report
   the skewness of the E1 P&L; α = 0.05 then carries an actual size of up to about 8% under strong left skew.
 - **Recommendation.** Use the restricted, studentized test (`WCR_t_rad`: the trade-weighted estimand the code
-  already reports), enumerated, for G ≥ 6. Webb weights add nothing at G ≥ 6 once the null is imposed; they matter
-  only below 6 clusters, which C3's floor excludes from the confirmatory test.
+  already reports), enumerated, for G ≥ 6. Do not use Webb weights at any G: they add nothing at G ≥ 6 once the null
+  is imposed, and over-reject at G = 4. Below 6 clusters no reliable *confirmatory* inference exists here, and C3's
+  floor of 8 excludes it. Only the interim futility bound can meet G < 6, and for it the inverted t on week means is
+  the best-calibrated option in this simulation (C1).
 
 ### 3.3 Other test-validity points
 
@@ -236,7 +249,7 @@ about 0.4¢ at these trade counts, so its row-to-row differences are noise.
 | INFO (consensus knows 30% of the move) | 12.1% | +1.87 | +1.58 (se 0.02) | 2.7 | +1.83 | 0.0% |
 | NULL + 3% random missing exits | 8.8% | +1.69 | -0.87 (se 0.06) | 8.6 | -0.74 | 2.8% |
 | NULL + 10% random missing exits | 8.8% | +1.69 | -1.06 (se 0.11) | 15.0 | -0.74 | 9.3% |
-| NULL + informative missing exits (20% if |move|>6c) | 8.8% | +1.69 | -0.98 (se 0.05) | 7.0 | -0.74 | 1.7% |
+| NULL + informative missing exits (20% if abs(move)>6c) | 8.8% | +1.69 | -0.98 (se 0.05) | 7.0 | -0.74 | 1.7% |
 | INFO + informative missing exits | 12.1% | +1.87 | +1.52 (se 0.05) | 8.3 | +1.83 | 2.8% |
 | NULL + sticky-down exit bids (50% of falls unpriced) | 8.8% | +1.70 | -0.36 (se 0.02) | 2.5 | -0.46 | 0.0% |
 | NULL + sticky-down exit bids (20% of falls unpriced) | 8.8% | +1.70 | -0.70 (se 0.02) | 2.8 | -0.46 | 0.0% |
@@ -370,7 +383,8 @@ games and settlement fallbacks are near zero.** The simulated power at a
 true 1¢ effect (§8.1) is:
 
 Cells: rejection % at one-sided α = 0.10 / 0.05 / 0.05/3 (Holm worst case). ICC 0.05; about 4.5 trades a week;
-2,000 replications (Monte Carlo SE about 1 point). `WCU_rad` is shown only for comparison: its higher numbers come
+2,000 replications (Monte Carlo SE about 1 point). SDs are shown in ¢ here; the raw output in §8.1 prints `c`.
+`WCU_rad` is shown only for comparison: its higher numbers come
 from its over-rejection under the null.
 
 | G | distribution | base SD | WCU_rad | SF_sum | SF_mean | WCR_t_rad | T_means |
@@ -463,11 +477,15 @@ fail or futility can end the family's current form cheaply.
   (sign-flip) test**: Rademacher weights over NFL-week clusters with the null imposed, the statistic the
   cluster-robust t of the trade-weighted mean gross, and every one of the 2^G patterns enumerated (G ≤ 12; above
   that, 9,999 seeded draws). p = the share of patterns with t* ≥ t_obs, counting ties against rejection.
-  At G ≥ 6 the enumerated Rademacher patterns are adequate (§3.2). Below 6 clusters, which C3 excludes from the
-  confirmatory test but which a descriptive interim bound can meet, use Webb six-point weights in the same restricted
-  test with 9,999 seeded draws. Confidence bounds are obtained by **inverting the same test** (the lower bound is the
-  smallest μ₀ not rejected for `y − μ₀`; the upper bound likewise). The current `_wild_cluster_bounds` output stays
-  as a descriptive interval labelled "unrestricted, anti-conservative at few clusters". The t on week means with
+  At G ≥ 6 the enumerated Rademacher patterns are adequate (§3.2). **Below 6 clusters there is no confirmatory
+  inference:** the efficacy test is not run (C3's floor is 8 in any case) and the result is INSUFFICIENT_EVIDENCE.
+  If the non-binding interim futility bound (C6) meets G = 4 or 5, it uses the one-sided 90% upper bound of the
+  **t on week means with G − 1 df** (false-futility rate 6.3–10.6% at G = 4 in §3.2; G = 5 was not simulated),
+  flagged `COARSE_FEW_CLUSTERS`, and it may only support a futility recommendation to the owner, never an efficacy
+  claim. Webb weights are not used: correctly studentized, they over-reject at G = 4 (§3.2). At G ≥ 6, confidence
+  bounds are obtained by **inverting the same restricted test** (the lower bound is the smallest μ₀ not rejected for
+  `y − μ₀`; the upper bound likewise). The current `_wild_cluster_bounds` output stays as a descriptive interval
+  labelled "unrestricted, anti-conservative at few clusters". The t on week means with
   G − 1 df is a reported cross-check.
 - **C2 — Efficacy level (PROPOSED).** The confirmatory test is one-sided at **α = 0.05** (A.G's planning level), at
   the final analysis only. The one-sided **90%** level is used only for the statistical futility bound.
@@ -477,7 +495,8 @@ fail or futility can end the family's current form cheaply.
 - **C4 — Exit order (PROPOSED).** Exit (i) at the own market's first T-60m bid with displayed depth ≥ 1; else
   (ii) synthetically at `1 − ask` of the other team market's first T-60m book in the same window, displayed depth
   ≥ 1; else (iii) at the settlement payoff. The exit-at-0 sensitivity stays. (ii) is exact in a win, a loss and a
-  tie, and differs only in fallback-F states (probability ≤ u_max). This is a change to a label-reading rule, made
+  tie (tie payout per the VERIFIED terms; the `settlement_value_dollars` field reading is UNVERIFIED, §9.6), and
+  differs only in fallback-F states (probability ≤ u_max). This is a change to a label-reading rule, made
   with no label viewed; it must be decided before the pilot label look or not at all.
 - **C5 — Fallback reporting (PROPOSED).** Report the counts and shares of the three exit bases. If the settlement
   basis exceeds **5%** of scored trades, the result carries `SETTLEMENT_VARIANCE_DOMINANT`. The endpoint does not
@@ -522,22 +541,25 @@ fail or futility can end the family's current form cheaply.
 
 Both scripts use only the Python standard library (run with Python 3.12.10, Windows). They read no file and no
 database. They are reproduced here in full so that the review is self-contained; they are not committed as code.
-To rerun, save each block to a file and run it with `python <file>`. **Reproduced:** both blocks were extracted
-from this document and rerun; each output's sha256 matched the one stated below.
+To rerun, save each block to a file and run it with `python <file>`. **Reproducibility:** each block below is
+byte-identical (sha256-checked) to the file that produced the stated output. For the first version, both blocks were
+also extracted from this document and rerun, and each output's sha256 matched; the fact-check of PR #154 reproduced
+them byte for byte as well.
 
-### 8.1 `exp002-e1-review-sim-v1` (few-cluster size and power)
+### 8.1 `exp002-e1-review-sim-v2` (few-cluster size and power)
 
 Command: `python e1_cluster_size_sim.py 4000 1000` (4,000 replications per cell at G = 12; 1,000 at G ≤ 8, where
 the Webb columns also run; 2,000 per power cell). Master seed 20261022; each size cell's seed is
 `20261022 + 1000·(G index) + 100·(ICC index) + 10·(distribution index)`, and each power cell's is
 `20261022 + 77·G + SD`.
 Script sha256
-`f6613c6835a3f3631220db348d33a52d19de8b1369c13f25310fb7b61eed429e`;
-output sha256 `4da5524798e75ae8dfc2b9cc896d6335fc15150c7a9e8e0b4d29fe0a2da67731` (7 min 36 s on the laptop).
+`dc5e2611869ff03ab3f316043f1c9bc9e46a5113e9a80ca671ed3e2f725c4d45`;
+output sha256 `2f1d2d90d1fdd728fb1ae0f35015ea74e4a27a45c8c1b5292ae6b80eac7c132c` (7 min 56 s on the laptop).
+v1 (superseded; Webb studentization bug) had script sha256 `f6613c68…` and output sha256 `4da55247…`.
 The full output follows the code.
 
 ```python
-"""E1 few-cluster inference check (exp002-e1-review-sim-v1). SYNTHETIC ONLY: no EXP-002 data.
+"""E1 few-cluster inference check (exp002-e1-review-sim-v2). SYNTHETIC ONLY: no EXP-002 data.
 
 Per-trade gross P&L in cents, clustered by NFL week. Under H0 the true mean is exactly 0.
 Weeks G; trades per week n_g ~ Binomial(15, 0.30) conditioned on >= 1; week effect a_g with
@@ -666,6 +688,11 @@ def decide(cl, alphas, tq, rng, webb=True):
         v = sumY2 - 2 * ms * b + ms * ms * sumn2
         return ms / math.sqrt(max(v, 1e-18)) * n
 
+    def tstat_w(w):  # general weights: the expansion used by tstat needs w_g**2 == 1 (Rademacher) and is not used
+        ms = sum(x * y for x, y in zip(w, Y)) / n
+        v = sum((x * y - k * ms) ** 2 for x, y, k in zip(w, Y, ns))
+        return ms / math.sqrt(max(v, 1e-18)) * n
+
     t_obs = tstat(sum(Y), sum(k * y for k, y in zip(ns, Y)))
     t_star = [tstat(a, b) for a, b in zip(A, B)]
     p_sum = pvals(sf_sum, sum(Y))
@@ -677,7 +704,7 @@ def decide(cl, alphas, tq, rng, webb=True):
     if webb:
         pats, sampled = webb_draws(rng, G)
         wdevs = [sum(w * s for w, s in zip(p, S)) / n for p in pats]
-        wt = [tstat(sum(w * y for w, y in zip(p, Y)), sum(w * k * y for w, k, y in zip(p, ns, Y))) for p in pats]
+        wt = [tstat_w(p) for p in pats]
         p_wt = pvals(wt, t_obs, plus_one=sampled)
     for a in alphas:
         r = {}
@@ -764,42 +791,42 @@ SIZE under H0 (true mean 0). Cell = upper-tail rejection % (efficacy false posit
 
 | alpha 0.1 | G | ICC | dist | WCU_rad | WCU_rad_cr1 | WCU_webb | SF_sum | SF_mean | WCR_t_rad | WCR_t_webb | T_means |
 |---|---|---|---|---|---|---|---|---|---|---|---|
-| | 4 | 0.00 | normal | 16.3 / 16.6 | 13.4 / 13.3 | 17.0 / 17.0 | 6.5 / 6.9 | 6.5 / 6.9 | 6.5 / 6.9 | 10.2 / 10.8 | 10.5 / 10.6 |
-| | 4 | 0.00 | skewed | 19.5 / 13.6 | 16.2 / 11.1 | 20.7 / 14.8 | 7.9 / 5.1 | 7.9 / 5.1 | 7.9 / 5.1 | 12.4 / 9.0 | 12.2 / 8.0 |
-| | 4 | 0.00 | fallback | 16.6 / 15.4 | 13.3 / 12.0 | 17.7 / 16.5 | 6.8 / 7.2 | 6.8 / 7.2 | 6.8 / 7.2 | 9.5 / 8.2 | 8.7 / 8.1 |
-| | 4 | 0.05 | normal | 16.4 / 13.7 | 13.8 / 11.3 | 17.0 / 13.9 | 6.4 / 5.1 | 6.4 / 5.1 | 6.4 / 5.1 | 10.8 / 8.9 | 9.4 / 8.4 |
-| | 4 | 0.05 | skewed | 19.4 / 13.2 | 15.9 / 9.6 | 19.7 / 13.9 | 7.1 / 3.3 | 7.1 / 3.3 | 7.1 / 3.3 | 12.3 / 6.9 | 12.3 / 6.3 |
-| | 4 | 0.05 | fallback | 14.8 / 14.8 | 12.0 / 10.5 | 15.2 / 15.6 | 5.8 / 5.5 | 5.8 / 5.5 | 5.8 / 5.5 | 8.3 / 7.3 | 8.3 / 6.7 |
-| | 4 | 0.10 | normal | 14.3 / 16.1 | 12.0 / 12.9 | 15.1 / 17.0 | 5.9 / 6.3 | 5.9 / 6.3 | 5.9 / 6.3 | 9.2 / 10.5 | 9.3 / 10.1 |
-| | 4 | 0.10 | skewed | 18.5 / 14.2 | 16.7 / 11.7 | 19.0 / 15.5 | 7.9 / 5.8 | 7.9 / 5.8 | 7.9 / 5.8 | 13.2 / 9.3 | 12.0 / 8.1 |
-| | 4 | 0.10 | fallback | 18.0 / 14.8 | 13.9 / 11.4 | 18.4 / 15.5 | 8.0 / 5.6 | 8.0 / 5.6 | 8.0 / 5.6 | 10.1 / 7.8 | 10.1 / 7.8 |
-| | 4 | 0.20 | normal | 16.4 / 15.3 | 14.2 / 12.9 | 16.6 / 16.2 | 5.7 / 5.1 | 5.7 / 5.1 | 5.7 / 5.1 | 10.9 / 9.5 | 9.5 / 8.7 |
-| | 4 | 0.20 | skewed | 16.6 / 16.1 | 13.2 / 12.5 | 17.6 / 16.8 | 6.8 / 5.7 | 6.8 / 5.7 | 6.8 / 5.7 | 9.9 / 9.7 | 10.6 / 9.1 |
-| | 4 | 0.20 | fallback | 16.1 / 17.1 | 12.9 / 13.5 | 17.1 / 17.9 | 7.3 / 6.6 | 7.3 / 6.6 | 7.3 / 6.6 | 10.3 / 9.9 | 9.2 / 9.8 |
-| | 6 | 0.00 | normal | 14.9 / 14.1 | 13.1 / 12.1 | 14.7 / 14.2 | 10.1 / 9.0 | 9.5 / 9.5 | 9.8 / 9.3 | 10.6 / 10.0 | 10.1 / 10.2 |
-| | 6 | 0.00 | skewed | 19.9 / 10.7 | 18.0 / 9.1 | 19.4 / 10.6 | 14.6 / 6.5 | 14.5 / 7.0 | 14.5 / 6.4 | 15.5 / 6.7 | 14.5 / 6.7 |
-| | 6 | 0.00 | fallback | 14.1 / 15.1 | 11.2 / 12.2 | 14.3 / 15.1 | 8.7 / 8.3 | 8.5 / 8.0 | 8.0 / 8.4 | 8.6 / 9.9 | 8.8 / 7.2 |
-| | 6 | 0.05 | normal | 13.4 / 13.5 | 12.2 / 11.5 | 13.3 / 13.4 | 9.5 / 8.2 | 9.2 / 8.8 | 9.3 / 7.7 | 10.2 / 8.6 | 9.2 / 9.3 |
-| | 6 | 0.05 | skewed | 17.9 / 13.1 | 15.5 / 10.4 | 17.8 / 13.1 | 11.6 / 8.0 | 11.6 / 7.8 | 11.5 / 8.1 | 12.3 / 8.3 | 10.9 / 8.1 |
-| | 6 | 0.05 | fallback | 15.2 / 14.7 | 12.6 / 12.2 | 14.9 / 14.9 | 9.6 / 9.0 | 9.0 / 8.3 | 9.9 / 9.0 | 9.8 / 9.2 | 9.3 / 7.8 |
-| | 6 | 0.10 | normal | 15.2 / 17.6 | 13.1 / 14.4 | 15.3 / 17.0 | 9.8 / 9.9 | 10.5 / 10.1 | 9.3 / 10.1 | 10.1 / 10.7 | 10.6 / 10.5 |
-| | 6 | 0.10 | skewed | 19.3 / 14.1 | 16.8 / 11.5 | 19.1 / 14.1 | 11.9 / 8.8 | 12.0 / 8.7 | 12.4 / 8.5 | 13.5 / 9.3 | 12.7 / 9.7 |
-| | 6 | 0.10 | fallback | 14.4 / 13.5 | 12.3 / 11.9 | 14.4 / 13.9 | 9.3 / 8.4 | 8.7 / 8.4 | 9.5 / 8.4 | 9.6 / 7.7 | 8.2 / 7.6 |
-| | 6 | 0.20 | normal | 13.6 / 16.3 | 11.9 / 13.8 | 13.8 / 16.2 | 8.2 / 10.7 | 8.3 / 10.2 | 8.0 / 10.4 | 9.0 / 11.4 | 9.3 / 11.3 |
-| | 6 | 0.20 | skewed | 16.5 / 12.7 | 13.9 / 10.6 | 16.4 / 12.5 | 10.2 / 7.7 | 10.1 / 8.4 | 10.2 / 7.7 | 11.6 / 8.1 | 11.1 / 8.3 |
-| | 6 | 0.20 | fallback | 14.1 / 15.1 | 11.7 / 12.3 | 14.0 / 15.2 | 8.3 / 10.7 | 8.3 / 9.7 | 8.2 / 10.4 | 8.6 / 11.2 | 8.0 / 9.3 |
-| | 8 | 0.00 | normal | 12.7 / 11.9 | 11.5 / 10.4 | 12.8 / 11.9 | 9.8 / 9.0 | 8.8 / 9.2 | 10.0 / 9.2 | 10.1 / 9.4 | 9.1 / 9.6 |
-| | 8 | 0.00 | skewed | 17.7 / 10.2 | 16.6 / 8.8 | 18.3 / 10.6 | 14.3 / 7.1 | 14.4 / 7.3 | 14.1 / 6.9 | 14.3 / 7.8 | 14.2 / 7.2 |
-| | 8 | 0.00 | fallback | 12.7 / 12.6 | 11.8 / 10.9 | 12.9 / 12.7 | 10.2 / 9.1 | 10.2 / 8.4 | 10.2 / 9.0 | 9.8 / 8.7 | 9.4 / 8.2 |
-| | 8 | 0.05 | normal | 12.1 / 11.8 | 11.0 / 10.2 | 12.2 / 12.2 | 9.1 / 8.9 | 8.8 / 8.5 | 9.8 / 8.9 | 9.9 / 9.1 | 9.2 / 8.7 |
-| | 8 | 0.05 | skewed | 16.8 / 11.1 | 14.9 / 9.2 | 17.0 / 11.6 | 13.0 / 7.4 | 13.5 / 8.5 | 13.0 / 7.4 | 13.3 / 8.3 | 13.7 / 8.5 |
-| | 8 | 0.05 | fallback | 11.7 / 11.8 | 9.6 / 10.7 | 12.1 / 12.3 | 8.4 / 8.9 | 7.9 / 8.9 | 8.0 / 9.1 | 7.6 / 9.1 | 8.1 / 8.3 |
-| | 8 | 0.10 | normal | 12.8 / 14.2 | 11.2 / 12.3 | 13.0 / 14.2 | 9.9 / 9.5 | 9.1 / 9.0 | 9.4 / 10.4 | 10.0 / 10.0 | 9.6 / 9.0 |
-| | 8 | 0.10 | skewed | 15.5 / 10.8 | 13.9 / 9.0 | 15.6 / 11.0 | 11.1 / 7.3 | 11.0 / 7.5 | 11.6 / 7.0 | 11.4 / 7.7 | 11.3 / 7.7 |
-| | 8 | 0.10 | fallback | 16.1 / 14.8 | 13.4 / 12.2 | 15.9 / 14.6 | 10.4 / 10.8 | 9.8 / 10.0 | 10.3 / 10.3 | 10.5 / 10.2 | 9.9 / 9.5 |
-| | 8 | 0.20 | normal | 12.2 / 14.4 | 10.7 / 12.8 | 12.2 / 14.2 | 8.4 / 10.6 | 9.2 / 10.4 | 8.3 / 10.4 | 8.9 / 10.9 | 9.2 / 10.8 |
-| | 8 | 0.20 | skewed | 13.8 / 11.2 | 12.6 / 10.0 | 13.8 / 11.0 | 10.8 / 8.2 | 10.7 / 7.4 | 10.3 / 8.1 | 10.7 / 8.7 | 11.4 / 7.5 |
-| | 8 | 0.20 | fallback | 13.9 / 12.4 | 11.7 / 11.0 | 13.8 / 13.1 | 9.8 / 8.7 | 10.7 / 9.8 | 9.5 / 8.9 | 9.8 / 9.1 | 10.4 / 10.0 |
+| | 4 | 0.00 | normal | 16.3 / 16.6 | 13.4 / 13.3 | 17.0 / 17.0 | 6.5 / 6.9 | 6.5 / 6.9 | 6.5 / 6.9 | 10.8 / 11.3 | 10.5 / 10.6 |
+| | 4 | 0.00 | skewed | 19.5 / 13.6 | 16.2 / 11.1 | 20.7 / 14.8 | 7.9 / 5.1 | 7.9 / 5.1 | 7.9 / 5.1 | 13.8 / 10.4 | 12.2 / 8.0 |
+| | 4 | 0.00 | fallback | 16.6 / 15.4 | 13.3 / 12.0 | 17.7 / 16.5 | 6.8 / 7.2 | 6.8 / 7.2 | 6.8 / 7.2 | 11.9 / 11.4 | 8.7 / 8.1 |
+| | 4 | 0.05 | normal | 16.4 / 13.7 | 13.8 / 11.3 | 17.0 / 13.9 | 6.4 / 5.1 | 6.4 / 5.1 | 6.4 / 5.1 | 11.7 / 9.8 | 9.4 / 8.4 |
+| | 4 | 0.05 | skewed | 19.4 / 13.2 | 15.9 / 9.6 | 19.7 / 13.9 | 7.1 / 3.3 | 7.1 / 3.3 | 7.1 / 3.3 | 13.6 / 8.2 | 12.3 / 6.3 |
+| | 4 | 0.05 | fallback | 14.8 / 14.8 | 12.0 / 10.5 | 15.2 / 15.6 | 5.8 / 5.5 | 5.8 / 5.5 | 5.8 / 5.5 | 10.5 / 9.0 | 8.3 / 6.7 |
+| | 4 | 0.10 | normal | 14.3 / 16.1 | 12.0 / 12.9 | 15.1 / 17.0 | 5.9 / 6.3 | 5.9 / 6.3 | 5.9 / 6.3 | 10.5 / 11.8 | 9.3 / 10.1 |
+| | 4 | 0.10 | skewed | 18.5 / 14.2 | 16.7 / 11.7 | 19.0 / 15.5 | 7.9 / 5.8 | 7.9 / 5.8 | 7.9 / 5.8 | 14.4 / 10.6 | 12.0 / 8.1 |
+| | 4 | 0.10 | fallback | 18.0 / 14.8 | 13.9 / 11.4 | 18.4 / 15.5 | 8.0 / 5.6 | 8.0 / 5.6 | 8.0 / 5.6 | 13.1 / 9.8 | 10.1 / 7.8 |
+| | 4 | 0.20 | normal | 16.4 / 15.3 | 14.2 / 12.9 | 16.6 / 16.2 | 5.7 / 5.1 | 5.7 / 5.1 | 5.7 / 5.1 | 11.6 / 10.7 | 9.5 / 8.7 |
+| | 4 | 0.20 | skewed | 16.6 / 16.1 | 13.2 / 12.5 | 17.6 / 16.8 | 6.8 / 5.7 | 6.8 / 5.7 | 6.8 / 5.7 | 11.3 / 10.7 | 10.6 / 9.1 |
+| | 4 | 0.20 | fallback | 16.1 / 17.1 | 12.9 / 13.5 | 17.1 / 17.9 | 7.3 / 6.6 | 7.3 / 6.6 | 7.3 / 6.6 | 12.1 / 12.1 | 9.2 / 9.8 |
+| | 6 | 0.00 | normal | 14.9 / 14.1 | 13.1 / 12.1 | 14.7 / 14.2 | 10.1 / 9.0 | 9.5 / 9.5 | 9.8 / 9.3 | 10.6 / 9.9 | 10.1 / 10.2 |
+| | 6 | 0.00 | skewed | 19.9 / 10.7 | 18.0 / 9.1 | 19.4 / 10.6 | 14.6 / 6.5 | 14.5 / 7.0 | 14.5 / 6.4 | 15.5 / 7.2 | 14.5 / 6.7 |
+| | 6 | 0.00 | fallback | 14.1 / 15.1 | 11.2 / 12.2 | 14.3 / 15.1 | 8.7 / 8.3 | 8.5 / 8.0 | 8.0 / 8.4 | 9.0 / 10.5 | 8.8 / 7.2 |
+| | 6 | 0.05 | normal | 13.4 / 13.5 | 12.2 / 11.5 | 13.3 / 13.4 | 9.5 / 8.2 | 9.2 / 8.8 | 9.3 / 7.7 | 9.9 / 8.4 | 9.2 / 9.3 |
+| | 6 | 0.05 | skewed | 17.9 / 13.1 | 15.5 / 10.4 | 17.8 / 13.1 | 11.6 / 8.0 | 11.6 / 7.8 | 11.5 / 8.1 | 12.5 / 8.4 | 10.9 / 8.1 |
+| | 6 | 0.05 | fallback | 15.2 / 14.7 | 12.6 / 12.2 | 14.9 / 14.9 | 9.6 / 9.0 | 9.0 / 8.3 | 9.9 / 9.0 | 10.1 / 9.6 | 9.3 / 7.8 |
+| | 6 | 0.10 | normal | 15.2 / 17.6 | 13.1 / 14.4 | 15.3 / 17.0 | 9.8 / 9.9 | 10.5 / 10.1 | 9.3 / 10.1 | 10.1 / 10.9 | 10.6 / 10.5 |
+| | 6 | 0.10 | skewed | 19.3 / 14.1 | 16.8 / 11.5 | 19.1 / 14.1 | 11.9 / 8.8 | 12.0 / 8.7 | 12.4 / 8.5 | 13.2 / 9.5 | 12.7 / 9.7 |
+| | 6 | 0.10 | fallback | 14.4 / 13.5 | 12.3 / 11.9 | 14.4 / 13.9 | 9.3 / 8.4 | 8.7 / 8.4 | 9.5 / 8.4 | 10.2 / 9.1 | 8.2 / 7.6 |
+| | 6 | 0.20 | normal | 13.6 / 16.3 | 11.9 / 13.8 | 13.8 / 16.2 | 8.2 / 10.7 | 8.3 / 10.2 | 8.0 / 10.4 | 8.8 / 11.4 | 9.3 / 11.3 |
+| | 6 | 0.20 | skewed | 16.5 / 12.7 | 13.9 / 10.6 | 16.4 / 12.5 | 10.2 / 7.7 | 10.1 / 8.4 | 10.2 / 7.7 | 11.3 / 8.6 | 11.1 / 8.3 |
+| | 6 | 0.20 | fallback | 14.1 / 15.1 | 11.7 / 12.3 | 14.0 / 15.2 | 8.3 / 10.7 | 8.3 / 9.7 | 8.2 / 10.4 | 9.5 / 11.3 | 8.0 / 9.3 |
+| | 8 | 0.00 | normal | 12.7 / 11.9 | 11.5 / 10.4 | 12.8 / 11.9 | 9.8 / 9.0 | 8.8 / 9.2 | 10.0 / 9.2 | 10.2 / 9.4 | 9.1 / 9.6 |
+| | 8 | 0.00 | skewed | 17.7 / 10.2 | 16.6 / 8.8 | 18.3 / 10.6 | 14.3 / 7.1 | 14.4 / 7.3 | 14.1 / 6.9 | 14.1 / 8.0 | 14.2 / 7.2 |
+| | 8 | 0.00 | fallback | 12.7 / 12.6 | 11.8 / 10.9 | 12.9 / 12.7 | 10.2 / 9.1 | 10.2 / 8.4 | 10.2 / 9.0 | 10.2 / 9.8 | 9.4 / 8.2 |
+| | 8 | 0.05 | normal | 12.1 / 11.8 | 11.0 / 10.2 | 12.2 / 12.2 | 9.1 / 8.9 | 8.8 / 8.5 | 9.8 / 8.9 | 9.6 / 9.1 | 9.2 / 8.7 |
+| | 8 | 0.05 | skewed | 16.8 / 11.1 | 14.9 / 9.2 | 17.0 / 11.6 | 13.0 / 7.4 | 13.5 / 8.5 | 13.0 / 7.4 | 13.3 / 7.8 | 13.7 / 8.5 |
+| | 8 | 0.05 | fallback | 11.7 / 11.8 | 9.6 / 10.7 | 12.1 / 12.3 | 8.4 / 8.9 | 7.9 / 8.9 | 8.0 / 9.1 | 8.1 / 9.3 | 8.1 / 8.3 |
+| | 8 | 0.10 | normal | 12.8 / 14.2 | 11.2 / 12.3 | 13.0 / 14.2 | 9.9 / 9.5 | 9.1 / 9.0 | 9.4 / 10.4 | 9.7 / 9.9 | 9.6 / 9.0 |
+| | 8 | 0.10 | skewed | 15.5 / 10.8 | 13.9 / 9.0 | 15.6 / 11.0 | 11.1 / 7.3 | 11.0 / 7.5 | 11.6 / 7.0 | 11.5 / 7.9 | 11.3 / 7.7 |
+| | 8 | 0.10 | fallback | 16.1 / 14.8 | 13.4 / 12.2 | 15.9 / 14.6 | 10.4 / 10.8 | 9.8 / 10.0 | 10.3 / 10.3 | 10.8 / 10.7 | 9.9 / 9.5 |
+| | 8 | 0.20 | normal | 12.2 / 14.4 | 10.7 / 12.8 | 12.2 / 14.2 | 8.4 / 10.6 | 9.2 / 10.4 | 8.3 / 10.4 | 8.9 / 10.7 | 9.2 / 10.8 |
+| | 8 | 0.20 | skewed | 13.8 / 11.2 | 12.6 / 10.0 | 13.8 / 11.0 | 10.8 / 8.2 | 10.7 / 7.4 | 10.3 / 8.1 | 11.0 / 8.4 | 11.4 / 7.5 |
+| | 8 | 0.20 | fallback | 13.9 / 12.4 | 11.7 / 11.0 | 13.8 / 13.1 | 9.8 / 8.7 | 10.7 / 9.8 | 9.5 / 8.9 | 10.0 / 9.2 | 10.4 / 10.0 |
 | | 12 | 0.00 | normal | 12.8 / 11.9 | 11.7 / 10.9 | n/a | 10.5 / 9.7 | 10.7 / 10.1 | 10.6 / 9.7 | n/a | 10.6 / 10.2 |
 | | 12 | 0.00 | skewed | 16.3 / 8.8 | 15.2 / 7.8 | n/a | 14.3 / 6.9 | 14.2 / 6.8 | 14.2 / 6.9 | n/a | 14.1 / 7.0 |
 | | 12 | 0.00 | fallback | 12.8 / 13.1 | 11.7 / 12.0 | n/a | 10.2 / 10.3 | 10.8 / 10.2 | 10.0 / 10.2 | n/a | 10.6 / 10.4 |
@@ -815,42 +842,42 @@ SIZE under H0 (true mean 0). Cell = upper-tail rejection % (efficacy false posit
 
 | alpha 0.05 | G | ICC | dist | WCU_rad | WCU_rad_cr1 | WCU_webb | SF_sum | SF_mean | WCR_t_rad | WCR_t_webb | T_means |
 |---|---|---|---|---|---|---|---|---|---|---|---|
-| | 4 | 0.00 | normal | 11.9 / 11.9 | 9.5 / 10.2 | 13.3 / 12.8 | 0.0 / 0.0 | 0.0 / 0.0 | 0.0 / 0.0 | 3.9 / 4.4 | 5.5 / 5.7 |
-| | 4 | 0.00 | skewed | 15.0 / 10.7 | 12.3 / 8.2 | 16.0 / 11.7 | 0.0 / 0.0 | 0.0 / 0.0 | 0.0 / 0.0 | 4.6 / 3.0 | 5.8 / 2.9 |
-| | 4 | 0.00 | fallback | 11.9 / 10.8 | 9.0 / 7.7 | 12.7 / 12.0 | 0.0 / 0.0 | 0.0 / 0.0 | 0.0 / 0.0 | 2.5 / 3.2 | 3.2 / 3.8 |
-| | 4 | 0.05 | normal | 12.5 / 10.7 | 10.1 / 8.9 | 13.7 / 11.3 | 0.0 / 0.0 | 0.0 / 0.0 | 0.0 / 0.0 | 3.7 / 3.6 | 4.6 / 4.2 |
-| | 4 | 0.05 | skewed | 14.4 / 9.6 | 11.6 / 6.0 | 15.6 / 10.1 | 0.0 / 0.0 | 0.0 / 0.0 | 0.0 / 0.0 | 4.9 / 1.6 | 5.9 / 2.5 |
-| | 4 | 0.05 | fallback | 10.7 / 9.2 | 8.2 / 7.1 | 12.4 / 10.5 | 0.0 / 0.0 | 0.0 / 0.0 | 0.0 / 0.0 | 3.3 / 2.9 | 3.6 / 3.5 |
-| | 4 | 0.10 | normal | 11.2 / 13.0 | 8.5 / 10.1 | 12.3 / 13.2 | 0.0 / 0.0 | 0.0 / 0.0 | 0.0 / 0.0 | 3.8 / 4.5 | 4.3 / 5.6 |
-| | 4 | 0.10 | skewed | 15.4 / 11.4 | 12.7 / 9.5 | 16.3 / 12.0 | 0.0 / 0.0 | 0.0 / 0.0 | 0.0 / 0.0 | 4.2 / 2.9 | 6.3 / 3.7 |
-| | 4 | 0.10 | fallback | 12.7 / 9.8 | 9.4 / 7.4 | 14.1 / 10.7 | 0.0 / 0.0 | 0.0 / 0.0 | 0.0 / 0.0 | 3.6 / 2.8 | 2.8 / 3.3 |
-| | 4 | 0.20 | normal | 13.4 / 11.9 | 10.6 / 9.1 | 14.7 / 12.5 | 0.0 / 0.0 | 0.0 / 0.0 | 0.0 / 0.0 | 3.6 / 3.2 | 5.4 / 4.3 |
-| | 4 | 0.20 | skewed | 12.9 / 12.8 | 10.8 / 9.2 | 13.6 / 13.2 | 0.0 / 0.0 | 0.0 / 0.0 | 0.0 / 0.0 | 4.0 / 3.6 | 5.3 / 4.7 |
-| | 4 | 0.20 | fallback | 12.3 / 12.5 | 9.1 / 9.9 | 13.0 / 13.7 | 0.0 / 0.0 | 0.0 / 0.0 | 0.0 / 0.0 | 3.5 / 3.5 | 4.9 / 3.8 |
-| | 6 | 0.00 | normal | 10.5 / 10.3 | 9.6 / 7.8 | 10.3 / 9.8 | 6.1 / 4.4 | 6.1 / 4.7 | 5.7 / 4.4 | 5.9 / 5.1 | 6.4 / 4.5 |
-| | 6 | 0.00 | skewed | 16.1 / 7.5 | 13.8 / 5.4 | 15.9 / 7.3 | 8.2 / 2.9 | 8.1 / 3.1 | 8.4 / 3.0 | 8.5 / 2.8 | 8.2 / 2.5 |
-| | 6 | 0.00 | fallback | 8.5 / 10.2 | 6.6 / 7.1 | 8.4 / 9.3 | 3.9 / 3.9 | 4.1 / 3.6 | 4.0 / 4.2 | 2.9 / 3.1 | 2.7 / 2.7 |
-| | 6 | 0.05 | normal | 10.1 / 9.8 | 8.6 / 8.1 | 9.6 / 9.6 | 4.1 / 4.3 | 4.1 / 4.5 | 4.0 / 4.3 | 4.5 / 4.7 | 4.8 / 4.5 |
-| | 6 | 0.05 | skewed | 13.0 / 9.4 | 10.8 / 7.4 | 12.6 / 8.7 | 6.3 / 4.2 | 6.0 / 4.3 | 6.4 / 4.0 | 6.3 / 3.8 | 5.8 / 3.9 |
-| | 6 | 0.05 | fallback | 10.5 / 10.1 | 8.2 / 8.0 | 10.5 / 9.6 | 5.0 / 5.1 | 5.1 / 4.4 | 5.1 / 5.2 | 4.4 / 4.4 | 3.5 / 3.0 |
+| | 4 | 0.00 | normal | 11.9 / 11.9 | 9.5 / 10.2 | 13.3 / 12.8 | 0.0 / 0.0 | 0.0 / 0.0 | 0.0 / 0.0 | 6.0 / 6.4 | 5.5 / 5.7 |
+| | 4 | 0.00 | skewed | 15.0 / 10.7 | 12.3 / 8.2 | 16.0 / 11.7 | 0.0 / 0.0 | 0.0 / 0.0 | 0.0 / 0.0 | 7.1 / 4.5 | 5.8 / 2.9 |
+| | 4 | 0.00 | fallback | 11.9 / 10.8 | 9.0 / 7.7 | 12.7 / 12.0 | 0.0 / 0.0 | 0.0 / 0.0 | 0.0 / 0.0 | 5.2 / 5.9 | 3.2 / 3.8 |
+| | 4 | 0.05 | normal | 12.5 / 10.7 | 10.1 / 8.9 | 13.7 / 11.3 | 0.0 / 0.0 | 0.0 / 0.0 | 0.0 / 0.0 | 5.9 / 4.8 | 4.6 / 4.2 |
+| | 4 | 0.05 | skewed | 14.4 / 9.6 | 11.6 / 6.0 | 15.6 / 10.1 | 0.0 / 0.0 | 0.0 / 0.0 | 0.0 / 0.0 | 7.2 / 3.0 | 5.9 / 2.5 |
+| | 4 | 0.05 | fallback | 10.7 / 9.2 | 8.2 / 7.1 | 12.4 / 10.5 | 0.0 / 0.0 | 0.0 / 0.0 | 0.0 / 0.0 | 4.9 / 4.7 | 3.6 / 3.5 |
+| | 4 | 0.10 | normal | 11.2 / 13.0 | 8.5 / 10.1 | 12.3 / 13.2 | 0.0 / 0.0 | 0.0 / 0.0 | 0.0 / 0.0 | 5.5 / 5.7 | 4.3 / 5.6 |
+| | 4 | 0.10 | skewed | 15.4 / 11.4 | 12.7 / 9.5 | 16.3 / 12.0 | 0.0 / 0.0 | 0.0 / 0.0 | 0.0 / 0.0 | 7.4 / 5.0 | 6.3 / 3.7 |
+| | 4 | 0.10 | fallback | 12.7 / 9.8 | 9.4 / 7.4 | 14.1 / 10.7 | 0.0 / 0.0 | 0.0 / 0.0 | 0.0 / 0.0 | 6.5 / 4.5 | 2.8 / 3.3 |
+| | 4 | 0.20 | normal | 13.4 / 11.9 | 10.6 / 9.1 | 14.7 / 12.5 | 0.0 / 0.0 | 0.0 / 0.0 | 0.0 / 0.0 | 5.5 / 4.9 | 5.4 / 4.3 |
+| | 4 | 0.20 | skewed | 12.9 / 12.8 | 10.8 / 9.2 | 13.6 / 13.2 | 0.0 / 0.0 | 0.0 / 0.0 | 0.0 / 0.0 | 6.3 / 5.5 | 5.3 / 4.7 |
+| | 4 | 0.20 | fallback | 12.3 / 12.5 | 9.1 / 9.9 | 13.0 / 13.7 | 0.0 / 0.0 | 0.0 / 0.0 | 0.0 / 0.0 | 6.3 / 6.0 | 4.9 / 3.8 |
+| | 6 | 0.00 | normal | 10.5 / 10.3 | 9.6 / 7.8 | 10.3 / 9.8 | 6.1 / 4.4 | 6.1 / 4.7 | 5.7 / 4.4 | 6.7 / 5.2 | 6.4 / 4.5 |
+| | 6 | 0.00 | skewed | 16.1 / 7.5 | 13.8 / 5.4 | 15.9 / 7.3 | 8.2 / 2.9 | 8.1 / 3.1 | 8.4 / 3.0 | 8.9 / 3.3 | 8.2 / 2.5 |
+| | 6 | 0.00 | fallback | 8.5 / 10.2 | 6.6 / 7.1 | 8.4 / 9.3 | 3.9 / 3.9 | 4.1 / 3.6 | 4.0 / 4.2 | 4.2 / 4.7 | 2.7 / 2.7 |
+| | 6 | 0.05 | normal | 10.1 / 9.8 | 8.6 / 8.1 | 9.6 / 9.6 | 4.1 / 4.3 | 4.1 / 4.5 | 4.0 / 4.3 | 5.0 / 5.1 | 4.8 / 4.5 |
+| | 6 | 0.05 | skewed | 13.0 / 9.4 | 10.8 / 7.4 | 12.6 / 8.7 | 6.3 / 4.2 | 6.0 / 4.3 | 6.4 / 4.0 | 7.1 / 4.2 | 5.8 / 3.9 |
+| | 6 | 0.05 | fallback | 10.5 / 10.1 | 8.2 / 8.0 | 10.5 / 9.6 | 5.0 / 5.1 | 5.1 / 4.4 | 5.1 / 5.2 | 5.5 / 5.1 | 3.5 / 3.0 |
 | | 6 | 0.10 | normal | 11.1 / 11.5 | 8.7 / 9.2 | 10.6 / 11.7 | 4.7 / 4.7 | 4.8 / 5.0 | 4.7 / 4.7 | 5.0 / 5.5 | 4.8 / 5.2 |
-| | 6 | 0.10 | skewed | 13.6 / 9.7 | 11.3 / 8.2 | 13.6 / 9.7 | 6.5 / 3.8 | 6.6 / 3.9 | 6.4 / 3.4 | 6.0 / 3.6 | 6.6 / 3.6 |
-| | 6 | 0.10 | fallback | 10.5 / 9.0 | 7.8 / 6.5 | 10.2 / 8.4 | 4.9 / 3.3 | 5.0 / 3.5 | 5.1 / 3.4 | 3.9 / 2.8 | 3.8 / 2.1 |
-| | 6 | 0.20 | normal | 9.4 / 11.3 | 8.0 / 10.0 | 9.4 / 11.0 | 3.8 / 5.3 | 4.3 / 5.2 | 3.7 / 5.6 | 4.4 / 5.5 | 4.2 / 5.7 |
-| | 6 | 0.20 | skewed | 11.6 / 8.6 | 10.1 / 7.5 | 12.0 / 8.7 | 5.4 / 4.8 | 5.0 / 4.3 | 5.6 / 4.3 | 5.3 / 4.9 | 5.9 / 4.4 |
-| | 6 | 0.20 | fallback | 10.2 / 10.4 | 7.7 / 8.5 | 9.9 / 10.1 | 4.4 / 4.3 | 4.5 / 5.0 | 4.3 / 3.8 | 3.6 / 3.4 | 2.4 / 3.6 |
-| | 8 | 0.00 | normal | 8.9 / 8.1 | 7.4 / 7.2 | 9.1 / 8.1 | 4.8 / 4.2 | 4.7 / 3.9 | 4.8 / 4.4 | 5.0 / 4.5 | 5.3 / 4.4 |
-| | 8 | 0.00 | skewed | 12.8 / 5.9 | 11.6 / 4.8 | 12.9 / 5.6 | 7.6 / 3.5 | 7.8 / 3.5 | 7.5 / 3.4 | 8.0 / 3.6 | 7.9 / 3.2 |
-| | 8 | 0.00 | fallback | 9.1 / 7.2 | 7.3 / 6.2 | 9.1 / 7.3 | 5.9 / 4.9 | 5.7 / 3.9 | 5.6 / 4.8 | 4.6 / 3.6 | 4.2 / 3.2 |
-| | 8 | 0.05 | normal | 8.4 / 8.0 | 7.1 / 6.7 | 8.5 / 8.1 | 4.1 / 4.6 | 4.1 / 4.6 | 4.3 / 4.9 | 4.5 / 4.9 | 4.5 / 4.9 |
-| | 8 | 0.05 | skewed | 11.3 / 6.6 | 10.6 / 5.2 | 11.8 / 6.9 | 7.5 / 3.2 | 7.2 / 3.4 | 7.7 / 3.1 | 7.8 / 3.2 | 6.8 / 2.7 |
-| | 8 | 0.05 | fallback | 6.6 / 7.6 | 5.2 / 5.8 | 6.5 / 7.3 | 3.6 / 4.4 | 3.0 / 4.1 | 3.6 / 4.7 | 3.3 / 3.5 | 2.3 / 3.3 |
-| | 8 | 0.10 | normal | 8.2 / 9.1 | 6.4 / 7.7 | 8.5 / 9.2 | 4.2 / 4.0 | 4.6 / 3.7 | 3.9 / 4.3 | 4.0 / 4.4 | 4.7 / 4.1 |
-| | 8 | 0.10 | skewed | 10.3 / 6.4 | 9.2 / 5.7 | 10.1 / 6.5 | 5.3 / 3.1 | 4.7 / 3.0 | 5.7 / 3.2 | 5.7 / 3.7 | 5.1 / 2.9 |
-| | 8 | 0.10 | fallback | 9.1 / 8.6 | 7.4 / 6.7 | 9.0 / 8.1 | 5.8 / 4.8 | 5.3 / 5.0 | 5.9 / 4.5 | 5.0 / 4.3 | 4.1 / 3.2 |
-| | 8 | 0.20 | normal | 8.3 / 9.5 | 6.6 / 8.1 | 8.3 / 9.1 | 3.7 / 5.1 | 4.0 / 5.1 | 3.7 / 5.3 | 4.5 / 5.4 | 4.0 / 5.3 |
-| | 8 | 0.20 | skewed | 9.3 / 7.9 | 7.5 / 6.6 | 9.2 / 7.6 | 5.2 / 3.9 | 6.1 / 3.6 | 5.0 / 4.2 | 4.9 / 4.0 | 5.8 / 3.2 |
-| | 8 | 0.20 | fallback | 8.8 / 8.3 | 7.0 / 7.2 | 8.4 / 8.6 | 4.7 / 4.6 | 4.8 / 5.0 | 4.6 / 4.7 | 4.9 / 4.3 | 3.8 / 3.9 |
+| | 6 | 0.10 | skewed | 13.6 / 9.7 | 11.3 / 8.2 | 13.6 / 9.7 | 6.5 / 3.8 | 6.6 / 3.9 | 6.4 / 3.4 | 7.2 / 4.9 | 6.6 / 3.6 |
+| | 6 | 0.10 | fallback | 10.5 / 9.0 | 7.8 / 6.5 | 10.2 / 8.4 | 4.9 / 3.3 | 5.0 / 3.5 | 5.1 / 3.4 | 5.4 / 4.0 | 3.8 / 2.1 |
+| | 6 | 0.20 | normal | 9.4 / 11.3 | 8.0 / 10.0 | 9.4 / 11.0 | 3.8 / 5.3 | 4.3 / 5.2 | 3.7 / 5.6 | 4.6 / 6.0 | 4.2 / 5.7 |
+| | 6 | 0.20 | skewed | 11.6 / 8.6 | 10.1 / 7.5 | 12.0 / 8.7 | 5.4 / 4.8 | 5.0 / 4.3 | 5.6 / 4.3 | 6.0 / 5.2 | 5.9 / 4.4 |
+| | 6 | 0.20 | fallback | 10.2 / 10.4 | 7.7 / 8.5 | 9.9 / 10.1 | 4.4 / 4.3 | 4.5 / 5.0 | 4.3 / 3.8 | 4.9 / 4.7 | 2.4 / 3.6 |
+| | 8 | 0.00 | normal | 8.9 / 8.1 | 7.4 / 7.2 | 9.1 / 8.1 | 4.8 / 4.2 | 4.7 / 3.9 | 4.8 / 4.4 | 5.2 / 4.7 | 5.3 / 4.4 |
+| | 8 | 0.00 | skewed | 12.8 / 5.9 | 11.6 / 4.8 | 12.9 / 5.6 | 7.6 / 3.5 | 7.8 / 3.5 | 7.5 / 3.4 | 8.3 / 3.6 | 7.9 / 3.2 |
+| | 8 | 0.00 | fallback | 9.1 / 7.2 | 7.3 / 6.2 | 9.1 / 7.3 | 5.9 / 4.9 | 5.7 / 3.9 | 5.6 / 4.8 | 5.6 / 5.1 | 4.2 / 3.2 |
+| | 8 | 0.05 | normal | 8.4 / 8.0 | 7.1 / 6.7 | 8.5 / 8.1 | 4.1 / 4.6 | 4.1 / 4.6 | 4.3 / 4.9 | 4.8 / 4.9 | 4.5 / 4.9 |
+| | 8 | 0.05 | skewed | 11.3 / 6.6 | 10.6 / 5.2 | 11.8 / 6.9 | 7.5 / 3.2 | 7.2 / 3.4 | 7.7 / 3.1 | 8.3 / 3.7 | 6.8 / 2.7 |
+| | 8 | 0.05 | fallback | 6.6 / 7.6 | 5.2 / 5.8 | 6.5 / 7.3 | 3.6 / 4.4 | 3.0 / 4.1 | 3.6 / 4.7 | 3.7 / 5.1 | 2.3 / 3.3 |
+| | 8 | 0.10 | normal | 8.2 / 9.1 | 6.4 / 7.7 | 8.5 / 9.2 | 4.2 / 4.0 | 4.6 / 3.7 | 3.9 / 4.3 | 4.0 / 4.8 | 4.7 / 4.1 |
+| | 8 | 0.10 | skewed | 10.3 / 6.4 | 9.2 / 5.7 | 10.1 / 6.5 | 5.3 / 3.1 | 4.7 / 3.0 | 5.7 / 3.2 | 5.7 / 3.8 | 5.1 / 2.9 |
+| | 8 | 0.10 | fallback | 9.1 / 8.6 | 7.4 / 6.7 | 9.0 / 8.1 | 5.8 / 4.8 | 5.3 / 5.0 | 5.9 / 4.5 | 6.3 / 5.2 | 4.1 / 3.2 |
+| | 8 | 0.20 | normal | 8.3 / 9.5 | 6.6 / 8.1 | 8.3 / 9.1 | 3.7 / 5.1 | 4.0 / 5.1 | 3.7 / 5.3 | 4.3 / 5.7 | 4.0 / 5.3 |
+| | 8 | 0.20 | skewed | 9.3 / 7.9 | 7.5 / 6.6 | 9.2 / 7.6 | 5.2 / 3.9 | 6.1 / 3.6 | 5.0 / 4.2 | 5.2 / 4.5 | 5.8 / 3.2 |
+| | 8 | 0.20 | fallback | 8.8 / 8.3 | 7.0 / 7.2 | 8.4 / 8.6 | 4.7 / 4.6 | 4.8 / 5.0 | 4.6 / 4.7 | 5.0 / 5.3 | 3.8 / 3.9 |
 | | 12 | 0.00 | normal | 7.3 / 7.1 | 6.3 / 6.3 | n/a | 4.9 / 4.6 | 5.1 / 4.9 | 5.0 / 4.6 | n/a | 5.1 / 4.7 |
 | | 12 | 0.00 | skewed | 11.5 / 3.9 | 10.2 / 3.2 | n/a | 8.1 / 2.4 | 8.1 / 2.6 | 8.2 / 2.4 | n/a | 7.9 / 2.2 |
 | | 12 | 0.00 | fallback | 7.6 / 7.7 | 6.4 / 6.7 | n/a | 5.0 / 5.4 | 5.0 / 5.3 | 4.8 / 5.5 | n/a | 4.0 / 3.9 |
@@ -867,11 +894,11 @@ SIZE under H0 (true mean 0). Cell = upper-tail rejection % (efficacy false posit
 POWER at true mean 1c (upper-tail rejection %), ICC 0.05; alpha 0.10 / 0.05 / 0.05/3 (Holm worst case)
 | G | dist | sigma | WCU_rad | SF_sum | SF_mean | WCR_t_rad | T_means |
 |---|---|---|---|---|---|---|---|
-| 6 | normal | 3¢ | 65 / 56 / 49 | 53 / 35 / 15 | 51 / 35 / 15 | 53 / 35 / 15 | 54 / 37 / 17 |
-| 6 | normal | 4¢ | 50 / 42 / 35 | 39 / 23 / 9 | 38 / 23 / 9 | 39 / 23 / 9 | 40 / 24 / 10 |
+| 6 | normal | 3c | 65 / 56 / 49 | 53 / 35 / 15 | 51 / 35 / 15 | 53 / 35 / 15 | 54 / 37 / 17 |
+| 6 | normal | 4c | 50 / 42 / 35 | 39 / 23 / 9 | 38 / 23 / 9 | 39 / 23 / 9 | 40 / 24 / 10 |
 | 6 | fallback | 3c | 47 / 39 / 33 | 37 / 26 / 11 | 37 / 25 / 11 | 37 / 25 / 11 | 36 / 21 / 8 |
-| 12 | normal | 3¢ | 83 / 75 / 62 | 80 / 66 / 43 | 76 / 63 / 41 | 80 / 65 / 42 | 77 / 63 / 41 |
-| 12 | normal | 4¢ | 65 / 54 / 42 | 61 / 46 / 26 | 58 / 43 / 25 | 61 / 45 / 25 | 58 / 43 / 25 |
+| 12 | normal | 3c | 83 / 75 / 62 | 80 / 66 / 43 | 76 / 63 / 41 | 80 / 65 / 42 | 77 / 63 / 41 |
+| 12 | normal | 4c | 65 / 54 / 42 | 61 / 46 / 26 | 58 / 43 / 25 | 61 / 45 / 25 | 58 / 43 / 25 |
 | 12 | fallback | 3c | 47 / 40 / 32 | 44 / 35 / 23 | 46 / 35 / 22 | 44 / 35 / 23 | 45 / 31 / 15 |
 ```
 
@@ -884,8 +911,9 @@ standard error of about 0.4¢ (a binary payoff), so its row-to-row differences a
 illustrate how noisy the settlement endpoint is. Rows that add the sticky-down draw consume the random stream
 differently, which is why their hold column differs.
 Script sha256
-`09b3c8877d6f4a6244ca5c016d7b9cf5dabe95fc300712785d5043a04fd8f402`;
-output sha256 `1fadc7298ba29e27dd4ae88d1135190da71ad59fec3d3175a1c0808029e2bfe4`. The output is the table in §4.
+`7a24664330460b342a14f5b7f1c1833158165ac9e7434f9fe392e35a0d2d2a8e`;
+output sha256 `07ad4860fdf18c18788cce43c65fa98d2f4e273b00f40daefd7eb43926816c62`. A row label once read `|move|`,
+which broke the GitHub table; only that label changed, so every number is as before. The output is the table in §4.
 
 ```python
 """E1 bias illustrations (exp002-e1-review-bias-v1). SYNTHETIC ONLY: no EXP-002 data. Cents throughout.
@@ -961,7 +989,7 @@ row("STALE 35%, half the stale favourable asks picked off", run("STALE", pickoff
 row("INFO (consensus knows 30% of the move)", run("INFO"))
 row("NULL + 3% random missing exits", run("NULL", miss=0.03))
 row("NULL + 10% random missing exits", run("NULL", miss=0.10))
-row("NULL + informative missing exits (20% if |move|>6c)", run("NULL", informative_miss=True))
+row("NULL + informative missing exits (20% if abs(move)>6c)", run("NULL", informative_miss=True))
 row("INFO + informative missing exits", run("INFO", informative_miss=True))
 row("NULL + sticky-down exit bids (50% of falls unpriced)", run("NULL", sticky_down=0.5))
 row("NULL + sticky-down exit bids (20% of falls unpriced)", run("NULL", sticky_down=0.2))
