@@ -821,3 +821,94 @@ def test_the_cli_refuses_evaluation_window_games_before_logging_them(tmp_path, m
     shown = [g for g in recorded[0]["e1"]["games"]] + list((recorded[0]["markout"] or {}).get("games") or [])
     assert shown == [] and recorded[0]["evaluation_window_guard"]["games_refused"] == 8
     assert real is not None
+
+
+# ================================================================== #156 review: exact identity tie, report guard
+
+
+def test_the_unflipped_pattern_ties_with_the_observed_statistic_bit_for_bit():
+    # Review of #156: with strong signal the observed t and the unflipped pattern's t used to differ by rounding,
+    # so p fell below its 1/2^G floor (p = 0.0 here). Both now use the same arithmetic.
+    pairs = [(f"w{i}", v) for i in range(6) for v in (1.0 + 0.01 * i, 1.2)]
+    out = se.e1_signflip(pairs)
+    assert out["p_value_one_sided"] == 1 / 64
+    by = {}
+    for w, v in pairs:
+        by.setdefault(w, []).append(v)
+    assert se._signflip_p([by[k] for k in sorted(by)], 0.0)[0] == 1 / 64
+
+
+def test_p_never_falls_below_one_over_two_to_the_g():
+    import random
+
+    rng = random.Random(156)
+    for _ in range(300):
+        weeks = rng.randint(6, 10)
+        shift = rng.choice((0.0, 0.5, 5.0, 1e3))
+        clusters = [[shift + rng.gauss(0, rng.choice((1e-6, 0.01, 1.0))) for _ in range(rng.randint(1, 5))]
+                    for _ in range(weeks)]
+        for mu0 in (0.0, shift, -shift):
+            upper, lower = se._signflip_p(clusters, mu0)
+            assert upper >= 1 / 2 ** weeks and lower >= 1 / 2 ** weeks, (weeks, shift, mu0)
+
+
+# Just inside the evaluation window (01:00 ET on 2026-10-22): the week-1 games' T-6h rows fall before the label
+# cutoff, so the per-game refusal is exercised; week 2's games appear as not-yet-due target rows and are refused too.
+BOUNDARY_KICKOFF = datetime(2026, 10, 22, 5, 0, tzinfo=UTC)
+
+
+def test_report_with_results_refuses_evaluation_window_games_and_caps_label_reads(tmp_path, monkeypatch):
+    eval_kickoff = BOUNDARY_KICKOFF
+    path, now, ids = build_e1_store(tmp_path, kickoff=eval_kickoff)
+    loaded: list[int] = []
+    real = se._Payloads.payload
+
+    def spy(self, sid):
+        loaded.append(sid)
+        return real(self, sid)
+    monkeypatch.setattr(se._Payloads, "payload", spy)
+    report = se.build_report(SnapshotStore.open_readonly(path), as_of=now, results=True)
+    guard = report["evaluation_window_guard"]
+    assert guard["games_refused"] == 8 and report["rows"] == []
+    assert report["as_of_utc"] == se._iso(se.EVALUATION_LABEL_CUTOFF) == guard["label_as_of_utc"]
+    assert not set(loaded) & ids["T-60m"]  # no evaluation-window T-60m book was read
+    # the label-free report is untouched: no guard key, the as-of as asked
+    free = se.build_report(SnapshotStore.open_readonly(path), as_of=now)
+    assert "evaluation_window_guard" not in free and free["as_of_utc"] == se._iso(now) and free["rows"]
+
+
+def test_report_with_results_still_shows_pilot_games_as_of_the_cutoff(tmp_path):
+    path, _, ids = build_e1_store(tmp_path)  # pilot kickoffs 2026-09-27 and 2026-10-04
+    late = datetime(2026, 11, 1, tzinfo=UTC)
+    report = se.build_report(SnapshotStore.open_readonly(path), as_of=late, results=True)
+    assert report["evaluation_window_guard"]["games_refused"] == 0
+    assert report["evaluation_window_guard"]["requested_as_of_utc"] == se._iso(late)
+    assert report["as_of_utc"] == se._iso(se.EVALUATION_LABEL_CUTOFF)
+    assert any(isinstance(r.get("outcome"), dict) for r in report["rows"])  # pilot outcomes are still shown
+
+
+def test_report_cli_logs_nothing_for_evaluation_window_games(tmp_path, monkeypatch):
+    eval_kickoff = BOUNDARY_KICKOFF
+    path, now, _ = build_e1_store(tmp_path, kickoff=eval_kickoff)
+    recorded = []
+    monkeypatch.setattr(se, "_record_label_view", lambda protocol, shown, **k: recorded.append(list(shown)) or "eu-t")
+    code, text = _run(["report", "--db", str(path), "--as-of", iso_z(now), "--with-results", "--evidence-log",
+                       str(tmp_path / "log.jsonl"), "--actor", "test", "--code-version", "test"])
+    assert code == 0 and recorded == [[]], text  # the logged window holds no evaluation-window kickoff
+    assert json.loads(text)["evaluation_window_guard"]["games_refused"] == 8
+
+
+def test_the_ten_contract_walk_uses_the_recorded_depth_limit(tmp_path):
+    # a book requested with depth=1 whose single level is exhausted is truncated (DEPTH_UNKNOWN), not insufficient
+    path, now, ids = build_e1_store(tmp_path)
+    store = SnapshotStore.open_readonly(path)
+    rows, _, payloads, targets, _ = se._join(store, now, POLICY, results=False, horizons=se.GATE_HORIZONS,
+                                             drop_settled=True)
+    catalog = se.kalshi_catalog(store, now, payloads)
+    ticker, books = next((t, b) for t, b in catalog.books.items() if b)
+    received, sid, url, sha = books[0]
+    catalog.books[ticker][0] = (received, sid, url.replace("depth=100", "depth=1"), sha)
+    value, why = se._e1_walk(catalog, payloads, ticker, sid, "YES", D(1000))
+    assert value is None and why == "NOT_FILLABLE_DEPTH_UNKNOWN"
+    catalog.books[ticker][0] = (received, sid, url, sha)
+    assert se._e1_walk(catalog, payloads, ticker, sid, "YES", D(1000)) == (None, "NOT_FILLABLE_INSUFFICIENT_DEPTH")

@@ -1748,11 +1748,28 @@ def build_report(store: Any, *, as_of: datetime, policy: JoinPolicy = JoinPolicy
 
     Outcome states and results are labels (EXP-002 [data_roles]), so by default they are hidden everywhere:
     rows, join counts and the protocol OUTCOME stage. `results=True` is for a run whose viewing is logged in
-    the experiment's evidence-use log (the CLI's `--with-results` records it before printing)."""
+    the experiment's evidence-use log (the CLI's `--with-results` records it before printing). With `results=True`
+    the C14 evaluation-window guard applies: the report is built as of min(as_of, EVALUATION_LABEL_CUTOFF), and
+    every game with a kickoff on or after EVALUATION_WINDOW_EARLIEST_ET (or unknown) is refused before anything is
+    shown or logged; a reviewed code change tied to the freeze record's id is required to admit the pre-registered
+    interim and final analyses."""
     if not isinstance(as_of, datetime) or as_of.tzinfo is None:
         raise ValueError("as_of must be a timezone-aware datetime")
     as_of = as_of.astimezone(UTC)
+    guard: dict[str, Any] | None = None
+    requested = as_of
+    if results:  # C14: labels are read only up to the cutoff, whatever as_of says
+        as_of = min(as_of, EVALUATION_LABEL_CUTOFF.astimezone(UTC))
     rows, catalog, payloads, _, targets_truncated = _join(store, as_of, policy, results)
+    if results:  # C14: evaluation-window games are refused, never shown or logged
+        refused = sorted({r.get("event_id") for r in rows if evaluation_window_refused(r)}, key=str)
+        rows = [r for r in rows if not evaluation_window_refused(r)]
+        guard = {"evaluation_window_earliest_et": _iso(EVALUATION_WINDOW_EARLIEST_ET),
+                 "label_cutoff_utc": _iso(EVALUATION_LABEL_CUTOFF), "requested_as_of_utc": _iso(requested),
+                 "label_as_of_utc": _iso(as_of), "games_refused": len(refused),
+                 "rule": "C14: a results report reads labels only up to the cutoff and refuses every game with a "
+                         "kickoff on or after the evaluation window's earliest start (or unknown). Lifting it needs a "
+                         "reviewed code change tied to the freeze record's id"}
     observations = _observations(rows)  # also removes the private ladder objects from the rows
     join = _attrition(rows, results)
     protocol = protocol_status(experiments_root)
@@ -1784,6 +1801,8 @@ def build_report(store: Any, *, as_of: datetime, policy: JoinPolicy = JoinPolicy
         "economics": economics(rows, observations, protocol, join, policy, as_of, [g["stream"] for g in gaps]),
         "rows": rows if results else _hide_label_books(rows),
     }
+    if guard is not None:  # results runs only: a label-free report is byte-identical to before
+        body["evaluation_window_guard"] = guard
     plain = _plain(body)
     plain["output_sha256"] = sha256_hex(canonical_json(plain))
     return plain
@@ -2629,7 +2648,9 @@ def noise_gate_v3(obs: GateV3Observations, *, min_effect: float | None = None,
 # (own bid, else settlement) is still reported as `summary.v1_exit_order`, descriptive.
 E1_VERSION = "exp002-e1-roundtrip-v2"
 E1_STATE = "PILOT DESCRIPTIVE — PROPOSED ENDPOINT, NOT FROZEN, NOT A TEST"
-E1_PROPOSAL = "docs/research/EXP002_FREEZE_PROPOSAL.md (exp002-freeze-proposal-v1) §3 rows 3, 4, 5(b), 11, 15"
+E1_PROPOSAL = ("docs/research/EXP002_FREEZE_PROPOSAL.md (exp002-freeze-proposal-v1) §3 rows 3, 4, 5(b), 11, 15; "
+               "docs/research/EXP002_FREEZE_PROPOSAL_V2.md (#155) §3 rows 3, 5; docs/research/EXP002_E1_DESIGN_REVIEW.md "
+               "(#154) C1, C4, C5, C11, C12, C14")
 E1_THETA = Decimal("0.01")  # row 4: one tick beyond the ask; a named constant, never tuned here
 E1_MIN_DEPTH = Decimal(1)  # contracts displayed at the T-6h ask (entry) and at the first T-60m bid (exit)
 E1_QUANTITY = 1  # contracts per trade (row 3)
@@ -2949,19 +2970,9 @@ E1_FUTILITY_WEEK_MEANS_WEEKS = (4, 5)  # interim futility only: the t on week me
 E1_SIGNFLIP_ENUMERATE_MAX_WEEKS = 20  # every Rademacher pattern enumerated up to 2^20
 E1_SIGNFLIP_DRAWS = 9999  # more weeks than that: seeded draws
 E1_SIGNFLIP_LEVELS = (0.05, 0.10)  # one-sided: 0.05 is the efficacy level (C2), 0.10 the futility bound (C6)
+E1_SIGNFLIP_BOUND_TOLERANCE = 1e-6  # dollars per contract (0.0001 cents): the inverted bounds' bisection precision
 # One-sided 90% Student t quantiles for the week-means futility bound (df = G - 1 = 3, 4).
 T_QUANTILE_90 = {3: 1.6377443572159062, 4: 1.5332062740589443}
-
-
-def _cluster_t(sums: Sequence[float], sizes: Sequence[int]) -> float:
-    """The cluster-robust t of a trade-weighted mean from its cluster sums: total / sqrt(sum_g (Y_g - n_g m)^2)."""
-    n = sum(sizes)
-    total = sum(sums)
-    m = total / n
-    v = sum((y - k * m) ** 2 for y, k in zip(sums, sizes))
-    if v <= 1e-30:
-        return 0.0 if abs(total) <= 1e-15 else math.copysign(math.inf, total)
-    return total / math.sqrt(v)
 
 
 def _signflip_draws(weeks: int, seed: int) -> list[tuple[float, ...]] | None:
@@ -2972,54 +2983,85 @@ def _signflip_draws(weeks: int, seed: int) -> list[tuple[float, ...]] | None:
     return [tuple(rng.choice((-1.0, 1.0)) for _ in range(weeks)) for _ in range(E1_SIGNFLIP_DRAWS)]
 
 
-def _signflip_p(clusters: Sequence[Sequence[float]], mu0: float,
-                draws: Sequence[Sequence[float]] | None = None) -> tuple[float, float]:
-    """(p for H0: mean <= mu0, p for H0: mean >= mu0), with the null imposed on y - mu0. Every Rademacher pattern
-    when `draws` is None: with w_g^2 = 1, a pattern's t* depends only on A = sum w_g Y_g and B = sum w_g n_g Y_g,
-    t* = A / sqrt(S2 - 2 (A/n) B + (A/n)^2 N2), which is sum_g (w_g Y_g - n_g m*)^2 under the root; both sums are
-    enumerated by doubling."""
-    sizes = [len(c) for c in clusters]
-    sums = [sum(v - mu0 for v in c) for c in clusters]
-    n, s2, n2 = sum(sizes), sum(y * y for y in sums), sum(k * k for k in sizes)
-    if draws is None:
-        a_list, b_list = [0.0], [0.0]
-        for y, k in zip(sums, sizes):
-            ky = k * y
-            a_list = [a + y for a in a_list] + [a - y for a in a_list]
-            b_list = [b + ky for b in b_list] + [b - ky for b in b_list]
-    else:
-        a_list = [sum(w * y for w, y in zip(p, sums)) for p in draws]
-        b_list = [sum(w * k * y for w, k, y in zip(p, sizes, sums)) for p in draws]
+class _SignFlip:
+    """The Rademacher patterns of one set of week clusters, precomputed once and evaluated at any null mu0.
 
-    def t_of(a: float, b: float) -> float:
-        m = a / n
-        v = s2 - 2 * m * b + m * m * n2
+    With y_g(mu0) = Y_g - n_g mu0 and w_g^2 = 1, a pattern's studentized t depends only on
+    A = sum w_g y_g = A0 - mu0 C and B = sum w_g n_g y_g = B0 - mu0 D (C = sum w_g n_g, D = sum w_g n_g^2):
+    t* = A / sqrt(S2 - 2 (A/n) B + (A/n)^2 N2), which is sum_g (w_g y_g - n_g m*)^2 under the root. The observed
+    statistic is the unflipped pattern computed by exactly the same arithmetic, so it ties with itself bit for bit
+    and p can never fall below 1 / 2^G."""
+
+    def __init__(self, clusters: Sequence[Sequence[float]], draws: Sequence[Sequence[float]] | None = None):
+        self.sizes = [len(c) for c in clusters]
+        self.base = [sum(c) for c in clusters]
+        self.n = sum(self.sizes)
+        self.n2 = sum(k * k for k in self.sizes)
+        self.exact = draws is None
+        cols = ([], [], [], [])  # A0, B0, C, D per pattern
+        if draws is None:
+            a0, b0, c, d = [0.0], [0.0], [0.0], [0.0]
+            for y, k in zip(self.base, self.sizes):
+                ky, kk = k * y, float(k * k)
+                a0 = [x + y for x in a0] + [x - y for x in a0]
+                b0 = [x + ky for x in b0] + [x - ky for x in b0]
+                c = [x + k for x in c] + [x - k for x in c]
+                d = [x + kk for x in d] + [x - kk for x in d]
+            cols = (a0, b0, c, d)
+        else:
+            for pattern in draws:
+                cols[0].append(sum(w * y for w, y in zip(pattern, self.base)))
+                cols[1].append(sum(w * k * y for w, k, y in zip(pattern, self.sizes, self.base)))
+                cols[2].append(sum(w * k for w, k in zip(pattern, self.sizes)))
+                cols[3].append(sum(w * k * k for w, k in zip(pattern, self.sizes)))
+        self.cols = cols
+        # the unflipped pattern, by the same sequential arithmetic as the enumeration's first pattern
+        ident = [0.0, 0.0, 0.0, 0.0]
+        for y, k in zip(self.base, self.sizes):
+            ident = [ident[0] + y, ident[1] + k * y, ident[2] + k, ident[3] + float(k * k)]
+        self.identity = tuple(ident)
+
+    def _t(self, a0: float, b0: float, c: float, d: float, mu0: float, s2: float) -> float:
+        a, b = a0 - mu0 * c, b0 - mu0 * d
+        m = a / self.n
+        v = s2 - 2 * m * b + m * m * self.n2
         if v <= 1e-30:
             return 0.0 if abs(a) <= 1e-15 else math.copysign(math.inf, a)
         return a / math.sqrt(v)
 
-    t_obs = _cluster_t(sums, sizes)
-    eps = 1e-12 * max(1.0, abs(t_obs)) if math.isfinite(t_obs) else 0.0
-    ge = le = 0
-    for a, b in zip(a_list, b_list):
-        t = t_of(a, b)
-        ge += t >= t_obs - eps
-        le += t <= t_obs + eps
-    count = len(a_list)
-    return (ge / count, le / count) if draws is None else ((ge + 1) / (count + 1), (le + 1) / (count + 1))
+    def p(self, mu0: float) -> tuple[float, float]:
+        """(p for H0: mean <= mu0, p for H0: mean >= mu0); ties count against rejection."""
+        s2 = sum((y - k * mu0) ** 2 for y, k in zip(self.base, self.sizes))
+        t_obs = self._t(*self.identity, mu0, s2)
+        eps = 1e-12 * max(1.0, abs(t_obs)) if math.isfinite(t_obs) else 0.0
+        ge = le = 0
+        for a0, b0, c, d in zip(*self.cols):
+            t = self._t(a0, b0, c, d, mu0, s2)
+            ge += t >= t_obs - eps
+            le += t <= t_obs + eps
+        count = len(self.cols[0])
+        return (ge / count, le / count) if self.exact else ((ge + 1) / (count + 1), (le + 1) / (count + 1))
+
+
+def _signflip_p(clusters: Sequence[Sequence[float]], mu0: float,
+                draws: Sequence[Sequence[float]] | None = None) -> tuple[float, float]:
+    """(p for H0: mean <= mu0, p for H0: mean >= mu0), with the null imposed on y - mu0; every Rademacher pattern
+    when `draws` is None (`_SignFlip`)."""
+    return _SignFlip(clusters, draws).p(mu0)
 
 
 def _signflip_invert(clusters: Sequence[Sequence[float]], alpha: float, side: str,
-                     draws: Sequence[Sequence[float]] | None = None) -> float | None:
+                     draws: Sequence[Sequence[float]] | None = None, test: "_SignFlip | None" = None) -> float | None:
     """A one-sided confidence bound by inverting the same test: the lower bound is the smallest mu0 not rejected
     by the test of H0: mean <= mu0 (side "lower"); the upper bound the largest mu0 not rejected by H0: mean >= mu0.
     None when no finite bound exists (the smallest achievable p exceeds alpha)."""
     values = [v for c in clusters for v in c]
     mean = sum(values) / len(values)
     k = 0 if side == "lower" else 1
+    test = test or _SignFlip(clusters, draws)
 
     def not_rejected(mu: float) -> bool:
-        return _signflip_p(clusters, mu, draws)[k] > alpha
+        return test.p(mu)[k] > alpha
 
     inside = mean
     if not not_rejected(inside):
@@ -3035,7 +3077,7 @@ def _signflip_invert(clusters: Sequence[Sequence[float]], alpha: float, side: st
         inside, step = candidate, step * 2
     if outside is None:
         return None
-    while abs(outside - inside) > 1e-9:
+    while abs(outside - inside) > E1_SIGNFLIP_BOUND_TOLERANCE:
         mid = (inside + outside) / 2
         if not_rejected(mid):
             inside = mid
@@ -3110,14 +3152,15 @@ def e1_signflip(pairs: Sequence[tuple[str, float]], *, seed: int = 20261022) -> 
                 "note": f"no confirmatory inference with {g} week cluster(s): the test needs at least "
                         f"{E1_SIGNFLIP_MIN_WEEKS}; with 4 or 5 weeks a coarse futility bound is reported, never efficacy"}
     draws = _signflip_draws(g, seed)
+    test = _SignFlip(clusters, draws)
     bounds = {}
     for alpha in E1_SIGNFLIP_LEVELS:
         level = f"{round((1 - alpha) * 100)}"
-        bounds[f"lower_{level}_one_sided"] = _signflip_invert(clusters, alpha, "lower", draws)
-        bounds[f"upper_{level}_one_sided"] = _signflip_invert(clusters, alpha, "upper", draws)
+        bounds[f"lower_{level}_one_sided"] = _signflip_invert(clusters, alpha, "lower", draws, test)
+        bounds[f"upper_{level}_one_sided"] = _signflip_invert(clusters, alpha, "upper", draws, test)
     return {**out, "state": "COMPUTED", "patterns": 2 ** g if draws is None else len(draws),
             "exact_enumeration": draws is None, "seed": None if draws is None else seed,
-            "p_value_one_sided": _signflip_p(clusters, 0.0, draws)[0], "bounds": bounds,
+            "p_value_one_sided": test.p(0.0)[0], "bounds": bounds,
             "note": "a None bound means no finite bound exists at that level (the smallest achievable p exceeds alpha)"}
 
 
@@ -3149,7 +3192,7 @@ def _e1_other_ask(catalog: KalshiCatalog, payloads: _Payloads, ticker: str | Non
     return yes.best_ask, yes.displayed_size, None, book
 
 
-def _e1_walk(payloads: _Payloads, ticker: str, sid: int | None, side: str, quantity: Decimal
+def _e1_walk(catalog: KalshiCatalog, payloads: _Payloads, ticker: str, sid: int | None, side: str, quantity: Decimal
              ) -> tuple[Decimal | None, str]:
     """Gross cash of taking `quantity` contracts from one stored book: YES asks for an entry (`side` "YES", the
     cost), YES bids for an exit (`side` "NO": buying NO asks is selling YES into its bids; the proceeds). A walk
@@ -3159,8 +3202,9 @@ def _e1_walk(payloads: _Payloads, ticker: str, sid: int | None, side: str, quant
     payload, bad = payloads.payload(sid)
     if bad:
         return None, "UNUSABLE_BOOK"
-    ladder = kalshi_quotes.ladders_from_orderbook(ticker, payload, received_at_utc=None,
-                                                  evidence_id=f"snapshot:{sid}", depth_limit=None).get(side)
+    url = next((b[2] for b in catalog.books.get(ticker, []) if b[1] == sid), None)
+    ladder = kalshi_quotes.ladders_from_orderbook(ticker, payload, received_at_utc=None, evidence_id=f"snapshot:{sid}",
+                                                  depth_limit=_depth_limit(url) if url else None).get(side)
     if ladder is None or ladder.anomaly:
         return None, "UNUSABLE_BOOK"
     from .opportunity import walk_ladder
@@ -3284,8 +3328,9 @@ def e1_endpoint(entries: Mapping[str, Any], targets: Sequence[Mapping[str, Any]]
                 cross_checks["checked"] += 1
                 cross_checks["own_bid_above_other_implied"] += bid > Decimal(1) - other_ask
             if e["ask_depth"] is not None:  # C11: a descriptive 10-contract round trip on the ladders
-                cost, why = _e1_walk(payloads, e["ticker"], e.get("book_snapshot_id"), "YES", E1_DESCRIPTIVE_QUANTITY)
-                proceeds, why_exit = (_e1_walk(payloads, e["ticker"], book[1], "NO", E1_DESCRIPTIVE_QUANTITY)
+                cost, why = _e1_walk(catalog, payloads, e["ticker"], e.get("book_snapshot_id"), "YES",
+                                     E1_DESCRIPTIVE_QUANTITY)
+                proceeds, why_exit = (_e1_walk(catalog, payloads, e["ticker"], book[1], "NO", E1_DESCRIPTIVE_QUANTITY)
                                       if cost is not None else (None, why))
                 if cost is None or proceeds is None:
                     reason = why if cost is None else why_exit
@@ -3469,7 +3514,10 @@ def freeze_eligibility(gate: Mapping[str, Any], protocol: Mapping[str, Any]) -> 
 # otherwise, the results path refuses every game whose kickoff is on or after this instant, before any label is
 # read or anything is logged, and it reads labels only up to EVALUATION_LABEL_CUTOFF (the earliest instant an
 # evaluation-window game's T-60m capture can occur, less a margin), so no evaluation-window book or settlement is
-# ever loaded, whatever --as-of says.
+# ever loaded, whatever --as-of says. The guard covers both label paths: `measure_exp002(results=True)` (exp002
+# --with-results: the markout and E1) and `build_report(results=True)` (report --with-results). Admitting the
+# pre-registered interim (2026-11-30, futility only) and final analyses needs a reviewed code change tied to the
+# freeze record's id; no flag, argument or environment variable lifts it.
 EVALUATION_WINDOW_EARLIEST_ET = datetime(2026, 10, 22, 0, 0, tzinfo=timezone(timedelta(hours=-4)))  # EDT
 EVALUATION_WINDOW_LABEL_LEAD = timedelta(hours=2)  # covers the T-60m capture lead plus its early tolerance
 EVALUATION_LABEL_CUTOFF = EVALUATION_WINDOW_EARLIEST_ET - EVALUATION_WINDOW_LABEL_LEAD
