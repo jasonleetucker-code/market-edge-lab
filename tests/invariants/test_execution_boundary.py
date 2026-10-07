@@ -53,7 +53,7 @@ TRANSITIVE_EXEMPT = {("risk", "shadow_ledger"): "AccountState type for legacy sh
 THIRD_PARTY = {"cryptography": frozenset({"edge_lab/execution/signer.py"})}
 NETWORK_MODULES = frozenset({"socket", "_socket", "ssl", "_ssl", "http", "urllib", "ftplib", "smtplib", "poplib",
                              "imaplib", "telnetlib", "xmlrpc", "asyncio", "selectors", "socketserver", "webbrowser",
-                             "email", "wsgiref"})
+                             "email", "wsgiref", "nntplib"})
 # Network-capable submodules of otherwise harmless packages (HTTPHandler, SocketHandler, config.listen()).
 NETWORK_SUBMODULES = ("logging.handlers", "logging.config")
 NETWORK_FILES = frozenset({"edge_lab/execution/transport.py"})
@@ -193,8 +193,8 @@ def _inside_violations(rel: str, text: str) -> list[str]:
 # nothing). A plain `import urllib` / `import urllib.parse` / `import http` is refused: it binds the
 # package name, through which `urllib.request` or `http.client` is reachable once any module loaded it.
 _NETWORK_FROM_OK = {"urllib.parse": None, "http": frozenset({"HTTPStatus"})}  # None: any name
-_NETWORK_ATTRIBUTE = re.compile(r"\b(urllib\s*\.\s*(request|response|error|robotparser)|http\s*\.\s*(client|server|"
-                                r"cookiejar|cookies)|logging\s*\.\s*(handlers|config))|(?<![A-Za-z0-9])_?(socket|ssl)\s*\.")
+_NETWORK_ATTRIBUTE = re.compile(r"(?<![A-Za-z0-9_.])(urllib\s*\.\s*(request|response|error|robotparser)|http\s*\.\s*"
+                                r"(client|server|cookiejar|cookies)|logging\s*\.\s*(handlers|config)|_?(socket|ssl)\s*\.)")
 
 
 def _network_and_os_hits(rel: str, text: str) -> list[str]:
@@ -222,30 +222,29 @@ def _network_and_os_hits(rel: str, text: str) -> list[str]:
                 allowed = _NETWORK_FROM_OK.get(node.module, frozenset())
                 if not (node.module in _NETWORK_FROM_OK and (allowed is None or names <= allowed)):
                     hits.append(f"{rel}:{line}: imports network names from {node.module}")
-        elif isinstance(node, ast.ImportFrom) and node.level == 1 and node.module == "transport" \
-                and rel not in NETWORK_FILES:
-            leaked = {a.name for a in node.names} & (_transport_network_names() | {"*"})
-            if leaked:
-                hits.append(f"{rel}:{line}: re-imports transport's network names {sorted(leaked)}")
     if rel not in NETWORK_FILES:
         hits += [f"{rel}:{n}: uses a network module by attribute" for n, src_line in enumerate(text.splitlines(), 1)
-                 if _NETWORK_ATTRIBUTE.search(src_line)]
+                 if _NETWORK_ATTRIBUTE.search(src_line.split("#", 1)[0])]
+    return hits + _capability_hits(rel, text)
+
+
+# Capability modules and the only files that may import them, in any form (relative, absolute, `from . import`).
+# This replaces name-by-name re-export checks: a file that cannot import transport cannot reach its network
+# names. A future executor is added here by a reviewed change.
+CAPABILITY_USERS = {
+    "edge_lab.execution.transport": frozenset(),
+    "edge_lab.execution.signer": frozenset({"edge_lab/execution/transport.py"}),
+}
+
+
+def _capability_hits(rel: str, text: str) -> list[str]:
+    hits = []
+    for n, mod in _imports(text, rel):
+        for capability, users in CAPABILITY_USERS.items():
+            own = rel == capability.replace(".", "/") + ".py"
+            if not own and (mod == capability or mod.startswith(capability + ".")) and rel not in users:
+                hits.append(f"{rel}:{n}: imports {capability}, allowed only in {sorted(users) or 'no file yet'}")
     return hits
-
-
-def _transport_network_names() -> set[str]:
-    """Every name transport.py binds from a network module (Request, urlopen, HTTPError, ...)."""
-    path = PACKAGE / "transport.py"
-    names = {"Request", "urlopen", "build_opener", "HTTPSHandler", "HTTPConnection", "HTTPSConnection", "socket",
-             "create_connection", "SSLContext", "create_default_context"}
-    if path.is_file():
-        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
-            if isinstance(node, ast.ImportFrom) and node.module and node.module.split(".")[0] in NETWORK_MODULES:
-                names |= {a.asname or a.name for a in node.names}
-            elif isinstance(node, ast.Import):
-                names |= {(a.asname or a.name).split(".")[0] for a in node.names
-                          if a.name.split(".")[0] in NETWORK_MODULES}
-    return names
 
 
 def _outside_files():
@@ -426,40 +425,335 @@ def test_authorization_has_one_owner():
 
 # ---------------------------------------------------------------- tampering with execution safety state
 
-# Only the owning file may assign these; nobody may reach a signer's closure or private signing method.
-_TAMPERING = re.compile(r"\b(_HOSTS|AUTHORIZED_ENVIRONMENTS|PLANNED_EXECUTION_EXCEPTIONS)\b\s*(\[[^\]]*\]\s*)?"
-                        r"(\+|\||-)?=(?!=)|__closure__|cell_contents|\._sign\b"
-                        r"|setattr\([^)]*[\"'](_HOSTS|AUTHORIZED_ENVIRONMENTS|_sign)[\"']")
-_TAMPER_OWNERS = {"edge_lab/execution/model.py": {"AUTHORIZED_ENVIRONMENTS"},
-                  "edge_lab/execution/conformance.py": {"_HOSTS"},
-                  "edge_lab/execution/signer.py": {"_sign"}}
+# Inside the package, no file changes another module's state or reaches into function internals:
+# - no assignment, augmented assignment or `del` on an attribute of a name bound by an import;
+# - no setattr/delattr/vars/globals/locals, no `__dict__`, `__closure__`, `cell_contents`, `__code__`,
+#   `__globals__`, `__defaults__`, no getattr of a private name;
+# - no `inspect`, `gc` or `sys.modules`;
+# - private safety state is named only by its owner: `_HOSTS` (conformance.py), `_sign` (signer.py).
+# Outside the package nothing can import it (above), so these rules cover both directions.
+_INTERNALS = frozenset({"__dict__", "__closure__", "cell_contents", "__code__", "__globals__", "__defaults__",
+                        "__kwdefaults__", "__builtins__", "__class__", "__setitem__", "__delitem__"})
+_MUTATING_METHODS = frozenset({"update", "clear", "pop", "popitem", "setdefault", "add", "append", "extend", "insert",
+                               "remove", "discard", "sort", "reverse", "__setitem__", "__delitem__", "__ior__"})
+_REFLECTION_CALLS = frozenset({"setattr", "delattr", "vars", "globals", "locals"})
+_PRIVATE_OWNERS = {"_HOSTS": "edge_lab/execution/conformance.py", "_sign": "edge_lab/execution/signer.py"}
+_REFLECTION_MODULES = frozenset({"inspect", "gc", "unittest"})
+
+
+def _bound_by_imports(tree: ast.AST) -> set[str]:
+    names = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            names |= {(a.asname or a.name).split(".")[0] for a in node.names}
+        elif isinstance(node, ast.ImportFrom):
+            names |= {a.asname or a.name for a in node.names}
+    return names
 
 
 def _tamper_hits(rel: str, text: str) -> list[str]:
-    owned = _TAMPER_OWNERS.get(rel, set())
+    tree = ast.parse(text)
+    imported = _bound_by_imports(tree)
     hits = []
-    for n, line in enumerate(text.splitlines(), 1):
-        m = _TAMPERING.search(line)
-        if m and not any(name in line for name in owned):
-            hits.append(f"{rel}:{n}: {line.strip()}")
+
+    def targets(node):
+        if isinstance(node, (ast.Assign, ast.Delete)):
+            return node.targets
+        if isinstance(node, (ast.AugAssign, ast.AnnAssign)):
+            return [node.target]
+        return []
+
+    for node in ast.walk(tree):
+        line = getattr(node, "lineno", 0)
+        for t in targets(node):
+            chain = [t]  # the object being changed: follow .value through attributes and subscripts, never the index
+            while isinstance(chain[-1], (ast.Attribute, ast.Subscript)):
+                chain.append(chain[-1].value)
+            for sub in chain:
+                if isinstance(sub, ast.Attribute) and isinstance(sub.value, ast.Name) and sub.value.id in imported:
+                    hits.append(f"{rel}:{line}: changes {sub.value.id}.{sub.attr} of an imported module or class")
+            base = chain[-1]
+            if len(chain) > 1 and isinstance(base, ast.Name) and base.id in imported:
+                hits.append(f"{rel}:{line}: changes the imported name {base.id} in place")
+            if isinstance(base, ast.Call):
+                hits.append(f"{rel}:{line}: assigns through a call result (e.g. type(x).attr)")
+        if isinstance(node, ast.Attribute):
+            if node.attr in _INTERNALS:
+                hits.append(f"{rel}:{line}: reaches {node.attr}")
+            if node.attr in _PRIVATE_OWNERS and rel != _PRIVATE_OWNERS[node.attr]:
+                hits.append(f"{rel}:{line}: names {node.attr}, private to {_PRIVATE_OWNERS[node.attr]}")
+        if isinstance(node, ast.Name) and node.id in _PRIVATE_OWNERS and rel != _PRIVATE_OWNERS[node.id]:
+            hits.append(f"{rel}:{line}: names {node.id}, private to {_PRIVATE_OWNERS[node.id]}")
+        if isinstance(node, ast.Call):
+            fname = node.func.id if isinstance(node.func, ast.Name) else (
+                node.func.attr if isinstance(node.func, ast.Attribute) else "")
+            if fname in _REFLECTION_CALLS:
+                hits.append(f"{rel}:{line}: calls {fname}()")
+            if fname == "getattr" and len(node.args) >= 2 and isinstance(node.args[1], ast.Constant) \
+                    and isinstance(node.args[1].value, str) and node.args[1].value.startswith("_"):
+                hits.append(f"{rel}:{line}: getattr of private {node.args[1].value}")
+            if fname in _MUTATING_METHODS and isinstance(node.func, ast.Attribute):
+                # `module.TABLE.add(...)` or `TABLE.add(...)` for an imported UPPER_CASE name; a module function
+                # call such as `journal.append(conn, event)` is not flagged (runtime immutability covers the rest).
+                owner = node.func.value
+                if (isinstance(owner, ast.Name) and owner.id in imported and owner.id.lstrip("_").isupper()) or (
+                        isinstance(owner, ast.Attribute) and isinstance(owner.value, ast.Name)
+                        and owner.value.id in imported):
+                    hits.append(f"{rel}:{line}: mutates imported state with .{fname}()")
+            if fname == "__setattr__" and isinstance(node.func, ast.Attribute) \
+                    and isinstance(node.func.value, ast.Name) and node.func.value.id == "object":
+                first = node.args[0] if node.args else None
+                if not (isinstance(first, ast.Name) and first.id == "self"):
+                    hits.append(f"{rel}:{line}: object.__setattr__ on something other than self")
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            mods = [a.name for a in node.names] if isinstance(node, ast.Import) else [node.module or ""]
+            if any(m.split(".")[0] in _REFLECTION_MODULES for m in mods):
+                hits.append(f"{rel}:{line}: imports a reflection module")
+    hits += [f"{rel}:{n}: uses sys.modules" for n, src in enumerate(text.splitlines(), 1)
+             if re.search(r"\bsys\s*\.\s*modules\b", src.split("#", 1)[0])]
     return hits
 
 
-def test_nothing_tampers_with_hosts_authorization_or_the_signer():
-    files = [p for p in SRC.rglob("*.py")] + [p for p in _outside_files() if SRC not in p.parents]
-    hits = [h for p in set(files) for h in _tamper_hits(_rel(p), p.read_text(encoding="utf-8"))]
+def _post_init_only_setattr_hits(rel: str, text: str) -> list[str]:
+    """`object.__setattr__(self, ...)` belongs only in `__init__`/`__post_init__` (building an immutable object)."""
+    hits = []
+    for fn in ast.walk(ast.parse(text)):
+        if isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)) and fn.name not in ("__init__", "__post_init__"):
+            for node in ast.walk(fn):
+                if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) \
+                        and node.func.attr == "__setattr__" and isinstance(node.func.value, ast.Name) \
+                        and node.func.value.id == "object":
+                    hits.append(f"{rel}:{node.lineno}: object.__setattr__ outside __post_init__ (in {fn.name})")
+    return hits
+
+
+# Module-level values in the package must be immutable, so an edit through any alias, copy or call fails
+# at runtime whatever form it takes: frozenset, tuple, MappingProxyType over immutable values, constants.
+_MUTABLE_CALLS = frozenset({"dict", "list", "set", "bytearray", "defaultdict", "OrderedDict", "Counter", "deque"})
+
+
+def _is_mutable(value: ast.AST) -> bool:
+    if isinstance(value, (ast.Dict, ast.List, ast.Set, ast.DictComp, ast.ListComp, ast.SetComp)):
+        return True
+    if isinstance(value, ast.Call):
+        f = value.func
+        name = f.id if isinstance(f, ast.Name) else f.attr if isinstance(f, ast.Attribute) else ""
+        if name in _MUTABLE_CALLS:
+            return True
+        if name == "MappingProxyType":
+            return any(_is_mutable(v) for a in value.args for v in (a.values if isinstance(a, ast.Dict) else []))
+    if isinstance(value, ast.Tuple):
+        return any(_is_mutable(e) for e in value.elts)
+    return False
+
+
+def _mutable_module_state_hits(rel: str, text: str) -> list[str]:
+    hits = []
+    for node in ast.parse(text).body:
+        if isinstance(node, (ast.Assign, ast.AnnAssign)) and node.value is not None and _is_mutable(node.value):
+            hits.append(f"{rel}:{node.lineno}: module-level mutable value (use frozenset, tuple or MappingProxyType)")
+    return hits
+
+
+def test_module_level_state_in_the_package_is_immutable():
+    hits = [h for p in PACKAGE.rglob("*.py") for h in _mutable_module_state_hits(_rel(p), p.read_text(encoding="utf-8"))]
+    assert not hits, "\n".join(hits)
+
+
+@pytest.mark.parametrize("line", ["HOSTS = {'FIXTURE': 'x'}", "ALLOWED = set()", "X = [1]", "T = ({'a': 1},)",
+                                  "M = MappingProxyType({'a': [1]})", "C: dict = dict(a=1)"])
+def test_mutable_module_state_is_caught(line):
+    assert _mutable_module_state_hits("edge_lab/execution/x.py", line + "\n"), line
+
+
+def test_immutable_module_state_passes():
+    ok = ("A = frozenset({1})\nB = (1, 2)\nC = MappingProxyType({'a': (1,), 'b': frozenset()})\nD = 'x'\n"
+          "E = re.compile('x')\n")
+    assert not _mutable_module_state_hits("edge_lab/execution/x.py", ok)
+
+
+def test_object_setattr_only_in_post_init():
+    hits = [h for p in PACKAGE.rglob("*.py") for h in _post_init_only_setattr_hits(_rel(p), p.read_text(encoding="utf-8"))]
+    assert not hits, "\n".join(hits)
+    assert _post_init_only_setattr_hits("x.py", "def f(self):\n    object.__setattr__(self, 'a', 1)\n")
+    assert not _post_init_only_setattr_hits("x.py", "def __post_init__(self):\n    object.__setattr__(self, 'a', 1)\n")
+    assert not _post_init_only_setattr_hits("x.py", "def __init__(self):\n    object.__setattr__(self, 'a', 1)\n")
+
+
+def test_no_package_file_tampers_with_another_or_reaches_internals():
+    hits = [h for p in PACKAGE.rglob("*.py") for h in _tamper_hits(_rel(p), p.read_text(encoding="utf-8"))]
     assert not hits, "\n".join(hits)
 
 
 @pytest.mark.parametrize("rel,line", [
-    ("edge_lab/execution/journal.py", "conformance._HOSTS[Environment.FIXTURE] = 'external-api.kalshi.com'"),
-    ("edge_lab/cli.py", "model.AUTHORIZED_ENVIRONMENTS = frozenset(Environment)"),
-    ("edge_lab/execution/transport.py", "key = signer._sign.__closure__[0].cell_contents"),
-    ("edge_lab/execution/transport.py", "sig = self._signer._sign(b'anything')"),
-    ("edge_lab/execution/lifecycle.py", "setattr(conformance, '_HOSTS', {})"),
+    ("edge_lab/execution/journal.py", "from . import conformance\nconformance._HOSTS['FIXTURE'] = 'x'"),
+    ("edge_lab/execution/journal.py", "from . import conformance as c\nc._HOSTS.update({})"),
+    ("edge_lab/execution/journal.py", "from . import conformance as c\nc.HOSTS.update({})"),
+    ("edge_lab/execution/lifecycle.py", "from . import model\nmodel.AUTHORIZED_ENVIRONMENTS = frozenset()"),
+    ("edge_lab/execution/lifecycle.py", "from . import model\nmodel.environment_authorized = lambda e: True"),
+    ("edge_lab/execution/lifecycle.py", "from .model import Environment\nEnvironment.FIXTURE = 1"),
+    ("edge_lab/execution/lifecycle.py", "from . import model\nvars(model)['AUTHORIZED_ENVIRONMENTS'] = 1"),
+    ("edge_lab/execution/transport.py", "f = getattr(s, '_sign')"),
+    ("edge_lab/execution/transport.py", "k = s.sign.__closure__[0].cell_contents"),
+    ("edge_lab/execution/signer.py", "k = self._sign.__closure__[0].cell_contents"),
+    ("edge_lab/execution/transport.py", "import inspect\ninspect.getclosurevars(s.sign)"),
+    ("edge_lab/execution/transport.py", "sig = self.signer._sign(b'x')"),
+    ("edge_lab/execution/journal.py", "import sys\nm = sys.modules['edge_lab.execution.model']"),
+    ("edge_lab/execution/journal.py", "from . import model\ndel model.AUTHORIZED_ENVIRONMENTS"),
+    ("edge_lab/execution/journal.py", "setattr(obj, 'x', 1)"),
+    ("edge_lab/execution/lifecycle.py", "from .conformance import HOSTS\nHOSTS['FIXTURE'] = 'x'"),
+    ("edge_lab/execution/lifecycle.py", "from .conformance import HOSTS\nHOSTS.update({})"),
+    ("edge_lab/execution/lifecycle.py", "from . import conformance\nconformance.ALLOWED.add(x)"),
+    ("edge_lab/execution/lifecycle.py", "from .risk_gate import DEFAULT_LIMITS\nDEFAULT_LIMITS.append(x)"),
+    ("edge_lab/execution/lifecycle.py", "from . import model\nobject.__setattr__(model, 'AUTHORIZED_ENVIRONMENTS', 1)"),
+    ("edge_lab/execution/lifecycle.py", "object.__setattr__(intent, 'limit_price', p)"),
+    ("edge_lab/execution/lifecycle.py", "from unittest import mock\nmock.patch.object(m, 'X', 1)"),
+    ("edge_lab/execution/lifecycle.py", "type(grant).problems = f"),
+    ("edge_lab/execution/lifecycle.py", "k = grant.__class__"),
 ])
 def test_tampering_is_caught(rel, line):
     assert _tamper_hits(rel, line + "\n"), line
+
+
+def test_ordinary_code_is_not_tampering():
+    ok = ("from .model import OrderIntent\nfrom dataclasses import replace\nself.x = 1\nd = {}\nd['a'] = 1\n"
+          "x = replace(intent, quantity=q)\nobject.__setattr__(self, 'quantity', q)\n")
+    assert not _tamper_hits("edge_lab/execution/journal.py", ok)
+
+
+@pytest.mark.parametrize("rel,line", [
+    ("edge_lab/execution/lifecycle.py", "from . import transport\ntransport.urlopen(req, body)"),
+    ("edge_lab/execution/lifecycle.py", "from edge_lab.execution.transport import Transport"),
+    ("edge_lab/execution/lifecycle.py", "from ..execution.transport import Request"),
+    ("edge_lab/execution/lifecycle.py", "from .transport import Transport"),
+    ("edge_lab/execution/journal.py", "from .signer import Signer"),
+    ("edge_lab/execution/kalshi_wire.py", "from . import signer"),
+])
+def test_capability_modules_are_imported_only_by_their_users(rel, line):
+    assert _capability_hits(rel, line + "\n"), line
+    assert not _capability_hits("edge_lab/execution/transport.py", "from .signer import Signer\n")
+
+
+def test_network_attribute_rule_ignores_comments_and_object_attributes():
+    assert not _network_and_os_hits("edge_lab/execution/lifecycle.py", "self.socket.close()\n# retry on ssl. errors\n")
+
+
+
+
+# ---------------------------------------------------------------- runtime immutability (closes the syntax class)
+
+def _immutable(value, depth: int = 0) -> bool:
+    """Whether `value` is an allowed immutable value. Recursive through containers that are themselves read-only."""
+    import dataclasses
+    import enum
+    import re as _re
+    import types
+    from decimal import Decimal
+
+    if depth > 8:
+        return False
+    import __future__
+    import uuid
+
+    if value is None or isinstance(value, (str, bytes, int, float, complex, bool, Decimal, range, _re.Pattern,
+                                           enum.Enum, uuid.UUID, __future__._Feature)):
+        return True  # float only appears in non-money constants (e.g. a pacer interval); money is Decimal
+    import datetime as _dt
+    import functools
+
+    if isinstance(value, (type, types.FunctionType, types.BuiltinFunctionType, types.ModuleType, property,
+                          staticmethod, classmethod, types.MethodType, types.GenericAlias)):
+        return True
+    if isinstance(value, (_dt.datetime, _dt.date, _dt.time, _dt.timedelta, _dt.timezone)):
+        return True  # immutable value types
+    if type(value).__module__ == "typing":
+        return True  # type annotations and aliases (Mapping, Callable[...], Union[...]): no table state
+    if isinstance(value, functools._lru_cache_wrapper) and getattr(value, "__module__", "").split(".")[0] != "edge_lab":
+        return True  # an imported stdlib function (urlsplit); our own modules may not cache
+    if isinstance(value, (tuple, frozenset)):
+        return all(_immutable(v, depth + 1) for v in value)
+    if isinstance(value, types.MappingProxyType):
+        return all(_immutable(k, depth + 1) and _immutable(v, depth + 1) for k, v in value.items())
+    if dataclasses.is_dataclass(value) and not isinstance(value, type):
+        if not value.__dataclass_params__.frozen:
+            return False
+        return all(_immutable(getattr(value, f.name), depth + 1) for f in dataclasses.fields(value))
+    return False
+
+
+# Class attributes Python or dataclasses/enum create themselves; they are not our tables.
+_CLASS_MACHINERY = re.compile(r"^__\w+__$|^_abc_impl$|^_(member_map|value2member_map|member_names|unhashable_values|"
+                              r"value_repr|missing|generate_next_value|use_args|member_type|new_member|"
+                              r"hashable_values|singles_mask|all_bits|flag_mask|boundary|inverted|sort_order)_?$")
+
+
+def test_every_module_and_class_value_in_the_package_is_immutable_at_runtime():
+    """Import every execution module and check the values its module and classes actually hold. This catches a
+    mutable table however it was built (class body, try/if block, helper call, dict.fromkeys, ChainMap...)."""
+    import importlib
+    import inspect
+
+    problems = []
+    for path in sorted(PACKAGE.glob("*.py")):
+        name = "edge_lab.execution" + ("" if path.stem == "__init__" else "." + path.stem)
+        module = importlib.import_module(name)
+        for attr, value in vars(module).items():
+            if attr.startswith("__") and attr.endswith("__"):
+                continue
+            if inspect.ismodule(value) or (inspect.isclass(value) and value.__module__ != name):
+                continue  # imported modules and classes are judged in their own module
+            if not _immutable(value):
+                problems.append(f"{name}.{attr}: {type(value).__name__}")
+            if inspect.isclass(value) and value.__module__ == name:
+                for cattr, cvalue in vars(value).items():
+                    if _CLASS_MACHINERY.match(cattr) or isinstance(cvalue, (types_member_descriptor(),)):
+                        continue
+                    if not _immutable(cvalue):
+                        problems.append(f"{name}.{attr}.{cattr}: {type(cvalue).__name__}")
+    assert not problems, "\n".join(problems)
+
+
+def types_member_descriptor():
+    import types
+
+    return types.MemberDescriptorType
+
+
+def test_the_runtime_immutability_check_catches_tables_built_any_way():
+    import types
+    from collections import ChainMap
+    from dataclasses import dataclass
+
+    @dataclass
+    class Loose:
+        x: int = 1
+
+    for bad in ({"a": 1}, [1], {1}, dict.fromkeys("ab"), ChainMap(), types.SimpleNamespace(a=1), (1, [2]),
+                types.MappingProxyType({"a": [1]}), Loose()):
+        assert not _immutable(bad), bad
+    for ok in (frozenset({1}), (1, "a"), types.MappingProxyType({"a": (1,)}), None, re.compile("x")):
+        assert _immutable(ok), ok
+
+
+def _setattr_alias_hits(rel: str, text: str) -> list[str]:
+    hits = []
+    tree = ast.parse(text)
+    called = {id(c.func) for c in ast.walk(tree) if isinstance(c, ast.Call)}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Attribute) and node.attr == "__setattr__":
+            parent_call = id(node) in called
+            base_is_object = isinstance(node.value, ast.Name) and node.value.id == "object"
+            if not (parent_call and base_is_object):
+                hits.append(f"{rel}:{node.lineno}: __setattr__ used other than as a direct object.__setattr__(self, ...)")
+    return hits
+
+
+def test_setattr_is_never_aliased_or_reached_through_super():
+    hits = [h for p in PACKAGE.rglob("*.py") for h in _setattr_alias_hits(_rel(p), p.read_text(encoding="utf-8"))]
+    assert not hits, "\n".join(hits)
+    assert _setattr_alias_hits("x.py", "osa = object.__setattr__\n")
+    assert _setattr_alias_hits("x.py", "super().__setattr__('a', 1)\n")
+    assert not _setattr_alias_hits("x.py", "object.__setattr__(self, 'a', 1)\n")
 
 
 # ---------------------------------------------------------------- the fake venue is for tests only

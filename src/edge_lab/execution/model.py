@@ -51,12 +51,14 @@ MAX_EXPONENT = 12  # adjusted exponent: refuses 1e13 and above, and 9E+100000-st
 MAX_DECIMAL_PLACES = 8  # finer than any documented price, quantity or fee unit
 MAX_DIGITS = MAX_EXPONENT + 1 + MAX_DECIMAL_PLACES
 # Exact arithmetic: a result that would need rounding raises instead of being rounded.
-_EXACT = Context(prec=2 * MAX_DIGITS + 10, traps=[InvalidOperation, Inexact, Rounded])
+def _exact_context() -> Context:
+    """A fresh trapping context per use: a shared module-level Context would be mutable state."""
+    return Context(prec=2 * MAX_DIGITS + 10, traps=[InvalidOperation, Inexact, Rounded])
 
 
 def exact_product(a: Decimal, b: Decimal) -> Decimal:
     """a x b, exactly, independent of the caller's decimal context (raises if it cannot be exact)."""
-    with localcontext(_EXACT):
+    with localcontext(_exact_context()):
         return a * b
 
 
@@ -170,7 +172,7 @@ class Grid:
 
     def _on_grid(self, value: Decimal) -> bool:
         try:
-            with localcontext(_EXACT):
+            with localcontext(_exact_context()):
                 return value % self.step == 0
         except (InvalidOperation, Inexact, Rounded) as exc:
             raise ExactValueError(f"{value} cannot be checked exactly against step {self.step}") from exc
