@@ -754,3 +754,33 @@ def test_setattr_is_never_aliased_or_reached_through_super():
     assert _setattr_alias_hits("x.py", "osa = object.__setattr__\n")
     assert _setattr_alias_hits("x.py", "super().__setattr__('a', 1)\n")
     assert not _setattr_alias_hits("x.py", "object.__setattr__(self, 'a', 1)\n")
+
+
+# ---------------------------------------------------------------- the fake venue is for tests only
+
+def _fake_venue_hits(rel: str, text: str) -> list[str]:
+    if rel == "edge_lab/execution/fake_venue.py":
+        return []
+    hits = [f"{rel}:{n}: imports {m}" for n, m in _imports(text, rel)
+            if m.endswith(".fake_venue") or ".fake_venue." in m or m == "fake_venue"]
+    hits += [f"{rel}:{n}: names the fake venue" for n, line in enumerate(text.splitlines(), 1)
+             if re.search(r"\bFakeVenue\b|\bfake_venue\b", line)]
+    return hits
+
+
+def test_only_tests_may_use_the_fake_venue():
+    """`execution/fake_venue.py` is a deterministic test exchange with fault injection. No source module,
+    script or deploy file may import or name it, so it can never stand in for a real transport."""
+    files = set(SRC.rglob("*.py")) | set(_outside_files())
+    hits = [h for p in files for h in _fake_venue_hits(_rel(p), p.read_text(encoding="utf-8"))]
+    assert not hits, "\n".join(hits)
+
+
+@pytest.mark.parametrize("rel,line", [
+    ("edge_lab/execution/transport.py", "from .fake_venue import FakeVenue"),
+    ("edge_lab/execution/journal.py", "from . import fake_venue"),
+    ("edge_lab/cli.py", "from .execution.fake_venue import FakeVenue"),
+    ("edge_lab/execution/lifecycle.py", "v = FakeVenue(); v.inject('DROP_ACK')"),
+])
+def test_a_non_test_use_of_the_fake_venue_is_caught(rel, line):
+    assert _fake_venue_hits(rel, line + "\n"), line
