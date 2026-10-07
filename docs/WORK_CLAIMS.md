@@ -6,3 +6,4 @@ The expiry is a UTC date no more than 7 days out. An expired row is not a live c
 
 | Claim | Agent | Branch | Paths | Expires |
 |---|---|---|---|---|
+| NHL planner tests: pin the receipt clock | Claude (laptop) | fix/nhl-planner-test-clock | tests/test_price_observations_nhl_with_odds_pilot.py | 2026-10-10 |
