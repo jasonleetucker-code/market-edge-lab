@@ -11,6 +11,8 @@ dependencies = []
 
 [project.optional-dependencies]
 dev = ["pytest>=8,<9"]
+# The isolated execution package's signer only (ADR 0043). Every other runtime module is stdlib-only.
+execution = ["cryptography>=43,<50"]
 
 [project.scripts]
 edge-lab = "edge_lab.cli:main"

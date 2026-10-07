@@ -641,6 +641,51 @@ be written here when they are made.
     - This PR changes runtime code (`inplay_evidence.py`), so the standing docs/test-only rule does not apply.
     - The 2026-09-30 batch delegation covers that batch's code, not this change.
     - It therefore stops at a reviewed PR for the owner to merge. It grants nothing else.
+  - **Merged 2026-10-07** by the owner's decision (answer 2 in
+    `docs/owner/2026-10-07-kalshi-execution-campaign-directive.md`): squash `fcd46fe`, exact head `1592efb`,
+    CI green. Not deployed by that decision.
+- **2026-10-07 (America/New_York), owner directive: finish the Kalshi ordinary-event automation core (#160).**
+  Recorded in `docs/owner/2026-10-07-kalshi-execution-campaign-directive.md` (authority sections verbatim, plus the
+  owner's three answers). Campaign plan: `docs/strategy/KALSHI_AUTOMATION_DELIVERY_160.md` (PR #163), packages A–T.
+  Boundary: ADR 0043.
+  - **Authorized (offline, hard-disabled):**
+    - the isolated execution package `src/edge_lab/execution/`, built under ADR 0043's file-exact rules. This
+      covers the intent journal, reservations and fencing, the lifecycle, risk and ticket checks, the wire
+      format, the signer, the transport, account reconciliation, kill and restart, account-aware shadow logic, and
+      fixture-only Terminal work;
+    - the isolated execution package may run in the FIXTURE environment only: a fake transport and disposable
+      stores. Signing tests use keys generated at test time;
+    - the matching revision of `tests/invariants/test_no_execution_paths.py` (path-exact exceptions only) and a new
+      import-boundary invariant;
+    - `cryptography` as an optional `execution` extra, imported only by `execution/signer.py`;
+    - documentation, conformance research from public documentation, and owner setup and approval packets.
+  - **Merge delegation:** agents may squash-merge this campaign's offline execution PRs when **all** of these hold:
+    - an independent review, with re-review of changed heads;
+    - required CI green on the exact final head;
+    - current-main reconciliation;
+    - mergeability;
+    - no open review blocker.
+
+    This is owner answer 1. It covers no credentials, no demo or production access, no deployment of an executor
+    and no gate advance.
+  - **Deploy:** PR #161 (the Polymarket capture-window fix) may be deployed through the runbook once reviewed and
+    merged (owner answer 3):
+    - code only;
+    - outside the protected windows;
+    - deployed SHA verified;
+    - no timer, budget or schema change.
+
+    Nothing from the execution package is deployed.
+  - **Not authorized (each needs its own recorded owner approval):**
+    - DEMO or PRODUCTION egress, including any change to `execution.model.AUTHORIZED_ENVIRONMENTS`;
+    - creating, installing, reading or requesting any credential, key or account;
+    - demo mock orders and production account reads;
+    - new market-data acquisition or streams;
+    - any real-money order, and unattended automation (LIVE_AUTHORIZED and UNATTENDED_LIVE_AUTHORIZED stay false);
+    - deposits, withdrawals, margin, borrowing or outside capital;
+    - paid services and support messages;
+    - changes to source budgets, protected windows or EXP-001/EXP-002 protocols;
+    - a gate advance. Gates 8–10 stay not authorized.
 
 ## Standing merge rule: docs-only and test-only PRs
 
@@ -732,7 +777,9 @@ A PR that fails any of these needs the usual authority: a directive grant or the
 
 ## Explicitly not authorized
 
-- Any order placement, order simulation against live endpoints, or authenticated trading client.
+- Any order placement, order simulation against live endpoints, or authenticated trading client. The ADR 0043
+  execution package is offline code that runs in the FIXTURE environment only (2026-10-07 entry); it
+  authenticates to nothing.
 - Credential creation or storage, or funded accounts. One exception, directive §10 and
   issue #29: the owner may install The Odds API free read-only key in server or local
   environment configuration. Agents never create, request, see or commit it.
