@@ -1,0 +1,19 @@
+{
+  "settlements": [
+    {
+      "ticker": "KXHIGHNY-26OCT01-T55",
+      "exchange_index": 0,
+      "event_ticker": "KXHIGHNY-26OCT01",
+      "market_result": "no",
+      "yes_count_fp": "0.00",
+      "yes_total_cost_dollars": "0.0000",
+      "no_count_fp": "1.00",
+      "no_total_cost_dollars": "0.4000",
+      "revenue": 100,
+      "settled_time": "2026-10-02T12:00:00Z",
+      "fee_cost": "0.0100",
+      "value": 100
+    }
+  ],
+  "cursor": null
+}

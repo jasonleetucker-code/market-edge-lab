@@ -1,0 +1,16 @@
+{
+  "market_positions": [
+    {
+      "ticker": "KXHIGHNY-26OCT01-T55",
+      "exchange_index": 0,
+      "total_traded_dollars": "0.4000",
+      "position_fp": "0.00",
+      "market_exposure_dollars": "0.0000",
+      "realized_pnl_dollars": "0.5900",
+      "fees_paid_dollars": "0.0100",
+      "last_updated_ts": "2026-10-02T12:00:00Z"
+    }
+  ],
+  "event_positions": [],
+  "cursor": ""
+}
