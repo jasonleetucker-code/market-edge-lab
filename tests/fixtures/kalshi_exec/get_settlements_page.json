@@ -1,0 +1,19 @@
+{
+  "settlements": [
+    {
+      "ticker": "HIGHNY-24JAN01-T60",
+      "exchange_index": 0,
+      "event_ticker": "HIGHNY-24JAN01",
+      "market_result": "yes",
+      "yes_count_fp": "2.50",
+      "yes_total_cost_dollars": "1.4000",
+      "no_count_fp": "0.00",
+      "no_total_cost_dollars": "0.0000",
+      "revenue": 250,
+      "settled_time": "2026-10-08T12:00:00Z",
+      "fee_cost": "0.3400",
+      "value": 100
+    }
+  ],
+  "cursor": null
+}
