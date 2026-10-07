@@ -642,96 +642,179 @@ def test_network_attribute_rule_ignores_comments_and_object_attributes():
 
 # ---------------------------------------------------------------- runtime immutability (closes the syntax class)
 
-def _immutable(value, depth: int = 0) -> bool:
-    """Whether `value` is an allowed immutable value. Recursive through containers that are themselves read-only."""
+# Class attributes Python, dataclasses and abc create themselves. Enum internals are skipped only on Enum classes.
+_PYTHON_CLASS_DUNDERS = frozenset({"__module__", "__qualname__", "__doc__", "__dict__", "__weakref__", "__annotations__",
+                                   "__dataclass_fields__", "__dataclass_params__", "__match_args__", "__slots__",
+                                   "__orig_bases__", "__parameters__", "__static_attributes__", "__firstlineno__",
+                                   "__abstractmethods__", "__hash__", "__annotate__", "__type_params__"})
+_ENUM_INTERNALS = re.compile(r"^_(member_map|value2member_map|member_names|unhashable_values|value_repr|missing|"
+                             r"generate_next_value|use_args|member_type|new_member|hashable_values|singles_mask|"
+                             r"all_bits|flag_mask|boundary|inverted|sort_order)_?$")
+
+
+def _function_parts(fn):
+    """What a function can carry: defaults, keyword defaults, its own attributes and closure values."""
+    parts = list(fn.__defaults__ or ()) + list((fn.__kwdefaults__ or {}).values()) + list(vars(fn).values())
+    parts += [cell.cell_contents for cell in (fn.__closure__ or ()) if _cell_filled(cell)]
+    return parts
+
+
+def _cell_filled(cell) -> bool:
+    try:
+        cell.cell_contents  # noqa: B018
+    except ValueError:
+        return False
+    return True
+
+
+def _immutable(value, depth: int = 0, seen: frozenset = frozenset()) -> bool:
+    """Whether `value` is an allowed immutable value, recursively. Functions are judged by what they carry
+    (defaults, attributes, closure), wrappers and bound methods by what they wrap or are bound to, and classes
+    by their own attributes, nested classes included."""
+    import __future__
     import dataclasses
+    import datetime as _dt
     import enum
+    import functools
     import re as _re
     import types
+    import typing
+    import uuid
     from decimal import Decimal
 
-    if depth > 8:
+    if depth > 12:
         return False
-    import __future__
-    import uuid
-
+    if id(value) in seen:
+        return True  # a cycle back to something already being checked
+    seen = seen | {id(value)}
+    nxt = lambda v: _immutable(v, depth + 1, seen)  # noqa: E731
     if value is None or isinstance(value, (str, bytes, int, float, complex, bool, Decimal, range, _re.Pattern,
-                                           enum.Enum, uuid.UUID, __future__._Feature)):
-        return True  # float only appears in non-money constants (e.g. a pacer interval); money is Decimal
-    import datetime as _dt
-    import functools
-
-    if isinstance(value, (type, types.FunctionType, types.BuiltinFunctionType, types.ModuleType, property,
-                          staticmethod, classmethod, types.MethodType, types.GenericAlias)):
+                                           uuid.UUID, __future__._Feature, _dt.datetime, _dt.date, _dt.time,
+                                           _dt.timedelta, _dt.timezone)):
+        return True  # float appears only in non-money constants (e.g. a pacer interval); money is Decimal
+    if isinstance(value, enum.Enum):
+        return nxt(value.value)
+    if isinstance(value, types.ModuleType):
+        return True  # judged in its own module
+    if isinstance(value, type):
+        return _class_immutable(value, depth, seen)
+    if isinstance(value, types.FunctionType):
+        # Only our own code is inspected: stdlib-generated wrappers (dataclass __repr__ through reprlib, whose
+        # closure holds a private recursion guard) carry machinery, not tables. Tests define probe functions too.
+        filename = value.__code__.co_filename
+        ours = str(PACKAGE) in filename or "test_execution_boundary" in filename
+        return not ours or all(nxt(p) for p in _function_parts(value))
+    if isinstance(value, (staticmethod, classmethod)):
+        return nxt(value.__func__)
+    if isinstance(value, property):
+        return all(nxt(f) for f in (value.fget, value.fset, value.fdel) if f is not None)
+    if isinstance(value, (types.MethodType, types.BuiltinMethodType)):
+        owner = getattr(value, "__self__", None)
+        if isinstance(value, types.MethodType):
+            return nxt(owner) and nxt(value.__func__)
+        return owner is None or isinstance(owner, types.ModuleType) or nxt(owner)  # `set().add` holds its set
+    if isinstance(value, types.BuiltinFunctionType):
         return True
-    if isinstance(value, (_dt.datetime, _dt.date, _dt.time, _dt.timedelta, _dt.timezone)):
-        return True  # immutable value types
-    if type(value).__module__ == "typing":
-        return True  # type annotations and aliases (Mapping, Callable[...], Union[...]): no table state
-    if isinstance(value, functools._lru_cache_wrapper) and getattr(value, "__module__", "").split(".")[0] != "edge_lab":
-        return True  # an imported stdlib function (urlsplit); our own modules may not cache
+    if isinstance(value, functools._lru_cache_wrapper):
+        # A stdlib function (urlsplit) is fine; our own modules may not cache.
+        return getattr(value, "__module__", "").split(".")[0] != "edge_lab"
+    if isinstance(value, types.GenericAlias) or type(value).__module__ == "typing":
+        metadata = getattr(value, "__metadata__", ())  # Annotated[int, {...}] hides values here
+        args = getattr(value, "__args__", ()) or ()
+        return all(nxt(m) for m in metadata) and all(nxt(a) for a in args if not isinstance(a, typing.TypeVar))
     if isinstance(value, (tuple, frozenset)):
-        return all(_immutable(v, depth + 1) for v in value)
+        return all(nxt(v) for v in value)
     if isinstance(value, types.MappingProxyType):
-        return all(_immutable(k, depth + 1) and _immutable(v, depth + 1) for k, v in value.items())
+        return all(nxt(k) and nxt(v) for k, v in value.items())
     if dataclasses.is_dataclass(value) and not isinstance(value, type):
-        if not value.__dataclass_params__.frozen:
-            return False
-        return all(_immutable(getattr(value, f.name), depth + 1) for f in dataclasses.fields(value))
+        return value.__dataclass_params__.frozen and all(nxt(getattr(value, f.name)) for f in dataclasses.fields(value))
     return False
 
 
-# Class attributes Python or dataclasses/enum create themselves; they are not our tables.
-_CLASS_MACHINERY = re.compile(r"^__\w+__$|^_abc_impl$|^_(member_map|value2member_map|member_names|unhashable_values|"
-                              r"value_repr|missing|generate_next_value|use_args|member_type|new_member|"
-                              r"hashable_values|singles_mask|all_bits|flag_mask|boundary|inverted|sort_order)_?$")
+def _class_immutable(cls, depth: int, seen: frozenset) -> bool:
+    return not _class_problems(cls, depth, seen)
+
+
+def _class_problems(cls, depth: int = 0, seen: frozenset = frozenset()) -> list[str]:
+    import enum
+    import types
+
+    if not cls.__module__.startswith("edge_lab.execution"):
+        return []  # an imported class is judged in its own module (stdlib and allowed owners)
+    problems = []
+    is_enum = isinstance(cls, enum.EnumMeta)
+    for cattr, cvalue in vars(cls).items():
+        if cattr in _PYTHON_CLASS_DUNDERS or cattr == "_abc_impl" or (is_enum and _ENUM_INTERNALS.match(cattr)):
+            continue
+        if isinstance(cvalue, (types.MemberDescriptorType, types.GetSetDescriptorType)):
+            continue  # __slots__ members and Python's own descriptors hold no class-level table
+        if not _immutable(cvalue, depth + 1, seen | {id(cls)}):
+            problems.append(f"{cls.__qualname__}.{cattr}: {type(cvalue).__name__}")
+    return problems
 
 
 def test_every_module_and_class_value_in_the_package_is_immutable_at_runtime():
-    """Import every execution module and check the values its module and classes actually hold. This catches a
-    mutable table however it was built (class body, try/if block, helper call, dict.fromkeys, ChainMap...)."""
+    """Import every execution module (subpackages included) and check the values its module, classes and
+    functions actually hold. This catches a mutable table however it was built: class body, try/if block,
+    helper call, dict.fromkeys, ChainMap, mutable default, closure, function attribute or bound method."""
     import importlib
     import inspect
 
     problems = []
-    for path in sorted(PACKAGE.glob("*.py")):
-        name = "edge_lab.execution" + ("" if path.stem == "__init__" else "." + path.stem)
+    for path in sorted(PACKAGE.rglob("*.py")):
+        parts = path.relative_to(PACKAGE).with_suffix("").parts
+        name = ".".join(("edge_lab", "execution") + tuple(p for p in parts if p != "__init__"))
         module = importlib.import_module(name)
         for attr, value in vars(module).items():
-            if attr.startswith("__") and attr.endswith("__"):
+            if attr in ("__builtins__", "__loader__", "__spec__", "__file__", "__cached__", "__name__",
+                        "__package__", "__doc__", "__path__", "__annotations__"):
                 continue
-            if inspect.ismodule(value) or (inspect.isclass(value) and value.__module__ != name):
-                continue  # imported modules and classes are judged in their own module
-            if not _immutable(value):
-                problems.append(f"{name}.{attr}: {type(value).__name__}")
             if inspect.isclass(value) and value.__module__ == name:
-                for cattr, cvalue in vars(value).items():
-                    if _CLASS_MACHINERY.match(cattr) or isinstance(cvalue, (types_member_descriptor(),)):
-                        continue
-                    if not _immutable(cvalue):
-                        problems.append(f"{name}.{attr}.{cattr}: {type(cvalue).__name__}")
+                problems += [f"{name}.{p}" for p in _class_problems(value)]
+            elif not _immutable(value):
+                problems.append(f"{name}.{attr}: {type(value).__name__}")
     assert not problems, "\n".join(problems)
-
-
-def types_member_descriptor():
-    import types
-
-    return types.MemberDescriptorType
 
 
 def test_the_runtime_immutability_check_catches_tables_built_any_way():
     import types
     from collections import ChainMap
     from dataclasses import dataclass
+    from typing import Annotated
 
     @dataclass
     class Loose:
         x: int = 1
 
+    def with_default(x, _cache={}):  # noqa: B006
+        return x
+
+    def factory():
+        table = {}
+
+        def inner():
+            return table
+
+        return inner
+
+    def with_attr():
+        return 1
+
+    with_attr.table = {}
+
+    class Outer:
+        class Inner:
+            TABLE = {}
+
     for bad in ({"a": 1}, [1], {1}, dict.fromkeys("ab"), ChainMap(), types.SimpleNamespace(a=1), (1, [2]),
-                types.MappingProxyType({"a": [1]}), Loose()):
+                types.MappingProxyType({"a": [1]}), Loose(), with_default, factory(), with_attr, set().add,
+                {}.setdefault, staticmethod(with_default), Annotated[int, {"FIXTURE": "x"}]):
         assert not _immutable(bad), bad
-    for ok in (frozenset({1}), (1, "a"), types.MappingProxyType({"a": (1,)}), None, re.compile("x")):
+    Outer.__module__ = "edge_lab.execution.probe"
+    Outer.Inner.__module__ = "edge_lab.execution.probe"
+    assert _class_problems(Outer)  # the nested class's table is found
+    for ok in (frozenset({1}), (1, "a"), types.MappingProxyType({"a": (1,)}), None, re.compile("x"), len,
+               lambda x: x):
         assert _immutable(ok), ok
 
 
