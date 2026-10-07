@@ -3,7 +3,7 @@
 Received in the laptop Claude Code session of 2026-10-07 (America/New_York). The owner pasted the research session's
 summary of PR #163 and its "Next Claude Code prompt". The prompt is an edited successor of
 `docs/strategy/CLAUDE_KALSHI_AUTOMATION_160.md` (PR #163), with the #162/#163 integration details added. The
-owner then answered three questions in the same session.
+owner then answered four questions in the same session.
 
 **Authority.** This is the owner's instruction to implement the offline, hard-disabled execution campaign. The
 scope is recorded in `docs/EXECUTION_PLAN.md` (owner authorization record, 2026-10-07 entry) and the boundary in

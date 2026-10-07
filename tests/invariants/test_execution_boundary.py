@@ -55,12 +55,20 @@ NETWORK_MODULES = frozenset({"socket", "ssl", "http", "urllib", "ftplib", "smtpl
                              "xmlrpc", "asyncio", "selectors", "socketserver", "webbrowser", "email"})
 NETWORK_FILES = frozenset({"edge_lab/execution/transport.py"})
 SQLITE_FILES = frozenset({"edge_lab/execution/journal.py", "edge_lab/execution/reservations.py"})
-BANNED_IN_PACKAGE = frozenset({"subprocess", "multiprocessing", "ctypes", "pty", "importlib", "runpy", "pkgutil",
-                               "zipimport", "code", "codeop", "pickle", "shelve", "marshal"})
-_BANNED_CALLS = re.compile(r"\bos\.(system|popen|exec\w*|spawn\w*|fork\w*|environ|getenv|putenv|unsetenv)\b"
-                           r"|__import__\s*\(|\bgetenv\s*\(|\beval\s*\(|\bexec\s*\(")
-_NAMES_PACKAGE = re.compile(r"edge_lab\s*[./\\]\s*execution(?![a-z0-9_])|^\.?execution[./][a-z_]")
-_BUILDS_PATH = re.compile(r"edge_lab\s*[./\\]\s*$")
+# Harmless helpers inside network packages, allowed anywhere in the package (they open nothing).
+NETWORK_HELPERS = frozenset({"http", "http.HTTPStatus", "urllib", "urllib.parse"})
+BANNED_IN_PACKAGE = frozenset({"subprocess", "multiprocessing", "concurrent", "ctypes", "pty", "importlib", "runpy",
+                               "pkgutil", "zipimport", "code", "codeop", "pickle", "shelve", "marshal"})
+# Names that may not be imported from `os` (`from os import system`), nor used as `os.<name>`.
+_OS_BANNED = r"system|popen|exec\w*|spawn\w*|posix_spawn\w*|fork\w*|environ\w*|getenv\w*|putenv|unsetenv"
+_OS_BANNED_NAME = re.compile(rf"(?:{_OS_BANNED})")
+_BANNED_CALLS = re.compile(rf"\bos\.(?:{_OS_BANNED})\b|__import__\s*\(|\bgetenv\s*\(|\beval\s*\(|\bexec\s*\(")
+_NAMES_PACKAGE = re.compile(r"edge_lab\s*[./\\]\s*execution(?![a-z0-9_])")
+_BUILDS_PATH = re.compile(r"(^|[^a-z0-9_])edge_lab\s*[./\\]\s*($|%|\{)")
+_EXECUTION_PIECE = re.compile(r"^\.?execution([./][a-z_].*)?$")
+# Calls that turn strings into module paths: a piece naming the package must not reach them.
+_IMPORTISH_CALLS = frozenset({"import_module", "__import__", "resolve_name", "run_module", "run_path", "find_spec",
+                              "join", "format"})
 
 
 def _rel(path: Path) -> str:
@@ -95,18 +103,41 @@ def _names_package(text: str) -> bool:
 def _outside_violations(rel: str, text: str) -> list[str]:
     hits = [f"{rel}:{n}: imports {m}" for n, m in _imports(text, rel)
             if m == "edge_lab.execution" or m.startswith("edge_lab.execution.")]
-    for node in ast.walk(ast.parse(text)):
+    tree = ast.parse(text)
+    docstrings = {id(n.value) for n in ast.walk(tree) if isinstance(n, ast.Expr) and isinstance(n.value, ast.Constant)}
+    for node in ast.walk(tree):
         line = getattr(node, "lineno", 0)
+        if isinstance(node, ast.Call):
+            func = node.func
+            fname = func.attr if isinstance(func, ast.Attribute) else func.id if isinstance(func, ast.Name) else ""
+            if fname in _IMPORTISH_CALLS:
+                pieces = [c.value for arg in [*node.args, *(k.value for k in node.keywords)] for c in ast.walk(arg)
+                          if isinstance(c, ast.Constant) and isinstance(c.value, str)]
+                if isinstance(func, ast.Attribute):  # "edge_lab.{}".format(...), ".".join([...])
+                    pieces += [c.value for c in ast.walk(func.value) if isinstance(c, ast.Constant)
+                               and isinstance(c.value, str)]
+                receiver = [c.value for c in ast.walk(func.value) if isinstance(c, ast.Constant)
+                            and isinstance(c.value, str)] if isinstance(func, ast.Attribute) else []
+                if fname == "format" and any(_BUILDS_PATH.search(p) for p in receiver):
+                    hits.append(f"{rel}:{line}: formats an edge_lab module path")
+                if fname == "join" and "edge_lab" in pieces and any(r in (".", "/") for r in receiver):
+                    hits.append(f"{rel}:{line}: joins an edge_lab module path")
+                if any(_EXECUTION_PIECE.match(p) for p in pieces) or (
+                        fname not in ("join", "format") and any(p in ("edge_lab", "edge_lab.") for p in pieces)
+                        and any(_EXECUTION_PIECE.match(p.lstrip(".")) for p in pieces)):
+                    hits.append(f"{rel}:{line}: an import-style call is given a piece naming the package")
         if isinstance(node, ast.Attribute) and node.attr == "execution":
             base = node.value
             if (isinstance(base, ast.Name) and base.id == "edge_lab") or (
                     isinstance(base, ast.Attribute) and base.attr == "edge_lab"):
                 hits.append(f"{rel}:{line}: reaches edge_lab.execution by attribute")
-        elif isinstance(node, ast.Constant) and isinstance(node.value, str) and _names_package(node.value):
+        elif isinstance(node, ast.Constant) and isinstance(node.value, str) and id(node) not in docstrings \
+                and _names_package(node.value):
             hits.append(f"{rel}:{line}: a string names the execution package")
         elif isinstance(node, (ast.BinOp, ast.JoinedStr)):
             parts = [c.value for c in ast.walk(node) if isinstance(c, ast.Constant) and isinstance(c.value, str)]
-            if any(_BUILDS_PATH.search(p) for p in parts):
+            if any(_BUILDS_PATH.search(p) for p in parts) or (
+                    "edge_lab" in parts and any(_EXECUTION_PIECE.match(p.lstrip(".")) for p in parts)):
                 hits.append(f"{rel}:{line}: builds an edge_lab module path from pieces")
     return hits
 
@@ -128,6 +159,11 @@ def _inside_violations(rel: str, text: str) -> list[str]:
     stdlib = sys.stdlib_module_names
     for n, mod in _imports(text, rel):
         top = mod.split(".")[0]
+        if mod.startswith("os.") and _OS_BANNED_NAME.fullmatch(mod[3:]):
+            hits.append(f"{rel}:{n}: imports {mod}, banned in the execution package")
+            continue
+        if mod in NETWORK_HELPERS or mod.startswith("urllib.parse."):
+            continue
         if top == "edge_lab":
             parts = mod.split(".")
             if len(parts) == 1 or parts[1] == "execution":
@@ -186,6 +222,12 @@ def test_nothing_outside_the_package_reaches_it():
     ("edge_lab/daily.py", "from . import execution_ticket; import edge_lab.execution"),
     ("edge_lab/daily.py", "p = f'edge_lab.{name}'"),
     ("edge_lab/daily.py", "p = 'src/edge_lab/execution/signer.py'"),
+    ("edge_lab/daily.py", "importlib.import_module('.execution', 'edge_lab')"),
+    ("edge_lab/daily.py", "__import__('edge_lab', fromlist=['execution'])"),
+    ("edge_lab/daily.py", "p = 'edge_lab' + '.' + 'execution'"),
+    ("edge_lab/daily.py", "p = 'edge_lab.%s' % name"),
+    ("edge_lab/daily.py", "p = 'edge_lab.{}'.format(name)"),
+    ("edge_lab/daily.py", "p = '.'.join(['edge_lab', 'execution'])"),
     ("scripts/x.py", "from edge_lab.execution import transport"),
 ])
 def test_an_outside_reach_is_caught(rel, line):
@@ -193,8 +235,10 @@ def test_an_outside_reach_is_caught(rel, line):
 
 
 def test_ordinary_outside_code_passes():
-    ok = ("from . import execution_ticket\nRESEARCH = 'edge_lab.sizing_counterfactual'\nx = cfg['execution']\n"
-          "y = view.execution\nimport importlib\nm = importlib.import_module(RESEARCH)\n")
+    ok = ('"""Docs may mention src/edge_lab/execution/ (ADR 0043)."""\n'
+          "from . import execution_ticket\nRESEARCH = 'edge_lab.sizing_counterfactual'\nx = cfg['execution']\n"
+          "y = view.execution\nimport importlib\nm = importlib.import_module(RESEARCH)\nz = 'execution.status'\n"
+          "w = ', '.join(['a', 'b'])\nv = '{} {}'.format(a, b)\n")
     assert not _outside_violations("edge_lab/dashboard/data.py", ok)
 
 
@@ -221,6 +265,12 @@ def test_the_package_imports_only_what_its_files_may():
     ("edge_lab/execution/model.py", "import os\nk = os.environ['X']"),
     ("edge_lab/execution/model.py", "import os\nk = os.getenv('X')"),
     ("edge_lab/execution/model.py", "import pickle"),
+    ("edge_lab/execution/journal.py", "from os import system"),
+    ("edge_lab/execution/journal.py", "from os import environ"),
+    ("edge_lab/execution/journal.py", "import os\nos.posix_spawn(p, a, e)"),
+    ("edge_lab/execution/journal.py", "from concurrent.futures import ProcessPoolExecutor"),
+    ("edge_lab/execution/kalshi_wire.py", "from urllib.request import urlopen"),
+    ("edge_lab/execution/kalshi_wire.py", "from http import client"),
 ])
 def test_a_forbidden_package_import_is_caught(rel, line):
     assert _inside_violations(rel, line + "\n"), line
@@ -233,6 +283,8 @@ def test_allowed_imports_pass():
                                   "from cryptography.hazmat.primitives.asymmetric import ed25519\n")
     assert not _inside_violations("edge_lab/execution/transport.py", "from urllib.request import Request\nimport ssl\n")
     assert not _inside_violations("edge_lab/execution/journal.py", "import sqlite3\nimport os\nos.fsync(fd)\n")
+    assert not _inside_violations("edge_lab/execution/kalshi_wire.py", "from urllib.parse import urlencode, quote\n"
+                                  "from http import HTTPStatus\nimport urllib.parse\n")
 
 
 def test_protected_owners_are_never_allowed():

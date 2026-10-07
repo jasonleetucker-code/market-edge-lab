@@ -42,6 +42,7 @@ _CLIENT_ID_NAMESPACE = uuid.UUID("6f1d6a5e-6c1b-4d8e-9a59-0d7c3f0e8b21")  # fixe
 _TICKER = re.compile(r"[A-Z0-9][A-Z0-9._-]{0,127}")
 _KEY = re.compile(r"[A-Za-z0-9][A-Za-z0-9:._/-]{0,199}")
 _PLAIN_DECIMAL = re.compile(r"[+-]?([0-9]+(\.[0-9]*)?|\.[0-9]+)")  # ASCII digits only
+_ACCOUNT_REF = re.compile(r"[A-Za-z0-9][A-Za-z0-9._/-]{0,99}")  # no ':' (it separates scope-key fields)
 _SCOPE_KEY = re.compile(r"(FIXTURE|DEMO|PRODUCTION):[^:\s]+:(primary|[0-9]+)")
 # Bounds that keep arithmetic exact everywhere, even in the default 28-digit context (a reviewer found
 # default-context sums elsewhere): magnitude below 1e13 and at most 8 decimal places. A sum of a
@@ -234,7 +235,7 @@ class AccountScope:
     def __post_init__(self) -> None:
         if not isinstance(self.environment, Environment):
             raise ValueError("environment must be an Environment")
-        if not isinstance(self.account_ref, str) or not _KEY.fullmatch(self.account_ref):
+        if not isinstance(self.account_ref, str) or not _ACCOUNT_REF.fullmatch(self.account_ref):
             raise ValueError(f"account_ref must be a short opaque label, not {self.account_ref!r}")
         if self.subaccount is not None and (isinstance(self.subaccount, bool) or not isinstance(self.subaccount, int)
                                             or self.subaccount < 0):

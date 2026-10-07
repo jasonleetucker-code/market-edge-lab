@@ -119,7 +119,7 @@ def test_digest_covers_every_field_and_client_id_is_stable():
 def test_scope_keys_are_distinct_and_opaque():
     assert SCOPE.key() == "FIXTURE:fixture-acct:primary"
     assert m.AccountScope(m.Environment.DEMO, "a", 0).key() != m.AccountScope(m.Environment.DEMO, "a").key()
-    for bad in ("", "has space", "x" * 300):
+    for bad in ("", "has space", "x" * 300, "a:b"):
         with pytest.raises(ValueError):
             m.AccountScope(m.Environment.FIXTURE, bad)
     with pytest.raises(ValueError):

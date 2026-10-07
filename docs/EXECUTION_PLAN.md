@@ -646,7 +646,7 @@ be written here when they are made.
     CI green. Deploy approved with #161's deploy (owner answer 4 in the same record).
 - **2026-10-07 (America/New_York), owner directive: finish the Kalshi ordinary-event automation core (#160).**
   Recorded in `docs/owner/2026-10-07-kalshi-execution-campaign-directive.md` (authority sections verbatim, plus the
-  owner's three answers). Campaign plan: `docs/strategy/KALSHI_AUTOMATION_DELIVERY_160.md` (PR #163), packages A–T.
+  owner's four answers). Campaign plan: `docs/strategy/KALSHI_AUTOMATION_DELIVERY_160.md` (PR #163), packages A–T.
   Boundary: ADR 0043.
   - **Authorized (offline, hard-disabled):**
     - the isolated execution package `src/edge_lab/execution/`, built under ADR 0043's file-exact rules. This
@@ -673,7 +673,7 @@ be written here when they are made.
     needs a new approval:
     - code only;
     - outside the protected windows;
-    - deployed SHA verified;
+    - deployed SHA, dashboard and timers verified;
     - no timer, budget or schema change.
 
     The deploy is of the merged main SHA. It may also carry #153's reviewed in-play provenance fix and the merged
