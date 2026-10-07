@@ -72,6 +72,8 @@ Two opposite failures are possible:
      construction.
    - Serialization and arithmetic run in a fixed local context that traps rounding, so a digest never depends on
      the caller's `decimal` precision.
+   - With magnitude below 1e13 and at most 8 decimal places, a *sum* of up to a million values is exact even in
+     the default context. A *product* is not: code multiplying money or quantities uses `model.exact_product`.
 
    An intent cannot see positions: a buy of the opposite side can net or flip at the venue, so the risk gate
    (package I) checks the opposite-side holding before every ENTRY.

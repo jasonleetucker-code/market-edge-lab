@@ -55,8 +55,6 @@ NETWORK_MODULES = frozenset({"socket", "ssl", "http", "urllib", "ftplib", "smtpl
                              "xmlrpc", "asyncio", "selectors", "socketserver", "webbrowser", "email"})
 NETWORK_FILES = frozenset({"edge_lab/execution/transport.py"})
 SQLITE_FILES = frozenset({"edge_lab/execution/journal.py", "edge_lab/execution/reservations.py"})
-# Harmless helpers inside network packages, allowed anywhere in the package (they open nothing).
-NETWORK_HELPERS = frozenset({"http", "http.HTTPStatus", "urllib", "urllib.parse"})
 BANNED_IN_PACKAGE = frozenset({"subprocess", "multiprocessing", "concurrent", "ctypes", "pty", "importlib", "runpy",
                                "pkgutil", "zipimport", "code", "codeop", "pickle", "shelve", "marshal"})
 # Names that may not be imported from `os` (`from os import system`), nor used as `os.<name>`.
@@ -69,6 +67,8 @@ _EXECUTION_PIECE = re.compile(r"^\.?execution([./][a-z_].*)?$")
 # Calls that turn strings into module paths: a piece naming the package must not reach them.
 _IMPORTISH_CALLS = frozenset({"import_module", "__import__", "resolve_name", "run_module", "run_path", "find_spec",
                               "join", "format"})
+# Calls that load modules without naming them: refused outside the package wherever edge_lab is walked.
+_WALKING_CALLS = frozenset({"walk_packages", "iter_modules"})
 
 
 def _rel(path: Path) -> str:
@@ -110,6 +110,8 @@ def _outside_violations(rel: str, text: str) -> list[str]:
         if isinstance(node, ast.Call):
             func = node.func
             fname = func.attr if isinstance(func, ast.Attribute) else func.id if isinstance(func, ast.Name) else ""
+            if fname in _WALKING_CALLS and "edge_lab" in ast.unparse(node):
+                hits.append(f"{rel}:{line}: walks the edge_lab package, which would reach the execution package")
             if fname in _IMPORTISH_CALLS:
                 pieces = [c.value for arg in [*node.args, *(k.value for k in node.keywords)] for c in ast.walk(arg)
                           if isinstance(c, ast.Constant) and isinstance(c.value, str)]
@@ -162,8 +164,8 @@ def _inside_violations(rel: str, text: str) -> list[str]:
         if mod.startswith("os.") and _OS_BANNED_NAME.fullmatch(mod[3:]):
             hits.append(f"{rel}:{n}: imports {mod}, banned in the execution package")
             continue
-        if mod in NETWORK_HELPERS or mod.startswith("urllib.parse."):
-            continue
+        if top in NETWORK_MODULES:
+            continue  # judged by `_network_and_os_hits`, which needs the import's form
         if top == "edge_lab":
             parts = mod.split(".")
             if len(parts) == 1 or parts[1] == "execution":
@@ -175,14 +177,46 @@ def _inside_violations(rel: str, text: str) -> list[str]:
                 hits.append(f"{rel}:{n}: imports {top} outside {sorted(THIRD_PARTY[top])}")
         elif top in BANNED_IN_PACKAGE:
             hits.append(f"{rel}:{n}: imports {top}, banned in the execution package")
-        elif top in NETWORK_MODULES and rel not in NETWORK_FILES:
-            hits.append(f"{rel}:{n}: imports network module {top} outside {sorted(NETWORK_FILES)}")
         elif top == "sqlite3" and rel not in SQLITE_FILES:
             hits.append(f"{rel}:{n}: imports sqlite3 outside {sorted(SQLITE_FILES)}")
         elif top not in stdlib and top != "__future__":
             hits.append(f"{rel}:{n}: imports third-party {top}")
     hits += [f"{rel}:{n}: banned call or environment access" for n, line in enumerate(text.splitlines(), 1)
              if _BANNED_CALLS.search(line)]
+    return hits + _network_and_os_hits(rel, text)
+
+
+# Outside transport.py only these exact from-import forms of network packages are allowed (they open
+# nothing). A plain `import urllib` / `import urllib.parse` / `import http` is refused: it binds the
+# package name, through which `urllib.request` or `http.client` is reachable once any module loaded it.
+_NETWORK_FROM_OK = {"urllib.parse": None, "http": frozenset({"HTTPStatus"})}  # None: any name
+_NETWORK_ATTRIBUTE = re.compile(r"\b(urllib\s*\.\s*(request|response|error|robotparser)|http\s*\.\s*(client|server|"
+                                r"cookiejar|cookies)|socket\s*\.|ssl\s*\.)")
+
+
+def _network_and_os_hits(rel: str, text: str) -> list[str]:
+    hits = []
+    for node in ast.walk(ast.parse(text)):
+        line = getattr(node, "lineno", 0)
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                top = alias.name.split(".")[0]
+                if top in NETWORK_MODULES and rel not in NETWORK_FILES:
+                    hits.append(f"{rel}:{line}: plain import of network package {alias.name}")
+                if top == "os" and alias.asname:
+                    hits.append(f"{rel}:{line}: os imported under an alias (hides banned calls)")
+        elif isinstance(node, ast.ImportFrom) and not node.level and node.module:
+            top = node.module.split(".")[0]
+            names = {a.name for a in node.names}
+            if top == "os" and "*" in names:
+                hits.append(f"{rel}:{line}: from os import *")
+            if top in NETWORK_MODULES and rel not in NETWORK_FILES:
+                allowed = _NETWORK_FROM_OK.get(node.module, frozenset())
+                if not (node.module in _NETWORK_FROM_OK and (allowed is None or names <= allowed)):
+                    hits.append(f"{rel}:{line}: imports network names from {node.module}")
+    if rel not in NETWORK_FILES:
+        hits += [f"{rel}:{n}: uses a network module by attribute" for n, src_line in enumerate(text.splitlines(), 1)
+                 if _NETWORK_ATTRIBUTE.search(src_line)]
     return hits
 
 
@@ -229,6 +263,7 @@ def test_nothing_outside_the_package_reaches_it():
     ("edge_lab/daily.py", "p = 'edge_lab.{}'.format(name)"),
     ("edge_lab/daily.py", "p = '.'.join(['edge_lab', 'execution'])"),
     ("scripts/x.py", "from edge_lab.execution import transport"),
+    ("edge_lab/daily.py", "for m in pkgutil.walk_packages(edge_lab.__path__, 'edge_lab.'): pass"),
 ])
 def test_an_outside_reach_is_caught(rel, line):
     assert _outside_violations(rel, line + "\n"), line
@@ -271,6 +306,14 @@ def test_the_package_imports_only_what_its_files_may():
     ("edge_lab/execution/journal.py", "from concurrent.futures import ProcessPoolExecutor"),
     ("edge_lab/execution/kalshi_wire.py", "from urllib.request import urlopen"),
     ("edge_lab/execution/kalshi_wire.py", "from http import client"),
+    ("edge_lab/execution/lifecycle.py", "import urllib.parse"),
+    ("edge_lab/execution/lifecycle.py", "import urllib"),
+    ("edge_lab/execution/lifecycle.py", "import http"),
+    ("edge_lab/execution/lifecycle.py", "from urllib.parse import quote\nurllib.request.urlopen(r, body)"),
+    ("edge_lab/execution/lifecycle.py", "c = http.client.HTTPSConnection(h)"),
+    ("edge_lab/execution/lifecycle.py", "from http import HTTPStatus, client"),
+    ("edge_lab/execution/journal.py", "import os as o\no.system('x')"),
+    ("edge_lab/execution/journal.py", "from os import *"),
 ])
 def test_a_forbidden_package_import_is_caught(rel, line):
     assert _inside_violations(rel, line + "\n"), line
@@ -284,7 +327,9 @@ def test_allowed_imports_pass():
     assert not _inside_violations("edge_lab/execution/transport.py", "from urllib.request import Request\nimport ssl\n")
     assert not _inside_violations("edge_lab/execution/journal.py", "import sqlite3\nimport os\nos.fsync(fd)\n")
     assert not _inside_violations("edge_lab/execution/kalshi_wire.py", "from urllib.parse import urlencode, quote\n"
-                                  "from http import HTTPStatus\nimport urllib.parse\n")
+                                  "from http import HTTPStatus\n")
+    assert not _inside_violations("edge_lab/execution/transport.py", "import urllib.request\nimport http.client\n"
+                                  "r = urllib.request.Request(u)\n")
 
 
 def test_protected_owners_are_never_allowed():
