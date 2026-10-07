@@ -658,9 +658,18 @@ def _immutable(value, depth: int = 0) -> bool:
     if value is None or isinstance(value, (str, bytes, int, float, complex, bool, Decimal, range, _re.Pattern,
                                            enum.Enum, uuid.UUID, __future__._Feature)):
         return True  # float only appears in non-money constants (e.g. a pacer interval); money is Decimal
+    import datetime as _dt
+    import functools
+
     if isinstance(value, (type, types.FunctionType, types.BuiltinFunctionType, types.ModuleType, property,
-                          staticmethod, classmethod, types.MethodType)):
+                          staticmethod, classmethod, types.MethodType, types.GenericAlias)):
         return True
+    if isinstance(value, (_dt.datetime, _dt.date, _dt.time, _dt.timedelta, _dt.timezone)):
+        return True  # immutable value types
+    if type(value).__module__ == "typing":
+        return True  # type annotations and aliases (Mapping, Callable[...], Union[...]): no table state
+    if isinstance(value, functools._lru_cache_wrapper) and getattr(value, "__module__", "").split(".")[0] != "edge_lab":
+        return True  # an imported stdlib function (urlsplit); our own modules may not cache
     if isinstance(value, (tuple, frozenset)):
         return all(_immutable(v, depth + 1) for v in value)
     if isinstance(value, types.MappingProxyType):
@@ -673,7 +682,7 @@ def _immutable(value, depth: int = 0) -> bool:
 
 
 # Class attributes Python or dataclasses/enum create themselves; they are not our tables.
-_CLASS_MACHINERY = re.compile(r"^__\w+__$|^_(member_map|value2member_map|member_names|unhashable_values|"
+_CLASS_MACHINERY = re.compile(r"^__\w+__$|^_abc_impl$|^_(member_map|value2member_map|member_names|unhashable_values|"
                               r"value_repr|missing|generate_next_value|use_args|member_type|new_member|"
                               r"hashable_values|singles_mask|all_bits|flag_mask|boundary|inverted|sort_order)_?$")
 
