@@ -8,9 +8,10 @@ with an optional Bearer token, to one topic on an allowlisted ntfy host. Three r
 relaxed, in exactly one file, and only to POST and the Authorization header. The order, client-write and signing rules
 still apply to it, and the tests below prove the exception cannot spread.
 
-The isolated execution package (ADR 0043) is that "separate component". Three of its files each
-have exactly the relaxations they need (`EXECUTION_EXCEPTIONS`); every other file in it, and every
-file outside it, keeps every rule. `test_execution_boundary.py` proves nothing outside the package
+The isolated execution package (ADR 0043) is that "separate component". At most three of its files
+each get exactly the relaxations they need (`PLANNED_EXECUTION_EXCEPTIONS`). An exception is active
+(`EXECUTION_EXCEPTIONS`) only once its file exists, and it is added in the same PR that creates the
+file. Every other file, inside the package or outside it, keeps every rule. `test_execution_boundary.py` proves nothing outside the package
 imports it.
 """
 
@@ -42,13 +43,14 @@ NOTIFICATION_DELIVERY_EXCEPTION = {
         "auth header": re.compile(r"""["'](KALSHI-ACCESS-KEY|KALSHI-ACCESS-SIGNATURE)["']""", re.I),
     },
 }
-# These rules have no exception anywhere, the notification file included.
+# These rules have no exception in the notification file. The execution package's planned exceptions
+# are listed separately below.
 NEVER_EXEMPT = frozenset({"order endpoint", "client write call", "request signing"})
 
 # The isolated execution package (ADR 0043). Path-exact, like the notification exception: a copy, a
 # rename or another file in the package inherits nothing. `None` lifts a rule; a pattern narrows it.
 # The client-write rule (`.post(`, `.put(`, ...) is never lifted: transport sends through urllib only.
-EXECUTION_EXCEPTIONS = {
+PLANNED_EXECUTION_EXCEPTIONS = {
     "edge_lab/execution/signer.py": {"request signing": None},
     "edge_lab/execution/transport.py": {
         "non-GET HTTP method": re.compile(r"""method\s*=\s*["'](PUT|PATCH)["']""", re.I),  # POST and DELETE only
@@ -58,6 +60,8 @@ EXECUTION_EXCEPTIONS = {
     "edge_lab/execution/kalshi_wire.py": {"order endpoint": None},
 }
 EXECUTION_NEVER_EXEMPT = frozenset({"client write call"})
+# Active exceptions: each entry is copied unchanged from the plan, in the PR that creates its file.
+EXECUTION_EXCEPTIONS: dict = {}
 
 
 def _source_files():
@@ -119,7 +123,7 @@ def test_the_exception_is_bound_to_the_exact_path(rel):
 
 @pytest.mark.parametrize("label", sorted(_POST_LINES))
 def test_every_other_source_file_still_fails_on_post_or_body(label):
-    others = [p for p in _source_files() if _rel(p) != NTFY_REL]
+    others = [p for p in _source_files() if _rel(p) != NTFY_REL and label not in EXECUTION_EXCEPTIONS.get(_rel(p), {})]
     assert others
     for path in others:
         text = path.read_text() + "\n" + _POST_LINES[label] + "\n"
@@ -408,12 +412,20 @@ def test_http_client_refuses_credential_headers(header):
 
 
 def test_the_execution_exceptions_are_path_exact_and_never_lift_client_writes():
-    assert set(EXECUTION_EXCEPTIONS) == {"edge_lab/execution/signer.py", "edge_lab/execution/transport.py",
-                                         "edge_lab/execution/kalshi_wire.py"}
-    assert not set(EXECUTION_EXCEPTIONS) & set(NOTIFICATION_DELIVERY_EXCEPTION)
-    for rel, rules in EXECUTION_EXCEPTIONS.items():
+    assert set(PLANNED_EXECUTION_EXCEPTIONS) == {"edge_lab/execution/signer.py", "edge_lab/execution/transport.py",
+                                                 "edge_lab/execution/kalshi_wire.py"}
+    assert not set(PLANNED_EXECUTION_EXCEPTIONS) & set(NOTIFICATION_DELIVERY_EXCEPTION)
+    for rel, rules in PLANNED_EXECUTION_EXCEPTIONS.items():
         assert set(rules) <= set(FORBIDDEN) and not set(rules) & EXECUTION_NEVER_EXEMPT, rel
-    # An exception table entry is removed when its file would no longer need it.
+    # An active exception is exactly its planned one (never widened), for a file that exists.
+    for rel, rules in EXECUTION_EXCEPTIONS.items():
+        assert rules is PLANNED_EXECUTION_EXCEPTIONS.get(rel), f"{rel}: active exception differs from the plan"
+        assert (SRC / rel).is_file(), f"{rel}: an exception for a file that does not exist"
+    # A planned file that exists without its exception would fail the rules; one that exists is activated.
+    for rel in PLANNED_EXECUTION_EXCEPTIONS:
+        if (SRC / rel).is_file():
+            assert rel in EXECUTION_EXCEPTIONS, f"{rel} exists: activate its planned exception in the same PR"
+    # An active exception is in use, so it cannot linger after the file stops needing it.
     for rel, rules in EXECUTION_EXCEPTIONS.items():
         if (SRC / rel).is_file():
             text = (SRC / rel).read_text(encoding="utf-8")
@@ -436,4 +448,18 @@ def test_no_other_file_inherits_an_execution_exception(rel):
                                   'h["Authorization"] = t', 'h["Cookie"] = c', "session.post(url)"])
 def test_the_transport_exception_stays_narrow(line):
     rel = "edge_lab/execution/transport.py"
-    assert any(_violations(label, rel, line + "\n") for label in FORBIDDEN), line
+    rules = PLANNED_EXECUTION_EXCEPTIONS[rel]
+
+    def planned_violation(label: str) -> bool:
+        pattern = rules[label] if label in rules else FORBIDDEN[label]
+        return pattern is not None and bool(pattern.search(line))
+
+    assert any(planned_violation(label) for label in FORBIDDEN), line
+
+
+def test_no_planned_file_has_an_exception_before_it_exists():
+    """Until the PR that creates a file activates its exception, the file would be held to every rule."""
+    for rel in PLANNED_EXECUTION_EXCEPTIONS:
+        if rel not in EXECUTION_EXCEPTIONS:
+            assert _violations("order endpoint", rel, 'URL = "/portfolio/orders"\n')
+            assert _violations("request signing", rel, "import hmac\n")

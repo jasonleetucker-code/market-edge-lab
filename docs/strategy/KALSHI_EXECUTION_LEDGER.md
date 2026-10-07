@@ -34,7 +34,7 @@ observation.
 | F | Signer and transport | wire lane | `execution/signer.py`, `transport.py`, `kalshi_wire.py` | IN_PROGRESS | — | FIXTURE only; test-generated keys |
 | G | Complete account reads | coordinator, after F | `execution/account.py` | NOT_STARTED | — | Needs B's history and pagination facts |
 | H | Order lifecycle reducer | lifecycle lane | `execution/lifecycle.py`, `fake_venue.py` | IN_PROGRESS | — | — |
-| I | Risk and strategy tickets | coordinator, after D/E/H | `execution/risk_gate.py` | NOT_STARTED | — | Uses `risk.py` and `execution_ticket.py`; no second formula |
+| I | Risk and strategy tickets | coordinator, after D/E/H | `execution/risk_gate.py`, `risk.py` (account-projection refactor) | NOT_STARTED | — | Uses `risk.py` and `execution_ticket.py`, with no second formula; checks the opposite-side holding before every ENTRY; removes the pinned `risk → shadow_ledger` edge |
 | J | Feed and account recovery | after G/H | — | NOT_STARTED | — | Reuses `inplay_evidence` sequence logic |
 | K | Demo orchestration (fixture runner) | after F–J | — | NOT_STARTED | — | Real demo is package R (BLOCKED_OWNER) |
 | L | Kill and restart | after D–J | — | NOT_STARTED | — | — |
