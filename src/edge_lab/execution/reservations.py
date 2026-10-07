@@ -395,6 +395,20 @@ class ReservationView:
 
 
 @dataclass(frozen=True)
+class AccountView:
+    """One consistent read of a scope: its latest snapshot (None: none yet) and the reservations held then,
+    `provider_held` judged against that same snapshot (`ReservationAuthority.account_view`)."""
+
+    scope_key: str
+    snapshot: AccountSnapshot | None
+    held: tuple[ReservationView, ...]
+
+    @property
+    def snapshot_revision(self) -> int | None:
+        return None if self.snapshot is None else self.snapshot.revision
+
+
+@dataclass(frozen=True)
 class ReservationDecision:
     allowed: bool
     reasons: tuple[str, ...]
@@ -749,7 +763,7 @@ class ReservationAuthority:
             # Inventory: a REDUCTION sells only what the snapshot shows is held and not already being sold.
             inventory: Decimal | None = None
             if intent.kind is IntentKind.REDUCTION:
-                inventory, why = self._inventory(snap, held, intent.market_ticker, intent.side)
+                inventory, why = self.inventory_for(snap, held, intent.market_ticker, intent.side)
                 if why:
                     reasons.append(why)
                 elif intent.quantity > inventory:  # type: ignore[operator]
@@ -758,9 +772,11 @@ class ReservationAuthority:
         return ReservationDecision(not reasons, tuple(reasons), snap.revision, result.required, cash, inventory)
 
     @staticmethod
-    def _inventory(snap: AccountSnapshot, held: list[ReservationView], market_ticker: str,
-                   side: Side) -> tuple[Decimal | None, str | None]:
-        """Call inside `_exact()`."""
+    def inventory_for(snap: AccountSnapshot, held: list[ReservationView], market_ticker: str,
+                      side: Side) -> tuple[Decimal | None, str | None]:
+        """What a REDUCTION of (market_ticker, side) may sell: (available, None), or (None, why) when unknown.
+        The canonical inventory rule, used here and by the risk gate. `held` must come from the same read as
+        `snap` (`account_view`). Run it in an exact decimal context (`_exact()`)."""
         if snap.positions is None:
             return None, "POSITIONS_UNKNOWN: the snapshot does not list positions"
         if snap.external_orders is None:
@@ -929,6 +945,13 @@ class ReservationAuthority:
     def held_reservations(self, scope: AccountScope) -> list[ReservationView]:
         with self._store._reading() as conn:
             return self._held(conn, scope.key(), self._snapshot(conn, scope.key()))
+
+    def account_view(self, scope: AccountScope) -> AccountView:
+        """The latest snapshot and the held reservations of `scope`, read in ONE transaction. Two separate reads
+        can straddle a snapshot that releases a BOUND reservation, so that its fills are in neither."""
+        with self._store._reading() as conn:
+            snap = self._snapshot(conn, scope.key())
+            return AccountView(scope.key(), snap, tuple(self._held(conn, scope.key(), snap)))
 
     def _end(self, reservation_id: str, reason: EndReason, now: datetime, *, receipt_id: str, venue_filled: Decimal,
              kinds: tuple[ReceiptKind, ...]) -> ReservationView:
