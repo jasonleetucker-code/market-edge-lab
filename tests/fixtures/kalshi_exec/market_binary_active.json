@@ -1,0 +1,26 @@
+{
+  "ticker": "HIGHNY-24JAN01-T60",
+  "event_ticker": "HIGHNY-24JAN01",
+  "market_type": "binary",
+  "status": "active",
+  "settlement_bounds_type": "default",
+  "exchange_index": 0,
+  "price_level_structure": "tapered_deci_cent",
+  "price_ranges": [
+    {
+      "start": "0.0000",
+      "end": "0.1000",
+      "step": "0.0010"
+    },
+    {
+      "start": "0.1000",
+      "end": "0.9000",
+      "step": "0.0100"
+    },
+    {
+      "start": "0.9000",
+      "end": "1.0000",
+      "step": "0.0010"
+    }
+  ]
+}
