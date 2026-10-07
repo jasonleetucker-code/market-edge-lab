@@ -121,7 +121,10 @@ class RateBudget:
     costs are unknown (RL-07, RL-08), so the default is the smallest tier and the default cost for every request.
 
     Ordinary requests may not dip into the last `reserve_fraction` of a bucket; protective ones may. Writes are
-    billed per shard (RL-05): shard 0 is the unscoped bucket and each other shard has its own full budget."""
+    billed per shard (RL-05): shard 0 is the unscoped bucket and each other shard has its own full budget.
+
+    The venue meters per account, so every transport for one account must share one `RateBudget`; two budgets
+    for the same account would double the local allowance. Not thread-safe: one sender per budget."""
 
     def __init__(self, *, tier: str = c.DEFAULT_TIER, reserve_fraction: tuple[int, int] = (3, 10),
                  token_cost: int = c.DEFAULT_TOKEN_COST, monotonic_ns: Callable[[], int] = time.monotonic_ns):
