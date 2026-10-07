@@ -72,7 +72,7 @@ def test_timers_are_nonpersistent_staggered_and_pinned_to_the_code():
         offset = timedelta(hours=4 if day.month == 9 else 5)
         for h in hours:
             start = day + timedelta(hours=h, minutes=int(m.group(2))) + offset
-            assert protected_window_at(start, start + ps.MAX_RUN) is None, (day, h)
+            assert ps.run_deadline(start) == start + ps.MAX_RUN, (day, h)  # never cut, never refused
 
 
 def test_capture_ticks_next_to_the_settlement_windows_finish_before_them():
@@ -82,6 +82,38 @@ def test_capture_ticks_next_to_the_settlement_windows_finish_before_them():
         h, m = map(int, et.split(":"))
         at = day + timedelta(hours=h + 4, minutes=m)
         assert (ps.protected_refusal(at, "pm-sports capture") is None) is allowed, et
+
+
+def test_a_late_tick_before_a_settlement_window_runs_with_a_shortened_deadline():
+    """systemd fires the :10 ticks a few seconds late; a full MAX_RUN from then would reach the :13
+    window. The run is cut to end RUN_MARGIN before it, and only refused with under MIN_RUN left."""
+    day = datetime(2026, 9, 26, tzinfo=timezone.utc)  # a Saturday in EDT
+    for h in (11, 16):
+        window = day + timedelta(hours=h + 4, minutes=13)
+        for late_s in (0, 7, 30, 90):
+            at = day + timedelta(hours=h + 4, minutes=10, seconds=late_s)
+            assert ps.run_deadline(at) == window - ps.RUN_MARGIN, (h, late_s)
+            assert ps.protected_refusal(at, "pm-sports capture") is None, (h, late_s)
+        too_late = window - ps.RUN_MARGIN - ps.MIN_RUN + timedelta(seconds=1)
+        assert ps.run_deadline(too_late) is None
+        assert ps.protected_refusal(too_late, "pm-sports capture")["state"] == "DEFERRED_PROTECTED_WINDOW"
+        assert ps.run_deadline(window + timedelta(minutes=5)) is None  # inside the window
+    clear = day + timedelta(hours=21)  # 17:00 EDT: nothing near
+    assert ps.run_deadline(clear) == clear + ps.MAX_RUN
+    assert ps.MIN_RUN + ps.RUN_MARGIN < ps.MAX_RUN
+
+
+def test_the_retry_check_walks_the_timer_grid():
+    cap = _parse("edgelab-pm-sports.timer")
+    assert cap[("Timer", "OnCalendar")] == [f"*-*-* *:{ps.TICK_PHASE_MINUTE}/15:00 America/New_York"]
+    z = lambda h, m, s=0: datetime(2026, 9, 26, h, m, s, tzinfo=timezone.utc)  # noqa: E731  (EDT = UTC-4)
+    assert ps._next_tick(z(19, 56, 40)) == z(20, 10)
+    assert ps._next_tick(z(20, 9, 59)) == z(20, 10)
+    assert ps._next_tick(z(20, 10)) == z(20, 25)  # strictly after
+    assert ps._next_tick(z(23, 56)) == datetime(2026, 9, 27, 0, 10, tzinfo=timezone.utc)
+    deadline = z(20, 35)  # a 16:05 ET target's deadline
+    assert ps._retry_tick_before(deadline, z(19, 56, 40))  # 16:10 ET is still ahead
+    assert not ps._retry_tick_before(deadline, z(20, 10, 40))  # 16:25 is refused; 16:40 is too late
 
 
 def test_the_installer_installs_but_never_enables_the_pilot_timers():
