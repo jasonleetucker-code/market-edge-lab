@@ -8,17 +8,23 @@
 - **No default opener.** The caller injects `opener(request, timeout)`. There is no network default.
 - **Allowlists.** The host must be one of the environment's hosts (conformance); the method and path must match
   an allowlisted endpoint template (kalshi_wire); the request must be for the signer's environment and account.
-- **Redirects are refused**, never followed, so credentials are never forwarded to another URL. TLS verification
-  is never disabled: this module creates no SSL context and passes none.
+- **Redirects and TLS depend on the opener.** The transport never follows a redirect it can see: a 3xx status,
+  a 3xx `HTTPError` or a final URL that differs from the one sent is refused (AMBIGUOUS for a write). It creates
+  no SSL context and passes none. Whether credentials are forwarded on a redirect, and whether certificates are
+  verified, is decided inside the opener, which this module does not supply. Any real opener (it arrives only with
+  the DEMO approval PR) must meet `REAL_OPENER_REQUIREMENTS`; a pinned test keeps that list in place.
 - **Retries.** Only idempotent GET reads are retried, a bounded number of times. A POST or DELETE is sent at most
-  once per call. When its result is unknowable (timeout, connection error, 5xx, redirect, odd status) the outcome
-  is AMBIGUOUS, which the journal records as OUTCOME_UNKNOWN and reconciles before anything is retried.
+  once per call. When its result is unknowable (timeout, connection error, 5xx, 409, redirect, odd status, or a
+  2xx body that does not parse) the outcome is AMBIGUOUS, which the journal records as OUTCOME_UNKNOWN and
+  reconciles before anything is retried. A 409 is never a clean rejection: its meaning for a repeated client
+  order id is UNKNOWN (ORD-16), and the original order may be resting.
 - **Rate budget.** Token buckets from the documented limits (RL-01 to RL-05), per shard for writes, with reserved
   headroom that only protective requests (cancels, decreases and reads) may use, so a throttled strategy can
-  still cancel and reconcile. A request the local budget cannot cover is not sent.
+  still cancel and reconcile. A request the local budget cannot cover is not sent. Tokens are charged only
+  after signing succeeds.
 - **Redaction.** Exceptions and `repr` never carry headers, the key id, signatures or bodies.
 
-A 2xx write whose body then fails `kalshi_wire` parsing must also be treated as AMBIGUOUS by the caller.
+Use `send_and_parse` to get a parsed response: it turns a 2xx write whose body fails to parse into AMBIGUOUS.
 """
 
 from __future__ import annotations
@@ -51,6 +57,17 @@ _EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
 MAX_TIMEOUT_S = 30.0
 MAX_READ_ATTEMPTS = 5
 MAX_RESPONSE_BYTES = 8 * 1024 * 1024
+
+# What any future real opener must do (DEMO approval PR). Pinned by tests/execution/test_transport.py, which also
+# checks that this module still builds no opener and no SSL context of its own.
+REAL_OPENER_REQUIREMENTS = (
+    "refuse every redirect: install a redirect handler that raises instead of following, so the auth headers are "
+    "never replayed to another URL",
+    "verify TLS with ssl.create_default_context() (CERT_REQUIRED, check_hostname=True); never an unverified context",
+    "connect only to the transport's allowlisted host on port 443",
+    "honour the timeout argument on connect and read",
+    "add no headers, cookies or proxies of its own",
+)
 
 
 class TransportError(Exception):
@@ -91,6 +108,7 @@ class TransportResult:
     attempts: int
     reason: str
     body: bytes | None = field(default=None, repr=False)  # the caller parses it with kalshi_wire
+    parsed: Any = field(default=None, repr=False, compare=False)  # set by `send_and_parse` on success
 
 
 # ---------------------------------------------------------------------------------------------- rate budget
@@ -104,9 +122,16 @@ class _Bucket:
         self.milli, self.at = self.capacity_milli, now_ns
 
     def _refill(self, now_ns: int) -> None:
-        if now_ns > self.at:
-            self.milli = min(self.capacity_milli, self.milli + self.rate * (now_ns - self.at) // 1_000_000)
-            self.at = now_ns
+        """Credit whole milli-tokens and advance `at` only by the time they took, so a sub-milli-token remainder
+        carries over to the next call instead of being lost (frequent polling must not starve the bucket)."""
+        if now_ns <= self.at:
+            return
+        gained = self.rate * (now_ns - self.at) // 1_000_000
+        if self.milli + gained >= self.capacity_milli:
+            self.milli, self.at = self.capacity_milli, now_ns  # full: idle time beyond capacity banks nothing
+        else:
+            self.milli += gained
+            self.at += -(-gained * 1_000_000 // self.rate)  # ceil: never credits the same nanosecond twice
 
     def take(self, cost: int, reserve_milli: int, now_ns: int) -> bool:
         self._refill(now_ns)
@@ -263,13 +288,30 @@ class Transport:
                 self._sleep(min(0.5 * 2 ** (attempt - 1), 4.0))
         return result
 
+    def send_and_parse(self, request: WireRequest, parser: Callable[[bytes], Any], *,
+                       priority: Priority = Priority.ORDINARY) -> TransportResult:
+        """`send`, then `parser(body)` on a 2xx. A 2xx whose body does not parse is AMBIGUOUS for a write (the
+        venue may have acted) and UNAVAILABLE for a read; it is never OK with nothing parsed."""
+        if not callable(parser):
+            raise RequestNotAllowed("parser must be a kalshi_wire parse function")
+        result = self.send(request, priority=priority)
+        if result.outcome is not Outcome.OK:
+            return result
+        try:
+            parsed = parser(result.body)
+        except Exception:  # a parser bug is as unknowable as a malformed body
+            outcome = Outcome.AMBIGUOUS if request.is_write() else Outcome.UNAVAILABLE
+            return TransportResult(outcome, result.endpoint, result.status, result.attempts, "UNPARSEABLE_SUCCESS",
+                                   result.body)
+        return TransportResult(Outcome.OK, result.endpoint, result.status, result.attempts, "OK", result.body, parsed)
+
     def _attempt(self, request: WireRequest, url: str, *, write: bool, priority: Priority,
                  attempt: int) -> TransportResult:
         name = request.endpoint.name
         spec = request.endpoint.value
+        http_request = self._http_request(request, url)  # signs; a refused signature costs no tokens
         if not self._budget.try_acquire(spec.bucket, request.exchange_index, priority):
             return TransportResult(Outcome.NOT_SENT, name, None, attempt, "LOCAL_RATE_BUDGET")
-        http_request = self._http_request(request, url)
         unknown = Outcome.AMBIGUOUS if write else Outcome.UNAVAILABLE
         try:
             response = self._opener(http_request, self._timeout)
@@ -294,6 +336,8 @@ class Transport:
         if status == 429:
             return TransportResult(Outcome.THROTTLED if write else Outcome.UNAVAILABLE, name, status, attempt,
                                    "VENUE_RATE_LIMIT", body)
+        if status == 409 and write:  # "resource already exists": the original order may be resting (ORD-16)
+            return TransportResult(Outcome.AMBIGUOUS, name, status, attempt, "VENUE_CONFLICT", body)
         if 400 <= status < 500:
             return TransportResult(Outcome.REJECTED, name, status, attempt, "VENUE_REJECTED", body)
         return TransportResult(unknown, name, status, attempt, "VENUE_ERROR", body)

@@ -23,6 +23,7 @@ import re
 from dataclasses import dataclass
 from decimal import Decimal
 from enum import Enum
+from types import MappingProxyType
 from typing import Any, Mapping
 
 from .model import Environment, ExactValueError, Grid, TimeInForce, exact_decimal
@@ -150,7 +151,8 @@ PROFILE_FACTS: tuple[Fact, ...] = (
     Fact("DIR-01", "bid = buy YES; ask = sell YES; the price is always the YES price", D, ORDER_DIRECTION),
     Fact("DIR-02", ("buy yes -> bid", "sell no -> bid", "buy no -> ask", "sell yes -> ask"), D, ORDER_DIRECTION),
     Fact("DIR-03", "bid = outcome_side yes; ask = outcome_side no", D, ORDER_DIRECTION),
-    Fact("DIR-04", "legacy side/action removal date: May 14, 2026 (reference) vs May 28, 2026 (guide)", D,
+    Fact("DIR-04", "legacy side/action are not removed before May 14, 2026 (reference) vs not before May 28, 2026 "
+         "(guide)", D,
          ORDER_DIRECTION, support=Support.UNKNOWN),
     # Account
     Fact("ACC-01", "balance is the available balance in integer cents; balance_dollars is fixed-point dollars",
@@ -217,11 +219,11 @@ API_PATH_PREFIX = "/trade-api/v2"
 # Hosts per environment. FIXTURE uses a reserved `.invalid` name (RFC 2606) that can never resolve, so even a
 # real network opener cannot reach a venue from FIXTURE. DEMO and PRODUCTION are listed so that a host check
 # exists, but their egress is refused by `model.environment_authorized` (no transport may use them).
-_HOSTS: Mapping[Environment, tuple[str, ...]] = {
+_HOSTS: Mapping[Environment, tuple[str, ...]] = MappingProxyType({
     Environment.FIXTURE: ("fixture.invalid",),
     Environment.DEMO: ("external-api.demo.kalshi.co", "demo-api.kalshi.co"),
     Environment.PRODUCTION: ("external-api.kalshi.com", "api.elections.kalshi.com"),
-}
+})  # read-only: no caller can rewrite FIXTURE's `.invalid` host (tamper invariant: only this file assigns it)
 
 
 def hosts_for(environment: Environment) -> tuple[str, ...]:
@@ -247,7 +249,7 @@ SELF_TRADE_PREVENTION = "taker_at_cross"  # cancel our incoming order, never sil
 CANCEL_ORDER_ON_PAUSE = True  # a paused book never keeps our resting risk alive
 
 # RL-03 / RL-04: (read refill per second, write refill per second, read capacity seconds, write capacity seconds).
-RATE_TIERS: Mapping[str, tuple[int, int, int, int]] = {
+RATE_TIERS: Mapping[str, tuple[int, int, int, int]] = MappingProxyType({
     "basic": (200, 100, 3, 1),
     "advanced": (300, 300, 3, 3),
     "expert": (600, 600, 1, 3),
@@ -255,7 +257,7 @@ RATE_TIERS: Mapping[str, tuple[int, int, int, int]] = {
     "paragon": (2400, 2400, 1, 3),
     "prime": (4800, 4800, 1, 3),
     "prestige": (12000, 9600, 1, 3),
-}
+})
 DEFAULT_TIER = "basic"  # RL-08: the account's tier is unknown, so the smallest documented budget
 
 # Marker: there is no default price grid. The grid comes from the market record's `price_ranges` (PX-01).

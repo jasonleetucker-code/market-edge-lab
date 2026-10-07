@@ -108,6 +108,22 @@ def test_hosts_per_environment_mirror_the_facts():
         c.hosts_for("PRODUCTION")
 
 
+def test_the_host_and_tier_tables_are_read_only():
+    """Review finding 3: FIXTURE's `.invalid` host cannot be rewritten to a venue host at run time."""
+    with pytest.raises(TypeError):
+        c._HOSTS[Environment.FIXTURE] = ("external-api.kalshi.com",)  # type: ignore[index]
+    with pytest.raises(TypeError):
+        c.RATE_TIERS["basic"] = (10**6, 10**6, 3, 3)  # type: ignore[index]
+    with pytest.raises(AttributeError):
+        c._HOSTS.update({})  # type: ignore[attr-defined]
+    assert c.hosts_for(Environment.FIXTURE) == ("fixture.invalid",)
+
+
+def test_dir_04_states_lower_bounds_not_removal_dates():
+    value = {f.id: f for f in c.PROFILE_FACTS}["DIR-04"].value
+    assert value.count("not") >= 2 and "before May 14, 2026" in value and "before May 28, 2026" in value
+
+
 def test_helper_constants_mirror_the_facts():
     wire = {f.id: f for f in kalshi_wire.ENDPOINT_FACTS}
     facts = {f.id: f for f in c.PROFILE_FACTS}

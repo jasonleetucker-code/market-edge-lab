@@ -183,11 +183,34 @@ def test_amend_count_is_filled_plus_desired_remaining():
     doc = fixture("amend_order_v2_request.json")
     req = w.build_amend(intent(), MARKET, order_id=ORDER_ID, new_limit_price=Decimal("0.55"),
                         filled_count=Decimal("2"), desired_remaining=Decimal("6"),
+                        current_client_order_id=intent().client_order_id(),
                         updated_client_order_id="2a0e3fc9-b593-4aa3-96e5-82f7f7566c2a")
     got = body(req)
     assert set(got) == set(doc)
     assert got["count"] == "8.00" and got["price"] == "0.5500" and got["side"] == "bid"
+    assert got["client_order_id"] == intent().client_order_id()
     assert req.path == f"/portfolio/events/orders/{ORDER_ID}/amend" and req.query == (("subaccount", "0"),)
+
+
+AMEND = dict(order_id=ORDER_ID, new_limit_price=Decimal("0.55"), filled_count=Decimal("0"),
+             desired_remaining=Decimal("5"))
+UPDATED_ID = "2a0e3fc9-b593-4aa3-96e5-82f7f7566c2a"
+
+
+def test_a_later_amend_sends_the_updated_client_order_id():
+    first = body(w.build_amend(intent(), MARKET, **AMEND, current_client_order_id=intent().client_order_id(),
+                               updated_client_order_id=UPDATED_ID))
+    second = body(w.build_amend(intent(), MARKET, **{**AMEND, "new_limit_price": Decimal("0.54")},
+                                current_client_order_id=UPDATED_ID))
+    assert first["client_order_id"] == intent().client_order_id() and first["updated_client_order_id"] == UPDATED_ID
+    assert second["client_order_id"] == UPDATED_ID and "updated_client_order_id" not in second
+    with pytest.raises(TypeError):  # the current id is required: the original cannot be sent by default
+        w.build_amend(intent(), MARKET, **AMEND)  # type: ignore[call-arg]
+    for bad in ("", "has space", None, 7):
+        with pytest.raises(ValueError):
+            w.build_amend(intent(), MARKET, **AMEND, current_client_order_id=bad)
+    with pytest.raises(ValueError):
+        w.build_amend(intent(), MARKET, **AMEND, current_client_order_id=UPDATED_ID, updated_client_order_id=UPDATED_ID)
 
 
 @pytest.mark.parametrize("kw", [
@@ -195,15 +218,14 @@ def test_amend_count_is_filled_plus_desired_remaining():
     dict(filled_count=Decimal("5"), desired_remaining=Decimal("6")),  # above the approved quantity
 ])
 def test_amend_never_exceeds_the_approved_intent(kw):
-    args = dict(order_id=ORDER_ID, new_limit_price=Decimal("0.55"), filled_count=Decimal("0"),
-                desired_remaining=Decimal("5"))
-    args.update(kw)
+    args = {**AMEND, "current_client_order_id": intent().client_order_id(), **kw}
     with pytest.raises(c.UnsupportedByProfile):
         w.build_amend(intent(), MARKET, **args)
 
 
 def test_amend_refuses_zero_remaining_float_and_non_resting_orders():
-    args = dict(order_id=ORDER_ID, new_limit_price=Decimal("0.55"), filled_count=Decimal("0"))
+    args = dict(order_id=ORDER_ID, new_limit_price=Decimal("0.55"), filled_count=Decimal("0"),
+                current_client_order_id=intent().client_order_id())
     with pytest.raises(ValueError):
         w.build_amend(intent(), MARKET, desired_remaining=Decimal("0"), **args)
     with pytest.raises(ValueError):
@@ -216,17 +238,30 @@ def test_amend_refuses_zero_remaining_float_and_non_resting_orders():
 def test_a_reduction_cannot_rest_so_it_cannot_be_amended():
     with pytest.raises(c.UnsupportedByProfile):
         w.build_amend(reduction(limit_price=Decimal("0.50")), MARKET, order_id=ORDER_ID,
-                      new_limit_price=Decimal("0.55"), filled_count=Decimal("0"), desired_remaining=Decimal("1"))
+                      new_limit_price=Decimal("0.55"), filled_count=Decimal("0"), desired_remaining=Decimal("1"),
+                      current_client_order_id=reduction().client_order_id())
 
 
-def test_decrease_takes_exactly_one_of_reduce_to_or_reduce_by():
+def test_decrease_sends_reduce_by_only():
     doc = fixture("decrease_order_v2_request.json")
     req = w.build_decrease(SCOPE, ORDER_ID, exchange_index=0, reduce_by=Decimal("2"))
-    assert body(req) == doc
-    assert body(w.build_decrease(SCOPE, ORDER_ID, exchange_index=0, reduce_to=Decimal("0")))["reduce_to"] == "0.00"
-    for kw in ({}, dict(reduce_to=Decimal("1"), reduce_by=Decimal("1")), dict(reduce_by=Decimal("0"))):
+    assert body(req) == doc and req.endpoint.value.protective
+    for kw in (dict(reduce_by=Decimal("0")), dict(reduce_by=Decimal("-1")), dict(reduce_by=2)):
         with pytest.raises(ValueError):
             w.build_decrease(SCOPE, ORDER_ID, exchange_index=0, **kw)
+    with pytest.raises(TypeError):
+        w.build_decrease(SCOPE, ORDER_ID, exchange_index=0)  # type: ignore[call-arg]
+
+
+def test_reduce_to_is_unknown_so_it_is_never_built_or_sent():
+    with pytest.raises(c.UnsupportedByProfile):
+        w.build_decrease(SCOPE, ORDER_ID, exchange_index=0, reduce_by=Decimal("1"), reduce_to=Decimal("0"))
+    for raw in (b'{"exchange_index":0,"reduce_to":"0.00"}', b'{"exchange_index":0,"reduce_by":"1.00","reduce_to":"0.00"}'):
+        with pytest.raises(ValueError):  # a hand-built request cannot smuggle it into protective capacity
+            w.WireRequest(w.Endpoint.ORDER_DECREASE, SCOPE, f"/portfolio/events/orders/{ORDER_ID}/decrease",
+                          (("subaccount", "0"),), body=raw, exchange_index=0)
+    facts = {f.id: f for f in w.ENDPOINT_FACTS}
+    assert facts["ORD-34"].support is c.Support.UNKNOWN
 
 
 # ---------------------------------------------------------------------------------------------- reads

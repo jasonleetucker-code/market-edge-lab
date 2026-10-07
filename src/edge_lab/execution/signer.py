@@ -42,7 +42,11 @@ SIGNING_FACTS: tuple[Fact, ...] = (
     Fact("AUTH-01", ("Ed25519 (recommended)", "RSA 2048-bit"), _D, _KEYS),
     Fact("AUTH-02", "Ed25519 (RFC 8032) signs the pre-sign text directly", _D, _KEYS),
     Fact("AUTH-03", "RSA-PSS with SHA-256, MGF1 with SHA-256, salt length equal to the digest length", _D, _KEYS),
-    Fact("AUTH-04", "the PEM header does not identify the key type; use the parsed key", _D, _KEYS),
+    Fact("AUTH-04", "Kalshi generates PKCS#8 (PRIVATE KEY) for Ed25519 and PKCS#1 (RSA PRIVATE KEY) for RSA, but "
+         "PKCS#8 RSA keys share the PRIVATE KEY label, so the PEM header does not identify the type; determine it "
+         "from the parsed key", _D, _KEYS),
+    Fact("AUTH-10", "our inference: refusing an RSA-labelled PEM whose body is not PKCS#1 RSA is safe", _D, _KEYS,
+         support=Support.UNKNOWN),
     Fact("AUTH-05", "timestamp + METHOD + path from the API root, without the query; the host is not signed", _D,
          _ENVS),
     Fact("AUTH-06", "the signature is base64-encoded", _D, _KEYS),
@@ -53,7 +57,7 @@ SIGNING_FACTS: tuple[Fact, ...] = (
 
 # A plausible millisecond timestamp: 2020-09-13 to 2100-01-01. A seconds or microseconds value falls outside.
 _MIN_TS_MS, _MAX_TS_MS = 1_600_000_000_000, 4_102_444_800_000
-_RSA_MIN_BITS = 2048
+_RSA_BITS = 2048  # exactly: other sizes are UNKNOWN (AUTH-09)
 
 
 class KeyAlgorithm(str, Enum):
@@ -96,8 +100,8 @@ def _algorithm(key: object) -> KeyAlgorithm:
     if isinstance(key, ed25519.Ed25519PrivateKey):
         return KeyAlgorithm.ED25519
     if isinstance(key, rsa.RSAPrivateKey):
-        if key.key_size < _RSA_MIN_BITS:
-            raise UnsupportedKeyError(f"RSA keys must be at least {_RSA_MIN_BITS} bits")
+        if key.key_size != _RSA_BITS:
+            raise UnsupportedKeyError(f"RSA keys must be exactly {_RSA_BITS} bits while other sizes are UNKNOWN")
         return KeyAlgorithm.RSA_PSS_SHA256
     raise UnsupportedKeyError(f"unsupported key type {type(key).__name__}: Ed25519 or RSA private keys only")
 

@@ -141,6 +141,18 @@ def test_wrong_key_types_are_refused(ed_key):
                           account_ref="fixture-acct")
 
 
+def test_rsa_keys_must_be_exactly_2048_bits_while_other_sizes_are_unknown():
+    with pytest.raises(s.UnsupportedKeyError):
+        make(rsa.generate_private_key(public_exponent=65537, key_size=3072))
+    assert {f.id: f for f in s.SIGNING_FACTS}["AUTH-09"].support is s.Support.UNKNOWN
+
+
+def test_the_pem_label_fact_quotes_the_docs_and_the_inference_is_labelled():
+    facts = {f.id: f for f in s.SIGNING_FACTS}
+    assert "PKCS#1 (RSA PRIVATE KEY)" in facts["AUTH-04"].value and "parsed key" in facts["AUTH-04"].value
+    assert facts["AUTH-10"].value.startswith("our inference") and facts["AUTH-10"].support is s.Support.UNKNOWN
+
+
 @pytest.mark.parametrize("env", [Environment.DEMO, Environment.PRODUCTION, "FIXTURE"])
 def test_no_signer_exists_outside_authorized_environments_even_with_a_valid_key(ed_key, env):
     with pytest.raises(s.SigningRefused):

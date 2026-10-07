@@ -89,6 +89,8 @@ ENDPOINT_FACTS: tuple[Fact, ...] = (
                     "initial_count_fp", "taker_fees_dollars", "maker_fees_dollars", "taker_fill_cost_dollars",
                     "maker_fill_cost_dollars"), _D, _GET_ORDERS),
     Fact("ORD-33", "market orders (type market)", _D, _GET_ORDERS, support=Support.UNSUPPORTED),
+    Fact("ORD-34", "whether decrease reduce_to counts the filled part or only the resting remainder", _D, _DECREASE,
+         support=Support.UNKNOWN),
 )
 
 # ---------------------------------------------------------------------------------------------- endpoints
@@ -197,6 +199,8 @@ class WireRequest:
                 raise ValueError("a POST body must be canonical JSON bytes")
         elif self.body is not None:
             raise ValueError(f"{spec.method.value} requests carry no body")
+        if self.endpoint is Endpoint.ORDER_DECREASE and set(json.loads(self.body)) != {"reduce_by", "exchange_index"}:
+            raise ValueError("a decrease carries reduce_by and exchange_index only (reduce_to is UNKNOWN, ORD-34)")
         if spec.bucket is Bucket.WRITE:
             if isinstance(self.exchange_index, bool) or not isinstance(self.exchange_index, int) \
                     or self.exchange_index < 0:
@@ -292,6 +296,12 @@ def _limit(limit: int) -> int:
     return limit
 
 
+def _client_id(value: object, name: str) -> str:
+    if not isinstance(value, str) or not re.fullmatch(r"[A-Za-z0-9-]{1,64}", value):
+        raise ValueError(f"{name} is not a client order id")
+    return value
+
+
 def _shard(index: object) -> int:
     if isinstance(index, bool) or not isinstance(index, int) or index < 0:
         raise ValueError("exchange_index must be an explicit non-negative shard")
@@ -349,9 +359,13 @@ def build_cancel(scope: AccountScope, order_id: str, *, exchange_index: int) -> 
 
 
 def build_amend(intent: OrderIntent, market: c.MarketTradingProfile, *, order_id: str, new_limit_price: Decimal,
-                filled_count: Decimal, desired_remaining: Decimal,
+                filled_count: Decimal, desired_remaining: Decimal, current_client_order_id: str,
                 updated_client_order_id: str | None = None) -> WireRequest:
     """Amend price and/or size within the approved intent (ORD-20, ORD-21).
+
+    `current_client_order_id` is the client order id the order carries now: the intent's id for the first amend,
+    and the last `updated_client_order_id` after an amend that set one. It is required, so a later amend cannot
+    silently send the original id.
 
     The request count is filled + desired remaining, never just the remainder. The amend may only make the order
     less aggressive or smaller than the approved intent: a buy's price never rises above, and a sell's never falls
@@ -379,34 +393,30 @@ def build_amend(intent: OrderIntent, market: c.MarketTradingProfile, *, order_id
         "side": side,
         "price": price_text(market.check_yes_price(yes_price)),
         "count": count_text(total),
-        "client_order_id": intent.client_order_id(),
+        "client_order_id": _client_id(current_client_order_id, "current_client_order_id"),
         "exchange_index": market.exchange_index,
     }
     if updated_client_order_id is not None:
-        if not isinstance(updated_client_order_id, str) or not re.fullmatch(r"[A-Za-z0-9-]{1,64}",
-                                                                            updated_client_order_id):
-            raise ValueError("updated_client_order_id is not a client order id")
-        body["updated_client_order_id"] = updated_client_order_id
+        body["updated_client_order_id"] = _client_id(updated_client_order_id, "updated_client_order_id")
+        if updated_client_order_id == current_client_order_id:
+            raise ValueError("updated_client_order_id must differ from the current one")
     return WireRequest(Endpoint.ORDER_AMEND, intent.scope, f"/portfolio/events/orders/{_order_id(order_id)}/amend",
                        _query(subaccount=subaccount_number(intent.scope)), body=_canonical_body(body),
                        exchange_index=market.exchange_index)
 
 
-def build_decrease(scope: AccountScope, order_id: str, *, exchange_index: int, reduce_to: Decimal | None = None,
-                   reduce_by: Decimal | None = None) -> WireRequest:
-    """Decrease a resting order (ORD-24): exactly one of `reduce_to` or `reduce_by`."""
-    if (reduce_to is None) == (reduce_by is None):
-        raise ValueError("exactly one of reduce_to or reduce_by is required")
-    shard = _shard(exchange_index)
+def build_decrease(scope: AccountScope, order_id: str, *, exchange_index: int, reduce_by: Decimal,
+                   reduce_to: Decimal | None = None) -> WireRequest:
+    """Decrease a resting order by `reduce_by` contracts (ORD-24).
+
+    `reduce_to` is refused: whether its target counts the filled part or only the resting remainder is not
+    documented (ORD-34), so it is neither sent nor treated as protective until a venue observation settles it."""
     if reduce_to is not None:
-        if not isinstance(reduce_to, Decimal) or reduce_to < 0:
-            raise ValueError("reduce_to must be a non-negative Decimal")
-        body: dict[str, Any] = {"reduce_to": count_text(reduce_to)}
-    else:
-        if not isinstance(reduce_by, Decimal) or reduce_by <= 0:
-            raise ValueError("reduce_by must be a positive Decimal")
-        body = {"reduce_by": count_text(reduce_by)}
-    body["exchange_index"] = shard
+        raise UnsupportedByProfile("reduce_to semantics are UNKNOWN (ORD-34); use reduce_by")
+    shard = _shard(exchange_index)
+    if not isinstance(reduce_by, Decimal) or not reduce_by.is_finite() or reduce_by <= 0:
+        raise ValueError("reduce_by must be a positive Decimal")
+    body: dict[str, Any] = {"reduce_by": count_text(reduce_by), "exchange_index": shard}
     return WireRequest(Endpoint.ORDER_DECREASE, scope, f"/portfolio/events/orders/{_order_id(order_id)}/decrease",
                        _query(subaccount=subaccount_number(scope)), body=_canonical_body(body), exchange_index=shard)
 
