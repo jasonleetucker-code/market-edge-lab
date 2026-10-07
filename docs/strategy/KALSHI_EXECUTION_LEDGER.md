@@ -27,14 +27,14 @@ observation.
 | Pkg | Scope | Owner (lane) | Paths | State | Evidence | Next / blocker |
 |---|---|---|---|---|---|---|
 | A | Baseline, scope, reconciliation | coordinator | EXECUTION_PLAN, owner records, this ledger | MERGED | #164 `3481369` (scope record + plan entry; #153/#158/#161/#162/#163 reconciled and merged; #161 deployed `9ed305e` on 2026-10-07; evidence in HANDOFF.md, "2026-10-07 production update") | Keep the ledger current |
-| B | API, payoff and account conformance pack | wire lane | `docs/execution/`, `execution/conformance.py`, fixtures | REVIEWED (APPROVE at 20d0682; #167's head e234315 differs only by merges from main, with lane files byte-identical) | 111 facts, DOCUMENTED/FIXTURE_TESTED only | Merge #167 |
+| B | API, payoff and account conformance pack | wire lane | `docs/execution/`, `execution/conformance.py`, fixtures | MERGED | #167 `8dd572c`; 111 facts, DOCUMENTED/FIXTURE_TESTED only | Venue observation (R/S) |
 | C | Isolated security boundary | coordinator | ADR 0043, `tests/invariants/test_execution_boundary.py`, `test_no_execution_paths.py` | MERGED | #164 `3481369`; 8 review rounds ending APPROVE at bb6e725 (structural capability, tamper and runtime-immutability rules) | History and secret scan before any credential (package O) |
 | D | Durable intent journal | journal lane | `execution/journal.py` | MERGED | #165 `0bac2b9`; 3 review rounds: blocker (cancel released on local fills only) and 4 should-fixes fixed; 448 tests | **Bump the schema version before any persistent store exists** (the version-1 schema changed in place while unmerged) |
 | E | Atomic reservations and fencing | journal lane | `execution/reservations.py` | MERGED | #165 `0bac2b9`; cross-process race tests; provider-id ownership is unique | — |
-| F | Signer and transport | wire lane | `execution/signer.py`, `transport.py`, `kalshi_wire.py` | REVIEWED (APPROVE at 20d0682; #167's head e234315 differs only by merges from main, with lane files byte-identical) | 409 on a write is AMBIGUOUS; exact refill; FIXTURE only | Merge #167 |
+| F | Signer and transport | wire lane | `execution/signer.py`, `transport.py`, `kalshi_wire.py` | MERGED | #167 `8dd572c`; 409 on a write is AMBIGUOUS; exact refill; FIXTURE only | DEMO opener with the pinned `REAL_OPENER_REQUIREMENTS` (needs decision 1) |
 | G | Complete account reads | coordinator, after F | `execution/account.py` | NOT_STARTED | — | Needs B's history and pagination facts |
 | H | Order lifecycle reducer | lifecycle lane | `execution/lifecycle.py`, `fake_venue.py` | MERGED | #166 `dd93a8f`; 3 review rounds (two blockers fixed) | Provisional constants are listed below |
-| I | Risk and strategy tickets | coordinator (I lane) | `execution/risk_gate.py`, `risk.py` (account-projection refactor), ADR 0044 | IN_PROGRESS | Writer on `exec/i-risk-gate` (base: main + lane PRs) | Uses `risk.py` and `execution_ticket.py`, with no second formula; checks the opposite-side holding before every ENTRY; removes the pinned `risk → shadow_ledger` edge |
+| I | Risk and strategy tickets | I lane | `execution/risk_gate.py`, `risk.py` (account-projection refactor), ADR 0044 | IN REVIEW | Writer head `fda73a2`; 2082 targeted tests, full suite 5499 passed with 0 failed; legacy risk byte-identical; `TRANSITIVE_EXEMPT` now empty; placeholder limits block every order | Independent review, then merge |
 | J | Feed and account recovery | after G/H | — | NOT_STARTED | — | Reuses `inplay_evidence` sequence logic |
 | K | Demo orchestration (fixture runner) | after F–J | — | NOT_STARTED | — | Real demo is package R (BLOCKED_OWNER) |
 | L | Kill and restart | after D–J | — | NOT_STARTED | — | **Requirement from H:** a cancel and an amend may both be in flight on one order. Either serialize them per order, or define recovery for answers that cross, and never block an emergency cancel. |
@@ -60,6 +60,8 @@ to be confirmed against the venue (DEMO_OBSERVED or PRODUCTION_READ_VERIFIED) be
 - **What a 409 on a repeated `client_order_id` means.** It is treated as AMBIGUOUS.
 - **The meaning of `reduce_to`.** It is refused.
 - **Whether `post_only` crosses or rejects, and whether an amend keeps time priority.**
+- **How sales are charged fees.** The risk gate's fee bound for a sale uses the buy formula at the worst price at
+  or above the limit, which assumes Kalshi charges sales the same way.
 - **API-key scopes.** Kalshi's api_keys page documents no permission scopes, no read-only keys, no
   withdrawal permission settings and no IP allowlist (checked 2026-10-07). A production-read key would
   therefore be able to trade if stolen. See Decision 2 of `KALSHI_OWNER_ACTIVATION_PACKET.md`.
