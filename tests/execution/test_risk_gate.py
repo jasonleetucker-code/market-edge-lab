@@ -341,6 +341,25 @@ def test_an_unverified_schedule_is_rejected():
     assert codes(d) == (R.FEE_SCHEDULE_UNVERIFIED,), d.reasons
 
 
+def test_a_no_side_entry_uses_the_no_book_and_the_yes_price_grid():
+    no = intent(side=NO, quantity=Decimal("5"), limit_price=Decimal("0.60"), max_total_cost=Decimal("3.20"))
+    d = run(no)
+    assert d.allowed, d.reasons
+    assert d.fee_required == KALSHI_QUADRATIC_TAKER_V1.taker_buy(5, Decimal("0.60")).total_cost + Decimal("0.0505")
+    assert codes(run(no, acct=account(positions=(held("1", side=YES),)))) == (R.FLIP_FORBIDDEN,)
+    # A NO price of 0.585 is a YES price of 0.415: off the market's one-cent YES grid.
+    half = m.Grid(step=Decimal("0.005"), minimum=Decimal("0.005"), maximum=Decimal("0.995"))
+    off = replace(no, limit_price=Decimal("0.585"), price_grid=half)
+    d = run(off, mkt=market(book=book(no_asks=(lv("0.585", "5"),))))
+    assert codes(d) == (R.PRICE_OFF_GRID,) and "0.415" in d.primary.detail
+
+
+def test_a_price_the_fee_schedule_cannot_price_is_refused_not_raised():
+    fine = m.Grid(step=Decimal("0.00001"), minimum=Decimal("0.00001"), maximum=Decimal("0.99999"))
+    d = run(intent(limit_price=Decimal("0.42005"), price_grid=fine), mkt=market(price_bands=(fine,)))
+    assert codes(d) == (R.FEE_SCHEDULE_UNSUPPORTED,) and "cannot price" in d.primary.detail
+
+
 def test_fractional_quantity_is_off_the_grid_or_unpriced():
     fine = m.Grid(step=Decimal("0.001"), minimum=Decimal("0.001"), maximum=Decimal("1000"))
     d = run(intent(quantity=Decimal("9.995"), quantity_grid=fine))
@@ -579,6 +598,7 @@ def test_malformed_ticket_limits_are_refused():
     lambda: account(positions=(held("1"), held("2"))),
     lambda: account(positions=None, inventory=(InventoryLine(TICKER, YES, Decimal(1)),)),
     lambda: account(snapshot_revision=True),
+    lambda: account(pnl_history=(pnl("50", timedelta(days=1), ref="gain"), pnl("50", timedelta(days=2), ref="gain"))),
     lambda: account(schema="edge-lab-risk-account-projection/0"),
     lambda: market(exchange_active="yes"),
     lambda: market(price_bands=()),

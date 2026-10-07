@@ -432,6 +432,9 @@ class AccountProjection:
             raise ValueError("one inventory line per (market, side)")
         if self.positions is None and self.inventory:
             raise ValueError("inventory cannot be known while positions are unknown")
+        refs = [e.entry_ref for e in self.pnl_history or ()]
+        if len(set(refs)) != len(refs):  # a repeated gain would hide a loss
+            raise ValueError("ledger entry refs must be unique")
 
 
 @dataclass(frozen=True)
@@ -955,12 +958,16 @@ def _fee_checks(intent: OrderIntent, market: MarketState, venue: str, at: dateti
         fail(Reason.FEE_SCHEDULE_UNSUPPORTED, f"quantity {q}: the schedule prices whole contracts only")
         return
     contracts = int(q)
-    with localcontext(_fee_context()):
-        if intent.kind is IntentKind.ENTRY:
-            base = schedule.taker_buy(contracts, intent.limit_price).total_cost
-        else:
-            worst = max(intent.limit_price, Decimal("0.5"))
-            base = schedule.taker_buy(contracts, worst).fee
+    try:
+        with localcontext(_fee_context()):
+            if intent.kind is IntentKind.ENTRY:
+                base = schedule.taker_buy(contracts, intent.limit_price).total_cost
+            else:
+                worst = max(intent.limit_price, Decimal("0.5"))
+                base = schedule.taker_buy(contracts, worst).fee
+    except ValueError as exc:  # the schedule refuses the price (off its 1/100-cent grid) or the size
+        fail(Reason.FEE_SCHEDULE_UNSUPPORTED, f"{schedule.schedule_id} cannot price this order: {exc}")
+        return
     required = base + exact_product(allowance, q)
     figures["fee"] = required
     if intent.max_total_cost < required:  # exactly the requirement is enough
