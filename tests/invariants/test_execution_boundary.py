@@ -493,8 +493,10 @@ def _tamper_hits(rel: str, text: str) -> list[str]:
                     and isinstance(node.args[1].value, str) and node.args[1].value.startswith("_"):
                 hits.append(f"{rel}:{line}: getattr of private {node.args[1].value}")
             if fname in _MUTATING_METHODS and isinstance(node.func, ast.Attribute):
+                # `module.TABLE.add(...)` or `TABLE.add(...)` for an imported UPPER_CASE name; a module function
+                # call such as `journal.append(conn, event)` is not flagged (runtime immutability covers the rest).
                 owner = node.func.value
-                if (isinstance(owner, ast.Name) and owner.id in imported) or (
+                if (isinstance(owner, ast.Name) and owner.id in imported and owner.id.lstrip("_").isupper()) or (
                         isinstance(owner, ast.Attribute) and isinstance(owner.value, ast.Name)
                         and owner.value.id in imported):
                     hits.append(f"{rel}:{line}: mutates imported state with .{fname}()")
@@ -513,10 +515,10 @@ def _tamper_hits(rel: str, text: str) -> list[str]:
 
 
 def _post_init_only_setattr_hits(rel: str, text: str) -> list[str]:
-    """`object.__setattr__(self, ...)` belongs in `__post_init__` (normalizing a frozen dataclass) only."""
+    """`object.__setattr__(self, ...)` belongs only in `__init__`/`__post_init__` (building an immutable object)."""
     hits = []
     for fn in ast.walk(ast.parse(text)):
-        if isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)) and fn.name != "__post_init__":
+        if isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)) and fn.name not in ("__init__", "__post_init__"):
             for node in ast.walk(fn):
                 if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) \
                         and node.func.attr == "__setattr__" and isinstance(node.func.value, ast.Name) \
@@ -575,6 +577,7 @@ def test_object_setattr_only_in_post_init():
     assert not hits, "\n".join(hits)
     assert _post_init_only_setattr_hits("x.py", "def f(self):\n    object.__setattr__(self, 'a', 1)\n")
     assert not _post_init_only_setattr_hits("x.py", "def __post_init__(self):\n    object.__setattr__(self, 'a', 1)\n")
+    assert not _post_init_only_setattr_hits("x.py", "def __init__(self):\n    object.__setattr__(self, 'a', 1)\n")
 
 
 def test_no_package_file_tampers_with_another_or_reaches_internals():
@@ -635,3 +638,119 @@ def test_network_attribute_rule_ignores_comments_and_object_attributes():
     assert not _network_and_os_hits("edge_lab/execution/lifecycle.py", "self.socket.close()\n# retry on ssl. errors\n")
 
 
+
+
+# ---------------------------------------------------------------- runtime immutability (closes the syntax class)
+
+def _immutable(value, depth: int = 0) -> bool:
+    """Whether `value` is an allowed immutable value. Recursive through containers that are themselves read-only."""
+    import dataclasses
+    import enum
+    import re as _re
+    import types
+    from decimal import Decimal
+
+    if depth > 8:
+        return False
+    import __future__
+    import uuid
+
+    if value is None or isinstance(value, (str, bytes, int, float, complex, bool, Decimal, range, _re.Pattern,
+                                           enum.Enum, uuid.UUID, __future__._Feature)):
+        return True  # float only appears in non-money constants (e.g. a pacer interval); money is Decimal
+    import datetime as _dt
+    import functools
+
+    if isinstance(value, (type, types.FunctionType, types.BuiltinFunctionType, types.ModuleType, property,
+                          staticmethod, classmethod, types.MethodType, types.GenericAlias)):
+        return True
+    if isinstance(value, (_dt.datetime, _dt.date, _dt.time, _dt.timedelta, _dt.timezone)):
+        return True  # immutable value types
+    if type(value).__module__ == "typing":
+        return True  # type annotations and aliases (Mapping, Callable[...], Union[...]): no table state
+    if isinstance(value, functools._lru_cache_wrapper) and getattr(value, "__module__", "").split(".")[0] != "edge_lab":
+        return True  # an imported stdlib function (urlsplit); our own modules may not cache
+    if isinstance(value, (tuple, frozenset)):
+        return all(_immutable(v, depth + 1) for v in value)
+    if isinstance(value, types.MappingProxyType):
+        return all(_immutable(k, depth + 1) and _immutable(v, depth + 1) for k, v in value.items())
+    if dataclasses.is_dataclass(value) and not isinstance(value, type):
+        if not value.__dataclass_params__.frozen:
+            return False
+        return all(_immutable(getattr(value, f.name), depth + 1) for f in dataclasses.fields(value))
+    return False
+
+
+# Class attributes Python or dataclasses/enum create themselves; they are not our tables.
+_CLASS_MACHINERY = re.compile(r"^__\w+__$|^_abc_impl$|^_(member_map|value2member_map|member_names|unhashable_values|"
+                              r"value_repr|missing|generate_next_value|use_args|member_type|new_member|"
+                              r"hashable_values|singles_mask|all_bits|flag_mask|boundary|inverted|sort_order)_?$")
+
+
+def test_every_module_and_class_value_in_the_package_is_immutable_at_runtime():
+    """Import every execution module and check the values its module and classes actually hold. This catches a
+    mutable table however it was built (class body, try/if block, helper call, dict.fromkeys, ChainMap...)."""
+    import importlib
+    import inspect
+
+    problems = []
+    for path in sorted(PACKAGE.glob("*.py")):
+        name = "edge_lab.execution" + ("" if path.stem == "__init__" else "." + path.stem)
+        module = importlib.import_module(name)
+        for attr, value in vars(module).items():
+            if attr.startswith("__") and attr.endswith("__"):
+                continue
+            if inspect.ismodule(value) or (inspect.isclass(value) and value.__module__ != name):
+                continue  # imported modules and classes are judged in their own module
+            if not _immutable(value):
+                problems.append(f"{name}.{attr}: {type(value).__name__}")
+            if inspect.isclass(value) and value.__module__ == name:
+                for cattr, cvalue in vars(value).items():
+                    if _CLASS_MACHINERY.match(cattr) or isinstance(cvalue, (types_member_descriptor(),)):
+                        continue
+                    if not _immutable(cvalue):
+                        problems.append(f"{name}.{attr}.{cattr}: {type(cvalue).__name__}")
+    assert not problems, "\n".join(problems)
+
+
+def types_member_descriptor():
+    import types
+
+    return types.MemberDescriptorType
+
+
+def test_the_runtime_immutability_check_catches_tables_built_any_way():
+    import types
+    from collections import ChainMap
+    from dataclasses import dataclass
+
+    @dataclass
+    class Loose:
+        x: int = 1
+
+    for bad in ({"a": 1}, [1], {1}, dict.fromkeys("ab"), ChainMap(), types.SimpleNamespace(a=1), (1, [2]),
+                types.MappingProxyType({"a": [1]}), Loose()):
+        assert not _immutable(bad), bad
+    for ok in (frozenset({1}), (1, "a"), types.MappingProxyType({"a": (1,)}), None, re.compile("x")):
+        assert _immutable(ok), ok
+
+
+def _setattr_alias_hits(rel: str, text: str) -> list[str]:
+    hits = []
+    tree = ast.parse(text)
+    called = {id(c.func) for c in ast.walk(tree) if isinstance(c, ast.Call)}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Attribute) and node.attr == "__setattr__":
+            parent_call = id(node) in called
+            base_is_object = isinstance(node.value, ast.Name) and node.value.id == "object"
+            if not (parent_call and base_is_object):
+                hits.append(f"{rel}:{node.lineno}: __setattr__ used other than as a direct object.__setattr__(self, ...)")
+    return hits
+
+
+def test_setattr_is_never_aliased_or_reached_through_super():
+    hits = [h for p in PACKAGE.rglob("*.py") for h in _setattr_alias_hits(_rel(p), p.read_text(encoding="utf-8"))]
+    assert not hits, "\n".join(hits)
+    assert _setattr_alias_hits("x.py", "osa = object.__setattr__\n")
+    assert _setattr_alias_hits("x.py", "super().__setattr__('a', 1)\n")
+    assert not _setattr_alias_hits("x.py", "object.__setattr__(self, 'a', 1)\n")
