@@ -50,6 +50,8 @@ The previous complete index, shared-owner table, roadmap reruns, domain-readines
 | #83 | Outside capital, unit/NAV accounting and fee governance | LATER/BLOCKED; simulated design then legal/entity/custody/tax/venue and owner approval. Separate investor gains from manager compensation; no friend-money pooling now |
 | #33 | Notifications / SMS / ntfy | Existing outbox/relay; SMS blocked on provider approval; phone delivery unresolved and owner-deferred for current research. Reliable alert/incident path required before unattended live; no new test/send from this plan |
 | #96 | Evidence-to-economics reset | Governing strategy: evidence, after-cost dollars, executable size, capacity and survival before breadth. Full roadmap does not mean every experiment active together |
+| #160 | Kalshi ordinary-event automation core (owner directive 2026-10-07) | Packages A–T in `strategy/KALSHI_EXECUTION_LEDGER.md`. A/C, D/E (#164, #165) MERGED; H and B/F in review/merge; I in progress. All offline in the ADR 0043 package, FIXTURE only. NEXT: G, J–Q, orchestration. BLOCKED (owner): demo and production-read access (activation packet); LIVE and UNATTENDED stay false |
+| #168 | Wallet intelligence and copyability research (owner directive 2026-10-07 evening) | NOW, offline research lane outside the execution package: event model, point-in-time selection, leader vs follower reconstruction and replay on synthetic plus Polymarket Data API v2 documentation fixtures; no network. BLOCKED (owner): any live source read, paid feed, empirical slot or budget, and venue eligibility for execution. Feeds execution only through a reviewed typed bridge |
 | #152 | Architecture reconciliation and bounded evidence-path hardening (owner directive, 2026-09-30) | Existing architecture kept. External ideas classified by access and usefulness in [the reconciliation note](engineering/ARCHITECTURE_RECONCILIATION_2026-09-30.md); only the controlled defect loop is adopted (AGENT_OPERATING_SYSTEM §1). The in-play file → consumer path is verified, and two provenance gaps are fixed in `inplay_evidence.py` (PR pending owner merge). NEXT: R3 as recorded (scope entry, then the pilot-proposal refresh); R3a, in-play journal identity and point-in-time slicing, is *proposed* for that scope entry. Rejected without a measured need: memory DB, second scheduler, graph framework, agent platform, Steward transplant, behavioural-eval harness (ADR 0006). Not runtime authority |
 
 ## Shared primitives (one canonical owner each)
@@ -82,6 +84,9 @@ Extend the owner named here; never fork it into a feature-specific copy. `PLANNE
 | In-play evidence and replay | `src/edge_lab/inplay_evidence.py` | BUILT offline (ADR 0038; inplay_replay.py and inplay_view.py subordinate; no recorder). #145 state-version, source-family, clock-uncertainty and latency fields BUILT (source-state-v1, ADR 0041). A journal's data kind comes from its header, and a book's venue stamp is its last applied message's own (#152). Journal content identity through the consumer: proposed for the R3 scope entry (R3a) | #122 #145 #50 #152 |
 | RFQ research and lifecycle fixtures (joint pricing PLANNED later) | `src/edge_lab/rfq_research.py` | BUILT (PR B, ADR 0042: pure, fixture-fed observation and exposure contract; reuses venues (execution never authorized), provenance and freshness, and reserves through execution_ticket's canonical obligation primitive; RFQ stages stay separate from execution_ticket orders; payoff_constraints stays the logical-relation owner; joint pricing PLANNED later (R7); no gateway or generic pricing engine) | #145 #30 |
 | Shadow / live ledger boundary | `src/edge_lab/shadow_ledger.py` | BUILT (shadow only; ledger_anchor.py checkpoints, F09) | #6 #3 #32 |
+| Isolated execution package (Kalshi ordinary-event profile) | `src/edge_lab/execution/` | BUILT in part (ADR 0043; model, journal, reservations merged; lifecycle, wire, signer, transport in review; FIXTURE only) | #160 #6 #32 |
+| Autonomous orchestration (one supervised service, DISARMED → BOUNDED_AUTO) | `src/edge_lab/execution/orchestrator.py` | PLANNED (2026-10-07 evening directive; no second scheduler; starts DISARMED) | #160 #168 #82 |
+| Wallet / trader intelligence and copyability | `src/edge_lab/wallet_intel.py` | PLANNED (#168; extends sources/provenance; no second ledger, graph platform or scheduler; outside the execution package) | #168 #50 #82 #30 |
 | Risk engine | `src/edge_lab/risk.py` | BUILT (limits, capital release, withdrawal contract) | #6 #3 |
 | Stake sizing (research challenger) | `src/edge_lab/sizing_v2.py` | BUILT, research only (ADR 0026); sizing.py stays the frozen operational path | #6 #3 #32 |
 | Capital-eligibility policies | `src/edge_lab/starter_policy.py` | BUILT (STARTER_MAX_7D_V1, 168-hour venue-tradable cash, ADR 0018) | #32 #6 #93 |
@@ -132,3 +137,39 @@ Entries before 2026-09-29 (evening), with their classifications and supersession
     - LATER: behavioural agent evals (ADR 0006 triggers).
     - BLOCKED (owner): any recorder, capture, rights change or research slot.
   - No gate change. No order, credential, stream, schedule, budget change, paid service or message.
+
+### 2026-10-07 (evening): Market v1 + controlled autonomy + wallet intelligence (#160, #168)
+
+- **Source:** the owner adopted the pasted 25-section directive
+  (`docs/owner/2026-10-07-market-v1-autonomy-wallet-directive.md`). Scope is in EXECUTION_PLAN.
+- **Overlap search:** no existing issue covered wallet, copy or leader following. #168 was created. #160 already
+  covers the execution core and is extended, not duplicated.
+- **Priority:**
+  - The Kalshi execution core comes first: H, B/F, I, then G/J/K/L, the orchestrator and M/N/O/P/Q.
+  - The wallet lane runs alongside it as offline research.
+  - UI journeys follow once the schemas stabilize.
+- **Dependencies:**
+  - wallet → execution only through a reviewed typed bridge, after the orchestrator and risk gate exist;
+  - any empirical wallet result needs a #96 slot and budget;
+  - any live source read or execution venue needs the activation packet.
+- **Shared infrastructure:**
+  - one orchestrator inside the execution package (no second scheduler);
+  - `wallet_intel.py` extends `sources`/provenance (no second ledger);
+  - the Terminal shell for every journey.
+- **Can this ride an already-needed primitive?** Yes:
+  - follower replay reuses `research_economics` (fill-conditioned economics) and the execution package's exact
+    arithmetic;
+  - selection manifests reuse `research_evidence` lineage;
+  - leader and follower accounting reuses the risk/obligation primitives rather than a parallel P&L.
+- **Safe parallel lanes:** execution/account/recovery, wallet data/analytics/replay, UI/operations after the
+  schemas, and an independent read-only reviewer. One writer per shared owner.
+- **Roadmap effect (2026-10-22 checkpoint):** software readiness advances. No strategy qualification, demo
+  verification or live date is promised.
+- **Classification:**
+  - NOW: Kalshi packages H–Q offline, the orchestrator, the wallet research lane on fixtures, the v1 manifest and
+    the unblock packet.
+  - NEXT: operator journeys on canonical data; the typed wallet → execution bridge.
+  - LATER: on-chain execution profiles (a separate conformance profile) and the paid wallet feeds' value case.
+  - BLOCKED (owner): demo and production keys, live source reads, rights, slots and budgets, the risk profile and
+    real-money activation.
+- No gate change. No order, credential, stream, schedule, budget change, paid service or message.

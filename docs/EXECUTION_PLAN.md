@@ -688,6 +688,43 @@ be written here when they are made.
     - paid services and support messages;
     - changes to source budgets, protected windows or EXP-001/EXP-002 protocols;
     - a gate advance. Gates 8–10 stay not authorized.
+- **2026-10-07 (evening, America/New_York), owner directive: finish Market v1 + controlled autonomous trading +
+  wallet intelligence (#160, #168).** Recorded in `docs/owner/2026-10-07-market-v1-autonomy-wallet-directive.md`
+  (authority sections verbatim, the owner's adoption answers, and the owner's own instructions "keep going until
+  everything is merged", "then deploy it" and "then start package I"). It extends the 2026-10-07 Kalshi entry
+  above and supersedes none of it.
+  - **Authorized (offline, disabled until each activation grant exists):**
+    - the remaining Kalshi packages G–Q inside the ADR 0043 package, FIXTURE only;
+    - one supervised orchestration service in the execution package, with the states DISARMED, OBSERVE_ONLY,
+      SHADOW, DEMO, HUMAN_CONFIRMATION and BOUNDED_AUTO. It starts DISARMED, and only FIXTURE egress is
+      possible (`AUTHORIZED_ENVIRONMENTS` unchanged);
+    - automated-policy grant objects and their validation. No grant is issued;
+    - operator Terminal journeys rendered from canonical or fixture data, honestly labelled;
+    - a wallet-intelligence research lane outside the execution package: event model, identity, point-in-time
+      selection, leader and follower reconstruction, and follower replay, on **synthetic fixtures and Polymarket
+      Data API v2 documentation examples only, with no network calls** (owner answer 2);
+    - a versioned v1 acceptance manifest and one external unblock packet.
+  - **Merge:** this campaign's offline PRs merge under the conditions of the 2026-10-07 Kalshi entry's merge
+    delegation: independent review with re-review of changed heads, exact-head CI green, current-main
+    reconciliation, no open review blocker.
+  - **Deploy:** the merged main carrying #165–#167 may be deployed through the runbook ("then deploy it"):
+    - code only, outside the protected windows;
+    - SHA, dashboard and timers verified;
+    - the execution package stays inert there: nothing imports it, and the VPS venv is stdlib-only with no
+      `cryptography`;
+    - no new unit, timer, schedule or collector.
+
+    Later deploys of this campaign's merged offline code follow the same rules. Activating any service needs its
+    own approval.
+  - **Not authorized (each needs its own recorded owner approval):**
+    - every item in the 2026-10-07 Kalshi entry's list;
+    - any network read of Polymarket, chain, Hyperliquid or other wallet sources, including one-off public pulls;
+    - paid wallet feeds (Nansen, GMGN, Helius and similar);
+    - wallet connections, token approvals and on-chain execution;
+    - scheduled wallet collection;
+    - an empirical wallet-research evaluation, which needs its own family slot and budget (#96 limit);
+    - issuing any BOUNDED_AUTO or other automated grant;
+    - any change to `AUTHORIZED_ENVIRONMENTS`.
 
 ## Standing merge rule: docs-only and test-only PRs
 
