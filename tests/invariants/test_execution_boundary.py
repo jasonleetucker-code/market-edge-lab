@@ -513,10 +513,10 @@ def _tamper_hits(rel: str, text: str) -> list[str]:
 
 
 def _post_init_only_setattr_hits(rel: str, text: str) -> list[str]:
-    """`object.__setattr__(self, ...)` belongs in `__post_init__` (normalizing a frozen dataclass) only."""
+    """`object.__setattr__(self, ...)` belongs only in `__init__`/`__post_init__` (building an immutable object)."""
     hits = []
     for fn in ast.walk(ast.parse(text)):
-        if isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)) and fn.name != "__post_init__":
+        if isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)) and fn.name not in ("__init__", "__post_init__"):
             for node in ast.walk(fn):
                 if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) \
                         and node.func.attr == "__setattr__" and isinstance(node.func.value, ast.Name) \
@@ -575,6 +575,7 @@ def test_object_setattr_only_in_post_init():
     assert not hits, "\n".join(hits)
     assert _post_init_only_setattr_hits("x.py", "def f(self):\n    object.__setattr__(self, 'a', 1)\n")
     assert not _post_init_only_setattr_hits("x.py", "def __post_init__(self):\n    object.__setattr__(self, 'a', 1)\n")
+    assert not _post_init_only_setattr_hits("x.py", "def __init__(self):\n    object.__setattr__(self, 'a', 1)\n")
 
 
 def test_no_package_file_tampers_with_another_or_reaches_internals():
