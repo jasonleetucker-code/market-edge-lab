@@ -275,9 +275,12 @@ so `[now, now + 3 min]` always overlapped 16:13 and the tick was refused. ARI-SF
 - A run that would come within `RUN_MARGIN` (30 s) of a protected window now starts with its
   deadline cut to `RUN_MARGIN` before the window (`polymarket_sports.run_deadline`). It is refused
   only with less than `MIN_RUN` (1 min) left, or inside a window.
-- No request starts with less than 3 s to the deadline, and a request's timeout ends 1 s before it,
-  so a cut run finishes at least 30 s before the window opens, which is itself 2 min before the
-  settlement run.
+- No request attempt (a retry included) starts with less than 3 s to the deadline, and each
+  attempt's timeout ends 1 s before it. urllib applies that timeout per socket operation, so the
+  bound is approximate, not a hard 30 s: a cut run ends some tens of seconds before the window
+  opens, and the window itself opens 2 min before the settlement run.
+- The retry check (`_retry_tick_before`) walks the timer's real :10/:25/:40/:55 grid, not "the
+  run's end + 15 min", so a target that failed at 15:55 counts the 16:10 tick as its retry.
 - Rejected: moving such targets past the window (it would capture 35 min after the intended time,
   at 16:40), or adding a capture tick (one more unit, and the same race at the next window).
 - Reconsider if a cut run is seen deferring targets for lack of time, or if the protected windows

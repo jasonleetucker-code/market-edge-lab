@@ -129,6 +129,7 @@ MAX_RUN = timedelta(minutes=3)  # run deadline; edgelab-pm-sports*.service Timeo
 MIN_RUN = timedelta(minutes=1)
 RUN_MARGIN = timedelta(seconds=30)
 TICK_INTERVAL = timedelta(minutes=15)  # edgelab-pm-sports.timer (tests pin the two together)
+TICK_PHASE_MINUTE = 10  # ... at :10, :25, :40 and :55 (America/New_York offsets are whole hours, so UTC too)
 LOCK_TIMEOUT_S = 5.0
 START_TOLERANCE = timedelta(minutes=15)  # kickoff agreement for RELATED_NOT_EQUIVALENT
 SAME_GAME_WINDOW = timedelta(hours=36)  # beyond this the same teams are a different game
@@ -497,6 +498,12 @@ class _Requests:
         self.recent[:] = [t for t in self.recent if at - t < 60.0]
         if len(self.recent) >= self.per_minute:
             raise RequestRateCapReached(f"{self.per_minute} requests in the last 60 s; the rest is deferred")
+        # Each attempt (a retry included) ends 1 s before the run deadline: the timeout computed for the
+        # first attempt is not reused after a backoff. urllib applies it per socket operation.
+        remaining = (self.deadline - self.clock()).total_seconds()
+        if remaining < MIN_REQUEST_BUDGET.total_seconds():
+            raise DeadlineExceeded(f"{remaining:.1f}s left before an attempt")
+        timeout = min(timeout, remaining - 1.0)
         self.recent.append(at)
         self.attempts += 1
         # The package's default opener, looked up per call (the test suite's no-network guard patches it).
@@ -864,9 +871,18 @@ def _capture_one(store: SnapshotStore, run: _LazyRun, t: Mapping[str, Any], req:
                 depth_json=_levels_json(payload), **common)
 
 
+def _next_tick(after: datetime) -> datetime:
+    """The first scheduled capture tick strictly after `after` (the timer's :10/:25/:40/:55 grid)."""
+    at = after.astimezone(UTC)
+    base = at.replace(second=0, microsecond=0)
+    step = int(TICK_INTERVAL.total_seconds() // 60)
+    tick = base + timedelta(minutes=(TICK_PHASE_MINUTE - base.minute) % step)
+    return tick if tick > at else tick + TICK_INTERVAL
+
+
 def _retry_tick_before(deadline: datetime, after: datetime) -> bool:
     """Whether a later scheduled tick outside every protected window can still run before `deadline`."""
-    tick = after + TICK_INTERVAL
+    tick = _next_tick(after)
     while tick < deadline:
         if run_deadline(tick) is not None:
             return True
@@ -1281,7 +1297,8 @@ def freshness_records(store: SnapshotStore, *, now: datetime,
     if blocked:
         disc_state, disc_why = "PAUSED", f"BLOCKED_TERMS_REVIEW: {TERMS_REVIEW}"
     elif due and protected is not None:
-        disc_state, disc_why = "PROTECTED_WINDOW", f"due, but inside {protected[0]}: runs refuse it"
+        disc_state = "PROTECTED_WINDOW"
+        disc_why = f"due, but at or within {int((MIN_RUN + RUN_MARGIN).total_seconds())} s of {protected[0]}: runs refuse it"
     elif due:
         disc_state, disc_why = "DUE", ("no scan on record" if not scans else
                                        f"the last attempt is at least {int(DISCOVERY_INTERVAL.total_seconds() // 3600)} h old")
@@ -1315,7 +1332,9 @@ def freshness_records(store: SnapshotStore, *, now: datetime,
     if blocked:
         sched, why = "PAUSED", f"BLOCKED_TERMS_REVIEW: {TERMS_REVIEW}"
     elif nxt is not None and _t(nxt["due_from_utc"]) <= now and protected is not None:
-        sched, why = "PROTECTED_WINDOW", f"{nxt['target_id']} is due, but inside {protected[0]}: runs refuse it"
+        sched = "PROTECTED_WINDOW"
+        why = (f"{nxt['target_id']} is due, but at or within {int((MIN_RUN + RUN_MARGIN).total_seconds())} s of "
+               f"{protected[0]}: runs refuse it")
     elif nxt is not None and _t(nxt["due_from_utc"]) <= now:
         sched, why = "DUE", f"{nxt['target_id']} is inside its due window"
     elif overdue:

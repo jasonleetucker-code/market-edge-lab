@@ -72,7 +72,7 @@ def test_timers_are_nonpersistent_staggered_and_pinned_to_the_code():
         offset = timedelta(hours=4 if day.month == 9 else 5)
         for h in hours:
             start = day + timedelta(hours=h, minutes=int(m.group(2))) + offset
-            assert protected_window_at(start, start + ps.MAX_RUN) is None, (day, h)
+            assert ps.run_deadline(start) == start + ps.MAX_RUN, (day, h)  # never cut, never refused
 
 
 def test_capture_ticks_next_to_the_settlement_windows_finish_before_them():
@@ -101,6 +101,19 @@ def test_a_late_tick_before_a_settlement_window_runs_with_a_shortened_deadline()
     clear = day + timedelta(hours=21)  # 17:00 EDT: nothing near
     assert ps.run_deadline(clear) == clear + ps.MAX_RUN
     assert ps.MIN_RUN + ps.RUN_MARGIN < ps.MAX_RUN
+
+
+def test_the_retry_check_walks_the_timer_grid():
+    cap = _parse("edgelab-pm-sports.timer")
+    assert cap[("Timer", "OnCalendar")] == [f"*-*-* *:{ps.TICK_PHASE_MINUTE}/15:00 America/New_York"]
+    z = lambda h, m, s=0: datetime(2026, 9, 26, h, m, s, tzinfo=timezone.utc)  # noqa: E731  (EDT = UTC-4)
+    assert ps._next_tick(z(19, 56, 40)) == z(20, 10)
+    assert ps._next_tick(z(20, 9, 59)) == z(20, 10)
+    assert ps._next_tick(z(20, 10)) == z(20, 25)  # strictly after
+    assert ps._next_tick(z(23, 56)) == datetime(2026, 9, 27, 0, 10, tzinfo=timezone.utc)
+    deadline = z(20, 35)  # a 16:05 ET target's deadline
+    assert ps._retry_tick_before(deadline, z(19, 56, 40))  # 16:10 ET is still ahead
+    assert not ps._retry_tick_before(deadline, z(20, 10, 40))  # 16:25 is refused; 16:40 is too late
 
 
 def test_the_installer_installs_but_never_enables_the_pilot_timers():

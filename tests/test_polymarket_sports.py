@@ -461,6 +461,72 @@ def test_the_1610_tick_captures_a_1605_target_although_the_timer_fires_late(tmp_
     assert deadlines == [datetime(2026, 9, 26, 20, 12, 30, tzinfo=UTC)]  # 30 s before the 16:13 window
 
 
+def _two_1605_targets(tmp_path, at):
+    """ARI-SF and MIN-TB both kick off 16:05 ET Sunday 2026-09-27: two T-24h targets due 15:58-16:35 ET Saturday."""
+    odds = [_odds_event("e_ari_sf", "San Francisco 49ers", "Arizona Cardinals", "2026-09-27T20:05:00Z"),
+            _odds_event("e_min_tb", "Tampa Bay Buccaneers", "Minnesota Vikings", "2026-09-27T20:05:00Z")]
+    db = _discovered(tmp_path, odds_events=odds, odds_at=at - timedelta(hours=1))
+    _fresh_catalog_at(db, at - timedelta(hours=2))
+    slugs = ["aec-nfl-ari-sf-2026-09-27", "aec-nfl-min-tb-2026-09-27"]
+    due = [t for t in SnapshotStore(db).pm_sports_targets() if t["market_slug"] in slugs and t["offset_label"] == "T-24h"]
+    assert len(due) == 2
+    return db, slugs
+
+
+def test_a_cut_run_that_reaches_its_deadline_defers_the_rest_and_a_later_tick_records_them_missed(tmp_path):
+    at = datetime(2026, 9, 26, 20, 10, 7, tzinfo=UTC)
+    db, slugs = _two_1605_targets(tmp_path, at)
+    clock = Clock(at)
+    books = {s: BOOK_KC_MIA.read_bytes().replace(KC_MIA.encode(), s.encode()) for s in slugs}
+    calls = []
+
+    def slow_opener(request, timeout):
+        calls.append((request.full_url, timeout))
+        clock.at = datetime(2026, 9, 26, 20, 12, 28, tzinfo=UTC)  # the first book takes until 2 s before the cut
+        slug = request.full_url.split("/markets/")[1].split("/")[0]
+        return ScriptedOpener(books[slug])(request, timeout)
+
+    code, report = ps.run_capture(db, clock=clock, sleep=lambda s: None, opener=slow_opener, access_decision=ALLOW)
+    assert code == 0 and report["by_status"] == {"CAPTURED": 1} and len(report["deferred"]) == 1, report
+    assert len(calls) == 1 and calls[0][1] <= (datetime(2026, 9, 26, 20, 12, 30, tzinfo=UTC) - at).total_seconds() - 1
+    # 16:25 is refused (inside the window); 16:40 is past the 16:35 deadline: the deferred target is MISSED.
+    code, report = ps.run_capture(db, clock=lambda: datetime(2026, 9, 26, 20, 25, 3, tzinfo=UTC),
+                                  opener=ScriptedOpener(), access_decision=ALLOW)
+    assert report["state"] == "DEFERRED_PROTECTED_WINDOW"
+    code, report = ps.run_capture(db, clock=lambda: datetime(2026, 9, 26, 20, 40, 4, tzinfo=UTC),
+                                  opener=ScriptedOpener(), access_decision=ALLOW)
+    assert code == 0 and len(report["missed"]) == 1, report
+    missed = [t for t in SnapshotStore(db).pm_sports_targets() if t["state"] == "MISSED"]
+    assert len(missed) == 1 and missed[0]["state_reason"].startswith("NOT_CAPTURED_BY_DEADLINE")
+
+
+def test_a_failure_before_the_1610_tick_counts_it_as_the_retry(tmp_path):
+    """The retry check walks the real :10/:25/:40/:55 grid. Guessing "the run's end + 15 min" from a run at
+    15:58:30 EDT gives 16:13:30 and 16:28:30 (both refused) and wrongly calls the failure final."""
+    at = datetime(2026, 9, 26, 19, 58, 30, tzinfo=UTC)  # 15:58:30 EDT: both targets just became due
+    db, slugs = _two_1605_targets(tmp_path, at)
+    code, report = ps.run_capture(db, clock=lambda: at, sleep=lambda s: None,
+                                  opener=ScriptedOpener(*[http_error(503)] * 4), access_decision=ALLOW)
+    assert code == 0 and report["state"] == "PARTIAL_RETRYING" and not report["failed_final"], report
+    assert len(report["failed_retrying"]) == 2
+
+
+def test_discovery_takes_the_cut_deadline_too(tmp_path, monkeypatch):
+    at = datetime(2026, 9, 26, 20, 10, 7, tzinfo=UTC)
+    db = _store(tmp_path)
+    deadlines = []
+    real = ps._Requests
+
+    def recording(limit, deadline, *a, **kw):
+        deadlines.append(deadline)
+        return real(limit, deadline, *a, **kw)
+
+    monkeypatch.setattr(ps, "_Requests", recording)
+    code, report = ps.run_discover(db, clock=lambda: at, sleep=lambda s: None, force=True, access_decision=ALLOW,
+                                   opener=ScriptedOpener(EVENTS_P0.read_bytes(), EVENTS_P1.read_bytes()))
+    assert report["state"] == "FILTER_COMPLETE" and deadlines == [datetime(2026, 9, 26, 20, 12, 30, tzinfo=UTC)]
+
+
 def test_404_is_final_not_executable_and_503_retries_once(tmp_path):
     db = _discovered(tmp_path, odds_at=_due_clock_for_kc() - timedelta(hours=1))
     at = _due_clock_for_kc()
@@ -487,7 +553,7 @@ def test_a_retryable_failure_exits_zero_and_is_retried_next_tick(tmp_path):
 
 def test_a_failure_no_later_tick_can_retry_exits_one(tmp_path):
     db = _discovered(tmp_path, odds_at=_due_clock_for_kc() - timedelta(hours=1))
-    at = datetime(2026, 9, 27, 16, 20, tzinfo=UTC)  # 10 min before the T-60m deadline
+    at = datetime(2026, 9, 27, 16, 26, tzinfo=UTC)  # 12:26 EDT: the next tick (12:40) is past the 12:30 deadline
     _fresh_catalog_at(db, at - timedelta(hours=2))
     code, report = ps.run_capture(db, clock=lambda: at, sleep=lambda s: None,
                                   opener=ScriptedOpener(http_error(503), http_error(503)), access_decision=ALLOW)
