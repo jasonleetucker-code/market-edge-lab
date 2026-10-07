@@ -25,8 +25,9 @@ persists events through the journal and rebuilds state with `replay`.
   when the environment is authorized. It never touches unattributed orders.
 - **NEW_RISK** (ENTRY): only in a sending mode, with COMPLETE reconciliation, no open incident and no matching
   latch.
-- **REDUCE** (a reduce-only sale): in a sending mode. Under a matching latch, BOUNDED_AUTO needs an explicit
-  `CloseoutAuthorized` for that latch; HUMAN_CONFIRMATION approves each order anyway.
+- **REDUCE** (a reduce-only sale): in a sending mode. Under a matching latch, the automated modes (DEMO,
+  BOUNDED_AUTO) need an explicit, unexpired `CloseoutAuthorized` for that active latch. HUMAN_CONFIRMATION approves
+  each order anyway.
 - **CLOSEOUT** (a separately authorized liquidation): needs `CloseoutAuthorized` and a sending mode. It is never
   automatic.
 
@@ -78,6 +79,7 @@ class Mode(str, Enum):
 
 
 SENDING_MODES = frozenset({Mode.DEMO, Mode.HUMAN_CONFIRMATION, Mode.BOUNDED_AUTO})
+AUTOMATED_MODES = frozenset({Mode.DEMO, Mode.BOUNDED_AUTO})  # send without a human approving each order
 RECONCILED_MODES = SENDING_MODES | {Mode.SHADOW}
 
 
@@ -164,6 +166,8 @@ class IncidentAcknowledged:
     at_utc: str
 
     def __post_init__(self) -> None:
+        if not isinstance(self.incident_id, str) or not _INCIDENT.fullmatch(self.incident_id):
+            raise ValueError("incident_id must be a short identifier")
         _check_ref("operator_ref", self.operator_ref)
         _check_time(self.at_utc)
 
@@ -192,11 +196,29 @@ class ArmRequest:
 
 @dataclass(frozen=True)
 class ArmAccepted:
+    """A live arm decision. `basis` is `state_basis` of the state it was decided on: `reduce` refuses it if any
+    event landed in between (reconciliation change, incident, latch...), so a stale acceptance cannot arm."""
+
     mode: Mode
     operator_ref: str
     acknowledged_incidents: tuple[str, ...]
     grant_digest: str | None
     at_utc: str
+    basis: str
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.mode, Mode) or self.mode is Mode.DISARMED:
+            raise ValueError("an accepted arm names a Mode other than DISARMED")
+        _check_ref("operator_ref", self.operator_ref)
+        if not isinstance(self.acknowledged_incidents, tuple):
+            raise ValueError("acknowledged_incidents must be a tuple")
+        if self.grant_digest is not None and not _HASH.fullmatch(self.grant_digest):
+            raise ValueError("grant_digest must be a SHA-256 hex digest")
+        if (self.mode is Mode.BOUNDED_AUTO) != (self.grant_digest is not None):
+            raise ValueError("a grant digest is required for, and only for, BOUNDED_AUTO")
+        if not isinstance(self.basis, str) or not _HASH.fullmatch(self.basis):
+            raise ValueError("basis must be a state_basis digest")
+        _check_time(self.at_utc)
 
 
 @dataclass(frozen=True)
@@ -205,6 +227,14 @@ class ArmRefused:
     operator_ref: str
     reasons: tuple[str, ...]
     at_utc: str
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.mode, Mode):
+            raise ValueError("mode must be a Mode")
+        _check_ref("operator_ref", self.operator_ref)
+        if not isinstance(self.reasons, tuple) or not self.reasons:
+            raise ValueError("a refusal states its reasons")
+        _check_time(self.at_utc)
 
 
 @dataclass(frozen=True)
@@ -249,12 +279,14 @@ class ClearLatch:
 
 @dataclass(frozen=True)
 class CloseoutAuthorized:
-    """An operator's explicit authorization to reduce or close out under a latch: `scope`/`key` of that latch."""
+    """An operator's explicit, expiring authorization to reduce or close out under one *active* latch. It is
+    ignored (and logged as refused) if that latch is not set when it arrives, and it lapses at `expires_at_utc`."""
 
     scope: LatchScope
     key: str
     operator_ref: str
     at_utc: str
+    expires_at_utc: str
 
     def __post_init__(self) -> None:
         if not isinstance(self.scope, LatchScope):
@@ -262,6 +294,8 @@ class CloseoutAuthorized:
         object.__setattr__(self, "key", latch_key(self.scope, self.key))
         _check_ref("operator_ref", self.operator_ref)
         _check_time(self.at_utc)
+        if parse_utc_text(self.expires_at_utc) <= parse_utc_text(self.at_utc):
+            raise ValueError("a closeout authorization must expire after it is given")
 
 
 Event = Union[Started, ReconciliationObserved, IncidentRaised, IncidentAcknowledged, ArmAccepted, ArmRefused, Disarm,
@@ -278,9 +312,17 @@ class ControlState:
     reconciliation: Reconciliation = Reconciliation.NOT_RUN
     open_incidents: tuple[str, ...] = ()
     latches: frozenset[tuple[LatchScope, str]] = frozenset()
-    closeouts: frozenset[tuple[LatchScope, str]] = frozenset()
+    closeouts: frozenset[tuple[LatchScope, str, str]] = frozenset()  # (scope, key, expires_at_utc)
     armed_grant_digest: str | None = None
     log: tuple[str, ...] = ()  # one line per applied event: auditable, never trimmed
+
+
+def state_basis(state: ControlState) -> str:
+    """A digest of everything an arm decision depends on, plus the log length (any applied event changes it)."""
+    return sha256_text(canonical_json({
+        "scope": state.scope.key(), "mode": state.mode.value, "reconciliation": state.reconciliation.value,
+        "incidents": list(state.open_incidents), "latches": sorted(f"{s.value}:{k}" for s, k in state.latches),
+        "grant": state.armed_grant_digest, "events": len(state.log)}))
 
 
 def initial_state(scope: AccountScope) -> ControlState:
@@ -315,7 +357,8 @@ def decide_arm(state: ControlState, request: ArmRequest, *, grants: tuple["Autom
         return ArmRefused(request.mode, request.operator_ref, tuple(out), request.at_utc)
     acknowledged = tuple(i for i in request.acknowledged_incidents if i in state.open_incidents)
     return ArmAccepted(request.mode, request.operator_ref, acknowledged,
-                       request.grant_digest if request.mode is Mode.BOUNDED_AUTO else None, request.at_utc)
+                       request.grant_digest if request.mode is Mode.BOUNDED_AUTO else None, request.at_utc,
+                       state_basis(state))
 
 
 def _grant(grants: tuple["AutomationGrant", ...], digest: str | None) -> "AutomationGrant | None":
@@ -337,7 +380,7 @@ def reduce(state: ControlState, event: Event) -> ControlState:
         line = f"{event.at_utc} RECONCILIATION {event.status.value}"
         state = replace(state, reconciliation=event.status, log=state.log + (line,))
         if event.status is not Reconciliation.COMPLETE and state.mode in RECONCILED_MODES:
-            return _incident(state, f"reconciliation-lost:{event.at_utc}",
+            return _incident(state, "reconciliation-lost:" + re.sub(r"[^A-Za-z0-9]", "", event.at_utc),
                              f"{event.at_utc} INCIDENT reconciliation lost in {state.mode.value} -> DISARMED")
         return state
     if isinstance(event, IncidentRaised):
@@ -346,6 +389,9 @@ def reduce(state: ControlState, event: Event) -> ControlState:
         return replace(state, open_incidents=tuple(i for i in state.open_incidents if i != event.incident_id),
                        log=state.log + (f"{event.at_utc} ACK {event.incident_id} by {event.operator_ref}",))
     if isinstance(event, ArmAccepted):
+        if event.basis != state_basis(state):
+            return replace(state, log=state.log + (f"{event.at_utc} ARM {event.mode.value} REFUSED: STALE_DECISION "
+                                                   f"(state changed after it was decided)",))
         return replace(state, mode=event.mode, armed_grant_digest=event.grant_digest,
                        open_incidents=tuple(i for i in state.open_incidents if i not in event.acknowledged_incidents),
                        log=state.log + (f"{event.at_utc} ARMED {event.mode.value} by {event.operator_ref}; "
@@ -361,10 +407,13 @@ def reduce(state: ControlState, event: Event) -> ControlState:
                        log=state.log + (f"{event.at_utc} LATCH {event.scope.value}:{event.key} ({event.reason})",))
     if isinstance(event, ClearLatch):
         return replace(state, latches=state.latches - {(event.scope, event.key)},
-                       closeouts=state.closeouts - {(event.scope, event.key)},
+                       closeouts=frozenset(x for x in state.closeouts if (x[0], x[1]) != (event.scope, event.key)),
                        log=state.log + (f"{event.at_utc} UNLATCH {event.scope.value}:{event.key} by {event.operator_ref}",))
     if isinstance(event, CloseoutAuthorized):
-        return replace(state, closeouts=state.closeouts | {(event.scope, event.key)},
+        if (event.scope, event.key) not in state.latches:
+            return replace(state, log=state.log + (f"{event.at_utc} CLOSEOUT REFUSED {event.scope.value}:{event.key}: "
+                                                   f"no such active latch",))
+        return replace(state, closeouts=state.closeouts | {(event.scope, event.key, event.expires_at_utc)},
                        log=state.log + (f"{event.at_utc} CLOSEOUT AUTHORIZED {event.scope.value}:{event.key} "
                                         f"by {event.operator_ref}",))
     raise TypeError(f"unknown control event {type(event).__name__}")
@@ -409,8 +458,9 @@ def action_problems(state: ControlState, action: ControlAction, *, venue: str, s
     latched = _matching_latches(state, venue=venue, strategy_id=strategy_id, market_ticker=market_ticker)
     if action is ControlAction.NEW_RISK and latched:
         out.append(f"NEW_RISK_LATCHED: {[f'{s.value}:{k}' for s, k in latched]}")
-    uncovered = [latch for latch in latched if latch not in state.closeouts]
-    if action is ControlAction.REDUCE and state.mode is Mode.BOUNDED_AUTO and uncovered:
+    live = {(sc, k) for sc, k, exp in state.closeouts if now < parse_utc_text(exp)}
+    uncovered = [latch for latch in latched if latch not in live]
+    if action is ControlAction.REDUCE and state.mode in AUTOMATED_MODES and uncovered:
         out.append(f"REDUCTION_UNDER_LATCH_NEEDS_CLOSEOUT: {[f'{s.value}:{k}' for s, k in uncovered]}")
     if action is ControlAction.CLOSEOUT and (not latched or uncovered):
         out.append("CLOSEOUT_NOT_AUTHORIZED: a closeout needs a latch and an explicit CloseoutAuthorized for it")
@@ -557,11 +607,13 @@ def turnover_increment(intent: OrderIntent) -> Decimal:
     return exact_product(intent.quantity, intent.limit_price) + intent.max_total_cost
 
 
-def grant_problems(grant: AutomationGrant, intent: OrderIntent, *, venue: str, event_key: str, usage: GrantUsage,
-                   model_hash: str, policy_hash: str, now: datetime) -> list[str]:
-    """Why `intent` falls outside `grant` (empty: inside it). A change to any bound version or hash, a limit
-    breach, or unanchored, stale or unknown usage is outside."""
+def grant_problems(grant: AutomationGrant, intent: OrderIntent, *, armed_grant_digest: str | None, venue: str,
+                   event_key: str, usage: GrantUsage, model_hash: str, policy_hash: str, now: datetime) -> list[str]:
+    """Why `intent` falls outside `grant` (empty: inside it). `grant` must be the one the controller is armed
+    against. A change to any bound version or hash, a limit breach, or unanchored, stale or unknown usage is outside."""
     out = grant.validity_problems(intent.scope, now)
+    if armed_grant_digest != grant.digest():
+        out.append("GRANT_NOT_ARMED: the controller is not armed against this grant")
     if venue.lower() != grant.venue:
         out.append("GRANT_VENUE_MISMATCH")
     for name in ("strategy_id", "strategy_version", "risk_policy_version", "fee_schedule_version", "profile_version"):
@@ -593,13 +645,14 @@ def grant_problems(grant: AutomationGrant, intent: OrderIntent, *, venue: str, e
         out.append("GRANT_USAGE_UNKNOWN: turnover")
     elif usage.turnover_today + turnover_increment(intent) > lim.max_daily_turnover:
         out.append("GRANT_TURNOVER")
-    if usage.realized_loss_today is None or usage.drawdown is None:
-        out.append("GRANT_USAGE_UNKNOWN: losses")
-    else:
-        if usage.realized_loss_today >= lim.max_daily_loss and intent.kind is IntentKind.ENTRY:
-            out.append("GRANT_DAILY_LOSS_REACHED")
-        if usage.drawdown >= lim.max_drawdown and intent.kind is IntentKind.ENTRY:
-            out.append("GRANT_DRAWDOWN_REACHED")
+    if intent.kind is IntentKind.ENTRY:  # loss limits stop new risk; they never trap an exit
+        if usage.realized_loss_today is None or usage.drawdown is None:
+            out.append("GRANT_USAGE_UNKNOWN: losses")
+        else:
+            if usage.realized_loss_today >= lim.max_daily_loss:
+                out.append("GRANT_DAILY_LOSS_REACHED")
+            if usage.drawdown >= lim.max_drawdown:
+                out.append("GRANT_DRAWDOWN_REACHED")
     if intent.kind is IntentKind.ENTRY:
         if usage.event_exposure is None or usage.total_exposure is None:
             out.append("GRANT_USAGE_UNKNOWN: exposure")

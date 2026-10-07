@@ -73,7 +73,8 @@ def usage(g: c.AutomationGrant, **kw) -> c.GrantUsage:
 
 
 def check(g, i, u, **kw):
-    args = dict(venue="kalshi", event_key="EVT-1", usage=u, model_hash=H1, policy_hash=H2, now=T0)
+    args = dict(armed_grant_digest=g.digest(), venue="kalshi", event_key="EVT-1", usage=u, model_hash=H1,
+                policy_hash=H2, now=T0)
     args.update(kw)
     return c.grant_problems(g, i, **args)
 
@@ -148,7 +149,7 @@ def test_restart_is_disarmed_and_keeps_latches_closeouts_and_incidents():
     s, accepted = arm(reconciled(), c.Mode.HUMAN_CONFIRMATION)
     events = (c.ReconciliationObserved(c.Reconciliation.COMPLETE, at(0)), accepted,
               c.SetLatch(c.LatchScope.MARKET, "kxtest-1", "manual stop", at(2)),
-              c.CloseoutAuthorized(c.LatchScope.MARKET, "KXTEST-1", "owner", at(3)),
+              c.CloseoutAuthorized(c.LatchScope.MARKET, "KXTEST-1", "owner", at(3), at(60)),
               c.IncidentRaised("inc-9", "lost ack", at(4)))
     after = c.replay(FIX, events)
     assert after.mode is c.Mode.DISARMED and after.reconciliation is c.Reconciliation.NOT_RUN
@@ -184,7 +185,7 @@ def test_reductions_under_a_latch_need_an_explicit_closeout_in_bounded_auto():
     assert any("NEW_RISK_LATCHED" in p for p in c.action_problems(s, c.ControlAction.NEW_RISK, **args))
     assert any("REDUCTION_UNDER_LATCH_NEEDS_CLOSEOUT" in p for p in c.action_problems(s, c.ControlAction.REDUCE, **args))
     assert any("CLOSEOUT_NOT_AUTHORIZED" in p for p in c.action_problems(s, c.ControlAction.CLOSEOUT, **args))
-    s = c.reduce(s, c.CloseoutAuthorized(c.LatchScope.GLOBAL, "*", "owner", at(4)))
+    s = c.reduce(s, c.CloseoutAuthorized(c.LatchScope.GLOBAL, "*", "owner", at(4), at(30)))
     assert c.action_problems(s, c.ControlAction.REDUCE, **args) == []
     assert c.action_problems(s, c.ControlAction.CLOSEOUT, **args) == []
     human, _ = arm(reconciled(), c.Mode.HUMAN_CONFIRMATION)
@@ -290,3 +291,68 @@ def test_the_log_records_every_event():
     s, _ = arm(reconciled(), c.Mode.HUMAN_CONFIRMATION)
     s = c.reduce(s, c.Disarm("owner", "end of session", at(9)))
     assert s.mode is c.Mode.DISARMED and len(s.log) == 3 and "DISARM by owner" in s.log[-1]
+
+
+def test_a_stale_acceptance_cannot_arm():
+    """Regression (N1): events landing between the decision and its outcome invalidate the outcome."""
+    s = reconciled()
+    accepted = c.decide_arm(s, c.ArmRequest(c.Mode.HUMAN_CONFIRMATION, "owner", (), at(1)), grants=(), now=now(1))
+    assert isinstance(accepted, c.ArmAccepted)
+    for between in (c.ReconciliationObserved(c.Reconciliation.FAILED, at(1.5)), c.IncidentRaised("inc-x", "x", at(1.5)),
+                    c.SetLatch(c.LatchScope.GLOBAL, "*", "kill", at(1.5))):
+        after = c.reduce(c.reduce(s, between), accepted)
+        assert after.mode is c.Mode.DISARMED and "STALE_DECISION" in after.log[-1], between
+    assert c.reduce(s, accepted).mode is c.Mode.HUMAN_CONFIRMATION
+
+
+def test_closeouts_need_an_active_latch_and_expire():
+    s, g = bounded()
+    s = c.reduce(s, c.CloseoutAuthorized(c.LatchScope.MARKET, "KXTEST-1", "owner", at(2), at(30)))
+    assert not s.closeouts and "CLOSEOUT REFUSED" in s.log[-1]  # authorized before its latch existed: ignored
+    s = c.reduce(s, c.SetLatch(c.LatchScope.MARKET, "KXTEST-1", "stop", at(3)))
+    s = c.reduce(s, c.CloseoutAuthorized(c.LatchScope.MARKET, "KXTEST-1", "owner", at(4), at(10)))
+    assert c.action_problems(s, c.ControlAction.REDUCE, now=now(5), grants=(g,), **KW) == []
+    assert any("REDUCTION_UNDER_LATCH_NEEDS_CLOSEOUT" in p for p in
+               c.action_problems(s, c.ControlAction.REDUCE, now=now(10), grants=(g,), **KW))  # lapsed
+
+
+def test_grant_problems_require_the_armed_grant():
+    g, other = grant(), grant(issuer_ref="EXECUTION_PLAN:other")
+    assert any("GRANT_NOT_ARMED" in p for p in check(other, intent(), usage(other), armed_grant_digest=g.digest()))
+    assert any("GRANT_NOT_ARMED" in p for p in check(g, intent(), usage(g), armed_grant_digest=None))
+
+
+def test_unknown_losses_block_entries_only():
+    g = grant()
+    assert any("GRANT_USAGE_UNKNOWN: losses" in p for p in check(g, intent(), usage(g, drawdown=None)))
+    assert not any("losses" in p for p in check(g, reduction(), usage(g, drawdown=None)))
+
+
+def test_reconciliation_lost_incident_ids_are_valid_identifiers():
+    s, _ = arm(reconciled(), c.Mode.HUMAN_CONFIRMATION)
+    s = c.reduce(s, c.ReconciliationObserved(c.Reconciliation.FAILED, at(5)))
+    (incident,) = s.open_incidents
+    c.IncidentAcknowledged(incident, "owner", at(6))  # constructs: the generated id is a valid identifier
+
+
+@pytest.mark.parametrize("make", [
+    lambda: c.ArmAccepted("HUMAN_CONFIRMATION", "owner", (), None, at(0), "a" * 64),
+    lambda: c.ArmAccepted(c.Mode.BOUNDED_AUTO, "owner", (), None, at(0), "a" * 64),
+    lambda: c.ArmAccepted(c.Mode.SHADOW, "owner", (), None, "bad", "a" * 64),
+    lambda: c.ArmAccepted(c.Mode.SHADOW, "owner", (), None, at(0), "nope"),
+    lambda: c.ArmRefused(c.Mode.SHADOW, "owner", (), at(0)),
+    lambda: c.IncidentAcknowledged("", "owner", at(0)),
+    lambda: c.CloseoutAuthorized(c.LatchScope.GLOBAL, "*", "owner", at(5), at(5)),
+])
+def test_authority_events_are_validated(make):
+    with pytest.raises(ValueError):
+        make()
+
+
+def test_demo_mode_reductions_under_a_latch_also_need_a_closeout():
+    s = c.reduce(c.initial_state(FIX), c.ReconciliationObserved(c.Reconciliation.COMPLETE, at(0)))
+    forced = c.ArmAccepted(c.Mode.DEMO, "owner", (), None, at(1), c.state_basis(s))  # DEMO is unauthorized live;
+    s = c.reduce(s, forced)                                                            # this exercises the rule
+    s = c.reduce(s, c.SetLatch(c.LatchScope.GLOBAL, "*", "kill", at(2)))
+    assert any("REDUCTION_UNDER_LATCH_NEEDS_CLOSEOUT" in p for p in
+               c.action_problems(s, c.ControlAction.REDUCE, now=now(3), **KW))
