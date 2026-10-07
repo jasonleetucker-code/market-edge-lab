@@ -61,7 +61,9 @@ PLANNED_EXECUTION_EXCEPTIONS = {
 }
 EXECUTION_NEVER_EXEMPT = frozenset({"client write call"})
 # Active exceptions: each entry is copied unchanged from the plan, in the PR that creates its file.
-EXECUTION_EXCEPTIONS: dict = {}
+# Activated by #160 B/F, which creates signer.py, transport.py and kalshi_wire.py.
+EXECUTION_EXCEPTIONS: dict = {rel: PLANNED_EXECUTION_EXCEPTIONS[rel] for rel in (
+    "edge_lab/execution/signer.py", "edge_lab/execution/transport.py", "edge_lab/execution/kalshi_wire.py")}
 
 
 def _source_files():

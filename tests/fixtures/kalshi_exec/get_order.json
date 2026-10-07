@@ -1,0 +1,31 @@
+{
+  "order": {
+    "order_id": "3b23c1c7-f4ef-4f0d-8b9a-9e53c61f1a0d",
+    "user_id": "fixture-user",
+    "client_order_id": "8c35ecb3-328f-4f52-8c7c-0f4b9862f8d1",
+    "ticker": "HIGHNY-24JAN01-T60",
+    "side": "yes",
+    "action": "buy",
+    "outcome_side": "yes",
+    "book_side": "bid",
+    "type": "limit",
+    "status": "resting",
+    "yes_price_dollars": "0.5600",
+    "no_price_dollars": "0.4400",
+    "fill_count_fp": "2.50",
+    "remaining_count_fp": "7.50",
+    "initial_count_fp": "10.00",
+    "taker_fees_dollars": "0.000000",
+    "maker_fees_dollars": "0.012250",
+    "taker_fill_cost_dollars": "0.0000",
+    "maker_fill_cost_dollars": "1.4000",
+    "expiration_time": null,
+    "created_time": "2026-10-07T15:00:00Z",
+    "last_update_time": "2026-10-07T15:00:05Z",
+    "self_trade_prevention_type": "taker_at_cross",
+    "order_group_id": null,
+    "cancel_order_on_pause": true,
+    "subaccount_number": 0,
+    "exchange_index": 0
+  }
+}
