@@ -7,6 +7,11 @@ One narrow exception exists (ADR 0022): the ntfy notification sink may POST a te
 with an optional Bearer token, to one topic on an allowlisted ntfy host. Three rules are
 relaxed, in exactly one file, and only to POST and the Authorization header. The order, client-write and signing rules
 still apply to it, and the tests below prove the exception cannot spread.
+
+The isolated execution package (ADR 0043) is that "separate component". Three of its files each
+have exactly the relaxations they need (`EXECUTION_EXCEPTIONS`); every other file in it, and every
+file outside it, keeps every rule. `test_execution_boundary.py` proves nothing outside the package
+imports it.
 """
 
 import re
@@ -40,6 +45,20 @@ NOTIFICATION_DELIVERY_EXCEPTION = {
 # These rules have no exception anywhere, the notification file included.
 NEVER_EXEMPT = frozenset({"order endpoint", "client write call", "request signing"})
 
+# The isolated execution package (ADR 0043). Path-exact, like the notification exception: a copy, a
+# rename or another file in the package inherits nothing. `None` lifts a rule; a pattern narrows it.
+# The client-write rule (`.post(`, `.put(`, ...) is never lifted: transport sends through urllib only.
+EXECUTION_EXCEPTIONS = {
+    "edge_lab/execution/signer.py": {"request signing": None},
+    "edge_lab/execution/transport.py": {
+        "non-GET HTTP method": re.compile(r"""method\s*=\s*["'](PUT|PATCH)["']""", re.I),  # POST and DELETE only
+        "request body (implies POST)": None,
+        "auth header": re.compile(r"""["'](Authorization|Cookie)["']""", re.I),  # the two KALSHI-ACCESS-* only
+    },
+    "edge_lab/execution/kalshi_wire.py": {"order endpoint": None},
+}
+EXECUTION_NEVER_EXEMPT = frozenset({"client write call"})
+
 
 def _source_files():
     return sorted(SRC.rglob("*.py"))
@@ -51,7 +70,7 @@ def _rel(path: Path) -> str:
 
 def _violations(label: str, rel: str, text: str) -> list[str]:
     """Lines of `text` (the file at `rel`, relative to src/) that break rule `label`."""
-    relaxed = NOTIFICATION_DELIVERY_EXCEPTION.get(rel, {})
+    relaxed = NOTIFICATION_DELIVERY_EXCEPTION.get(rel) or EXECUTION_EXCEPTIONS.get(rel) or {}
     pattern = relaxed[label] if label in relaxed else FORBIDDEN[label]
     if pattern is None:
         return []
@@ -383,3 +402,38 @@ def test_http_client_refuses_credential_headers(header):
     with pytest.raises(ValueError):
         fetch("https://example.test/x", headers={header: "x"}, opener=opener, sleep=lambda s: None)
     assert opener.calls == []
+
+
+# ---------------------------------------------------------------- the execution boundary (ADR 0043)
+
+
+def test_the_execution_exceptions_are_path_exact_and_never_lift_client_writes():
+    assert set(EXECUTION_EXCEPTIONS) == {"edge_lab/execution/signer.py", "edge_lab/execution/transport.py",
+                                         "edge_lab/execution/kalshi_wire.py"}
+    assert not set(EXECUTION_EXCEPTIONS) & set(NOTIFICATION_DELIVERY_EXCEPTION)
+    for rel, rules in EXECUTION_EXCEPTIONS.items():
+        assert set(rules) <= set(FORBIDDEN) and not set(rules) & EXECUTION_NEVER_EXEMPT, rel
+    # An exception table entry is removed when its file would no longer need it.
+    for rel, rules in EXECUTION_EXCEPTIONS.items():
+        if (SRC / rel).is_file():
+            text = (SRC / rel).read_text(encoding="utf-8")
+            for label in rules:
+                assert FORBIDDEN[label].search(text), f"{rel}: the {label} exception is unused; remove it"
+
+
+@pytest.mark.parametrize("rel", ["edge_lab/execution/model.py", "edge_lab/execution/journal.py",
+                                 "edge_lab/execution/signer_copy.py", "edge_lab/execution/sub/signer.py",
+                                 "edge_lab/signer.py", "edge_lab/execution/Transport.py", "edge_lab/execution_ticket.py"])
+def test_no_other_file_inherits_an_execution_exception(rel):
+    probes = {"request signing": "import hmac", "order endpoint": 'URL = "/portfolio/orders"',
+              "non-GET HTTP method": 'Request(url, method="POST")', "request body (implies POST)": "Request(u, data=b)",
+              "auth header": 'h["KALSHI-ACCESS-KEY"] = k'}
+    for label, line in probes.items():
+        assert _violations(label, rel, line + "\n"), f"{rel} would inherit the {label} exception"
+
+
+@pytest.mark.parametrize("line", ['Request(url, method="PUT")', 'Request(url, method="PATCH")',
+                                  'h["Authorization"] = t', 'h["Cookie"] = c', "session.post(url)"])
+def test_the_transport_exception_stays_narrow(line):
+    rel = "edge_lab/execution/transport.py"
+    assert any(_violations(label, rel, line + "\n") for label in FORBIDDEN), line
