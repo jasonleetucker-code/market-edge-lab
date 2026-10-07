@@ -35,25 +35,37 @@ PAGE_BUDGET_EXHAUSTED, REQUEST_BUDGET_EXHAUSTED, DEADLINE_EXCEEDED; a record of 
 USER_DATA_AS_OF_REGRESSED, USER_DATA_AS_OF_UNAVAILABLE; CUTOFF_UNAVAILABLE, CUTOFF_REGRESSED, CUTOFF_MOVING;
 TIER_PARTITION_VIOLATION; RECORD_VANISHED (an order or fill seen live that is in neither tier at the end);
 UNIT_MISMATCH (balance cents vs dollars, settlement revenue vs count); ATTRIBUTION_MISMATCH;
-SHARDS_UNKNOWN, SHARDS_NOT_ENUMERATED (only a single-shard account can be COMPLETE); LOCAL_SCOPE_ALIAS;
+SHARDS_UNKNOWN, SHARDS_NOT_ENUMERATED (a balance or any record off shard 0); LOCAL_SCOPE_ALIAS;
 ENDPOINT_NOT_IN_PLAN. Any problem makes the result PARTIAL; no completed subaccount stream makes
 it FAILED. A malformed plan, a write request or a missing subaccount parameter raises `AccountReadError`.
 
-**Missing is not zero.** An incomplete, unstable or conflicting stream yields None, never an empty tuple. In the
-snapshot inputs: cash is None unless the whole result is COMPLETE, and its basis is UNKNOWN while ACC-02 is UNKNOWN
-(today, always), so `reservations` allows no new risk. Positions and external orders are None unless their own
-streams are complete, stable, conflict-free and fresh. Every resting venue order that is not attributed to a local
-attempt, or whose attribution does not hold, is an `ExternalOrder`: it never disappears, and its cash is unknown
-(blocking) or the full notional under `ExternalCashPolicy.FULL_NOTIONAL`.
+**Missing is not zero.** Every result field passes one gate (`_finalize`). A live-tier field (balance, positions,
+orders, open orders, fills, settlements) is set only when its stream is complete, conflict-free, STABLE, fresh and on
+enumerated shards; a historical field only when its stream is complete, conflict-free, on enumerated shards and the
+partition is proven. Otherwise it is None (unknown), never an empty or partial tuple: `open_orders=None` is "not
+known", never "no resting orders". In the snapshot inputs, cash is additionally None unless the whole result is
+COMPLETE, and its basis is UNKNOWN while ACC-02 is UNKNOWN (today, always), so `reservations` allows no new risk.
+Every resting venue order that is not attributed to a local attempt, or whose attribution does not hold, is an
+`ExternalOrder`: it never disappears, and its cash is unknown (blocking) or the full notional under
+`ExternalCashPolicy.FULL_NOTIONAL`.
 
-**Gaps, not zeros.** Settlements of markets settled before the cutoff have no historical endpoint (ACC-12). A
-settlement record with missing fields is kept with the fields it has (`missing` names the rest), and an archived
-position with no settlement record is a HISTORICAL_POSITION_ONLY record. Both are listed in `gaps`.
+**Attribution.** A unique provider order id is the identity, and the venue's client order id must be one the attempt
+carries (`LocalOrder.client_ids`: the intent's, or the amended `current_client_order_id`). Without a provider id
+match, the client order id must name exactly one unacknowledged attempt. Anything else stays external.
+
+**Gaps, not zeros.** Settlements of markets settled before the cutoff have no historical endpoint (ACC-12). Each
+settlement record is read on its own: one with every required field goes through the strict `kalshi_wire` parser;
+one with required fields missing is kept with the fields it has (`missing` names the rest), every present field
+held to the strict rules (and revenue never negative). An archived position with no settlement record is a
+HISTORICAL_POSITION_ONLY record. Both are listed in `gaps`.
 
 **Limitations.** Reads are not one atomic snapshot: agreement of two samples is evidence of a quiet account, not
 proof. The resting-collateral meaning of the balance (ACC-02) and the `updated_ts` unit (ACC-03) are UNKNOWN; only
 the ordering of `updated_ts` is used. Shards are not enumerated: whether a read without `exchange_index` covers
-every shard is not documented, so a balance on any shard but 0, or no `balance_breakdown`, is PARTIAL.
+every shard is not documented, so a balance on any shard but 0, no `balance_breakdown`, or any record whose
+`exchange_index` is not 0 is PARTIAL. An amended price is not modelled: an amended order whose price differs from
+the intent's limit is kept external. `local_orders_from_journal` cannot know an amended client order id (the journal
+does not record one), so it leaves `current_client_order_id` None.
 Legacy side/action fields are never read (DIR-04), so an external order's outcome side and action are unknown.
 Records without a `subaccount_number` are accepted on the strength of the explicit request parameter.
 """
@@ -277,6 +289,7 @@ class SettlementRecord:
 
     ticker: str
     source: SettlementSource
+    exchange_index: int | None
     event_ticker: str | None
     market_result: str | None
     yes_count: Decimal | None
@@ -305,14 +318,17 @@ class LocalOrder:
     limit_price: Decimal
     quantity: Decimal
     filled_quantity: Decimal
+    # The client order id the venue order carries now, when an amend set `updated_client_order_id`; None: unchanged.
+    current_client_order_id: str | None = None
 
     def __post_init__(self) -> None:
         for name in ("reservation_id", "scope_key", "client_order_id", "market_ticker"):
             if not isinstance(getattr(self, name), str) or not getattr(self, name):
                 raise ValueError(f"{name} is required")
-        if self.provider_order_id is not None and (not isinstance(self.provider_order_id, str)
-                                                   or not self.provider_order_id):
-            raise ValueError("provider_order_id must be a non-empty str or None")
+        for name in ("provider_order_id", "current_client_order_id"):
+            value = getattr(self, name)
+            if value is not None and (not isinstance(value, str) or not value):
+                raise ValueError(f"{name} must be a non-empty str or None")
         if not isinstance(self.side, Side) or not isinstance(self.kind, IntentKind):
             raise ValueError("side and kind must be enum members")
         for name in ("limit_price", "quantity", "filled_quantity"):
@@ -321,6 +337,11 @@ class LocalOrder:
     @property
     def action(self) -> Action:
         return Action.BUY if self.kind is IntentKind.ENTRY else Action.SELL
+
+    @property
+    def client_ids(self) -> frozenset[str]:
+        """Every client order id the venue order may carry: the intent's, and the amended one if any."""
+        return frozenset(x for x in (self.client_order_id, self.current_client_order_id) if x is not None)
 
 
 def local_orders_from_journal(journal: Any, scopes: Iterable[AccountScope]) -> tuple[LocalOrder, ...]:
@@ -430,8 +451,11 @@ def _refuse_constant(name: str) -> Any:
 
 
 def _load(body: bytes, where: str) -> dict[str, Any]:
+    """The page envelope. JSON numbers with a fraction stay `float` here on purpose: a record is re-serialized for
+    the strict parser, which refuses a number where a fixed-point string is documented, so the float must survive
+    as a number (turning it into text would make it look valid)."""
     try:
-        obj = json.loads(bytes(body).decode("utf-8"), parse_float=Decimal, parse_constant=_refuse_constant,
+        obj = json.loads(bytes(body).decode("utf-8"), parse_constant=_refuse_constant,
                          object_pairs_hook=_no_duplicate_keys)
     except WireFormatError:
         raise
@@ -444,15 +468,18 @@ def _load(body: bytes, where: str) -> dict[str, Any]:
 
 _COUNT_TEXT = re.compile(r"\d+(\.\d{1,2})?")
 _DOLLAR_TEXT = re.compile(r"\d+(\.\d{1,6})?")
-_SETTLEMENT_FIELDS = ("event_ticker", "market_result", "yes_count_fp", "yes_total_cost_dollars", "no_count_fp",
-                      "no_total_cost_dollars", "revenue", "value", "fee_cost", "settled_time")
+_SETTLEMENT_FIELDS = ("exchange_index", "event_ticker", "market_result", "yes_count_fp", "yes_total_cost_dollars",
+                      "no_count_fp", "no_total_cost_dollars", "revenue", "value", "fee_cost", "settled_time")
+# The fields `kalshi_wire` requires of a settlement record: a record with all of them goes through that parser.
+_STRICT_SETTLEMENT_FIELDS = frozenset({"ticker", "event_ticker", "exchange_index", "market_result", "yes_count_fp",
+                                       "yes_total_cost_dollars", "no_count_fp", "no_total_cost_dollars", "revenue",
+                                       "settled_time", "fee_cost"})
 
 
-def _lenient_settlement(obj: object, where: str) -> SettlementRecord:
-    """A settlement record with fields missing (old records): every present field is checked as strictly as
-    `kalshi_wire` does; an absent or null one is listed in `missing`, never defaulted. No ticker: unidentifiable."""
-    if not isinstance(obj, dict):
-        raise WireFormatError(f"{where} is not an object")
+def _lenient_settlement(obj: dict[str, Any], where: str) -> SettlementRecord:
+    """A settlement record with required fields missing (old records): every present field is checked as strictly
+    as `kalshi_wire` does (and revenue may not be negative); an absent or null one is listed in `missing`, never
+    defaulted. No ticker: unidentifiable."""
     ticker = obj.get("ticker")
     if not isinstance(ticker, str) or not ticker:
         raise WireFormatError(f"{where}: a settlement without a ticker cannot be identified")
@@ -465,10 +492,11 @@ def _lenient_settlement(obj: object, where: str) -> SettlementRecord:
             return None
         if kind == "text" and isinstance(value, str):
             return value
-        if kind == "int" and isinstance(value, int) and not isinstance(value, bool):
-            return value
-        if kind in ("count", "dollars") and isinstance(value, str) and \
-                (_COUNT_TEXT if kind == "count" else _DOLLAR_TEXT).fullmatch(value):
+        if kind in ("int", "index", "cents") and isinstance(value, int) and not isinstance(value, bool):
+            if kind == "int" or value >= 0:
+                return value
+        if kind in ("count", "dollars") and isinstance(value, str) and (
+                _COUNT_TEXT if kind == "count" else _DOLLAR_TEXT).fullmatch(value):
             return Decimal(value)
         if kind == "result" and value in ("yes", "no", "scalar"):
             return value
@@ -482,34 +510,42 @@ def _lenient_settlement(obj: object, where: str) -> SettlementRecord:
         raise WireFormatError(f"{where}.{key} is malformed")
 
     return SettlementRecord(
-        ticker, SettlementSource.VENUE_RECORD_INCOMPLETE, get("event_ticker", "text"), get("market_result", "result"),
-        get("yes_count_fp", "count"), get("yes_total_cost_dollars", "dollars"), get("no_count_fp", "count"),
-        get("no_total_cost_dollars", "dollars"), get("revenue", "int"), get("value", "int"), get("fee_cost", "dollars"),
-        get("settled_time", "time"), None, tuple(missing))
+        ticker, SettlementSource.VENUE_RECORD_INCOMPLETE, get("exchange_index", "index"), get("event_ticker", "text"),
+        get("market_result", "result"), get("yes_count_fp", "count"), get("yes_total_cost_dollars", "dollars"),
+        get("no_count_fp", "count"), get("no_total_cost_dollars", "dollars"), get("revenue", "cents"),
+        get("value", "int"), get("fee_cost", "dollars"), get("settled_time", "time"), None, tuple(missing))
 
 
-def _settlement_record(s: w.VenueSettlement) -> SettlementRecord:
+def _settlement_record(s: w.VenueSettlement, where: str) -> SettlementRecord:
+    if s.revenue_cents < 0:
+        raise WireFormatError(f"{where}.revenue must not be negative")
     missing = () if s.value_cents is not None else ("value",)
     return SettlementRecord(s.ticker, SettlementSource.VENUE_RECORD if not missing
-                            else SettlementSource.VENUE_RECORD_INCOMPLETE, s.event_ticker, s.market_result,
-                            s.yes_count, s.yes_total_cost, s.no_count, s.no_total_cost, s.revenue_cents,
-                            s.value_cents, s.fee_cost, s.settled_time, None, missing)
+                            else SettlementSource.VENUE_RECORD_INCOMPLETE, s.exchange_index, s.event_ticker,
+                            s.market_result, s.yes_count, s.yes_total_cost, s.no_count, s.no_total_cost,
+                            s.revenue_cents, s.value_cents, s.fee_cost, s.settled_time, None, missing)
+
+
+def _one_settlement(item: object, where: str) -> SettlementRecord:
+    """Per record: one with every required field goes through the strict `kalshi_wire` parser; only one with
+    required fields absent goes through the lenient reader. One bad record never weakens another."""
+    if not isinstance(item, dict):
+        raise WireFormatError(f"{where} is not an object")
+    if all(item.get(k) is not None for k in _STRICT_SETTLEMENT_FIELDS):
+        single = json.dumps({"settlements": [item], "cursor": None}, allow_nan=False).encode("utf-8")
+        (record,) = w.parse_settlements_page(single).items
+        return _settlement_record(record, where)
+    return _lenient_settlement(item, where)
 
 
 def _parse_settlements(body: bytes) -> tuple[tuple[SettlementRecord, ...], str | None]:
-    """The strict parser first; only when it refuses, the per-record lenient reader (missing fields only)."""
-    try:
-        page = w.parse_settlements_page(body)
-        return tuple(_settlement_record(s) for s in page.items), page.cursor
-    except WireFormatError:
-        pass
     obj = _load(body, "settlements")
     raw, cursor = obj.get("settlements"), obj.get("cursor")
     if not isinstance(raw, list):
         raise WireFormatError("settlements: required field 'settlements' is missing")
     if cursor is not None and not isinstance(cursor, str):
         raise WireFormatError("settlements.cursor must be a string")
-    return tuple(_lenient_settlement(x, f"settlements.settlements[{i}]") for i, x in enumerate(raw)), cursor or None
+    return tuple(_one_settlement(x, f"settlements.settlements[{i}]") for i, x in enumerate(raw)), cursor or None
 
 
 def _parse_orders(body: bytes) -> tuple[tuple[Any, ...], str | None]:
@@ -822,30 +858,41 @@ class _Attribution:
 
 def _attribute(open_orders: tuple[w.VenueOrder, ...], all_orders: tuple[w.VenueOrder, ...] | None,
                local: tuple[LocalOrder, ...], policy: ExternalCashPolicy) -> _Attribution:
-    """Match resting venue orders to local attempts by provider order id or client order id. A match must agree on
-    ticker, direction and YES price; anything ambiguous or contradictory stays external (it consumes capacity)."""
+    """Match resting venue orders to local attempts. A unique provider order id is the identity (the journal binds
+    each one to one attempt), and the venue's client order id must then be one the attempt carries (its intent's,
+    or the amended one). Without a provider id match, the client order id must name exactly one unacknowledged
+    attempt: attempts of one intent share it, and an acknowledged attempt is already another venue order. A match
+    must also agree on ticker, direction and YES price. Anything ambiguous or contradictory stays external (it
+    consumes capacity)."""
     by_provider: dict[str, list[LocalOrder]] = {}
     by_client: dict[str, list[LocalOrder]] = {}
     for lo in local:
         if lo.provider_order_id is not None:
             by_provider.setdefault(lo.provider_order_id, []).append(lo)
-        by_client.setdefault(lo.client_order_id, []).append(lo)
+        for cid in lo.client_ids:
+            by_client.setdefault(cid, []).append(lo)
     attributed, external, problems, observations = [], [], [], []
     claimed: dict[str, str] = {}
     for o in sorted(open_orders, key=lambda x: x.order_id):
         p, cl = by_provider.get(o.order_id, []), by_client.get(o.client_order_id, [])
         why, chosen = None, None
-        if len(p) > 1 or len(cl) > 1:
-            why = "several local orders claim it"
-        elif p and cl and p[0] is not cl[0]:
-            why = "its provider id and client id name different local orders"
-        elif p and not cl:
-            why = f"client order id differs from local {p[0].reservation_id}, which owns this provider id"
-        elif cl and cl[0].provider_order_id is not None and cl[0].provider_order_id != o.order_id:
-            why = (f"local {cl[0].reservation_id} carries this client order id but is acknowledged as venue order "
-                   f"{cl[0].provider_order_id}")
-        elif p or cl:
-            chosen = (p or cl)[0]
+        if len(p) > 1:
+            why = "several local orders own its provider id"
+        elif p:
+            chosen = p[0]
+            if o.client_order_id not in chosen.client_ids:
+                why = (f"client order id is not one local {chosen.reservation_id} carries, though it owns this "
+                       "provider id")
+        elif cl:
+            unacknowledged = [lo for lo in cl if lo.provider_order_id is None]
+            if len(unacknowledged) == 1:
+                chosen = unacknowledged[0]
+            elif unacknowledged:
+                why = "several unacknowledged local attempts carry its client order id"
+            else:
+                why = (f"every local order carrying its client order id is acknowledged as another venue order "
+                       f"({sorted(lo.provider_order_id for lo in cl)})")
+        if chosen is not None and why is None:
             why = _price_terms_problem(o, chosen)
             if why is None and chosen.reservation_id in claimed:
                 why = f"local {chosen.reservation_id} is already matched to {claimed[chosen.reservation_id]}"
@@ -855,8 +902,12 @@ def _attribute(open_orders: tuple[w.VenueOrder, ...], all_orders: tuple[w.VenueO
         elif chosen is not None:
             claimed[chosen.reservation_id] = o.order_id
             price = o.yes_price if chosen.side is Side.YES else o.no_price
-            attributed.append(AttributedOrder(chosen.reservation_id, o.client_order_id, o.remaining_count, price,
+            # The journal's client order id: the reservation authority checks it against its own row.
+            attributed.append(AttributedOrder(chosen.reservation_id, chosen.client_order_id, o.remaining_count, price,
                                               _unreflected(o.remaining_count, policy)))
+            if o.client_order_id != chosen.client_order_id:
+                observations.append(f"AMENDED_CLIENT_ID: venue order {o.order_id} carries {o.client_order_id}, the "
+                                    f"amended id of local {chosen.reservation_id}")
         else:
             external.append(_external(o, policy))
             observations.append(f"EXTERNAL_ORDER: venue order {o.order_id} ({o.ticker}) has no local attempt "
@@ -902,24 +953,47 @@ def _settlement_unit_problem(s: SettlementRecord, n: int) -> str | None:
 
 
 def _partition_problems(n: int, historical: Mapping[AccountEndpoint, _Got],
-                        cutoff: w.HistoricalCutoff | None) -> list[str]:
+                        cutoff: w.HistoricalCutoff | None) -> Mapping[AccountEndpoint, tuple[str, ...]]:
     """A historical record newer than the cutoff, or a resting order in the historical tier, contradicts the
-    documented partition (ACC-10, ORD-27)."""
+    documented partition (ACC-10, ORD-27). Per endpoint, so that endpoint's history is not used."""
     if cutoff is None:
-        return []
-    out = []
+        return MappingProxyType({})
+    out: dict[AccountEndpoint, list[str]] = {}
     fills = historical.get(AccountEndpoint.FILLS)
     for f in (fills.items or ()) if fills else ():
         if f.created_time is not None and f.created_time >= cutoff.trades_created:
-            out.append(f"TIER_PARTITION_VIOLATION: subaccount {n} historical fill {f.fill_id} is newer than the "
-                       f"cutoff {cutoff.trades_created.isoformat()}")
+            out.setdefault(AccountEndpoint.FILLS, []).append(
+                f"TIER_PARTITION_VIOLATION: subaccount {n} historical fill {f.fill_id} is newer than the cutoff "
+                f"{cutoff.trades_created.isoformat()}")
     orders = historical.get(AccountEndpoint.ORDERS)
     for o in (orders.items or ()) if orders else ():
         if o.status == "resting":
-            out.append(f"TIER_PARTITION_VIOLATION: subaccount {n} historical order {o.order_id} is resting")
+            out.setdefault(AccountEndpoint.ORDERS, []).append(
+                f"TIER_PARTITION_VIOLATION: subaccount {n} historical order {o.order_id} is resting")
         elif o.last_update_time is not None and o.last_update_time >= cutoff.orders_updated:
-            out.append(f"TIER_PARTITION_VIOLATION: subaccount {n} historical order {o.order_id} is newer than the "
-                       f"cutoff {cutoff.orders_updated.isoformat()}")
+            out.setdefault(AccountEndpoint.ORDERS, []).append(
+                f"TIER_PARTITION_VIOLATION: subaccount {n} historical order {o.order_id} is newer than the cutoff "
+                f"{cutoff.orders_updated.isoformat()}")
+    return MappingProxyType({e: tuple(v) for e, v in out.items()})
+
+
+def _shard_problems(n: int, balance: w.Balance | None, records: Iterable[Any]) -> list[str]:
+    """Shard coverage. Whether a read without `exchange_index` covers every shard is not documented, so only a
+    single-shard (0) account can be complete: a balance on another shard, a missing breakdown, or any record on
+    another shard is a problem."""
+    out = []
+    if balance is not None:
+        shards = None if balance.breakdown is None else sorted({index for index, _ in balance.breakdown})
+        if shards is None:
+            out.append(f"SHARDS_UNKNOWN: subaccount {n} balance has no balance_breakdown, so the shards that hold "
+                       "its cash and positions are not known")
+        elif shards != [0]:
+            out.append(f"SHARDS_NOT_ENUMERATED: subaccount {n} has balances on shards {shards}; whether a read "
+                       "without exchange_index covers every shard is not documented")
+    seen = sorted({index for x in records if (index := getattr(x, "exchange_index", None)) not in (None, 0)})
+    if seen:
+        out.append(f"SHARDS_NOT_ENUMERATED: subaccount {n} has records on shards {seen}; whether a read without "
+                   "exchange_index covers every shard is not documented")
     return out
 
 
@@ -962,9 +1036,12 @@ def _read_subaccount(reader: _Reader, n: int) -> _Work:
     return _Work(n, samples[-1], historical, stability, len(samples), tuple(problems), MappingProxyType(seen))
 
 
-def _finalize(work: _Work, plan: AccountReadPlan, *, complete_overall: bool, fresh: bool, observed_at: datetime,
-              cutoff: w.HistoricalCutoff | None, local: tuple[LocalOrder, ...],
+def _finalize(work: _Work, plan: AccountReadPlan, *, complete_overall: bool, fresh: bool, partition_ok: bool,
+              observed_at: datetime, cutoff: w.HistoricalCutoff | None, local: tuple[LocalOrder, ...],
               policy: ExternalCashPolicy) -> SubaccountReconciliation:
+    """Every result field passes one gate. A live field is set only when its stream is complete, conflict-free,
+    STABLE, fresh and on enumerated shards; a historical field only when its stream is complete, conflict-free,
+    on enumerated shards and the partition is proven. Otherwise it is None (unknown), never a partial tuple."""
     n, scope = work.n, plan.scope_for(work.n)
     problems, gaps, observations = list(work.problems), [], []
     for tier, got_map in ((Tier.LIVE, work.live), (Tier.HISTORICAL, work.historical)):
@@ -990,24 +1067,28 @@ def _finalize(work: _Work, plan: AccountReadPlan, *, complete_overall: bool, fre
 
     live = {e: deduped(work.live, e) for e in AccountEndpoint if e in work.live}
     hist = {e: deduped(work.historical, e) for e in _HISTORICAL if e in work.historical}
-    usable = {e: d is not None and not d.conflicts and stable and fresh for e, d in live.items()}
-
-    balance = None
-    if live.get(AccountEndpoint.BALANCE) is not None:
-        balance = live[AccountEndpoint.BALANCE].items[0]
-        unit = _balance_unit_problem(balance, n)
+    raw_balance = live[AccountEndpoint.BALANCE].items[0] if live.get(AccountEndpoint.BALANCE) is not None else None
+    shard_problems = _shard_problems(n, raw_balance, [x for d in (*live.values(), *hist.values()) if d is not None
+                                                      for x in d.items])
+    problems += shard_problems
+    violations = _partition_problems(n, work.historical, cutoff)
+    problems += [v for e in violations for v in violations[e]]
+    shards_ok = not shard_problems
+    usable = {e: d is not None and not d.conflicts and stable and fresh and shards_ok for e, d in live.items()}
+    hist_ok = {e: d is not None and not d.conflicts and partition_ok and shards_ok and e not in violations
+               for e, d in hist.items()}
+    if raw_balance is not None:
+        unit = _balance_unit_problem(raw_balance, n)
         if unit is not None:
             problems.append(unit)
             usable[AccountEndpoint.BALANCE] = False
-        shards = None if balance.breakdown is None else sorted({index for index, _ in balance.breakdown})
-        if shards is None:
-            problems.append(f"SHARDS_UNKNOWN: subaccount {n} balance has no balance_breakdown, so the shards that "
-                            "hold its cash and positions are not known")
-        elif shards != [0]:
-            problems.append(f"SHARDS_NOT_ENUMERATED: subaccount {n} has balances on shards {shards}; whether a read "
-                            "without exchange_index covers every shard is not documented")
+
+    def items_if(endpoint: AccountEndpoint) -> tuple | None:
+        return live[endpoint].items if usable.get(endpoint) else None
 
     def merged(endpoint: AccountEndpoint) -> tuple | None:
+        """Live first, then historical (ACC-11). Problems are reported whenever both tiers were read; the records
+        are returned only when both tiers pass the gate."""
         lv, hv = live.get(endpoint), hist.get(endpoint)
         if lv is None or hv is None or lv.conflicts or hv.conflicts:
             return None
@@ -1025,20 +1106,20 @@ def _finalize(work: _Work, plan: AccountReadPlan, *, complete_overall: bool, fre
             problems.append(f"RECORD_VANISHED: subaccount {n} {endpoint.value} {vanished[:5]} were read earlier but "
                             "are in neither tier now")
             return None
-        return items
+        return items if usable[endpoint] and hist_ok[endpoint] else None
 
-    problems += _partition_problems(n, work.historical, cutoff)
+    balance = raw_balance if usable.get(AccountEndpoint.BALANCE) else None
     orders, fills = merged(AccountEndpoint.ORDERS), merged(AccountEndpoint.FILLS)
     fills_by_order = None
-    if fills is not None and stable and fresh:
+    if fills is not None:
         totals: dict[str, Decimal] = {}
         with localcontext(_exact_context()):
             for f in fills:
                 totals[f.order_id] = totals.get(f.order_id, Decimal(0)) + f.count
         fills_by_order = MappingProxyType(dict(sorted(totals.items())))
 
-    positions = live[AccountEndpoint.POSITIONS].items if live.get(AccountEndpoint.POSITIONS) else None
-    historical_positions = hist[AccountEndpoint.POSITIONS].items if hist.get(AccountEndpoint.POSITIONS) else None
+    positions = items_if(AccountEndpoint.POSITIONS)
+    historical_positions = hist[AccountEndpoint.POSITIONS].items if hist_ok.get(AccountEndpoint.POSITIONS) else None
     if positions is not None and historical_positions is not None:
         current = {p.ticker: p for p in positions}
         moved = sorted(p.ticker for p in historical_positions if p.ticker in current and current[p.ticker] != p)
@@ -1049,20 +1130,22 @@ def _finalize(work: _Work, plan: AccountReadPlan, *, complete_overall: bool, fre
     if AccountEndpoint.SETTLEMENTS in live:
         d = live[AccountEndpoint.SETTLEMENTS]
         if d is not None and not d.conflicts:
-            records = list(d.items)
-            for s in records:
+            for s in d.items:
                 unit = _settlement_unit_problem(s, n)
                 if unit is not None:
                     problems.append(unit)
+                    usable[AccountEndpoint.SETTLEMENTS] = False
                 if s.missing:
                     gaps.append(f"SETTLEMENT_FIELDS_MISSING: subaccount {n} {s.ticker}: {list(s.missing)} not "
                                 "reported (not zero)")
+        if usable[AccountEndpoint.SETTLEMENTS]:
+            records = list(d.items)
             known = {s.ticker for s in records}
             for p in historical_positions or ():
                 if p.ticker not in known:
-                    records.append(SettlementRecord(p.ticker, SettlementSource.HISTORICAL_POSITION_ONLY, None, None,
-                                                    None, None, None, None, None, None, None, None,
-                                                    p.realized_pnl, _SETTLEMENT_FIELDS))
+                    records.append(SettlementRecord(p.ticker, SettlementSource.HISTORICAL_POSITION_ONLY,
+                                                    p.exchange_index, None, None, None, None, None, None, None, None,
+                                                    None, None, p.realized_pnl, _SETTLEMENT_FIELDS[1:]))
                     gaps.append(f"SETTLEMENT_DETAIL_UNAVAILABLE: subaccount {n} {p.ticker} is archived; only its "
                                 "position history is known (ACC-12)")
             settlements = tuple(sorted(records, key=lambda s: s.ticker))
@@ -1071,26 +1154,25 @@ def _finalize(work: _Work, plan: AccountReadPlan, *, complete_overall: bool, fre
                         f"{cutoff.market_settled.isoformat()} have no historical settlement endpoint (ACC-12)")
 
     mine = tuple(lo for lo in local if lo.scope_key == scope.key())
-    live_orders = live.get(AccountEndpoint.ORDERS)
-    open_orders = None if live_orders is None else tuple(o for o in live_orders.items if o.status == "resting")
+    live_orders = items_if(AccountEndpoint.ORDERS)
+    open_orders = None if live_orders is None else tuple(o for o in live_orders if o.status == "resting")
     attribution = _Attribution((), (), MappingProxyType({}), tuple(lo.reservation_id for lo in mine), (), ())
     external: tuple[ExternalOrder, ...] | None = None
-    if open_orders is not None and usable[AccountEndpoint.ORDERS]:
+    if open_orders is not None:
         attribution = _attribute(open_orders, orders, mine, policy)
         problems += attribution.problems
         observations += attribution.observations
         external = attribution.external
 
     holdings = None
-    if positions is not None and usable[AccountEndpoint.POSITIONS]:
+    if positions is not None:
         rows: dict[tuple[str, Side], Decimal] = {}
         for p in positions:
             if p.position != 0:  # ACC-08: negative is NO contracts
                 rows[(p.ticker, Side.YES if p.position > 0 else Side.NO)] = abs(p.position)
         holdings = MappingProxyType(rows)
 
-    cash = balance.balance_dollars if balance is not None and complete_overall and usable[AccountEndpoint.BALANCE] \
-        else None
+    cash = balance.balance_dollars if balance is not None and complete_overall else None
     snapshot = SnapshotInputs(scope, observed_at, cash, CASH_BASIS if cash is not None else CashBasis.UNKNOWN,
                               holdings, external, attribution.attributed if external is not None else ())
     return SubaccountReconciliation(
@@ -1184,11 +1266,13 @@ def reconcile_account(plan: AccountReadPlan, send: ReadSender, *, clock: Clock,
         elif len(steps) > 1 and steps[1] != "SAME":
             problems.append("CUTOFF_MOVING: the cutoff advanced again after the historical tier was re-read")
     fresh = not any(p.startswith(("USER_DATA_", "STALE_USER_DATA")) for p in problems)
+    partition_ok = not any(p.startswith("CUTOFF_") for p in problems)
     last_cutoff = cutoffs[-1]
     observed_at = started if as_of_start is None else min(started, as_of_start)
 
     # Status needs every subaccount's problems first; cash is then filled in only for a COMPLETE result.
-    draft = [_finalize(wk, plan, complete_overall=False, fresh=fresh, observed_at=observed_at, cutoff=last_cutoff,
+    draft = [_finalize(wk, plan, complete_overall=False, fresh=fresh, partition_ok=partition_ok,
+                       observed_at=observed_at, cutoff=last_cutoff,
                        local=local, policy=external_cash_policy) for wk in works]
     all_problems = problems + [p for s in draft for p in s.problems]
     any_complete = any(r.complete for r in reader.streams if r.subaccount is not None)
@@ -1199,8 +1283,9 @@ def reconcile_account(plan: AccountReadPlan, send: ReadSender, *, clock: Clock,
     else:
         status = ReconciliationStatus.COMPLETE
     subs = draft if status is not ReconciliationStatus.COMPLETE else [
-        _finalize(wk, plan, complete_overall=True, fresh=fresh, observed_at=observed_at, cutoff=last_cutoff,
-                  local=local, policy=external_cash_policy) for wk in works]
+        _finalize(wk, plan, complete_overall=True, fresh=fresh, partition_ok=partition_ok,
+                  observed_at=observed_at, cutoff=last_cutoff, local=local, policy=external_cash_policy)
+        for wk in works]
     coverage = {}
     for s, wk in zip(subs, works):
         for e in AccountEndpoint:
