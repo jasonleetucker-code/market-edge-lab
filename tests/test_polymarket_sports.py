@@ -433,6 +433,34 @@ def test_capture_records_a_research_book_from_real_bytes(tmp_path):
     assert code == 0 and report["attempted"] == 0
 
 
+def test_the_1610_tick_captures_a_1605_target_although_the_timer_fires_late(tmp_path, monkeypatch):
+    """Regression (ARI-SF and MIN-TB on 2026-09-26, MIA-MIN on 2026-10-03, all MISSED): the T-24h target
+    of a 16:05 ET Sunday kickoff is due 15:58-16:35 ET Saturday, and 16:10 is its only tick clear of the
+    16:13 settlement window. The timer fires seconds late, a full MAX_RUN from then overlapped the
+    window, and the tick was refused. Now it runs, with its deadline cut to end before the window."""
+    slug = "aec-nfl-ari-sf-2026-09-27"
+    at = datetime(2026, 9, 26, 20, 10, 7, tzinfo=UTC)  # the 16:10 EDT tick, 7 s late
+    odds = [_odds_event("e_ari_sf", "San Francisco 49ers", "Arizona Cardinals", "2026-09-27T20:05:00Z")]
+    db = _discovered(tmp_path, odds_events=odds, odds_at=at - timedelta(hours=1))
+    _fresh_catalog_at(db, at - timedelta(hours=2))
+    t = next(t for t in SnapshotStore(db).pm_sports_targets()
+             if t["market_slug"] == slug and t["offset_label"] == "T-24h")
+    assert t["effective_utc"] == "2026-09-26T20:05:00+00:00" and t["deadline_utc"] == "2026-09-26T20:35:00+00:00"
+    deadlines = []
+    real = ps._Requests
+
+    def recording(limit, deadline, *a, **kw):
+        deadlines.append(deadline)
+        return real(limit, deadline, *a, **kw)
+
+    monkeypatch.setattr(ps, "_Requests", recording)
+    book = BOOK_KC_MIA.read_bytes().replace(KC_MIA.encode(), slug.encode())
+    code, report = ps.run_capture(db, clock=lambda: at, sleep=lambda s: None, opener=ScriptedOpener(book),
+                                  access_decision=ALLOW)
+    assert code == 0 and report["by_status"] == {"CAPTURED": 1}, report
+    assert deadlines == [datetime(2026, 9, 26, 20, 12, 30, tzinfo=UTC)]  # 30 s before the 16:13 window
+
+
 def test_404_is_final_not_executable_and_503_retries_once(tmp_path):
     db = _discovered(tmp_path, odds_at=_due_clock_for_kc() - timedelta(hours=1))
     at = _due_clock_for_kc()

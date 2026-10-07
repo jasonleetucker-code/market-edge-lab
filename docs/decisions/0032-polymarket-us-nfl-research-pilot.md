@@ -119,7 +119,7 @@ Two traps:
   | markets per slot | 20 | 20 | the directive's value; the heaviest Sunday slot is about 10 games |
   | GETs per run | 50 | 50 HTTP attempts, **retries included**; books 20; discovery 12 | stricter than counting logical GETs |
   | pacer | 0.5 s or slower | **1.0 s** | 5% of the documented 20/s; the Terms forbid disproportionate load |
-  | runtime | 5 min hard | **3 min** run deadline; unit `TimeoutStartSec=5min` | lets the 11:10 and 16:10 ET ticks finish before the settlement windows |
+  | runtime | 5 min hard | **3 min** run deadline; unit `TimeoutStartSec=5min` | lets the 11:10 and 16:10 ET ticks finish before the settlement windows (cut short there; amendment 2026-10-07) |
   | retries | bounded | **1** per request (transient only) | 429 and 5xx only; a 404 is final |
 - **Lock.** `<db>.pm-sports.lock`, shared by discovery and capture, and **not** the Kalshi
   collector lock.
@@ -265,3 +265,20 @@ use their own pacer and run budget. Across the host the worst case in one minute
 pilot's 1 s pacer) + 40 (observe's run budget) = 100, so the attested 100/min condition holds by
 this arithmetic, not by a shared limiter. A shared per-host limiter belongs in the Freshness Fabric
 (#74) when a second collector of the same host is added.
+
+**Amendment (2026-10-07): the :10 ticks before the settlement windows.** The 16:10 ET tick is the
+only tick a T-24h target for a 16:05 ET Sunday kickoff has (due 15:58-16:35 ET Saturday; 16:25 is
+inside the 16:13 window and 16:40 is past the deadline). systemd fires each tick a few seconds late,
+so `[now, now + 3 min]` always overlapped 16:13 and the tick was refused. ARI-SF and MIN-TB
+(2026-09-26) and MIA-MIN (2026-10-03) were MISSED this way. The 11:10 tick had the same defect.
+
+- A run that would come within `RUN_MARGIN` (30 s) of a protected window now starts with its
+  deadline cut to `RUN_MARGIN` before the window (`polymarket_sports.run_deadline`). It is refused
+  only with less than `MIN_RUN` (1 min) left, or inside a window.
+- No request starts with less than 3 s to the deadline, and a request's timeout ends 1 s before it,
+  so a cut run finishes at least 30 s before the window opens, which is itself 2 min before the
+  settlement run.
+- Rejected: moving such targets past the window (it would capture 35 min after the intended time,
+  at 16:40), or adding a capture tick (one more unit, and the same race at the next window).
+- Reconsider if a cut run is seen deferring targets for lack of time, or if the protected windows
+  or the tick minutes change.
