@@ -870,3 +870,40 @@ def test_only_tests_may_use_the_fake_venue():
 ])
 def test_a_non_test_use_of_the_fake_venue_is_caught(rel, line):
     assert _fake_venue_hits(rel, line + "\n"), line
+
+
+# Decorators whose stdlib wrapper holds a mutable registry or cache in its closure. The runtime check does not
+# inspect stdlib-defined wrappers, so these are refused by syntax in every package file.
+_STATEFUL_DECORATORS = frozenset({"singledispatch", "singledispatchmethod", "lru_cache", "cache", "cached_property"})
+
+
+def _stateful_decorator_hits(rel: str, text: str) -> list[str]:
+    hits = []
+    for node in ast.walk(ast.parse(text)):
+        name = node.attr if isinstance(node, ast.Attribute) else node.id if isinstance(node, ast.Name) else None
+        if name in _STATEFUL_DECORATORS:
+            hits.append(f"{rel}:{node.lineno}: {name} keeps mutable state in a stdlib wrapper")
+        if isinstance(node, ast.ImportFrom) and node.module == "functools":
+            hits += [f"{rel}:{node.lineno}: imports functools.{a.name}" for a in node.names
+                     if a.name in _STATEFUL_DECORATORS]
+    return hits
+
+
+def test_no_stateful_stdlib_decorators_in_the_package():
+    hits = [h for p in PACKAGE.rglob("*.py") for h in _stateful_decorator_hits(_rel(p), p.read_text(encoding="utf-8"))]
+    assert not hits, "\n".join(hits)
+    for probe in ("from functools import singledispatch", "@functools.singledispatch\ndef f(x): pass",
+                  "@lru_cache\ndef f(x): pass", "import functools\nf = functools.cache(g)"):
+        assert _stateful_decorator_hits("x.py", probe + "\n"), probe
+
+
+def test_the_runtime_check_really_inspects_package_functions():
+    """Guard against a path mismatch (e.g. a non-editable install) making the co_filename rule skip everything."""
+    from edge_lab.execution import model
+
+    assert str(PACKAGE) in model.exact_decimal.__code__.co_filename
+
+    def leaky(x, _cache={}):  # noqa: B006
+        return x
+
+    assert not _immutable(leaky)  # this test file counts as ours, so a mutable default is caught
