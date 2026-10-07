@@ -1,0 +1,13 @@
+{
+  "exchange_active": true,
+  "trading_active": false,
+  "exchange_estimated_resume_time": null,
+  "exchange_index_statuses": [
+    {
+      "exchange_index": 0,
+      "description": "default",
+      "exchange_active": true,
+      "trading_active": false
+    }
+  ]
+}
