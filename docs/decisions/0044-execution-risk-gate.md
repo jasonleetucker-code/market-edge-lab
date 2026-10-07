@@ -51,7 +51,7 @@ A second copy of any of their formulas would be a second financial authority.
    | Cash and reserve floor | `reserve_simultaneous_obligations`, with cash minus `reserve_floor` available |
    | Exposure sums per key | its no-netting `by_key` |
    | Loss limits, drawdown, capacity | `risk.assess` on a projection-backed `RiskAccount` |
-   | Inventory | `ReservationAuthority._inventory` |
+   | Inventory | `ReservationAuthority.inventory_for` |
    | Fees | `schedule_for`, `verification_at`, `taker_buy` |
    | Grid and direction | `MarketTradingProfile.check_yes_price`, `kalshi_wire.yes_terms` |
 5. **Worst cases, never hope.**
@@ -59,7 +59,8 @@ A second copy of any of their formulas would be a second financial authority.
    - A held contract can still lose $1, its maximum value, whatever it cost. Purchase cost is never the remaining-risk
      measure.
    - An external order can add $1 per remaining contract.
-   - An unknown market, event, cluster or strategy counts toward the candidate's own key.
+   - An unknown market, event, cluster or strategy counts toward the candidate's own key. A held item on the
+     candidate's own market whose event or cluster contradicts the market state fails EXPOSURE_KEY_CONFLICT.
    - A reduction adds no exposure and is not held to exposure or loss limits.
 6. **Fail closed.**
    - Each of these is an explicit rejection:
@@ -67,11 +68,16 @@ A second copy of any of their formulas would be a second financial authority.
      - a quarantined or UNKNOWN obligation;
      - an inconsistent snapshot;
      - unlisted external orders;
-     - unknown P&L history;
+     - unknown P&L or order history, or one not complete since the projection's `account_genesis_utc`;
+     - a snapshot revision without a time (or the reverse), or a "consistent" snapshot with problems (refused at
+       construction);
      - an unverified or unsupported fee schedule;
      - a maker fee that is unverified for an order that can rest.
    - Loss limits use realized P&L only: deposits and withdrawals are listed and never counted.
-   - Counts come only from the persisted order history.
+   - Counts come only from the persisted order history. The decision's `inputs` record the genesis and a digest
+     of each history.
+   - The projection comes from one transaction (`ReservationAuthority.account_view`). Two separate reads could
+     straddle a snapshot that releases a BOUND reservation, so that its fills are in neither.
 7. **Owner-set limits.** `PLACEHOLDER_LIMITS`, `PLACEHOLDER_POLICY` and `PLACEHOLDER_TICKET_LIMITS` have zero caps
    and no `owner_approval_ref`, so every order fails LIMITS_NOT_SET_BY_OWNER. Real values come from the activation
    packet.
@@ -90,15 +96,20 @@ A second copy of any of their formulas would be a second financial authority.
 - $1 per held contract, plus double counting of a partly filled entry until its reservation is released, overstates
   exposure. Capacity is lower than strictly necessary.
 - Unknown dimensions counted toward the candidate can block orders that are in fact unrelated.
-- `project_account` mirrors `reservations._evaluate`'s obligation construction (quarantine is unknown; provider-held
-  uses the residual). A test pins agreement on `cash_required`. It also calls a private static method for inventory.
+- `project_account` mirrors `reservations._evaluate`'s cash obligation construction (quarantine is unknown;
+  provider-held uses the residual; a negative residual is unknown). Tests pin agreement on `cash_required`, including
+  the negative residual. A provider-held view the snapshot does not list keeps its full worst case.
+- The genesis is caller-supplied until a later package ties it to the journal's genesis. A history shorter than the
+  stated genesis is refused, and a moved genesis is visible in the decision's `inputs`.
+- Key conflicts are detected only on the candidate's own market. A mistagged market elsewhere in the same event is
+  not detectable here.
 - One account scope is the whole portfolio. Cross-scope aggregation does not exist yet.
 - The sale fee bound uses the buy formula's fee at the worst price at or above the limit. That assumes Kalshi charges
   sales with the same quadratic formula.
 
 ## Reconsider when
 
-- `reservations` exposes public obligation and inventory builders: switch to them.
+- `reservations` exposes a public cash-obligation builder: switch to it (inventory already is public).
 - A venue observation (DEMO or production read) shows different sell fees, holds or fee rounding.
 - Several scopes or subaccounts trade at once: add a portfolio projection.
 - The owner sets real limits, or asks for de-risking during a quarantine.

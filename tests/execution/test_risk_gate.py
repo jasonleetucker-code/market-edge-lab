@@ -36,6 +36,7 @@ LIMITS = GateLimits(limits_id="gate-test-limits", risk_policy_id="gate-test-poli
                     max_slippage=Decimal("0.02"), max_decision_age=timedelta(minutes=5),
                     max_source_age=timedelta(minutes=10), daily_new_risk=Decimal("25"),
                     max_strategy_risk=Decimal("30"))
+GENESIS = (NOW - timedelta(days=60)).isoformat()
 TICKET = TicketLimits(max_book_age=timedelta(seconds=30), max_order_state_age=timedelta(seconds=60),
                       max_orders_per_window=10, order_window=timedelta(hours=1), market_cooldown=timedelta(minutes=1))
 
@@ -83,7 +84,8 @@ def account(**kw) -> AccountProjection:
     base = dict(projection_id="proj-1", scope_key=SCOPE.key(), snapshot_revision=1, observed_at_utc=NOW.isoformat(),
                 consistent=True, problems=(), cash=Decimal("100"), positions=(), commitments=(),
                 external_orders_known=True, inventory=(), pnl_history=(),
-                pnl_history_since_utc=(NOW - timedelta(days=60)).isoformat(), order_history=())
+                pnl_history_since_utc=GENESIS, order_history=(), order_history_since_utc=GENESIS,
+                account_genesis_utc=GENESIS)
     base.update(kw)
     return AccountProjection(**base)
 
@@ -146,7 +148,9 @@ def test_a_complete_current_order_within_every_limit_is_allowed():
     assert dict(d.inputs) == {"intent": intent().digest(), "policy": "gate-test-policy", "limits": "gate-test-limits",
                               "evidence": "ev-1", "market": "mkt-1", "book": "book-1",
                               "fee_schedule": "kalshi-quadratic-taker-v1",
-                              "fee_verification": "kalshi-kxhighny-fee-verification-2026-09-23", "projection": "proj-1"}
+                              "fee_verification": "kalshi-kxhighny-fee-verification-2026-09-23", "projection": "proj-1",
+                              "account_genesis": GENESIS, "pnl_history": account().history_digest("pnl"),
+                              "order_history": account().history_digest("orders")}
 
 
 def test_a_clean_reduction_is_allowed():
@@ -199,7 +203,13 @@ ALONE = [
     ("another account", dict(acct=account(scope_key="FIXTURE:other-acct:primary")), R.ACCOUNT_SCOPE_MISMATCH),
     ("stale snapshot", dict(acct=account(observed_at_utc=(NOW - timedelta(seconds=61)).isoformat())),
      R.ACCOUNT_SNAPSHOT_STALE),
-    ("no snapshot time", dict(acct=account(observed_at_utc=None)), R.ACCOUNT_SNAPSHOT_STALE),
+    ("no snapshot", dict(acct=account(snapshot_revision=None, observed_at_utc=None)), R.ACCOUNT_SNAPSHOT_STALE),
+    ("held item on this market names another event",
+     dict(acct=account(positions=(held("1", event="WRONG-EVENT"),))), R.EXPOSURE_KEY_CONFLICT),
+    ("P&L history shorter than the account", dict(acct=account(
+        pnl_history_since_utc=(NOW - timedelta(minutes=1)).isoformat())), R.PNL_HISTORY_UNKNOWN),
+    ("order history shorter than the account", dict(acct=account(
+        order_history_since_utc=(NOW - timedelta(minutes=1)).isoformat())), R.ORDER_HISTORY_UNKNOWN),
     ("inconsistent snapshot", dict(acct=account(consistent=False, problems=("NEGATIVE_CASH: -1",))),
      R.RECONCILIATION_UNHEALTHY),
     ("external orders not listed", dict(acct=account(external_orders_known=False)), R.RECONCILIATION_UNHEALTHY),
@@ -598,6 +608,9 @@ def test_malformed_ticket_limits_are_refused():
     lambda: account(positions=(held("1"), held("2"))),
     lambda: account(positions=None, inventory=(InventoryLine(TICKER, YES, Decimal(1)),)),
     lambda: account(snapshot_revision=True),
+    lambda: account(snapshot_revision=None),  # a fresh observed_at without a revision is not one snapshot
+    lambda: account(observed_at_utc=None),
+    lambda: account(consistent=True, problems=("NEGATIVE_CASH: -1",)),
     lambda: account(pnl_history=(pnl("50", timedelta(days=1), ref="gain"), pnl("50", timedelta(days=2), ref="gain"))),
     lambda: account(schema="edge-lab-risk-account-projection/0"),
     lambda: market(exchange_active="yes"),
@@ -675,3 +688,50 @@ def test_revalidate_lists_approval_and_risk_problems_together_in_order():
     assert d.primary.code is R.APPROVAL_DIGEST_MISMATCH and not d.allowed
     expired = intent(expires_at_utc=NOW.isoformat())
     assert codes(revalidate(expired, grant(expired, expires=NOW + timedelta(minutes=1)))) == (R.INTENT_EXPIRED,)
+
+
+# ---------------------------------------------------------------- review round 1 regressions
+
+
+def test_review_probe_contradictory_event_keys_do_not_hide_exposure():
+    """Finding 2: 5 held on TICKER tagged WRONG-EVENT plus 7 on OTHER in EVENT, event cap 12. The true event exposure
+    with this 4.60 order is 16.60; trusting the held tag would see 11.60 and allow it."""
+    acct = account(positions=(held("5", event="WRONG-EVENT"), held("7", ticker=OTHER)))
+    d = run(policy=replace(WIDE, max_event_risk=Decimal("12"), max_cluster_risk=Decimal("40")), acct=acct)
+    assert not d.allowed and codes(d) == (R.EXPOSURE_KEY_CONFLICT,), d.reasons
+    # A conflicting cluster tag, or a pending commitment on this market, is the same conflict.
+    assert codes(run(acct=account(positions=(held("1", cluster="other-cluster"),)))) == (R.EXPOSURE_KEY_CONFLICT,)
+    pending = local("l1", ticker=TICKER, event="WRONG-EVENT", cash="1", risk="1")
+    assert codes(run(acct=account(commitments=(pending,)))) == (R.EXPOSURE_KEY_CONFLICT,)
+    # Matching or unknown tags are not a conflict (unknown counts toward the candidate's keys).
+    assert run(acct=account(positions=(held("1"),))).allowed
+    assert run(acct=account(positions=(held("1", event=None, cluster=None),))).allowed
+
+
+def test_a_short_history_cannot_reset_losses_or_counts_and_the_decision_records_what_it_saw():
+    """Finding 4: an empty history 'since one minute ago' is not complete since the account's genesis."""
+    recent = (NOW - timedelta(minutes=1)).isoformat()
+    d = run(acct=account(pnl_history=(), pnl_history_since_utc=recent, order_history=(),
+                         order_history_since_utc=recent))
+    assert codes(d) == (R.PNL_HISTORY_UNKNOWN, R.ORDER_HISTORY_UNKNOWN)
+    # An unknown genesis means neither history can be shown complete.
+    assert codes(run(acct=account(account_genesis_utc=None))) == (R.PNL_HISTORY_UNKNOWN, R.ORDER_HISTORY_UNKNOWN)
+    # A reduction is not held to the P&L history, but its order counts still need a complete history.
+    assert codes(run(reduction(), acct=account(account_genesis_utc=None, positions=(held("10"),),
+                                               inventory=(InventoryLine(TICKER, YES, Decimal("10")),)))) == \
+        (R.ORDER_HISTORY_UNKNOWN,)
+    # Even a genesis moved forward to match is recorded, so a replay can see the claim.
+    moved = account(account_genesis_utc=recent, pnl_history_since_utc=recent, order_history_since_utc=recent)
+    assert dict(run(acct=moved).inputs)["account_genesis"] == recent
+    # The digests change with the content and with the completeness claim.
+    base = account()
+    loss = account(pnl_history=(pnl("-1", timedelta(hours=1)),))
+    assert base.history_digest("pnl") != loss.history_digest("pnl")
+    assert base.history_digest("pnl") != moved.history_digest("pnl")
+    assert base.history_digest("orders") != account(order_history=(order("o1", timedelta(hours=2)),)) \
+        .history_digest("orders")
+    assert account(pnl_history=None).history_digest("pnl") is None
+    assert dict(run(acct=loss).inputs)["pnl_history"] == loss.history_digest("pnl")
+    # An order before the genesis contradicts the claim.
+    early = account(order_history=(order("o0", timedelta(days=61)),))
+    assert codes(run(acct=early)) == (R.ORDER_HISTORY_UNKNOWN,)

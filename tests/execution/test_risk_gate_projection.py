@@ -13,7 +13,8 @@ import pytest
 import test_journal_fixtures as f
 from edge_lab.execution import model as m
 from edge_lab.execution import risk_gate as g
-from edge_lab.execution.reservations import ExternalOrder, ExternalOrigin, ReceiptKind as K
+from edge_lab.execution.reservations import (AccountView, ExternalOrder, ExternalOrigin, ReceiptKind as K,
+                                             ReservationAuthority)
 from edge_lab.execution.risk_gate import CommitmentOrigin, MarketKeys, Reason as R
 from edge_lab.execution_ticket import ObligationState as S, TicketLimits
 from edge_lab.risk import RiskPolicy
@@ -35,12 +36,18 @@ def path(tmp_path: Path) -> Path:
     return tmp_path / "exec.execution.sqlite3"
 
 
-def _project(journal, intents=()):
-    snap = journal.reservations.latest_snapshot(f.SCOPE)
-    held = journal.reservations.held_reservations(f.SCOPE)
-    return g.project_account(f.SCOPE.key(), snap, held, projection_id=f"{f.SCOPE.key()}#{snap.revision if snap else 0}",
+GENESIS = (NOW - timedelta(days=30)).isoformat()
+
+
+def _from_view(view, intents=()):
+    return g.project_account(view, projection_id=f"{view.scope_key}#{view.snapshot_revision}",
                              intents={i.intent_key: i for i in intents}, market_keys=KEYS, pnl_history=(),
-                             pnl_history_since_utc=(NOW - timedelta(days=30)).isoformat(), order_history=())
+                             pnl_history_since_utc=GENESIS, order_history=(), order_history_since_utc=GENESIS,
+                             account_genesis_utc=GENESIS)
+
+
+def _project(journal, intents=()):
+    return _from_view(journal.reservations.account_view(f.SCOPE), intents)
 
 
 def _gate(intent, projection):
@@ -137,10 +144,109 @@ def test_unlisted_external_orders_are_unknown(path):
     journal.close()
 
 
-def test_the_builder_refuses_another_scopes_state(path):
+def test_the_builder_refuses_another_scopes_state_and_separate_reads(path):
     journal, _ = f.ready(path)
-    snap = journal.reservations.latest_snapshot(f.SCOPE)
+    view = journal.reservations.account_view(f.SCOPE)
     with pytest.raises(ValueError):
-        g.project_account("FIXTURE:other:primary", snap, (), projection_id="p", intents={}, market_keys={},
-                          pnl_history=(), pnl_history_since_utc=None, order_history=())
+        _from_view(AccountView("FIXTURE:other:primary", view.snapshot, view.held))
+    with pytest.raises(ValueError):  # the old two-read form is gone: only one consistent view is accepted
+        g.project_account(view.snapshot, projection_id="p", intents={}, market_keys={}, pnl_history=(),
+                          pnl_history_since_utc=None, order_history=(), order_history_since_utc=None,
+                          account_genesis_utc=None)
     journal.close()
+
+
+# ---------------------------------------------------------------- review round 1 regressions
+
+
+def _bound_entry(path: Path):
+    """An entry that filled completely: BOUND, still held, its fills in no snapshot yet. Returns (journal, rid)."""
+    journal, token = f.ready(path)
+    a = f.prepare(journal, f.entry(), token)
+    journal.mark_sent(a.attempt_id, now=NOW)
+    journal.mark_acknowledged(a.attempt_id, provider_order_id="p-1",
+                              receipt_id=f.receipt(journal, "r-ack", K.ORDER_ACK, a.attempt_id), now=NOW)
+    later = NOW + timedelta(seconds=1)
+    journal.reservations.record_fill(a.reservation_id, Decimal("10"), later,
+                                     receipt_id=f.receipt(journal, "r-fill", K.FILL, a.reservation_id, at=later))
+    assert journal.reservations.reservation(a.reservation_id).state is S.BOUND
+    return journal, a.reservation_id
+
+
+def _release_by_new_snapshot(path: Path, rid: str) -> None:
+    """Another process: snapshot 2 shows the fill as a position, and the BOUND reservation is released."""
+    from edge_lab.execution.journal import ExecutionJournal
+
+    other = ExecutionJournal.open(path)
+    at = NOW + timedelta(seconds=2)
+    f.snapshot(other, 2, positions={(f.MARKET, YES): Decimal("10")}, at=at)
+    other.reservations.confirm_by_snapshot(rid, 2, at)
+    other.close()
+
+
+def test_review_two_separate_reads_can_lose_a_filled_position_from_both(tmp_path):
+    """Finding 1, the failure mode: snapshot 1 is read, snapshot 2 releases the BOUND reservation, held is read."""
+    journal, rid = _bound_entry(tmp_path / "a.execution.sqlite3")
+    snap = journal.reservations.latest_snapshot(f.SCOPE)
+    _release_by_new_snapshot(tmp_path / "a.execution.sqlite3", rid)
+    held = journal.reservations.held_reservations(f.SCOPE)
+    assert snap.revision == 1 and not snap.positions and held == []  # the 10 contracts are in neither read
+    journal.close()
+
+
+def test_review_account_view_reads_snapshot_and_held_in_one_transaction(tmp_path, monkeypatch):
+    """Finding 1, the fix: the same interleaving lands between the two reads inside `account_view`, which still
+    pairs snapshot 1 with the reservation held at snapshot 1, so the exposure is kept."""
+    db = tmp_path / "b.execution.sqlite3"
+    journal, rid = _bound_entry(db)
+    real = journal.reservations._snapshot
+    raced = []
+
+    def snapshot_then_race(conn, scope_key, revision=None):
+        out = real(conn, scope_key, revision)
+        if not raced:
+            raced.append(True)
+            _release_by_new_snapshot(db, rid)
+        return out
+
+    monkeypatch.setattr(journal.reservations, "_snapshot", snapshot_then_race)
+    view = journal.reservations.account_view(f.SCOPE)
+    assert raced and view.snapshot_revision == 1 and [r.reservation_id for r in view.held] == [rid]
+    (c,) = _from_view(view).commitments
+    assert (c.state, c.risk_worst_case) == (S.BOUND, Decimal("4.60"))
+    monkeypatch.undo()
+    after = journal.reservations.account_view(f.SCOPE)  # a fresh read sees snapshot 2 with the position instead
+    assert after.snapshot_revision == 2 and after.held == ()
+    assert [(p.market_ticker, p.quantity) for p in _from_view(after).positions] == [(f.MARKET, Decimal("10"))]
+    journal.close()
+
+
+def test_review_cash_pin_negative_residual_matches_reservations(path):
+    """Finding 6: a negative venue residual is unknown in both owners (never a credit)."""
+    journal, token = f.ready(path)
+    first = f.entry("EXP-TEST:a")
+    view_a = journal.reservations.reservation(f.prepare(journal, first, token).reservation_id)
+    f.snapshot(journal, 2, attributed=(f.attributed(view_a, unreflected="-0.01"),))
+    projection = _project(journal, (first,))
+    assert projection.commitments[0].cash_worst_case is None and not projection.consistent
+    candidate = f.entry("EXP-TEST:b", quantity="2", cost="1.00")
+    owner = journal.reservations.evaluate(candidate, NOW, snapshot_max_age=f.MAX_AGE)
+    assert owner.cash_required is None and _gate(candidate, projection).cash_required is None
+    journal.close()
+
+
+def test_review_cash_pin_provider_held_view_missing_from_the_snapshot_keeps_the_full_worst_case(path):
+    """Finding 6: a provider-held view the snapshot does not list (only a mixed read could produce it) is never
+    reduced to a residual."""
+    journal, token = f.ready(path)
+    first = f.entry("EXP-TEST:a")
+    view_a = journal.reservations.reservation(f.prepare(journal, first, token).reservation_id)
+    snap = journal.reservations.latest_snapshot(f.SCOPE)
+    assert view_a.reservation_id not in snap.attributed
+    mixed = AccountView(f.SCOPE.key(), snap, (replace(view_a, provider_held=True),))
+    assert _from_view(mixed, (first,)).commitments[0].cash_worst_case == Decimal("4.60")
+    journal.close()
+
+
+def test_review_inventory_rule_is_public():
+    assert callable(ReservationAuthority.inventory_for) and not hasattr(ReservationAuthority, "_inventory")

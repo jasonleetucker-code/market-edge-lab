@@ -20,7 +20,7 @@ sending.
   `RiskPolicy.reserve_floor` as the available cash;
 - exposure sums per market, event, cluster and strategy: the same function's per-key sums (`by_key`), no netting;
 - loss limits, drawdown and remaining capacity: `risk.assess` on a projection-backed `risk.RiskAccount`;
-- inventory: `reservations.ReservationAuthority._inventory`, called by `project_account`;
+- inventory: `reservations.ReservationAuthority.inventory_for`, called by `project_account`;
 - grids and direction: `conformance.MarketTradingProfile.check_yes_price` and `kalshi_wire.yes_terms`.
 
 **Worst cases.**
@@ -34,18 +34,23 @@ sending.
   is not checked against exposure or loss limits: cutting risk is never blocked by them. It still needs its
   inventory, its fee bound in cash above the reserve floor, a healthy reconciliation, the book and rate checks.
 - An exposure whose market, event, cluster or strategy is unknown counts toward the candidate's own key on that
-  dimension: unknown is never zero, and never "elsewhere".
+  dimension: unknown is never zero, and never "elsewhere". A held item on the candidate's own market whose event
+  or cluster contradicts the market state's fails EXPOSURE_KEY_CONFLICT: one of the two is wrong.
+- The projection comes from ONE read of the reservation authority (`ReservationAuthority.account_view`), so a
+  snapshot that releases a BOUND reservation cannot fall between the snapshot and the held reservations.
 
 **No flip.** An ENTRY is refused while the account holds, or could come to hold, the opposite side of the same
 market: an opposite-side position, a pending local opposite ENTRY, or any external order on the market (or on an
 unknown market) other than a known buy of the candidate's side.
 
-**Loss limits** (`risk.assess`) are measured on realized P&L only, as cumulative P&L since the account's inception
-(`pnl_history_since_utc`). Deposits and withdrawals are listed for audit but are never P&L: they cannot offset a
-loss or reset a limit. Unknown history (None) allows no new risk.
+**Loss limits** (`risk.assess`) are measured on realized P&L only, as cumulative P&L since the account's genesis
+(`account_genesis_utc`; the P&L history must be complete since exactly that instant). Deposits and withdrawals are
+listed for audit but are never P&L: they cannot offset a loss or reset a limit. Unknown or shorter history allows
+no new risk.
 
 **Restart.** Every count (orders per window, cooldown, daily new risk) comes from the persisted inputs
-(`AccountProjection.order_history`). This module keeps no process memory.
+(`AccountProjection.order_history`, complete since the genesis). This module keeps no process memory. The decision
+records the genesis and a digest of each history in `inputs`, so a replay shows exactly what the gate saw.
 
 **Owner-set limits.** `PLACEHOLDER_LIMITS`, `PLACEHOLDER_POLICY` and `PLACEHOLDER_TICKET_LIMITS` block every
 order: zero caps, and `owner_approval_ref` None fails LIMITS_NOT_SET_BY_OWNER. Real values are owner decisions
@@ -59,7 +64,7 @@ from datetime import datetime, timedelta, timezone
 from decimal import Context, Decimal, Inexact, InvalidOperation, Rounded, localcontext
 from enum import Enum
 from types import MappingProxyType
-from typing import Iterable, Mapping
+from typing import Mapping
 
 from .. import fee_schedules
 from ..execution_ticket import Obligation, ObligationState, TicketLimits, reserve_simultaneous_obligations
@@ -67,8 +72,9 @@ from ..risk import RiskPolicy, assess, equity_curve
 from . import conformance
 from .kalshi_wire import yes_terms
 from .model import (MAX_DIGITS, Action, ApprovalGrant, ExactValueError, Grid, IntentKind, OrderIntent, Side,
-                    TimeInForce, environment_authorized, exact_decimal, exact_product, parse_utc_text, utc_text)
-from .reservations import AccountSnapshot, ReservationAuthority, ReservationView
+                    TimeInForce, canonical_json, decimal_text, environment_authorized, exact_decimal, exact_product,
+                    parse_utc_text, sha256_text, utc_text)
+from .reservations import AccountView, ReservationAuthority
 
 PROJECTION_SCHEMA = "edge-lab-risk-account-projection/1"
 MARKET_STATE_SCHEMA = "edge-lab-risk-market-state/1"
@@ -150,6 +156,9 @@ class Reason(str, Enum):
     INVENTORY_INSUFFICIENT = "INVENTORY_INSUFFICIENT"
     # exposure (ENTRY only)
     EXPOSURE_UNKNOWN = "EXPOSURE_UNKNOWN"
+    # A held item on the candidate's own market names another event or cluster than the market state does: one of
+    # them is wrong, and trusting either could hide exposure.
+    EXPOSURE_KEY_CONFLICT = "EXPOSURE_KEY_CONFLICT"
     EXPOSURE_PER_ORDER = "EXPOSURE_PER_ORDER"  # RiskPolicy.max_position_risk
     EXPOSURE_PER_MARKET = "EXPOSURE_PER_MARKET"  # RiskPolicy.max_position_risk, both sides of the market
     EXPOSURE_PER_EVENT = "EXPOSURE_PER_EVENT"
@@ -383,8 +392,14 @@ class InventoryLine:
 class AccountProjection:
     """One account scope as the gate sees it. Every unknown is None (or `consistent=False`), never zero.
 
-    `pnl_history_since_utc` is the account's inception: every realized P&L entry since then is listed, so the
-    trailing loss windows and the drawdown peak are complete."""
+    `account_genesis_utc` is the account's inception, as recorded by its owner of record (a later package ties it
+    to the journal's genesis). Both histories must be complete since exactly that instant
+    (`pnl_history_since_utc`, `order_history_since_utc`): a shorter history could forget a loss or an order, so a
+    mismatch blocks new risk. The decision records a digest of each history (`history_digest`), so a replay can
+    show what the gate saw.
+
+    A snapshot is all or nothing: `snapshot_revision` and `observed_at_utc` are both set or both None, and a
+    snapshot with problems is never `consistent`."""
 
     projection_id: str
     scope_key: str
@@ -400,6 +415,8 @@ class AccountProjection:
     pnl_history: tuple[LedgerEntry, ...] | None
     pnl_history_since_utc: str | None
     order_history: tuple[OrderHistoryEntry, ...] | None
+    account_genesis_utc: str | None = None  # None: unknown, so neither history can be shown complete
+    order_history_since_utc: str | None = None
     schema: str = PROJECTION_SCHEMA
 
     def __post_init__(self) -> None:
@@ -411,10 +428,14 @@ class AccountProjection:
                                                    or self.snapshot_revision < 1):
             raise ValueError("snapshot_revision must be a positive int or None")
         _stamp(self.observed_at_utc, "observed_at_utc", optional=True)
+        if (self.snapshot_revision is None) != (self.observed_at_utc is None):
+            raise ValueError("snapshot_revision and observed_at_utc are both known (one snapshot) or both None")
         _flag(self.consistent, "consistent")
         _flag(self.external_orders_known, "external_orders_known")
         if not isinstance(self.problems, tuple) or not all(isinstance(p, str) for p in self.problems):
             raise ValueError("problems must be a tuple of str")
+        if self.consistent and self.problems:
+            raise ValueError("a snapshot with problems is not consistent")
         object.__setattr__(self, "cash", _amount(self.cash, "cash", optional=True, signed=True))
         _tuple_of(self.positions, HeldPosition, "positions", optional=True)
         _tuple_of(self.commitments, Commitment, "commitments")
@@ -422,6 +443,8 @@ class AccountProjection:
         _tuple_of(self.pnl_history, LedgerEntry, "pnl_history", optional=True)
         _stamp(self.pnl_history_since_utc, "pnl_history_since_utc", optional=True)
         _tuple_of(self.order_history, OrderHistoryEntry, "order_history", optional=True)
+        _stamp(self.account_genesis_utc, "account_genesis_utc", optional=True)
+        _stamp(self.order_history_since_utc, "order_history_since_utc", optional=True)
         if len({c.commitment_id for c in self.commitments}) != len(self.commitments):
             raise ValueError("commitment ids must be unique")
         keys = [(p.market_ticker, p.side) for p in self.positions or ()]
@@ -436,6 +459,23 @@ class AccountProjection:
         if len(set(refs)) != len(refs):  # a repeated gain would hide a loss
             raise ValueError("ledger entry refs must be unique")
 
+    def history_digest(self, which: str) -> str | None:
+        """SHA-256 of one history ("pnl" or "orders") with its completeness claim; None while it is unknown."""
+        if which == "pnl":
+            since = self.pnl_history_since_utc
+            rows = None if self.pnl_history is None else sorted(
+                [e.entry_ref, e.at_utc, e.kind.value, decimal_text(e.amount)] for e in self.pnl_history)
+        elif which == "orders":
+            since = self.order_history_since_utc
+            rows = None if self.order_history is None else sorted(
+                [o.order_ref, o.market_ticker, o.kind.value, o.created_at_utc or "", decimal_text(o.new_risk)]
+                for o in self.order_history)
+        else:
+            raise ValueError(f"unknown history {which!r}")
+        if rows is None:
+            return None
+        return sha256_text(canonical_json({"genesis": self.account_genesis_utc, "since": since, "rows": rows}))
+
 
 @dataclass(frozen=True)
 class MarketKeys:
@@ -449,17 +489,21 @@ class MarketKeys:
         _label(self.cluster_key, "cluster_key", optional=True)
 
 
-def project_account(scope_key: str, snapshot: AccountSnapshot | None, held: Iterable[ReservationView], *,
-                    projection_id: str, intents: Mapping[str, OrderIntent], market_keys: Mapping[str, MarketKeys],
-                    pnl_history: tuple[LedgerEntry, ...] | None, pnl_history_since_utc: str | None,
-                    order_history: tuple[OrderHistoryEntry, ...] | None) -> AccountProjection:
-    """Build the projection from `reservations`' latest snapshot and held reservations (`held_reservations`).
+def project_account(view: AccountView, *, projection_id: str, intents: Mapping[str, OrderIntent],
+                    market_keys: Mapping[str, MarketKeys], pnl_history: tuple[LedgerEntry, ...] | None,
+                    pnl_history_since_utc: str | None, order_history: tuple[OrderHistoryEntry, ...] | None,
+                    order_history_since_utc: str | None, account_genesis_utc: str | None) -> AccountProjection:
+    """Build the projection from ONE consistent read of the reservation authority
+    (`ReservationAuthority.account_view`): the latest snapshot and the reservations held at that same moment.
+    Separate reads could straddle a snapshot that releases a BOUND reservation, losing its exposure from both.
 
     `intents` (by intent key) attributes local reservations to strategies; `market_keys` (by ticker) gives the
     event and cluster of every market involved. Anything missing from them is unknown and counts toward the
     candidate (see the module docstring). The ledger and order histories come from the persisted journal or the
     venue's account history (package G); this function does not read a store."""
-    held = tuple(held)
+    if not isinstance(view, AccountView):
+        raise ValueError("view must be a reservations.AccountView (one consistent read)")
+    scope_key, snapshot, held = view.scope_key, view.snapshot, tuple(view.held)
     if snapshot is not None and snapshot.scope_key != scope_key:
         raise ValueError("the snapshot is for another scope")
     if any(r.scope_key != scope_key or r.state is ObligationState.RELEASED for r in held):
@@ -474,7 +518,8 @@ def project_account(scope_key: str, snapshot: AccountSnapshot | None, held: Iter
         for r in held:
             quarantined = r.quarantine_reason is not None
             # Cash: the same obligation `reservations` builds at reserve time (its `_evaluate`): unknown while
-            # quarantined, the venue-unreflected residual while provider-held, otherwise the full worst case.
+            # quarantined, the venue-unreflected residual while provider-held, otherwise the full worst case. A
+            # provider-held view the snapshot does not list (impossible within one read) keeps the full worst case.
             cash: Decimal | None = r.cash_worst_case
             if quarantined:
                 cash = None
@@ -511,7 +556,7 @@ def project_account(scope_key: str, snapshot: AccountSnapshot | None, held: Iter
                        if e.market_ticker is not None and e.side is not None}
             for ticker, side in sorted(wanted, key=lambda k: (k[0], k[1].value)):
                 # The canonical inventory rule (reservations): position - held reductions - external sells.
-                available, why = ReservationAuthority._inventory(snapshot, list(held), ticker, side)
+                available, why = ReservationAuthority.inventory_for(snapshot, list(held), ticker, side)
                 inventory.append(InventoryLine(ticker, side, None if why else available))
 
     return AccountProjection(
@@ -522,7 +567,8 @@ def project_account(scope_key: str, snapshot: AccountSnapshot | None, held: Iter
         problems=("NO_ACCOUNT_SNAPSHOT",) if snapshot is None else tuple(snapshot.problems),
         cash=None if snapshot is None else snapshot.usable_cash(), positions=positions,
         commitments=tuple(commitments), external_orders_known=externals_known, inventory=tuple(inventory),
-        pnl_history=pnl_history, pnl_history_since_utc=pnl_history_since_utc, order_history=order_history)
+        pnl_history=pnl_history, pnl_history_since_utc=pnl_history_since_utc, order_history=order_history,
+        account_genesis_utc=account_genesis_utc, order_history_since_utc=order_history_since_utc)
 
 
 # ---------------------------------------------------------------------------------------------- the market
@@ -877,6 +923,9 @@ def _checks(intent: OrderIntent, account: AccountProjection | None, market: Mark
         fail(Reason.ACCOUNT_SCOPE_MISMATCH, f"projection is for {account.scope_key}, not {intent.scope.key()}")
         return
     inputs["projection"] = account.projection_id
+    inputs["account_genesis"] = account.account_genesis_utc
+    inputs["pnl_history"] = account.history_digest("pnl")
+    inputs["order_history"] = account.history_digest("orders")
     _account_checks(intent, account, market if market_ok else None, policy, limits, tl, at, fail, figures, entry)
 
 
@@ -1044,9 +1093,17 @@ def _account_checks(intent: OrderIntent, account: AccountProjection, market: Mar
 
 
 def _exposure_items(account: AccountProjection, intent: OrderIntent, market: MarketState):
-    """(obligation id, state, worst case, keys) for every held exposure. An unknown dimension is the candidate's:
-    an exposure that could be on the candidate's market, event, cluster or strategy is counted there."""
+    """(obligation id, state, worst case, keys) for every held exposure, the candidate's keys, and the ids of held
+    items on the candidate's own market whose event or cluster contradicts the market state's. An unknown dimension
+    is the candidate's: an exposure that could be on the candidate's market, event, cluster or strategy is counted
+    there."""
     cand = (intent.market_ticker, market.event_key, market.cluster_key, intent.strategy_id)
+    conflicts = [f"position:{p.market_ticker}:{p.side.value}" for p in account.positions or ()
+                 if p.market_ticker == cand[0] and (p.event_key not in (None, cand[1])
+                                                    or p.cluster_key not in (None, cand[2]))]
+    conflicts += [f"commitment:{c.commitment_id}" for c in account.commitments
+                  if c.market_ticker == cand[0] and (c.event_key not in (None, cand[1])
+                                                     or c.cluster_key not in (None, cand[2]))]
 
     def keys(ticker: str | None, event: str | None, cluster: str | None, strategy: str | None) -> tuple[str, ...]:
         if ticker is None:  # an unknown market could be this one, in this event and cluster
@@ -1059,7 +1116,7 @@ def _exposure_items(account: AccountProjection, intent: OrderIntent, market: Mar
               keys(p.market_ticker, p.event_key, p.cluster_key, p.strategy_id)) for p in account.positions or ()]
     items += [(f"commitment:{c.commitment_id}", c.state, c.risk_worst_case,
                keys(c.market_ticker, c.event_key, c.cluster_key, c.strategy_id)) for c in account.commitments]
-    return items, keys(*cand)
+    return items, keys(*cand), conflicts
 
 
 def _exposure_checks(intent: OrderIntent, account: AccountProjection, market: MarketState | None, policy: RiskPolicy,
@@ -1072,7 +1129,11 @@ def _exposure_checks(intent: OrderIntent, account: AccountProjection, market: Ma
     if account.positions is None:
         fail(Reason.EXPOSURE_UNKNOWN, "held positions are unknown")
         return
-    items, cand_keys = _exposure_items(account, intent, market)
+    items, cand_keys, conflicts = _exposure_items(account, intent, market)
+    if conflicts:
+        fail(Reason.EXPOSURE_KEY_CONFLICT, f"{conflicts[:3]} on {intent.market_ticker} name another event or cluster "
+                                           f"than the market state ({market.event_key}, {market.cluster_key})")
+        return
     # The canonical no-netting sum per shared key. Its cash verdict is not used here (no cash is passed): the
     # cash check is separate (`_cash_checks`).
     result = reserve_simultaneous_obligations(
@@ -1114,9 +1175,13 @@ def _cash_checks(intent: OrderIntent, account: AccountProjection, policy: RiskPo
 
 def _loss_checks(intent: OrderIntent, account: AccountProjection, market: MarketState | None, policy: RiskPolicy,
                  at: datetime, fail, figures: dict, risk: Decimal) -> None:
-    history, since = account.pnl_history, account.pnl_history_since_utc
+    history, since, genesis = account.pnl_history, account.pnl_history_since_utc, account.account_genesis_utc
     if history is None or since is None:
         fail(Reason.PNL_HISTORY_UNKNOWN, "realized P&L history is unknown: no new risk")
+        return
+    if genesis is None or parse_utc_text(since) != parse_utc_text(genesis):
+        fail(Reason.PNL_HISTORY_UNKNOWN, f"history since {since} is not complete since the account's genesis "
+                                         f"{genesis}: a shorter history could forget a loss")
         return
     start = parse_utc_text(since)
     times = [parse_utc_text(e.at_utc) for e in history]
@@ -1131,9 +1196,9 @@ def _loss_checks(intent: OrderIntent, account: AccountProjection, market: Market
                       key=lambda te: (te[0], te[1].entry_ref))
     settled = [_RiskPosition(f"pnl:{n}:{e.entry_ref}", e.at_utc, "realized", "realized", "SETTLED", Decimal(0),
                              Decimal(0), Decimal(0), None, e.amount, e.at_utc) for n, (_, e) in enumerate(realized)]
-    items, _ = _exposure_items(account, intent, market)
-    if any(w is None for _, _, w, _ in items):
-        return  # EXPOSURE_UNKNOWN already: the open risk the loss headroom must absorb is unknown
+    items, _, conflicts = _exposure_items(account, intent, market)
+    if conflicts or any(w is None for _, _, w, _ in items):
+        return  # EXPOSURE_UNKNOWN or EXPOSURE_KEY_CONFLICT already: the open risk to absorb is not known
     # Open exposures carry the same keys as in `_exposure_checks`, so an existing breach `risk.assess` finds is
     # the same one; `risk.assess` owns the loss limits, the drawdown and the remaining capacity.
     open_ = [_RiskPosition(i, stamp, k[1], k[2], "OPEN", w, w, w, None, None, None) for i, _, w, k in items]
@@ -1159,11 +1224,18 @@ def _history_checks(intent: OrderIntent, account: AccountProjection, limits: Gat
     """Counts from the persisted order history only, with `pre_submit_checks`' TicketLimits semantics: every order
     created in the window counts (failed and future-dated ones too); an order exactly `order_window` old has left
     it; exactly `market_cooldown` since the last order on the market is allowed."""
-    history = account.order_history
+    history, since, genesis = account.order_history, account.order_history_since_utc, account.account_genesis_utc
     if history is None or any(o.created_at_utc is None for o in history):
         fail(Reason.ORDER_HISTORY_UNKNOWN, "an order has no creation time, or the history is unknown")
         return
+    if since is None or genesis is None or parse_utc_text(since) != parse_utc_text(genesis):
+        fail(Reason.ORDER_HISTORY_UNKNOWN, f"order history since {since} is not complete since the account's "
+                                           f"genesis {genesis}: a shorter history could forget an order")
+        return
     timed = [(parse_utc_text(o.created_at_utc), o) for o in history]
+    if any(c < parse_utc_text(since) for c, _ in timed):
+        fail(Reason.ORDER_HISTORY_UNKNOWN, f"an order predates the account's genesis {genesis}")
+        return
     if entry:
         recent_risk = sum((o.new_risk for c, o in timed if c > at - DAY), Decimal(0))
         if recent_risk + risk > limits.daily_new_risk:  # exactly the limit is allowed
