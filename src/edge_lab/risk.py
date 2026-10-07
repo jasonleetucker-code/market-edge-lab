@@ -1,8 +1,13 @@
 """Risk and capital foundation (issue #6, P0). Simulation only: it reads a replayed shadow account.
 
-Every figure here is a deterministic function of the account state (`shadow_ledger.replay`),
-a `RiskPolicy` and an `as_of` instant. Nothing reads a venue balance, and nothing moves
-money.
+Every figure here is a deterministic function of the account state, a `RiskPolicy` and an
+`as_of` instant. Nothing reads a venue balance, and nothing moves money.
+
+The account state is anything shaped like `RiskAccount` (below): a replayed shadow account
+(`shadow_ledger.replay`) is one, and the execution risk gate builds its own versioned
+projection (`execution/risk_gate.py`, ADR 0044). This module does not import
+`shadow_ledger`, so the execution package can use these formulas without reaching a research
+ledger (ADR 0043's pinned edge, removed by #160 package I).
 
 Rules:
 
@@ -27,10 +32,62 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
-from typing import Any
+from typing import Any, Protocol, Sequence
 
 from .freshness import parse_utc
-from .shadow_ledger import AccountState
+
+
+class RiskPosition(Protocol):
+    """What the risk formulas read from one position (a `shadow_ledger.Position` is one).
+
+    Read-only properties, so a frozen dataclass satisfies it as well as a mutable one."""
+
+    @property
+    def position_id(self) -> str: ...
+    @property
+    def opened_at_utc(self) -> str: ...
+    @property
+    def event_id(self) -> str: ...
+    @property
+    def outcome_cluster(self) -> str: ...
+    @property
+    def status(self) -> str: ...  # "OPEN" or "SETTLED"
+    @property
+    def cost_basis(self) -> Decimal: ...
+    @property
+    def max_downside(self) -> Decimal: ...
+    @property
+    def potential_payout(self) -> Decimal: ...
+    @property
+    def expected_settlement_utc(self) -> str | None: ...
+    @property
+    def net_pnl(self) -> Decimal | None: ...  # known once SETTLED
+    @property
+    def settled_at_utc(self) -> str | None: ...
+
+
+class RiskAccount(Protocol):
+    """Exactly what `assess`, `equity_curve`, `capital_release`, `latest_activity`,
+    `require_point_in_time` and `withdrawal_assessment` read from an account (a
+    `shadow_ledger.AccountState` is one)."""
+
+    @property
+    def account_id(self) -> str: ...
+    @property
+    def starting_bankroll(self) -> Decimal: ...
+    @property
+    def settled_cash(self) -> Decimal: ...
+    @property
+    def committed_capital(self) -> Decimal: ...
+    @property
+    def open_worst_case_risk(self) -> Decimal: ...
+    @property
+    def equity(self) -> Decimal: ...
+    @property
+    def positions(self) -> Sequence[RiskPosition]: ...
+
+    def open_positions(self) -> Sequence[RiskPosition]: ...
+
 
 HORIZONS = ("available_now", "within_1_hour", "within_1_day", "within_1_week", "locked")
 _BOUNDS = (("within_1_hour", timedelta(hours=1)), ("within_1_day", timedelta(days=1)),
@@ -112,7 +169,7 @@ def _sum(values) -> Decimal:
     return sum(values, ZERO)
 
 
-def _grouped(state: AccountState, key: str) -> dict[str, Decimal]:
+def _grouped(state: RiskAccount, key: str) -> dict[str, Decimal]:
     out: dict[str, Decimal] = {}
     for p in state.open_positions():
         k = getattr(p, key)
@@ -120,7 +177,7 @@ def _grouped(state: AccountState, key: str) -> dict[str, Decimal]:
     return dict(sorted(out.items()))
 
 
-def equity_curve(state: AccountState) -> list[tuple[str, Decimal]]:
+def equity_curve(state: RiskAccount) -> list[tuple[str, Decimal]]:
     """Equity after each settlement, in settlement order (cost-basis equity moves only on settlement)."""
     settled = sorted((p for p in state.positions if p.status == "SETTLED"),
                      key=lambda p: (parse_utc(p.settled_at_utc) or _EARLIEST, p.position_id))
@@ -131,7 +188,7 @@ def equity_curve(state: AccountState) -> list[tuple[str, Decimal]]:
     return curve
 
 
-def _realized_since(state: AccountState, since: datetime, until: datetime) -> Decimal:
+def _realized_since(state: RiskAccount, since: datetime, until: datetime) -> Decimal:
     total = ZERO
     for p in state.positions:
         at = parse_utc(p.settled_at_utc) if p.status == "SETTLED" else None
@@ -140,7 +197,7 @@ def _realized_since(state: AccountState, since: datetime, until: datetime) -> De
     return total
 
 
-def capital_release(state: AccountState, as_of: datetime) -> tuple[HorizonBucket, ...]:
+def capital_release(state: RiskAccount, as_of: datetime) -> tuple[HorizonBucket, ...]:
     """Committed capital by when it is expected to settle. Overdue or unknown -> `locked`."""
     as_of = parse_utc(as_of)
     if as_of is None:
@@ -165,7 +222,7 @@ def capital_release(state: AccountState, as_of: datetime) -> tuple[HorizonBucket
     return tuple(out)
 
 
-def latest_activity(state: AccountState) -> datetime | None:
+def latest_activity(state: RiskAccount) -> datetime | None:
     """The latest fill or settlement time in the replayed state."""
     times = [parse_utc(p.opened_at_utc) for p in state.positions]
     times += [parse_utc(p.settled_at_utc) for p in state.positions if p.status == "SETTLED"]
@@ -173,7 +230,7 @@ def latest_activity(state: AccountState) -> datetime | None:
     return max(known) if known else None
 
 
-def require_point_in_time(state: AccountState, as_of: datetime) -> datetime:
+def require_point_in_time(state: RiskAccount, as_of: datetime) -> datetime:
     """Refuse an `as_of` earlier than the ledger's activity: the state would contain the future."""
     as_of_utc = parse_utc(as_of)
     if as_of_utc is None:
@@ -185,7 +242,7 @@ def require_point_in_time(state: AccountState, as_of: datetime) -> datetime:
     return as_of_utc
 
 
-def assess(state: AccountState, policy: RiskPolicy, as_of: datetime) -> RiskReport:
+def assess(state: RiskAccount, policy: RiskPolicy, as_of: datetime) -> RiskReport:
     as_of_utc = require_point_in_time(state, as_of)
     curve = equity_curve(state)
     peak = max(e for _, e in curve)
@@ -257,7 +314,7 @@ class WithdrawalAssessment:
                 for k, v in self.__dict__.items()}
 
 
-def withdrawal_assessment(state: AccountState, report: RiskReport, *, simulation: bool = True,
+def withdrawal_assessment(state: RiskAccount, report: RiskReport, *, simulation: bool = True,
                           edge_verified: bool = False, fee_claim_basis: str = "NONE",
                           owner_policy_approved: bool = False) -> WithdrawalAssessment:
     """The withdrawal contract. It never recommends a draw until every precondition holds."""

@@ -48,7 +48,7 @@ PROTECTED = frozenset({"sports_evidence", "exp002_timing", "odds_schedule", "pri
                        "exp001_shadow", "exp001_stageb", "dataset_exp001", "describe_exp001"})
 # The single pinned exception, with its reason: `risk` imports `shadow_ledger` for the `AccountState` type of the
 # legacy shadow `assess()`. Package I gives risk rules a versioned account projection and removes this edge.
-TRANSITIVE_EXEMPT = {("risk", "shadow_ledger"): "AccountState type for legacy shadow assess(); package I removes it"}
+TRANSITIVE_EXEMPT = {}
 
 THIRD_PARTY = {"cryptography": frozenset({"edge_lab/execution/signer.py"})}
 NETWORK_MODULES = frozenset({"socket", "_socket", "ssl", "_ssl", "http", "urllib", "ftplib", "smtplib", "poplib",
