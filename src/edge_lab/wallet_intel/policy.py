@@ -71,7 +71,9 @@ class FollowSignal:
     leader_price: Decimal
     leader_time: datetime
     observable_at: datetime  # when our channel could first report it, never the leader's fill time
-    leader_position_before: Decimal | None  # None: unknown
+    # The leader's holding of this token before the trade, as known at `observable_at` (never from later
+    # receipts). None: unknown, and then no exit is sized from it.
+    leader_position_before: Decimal | None
 
     def __post_init__(self) -> None:
         for name in ("signal_id", "leader_key", "cluster_key", "strategy", "instrument_id", "market_id", "event_id"):

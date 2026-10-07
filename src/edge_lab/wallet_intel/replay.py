@@ -267,7 +267,8 @@ def _execute(s: FollowSignal, kind: IntentKind, qty: Decimal | None, limit: Deci
     assert qty is not None
     side = "BUY" if kind is IntentKind.BUY else "SELL"
 
-    def result(status: FillStatus, reason: str, attempts: int, at: datetime, levels=(), fee=None) -> FollowerFill:  # type: ignore[no-untyped-def]
+    def result(status: FillStatus, reason: str, attempts: int, at: datetime,  # type: ignore[no-untyped-def]
+               levels=(), fee=None) -> FollowerFill:
         filled = add(*(sz for _, sz in levels))
         cash = add(*(mul(p, sz) for p, sz in levels))
         fee_l = Labeled.unknown("fee function returned UNKNOWN") if fee is None else Labeled(fee, Basis.ESTIMATED,
