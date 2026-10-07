@@ -277,7 +277,7 @@ def test_time_going_backwards_between_revisions_is_inconsistent(path):
 
 
 @pytest.mark.parametrize("change,problem", [
-    (dict(remaining="9"), "ATTRIBUTION_SIZE_MISMATCH"),
+    (dict(remaining="11"), "ATTRIBUTION_SIZE_MISMATCH"),  # more open at the venue than the order has left
     (dict(price="0.41"), "ATTRIBUTION_PRICE_MISMATCH"),
     (dict(client="someone-else"), "ATTRIBUTION_MISMATCH"),
     (dict(observed=NOW - timedelta(seconds=1)), "ATTRIBUTION_BEFORE_RESERVATION"),
@@ -295,6 +295,26 @@ def test_an_attribution_that_does_not_match_its_reservation_is_inconsistent(path
                                                         attributed_open_orders=(a,), now=NOW)
     assert not snap.consistent and any(p.startswith(problem) for p in snap.problems), snap.problems
     assert not _decide(journal, f.entry("EXP-TEST:b", quantity="1", price="0.01", cost="0.01")).allowed
+    journal.close()
+
+
+def test_a_venue_remainder_below_the_local_one_counts_that_reservation_in_full(path):
+    """Fills the venue knows of but this journal has not recorded yet: the snapshot stays consistent, but
+    only that one reservation loses its provider-held credit until the local fills catch up."""
+    journal, token = _open(path, cash="10")
+    rid = _acked(journal, f.entry("EXP-TEST:a", quantity="10", price="0.50", cost="5.00"), token)
+    view = journal.reservations.reservation(rid)
+    # The venue holds the 3 still open (1.50) and has debited 7 filled (3.50): 10.00 - 5.00 = 5.00, plus a
+    # 1.00 deposit: spendable 6.00.
+    snap = f.snapshot(journal, 2, cash="6", attributed=(f.attributed(view, remaining="3"),))
+    assert snap.consistent, snap.problems
+    assert not journal.reservations.reservation(rid).provider_held
+    candidate = f.entry("EXP-TEST:b", quantity="10", price="0.50", cost="5.00")
+    assert not _decide(journal, candidate).allowed  # counted in full: 5.00 + 5.00 > 6.00
+    assert _decide(journal, f.entry("EXP-TEST:c", quantity="1", price="0.01", cost="0.01")).allowed  # not blocked
+    journal.reservations.record_fill(rid, Decimal("7"), NOW, receipt_id=_ev(journal, rid, K.FILL))
+    assert journal.reservations.reservation(rid).provider_held  # caught up: the venue's 3 equal the local 3
+    assert _decide(journal, candidate).allowed
     journal.close()
 
 
@@ -560,15 +580,44 @@ def test_a_complete_fill_is_bound_until_a_snapshot_shows_the_position(path):
     journal.close()
 
 
-def test_a_rejected_attempt_cannot_have_fills(path):
+def test_a_rejection_after_a_recorded_fill_quarantines_instead_of_raising(path):
+    """Re-review finding 2: contradictory evidence is kept, and stops new risk on the account."""
     journal, token = _open(path)
     a = f.prepare(journal, f.entry(), token)
     journal.mark_sent(a.attempt_id, now=NOW)
     journal.reservations.record_fill(a.reservation_id, Decimal("1"), NOW, receipt_id=_ev(journal, a.reservation_id,
                                                                                          K.FILL))
-    with pytest.raises(InvalidTransition, match="has fills"):
-        journal.mark_rejected(a.attempt_id, receipt_id=_ev(journal, a.attempt_id, K.ORDER_REJECT), now=NOW)
-    assert journal.attempt(a.attempt_id).state is AttemptState.SENT  # the whole transaction rolled back
+    out = journal.mark_rejected(a.attempt_id, receipt_id=_ev(journal, a.attempt_id, K.ORDER_REJECT), now=NOW)
+    assert out.state is AttemptState.OUTCOME_UNKNOWN and out.state_reason.startswith("CONTRADICTED: REJECTED")
+    r = journal.reservations.reservation(a.reservation_id)
+    assert r.state is ObligationState.UNKNOWN and r.quarantine_reason.startswith("CONTRADICTED")
+    decision = _decide(journal, f.entry("EXP-TEST:b", quantity="1", price="0.01", cost="0.01"))
+    assert not decision.allowed and any("EXPOSURE_UNKNOWN" in x for x in decision.reasons)
+    kinds = [k for (k,) in journal._conn.execute("SELECT kind FROM events ORDER BY seq DESC LIMIT 2")]
+    assert kinds == ["RESERVATION_QUARANTINED", "ATTEMPT_STATE"]
+    with pytest.raises(AttemptRefused):
+        f.prepare(journal, f.entry(), token, nonce="n-2")  # no blind resubmission either
+    # An ABSENT reconciliation against the same record is contradicted the same way.
+    out = journal.reconcile_attempt(a.attempt_id, AttemptState.ABSENT, now=NOW,
+                                    receipt_id=_ev(journal, a.attempt_id, K.ORDER_LOOKUP))
+    assert out.state is AttemptState.OUTCOME_UNKNOWN and out.state_reason.startswith("CONTRADICTED: ABSENT")
+    assert journal.verify_chain().ok
+    journal.close()
+
+
+def test_resolving_a_quarantine_with_fewer_fills_is_accepted_but_recorded(path):
+    """Re-review nit 3: a lookup below the recorded fills (a busted trade) is the venue's answer; it is
+    noted in the event and releases nothing."""
+    journal, token = _open(path)
+    rid = _acked(journal, f.entry(), token)
+    rv = journal.reservations
+    rv.record_fill(rid, Decimal("4"), NOW, receipt_id=_ev(journal, rid, K.FILL))
+    rv.record_fill(rid, Decimal("2"), NOW, receipt_id=_ev(journal, rid, K.FILL))  # shrinks: quarantined
+    out = rv.resolve_quarantine(rid, NOW, receipt_id=_ev(journal, rid, K.ORDER_LOOKUP), venue_filled=Decimal("2"))
+    assert out.filled_quantity == Decimal("2") and out.state is ObligationState.UNKNOWN
+    assert out.cash_worst_case == Decimal("4.6")
+    body = journal._conn.execute("SELECT body_json FROM events WHERE kind = 'RESERVATION_RESOLVED'").fetchone()[0]
+    assert '"fills_reduced_from":"4"' in body
     journal.close()
 
 

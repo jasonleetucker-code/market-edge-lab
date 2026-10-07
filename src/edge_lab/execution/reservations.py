@@ -21,10 +21,11 @@ rounding (`_EXACT`), so the caller's thread-wide `decimal` precision can never c
 
 Cash worst cases:
 - ENTRY and REDUCTION: `intent.max_total_cost` (for a REDUCTION that is its fee bound);
-- a local order the latest snapshot lists as open, bound to its reservation id with a matching remaining
-  quantity and price (`AttributedOrder`), is provider-held: the venue already holds its cash, so only the
-  residual the snapshot reports (`unreflected_cash`) counts. Every other held reservation is local-only and
-  counts in full, so nothing is spent twice;
+- a local order the latest snapshot lists as open, bound to its reservation id with a matching price and
+  exactly the local remaining quantity (`AttributedOrder`), is provider-held: the venue already holds its
+  cash, so only the residual the snapshot reports (`unreflected_cash`) counts. Every other held reservation
+  is local-only and counts in full, so nothing is spent twice. A venue remainder below the local one (fills
+  not yet recorded here) is consistent but counts in full; one above it makes the snapshot inconsistent;
 - an external order: its `unreflected_cash`; None is unknown and blocks new risk;
 - a quarantined reservation (below): unknown, which blocks all new risk in its scope.
 
@@ -227,7 +228,7 @@ class _Store(Protocol):
     def _row_sha(self, conn: sqlite3.Connection, table: str, where: Mapping[str, Any]) -> str: ...
 
     def _require_receipt(self, conn: sqlite3.Connection, receipt_id: str, *, kinds: Iterable[ReceiptKind],
-                         attempt_id: str, provider_order_id: str | None = None) -> None: ...
+                         attempt_id: str) -> None: ...
 
     def _quarantine_superseded_fences(self, conn: sqlite3.Connection, *, live_token: int | None,
                                       at: str) -> list[str]: ...
@@ -383,7 +384,8 @@ class ReservationView:
     created_at_utc: str
     updated_at_utc: str
     last_fill_at_utc: str | None
-    provider_held: bool  # the latest snapshot lists this reservation's order as open: the venue holds its cash
+    # The latest snapshot lists this order as open with exactly its local remainder: the venue holds its cash.
+    provider_held: bool
 
 
 @dataclass(frozen=True)
@@ -609,9 +611,11 @@ class ReservationAuthority:
                 problems.append(f"ATTRIBUTION_MISMATCH: {a.reservation_id} client order id differs")
             if parse_utc_text(observed) < parse_utc_text(row[4]):
                 problems.append(f"ATTRIBUTION_BEFORE_RESERVATION: {a.reservation_id} was created after {observed}")
-            if a.remaining_quantity != remaining:
+            # Below the local remainder is fills not yet recorded here: consistent, but the reservation is
+            # then counted in full (`_decode`). Above it, or negative, the venue shows more open than can be.
+            if a.remaining_quantity > remaining or a.remaining_quantity < 0:
                 problems.append(f"ATTRIBUTION_SIZE_MISMATCH: {a.reservation_id} venue remaining "
-                                f"{a.remaining_quantity} != local {remaining}")
+                                f"{a.remaining_quantity} > local {remaining}")
             if a.limit_price != _req_dec(row[3], name="limit_price"):
                 problems.append(f"ATTRIBUTION_PRICE_MISMATCH: {a.reservation_id} venue price {a.limit_price}")
             if a.unreflected_cash is not None and a.unreflected_cash < 0:
@@ -886,7 +890,11 @@ class ReservationAuthority:
     def resolve_quarantine(self, reservation_id: str, now: datetime, *, receipt_id: str,
                            venue_filled: Decimal) -> ReservationView:
         """Record the venue's answer to a quarantine (an order lookup): its cumulative filled quantity. The
-        reservation stays UNKNOWN and held; the normal lifecycle then continues from what the venue shows."""
+        reservation stays UNKNOWN and held; the normal lifecycle then continues from what the venue shows.
+
+        The venue's answer is authoritative even when it is below the recorded fills (a busted trade). It is
+        accepted, never silently: the event records `fills_reduced_from`. Nothing is released by it, and the
+        reservation's worst case stays the full `max_total_cost`."""
         filled = exact_decimal(venue_filled, name="venue_filled")
         at = utc_text(now)
         with self._store._transaction() as conn:
@@ -900,9 +908,12 @@ class ReservationAuthority:
                          " updated_at_utc = ? WHERE reservation_id = ?",
                          (decimal_text(filled), at if filled != r.filled_quantity else r.last_fill_at_utc, at,
                           reservation_id))
+            with localcontext(_EXACT):
+                reduced = filled < r.filled_quantity
             self._store._audit(conn, at=at, kind="RESERVATION_RESOLVED", subject=reservation_id,
                                body={"from": r.state, "to": r.state, "venue_filled": filled, "receipt_id": receipt_id,
-                                     "was": r.quarantine_reason})
+                                     "was": r.quarantine_reason,
+                                     "fills_reduced_from": r.filled_quantity if reduced else None})
             return self._view(conn, reservation_id)
 
     def reservation(self, reservation_id: str) -> ReservationView:
@@ -987,9 +998,23 @@ class ReservationAuthority:
         if r.state is ObligationState.UNKNOWN and r.quarantine_reason is None:
             self._set_state(conn, r, ObligationState.OUTSTANDING, at, extra={"event": "ATTEMPT_ACKNOWLEDGED"})
 
+    def _contradicts_never_placed(self, conn: sqlite3.Connection, reservation_id: str) -> str | None:
+        """Why a REJECTED or ABSENT outcome contradicts what is recorded (fills, a quarantine), or None."""
+        r = self._view(conn, reservation_id)
+        if r.quarantine_reason is not None:
+            return f"already quarantined: {r.quarantine_reason}"
+        if r.filled_quantity > 0:
+            return f"{r.filled_quantity} contracts were recorded as filled"
+        return None
+
+    def _quarantine_for_attempt(self, conn: sqlite3.Connection, reservation_id: str, reason: str, at: str, *,
+                                receipt_id: str | None) -> None:
+        self._quarantine(conn, self._view(conn, reservation_id), reason, at, extra={"receipt_id": receipt_id})
+
     def _attempt_never_placed(self, conn: sqlite3.Connection, reservation_id: str, reason: ReleaseReason,
                               at: str) -> None:
-        """REJECTED or ABSENT: no order ever existed, so nothing can have filled. Released at once."""
+        """REJECTED or ABSENT: no order ever existed, so nothing can have filled. Released at once. The journal
+        checks `_contradicts_never_placed` first and quarantines instead; this guard is a backstop."""
         r = self._view(conn, reservation_id)
         if r.filled_quantity > 0 or r.quarantine_reason is not None:
             raise InvalidTransition(f"{reservation_id} has fills or is quarantined; it cannot be {reason.value}")
@@ -1008,7 +1033,7 @@ class ReservationAuthority:
                 " quarantine_reason, fence_token, created_at_utc, updated_at_utc, last_fill_at_utc")
 
     def _held(self, conn: sqlite3.Connection, scope_key: str, snap: AccountSnapshot | None) -> list[ReservationView]:
-        attributed = frozenset(snap.attributed) if snap is not None else frozenset()
+        attributed = snap.attributed if snap is not None else {}
         rows = conn.execute(f"SELECT {self._COLUMNS} FROM reservations WHERE scope_key = ? AND state != 'RELEASED'"
                             " ORDER BY reservation_id", (scope_key,)).fetchall()
         return [self._decode(row, attributed) for row in rows]
@@ -1019,22 +1044,26 @@ class ReservationAuthority:
         if row is None:
             raise InvalidTransition(f"no reservation {reservation_id!r}")
         snap = self._snapshot(conn, row[2])
-        return self._decode(row, frozenset(snap.attributed) if snap is not None else frozenset())
+        return self._decode(row, snap.attributed if snap is not None else {})
 
     @staticmethod
-    def _decode(row: tuple, attributed: frozenset[str]) -> ReservationView:
+    def _decode(row: tuple, attributed: Mapping[str, AttributedOrder]) -> ReservationView:
         try:
             state = ObligationState(row[11])
+            quantity, filled = _req_dec(row[7], name="quantity"), _req_dec(row[9], name="filled_quantity")
+            listing = attributed.get(row[0])
+            with localcontext(_EXACT):
+                held = (state is not ObligationState.RELEASED and listing is not None
+                        and listing.remaining_quantity == quantity - filled)
             return ReservationView(
                 reservation_id=row[0], intent_key=row[1], scope_key=row[2], market_ticker=row[3], side=Side(row[4]),
-                kind=IntentKind(row[5]), client_order_id=row[6], quantity=_req_dec(row[7], name="quantity"),
-                limit_price=_req_dec(row[8], name="limit_price"),
-                filled_quantity=_req_dec(row[9], name="filled_quantity"),
+                kind=IntentKind(row[5]), client_order_id=row[6], quantity=quantity,
+                limit_price=_req_dec(row[8], name="limit_price"), filled_quantity=filled,
                 cash_worst_case=_req_dec(row[10], name="cash_worst_case"), state=state,
                 release_reason=None if row[12] is None else ReleaseReason(row[12]),
                 end_reason=None if row[13] is None else EndReason(row[13]), ended_at_utc=row[14],
                 quarantine_reason=row[15], fence_token=int(row[16]), created_at_utc=row[17], updated_at_utc=row[18],
                 last_fill_at_utc=row[19],
-                provider_held=state is not ObligationState.RELEASED and row[0] in attributed)
-        except (ValueError, TypeError) as exc:
+                provider_held=held)
+        except (ValueError, TypeError, ArithmeticError) as exc:
             raise CorruptRecord(f"reservation {row[0]!r} does not decode: {exc}") from exc

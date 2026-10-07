@@ -28,8 +28,14 @@ serialized across processes.
 
 **Evidence.** Every state change that claims a venue outcome names a recorded receipt. The receipt must be
 the unconflicted original, of a kind allowed for that change (`reservations.ReceiptKind`), and bound to
-the same attempt: its `attempt_id` matches, or it has none and its `provider_id` is the attempt's
-provider order id.
+the same attempt: its `attempt_id` matches, or it has none and its `provider_id` is the provider order id
+the attempt already owns. The caller's word is never a binding: an ACK or a reconciliation receipt must
+name the attempt, and a provider order id belongs to at most one attempt (a partial UNIQUE index, and an
+ACK naming an id another attempt owns is refused).
+
+**Contradictions are kept, not refused.** A rejection or absence for an attempt whose reservation already
+has recorded fills (or is quarantined) cannot both be true. The attempt becomes OUTCOME_UNKNOWN and the
+reservation is quarantined (worst case unknown, so no new risk on the account), with an audit event.
 
 **Attempt states.**
 - PENDING_EGRESS → SENT or OUTCOME_UNKNOWN.
@@ -261,6 +267,7 @@ CREATE TABLE attempts (
     UNIQUE (intent_key, attempt_no)
 );
 CREATE INDEX attempts_by_state ON attempts(state);
+CREATE UNIQUE INDEX attempts_one_provider_order ON attempts(provider_order_id) WHERE provider_order_id IS NOT NULL;
 CREATE TABLE receipts (
     receipt_seq INTEGER PRIMARY KEY,
     receipt_id TEXT NOT NULL,
@@ -618,7 +625,8 @@ class ExecutionJournal:
 
     def mark_rejected(self, attempt_id: str, *, receipt_id: str, now: datetime) -> Attempt:
         """The venue refused the order (an ORDER_REJECT receipt bound to this attempt). Its reservation is
-        released."""
+        released. If fills were already recorded the two contradict: the attempt becomes OUTCOME_UNKNOWN and
+        its reservation is quarantined instead (check the returned state)."""
         return self._move(attempt_id, AttemptState.REJECTED, now, reason=None, receipt_id=receipt_id)
 
     def mark_outcome_unknown(self, attempt_id: str, *, reason: str, now: datetime) -> Attempt:
@@ -654,8 +662,19 @@ class ExecutionJournal:
                 raise InvalidTransition(f"{attempt_id}: {a.state.value} -> {new.value} is not allowed")
             if receipt_id is not None:
                 kinds = _RECONCILE_KINDS if expect is AttemptState.OUTCOME_UNKNOWN else _OUTCOME_KINDS[new]
-                self._require_receipt(conn, receipt_id, kinds=kinds, attempt_id=attempt_id,
-                                      provider_order_id=provider_order_id)
+                self._require_receipt(conn, receipt_id, kinds=kinds, attempt_id=attempt_id)
+            if provider_order_id is not None:
+                owner = conn.execute("SELECT attempt_id FROM attempts WHERE provider_order_id = ? AND attempt_id != ?",
+                                     (provider_order_id, attempt_id)).fetchone()
+                if owner is not None:
+                    raise InvalidTransition(f"PROVIDER_ORDER_OWNED: {provider_order_id!r} already belongs to "
+                                            f"{owner[0]}")
+                if a.provider_order_id is not None and a.provider_order_id != provider_order_id:
+                    raise InvalidTransition(f"{attempt_id} already has provider order {a.provider_order_id!r}")
+            if new in (AttemptState.REJECTED, AttemptState.ABSENT):
+                why = self.reservations._contradicts_never_placed(conn, a.reservation_id)
+                if why is not None:
+                    return self._contradicted(conn, a, new, why, at, receipt_id=receipt_id)
             if new is AttemptState.ABSENT and self.reservations._listed_open(conn, a.reservation_id):
                 raise InvalidTransition(f"{attempt_id}: the latest snapshot still lists the order as open; "
                                         "it is not absent")
@@ -674,6 +693,19 @@ class ExecutionJournal:
             elif new is AttemptState.ABSENT:
                 self.reservations._attempt_never_placed(conn, a.reservation_id, ReleaseReason.ABSENT_AT_VENUE, at)
             return self._attempt(conn, attempt_id)
+
+    def _contradicted(self, conn: sqlite3.Connection, a: Attempt, claimed: AttemptState, why: str, at: str, *,
+                      receipt_id: str | None) -> Attempt:
+        """`claimed` (REJECTED or ABSENT: no order exists) contradicts the record (`why`). Keep both: the
+        attempt is OUTCOME_UNKNOWN and its reservation quarantined, until a lookup resolves it."""
+        reason = f"CONTRADICTED: {claimed.value} but {why}"
+        conn.execute("UPDATE attempts SET state = 'OUTCOME_UNKNOWN', state_reason = ?, updated_at_utc = ?"
+                     " WHERE attempt_id = ?", (reason, at, a.attempt_id))
+        self._audit(conn, at=at, kind="ATTEMPT_STATE", subject=a.attempt_id,
+                    body={"from": a.state, "to": AttemptState.OUTCOME_UNKNOWN, "reason": reason,
+                          "claimed": claimed, "receipt_id": receipt_id})
+        self.reservations._quarantine_for_attempt(conn, a.reservation_id, reason, at, receipt_id=receipt_id)
+        return self._attempt(conn, a.attempt_id)
 
     def _quarantine_superseded_fences(self, conn: sqlite3.Connection, *, live_token: int | None,
                                       at: str) -> list[str]:
@@ -792,10 +824,10 @@ class ExecutionJournal:
         return [dict(zip(keys, r)) for r in rows]
 
     def _require_receipt(self, conn: sqlite3.Connection, receipt_id: str, *, kinds: Iterable[ReceiptKind],
-                         attempt_id: str, provider_order_id: str | None = None) -> None:
+                         attempt_id: str) -> None:
         """A state change backed by evidence: the receipt exists, is not in conflict, is of an allowed kind,
-        and is bound to `attempt_id` (by its attempt_id, or, when it has none, by the attempt's provider
-        order id)."""
+        and is bound to `attempt_id`: by its attempt_id, or, when it has none, by the provider order id the
+        attempt already owns (unique per attempt). A caller-supplied provider id never binds."""
         rows = conn.execute("SELECT status, kind, attempt_id, provider_id FROM receipts WHERE receipt_id = ?",
                             (receipt_id,)).fetchall()
         if not rows:
@@ -812,8 +844,8 @@ class ExecutionJournal:
                                         f"not {attempt_id}")
             return
         row = conn.execute("SELECT provider_order_id FROM attempts WHERE attempt_id = ?", (attempt_id,)).fetchone()
-        known = {p for p in (provider_order_id, row[0] if row else None) if p}
-        if provider_id is None or provider_id not in known:
+        owned = row[0] if row else None
+        if provider_id is None or owned is None or provider_id != owned:
             raise InvalidTransition(f"RECEIPT_NOT_BOUND: {receipt_id!r} names neither {attempt_id} nor its provider "
                                     "order id")
 

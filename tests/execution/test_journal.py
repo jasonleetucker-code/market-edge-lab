@@ -327,7 +327,7 @@ def test_no_new_attempt_while_an_earlier_one_could_exist(ready):
     journal.mark_sent(first.attempt_id, now=NOW)
     with pytest.raises(AttemptRefused, match="SENT"):
         f.prepare(journal, intent, token, nonce="n-2")
-    _receipt(journal, "r-ack", provider_id="p-1", kind="ORDER_ACK")  # bound by the provider order id
+    _receipt(journal, "r-ack", provider_id="p-1", kind="ORDER_ACK", attempt_id=first.attempt_id)
     journal.mark_acknowledged(first.attempt_id, provider_order_id="p-1", receipt_id="r-ack", now=NOW)
     with pytest.raises(AttemptRefused, match="ACKNOWLEDGED"):  # the order exists: never a second one
         f.prepare(journal, intent, token, nonce="n-2")
@@ -413,6 +413,51 @@ def test_a_receipt_for_another_attempt_or_of_the_wrong_kind_justifies_nothing(re
                                                venue_filled=0).state is ObligationState.BOUND
     with pytest.raises(InvalidTransition, match="unknown attempt"):
         f.receipt(journal, "ghost", K.FILL, "no-such-attempt")
+
+
+def test_one_provider_order_id_can_never_bind_two_attempts(ready, path):
+    """Re-review finding 1, reproduced: a receipt with provider_id PX and no attempt id acknowledged both x and
+    y, and x's cancel confirmation (PX) then moved y to BOUND."""
+    journal, token = ready
+    x = f.prepare(journal, f.entry("EXP-TEST:x"), token)
+    y = f.prepare(journal, f.entry("EXP-TEST:y"), token)
+    for a in (x, y):
+        journal.mark_sent(a.attempt_id, now=NOW)
+    shared = f.receipt(journal, "ack-px", K.ORDER_ACK, provider_id="PX")  # names no attempt
+    for a in (x, y):  # the caller's provider id is never a binding
+        with pytest.raises(InvalidTransition, match="RECEIPT_NOT_BOUND"):
+            journal.mark_acknowledged(a.attempt_id, provider_order_id="PX", receipt_id=shared, now=NOW)
+    journal.mark_acknowledged(x.attempt_id, provider_order_id="PX",
+                              receipt_id=f.receipt(journal, "ack-x", K.ORDER_ACK, x.attempt_id), now=NOW)
+    ack_y = f.receipt(journal, "ack-y", K.ORDER_ACK, y.attempt_id)
+    with pytest.raises(InvalidTransition, match="PROVIDER_ORDER_OWNED"):
+        journal.mark_acknowledged(y.attempt_id, provider_order_id="PX", receipt_id=ack_y, now=NOW)
+    assert journal.attempt(y.attempt_id).state is AttemptState.SENT
+    journal.mark_acknowledged(y.attempt_id, provider_order_id="PY", receipt_id=ack_y, now=NOW)
+    cancel_px = f.receipt(journal, "cancel-px", K.CANCEL_CONFIRM, provider_id="PX")
+    with pytest.raises(InvalidTransition, match="RECEIPT_NOT_BOUND"):
+        journal.reservations.confirm_cancel(y.reservation_id, NOW, receipt_id=cancel_px, venue_filled=0)
+    assert journal.reservations.reservation(y.reservation_id).state is ObligationState.OUTSTANDING
+    assert journal.reservations.confirm_cancel(x.reservation_id, NOW, receipt_id=cancel_px,
+                                               venue_filled=0).state is ObligationState.BOUND
+    # The store itself refuses a second owner, whatever the code path.
+    conn = sqlite3.connect(path)
+    with pytest.raises(sqlite3.IntegrityError, match="UNIQUE"):
+        conn.execute("UPDATE attempts SET provider_order_id = 'PX' WHERE attempt_id = ?", (y.attempt_id,))
+    conn.close()
+
+
+def test_a_reconciled_ack_cannot_take_another_attempts_provider_order(ready):
+    journal, token = ready
+    x = f.prepare(journal, f.entry("EXP-TEST:x"), token)
+    y = f.prepare(journal, f.entry("EXP-TEST:y"), token)
+    journal.mark_sent(x.attempt_id, now=NOW)
+    journal.mark_acknowledged(x.attempt_id, provider_order_id="PX",
+                              receipt_id=f.receipt(journal, "ack-x", K.ORDER_ACK, x.attempt_id), now=NOW)
+    journal.mark_outcome_unknown(y.attempt_id, reason="timeout", now=NOW)
+    with pytest.raises(InvalidTransition, match="PROVIDER_ORDER_OWNED"):
+        journal.reconcile_attempt(y.attempt_id, AttemptState.ACKNOWLEDGED, now=NOW, provider_order_id="PX",
+                                  receipt_id=f.receipt(journal, "look-y", K.ORDER_LOOKUP, y.attempt_id))
 
 
 def test_reconciling_needs_an_order_lookup(ready):
