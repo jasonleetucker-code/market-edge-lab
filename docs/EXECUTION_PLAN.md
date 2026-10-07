@@ -643,7 +643,7 @@ be written here when they are made.
     - It therefore stops at a reviewed PR for the owner to merge. It grants nothing else.
   - **Merged 2026-10-07** by the owner's decision (answer 2 in
     `docs/owner/2026-10-07-kalshi-execution-campaign-directive.md`): squash `fcd46fe`, exact head `1592efb`,
-    CI green. Not deployed by that decision.
+    CI green. Deploy approved with #161's deploy (owner answer 4 in the same record).
 - **2026-10-07 (America/New_York), owner directive: finish the Kalshi ordinary-event automation core (#160).**
   Recorded in `docs/owner/2026-10-07-kalshi-execution-campaign-directive.md` (authority sections verbatim, plus the
   owner's three answers). Campaign plan: `docs/strategy/KALSHI_AUTOMATION_DELIVERY_160.md` (PR #163), packages A–T.
@@ -675,7 +675,8 @@ be written here when they are made.
     - deployed SHA verified;
     - no timer, budget or schema change.
 
-    Nothing from the execution package is deployed.
+    The deploy is of the merged main SHA. It may also carry #153's reviewed in-play provenance fix and the merged
+    test- and docs-only changes (owner answer 4). Nothing from the execution package is deployed.
   - **Not authorized (each needs its own recorded owner approval):**
     - DEMO or PRODUCTION egress, including any change to `execution.model.AUTHORIZED_ENVIRONMENTS`;
     - creating, installing, reading or requesting any credential, key or account;
