@@ -1180,7 +1180,11 @@ def revalidate(intent: OrderIntent, grant: ApprovalGrant, *, account: AccountPro
                evidence: DecisionEvidence | None, now: datetime) -> GateDecision:
     """The check just before sending: the approval must bind this exact intent (`ApprovalGrant.problems`: a changed
     quantity or price is a digest mismatch), and `evaluate` must pass on current inputs. Nonce reuse is the
-    journal's check."""
+    journal's check.
+
+    It runs immediately before `ExecutionJournal.prepare_attempt`, on a projection that does not yet hold the
+    candidate's own reservation or attempt (otherwise its cash, inventory and counts would be counted twice).
+    `prepare_attempt` then re-checks cash and inventory transactionally (`reservations`)."""
     decision = evaluate(intent, account=account, market=market, policy=policy, limits=limits,
                         ticket_limits=ticket_limits, evidence=evidence, now=now)
     extra: dict[Reason, list[str]] = {}
