@@ -1,0 +1,25 @@
+{
+  "market_positions": [
+    {
+      "ticker": "KXHIGHNY-26OCT08-T60",
+      "exchange_index": 0,
+      "total_traded_dollars": "3.0800",
+      "position_fp": "5.50",
+      "market_exposure_dollars": "3.0800",
+      "realized_pnl_dollars": "0.0000",
+      "fees_paid_dollars": "0.0245",
+      "last_updated_ts": "2026-10-07T14:10:00Z"
+    }
+  ],
+  "event_positions": [
+    {
+      "event_ticker": "KXHIGHNY-26OCT08",
+      "total_cost_dollars": "3.0800",
+      "total_cost_shares_fp": "5.50",
+      "event_exposure_dollars": "3.0800",
+      "realized_pnl_dollars": "0.0000",
+      "fees_paid_dollars": "0.0245"
+    }
+  ],
+  "cursor": "positions-page-2"
+}
