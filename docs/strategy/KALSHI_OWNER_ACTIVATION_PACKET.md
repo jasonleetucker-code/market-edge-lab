@@ -91,3 +91,43 @@ risk until they are replaced. The list mirrors `risk.RiskPolicy`:
 - maximum drawdown;
 - orders per window;
 - per-market cooldown.
+
+## Decision 5 — wallet intelligence sources (#168)
+
+Today the lane runs on synthetic fixtures and documentation examples only (owner answer, 2026-10-07). To go
+further, each item below is its own approval:
+
+- **Live public reads**, for example a bounded Polymarket Data API v2 pull. *Recommended first, when you want
+  real data:*
+  - one bounded, one-off pull of public activity for a small fixed set of liquid markets;
+  - a recorded request budget and a terms check;
+  - stored as immutable evidence;
+  - no schedule.
+- **A research slot.** Any empirical copyability verdict needs one of the #96 slots, which allow two new active
+  families. Both are taken: EXP-002 (family A) holds one, and paused EXP-003 still holds the other, since the plan
+  says its pause frees no slot. Protected EXP-001 uses none. This is your choice: end or replace a family, or grant
+  an `owner_exception`.
+- **Execution eligibility.** Polymarket's international geoblock documentation lists the United States as
+  close-only (as stated by the research handoff of 2026-10-07, source https://docs.polymarket.com/api-reference/geoblock;
+  evidence class DOCUMENTED as reported, re-verified in the W1 source matrix). Polymarket US is a separate
+  product. Copying on the same product therefore needs a venue you can legally trade.
+  - *Recommended:* treat wallet activity as a signal for Kalshi (use C), and only where the contracts are proven
+    equivalent.
+- **Paid feeds** (Nansen, GMGN, Helius). Not recommended until free data shows a measured gap.
+
+## Decision 6 — automation policy (after a strategy qualifies)
+
+A BOUNDED_AUTO grant must bind all of the following:
+- environment and account;
+- strategy, model and policy hash;
+- universe and allowed actions;
+- spend, exposure and turnover limits;
+- per-event limits;
+- expiry.
+
+A grant is never issued automatically. Each one is its own owner decision, recorded in EXECUTION_PLAN, and
+it needs all of the following first:
+- a STRATEGY_QUALIFIED strategy;
+- decisions 1–3 (demo, production reads, a tiny live pilot);
+- decision 4 (unattended automation), since BOUNDED_AUTO runs without per-trade confirmation;
+- risk-limit values you have set.

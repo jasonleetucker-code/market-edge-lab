@@ -3,6 +3,28 @@
 This is the live state of the repository. Each session overwrites it; it is not a history
 (git log is the history). Format: `AI_INSTRUCTIONS.md` → Handoff format.
 
+## 2026-10-07 production update (supersedes the production SHA below)
+
+- **DEPLOYED and PRODUCTION_VERIFIED `9ed305e84086f84762e9fba4ebf89533aad0d1f8`** (main after #161) at
+  2026-10-07 ~15:00 America/New_York (VPS clock). Owner approval: answers 3 and 4 in
+  `docs/owner/2026-10-07-kalshi-execution-campaign-directive.md`.
+- **Runbook steps:**
+  - §1 staged: bundle head `refs/heads/release/9ed305e…`; preflight PASS.
+  - §2 backup: `VERIFIED_BACKUP_AND_RESTORE` for both the evidence DB and the ledger.
+  - §3 `INSTALL OK: 9ed305e…`, with timers keeping their enabled state.
+  - §4.1 `FAIL_CLOSED_CHECK: PASS`, recorded as DEPLOYMENT_VERIFICATION; `edgelab-notify` `HELD_BY_ORIGIN: 1`.
+  - The dashboard was restarted: `/healthz` and `/` both 200.
+- **`verify_production.sh`:**
+  - `STATE DEPLOYED_SHA: 9ed305e…`;
+  - 10/10 core timers enabled, plus odds and both pm-sports timers (13 in total);
+  - `UNIT_RESULTS: failed units: none`;
+  - `COLLECTOR_HEALTH: VALID`;
+  - Brisket/Chase Upside 4/4 active, `/api/health` 200.
+- **Not yet observed:** the fix itself (a Saturday 16:05 ET T-24h capture at the 16:10 tick). The first eligible
+  slot is 2026-10-10.
+- Execution campaign state: `docs/strategy/KALSHI_EXECUTION_LEDGER.md`. Full HANDOFF rewrite follows at the end of
+  this session's campaign.
+
 _Last updated: 2026-09-30 ~07:30 America/New_York (VPS clock) by the laptop Claude coordinator session. It covers
 the owner directive of 2026-09-30 (`docs/owner/2026-09-30-roadmap-integration-sports-intelligence-rfq-directive.md`,
 issue #145): complete roadmap integration plus sports intelligence and RFQ feasibility v1. The NHL state of
