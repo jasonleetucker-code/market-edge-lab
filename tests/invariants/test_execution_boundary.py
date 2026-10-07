@@ -433,10 +433,12 @@ def test_authorization_has_one_owner():
 # - private safety state is named only by its owner: `_HOSTS` (conformance.py), `_sign` (signer.py).
 # Outside the package nothing can import it (above), so these rules cover both directions.
 _INTERNALS = frozenset({"__dict__", "__closure__", "cell_contents", "__code__", "__globals__", "__defaults__",
-                        "__kwdefaults__", "__builtins__"})
+                        "__kwdefaults__", "__builtins__", "__class__", "__setitem__", "__delitem__"})
+_MUTATING_METHODS = frozenset({"update", "clear", "pop", "popitem", "setdefault", "add", "append", "extend", "insert",
+                               "remove", "discard", "sort", "reverse", "__setitem__", "__delitem__", "__ior__"})
 _REFLECTION_CALLS = frozenset({"setattr", "delattr", "vars", "globals", "locals"})
 _PRIVATE_OWNERS = {"_HOSTS": "edge_lab/execution/conformance.py", "_sign": "edge_lab/execution/signer.py"}
-_REFLECTION_MODULES = frozenset({"inspect", "gc"})
+_REFLECTION_MODULES = frozenset({"inspect", "gc", "unittest"})
 
 
 def _bound_by_imports(tree: ast.AST) -> set[str]:
@@ -470,6 +472,11 @@ def _tamper_hits(rel: str, text: str) -> list[str]:
             for sub in chain:
                 if isinstance(sub, ast.Attribute) and isinstance(sub.value, ast.Name) and sub.value.id in imported:
                     hits.append(f"{rel}:{line}: changes {sub.value.id}.{sub.attr} of an imported module or class")
+            base = chain[-1]
+            if len(chain) > 1 and isinstance(base, ast.Name) and base.id in imported:
+                hits.append(f"{rel}:{line}: changes the imported name {base.id} in place")
+            if isinstance(base, ast.Call):
+                hits.append(f"{rel}:{line}: assigns through a call result (e.g. type(x).attr)")
         if isinstance(node, ast.Attribute):
             if node.attr in _INTERNALS:
                 hits.append(f"{rel}:{line}: reaches {node.attr}")
@@ -485,10 +492,17 @@ def _tamper_hits(rel: str, text: str) -> list[str]:
             if fname == "getattr" and len(node.args) >= 2 and isinstance(node.args[1], ast.Constant) \
                     and isinstance(node.args[1].value, str) and node.args[1].value.startswith("_"):
                 hits.append(f"{rel}:{line}: getattr of private {node.args[1].value}")
-            if fname in ("update", "clear", "pop", "popitem", "setdefault") and isinstance(node.func, ast.Attribute) \
-                    and isinstance(node.func.value, ast.Attribute) and isinstance(node.func.value.value, ast.Name) \
-                    and node.func.value.value.id in imported:
-                hits.append(f"{rel}:{line}: mutates {node.func.value.value.id}.{node.func.value.attr}")
+            if fname in _MUTATING_METHODS and isinstance(node.func, ast.Attribute):
+                owner = node.func.value
+                if (isinstance(owner, ast.Name) and owner.id in imported) or (
+                        isinstance(owner, ast.Attribute) and isinstance(owner.value, ast.Name)
+                        and owner.value.id in imported):
+                    hits.append(f"{rel}:{line}: mutates imported state with .{fname}()")
+            if fname == "__setattr__" and isinstance(node.func, ast.Attribute) \
+                    and isinstance(node.func.value, ast.Name) and node.func.value.id == "object":
+                first = node.args[0] if node.args else None
+                if not (isinstance(first, ast.Name) and first.id == "self"):
+                    hits.append(f"{rel}:{line}: object.__setattr__ on something other than self")
         if isinstance(node, (ast.Import, ast.ImportFrom)):
             mods = [a.name for a in node.names] if isinstance(node, ast.Import) else [node.module or ""]
             if any(m.split(".")[0] in _REFLECTION_MODULES for m in mods):
@@ -496,6 +510,71 @@ def _tamper_hits(rel: str, text: str) -> list[str]:
     hits += [f"{rel}:{n}: uses sys.modules" for n, src in enumerate(text.splitlines(), 1)
              if re.search(r"\bsys\s*\.\s*modules\b", src.split("#", 1)[0])]
     return hits
+
+
+def _post_init_only_setattr_hits(rel: str, text: str) -> list[str]:
+    """`object.__setattr__(self, ...)` belongs in `__post_init__` (normalizing a frozen dataclass) only."""
+    hits = []
+    for fn in ast.walk(ast.parse(text)):
+        if isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)) and fn.name != "__post_init__":
+            for node in ast.walk(fn):
+                if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) \
+                        and node.func.attr == "__setattr__" and isinstance(node.func.value, ast.Name) \
+                        and node.func.value.id == "object":
+                    hits.append(f"{rel}:{node.lineno}: object.__setattr__ outside __post_init__ (in {fn.name})")
+    return hits
+
+
+# Module-level values in the package must be immutable, so an edit through any alias, copy or call fails
+# at runtime whatever form it takes: frozenset, tuple, MappingProxyType over immutable values, constants.
+_MUTABLE_CALLS = frozenset({"dict", "list", "set", "bytearray", "defaultdict", "OrderedDict", "Counter", "deque"})
+
+
+def _is_mutable(value: ast.AST) -> bool:
+    if isinstance(value, (ast.Dict, ast.List, ast.Set, ast.DictComp, ast.ListComp, ast.SetComp)):
+        return True
+    if isinstance(value, ast.Call):
+        f = value.func
+        name = f.id if isinstance(f, ast.Name) else f.attr if isinstance(f, ast.Attribute) else ""
+        if name in _MUTABLE_CALLS:
+            return True
+        if name == "MappingProxyType":
+            return any(_is_mutable(v) for a in value.args for v in (a.values if isinstance(a, ast.Dict) else []))
+    if isinstance(value, ast.Tuple):
+        return any(_is_mutable(e) for e in value.elts)
+    return False
+
+
+def _mutable_module_state_hits(rel: str, text: str) -> list[str]:
+    hits = []
+    for node in ast.parse(text).body:
+        if isinstance(node, (ast.Assign, ast.AnnAssign)) and node.value is not None and _is_mutable(node.value):
+            hits.append(f"{rel}:{node.lineno}: module-level mutable value (use frozenset, tuple or MappingProxyType)")
+    return hits
+
+
+def test_module_level_state_in_the_package_is_immutable():
+    hits = [h for p in PACKAGE.rglob("*.py") for h in _mutable_module_state_hits(_rel(p), p.read_text(encoding="utf-8"))]
+    assert not hits, "\n".join(hits)
+
+
+@pytest.mark.parametrize("line", ["HOSTS = {'FIXTURE': 'x'}", "ALLOWED = set()", "X = [1]", "T = ({'a': 1},)",
+                                  "M = MappingProxyType({'a': [1]})", "C: dict = dict(a=1)"])
+def test_mutable_module_state_is_caught(line):
+    assert _mutable_module_state_hits("edge_lab/execution/x.py", line + "\n"), line
+
+
+def test_immutable_module_state_passes():
+    ok = ("A = frozenset({1})\nB = (1, 2)\nC = MappingProxyType({'a': (1,), 'b': frozenset()})\nD = 'x'\n"
+          "E = re.compile('x')\n")
+    assert not _mutable_module_state_hits("edge_lab/execution/x.py", ok)
+
+
+def test_object_setattr_only_in_post_init():
+    hits = [h for p in PACKAGE.rglob("*.py") for h in _post_init_only_setattr_hits(_rel(p), p.read_text(encoding="utf-8"))]
+    assert not hits, "\n".join(hits)
+    assert _post_init_only_setattr_hits("x.py", "def f(self):\n    object.__setattr__(self, 'a', 1)\n")
+    assert not _post_init_only_setattr_hits("x.py", "def __post_init__(self):\n    object.__setattr__(self, 'a', 1)\n")
 
 
 def test_no_package_file_tampers_with_another_or_reaches_internals():
@@ -519,6 +598,15 @@ def test_no_package_file_tampers_with_another_or_reaches_internals():
     ("edge_lab/execution/journal.py", "import sys\nm = sys.modules['edge_lab.execution.model']"),
     ("edge_lab/execution/journal.py", "from . import model\ndel model.AUTHORIZED_ENVIRONMENTS"),
     ("edge_lab/execution/journal.py", "setattr(obj, 'x', 1)"),
+    ("edge_lab/execution/lifecycle.py", "from .conformance import HOSTS\nHOSTS['FIXTURE'] = 'x'"),
+    ("edge_lab/execution/lifecycle.py", "from .conformance import HOSTS\nHOSTS.update({})"),
+    ("edge_lab/execution/lifecycle.py", "from . import conformance\nconformance.ALLOWED.add(x)"),
+    ("edge_lab/execution/lifecycle.py", "from .risk_gate import DEFAULT_LIMITS\nDEFAULT_LIMITS.append(x)"),
+    ("edge_lab/execution/lifecycle.py", "from . import model\nobject.__setattr__(model, 'AUTHORIZED_ENVIRONMENTS', 1)"),
+    ("edge_lab/execution/lifecycle.py", "object.__setattr__(intent, 'limit_price', p)"),
+    ("edge_lab/execution/lifecycle.py", "from unittest import mock\nmock.patch.object(m, 'X', 1)"),
+    ("edge_lab/execution/lifecycle.py", "type(grant).problems = f"),
+    ("edge_lab/execution/lifecycle.py", "k = grant.__class__"),
 ])
 def test_tampering_is_caught(rel, line):
     assert _tamper_hits(rel, line + "\n"), line
