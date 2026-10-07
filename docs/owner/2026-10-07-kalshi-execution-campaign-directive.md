@@ -69,6 +69,141 @@ Deploy only approved reviewed scope through the gated runbook.
 LIVE_AUTHORIZED and UNATTENDED_LIVE_AUTHORIZED remain separate.
 ```
 
+Section 7, the package list that the authorized components in `docs/EXECUTION_PLAN.md` are drawn from, verbatim:
+
+```text
+7. IMPLEMENT THE A–T CAMPAIGN
+
+Use the detailed dependencies, owners and acceptance criteria in
+KALSHI_AUTOMATION_DELIVERY_160.md.
+
+A — BASELINE AND SCOPE
+Reconcile current PRs, baseline failures, claims and authority.
+Do not bypass #153's owner decision.
+
+B — CONFORMANCE PACK
+Version native units, account dimensions, fees, APIs, order capabilities,
+history, clocks and settlement exceptions. Unknown remains unsupported.
+
+C — ISOLATED EXECUTION SECURITY
+Research and UI cannot load signer/key objects or send arbitrary
+commands. Exact import and egress boundaries; private process identity;
+strict environment and host allowlists; mutation-tested invariants.
+
+D — DURABLE INTENT JOURNAL
+Stable business intent distinct from transport attempts.
+Commit intent, approval digest, reservation and pending egress before
+network transmission. Same ID/different payload is a conflict.
+Audit and recovery survive SIGKILL, disk-full and lock failures.
+
+E — ATOMIC RESERVATIONS AND FENCING
+One transactional cash/inventory/risk authority, including manual,
+native Auto Sell, pending and unknown obligations.
+No double-spend, oversell or unsupported netting.
+A stale worker cannot transmit after losing authority.
+
+F — SIGNER AND TRANSPORT
+Maintained cryptography; generated fixture keys initially.
+No generic arbitrary-request signer.
+Bind local approval to the complete command.
+Demo/prod isolation, credential-safe redirects, bounded token-aware
+requests and reserved cancellation/reconciliation capacity.
+
+G — COMPLETE ACCOUNT READS
+Every relevant authorized page, subaccount and shard.
+Live plus historical records, cutoff movement, deduplication and
+bounded resampling.
+Missing data is not flat, empty or zero.
+Do not cancel or flatten holdings to simplify reconciliation.
+
+H — ORDER LIFECYCLE
+Pending, unknown, acknowledged, resting, partial, filled, cancel
+requested/confirmed, rejected and expired behavior.
+Cumulative fills remain separate from canceled remainder.
+No blind resubmission after an ambiguous timeout.
+Handle amendment lineage and late fills exactly once locally.
+
+I — RISK AND STRATEGY TICKETS
+Version entry/reduction/flip semantics, limits, quantities, prices,
+fees, expiry, account dimensions and evidence.
+Independently validate per-order, market, event, cluster, strategy,
+account and portfolio exposure; reserves; losses; new risk; depth;
+slippage; latency; source quality and reconciliation.
+Do not use original purchase cost as every possible remaining-risk
+or marginal-action measure.
+
+J — FEED AND ACCOUNT RECOVERY
+Reuse existing sequence/state reconstruction.
+Detect gaps, conflicting duplicates and reconnects.
+Reconcile stream and REST evidence.
+New material game information invalidates an obsolete recommendation.
+A reconnect is not proof resting orders disappeared.
+
+K — DEMO ORCHESTRATION
+Same deterministic core with separate environment.
+A synthetic signal and one supported mock contract.
+No production fallback and no fake observed fill.
+
+L — KILL AND RESTART
+Durable global/venue/strategy/market/new-risk disable.
+Owned-order cancellation and separately authorized closeout.
+Cancellation may be unavailable.
+Restart disarmed until reconciliation.
+Do not automatically reset loss limits or order-group protections.
+
+M — ACCOUNT-AWARE SHADOW
+Authorized real account inputs through the exact risk chain.
+Output WOULD_SUBMIT or BLOCKED.
+No financial write and no mutation of real reservations.
+Hypothetical state is explicitly separate.
+
+N — PRIVATE APPROVAL AND TERMINAL
+Authenticated, expiring, anti-replay approval bound to exact intent.
+CSRF/same-origin controls for command routes.
+Show account, orders, fills, reservations, uncertainty and reconciliation.
+No signing keys in browser and no substituted order after approval.
+
+O — OPERATIONS AND RECOVERY
+Dedicated permissions and resource bounds, private journal backups,
+restore drills, secret rotation/compromise runbook, disarmed startup,
+schema-aware deployment and rollback.
+No changes to the other application's services.
+
+P — CHAOS AND PERFORMANCE
+Synthetic representative load and failure bursts.
+Explicit queue, latency, memory, storage and recovery limits.
+No provider stress tests.
+Resolve current full-suite failures rather than skip them.
+
+Q — INDEPENDENT REVIEW
+Review security, exact arithmetic, state transitions, temporal
+correctness, complete account reads and authority.
+Fix and re-review changed heads.
+Require exact-head CI and frozen checks.
+
+R — AUTHORIZED DEMO REHEARSAL
+Once approved, observe the real mock lifecycle:
+account → synthetic ticket → reserve → submit → ACK/fill/resting →
+cancel/amend as supported → reconcile → restart → reconcile →
+close/settle residual → cash/P&L/audit match.
+Do not self-trade to force a test.
+Unobserved capabilities remain explicit residuals.
+
+S — AUTHORIZED PRODUCTION-READ REHEARSAL
+Once approved, verify actual account scope, precision, fees,
+manual/native orders, full history and stable reconciliation.
+No financial mutations and no protected strategy outcomes.
+
+T — READINESS CERTIFICATE
+Compute readiness from actual evidence for the declared profile.
+Pin code/config/schema, tests, reviews, account/environment,
+capabilities, limitations and retest triggers.
+Live write and unattended automation remain disabled.
+
+Do not stop after A, after a signer, or after one PR.
+Continue all independent authorized work through T's prerequisites.
+```
+
 ## Owner answers in the same session (verbatim)
 
 1. Question: "May I merge this campaign's offline execution PRs myself, once each has an independent review and green

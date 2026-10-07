@@ -30,20 +30,36 @@ Two opposite failures are possible:
    dashboard and the CLI never import it. `tests/invariants/test_execution_boundary.py` enforces this with an AST
    scan of every source file. Adding an `import edge_lab.execution` anywhere else fails CI.
 2. **Inside the package, the no-execution rules still apply file by file.** Each rule is relaxed only for the
-   exact file that needs it, in a path-exact table (`EXECUTION_EXCEPTIONS` in the invariant):
+   exact file that needs it, in a path-exact planned table (`PLANNED_EXECUTION_EXCEPTIONS` in the invariant). An
+   exception becomes active (`EXECUTION_EXCEPTIONS`) only in the PR that creates its file, copied unchanged from
+   the plan. An exception for a missing file fails the invariant. The planned exceptions are:
    - `execution/signer.py`: the request-signing rule only;
    - `execution/transport.py`: non-GET methods, request bodies and the two Kalshi auth headers;
    - `execution/kalshi_wire.py`: the order-endpoint rule only.
 
    Every other file in the package, including the journal, reservations, lifecycle and risk gate, is held to
    the full research rules. A copy, a rename or a new file inherits nothing.
-3. **The package imports only reviewed owners.** It may import its own modules and an allowlist of canonical
-   owners:
+3. **The package imports only reviewed owners and a restricted standard library.**
+   - Network modules (`socket`, `ssl`, `http`, `urllib`, ...) only in `transport.py`.
+   - `sqlite3` only in the journal and reservation files.
+   - No process, dynamic-import or serialization modules (`subprocess`, `multiprocessing`, `importlib`, `runpy`,
+     `pickle`, ...) and no environment access, anywhere in the package.
+
+   It may import its own modules and an allowlist of canonical owners:
    - `execution_ticket`, `risk`, `fee_schedules`, `opportunity`, `freshness`, `redaction`, `venues`.
 
    It never imports a protected-label owner: `sports_evidence`, `exp002_timing`, `odds_schedule`,
    `price_observations`, `odds_consensus`, `experiments`, `settlement`, `forward`, `shadow_ledger`,
-   `exp001_*`, `storage`. So it cannot read protected outcomes, and it cannot write the research store.
+   `exp001_*`, `storage`.
+
+   The allowed owners' transitive imports are checked too. One edge is pinned as an exception: `risk` imports
+   `shadow_ledger` for the `AccountState` type of the legacy shadow `assess()`, and `shadow_ledger` does not reach
+   the research store. Package I gives risk rules a versioned account projection and removes that edge.
+
+   Outside the package (`src/`, `scripts/`, `deploy/`), no import, attribute path, naming string or
+   path-building string may reach it. These static scans catch ordinary and careless paths. They do not catch
+   determined obfuscation; the hard control is the separate executor process and service user (package O)
+   plus review.
 4. **Environments are closed and hard-disabled.** `Environment` is FIXTURE, DEMO or PRODUCTION.
    - FIXTURE is the only environment authorized. It means a fake transport and a disposable store.
    - DEMO and PRODUCTION network egress stay disabled by reviewed constants, pinned by tests to the plan's
@@ -51,7 +67,14 @@ Two opposite failures are possible:
    - Enabling DEMO later is its own PR, made in the same change as a recorded owner approval.
    - No force flag exists.
 5. **Exact values only.** Prices, quantities and money in the execution package are `Decimal` values built from
-   `str` or `int`, never from `float` or `bool`. NaN, infinity and off-grid values are refused at construction.
+   ASCII `str` or `int`, never from `float` or `bool`.
+   - NaN, infinity, off-grid values and values beyond 30 significant digits or exponent 30 are refused at
+     construction.
+   - Serialization and arithmetic run in a fixed local context that traps rounding, so a digest never depends on
+     the caller's `decimal` precision.
+
+   An intent cannot see positions: a buy of the opposite side can net or flip at the venue, so the risk gate
+   (package I) checks the opposite-side holding before every ENTRY.
 6. **Identity is layered.** These are distinct, linked records:
    - business intent: a stable `intent_key` plus a content digest;
    - approval grant, bound to the intent digest;

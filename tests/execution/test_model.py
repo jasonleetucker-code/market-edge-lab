@@ -173,3 +173,60 @@ def test_canonical_json_refuses_floats_and_nan():
     assert m.canonical_json({"b": Decimal("1.50"), "a": m.Side.YES}) == '{"a":"yes","b":"1.5"}'
     with pytest.raises(ValueError):
         m.canonical_json({"x": float("nan")})
+
+
+# ---------------------------------------------------------------- review fixes (foundation review, 3766d87)
+
+
+def test_digest_is_independent_of_the_callers_decimal_context():
+    import decimal
+
+    a = intent(max_total_cost=Decimal("4.6000000000000000000001"))
+    b = intent(max_total_cost=Decimal("4.6000000000000000000002"))
+    assert a.digest() != b.digest()  # normalize() at 28 digits used to merge them
+    baseline = intent(max_total_cost=Decimal("4.2345678")).digest()
+    with decimal.localcontext() as ctx:
+        ctx.prec = 3
+        assert intent(max_total_cost=Decimal("4.2345678")).digest() == baseline
+        assert m.decimal_text(Decimal("1.2345678")) == "1.2345678"
+
+
+@pytest.mark.parametrize("value", ["9E+100000", "1" * 31, "0." + "0" * 40 + "1", "١٢", "１２"])
+def test_huge_tiny_and_non_ascii_numbers_are_refused(value):
+    with pytest.raises(m.ExactValueError):
+        m.exact_decimal(value if "E" not in value else Decimal(value), name="x")
+
+
+def test_grid_errors_are_exact_value_errors():
+    with pytest.raises(m.ExactValueError):
+        m.Grid(step=Decimal("0.01"), minimum=Decimal("0"), maximum=Decimal("1E40"))
+
+
+def test_max_total_cost_has_a_typo_guard_for_both_kinds():
+    with pytest.raises(m.ExactValueError):
+        intent(max_total_cost=Decimal("11.01"))  # 10 contracts x 1.10
+    with pytest.raises(m.ExactValueError):
+        intent(kind=m.IntentKind.REDUCTION, action=m.Action.SELL, reduce_only=True, max_total_cost=Decimal("1000000"))
+
+
+def test_evidence_order_does_not_change_identity_and_duplicates_are_refused():
+    assert intent(evidence=("b", "a")).digest() == intent(evidence=("a", "b")).digest()
+    assert intent(evidence=("b", "a")).evidence == ("a", "b")
+    with pytest.raises(ValueError):
+        intent(evidence=("a", "a"))
+
+
+def test_problems_refuses_a_naive_now_and_grants_validate_types():
+    i = intent()
+    g = grant(i)
+    with pytest.raises(ValueError):
+        g.problems(i, now=datetime(2026, 10, 7, 15, 0))
+    with pytest.raises(ValueError):
+        grant(i, intent_digest=123)
+    with pytest.raises(ValueError):
+        grant(i, scope_key="free text")
+
+
+def test_a_lookalike_string_is_never_an_authorized_environment():
+    assert not m.environment_authorized("FIXTURE")
+    assert m.environment_authorized(m.Environment.FIXTURE)

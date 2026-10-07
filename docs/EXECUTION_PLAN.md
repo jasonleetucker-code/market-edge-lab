@@ -669,7 +669,8 @@ be written here when they are made.
     This is owner answer 1. It covers no credentials, no demo or production access, no deployment of an executor
     and no gate advance.
   - **Deploy:** PR #161 (the Polymarket capture-window fix) may be deployed through the runbook once reviewed and
-    merged (owner answer 3):
+    merged, **before Saturday 2026-10-10 16:10 America/New_York** (owner answer 3). A deploy after that time
+    needs a new approval:
     - code only;
     - outside the protected windows;
     - deployed SHA verified;

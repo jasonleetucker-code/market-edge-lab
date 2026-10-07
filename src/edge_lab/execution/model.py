@@ -5,7 +5,14 @@ Nothing here signs, sends, reads an account or touches a store.
 - **Exact numbers.** Prices, quantities and money are `Decimal` values from `str`, `int` or `Decimal`,
   never `float` or `bool`. NaN and infinity are refused, and off-grid values are refused against a `Grid`.
 - **Closed vocabularies.** Environment, side, action, time in force and intent kind. Only the
-  documented combinations are valid; a flip is never one.
+  documented combinations are valid.
+- **No flip, within what an intent can know.** An intent is a buy-to-open (ENTRY) or a reduce-only
+  sell (REDUCTION). It holds no position data. A buy of the *opposite* side can still net against or
+  flip an existing position at the venue, so the risk gate (package I) must check the account's
+  opposite-side holding before any ENTRY.
+- **Context-free arithmetic.** Every Decimal operation here runs in a fixed local context that traps
+  rounding, so a digest never depends on the caller's thread-wide `decimal` precision. Values with
+  more than `MAX_DIGITS` significant digits or an exponent beyond `MAX_EXPONENT` are refused.
 - **Layered identity.**
   - `OrderIntent.intent_key` is the business key the strategy supplies.
   - `OrderIntent.digest()` is the content identity: the same key with a different digest is a
@@ -23,15 +30,29 @@ import re
 import uuid
 from dataclasses import dataclass, fields
 from datetime import datetime, timezone
-from decimal import Decimal, InvalidOperation
+from decimal import Context, Decimal, Inexact, InvalidOperation, Rounded, localcontext
 from enum import Enum
 from typing import Any
 
 INTENT_SCHEMA = "edge-lab-execution-intent/1"
+# A typo guard on `max_total_cost`, not a fee check: a $1 binary plus any plausible fee stays well under it.
+MAX_COST_PER_CONTRACT = Decimal("1.10")
 APPROVAL_SCHEMA = "edge-lab-execution-approval/1"
 _CLIENT_ID_NAMESPACE = uuid.UUID("6f1d6a5e-6c1b-4d8e-9a59-0d7c3f0e8b21")  # fixed: ids are reproducible
 _TICKER = re.compile(r"[A-Z0-9][A-Z0-9._-]{0,127}")
 _KEY = re.compile(r"[A-Za-z0-9][A-Za-z0-9:._/-]{0,199}")
+_PLAIN_DECIMAL = re.compile(r"[+-]?([0-9]+(\.[0-9]*)?|\.[0-9]+)")  # ASCII digits only
+_SCOPE_KEY = re.compile(r"(FIXTURE|DEMO|PRODUCTION):[^:\s]+:(primary|[0-9]+)")
+MAX_DIGITS = 30  # significant digits: far beyond any price, quantity or account balance
+MAX_EXPONENT = 30  # |adjusted exponent|: refuses 9E+100000-style values
+# Exact arithmetic: a result that would need rounding raises instead of being rounded.
+_EXACT = Context(prec=2 * MAX_DIGITS + 10, traps=[InvalidOperation, Inexact, Rounded])
+
+
+def exact_product(a: Decimal, b: Decimal) -> Decimal:
+    """a x b, exactly, independent of the caller's decimal context (raises if it cannot be exact)."""
+    with localcontext(_EXACT):
+        return a * b
 
 
 class Environment(str, Enum):
@@ -48,7 +69,8 @@ AUTHORIZED_ENVIRONMENTS: frozenset[Environment] = frozenset({Environment.FIXTURE
 
 
 def environment_authorized(environment: Environment) -> bool:
-    return environment in AUTHORIZED_ENVIRONMENTS
+    """Only an `Environment` member can be authorized; a look-alike string never is."""
+    return isinstance(environment, Environment) and environment in AUTHORIZED_ENVIRONMENTS
 
 
 class Side(str, Enum):
@@ -88,7 +110,7 @@ def exact_decimal(value: object, *, name: str) -> Decimal:
         d = Decimal(value)
     elif isinstance(value, str):
         text = value.strip()
-        if not re.fullmatch(r"[+-]?(\d+(\.\d*)?|\.\d+)", text):
+        if not _PLAIN_DECIMAL.fullmatch(text):
             raise ExactValueError(f"{name} is not a plain decimal string: {value!r}")
         try:
             d = Decimal(text)
@@ -98,6 +120,10 @@ def exact_decimal(value: object, *, name: str) -> Decimal:
         raise ExactValueError(f"{name} must be a Decimal, int or numeric string, not {type(value).__name__}")
     if not d.is_finite():
         raise ExactValueError(f"{name} must be finite, not {d}")
+    if d != 0:
+        digits = len(d.as_tuple().digits)
+        if digits > MAX_DIGITS or abs(d.adjusted()) > MAX_EXPONENT:
+            raise ExactValueError(f"{name} has too many digits or too large an exponent: {d}")
     return d
 
 
@@ -108,8 +134,13 @@ def decimal_text(value: Decimal) -> str:
         raise ExactValueError(f"not a finite Decimal: {value!r}")
     if value == 0:
         return "0"
-    text = format(value.normalize(), "f")
-    return text
+    # Strip trailing zeros by hand: `normalize()` rounds to the active context's precision.
+    sign, digits, exponent = value.as_tuple()
+    digit_list = list(digits)
+    while exponent < 0 and len(digit_list) > 1 and digit_list[-1] == 0:
+        digit_list.pop()
+        exponent += 1
+    return format(Decimal((sign, tuple(digit_list), exponent)), "f")
 
 
 @dataclass(frozen=True)
@@ -126,15 +157,22 @@ class Grid:
             object.__setattr__(self, f, exact_decimal(getattr(self, f), name=f"grid {f}"))
         if self.step <= 0 or self.minimum > self.maximum:
             raise ExactValueError(f"invalid grid: step {self.step}, range [{self.minimum}, {self.maximum}]")
-        if (self.minimum % self.step) != 0 or (self.maximum % self.step) != 0:
+        if not (self._on_grid(self.minimum) and self._on_grid(self.maximum)):
             raise ExactValueError("grid bounds must lie on the grid")
+
+    def _on_grid(self, value: Decimal) -> bool:
+        try:
+            with localcontext(_EXACT):
+                return value % self.step == 0
+        except (InvalidOperation, Inexact, Rounded) as exc:
+            raise ExactValueError(f"{value} cannot be checked exactly against step {self.step}") from exc
 
     def check(self, value: object, *, name: str) -> Decimal:
         """`value` if it is exact, in range and on the grid; otherwise raises with why."""
         d = exact_decimal(value, name=name)
         if d < self.minimum or d > self.maximum:
             raise ExactValueError(f"{name} {d} is outside [{self.minimum}, {self.maximum}]")
-        if d % self.step != 0:
+        if not self._on_grid(d):
             raise ExactValueError(f"{name} {d} is off the {self.step} grid")
         return d
 
@@ -210,9 +248,12 @@ class OrderIntent:
 
     Semantics:
     - `limit_price` is dollars per contract of `side`: a buy's maximum, a sell's minimum.
-    - `max_total_cost` is the most cash the order may consume, fees included.
-      - ENTRY: it must cover quantity × limit_price.
-      - REDUCTION: it bounds fees only, since a sale's proceeds are not cost.
+    - `max_total_cost` is the caller's ceiling on cash the order may consume, fees included. Only
+      the risk gate (package I) can check fee headroom, with the versioned fee schedule. Here it is
+      bounded structurally:
+      - ENTRY: it must cover quantity × limit_price;
+      - REDUCTION: it bounds fees only, since a sale's proceeds are not cost, so it may be small;
+      - both: at most quantity × MAX_COST_PER_CONTRACT, a typo guard and not a fee check.
     - ENTRY is BUY and never reduce-only. REDUCTION is SELL and always reduce-only. There is no flip.
     - `price_grid` / `quantity_grid` come from the conformance profile for this market. The intent
       refuses off-grid values at construction.
@@ -240,7 +281,7 @@ class OrderIntent:
     fee_schedule_version: str
     reduce_only: bool
     post_only: bool = False
-    evidence: tuple[str, ...] = ()
+    evidence: tuple[str, ...] = ()  # stored sorted and unique: order carries no meaning
     schema: str = INTENT_SCHEMA
 
     def __post_init__(self) -> None:
@@ -275,12 +316,17 @@ class OrderIntent:
         parse_utc_text(self.expires_at_utc)
         if not isinstance(self.evidence, tuple) or not all(isinstance(e, str) and e for e in self.evidence):
             raise ValueError("evidence must be a tuple of non-empty strings")
+        if len(set(self.evidence)) != len(self.evidence):
+            raise ValueError("evidence references must be unique")
+        object.__setattr__(self, "evidence", tuple(sorted(self.evidence)))
+        if self.max_total_cost > exact_product(self.quantity, MAX_COST_PER_CONTRACT):
+            raise ExactValueError(f"max_total_cost {self.max_total_cost} exceeds {MAX_COST_PER_CONTRACT} per contract")
         if self.kind is IntentKind.ENTRY:
             if self.action is not Action.BUY or self.reduce_only:
                 raise ValueError("an ENTRY is a BUY and is never reduce-only")
-            if self.max_total_cost < self.quantity * self.limit_price:
-                raise ExactValueError(f"max_total_cost {self.max_total_cost} understates quantity × limit "
-                                      f"{self.quantity * self.limit_price}")
+            principal = exact_product(self.quantity, self.limit_price)
+            if self.max_total_cost < principal:
+                raise ExactValueError(f"max_total_cost {self.max_total_cost} understates quantity × limit {principal}")
         else:
             if self.action is not Action.SELL or not self.reduce_only:
                 raise ValueError("a REDUCTION is a SELL and is always reduce-only (no flip)")
@@ -338,11 +384,13 @@ class ApprovalGrant:
     schema: str = APPROVAL_SCHEMA
 
     def __post_init__(self) -> None:
-        if not re.fullmatch(r"[0-9a-f]{64}", self.intent_digest or ""):
+        if not isinstance(self.intent_digest, str) or not re.fullmatch(r"[0-9a-f]{64}", self.intent_digest):
             raise ValueError("intent_digest must be a SHA-256 hex digest")
+        if not isinstance(self.scope_key, str) or not _SCOPE_KEY.fullmatch(self.scope_key):
+            raise ValueError(f"scope_key must be an AccountScope.key(), not {self.scope_key!r}")
         if not isinstance(self.method, ApprovalMethod):
             raise ValueError("method must be an ApprovalMethod")
-        for name in ("scope_key", "approver_ref", "nonce"):
+        for name in ("approver_ref", "nonce"):
             if not isinstance(getattr(self, name), str) or not getattr(self, name):
                 raise ValueError(f"{name} is required")
         if (self.method is ApprovalMethod.POLICY) != bool(self.policy_ref):
@@ -355,6 +403,8 @@ class ApprovalGrant:
     def problems(self, intent: OrderIntent, *, now: datetime) -> list[str]:
         """Why this grant does not authorize `intent` at `now` (empty: it binds). Nonce reuse is the
         journal's check, not this one."""
+        if not isinstance(now, datetime) or now.tzinfo is None or now.utcoffset() is None:
+            raise ValueError("now must be a timezone-aware datetime")
         out = []
         if self.intent_digest != intent.digest():
             out.append("APPROVAL_DIGEST_MISMATCH: the intent changed after approval")
