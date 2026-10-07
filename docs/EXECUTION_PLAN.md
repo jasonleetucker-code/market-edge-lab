@@ -618,6 +618,30 @@ be written here when they are made.
     deploying this batch's reviewed offline code is the owner's standing chat instruction, repeated across the coordinator sessions of 2026-09-22 to 2026-09-30: "keep going until everything is merged and deployed" (verbatim), bounded by these conditions and by every
     prohibition above. It delegates no financial, acquisition, credential or gate authority.
 
+- **2026-09-30 (America/New_York), owner directive: architecture reconciliation and bounded hardening.**
+  Recorded verbatim in `docs/owner/2026-09-30-architecture-reconciliation-directive.md`.
+  - **Authorized (offline, bounded, for this task (#152) only):**
+    - local inspection;
+    - regression tests;
+    - fixes to demonstrated gaps in existing canonical owners;
+    - reconciliation of external architecture and agent-engineering ideas;
+    - roadmap reconciliation;
+    - a reviewable PR.
+  - The result is in `docs/engineering/ARCHITECTURE_RECONCILIATION_2026-09-30.md`.
+  - **Not authorized:**
+    - deployment or any change to operating services;
+    - orders, RFQs, credentials, spending, new timers or broader collection;
+    - data-rights changes, public exposure or production-store mutation;
+    - running the A.C calibration early, or any other protected outcome or markout inspection;
+    - methodology changes or model promotion;
+    - new infrastructure without a measured need and a separate decision. That covers a vector database, a
+      second scheduler, a graph framework, a generic agent platform, a Calculator Steward transplant and a
+      behavioural-eval harness (ADR 0006).
+  - **Merge:** the directive allows merging only under documented authority that clearly covers the exact change.
+    - This PR changes runtime code (`inplay_evidence.py`), so the standing docs/test-only rule does not apply.
+    - The 2026-09-30 batch delegation covers that batch's code, not this change.
+    - It therefore stops at a reviewed PR for the owner to merge. It grants nothing else.
+
 ## Standing merge rule: docs-only and test-only PRs
 
 Owner rule of 2026-09-22 (verbatim source: `docs/owner/2026-09-22-overnight-build-directive.md`).

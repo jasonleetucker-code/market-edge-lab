@@ -287,3 +287,30 @@ in-play-evidence, research-evidence and research-economics primitives; and two n
 acceptance onto the R2 contracts (state-version validity, latency stages, evidence status). It is offline and
 documentation/fixture-level, and it prepares the exact owner decision (rights + slot) without taking one. R5 needs
 an EXECUTION_PLAN entry first.
+
+## 10. Architecture reconciliation, 2026-09-30 (#152)
+
+This section changes no package, order or dependency. R0–R11 and §6 stand as written; §9 remains the completion
+ledger. Detail: [`docs/engineering/ARCHITECTURE_RECONCILIATION_2026-09-30.md`](../engineering/ARCHITECTURE_RECONCILIATION_2026-09-30.md).
+
+- **External architecture review and 25 X links:** the existing architecture is kept. The only mechanism adopted is
+  the controlled defect loop (reproduce → repair the canonical owner → keep the regression → review), in
+  `docs/AGENT_OPERATING_SYSTEM.md` §1. Everything else is ALREADY_COVERED, DEFERRED (behavioural evals, ADR 0006)
+  or NOT_APPLICABLE. Nothing is added to the runtime.
+- **R0 / R2 / R3 (in-play offline path):**
+  - The path journal file → evidence → freshness/state validity → policy/replay → `inplay-view/1` is verified
+    through its consumer.
+  - Two provenance gaps in `inplay_evidence.py` are fixed:
+    - an empty RECORDED journal was reported as SYNTHETIC and passed the consumer's RECORDED refusal;
+    - a book carried an earlier message's venue stamp across a resync.
+  - `inplay_view` now sits inside the offline *direct-import* boundary, and a new direct-import protected-label check
+    covers all four in-play modules. Transitive imports are not checked; see the note, §3.
+  - Implementation state: TESTED_LOCALLY on the PR branch. CI, merge and deploy are recorded in the PR.
+- **R3 is still the next dependency-ready package**, as in §9 and HANDOFF: first a new scope entry, then the
+  `inplay-source-pilot-1` refresh onto the R2 contracts. This section *proposes* one addition for that scope entry
+  and does not order it: **R3a**, offline code within R3's "latency/attribution only where missing". It covers:
+  - the journal content digest and the last applied message hash carried through `BookState`/`build_view`;
+  - transitions sliced to the as-of;
+  - both shown in the existing in-play page under the UI contract.
+
+  Capture, recorder, rights and research slot stay BLOCKED on the owner.
