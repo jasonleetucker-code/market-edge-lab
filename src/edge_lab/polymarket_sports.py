@@ -39,8 +39,9 @@ protected windows (`price_observations.PROTECTED_WINDOWS_ET`). A target is writt
 intended time and due window; each attempt is an append-only row. A target not captured by its
 deadline becomes MISSED with its reason; nothing is fetched late and nothing is fabricated. Caps:
 20 markets per slot (overflow SKIPPED_CAP, visible), 20 books and 50 HTTP requests (retries
-included) per run, a 1 s pacer, a 3-minute run deadline (the unit's hard limit is 5 minutes), one
-retry per request. A captured book is research evidence: never an executable price claim, never
+included) per run, a 1 s pacer, a 3-minute run deadline (the unit's hard limit is 5 minutes) cut
+short to end 30 s before a protected window (no run starts with under a minute left), one retry per
+request. A captured book is research evidence: never an executable price claim, never
 compared with or ranked against a sportsbook offer.
 
 **Lock.** Runs hold `<db>.pm-sports.lock`, not the Kalshi collector lock: this pilot uses no
@@ -122,7 +123,13 @@ MAX_REQUESTS_PER_MINUTE = 100  # the attested permission's condition; the 1 s pa
 RETRIES = 1  # one retry per request, only for transient failures (edge_lab.http)
 PACER_INTERVAL_S = 1.0  # the docs allow 20/s per IP; 1/s is deliberate politeness
 MAX_RUN = timedelta(minutes=3)  # run deadline; edgelab-pm-sports*.service TimeoutStartSec=5min is the hard stop
+# A run that would reach a protected window is cut short to end RUN_MARGIN before it, and does not
+# start with less than MIN_RUN left: the :10 ticks before the 11:13/16:13 windows fire a few seconds
+# late, and a full MAX_RUN from then would overlap, refusing the only tick some targets have.
+MIN_RUN = timedelta(minutes=1)
+RUN_MARGIN = timedelta(seconds=30)
 TICK_INTERVAL = timedelta(minutes=15)  # edgelab-pm-sports.timer (tests pin the two together)
+TICK_PHASE_MINUTE = 10  # ... at :10, :25, :40 and :55 (America/New_York offsets are whole hours, so UTC too)
 LOCK_TIMEOUT_S = 5.0
 START_TOLERANCE = timedelta(minutes=15)  # kickoff agreement for RELATED_NOT_EQUIVALENT
 SAME_GAME_WINDOW = timedelta(hours=36)  # beyond this the same teams are a different game
@@ -491,6 +498,12 @@ class _Requests:
         self.recent[:] = [t for t in self.recent if at - t < 60.0]
         if len(self.recent) >= self.per_minute:
             raise RequestRateCapReached(f"{self.per_minute} requests in the last 60 s; the rest is deferred")
+        # Each attempt (a retry included) ends 1 s before the run deadline: the timeout computed for the
+        # first attempt is not reused after a backoff. urllib applies it per socket operation.
+        remaining = (self.deadline - self.clock()).total_seconds()
+        if remaining < MIN_REQUEST_BUDGET.total_seconds():
+            raise DeadlineExceeded(f"{remaining:.1f}s left before an attempt")
+        timeout = min(timeout, remaining - 1.0)
         self.recent.append(at)
         self.attempts += 1
         # The package's default opener, looked up per call (the test suite's no-network guard patches it).
@@ -561,7 +574,8 @@ def discovery_due(store: SnapshotStore, now: datetime) -> tuple[bool, str | None
 
 
 def discover(store: SnapshotStore, *, clock: Clock | None = None, sleep: Sleep = time.sleep,
-             opener: http.Opener | None = None, force: bool = False) -> tuple[int, dict[str, Any]]:
+             opener: http.Opener | None = None, force: bool = False, deadline: datetime | None = None
+             ) -> tuple[int, dict[str, Any]]:
     """INTERNAL: one bounded discovery scan, then (network-free) planning. It does not check the
     access gate or the protected windows: call `run_discover`, which does, then takes the lock."""
     clock = clock or _now
@@ -581,7 +595,7 @@ def discover(store: SnapshotStore, *, clock: Clock | None = None, sleep: Sleep =
     was_stale = last_attempt is None or previous_age is None or previous_age > DISCOVERY_MAX_AGE
     run = _LazyRun(store, "pm-sports-discover")
     run_id = run.id()
-    req = _Requests(2 * MAX_DISCOVERY_PAGES, now + MAX_RUN, clock, sleep, http.Pacer(PACER_INTERVAL_S, sleep=sleep), opener)
+    req = _Requests(2 * MAX_DISCOVERY_PAGES, deadline or now + MAX_RUN, clock, sleep, http.Pacer(PACER_INTERVAL_S, sleep=sleep), opener)
     page_ids: list[int] = []
     sizes: list[int] = []
     payload_bytes = 0
@@ -857,11 +871,20 @@ def _capture_one(store: SnapshotStore, run: _LazyRun, t: Mapping[str, Any], req:
                 depth_json=_levels_json(payload), **common)
 
 
+def _next_tick(after: datetime) -> datetime:
+    """The first scheduled capture tick strictly after `after` (the timer's :10/:25/:40/:55 grid)."""
+    at = after.astimezone(UTC)
+    base = at.replace(second=0, microsecond=0)
+    step = int(TICK_INTERVAL.total_seconds() // 60)
+    tick = base + timedelta(minutes=(TICK_PHASE_MINUTE - base.minute) % step)
+    return tick if tick > at else tick + TICK_INTERVAL
+
+
 def _retry_tick_before(deadline: datetime, after: datetime) -> bool:
     """Whether a later scheduled tick outside every protected window can still run before `deadline`."""
-    tick = after + TICK_INTERVAL
+    tick = _next_tick(after)
     while tick < deadline:
-        if protected_window_at(tick, tick + MAX_RUN) is None:
+        if run_deadline(tick) is not None:
             return True
         tick += TICK_INTERVAL
     return False
@@ -869,7 +892,8 @@ def _retry_tick_before(deadline: datetime, after: datetime) -> bool:
 
 def capture(store: SnapshotStore, *, clock: Clock | None = None, sleep: Sleep = time.sleep,
             opener: http.Opener | None = None, max_books: int = MAX_BOOKS_PER_RUN,
-            max_requests: int = MAX_HTTP_REQUESTS_PER_RUN) -> tuple[int, dict[str, Any]]:
+            max_requests: int = MAX_HTTP_REQUESTS_PER_RUN, deadline: datetime | None = None
+            ) -> tuple[int, dict[str, Any]]:
     """INTERNAL: one bounded capture tick: plan (no network), expire, then book GETs for due targets.
     It does not check the access gate or the protected windows: call `run_capture`, which does."""
     if not 0 < max_books <= MAX_BOOKS_PER_RUN or not 0 < max_requests <= MAX_HTTP_REQUESTS_PER_RUN:
@@ -896,7 +920,7 @@ def capture(store: SnapshotStore, *, clock: Clock | None = None, sleep: Sleep = 
             return 0, report
         report["deferred"] = [t["target_id"] for t in due[max_books:]]
         due = due[:max_books]
-        req = _Requests(max_requests, now + MAX_RUN, clock, sleep, http.Pacer(PACER_INTERVAL_S, sleep=sleep), opener)
+        req = _Requests(max_requests, deadline or now + MAX_RUN, clock, sleep, http.Pacer(PACER_INTERVAL_S, sleep=sleep), opener)
         failed_targets: dict[str, Mapping[str, Any]] = {}
         for t in due:
             if clock() > _t(t["deadline_utc"]):  # never fetched late: the next tick records it MISSED
@@ -942,13 +966,24 @@ def _lock_path(db: Path) -> Path:
     return db.with_name(db.name + ".pm-sports.lock")
 
 
-def protected_refusal(now: datetime, command: str) -> dict[str, Any] | None:
-    hit = protected_window_at(now, now + MAX_RUN)
+def run_deadline(now: datetime) -> datetime | None:
+    """A run's deadline: `now + MAX_RUN`, cut to RUN_MARGIN before a protected window it would reach.
+    None when that leaves less than MIN_RUN (inside a window included): the run does not start."""
+    hit = protected_window_at(now, now + MAX_RUN + RUN_MARGIN)
     if hit is None:
+        return now + MAX_RUN
+    cut = hit[1] - RUN_MARGIN
+    return cut if cut - now >= MIN_RUN else None
+
+
+def protected_refusal(now: datetime, command: str) -> dict[str, Any] | None:
+    if run_deadline(now) is not None:
         return None
+    hit = protected_window_at(now, now + MAX_RUN + RUN_MARGIN)
     return {"command": command, "now_utc": _iso(now), "state": "DEFERRED_PROTECTED_WINDOW", "requests": 0,
-            "detail": f"[{iso_z(now)}, +{int(MAX_RUN.total_seconds())} s] overlaps {hit[0]} "
-                      f"({iso_z(hit[1])} to {iso_z(hit[2])}): no network, no writes"}
+            "detail": f"less than {int(MIN_RUN.total_seconds())} s before {hit[0]} "
+                      f"({iso_z(hit[1])} to {iso_z(hit[2])}), less a {int(RUN_MARGIN.total_seconds())} s margin: "
+                      f"no network, no writes"}
 
 
 def access_refusal(command: str, access_decision: str | None) -> dict[str, Any] | None:
@@ -959,20 +994,22 @@ def access_refusal(command: str, access_decision: str | None) -> dict[str, Any] 
                        f"the Terms do not clear unattended collection ({TERMS_REVIEW}). No network, no writes.")}
 
 
-def _run(command: str, db: Path, body: Callable[[SnapshotStore], tuple[int, dict[str, Any]]], *, clock: Clock,
-         access_decision: Any) -> tuple[int, dict[str, Any]]:
+def _run(command: str, db: Path, body: Callable[[SnapshotStore, datetime], tuple[int, dict[str, Any]]], *,
+         clock: Clock, access_decision: Any) -> tuple[int, dict[str, Any]]:
     access_decision = access_decision_now(access_decision)
     refusal = access_refusal(command, access_decision)
     if refusal is not None:
         return 0, refusal
-    refusal = protected_refusal(clock(), command)
+    now = clock()
+    refusal = protected_refusal(now, command)
     if refusal is not None:  # before the lock: nothing is opened inside a protected window
         return 0, refusal
+    deadline = run_deadline(now)
     if not db.is_file():
         return 0, {"command": command, "state": "NO_STORE", "detail": f"{db} does not exist; nothing created"}
     try:
         with exclusive_lock(_lock_path(db), timeout_s=LOCK_TIMEOUT_S):
-            code, report = body(SnapshotStore(db))
+            code, report = body(SnapshotStore(db), deadline)
     except LockBusy as exc:
         return 0, {"command": command, "state": "LOCK_BUSY", "detail": str(exc)}
     report["access_decision"] = access_decision
@@ -986,7 +1023,8 @@ def run_discover(db: str | Path, *, clock: Clock | None = None, sleep: Sleep = t
     The only public entry point for a networked discovery: `discover()` itself is internal."""
     clock = clock or _now
     return _run("pm-sports discover", Path(db),
-                lambda store: discover(store, clock=clock, sleep=sleep, opener=opener, force=force),
+                lambda store, deadline: discover(store, clock=clock, sleep=sleep, opener=opener, force=force,
+                                                 deadline=deadline),
                 clock=clock, access_decision=access_decision)
 
 
@@ -998,8 +1036,8 @@ def run_capture(db: str | Path, *, clock: Clock | None = None, sleep: Sleep = ti
     The only public entry point for networked captures: `capture()` itself is internal."""
     clock = clock or _now
     return _run("pm-sports capture", Path(db),
-                lambda store: capture(store, clock=clock, sleep=sleep, opener=opener, max_books=max_books,
-                                      max_requests=max_requests),
+                lambda store, deadline: capture(store, clock=clock, sleep=sleep, opener=opener, max_books=max_books,
+                                                max_requests=max_requests, deadline=deadline),
                 clock=clock, access_decision=access_decision)
 
 
@@ -1247,7 +1285,7 @@ def freshness_records(store: SnapshotStore, *, now: datetime,
     scans = store.pm_sports_scans(league=LEAGUE, limit=1)
     usable = latest_usable_scan(store)
     blocked = not access_decision_now(access_decision)
-    protected = protected_window_at(now, now + MAX_RUN)
+    protected = protected_window_at(now, now + MAX_RUN + RUN_MARGIN) if run_deadline(now) is None else None
     complete = next((r for r in store.pm_sports_scans(league=LEAGUE) if int(r["filter_complete"])), None)
     # A receipt is a successful acquisition only: a scan read to its empty page. A partial scan is
     # still usable for planning (what it read is real), but it is an attempt, not a receipt.
@@ -1259,7 +1297,8 @@ def freshness_records(store: SnapshotStore, *, now: datetime,
     if blocked:
         disc_state, disc_why = "PAUSED", f"BLOCKED_TERMS_REVIEW: {TERMS_REVIEW}"
     elif due and protected is not None:
-        disc_state, disc_why = "PROTECTED_WINDOW", f"due, but inside {protected[0]}: runs refuse it"
+        disc_state = "PROTECTED_WINDOW"
+        disc_why = f"due, but at or within {int((MIN_RUN + RUN_MARGIN).total_seconds())} s of {protected[0]}: runs refuse it"
     elif due:
         disc_state, disc_why = "DUE", ("no scan on record" if not scans else
                                        f"the last attempt is at least {int(DISCOVERY_INTERVAL.total_seconds() // 3600)} h old")
@@ -1293,7 +1332,9 @@ def freshness_records(store: SnapshotStore, *, now: datetime,
     if blocked:
         sched, why = "PAUSED", f"BLOCKED_TERMS_REVIEW: {TERMS_REVIEW}"
     elif nxt is not None and _t(nxt["due_from_utc"]) <= now and protected is not None:
-        sched, why = "PROTECTED_WINDOW", f"{nxt['target_id']} is due, but inside {protected[0]}: runs refuse it"
+        sched = "PROTECTED_WINDOW"
+        why = (f"{nxt['target_id']} is due, but at or within {int((MIN_RUN + RUN_MARGIN).total_seconds())} s of "
+               f"{protected[0]}: runs refuse it")
     elif nxt is not None and _t(nxt["due_from_utc"]) <= now:
         sched, why = "DUE", f"{nxt['target_id']} is inside its due window"
     elif overdue:
