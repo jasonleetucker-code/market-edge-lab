@@ -76,6 +76,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from decimal import Context, Decimal, Inexact, InvalidOperation, Rounded, localcontext
 from enum import Enum
+from types import MappingProxyType
 from typing import Any, ContextManager, Iterable, Iterator, Mapping, Protocol
 
 from .. import freshness
@@ -136,7 +137,7 @@ CREATE TABLE reservations (
 CREATE INDEX reservations_held ON reservations(scope_key, state);
 """
 # Append-only tables owned here, with the key columns an INSERT OR REPLACE would collide on.
-APPEND_ONLY_KEYS = {"account_snapshots": ("scope_key", "revision")}
+APPEND_ONLY_KEYS = MappingProxyType({"account_snapshots": ("scope_key", "revision")})
 
 
 class CashBasis(str, Enum):
@@ -398,7 +399,7 @@ class ReservationDecision:
     inventory_available: Decimal | None  # REDUCTION only
 
 
-_TRANSITIONS: dict[ObligationState, frozenset[ObligationState]] = {
+_TRANSITIONS: Mapping[ObligationState, frozenset[ObligationState]] = MappingProxyType({
     ObligationState.OUTSTANDING: frozenset({ObligationState.CANCEL_REQUESTED, ObligationState.UNKNOWN,
                                             ObligationState.BOUND, ObligationState.RELEASED}),
     ObligationState.CANCEL_REQUESTED: frozenset({ObligationState.OUTSTANDING, ObligationState.UNKNOWN,
@@ -407,7 +408,7 @@ _TRANSITIONS: dict[ObligationState, frozenset[ObligationState]] = {
                                         ObligationState.BOUND, ObligationState.RELEASED}),
     ObligationState.BOUND: frozenset({ObligationState.RELEASED}),
     ObligationState.RELEASED: frozenset(),
-}
+})
 # Only a quarantine moves a reservation outside this table (to UNKNOWN, from any state, RELEASED included).
 
 

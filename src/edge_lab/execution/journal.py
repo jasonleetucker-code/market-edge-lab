@@ -94,6 +94,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from enum import Enum
 from pathlib import Path
+from types import MappingProxyType
 from typing import Any, Callable, Iterable, Iterator, Mapping
 
 from .model import ApprovalGrant, OrderIntent, canonical_json, environment_authorized, sha256_text, utc_text
@@ -157,14 +158,14 @@ TERMINAL_ATTEMPT_STATES = frozenset({AttemptState.ACKNOWLEDGED, AttemptState.REJ
 NO_ORDER_STATES = frozenset({AttemptState.REJECTED, AttemptState.ABSENT})  # only these allow a new attempt
 IN_FLIGHT_STATES = frozenset({AttemptState.PENDING_EGRESS, AttemptState.SENT})
 
-_TRANSITIONS = {
+_TRANSITIONS = MappingProxyType({
     AttemptState.PENDING_EGRESS: frozenset({AttemptState.SENT, AttemptState.OUTCOME_UNKNOWN}),
     AttemptState.SENT: frozenset({AttemptState.ACKNOWLEDGED, AttemptState.REJECTED, AttemptState.OUTCOME_UNKNOWN}),
     AttemptState.OUTCOME_UNKNOWN: frozenset({AttemptState.ACKNOWLEDGED, AttemptState.REJECTED, AttemptState.ABSENT}),
-}
+})
 # The receipt kinds that can justify each attempt outcome (reconciliation is always an order lookup).
-_OUTCOME_KINDS = {AttemptState.ACKNOWLEDGED: (ReceiptKind.ORDER_ACK,),
-                  AttemptState.REJECTED: (ReceiptKind.ORDER_REJECT,)}
+_OUTCOME_KINDS = MappingProxyType({AttemptState.ACKNOWLEDGED: (ReceiptKind.ORDER_ACK,),
+                                   AttemptState.REJECTED: (ReceiptKind.ORDER_REJECT,)})
 _RECONCILE_KINDS = (ReceiptKind.ORDER_LOOKUP,)
 
 
@@ -292,25 +293,34 @@ CREATE TABLE events (
     row_hash TEXT NOT NULL UNIQUE
 );
 """
-# Append-only tables and the condition under which an INSERT would collide with an existing row.
-_APPEND_ONLY_COLLISION = {
-    "schema_meta": "key = NEW.key",
-    "intents": "intent_key = NEW.intent_key",
-    "approvals": "nonce = NEW.nonce",
-    "receipts": "receipt_seq = NEW.receipt_seq OR (NEW.status = 'ORIGINAL' AND status = 'ORIGINAL'"
-                " AND receipt_id = NEW.receipt_id)",
-    "events": "seq = NEW.seq OR row_hash = NEW.row_hash",
-    **{t: " AND ".join(f"{c} = NEW.{c}" for c in cols) for t, cols in _RESERVATION_APPEND_ONLY.items()},
-}
+
+
+def _collision_conditions() -> Mapping[str, str]:
+    """Append-only tables and the condition under which an INSERT would collide with an existing row."""
+    out = {
+        "schema_meta": "key = NEW.key",
+        "intents": "intent_key = NEW.intent_key",
+        "approvals": "nonce = NEW.nonce",
+        "receipts": "receipt_seq = NEW.receipt_seq OR (NEW.status = 'ORIGINAL' AND status = 'ORIGINAL'"
+                    " AND receipt_id = NEW.receipt_id)",
+        "events": "seq = NEW.seq OR row_hash = NEW.row_hash",
+    }
+    for table, cols in _RESERVATION_APPEND_ONLY.items():
+        out[table] = " AND ".join(f"{c} = NEW.{c}" for c in cols)
+    return MappingProxyType(out)
+
+
+_APPEND_ONLY_COLLISION = _collision_conditions()
+
 # Append-only rows whose content each has a hash in its creation event: table -> (event kind, subject).
-_HASHED_ROWS = {
+_HASHED_ROWS = MappingProxyType({
     "intents": ("INTENT_RECORDED", "intent_key"),
     "approvals": ("APPROVAL_CONSUMED", "nonce"),
     "receipts": ("RECEIPT_RECORDED", "CAST(receipt_seq AS TEXT)"),
     "account_snapshots": ("SNAPSHOT_RECORDED", "scope_key || '#' || revision"),
-}
-_HASH_KEYS = {"intents": ("intent_key",), "approvals": ("nonce",), "receipts": ("receipt_seq",),
-              "account_snapshots": ("scope_key", "revision")}
+})
+_HASH_KEYS = MappingProxyType({"intents": ("intent_key",), "approvals": ("nonce",), "receipts": ("receipt_seq",),
+                               "account_snapshots": ("scope_key", "revision")})
 
 
 def _append_only_triggers() -> str:
@@ -340,7 +350,7 @@ def _split_sql(script: str) -> list[str]:
     return out
 
 
-_SCHEMA_STATEMENTS = _split_sql(_JOURNAL_SCHEMA_SQL + _RESERVATION_SCHEMA_SQL + _append_only_triggers())
+_SCHEMA_STATEMENTS = tuple(_split_sql(_JOURNAL_SCHEMA_SQL + _RESERVATION_SCHEMA_SQL + _append_only_triggers()))
 _OBJECT_NAME = re.compile(r"CREATE\s+(?:UNIQUE\s+)?(?:TABLE|INDEX|TRIGGER)\s+(\w+)", re.I)
 
 
@@ -348,7 +358,8 @@ def _normalized(sql: str) -> str:
     return " ".join(sql.split()).rstrip(";").strip()
 
 
-_EXPECTED_OBJECTS = {_OBJECT_NAME.match(s).group(1): _normalized(s) for s in _SCHEMA_STATEMENTS}  # type: ignore[union-attr]
+_EXPECTED_OBJECTS = MappingProxyType(
+    {_OBJECT_NAME.match(s).group(1): _normalized(s) for s in _SCHEMA_STATEMENTS})  # type: ignore[union-attr]
 
 
 class ExecutionJournal:
