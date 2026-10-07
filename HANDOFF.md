@@ -90,6 +90,50 @@ NEXT ACTION: R3. Refresh the existing `inplay-source-pilot-1` proposal onto the 
   and F09 around 2026-10-03.
 ```
 
+## Architecture reconciliation (#152, PR #153), 2026-09-30
+
+_Added by the laptop Claude session for the owner directive `docs/owner/2026-09-30-architecture-reconciliation-directive.md`.
+The operations state above is unchanged by it._
+
+```
+STATUS: DONE for the directive's scope, pending the owner's merge. PR #153 is IMPLEMENTED, TESTED_LOCALLY and CI_GREEN
+  (exact head 085edb9), and independently reviewed with verdict APPROVE. It is NOT MERGED and NOT DEPLOYED. No merge
+  delegation clearly covers runtime code, so it stops at a reviewed PR (EXECUTION_PLAN, 2026-09-30 architecture entry).
+ACCEPTANCE: the directive's completion list:
+  - architecture and owner map;
+  - source-access and adoption decisions;
+  - roadmap integration;
+  - one bounded confirmed-gap fix;
+  - test and review evidence;
+  - compatibility, safety and unresolved items.
+  All are in docs/engineering/ARCHITECTURE_RECONCILIATION_2026-09-30.md.
+EVIDENCE:
+  - Gaps fixed in inplay_evidence.py, each reproduced by a regression that fails first:
+    - an empty RECORDED journal was reported SYNTHETIC and passed the consumer's RECORDED refusal;
+    - a book carried an earlier message's venue stamp across a resync (false published time; 599.05 s false
+      TRANSPORT latency).
+  - tests/test_inplay_evidence_path.py (journal file -> build_view): 5 fail on main 14704e3; with the fix, all 12
+    tests in the file pass. The reviewer confirmed the before/after independently.
+  - Full local suite (Windows, 3.12) at 085edb9, `-k "not sigterm"`: 3538 passed, 58 skipped, 3 deselected, 0 failed.
+  - tests/invariants: 127 passed. `experiments check-frozen --base origin/main`: clean (exit 0).
+  - CI: pytest 3.11 and 3.12 green on 085edb9 (actions run 36710106274).
+  - Review: one read-only reviewer. Round 1: CHANGES_REQUIRED, no blocker, 9 findings (docs overclaims, direct-import
+    scope, R3 ordering, HANDOFF). Round 2: APPROVE with 2 nits, both fixed in 085edb9.
+  - Fixture gallery output is byte-identical to main (all 11 variants). check-frozen is clean.
+  - The 25 X links: 3 were attempted this session, all HTTP 402. No disposition relies on unseen content.
+UNRESOLVED:
+  - The book path is not content-addressed through the consumer (journal digest; last message raw_sha256).
+  - build_view does not slice transitions to the as-of. It fails closed: BOOK_STALE, and the view shows STALE.
+    Both items are proposed as R3a for the R3 scope entry.
+  - The import boundary is direct-import only. Transitive research_economics -> experiments and
+    position_policy -> ... -> shadow_ledger predate this work; no protected data is read.
+  - The hand-written fixture journal's ts_ms values are 2 days before their receipts. Left unedited; any latency
+    test that uses it needs a labelled derivative.
+BLOCKERS: the owner's merge decision on PR #153.
+NEXT ACTION: the owner reviews and merges PR #153 (a normal deploy afterwards carries it; nothing reaches
+  production, which shows NOT_AUTHORIZED for in-play). Then R3 as above: a scope entry, with R3a proposed in it.
+```
+
 ## Daily operation (what runs by itself)
 
 | ET time | Unit | Does |

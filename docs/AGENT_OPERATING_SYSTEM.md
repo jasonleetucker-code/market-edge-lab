@@ -18,6 +18,10 @@ inspect main/PRs/claims → claim → implement → test → review own diff adv
 - **Self-review**: read the diff as a hostile reviewer would. Ask what would make CI reject it,
   and what it claims that isn't proven.
 - **Evidence**: record the exact commands and results. `UNRESOLVED: NONE` must be true.
+- **Defects** follow a controlled loop: reproduce with a regression test that fails first, repair the canonical
+  owner (never a copy), keep the test, and get independent review when the change is consequential. Prefer a test
+  through the real consumer over one inside a helper. A fix whose test never failed is not proven. A supported
+  no-gap finding is a valid result; do not manufacture a change.
 
 Ask the owner only when a decision is consequential (financial, destructive, credentials or
 spending), crosses a gate, or is genuinely ambiguous after reading the repo. Routine
