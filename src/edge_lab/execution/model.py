@@ -43,8 +43,12 @@ _TICKER = re.compile(r"[A-Z0-9][A-Z0-9._-]{0,127}")
 _KEY = re.compile(r"[A-Za-z0-9][A-Za-z0-9:._/-]{0,199}")
 _PLAIN_DECIMAL = re.compile(r"[+-]?([0-9]+(\.[0-9]*)?|\.[0-9]+)")  # ASCII digits only
 _SCOPE_KEY = re.compile(r"(FIXTURE|DEMO|PRODUCTION):[^:\s]+:(primary|[0-9]+)")
-MAX_DIGITS = 30  # significant digits: far beyond any price, quantity or account balance
-MAX_EXPONENT = 30  # |adjusted exponent|: refuses 9E+100000-style values
+# Bounds that keep arithmetic exact everywhere, even in the default 28-digit context (a reviewer found
+# default-context sums elsewhere): magnitude below 1e13 and at most 8 decimal places. A sum of a
+# million such values needs at most 27 digits.
+MAX_EXPONENT = 12  # adjusted exponent: refuses 1e13 and above, and 9E+100000-style values
+MAX_DECIMAL_PLACES = 8  # finer than any documented price, quantity or fee unit
+MAX_DIGITS = MAX_EXPONENT + 1 + MAX_DECIMAL_PLACES
 # Exact arithmetic: a result that would need rounding raises instead of being rounded.
 _EXACT = Context(prec=2 * MAX_DIGITS + 10, traps=[InvalidOperation, Inexact, Rounded])
 
@@ -121,9 +125,12 @@ def exact_decimal(value: object, *, name: str) -> Decimal:
     if not d.is_finite():
         raise ExactValueError(f"{name} must be finite, not {d}")
     if d != 0:
-        digits = len(d.as_tuple().digits)
-        if digits > MAX_DIGITS or abs(d.adjusted()) > MAX_EXPONENT:
-            raise ExactValueError(f"{name} has too many digits or too large an exponent: {d}")
+        if d.adjusted() > MAX_EXPONENT:
+            raise ExactValueError(f"{name} is too large: {d}")
+        places = -d.as_tuple().exponent if d.as_tuple().exponent < 0 else 0
+        significant_places = len(decimal_text(d).partition(".")[2])
+        if min(places, significant_places) > MAX_DECIMAL_PLACES:
+            raise ExactValueError(f"{name} has more than {MAX_DECIMAL_PLACES} decimal places: {d}")
     return d
 
 
