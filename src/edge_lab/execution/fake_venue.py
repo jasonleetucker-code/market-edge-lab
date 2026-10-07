@@ -160,6 +160,12 @@ class FakeVenue:
         self._seq += 1
         return utc_text(self._start + timedelta(seconds=self._seq))
 
+    def advance(self, seconds: int) -> None:
+        """Move the fake clock forward (a test hook)."""
+        if isinstance(seconds, bool) or not isinstance(seconds, int) or seconds < 0:
+            raise ValueError("seconds must be a non-negative int")
+        self._seq += seconds
+
     def now_text(self) -> str:
         return utc_text(self._start + timedelta(seconds=self._seq))
 

@@ -5,48 +5,62 @@ reads a clock, touches a store or decides anything: it only records what is know
 
 Coarse state and detail
 - The coarse state is always an `execution_ticket.OrderState` and moves only through
-  `execution_ticket.transition`. The richer detail sits beside it: send stage, establishment, quantities,
-  fills, a pending cancel or amendment, and an unresolved ambiguous operation.
+  `execution_ticket.transition`. The richer detail sits beside it: send stage and time, establishment,
+  quantities, fills, venue count observations, a pending cancel or amendment, and an unresolved
+  ambiguous operation.
 - Quantities: `filled + remaining + canceled == total` after every event, and none is negative. A
   receipt that would break this is recorded but not applied, and the view is quarantined with the
-  reason. Nothing is clamped.
-- `filled` is the larger of the fills applied (by fill id) and the highest fill count the venue has
-  reported. When the venue's count runs ahead of the fill receipts, the gap is fills still owed
-  (`unreceived_fill_quantity`), and their fees are unknown, not zero.
+  reason. Nothing is clamped. Every change of a count is logged in `count_log`.
+
+How `filled` is known
+- Two kinds of evidence are kept apart: the fills received (by fill id) and the venue's cumulative
+  fill counts (`count_observations`, each with the venue time it was true at).
+- A count observed at time t covers the fills executed at or before t. Fills received with a later
+  venue time are on top of it. So `filled` is the largest of: the fills received, and, for each
+  observation, its count plus the received fills timestamped after it. It never decreases.
+- When a fill or an observation has no usable time, which fills an observation covers is unknown. The
+  lower bound is kept, `fill_timing_uncertain` is set, and fees are never reported complete.
+- A final count (a canceled or executed order) cannot be exceeded. A venue-stated cancel count
+  (`canceled_floor`) never changes once known; a second, different one quarantines.
+- A count below fills the snapshot must already include, or below an earlier venue count, is noted.
+  It quarantines when it is final, or from an authoritative reconcile that cannot be shown to be older.
 
 Ambiguity and establishment
 - A new order whose send returned ambiguously (timeout or connection loss after egress) is
   OUTCOME_UNKNOWN. Only an `Acknowledged` or a found `ReconcileObserved` establishes it. A fill
-  carrying our client order id adds quantity but does not establish the order.
-- A "not found" reconcile is NOT_FOUND evidence, never proof of absence, unless it says it is
-  authoritative and complete for the scope. Only then does an unestablished, unfilled order end
-  REJECTED with reason NEVER_ACCEPTED.
+  carrying our client order id adds quantity but does not establish the order. A bare rejection (no
+  order id) cannot be tied to the lost send and is only noted.
+- A "not found" reconcile is NOT_FOUND evidence, never proof of absence, unless it is authoritative and
+  complete for the scope and was taken at least `NOT_FOUND_MIN_DELAY` after the recorded send time.
+  Only then does an unestablished, unfilled order end REJECTED as never accepted.
 - A second `SendPrepared` is a blind resubmission and quarantines the view. `may_send_new_order`
   is the guard a sender checks first.
 
 Cancellation, amendment and terminal states
 - `CancelRequested` and `AmendRequested` change no quantity. Only the venue's confirmation does.
-- Canceled does not mean never filled. A fill that executed before a cancel but arrives after the
-  confirmation applies once and reduces the canceled quantity. It may not go below the part of the
-  cancel the venue stated as an explicit count (`canceled_floor`); that would be a contradiction.
+- Canceled does not mean never filled. A fill that executed before a cancel without a stated count
+  (soft) applies once and reduces the canceled quantity.
 - The venue's amend count is the order's new TOTAL, already-filled contracts included, not a desired
   remainder: total 10 with 4 filled, amended to 8, leaves 4 resting. A requested total at or below the
-  filled quantity is refused locally; one acknowledged below it quarantines.
+  filled quantity is refused locally; one acknowledged below it quarantines. While an amendment is
+  pending, fills at its new price are within the limit.
 - An amendment keeps the order's identity. If the venue assigns a new provider id, the old one moves to
-  `prior_provider_order_ids`, and fills for either id still match. Fills from before stay attached.
+  `prior_provider_order_ids`, and fills for either id still match. A receipt with our client order id
+  and an unknown provider id, while an amendment is pending or ambiguous, is taken as that replacement.
 - A terminal view still records every later receipt (`receipts`). If a receipt contradicts the terminal
   state, the view is quarantined; the state never moves back.
 
 Identity: receipts match an order by provider order id or client order id, never by price, quantity or
 time coincidence (`route`).
 
-The venue field meanings assumed here (status words, `reduced_by`, the amend count, the fill fields) are
-illustrative until the conformance pack confirms them.
+The venue field meanings assumed here (status words, `reduced_by`, the amend count, the fill fields,
+which time a snapshot is true at) are illustrative until the conformance pack confirms them.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
+from datetime import datetime, timedelta
 from decimal import Decimal
 from enum import Enum
 from typing import Iterable, Union
@@ -57,6 +71,9 @@ from .model import Action, OrderIntent, Side, exact_decimal, parse_utc_text
 ZERO = Decimal(0)
 ONE = Decimal(1)
 TERMINAL_STATES = frozenset({OrderState.FILLED, OrderState.CANCELLED, OrderState.REJECTED})
+# How long after our recorded send a complete not-found snapshot must be taken to prove the order never
+# arrived. Provisional: it covers transit and clock disagreement; the conformance pack should set it.
+NOT_FOUND_MIN_DELAY = timedelta(seconds=30)
 
 
 class Operation(str, Enum):
@@ -105,7 +122,15 @@ def _ident(value: object, name: str) -> str | None:
 
 @dataclass(frozen=True)
 class SendPrepared:
-    """Local: the new order is journaled and about to be transmitted. Recorded before egress."""
+    """Local: the new order is journaled and about to be transmitted. Recorded before egress, with the
+    time (our clock) it was journaled: a not-found snapshot taken before it proves nothing."""
+
+    prepared_at_utc: str
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.prepared_at_utc, str):
+            raise TypeError("prepared_at_utc must be ISO-8601 text")
+        parse_utc_text(self.prepared_at_utc)  # naive or malformed text raises
 
 
 @dataclass(frozen=True)
@@ -297,7 +322,6 @@ Event = Union[SendPrepared, SendReturnedAmbiguous, Acknowledged, Rejected, Fill,
               AmendRequested, AmendAcknowledged, Expired, ReconcileObserved]
 LOCAL_EVENTS = (SendPrepared, SendReturnedAmbiguous, CancelRequested, AmendRequested)
 
-
 # ---------------------------------------------------------------- the view
 
 
@@ -313,9 +337,25 @@ class FillRecord:
 
 
 @dataclass(frozen=True)
+class CountObservation:
+    """The venue said `count` contracts were filled, true at `as_of_utc` (None: time unknown). A final
+    count belongs to a canceled or executed order: nothing can fill beyond it."""
+
+    count: Decimal
+    as_of_utc: str | None
+    final: bool
+    source: str
+
+
+@dataclass(frozen=True)
 class AmendTarget:
     new_total: Decimal  # TOTAL quantity including filled
     new_price: Decimal
+
+
+class CancelBasis(str, Enum):
+    SOFT = "SOFT"  # canceled "whatever was open", no count stated: late fills may reduce it
+    VENUE_COUNT = "VENUE_COUNT"  # the venue stated the count (`canceled_floor`): fixed
 
 
 @dataclass(frozen=True)
@@ -330,6 +370,7 @@ class OrderView:
     original_quantity: Decimal
     state: OrderState
     send_stage: SendStage
+    sent_at_utc: str | None  # when the new order was journaled for sending (our clock)
     established: bool  # an Acknowledged or a found ReconcileObserved has shown the order exists
     provider_order_id: str | None
     prior_provider_order_ids: tuple[str, ...]
@@ -340,11 +381,14 @@ class OrderView:
     filled_quantity: Decimal
     remaining_quantity: Decimal
     canceled_quantity: Decimal
-    canceled_floor: Decimal  # the part of the cancel stated by an explicit venue count
+    cancel_basis: CancelBasis | None
+    canceled_floor: Decimal  # the venue-stated cancel count (VENUE_COUNT), else 0
     fills: tuple[FillRecord, ...]
+    count_observations: tuple[CountObservation, ...]
     parked_fills: tuple[Fill, ...]  # fills beyond the open quantity while a larger amendment is pending
     cancel_requested: bool
     amend_pending: AmendTarget | None
+    amend_reply_owed: bool  # a snapshot showed the pending amendment applied; its own reply is still due
     ambiguous_operation: Operation | None
     terminal_reason: str | None
     last_venue_status: str | None
@@ -352,6 +396,7 @@ class OrderView:
     quarantine_reasons: tuple[str, ...]
     refusals: tuple[str, ...]  # local requests the reducer refused (nothing was sent for them)
     notes: tuple[str, ...]  # non-fatal observations: duplicates, stale snapshots, late fills
+    count_log: tuple[str, ...]  # one line per change of total, filled, remaining, canceled or floor
     receipts: tuple[object, ...]  # every event, in arrival order, applied or not
 
     @property
@@ -367,9 +412,25 @@ class OrderView:
         return sum((f.quantity for f in self.fills), ZERO)
 
     @property
+    def venue_filled_reported(self) -> Decimal:
+        """The highest cumulative fill count the venue has reported (0 if none)."""
+        return max((o.count for o in self.count_observations), default=ZERO)
+
+    @property
     def unreceived_fill_quantity(self) -> Decimal:
-        """Contracts the venue counts as filled whose fill receipts have not arrived."""
+        """Contracts known to be filled whose fill receipts have not arrived."""
         return self.filled_quantity - self.fill_quantity_applied
+
+    @property
+    def fill_timing_uncertain(self) -> bool:
+        """True when it is unknown which received fills a venue count already covers, so `filled` is a
+        lower bound that may be short."""
+        if any(o.final for o in self.count_observations) or not self.fills:
+            return False
+        if self.filled_quantity >= self.total_quantity and self.amend_pending is None:
+            return False
+        fills_untimed = any(_time(f.venue_time_utc) is None for f in self.fills)
+        return any(o.count > 0 and (fills_untimed or _time(o.as_of_utc) is None) for o in self.count_observations)
 
     @property
     def fees_known(self) -> Decimal:
@@ -377,9 +438,10 @@ class OrderView:
 
     @property
     def fees_complete(self) -> bool:
-        """True only if every filled contract has a fill receipt with a known fee."""
+        """True only if every filled contract has a fill receipt with a known fee, and no venue count
+        could cover fills not yet received."""
         return (all(f.fee is not None for f in self.fills) and self.unreceived_fill_quantity == 0
-                and not self.parked_fills)
+                and not self.parked_fills and not self.fill_timing_uncertain)
 
     def fill(self, fill_id: str) -> FillRecord | None:
         return next((f for f in self.fills if f.fill_id == fill_id), None)
@@ -409,12 +471,12 @@ def open_view(*, client_order_id: str, market_ticker: str, side: Side, action: A
     return OrderView(
         client_order_id=client_order_id, intent_digest=intent_digest, market_ticker=market_ticker, side=side,
         action=action, original_quantity=qty, state=OrderState.PENDING, send_stage=SendStage.UNSENT,
-        established=False, provider_order_id=None, prior_provider_order_ids=(), limit_price=price,
-        limit_prices=(price,), total_quantity=qty, total_history=(qty,), filled_quantity=ZERO,
-        remaining_quantity=qty, canceled_quantity=ZERO, canceled_floor=ZERO, fills=(), parked_fills=(),
-        cancel_requested=False, amend_pending=None, ambiguous_operation=None, terminal_reason=None,
-        last_venue_status=None, not_found_observations=0, quarantine_reasons=(), refusals=(), notes=(),
-        receipts=())
+        sent_at_utc=None, established=False, provider_order_id=None, prior_provider_order_ids=(),
+        limit_price=price, limit_prices=(price,), total_quantity=qty, total_history=(qty,), filled_quantity=ZERO,
+        remaining_quantity=qty, canceled_quantity=ZERO, cancel_basis=None, canceled_floor=ZERO, fills=(),
+        count_observations=(), parked_fills=(), cancel_requested=False, amend_pending=None, amend_reply_owed=False,
+        ambiguous_operation=None, terminal_reason=None, last_venue_status=None, not_found_observations=0,
+        quarantine_reasons=(), refusals=(), notes=(), count_log=(), receipts=())
 
 
 def view_from_intent(intent: OrderIntent) -> OrderView:
@@ -425,12 +487,13 @@ def view_from_intent(intent: OrderIntent) -> OrderView:
 
 # ---------------------------------------------------------------- invariants and guards
 
+_COUNT_FIELDS = ("total_quantity", "filled_quantity", "remaining_quantity", "canceled_quantity", "canceled_floor")
+
 
 def invariant_problems(view: OrderView) -> list[str]:
     """Why `view`'s quantities or state are incoherent (empty: they hold)."""
     out = []
-    names = ("total_quantity", "filled_quantity", "remaining_quantity", "canceled_quantity", "canceled_floor")
-    for name in names:
+    for name in _COUNT_FIELDS:
         value = getattr(view, name)
         if not isinstance(value, Decimal) or not value.is_finite():
             return [f"INVARIANT: {name} is not a finite Decimal"]
@@ -443,15 +506,19 @@ def invariant_problems(view: OrderView) -> list[str]:
                    f"{view.canceled_quantity} != total {view.total_quantity}")
     if view.fill_quantity_applied > view.filled_quantity:
         out.append(f"INVARIANT: fills applied {view.fill_quantity_applied} exceed filled {view.filled_quantity}")
-    if view.canceled_floor > view.canceled_quantity:
-        out.append(f"INVARIANT: canceled {view.canceled_quantity} is below the venue-stated {view.canceled_floor}")
+    if view.filled_quantity > view.venue_filled_reported + view.fill_quantity_applied:
+        out.append("INVARIANT: filled exceeds every venue count plus the fills received")
+    if view.cancel_basis is CancelBasis.VENUE_COUNT and view.canceled_quantity != view.canceled_floor:
+        out.append(f"INVARIANT: canceled {view.canceled_quantity} is not the venue-stated {view.canceled_floor}")
+    if view.cancel_basis is not CancelBasis.VENUE_COUNT and view.canceled_floor != 0:
+        out.append("INVARIANT: a cancel floor without a venue-stated count")
     if view.state is OrderState.REJECTED and view.filled_quantity > 0:
         out.append("INVARIANT: a REJECTED order has fills")
     if view.state is OrderState.FILLED and view.filled_quantity != view.total_quantity:
         out.append("INVARIANT: a FILLED order is not fully filled")
     if view.state is OrderState.CANCELLED and view.remaining_quantity != 0:
         out.append("INVARIANT: a CANCELLED order still has a remainder")
-    if view.state in (OrderState.RESTING,) and not view.established:
+    if view.state is OrderState.RESTING and not view.established:
         out.append("INVARIANT: RESTING but never established")
     return out
 
@@ -494,6 +561,8 @@ def amend_problems(view: OrderView, new_total: Decimal | None, new_price: Decima
         out.append(f"AMEND_ON_TERMINAL: {view.state.value}")
     if view.amend_pending is not None:
         out.append("AMEND_ALREADY_PENDING")
+    if view.amend_reply_owed:
+        out.append("AMEND_REPLY_OUTSTANDING: the last amendment's reply has not arrived")
     if view.cancel_requested:
         out.append("AMEND_WHILE_CANCEL_PENDING")
     if view.ambiguous_operation is not None:
@@ -526,6 +595,19 @@ def _refuse(view: OrderView, reasons: list[str]) -> OrderView:
     return replace(view, refusals=view.refusals + tuple(reasons))
 
 
+def _time(text: str | None) -> datetime | None:
+    if text is None:
+        return None
+    try:
+        return parse_utc_text(text)
+    except ValueError:
+        return None
+
+
+def _replacement_expected(view: OrderView) -> bool:
+    return view.amend_pending is not None or view.ambiguous_operation is Operation.AMEND
+
+
 def _identity_problem(view: OrderView, provider_order_id: str | None, client_order_id: str | None, *,
                       require: bool) -> str | None:
     """Why a receipt does not belong to `view` (None: it does). Identity only: never price or size."""
@@ -536,6 +618,8 @@ def _identity_problem(view: OrderView, provider_order_id: str | None, client_ord
         if not provider_order_id:
             return "IDENTITY_MALFORMED: empty provider order id"
         if known and provider_order_id not in known:
+            if client_order_id is not None and _replacement_expected(view):
+                return None  # our order, re-identified by the pending amendment (`_link_provider_id`)
             return f"IDENTITY_MISMATCH: provider order id {provider_order_id!r} is not {sorted(known)}"
         if not known and client_order_id is None:
             return f"IDENTITY_UNMATCHED: provider order id {provider_order_id!r} is not yet linked to this order"
@@ -544,41 +628,56 @@ def _identity_problem(view: OrderView, provider_order_id: str | None, client_ord
     return None
 
 
-def _adopt_provider_id(view: OrderView, provider_order_id: str | None) -> OrderView:
-    if provider_order_id is None or view.provider_order_id is not None or provider_order_id in view.provider_ids():
+def _link_provider_id(view: OrderView, provider_order_id: str | None) -> OrderView:
+    """Record a provider id the identity check accepted: the first one, or a replacement id."""
+    if provider_order_id is None or provider_order_id in view.provider_ids():
         return view
-    return replace(view, provider_order_id=provider_order_id)
+    if view.provider_order_id is None:
+        return replace(view, provider_order_id=provider_order_id)
+    out = replace(view, provider_order_id=provider_order_id,
+                  prior_provider_order_ids=view.prior_provider_order_ids + (view.provider_order_id,))
+    return _note(out, f"PROVIDER_ID_REPLACED: {view.provider_order_id} -> {provider_order_id} (amendment lineage)")
 
 
-def _counts(view: OrderView, *, total: Decimal | None = None, filled: Decimal | None = None,
-            canceled: Decimal | None = None, floor: Decimal | None = None) -> OrderView:
-    """`view` with new counts; remaining is derived. A negative result is left for the invariant check."""
-    total = view.total_quantity if total is None else total
-    filled = view.filled_quantity if filled is None else filled
-    canceled = view.canceled_quantity if canceled is None else canceled
-    floor = view.canceled_floor if floor is None else floor
-    history = view.total_history if total == view.total_quantity else view.total_history + (total,)
-    return replace(view, total_quantity=total, filled_quantity=filled, canceled_quantity=canceled,
-                   canceled_floor=floor, remaining_quantity=total - filled - canceled, total_history=history)
+def _implied_filled(fills: tuple[FillRecord, ...], observations: tuple[CountObservation, ...]) -> Decimal:
+    """The largest of the fills received and, per venue count, the count plus the fills received with a
+    later venue time. Untimed fills or counts are treated as covered (a lower bound)."""
+    best = sum((f.quantity for f in fills), ZERO)
+    timed = [(f.quantity, _time(f.venue_time_utc)) for f in fills]
+    for o in observations:
+        at = _time(o.as_of_utc)
+        after = ZERO if at is None else sum((q for q, ft in timed if ft is not None and ft > at), ZERO)
+        best = max(best, o.count + after)
+    return best
 
 
-def _raise_filled(view: OrderView, new_filled: Decimal) -> OrderView | str:
-    """Raise `filled` to `new_filled`, taking the delta from the remainder first and then from the soft
-    (not venue-counted) part of a cancel: a fill that executed before the cancel. Returns a reason
-    string if the delta does not fit."""
-    delta = new_filled - view.filled_quantity
-    if delta <= 0:
+def _recount(view: OrderView) -> OrderView | str:
+    """Recompute filled, canceled and remaining from the evidence. A reason string if they do not fit."""
+    filled = _implied_filled(view.fills, view.count_observations)
+    finals = {o.count for o in view.count_observations if o.final}
+    if len(finals) > 1:
+        return f"FINAL_COUNTS_DISAGREE: the venue gave final fill counts {sorted(finals)}"
+    if finals and filled > min(finals):
+        return (f"FILL_EXCEEDS_OPEN_QUANTITY: filled would be {filled}, beyond the venue's final count "
+                f"{min(finals)}")
+    total = view.total_quantity
+    if view.cancel_basis is CancelBasis.VENUE_COUNT:
+        canceled = view.canceled_floor
+    elif view.cancel_basis is CancelBasis.SOFT:
+        canceled = max(total - filled, ZERO)
+    else:
+        canceled = ZERO
+    if filled + canceled > total:
+        return (f"FILL_EXCEEDS_OPEN_QUANTITY: filled would be {filled} of total {total} "
+                f"(venue-stated canceled {view.canceled_floor})")
+    return replace(view, filled_quantity=filled, canceled_quantity=canceled,
+                   remaining_quantity=total - filled - canceled)
+
+
+def _with_total(view: OrderView, total: Decimal) -> OrderView:
+    if total == view.total_quantity:
         return view
-    from_remaining = min(delta, view.remaining_quantity)
-    from_canceled = delta - from_remaining
-    soft_canceled = view.canceled_quantity - view.canceled_floor
-    if from_canceled > soft_canceled:
-        return (f"FILL_EXCEEDS_OPEN_QUANTITY: filled would be {new_filled} of total {view.total_quantity} "
-                f"(remaining {view.remaining_quantity}, venue-stated canceled {view.canceled_floor})")
-    out = _counts(view, filled=new_filled, canceled=view.canceled_quantity - from_canceled)
-    if from_canceled > 0:
-        out = _note(out, f"LATE_FILL_REDUCED_CANCELED: {from_canceled} executed before the cancel")
-    return out
+    return replace(view, total_quantity=total, total_history=view.total_history + (total,))
 
 
 def _amend_up_pending(view: OrderView) -> bool:
@@ -618,6 +717,13 @@ def _settle(before: OrderView, candidate: OrderView) -> OrderView:
     return out
 
 
+def _move(before: OrderView, candidate: OrderView, state: OrderState) -> OrderView:
+    try:
+        return replace(candidate, state=transition(candidate.state, state))
+    except ValueError as exc:
+        return _quarantine(before, f"ILLEGAL_TRANSITION: {exc}")
+
+
 def _status(text: str | None) -> VenueStatus | None:
     try:
         return VenueStatus(text)
@@ -625,36 +731,69 @@ def _status(text: str | None) -> VenueStatus | None:
         return None
 
 
-def _latest_fill_time(view: OrderView):
-    times = []
-    for f in view.fills:
-        if f.venue_time_utc is None:
-            return None
-        try:
-            times.append(parse_utc_text(f.venue_time_utc))
-        except ValueError:
-            return None
-    return max(times) if times else None
+def _observe(view: OrderView, count: Decimal, as_of_utc: str | None, *, final: bool, authoritative: bool,
+             complete: bool, source: str) -> OrderView | str:
+    """Record a venue fill count. A reason string if it contradicts what is known; a note if it is only
+    stale. Counts are cumulative at the venue, so a lower count is either older or a contradiction."""
+    if count < 0:
+        return f"MALFORMED_COUNTS: fill count {count} is negative"
+    at = _time(as_of_utc)
+    received = view.fill_quantity_applied
+    covered = ZERO if at is None else sum((f.quantity for f in view.fills if (ft := _time(f.venue_time_utc))
+                                           is not None and ft <= at), ZERO)
+    if covered > count:
+        if final or authoritative:
+            return f"COUNT_BELOW_APPLIED_FILLS: venue count {count} < {covered} received fills executed by {as_of_utc}"
+        view = _note(view, f"STALE_FILL_COUNT: {count} < {covered} received fills executed by its time ({source})")
+    elif received > count:
+        if final or (authoritative and covered + _untimed_fills(view, at) > count):
+            return (f"COUNT_BELOW_APPLIED_FILLS: venue count {count} < fills received {received} and not shown "
+                    f"to be older ({source})")
+        view = _note(view, f"STALE_FILL_COUNT: {count} < fills received {received} ({source})")
+    higher = [o for o in view.count_observations if o.count > count]
+    for o in higher:
+        earlier = _time(o.as_of_utc)
+        provably_older = at is not None and earlier is not None and at < earlier
+        if final or (not provably_older and (o.final or (authoritative and complete))):
+            return (f"COUNT_BELOW_KNOWN_FILLS: venue count {count} ({source}) < an earlier venue count {o.count} "
+                    f"({o.source})")
+    if higher:
+        view = _note(view, f"COUNT_BELOW_EARLIER_VENUE_COUNT: {count} ({source}) < {max(o.count for o in higher)}; "
+                           f"stale or not shown to be newer")
+    return replace(view, count_observations=view.count_observations + (CountObservation(count, as_of_utc, final,
+                                                                                        source),))
 
 
-def _snapshot_predates_fills(view: OrderView, as_of_utc: str | None) -> bool:
-    """True only if `as_of_utc` is provably earlier than the newest applied fill."""
-    if as_of_utc is None:
-        return False
-    try:
-        as_of = parse_utc_text(as_of_utc)
-    except ValueError:
-        return False
-    latest = _latest_fill_time(view)
-    return latest is not None and as_of < latest
+def _untimed_fills(view: OrderView, at: datetime | None) -> Decimal:
+    """Received fills whose relation to `at` is unknown."""
+    if at is None:
+        return view.fill_quantity_applied
+    return sum((f.quantity for f in view.fills if _time(f.venue_time_utc) is None), ZERO)
+
+
+def _cancel_firm(view: OrderView, floor: Decimal, as_of_utc: str | None, source: str) -> OrderView | str:
+    """The venue stated how many contracts the cancel removed. Fixed once known."""
+    if floor < 0 or floor > view.total_quantity:
+        return f"MALFORMED_CANCEL: canceled count {floor} outside [0, {view.total_quantity}]"
+    if view.cancel_basis is CancelBasis.VENUE_COUNT and floor != view.canceled_floor:
+        return f"CANCEL_COUNT_CONFLICT: the venue stated {view.canceled_floor} canceled, now {floor} ({source})"
+    out = _observe(view, view.total_quantity - floor, as_of_utc, final=True, authoritative=True, complete=True,
+                   source=source)
+    if isinstance(out, str):
+        return out
+    return replace(out, cancel_basis=CancelBasis.VENUE_COUNT, canceled_floor=floor)
+
+
+def _cancel_soft(view: OrderView) -> OrderView:
+    if view.cancel_basis is not None:
+        return _note(view, "DUPLICATE_CANCEL: no count stated")
+    return replace(view, cancel_basis=CancelBasis.SOFT)
 
 
 def _merge_venue_counts(before: OrderView, view: OrderView, status: VenueStatus, filled: Decimal | None,
-                        remaining: Decimal | None, total: Decimal | None, *, authoritative: bool,
-                        as_of_utc: str | None, price: Decimal | None = None) -> OrderView:
-    """Fold a venue snapshot's counts into `view`. Counts only ever move forward: a lower fill count
-    than already known is stale (noted), except where a final or authoritative snapshot proves a
-    contradiction (quarantined)."""
+                        remaining: Decimal | None, total: Decimal | None, *, authoritative: bool, complete: bool,
+                        as_of_utc: str | None, source: str, price: Decimal | None = None) -> OrderView:
+    """Fold a venue snapshot into `view` (not yet recounted)."""
     for name, value in (("filled", filled), ("remaining", remaining), ("total", total)):
         if value is not None and value < 0:
             return _quarantine(before, f"MALFORMED_COUNTS: {name} {value} is negative")
@@ -672,10 +811,10 @@ def _merge_venue_counts(before: OrderView, view: OrderView, status: VenueStatus,
     if venue_total is not None and venue_total != view.total_quantity:
         target = view.amend_pending
         if target is not None and venue_total == target.new_total and (price is None or price == target.new_price):
-            view = _apply_amend(view, target.new_total, target.new_price, None)
-            if isinstance(view, str):
-                return _quarantine(before, view)
-            view = _note(view, "AMEND_APPLIED_PER_SNAPSHOT")
+            amended = _apply_amend(view, target.new_total, target.new_price, None)
+            if isinstance(amended, str):
+                return _quarantine(before, amended)
+            view = _note(replace(amended, amend_reply_owed=True), "AMEND_APPLIED_PER_SNAPSHOT")
         elif not authoritative and venue_total in view.total_history:
             return _note(view, f"STALE_SNAPSHOT: total {venue_total} predates the current total "
                                f"{view.total_quantity}")
@@ -684,50 +823,46 @@ def _merge_venue_counts(before: OrderView, view: OrderView, status: VenueStatus,
     if price is not None and price != view.limit_price:
         target = view.amend_pending
         if target is not None and price == target.new_price and target.new_total == view.total_quantity:
-            view = _apply_amend(view, target.new_total, target.new_price, None)
-            if isinstance(view, str):
-                return _quarantine(before, view)
+            amended = _apply_amend(view, target.new_total, target.new_price, None)
+            if isinstance(amended, str):
+                return _quarantine(before, amended)
+            view = replace(amended, amend_reply_owed=True)
         elif authoritative:
             return _quarantine(before, f"PRICE_MISMATCH: venue price {price} != {view.limit_price}")
 
-    applied = view.fill_quantity_applied
-    new_filled = view.filled_quantity
+    if status is VenueStatus.EXECUTED and filled is None:
+        view = _note(view, f"EXECUTED_WITHOUT_COUNTS: {source} says executed but gives no fill count")
     if filled is not None:
-        if filled < applied:
-            final = status in (VenueStatus.CANCELED, VenueStatus.EXECUTED)
-            if final or (authoritative and not _snapshot_predates_fills(view, as_of_utc)):
-                return _quarantine(before, f"COUNT_BELOW_APPLIED_FILLS: venue fill count {filled} < fills applied "
-                                           f"{applied} (status {status.value})")
-            view = _note(view, f"STALE_FILL_COUNT: {filled} < fills applied {applied}")
-        new_filled = max(view.filled_quantity, filled)
-
-    if status is VenueStatus.CANCELED:
-        if filled is not None and view.filled_quantity > filled:
-            return _quarantine(before, f"COUNT_BELOW_KNOWN_FILLS: canceled with fill count {filled} < known "
-                                       f"{view.filled_quantity}")
-        canceled = view.total_quantity - new_filled
-        floor = canceled if filled is not None else view.canceled_floor
-        return _counts(view, filled=new_filled, canceled=canceled, floor=floor)
-    out = _raise_filled(view, new_filled)
-    if isinstance(out, str):
-        return _quarantine(before, out)
-    return out
+        final = status in (VenueStatus.CANCELED, VenueStatus.EXECUTED)
+        if status is VenueStatus.CANCELED:
+            observed = _cancel_firm(view, view.total_quantity - filled, as_of_utc, source)
+        else:
+            observed = _observe(view, filled, as_of_utc, final=final, authoritative=authoritative, complete=complete,
+                                source=source)
+        if isinstance(observed, str):
+            return _quarantine(before, observed)
+        view = observed
+    elif status is VenueStatus.CANCELED:
+        view = _cancel_soft(view)
+    return view
 
 
 def _apply_amend(view: OrderView, new_total: Decimal, new_price: Decimal,
                  new_provider_order_id: str | None) -> OrderView | str:
+    """The order now has `new_total` (TOTAL including filled) at `new_price`. Not yet recounted."""
+    if view.is_terminal and (new_total != view.total_quantity or new_price != view.limit_price):
+        return f"TERMINAL_CONTRADICTED: an amendment of a {view.state.value} order"
     if new_total < view.filled_quantity:
         return f"AMEND_TOTAL_BELOW_FILLED: venue total {new_total} < filled {view.filled_quantity}"
     if not ZERO < new_price < ONE:
         return f"AMEND_PRICE_OUT_OF_RANGE: {new_price}"
-    out = _counts(view, total=new_total)
+    out = _with_total(view, new_total)
     prices = out.limit_prices if new_price == out.limit_price else out.limit_prices + (new_price,)
     out = replace(out, limit_price=new_price, limit_prices=prices, amend_pending=None,
                   ambiguous_operation=None if out.ambiguous_operation is Operation.AMEND else out.ambiguous_operation)
-    if new_provider_order_id is not None and new_provider_order_id != out.provider_order_id:
-        prior = out.prior_provider_order_ids + ((out.provider_order_id,) if out.provider_order_id else ())
-        out = replace(out, provider_order_id=new_provider_order_id, prior_provider_order_ids=prior)
-    return _replay_parked(out)
+    if new_provider_order_id is not None and new_provider_order_id not in out.provider_ids():
+        out = _link_provider_id(out, new_provider_order_id)
+    return out
 
 
 def _replay_parked(view: OrderView) -> OrderView:
@@ -738,6 +873,22 @@ def _replay_parked(view: OrderView) -> OrderView:
     return out
 
 
+def _finish(before: OrderView, candidate: OrderView) -> OrderView:
+    """Recount `candidate`, replay parked fills if their amendment resolved, then settle the state."""
+    counted = _recount(candidate)
+    if isinstance(counted, str):
+        return _quarantine(before, counted)
+    if counted.parked_fills and counted.amend_pending is None:
+        counted = _replay_parked(counted)
+        if counted.quarantine_reasons != before.quarantine_reasons:
+            return counted
+    return _settle(before, counted)
+
+
+def _changed(before: OrderView, out: OrderView) -> bool:
+    return out.quarantine_reasons != before.quarantine_reasons
+
+
 # ---------------------------------------------------------------- handlers
 
 
@@ -746,7 +897,7 @@ def _on_send_prepared(view: OrderView, event: SendPrepared) -> OrderView:
     if problems:
         return _quarantine(view, "RESEND_REFUSED: sending now would be a blind resubmission or a send of a "
                                  "quarantined order: " + "; ".join(problems))
-    return replace(view, send_stage=SendStage.PREPARED)
+    return replace(view, send_stage=SendStage.PREPARED, sent_at_utc=event.prepared_at_utc)
 
 
 def _on_ambiguous(view: OrderView, event: SendReturnedAmbiguous) -> OrderView:
@@ -759,6 +910,9 @@ def _on_ambiguous(view: OrderView, event: SendReturnedAmbiguous) -> OrderView:
     elif op is Operation.CANCEL and not view.cancel_requested:
         return _quarantine(view, "AMBIGUOUS_WITHOUT_REQUEST: no cancel was requested")
     elif op is Operation.AMEND and view.amend_pending is None:
+        if view.amend_reply_owed:
+            return _note(replace(view, amend_reply_owed=False),
+                         "AMBIGUOUS_AFTER_RESOLVED: a snapshot already showed the amendment applied")
         return _quarantine(view, "AMBIGUOUS_WITHOUT_REQUEST: no amendment was requested")
     if view.is_terminal:
         return _note(view, f"AMBIGUOUS_AFTER_TERMINAL: {op.value} outcome is moot ({view.state.value})")
@@ -766,13 +920,6 @@ def _on_ambiguous(view: OrderView, event: SendReturnedAmbiguous) -> OrderView:
     if out.state is OrderState.OUTCOME_UNKNOWN:
         return out
     return _move(view, out, OrderState.OUTCOME_UNKNOWN)
-
-
-def _move(before: OrderView, candidate: OrderView, state: OrderState) -> OrderView:
-    try:
-        return replace(candidate, state=transition(candidate.state, state))
-    except ValueError as exc:
-        return _quarantine(before, f"ILLEGAL_TRANSITION: {exc}")
 
 
 def _on_ack(view: OrderView, event: Acknowledged) -> OrderView:
@@ -790,17 +937,18 @@ def _on_ack(view: OrderView, event: Acknowledged) -> OrderView:
         return _quarantine(view, "TERMINAL_CONTRADICTED: an acknowledgement for a REJECTED order")
     if event.provider_order_id in view.prior_provider_order_ids:
         return _note(replace(view, last_venue_status=status.value), "STALE_SNAPSHOT: for a replaced provider id")
-    out = _adopt_provider_id(view, event.provider_order_id)
+    out = _link_provider_id(view, event.provider_order_id)
     out = replace(out, established=True, last_venue_status=status.value)
     if out.ambiguous_operation is Operation.NEW_ORDER:
         out = replace(out, ambiguous_operation=None)
     out = _merge_venue_counts(view, out, status, event.filled_quantity, event.remaining_quantity,
-                              event.total_quantity, authoritative=False, as_of_utc=event.venue_time_utc)
-    if out.quarantine_reasons != view.quarantine_reasons:
+                              event.total_quantity, authoritative=False, complete=False,
+                              as_of_utc=event.venue_time_utc, source="acknowledgement")
+    if _changed(view, out):
         return out
     if status is VenueStatus.CANCELED and out.terminal_reason is None:
         out = replace(out, terminal_reason="canceled")
-    return _settle(view, out)
+    return _finish(view, out)
 
 
 def _on_rejected(view: OrderView, event: Rejected) -> OrderView:
@@ -815,6 +963,10 @@ def _on_rejected(view: OrderView, event: Rejected) -> OrderView:
             return _quarantine(view, "REJECT_WITHOUT_SEND: no SendPrepared was recorded")
         if view.established or view.filled_quantity > 0:
             return _quarantine(view, f"REJECT_CONTRADICTS_EVIDENCE: the order exists ({event.reason})")
+        bare = event.provider_order_id is None and event.client_order_id is None
+        if bare and view.ambiguous_operation is Operation.NEW_ORDER:
+            return _note(view, f"BARE_REJECT_WHILE_UNKNOWN: {event.reason!r} names no order and cannot settle the "
+                               f"lost send; reconcile")
         out = replace(view, terminal_reason=f"rejected: {event.reason}", ambiguous_operation=None)
         return _move(view, out, OrderState.REJECTED)
     if op is Operation.CANCEL:
@@ -823,29 +975,43 @@ def _on_rejected(view: OrderView, event: Rejected) -> OrderView:
         out = replace(view, cancel_requested=False,
                       ambiguous_operation=None if view.ambiguous_operation is Operation.CANCEL
                       else view.ambiguous_operation)
-        return _settle(view, _note(out, f"CANCEL_REJECTED: {event.reason}"))
+        return _finish(view, _note(out, f"CANCEL_REJECTED: {event.reason}"))
     if view.amend_pending is None:
+        if view.amend_reply_owed:
+            return _quarantine(replace(view, amend_reply_owed=False),
+                               f"AMEND_REJECT_CONTRADICTS_SNAPSHOT: {event.reason!r}, but a snapshot showed it applied")
         return _note(view, f"STRAY_AMEND_REJECT: {event.reason}")
     out = replace(view, amend_pending=None, ambiguous_operation=None if view.ambiguous_operation is Operation.AMEND
                   else view.ambiguous_operation)
-    out = _note(out, f"AMEND_REJECTED: {event.reason}")
-    return _settle(view, _replay_parked(out))
+    return _finish(view, _note(out, f"AMEND_REJECTED: {event.reason}"))
 
 
-def _merge_fill_record(old: FillRecord, new: FillRecord) -> FillRecord | None:
-    """`old` enriched by `new` (an unknown field may become known), or None if they conflict."""
+def _merge_fill_record(view: OrderView, old: FillRecord, new: FillRecord) -> FillRecord | None:
+    """`old` enriched by `new` (an unknown field may become known), or None if they conflict. Two provider
+    ids of the same amendment lineage are the same order."""
     if (old.quantity, old.price) != (new.quantity, new.price):
         return None
     merged = {}
     for name in ("fee", "liquidity", "venue_time_utc", "provider_order_id"):
         a, b = getattr(old, name), getattr(new, name)
         if a is not None and b is not None and a != b:
+            if name == "provider_order_id" and {a, b} <= view.provider_ids():
+                merged[name] = a
+                continue
             return None
         merged[name] = a if a is not None else b
     return replace(old, **merged)
 
 
+def _limits(view: OrderView) -> list[Decimal]:
+    out = list(view.limit_prices)
+    if view.amend_pending is not None:
+        out.append(view.amend_pending.new_price)  # the venue may fill at it before the ack arrives
+    return out
+
+
 def _apply_fill(before: OrderView, view: OrderView, event: Fill) -> OrderView:
+    """Validate and apply one fill (recounted, not settled)."""
     if not event.fill_id:
         return _quarantine(before, "MALFORMED_FILL: no fill id")
     problem = _identity_problem(view, event.provider_order_id, event.client_order_id, require=True)
@@ -861,40 +1027,46 @@ def _apply_fill(before: OrderView, view: OrderView, event: Fill) -> OrderView:
         return _quarantine(before, f"FILL_SIDE_MISMATCH: {event.side.value} fill on a {view.side.value} order")
     if event.action is not None and event.action is not view.action:
         return _quarantine(before, f"FILL_ACTION_MISMATCH: {event.action.value} fill on a {view.action.value} order")
-    if view.action is Action.BUY and event.price > max(view.limit_prices):
+    if view.action is Action.BUY and event.price > max(_limits(view)):
         return _quarantine(before, f"FILL_PRICE_BEYOND_LIMIT: bought at {event.price} above every limit")
-    if view.action is Action.SELL and event.price < min(view.limit_prices):
+    if view.action is Action.SELL and event.price < min(_limits(view)):
         return _quarantine(before, f"FILL_PRICE_BEYOND_LIMIT: sold at {event.price} below every limit")
+    linked = _link_provider_id(view, event.provider_order_id)
     record = FillRecord(event.fill_id, event.quantity, event.price, event.fee, event.liquidity, event.venue_time_utc,
                         event.provider_order_id)
     existing = view.fill(event.fill_id)
     if existing is not None:
-        merged = _merge_fill_record(existing, record)
+        merged = _merge_fill_record(linked, existing, record)
         if merged is None:
             return _quarantine(before, f"FILL_CONFLICT: fill {event.fill_id} seen with different content")
-        out = replace(view, fills=tuple(merged if f.fill_id == event.fill_id else f for f in view.fills))
-        return _note(out, f"DUPLICATE_FILL: {event.fill_id}")
+        out = replace(linked, fills=tuple(merged if f.fill_id == event.fill_id else f for f in view.fills))
+        counted = _recount(out)  # a newly known time may change what a venue count covers
+        if isinstance(counted, str):
+            return _quarantine(before, counted)
+        return _note(counted, f"DUPLICATE_FILL: {event.fill_id}")
     if any(p.fill_id == event.fill_id for p in view.parked_fills):
         return _note(view, f"DUPLICATE_FILL: {event.fill_id} (parked)")
     if view.state is OrderState.REJECTED:
         return _quarantine(before, f"TERMINAL_CONTRADICTED: fill {event.fill_id} on a REJECTED order")
-    out = _adopt_provider_id(view, event.provider_order_id)
-    out = replace(out, fills=out.fills + (record,))
-    new_filled = max(out.filled_quantity, out.fill_quantity_applied)
-    raised = _raise_filled(out, new_filled)
-    if isinstance(raised, str):
-        if _amend_up_pending(view) and new_filled <= view.amend_pending.new_total:
-            return _note(replace(view, parked_fills=view.parked_fills + (event,)),
+    out = replace(linked, fills=linked.fills + (record,))
+    counted = _recount(out)
+    if isinstance(counted, str):
+        if _amend_up_pending(view) and _implied_filled(out.fills, out.count_observations) <= \
+                view.amend_pending.new_total:
+            return _note(replace(linked, parked_fills=view.parked_fills + (event,)),
                          f"FILL_PARKED: {event.fill_id} waits for the pending amendment's larger total")
-        return _quarantine(before, raised)
-    return raised
+        return _quarantine(before, counted)
+    if counted.cancel_basis is CancelBasis.SOFT and counted.canceled_quantity < view.canceled_quantity:
+        counted = _note(counted, f"LATE_FILL_REDUCED_CANCELED: {view.canceled_quantity - counted.canceled_quantity} "
+                                 f"executed before the cancel")
+    return counted
 
 
 def _on_fill(view: OrderView, event: Fill) -> OrderView:
     if view.send_stage is SendStage.UNSENT:
         return _quarantine(view, "RECEIPT_FOR_UNSENT_ORDER: no SendPrepared was recorded")
     out = _apply_fill(view, view, event)
-    if out.quarantine_reasons != view.quarantine_reasons:
+    if _changed(view, out):
         return out
     return _settle(view, out)
 
@@ -904,13 +1076,9 @@ def _on_cancel_requested(view: OrderView, event: CancelRequested) -> OrderView:
     return _refuse(view, problems) if problems else replace(view, cancel_requested=True)
 
 
-def _end_open_quantity(view: OrderView, *, provider_order_id: str | None, client_order_id: str | None,
-                       reduced_by: Decimal | None, filled: Decimal | None, remaining: Decimal | None,
-                       reason: str) -> OrderView:
-    """A venue cancel or expiry: everything not filled is canceled."""
-    problem = _identity_problem(view, provider_order_id, client_order_id, require=True)
-    if problem:
-        return _quarantine(view, problem)
+def _end_open_quantity(view: OrderView, *, reduced_by: Decimal | None, filled: Decimal | None,
+                       remaining: Decimal | None, as_of_utc: str | None, reason: str) -> OrderView:
+    """A venue cancel or expiry: everything not filled is canceled. Identity is already checked."""
     if not view.established:
         return _quarantine(view, f"{reason.upper()}_FOR_UNESTABLISHED_ORDER: reconcile first")
     for name, value in (("reduced_by", reduced_by), ("filled", filled), ("remaining", remaining)):
@@ -918,34 +1086,25 @@ def _end_open_quantity(view: OrderView, *, provider_order_id: str | None, client
             return _quarantine(view, f"MALFORMED_CANCEL: {name} {value} is negative")
     if remaining not in (None, ZERO):
         return _quarantine(view, f"MALFORMED_CANCEL: remaining {remaining} after a full {reason}")
-    new_filled = view.filled_quantity if filled is None else max(view.filled_quantity, filled)
-    if filled is not None and view.filled_quantity > filled:
-        return _quarantine(view, f"COUNT_BELOW_KNOWN_FILLS: {reason} with fill count {filled} < known "
-                                 f"{view.filled_quantity}")
-    floor = view.canceled_floor
-    if reduced_by is not None:
-        implied = view.total_quantity - reduced_by
-        if implied < 0:
-            return _quarantine(view, f"MALFORMED_CANCEL: reduced_by {reduced_by} exceeds total {view.total_quantity}")
-        if filled is not None and filled != implied:
-            return _quarantine(view, f"MALFORMED_CANCEL: fill count {filled} + reduced_by {reduced_by} != total")
-        if new_filled > implied:
-            return _quarantine(view, f"CANCEL_COUNT_CONTRADICTS_FILLS: reduced_by {reduced_by} leaves {implied} "
-                                     f"filled, but {new_filled} is known")
-        new_filled, floor = implied, reduced_by
-    elif filled is not None:
-        floor = view.total_quantity - new_filled
-    if view.state is OrderState.CANCELLED and reduced_by is None and filled is None:
-        return _note(view, f"DUPLICATE_{reason.upper()}")
-    out = _counts(view, filled=new_filled, canceled=view.total_quantity - new_filled, floor=floor)
+    if reduced_by is not None and reduced_by > view.total_quantity:
+        return _quarantine(view, f"MALFORMED_CANCEL: reduced_by {reduced_by} exceeds total {view.total_quantity}")
+    if reduced_by is not None and filled is not None and filled + reduced_by != view.total_quantity:
+        return _quarantine(view, f"MALFORMED_CANCEL: fill count {filled} + reduced_by {reduced_by} != total")
+    if reduced_by is not None or filled is not None:
+        floor = reduced_by if reduced_by is not None else view.total_quantity - filled
+        out = _cancel_firm(view, floor, as_of_utc, reason)
+        if isinstance(out, str):
+            return _quarantine(view, out)
+    else:
+        out = _cancel_soft(view)
     out = replace(out, cancel_requested=False,
                   ambiguous_operation=None if view.ambiguous_operation is Operation.CANCEL
                   else view.ambiguous_operation)
     if not view.cancel_requested and reason == "cancel":
         out = _note(out, "UNSOLICITED_CANCEL: the venue canceled without a recorded request")
-    if out.canceled_quantity > 0 and out.terminal_reason is None:
+    if out.terminal_reason is None:
         out = replace(out, terminal_reason=reason)
-    return _settle(view, out)
+    return _finish(view, out)
 
 
 def _on_cancel_confirmed(view: OrderView, event: CancelConfirmed) -> OrderView:
@@ -954,9 +1113,9 @@ def _on_cancel_confirmed(view: OrderView, event: CancelConfirmed) -> OrderView:
         return _quarantine(view, problem)
     if view.state is OrderState.FILLED and event.reduced_by in (None, ZERO):
         return _note(replace(view, cancel_requested=False), "CANCEL_AFTER_FILLED: nothing was open")
-    return _end_open_quantity(view, provider_order_id=event.provider_order_id, client_order_id=event.client_order_id,
-                              reduced_by=event.reduced_by, filled=event.filled_quantity,
-                              remaining=event.remaining_quantity, reason="cancel")
+    return _end_open_quantity(_link_provider_id(view, event.provider_order_id), reduced_by=event.reduced_by,
+                              filled=event.filled_quantity, remaining=event.remaining_quantity,
+                              as_of_utc=event.venue_time_utc, reason="cancel")
 
 
 def _on_expired(view: OrderView, event: Expired) -> OrderView:
@@ -965,8 +1124,9 @@ def _on_expired(view: OrderView, event: Expired) -> OrderView:
         return _quarantine(view, problem)
     if view.state is OrderState.FILLED:
         return _note(view, "EXPIRY_AFTER_FILLED: nothing was open")
-    return _end_open_quantity(view, provider_order_id=event.provider_order_id, client_order_id=event.client_order_id,
-                              reduced_by=None, filled=event.filled_quantity, remaining=None, reason="expired")
+    return _end_open_quantity(_link_provider_id(view, event.provider_order_id), reduced_by=None,
+                              filled=event.filled_quantity, remaining=None, as_of_utc=event.venue_time_utc,
+                              reason="expired")
 
 
 def _on_amend_requested(view: OrderView, event: AmendRequested) -> OrderView:
@@ -987,7 +1147,10 @@ def _on_amend_ack(view: OrderView, event: AmendAcknowledged) -> OrderView:
     target = view.amend_pending
     if target is None:
         if event.new_total == view.total_quantity and event.new_price == view.limit_price:
-            return _note(view, "DUPLICATE_AMEND_ACK")
+            out = replace(view, amend_reply_owed=False)
+            if event.new_provider_order_id is not None and event.new_provider_order_id not in view.provider_ids():
+                return _quarantine(view, "IDENTITY_MISMATCH: the amend reply names a provider id never seen")
+            return _note(out, "DUPLICATE_AMEND_ACK")
         view = _note(view, "UNSOLICITED_AMEND: the venue amended without a recorded request")
     elif (target.new_total, target.new_price) != (event.new_total, event.new_price):
         view = _note(view, f"AMEND_DIFFERS_FROM_REQUEST: asked {target.new_total}@{target.new_price}, venue "
@@ -1002,35 +1165,19 @@ def _on_amend_ack(view: OrderView, event: AmendAcknowledged) -> OrderView:
     amended = _apply_amend(view, event.new_total, event.new_price, event.new_provider_order_id)
     if isinstance(amended, str):
         return _quarantine(before, amended)
-    if amended.quarantine_reasons != before.quarantine_reasons:
-        return amended
+    amended = replace(amended, amend_reply_owed=False)
     if event.filled_quantity is not None:
-        raised = _raise_filled(amended, max(amended.filled_quantity, event.filled_quantity))
-        if isinstance(raised, str):
-            return _quarantine(before, raised)
-        amended = raised
-    return _settle(before, amended)
+        observed = _observe(amended, event.filled_quantity, event.venue_time_utc, final=False, authoritative=False,
+                            complete=False, source="amend reply")
+        if isinstance(observed, str):
+            return _quarantine(before, observed)
+        amended = observed
+    return _finish(before, amended)
 
 
 def _on_reconcile(view: OrderView, event: ReconcileObserved) -> OrderView:
     if not event.found:
-        problem = _identity_problem(view, event.provider_order_id, event.client_order_id, require=True)
-        if problem:
-            return _quarantine(view, problem)
-        out = replace(view, not_found_observations=view.not_found_observations + 1)
-        out = _note(out, "NOT_FOUND" + (" (authoritative, complete)" if event.authoritative_complete
-                                        else " (not proof of absence)"))
-        if not event.authoritative_complete:
-            return out
-        if view.established or view.filled_quantity > 0:
-            return _quarantine(out, "NOT_FOUND_CONTRADICTS_EVIDENCE: the order was established or filled")
-        if view.is_terminal:
-            return out
-        if view.send_stage is SendStage.UNSENT:
-            return out  # nothing was sent: absence is expected
-        out = replace(out, terminal_reason="never accepted (authoritative not-found)", ambiguous_operation=None)
-        return _move(view, out, OrderState.REJECTED)
-
+        return _on_not_found(view, event)
     if not event.provider_order_id:
         return _quarantine(view, "MALFORMED_RECONCILE: found without a provider order id")
     problem = _identity_problem(view, event.provider_order_id, event.client_order_id, require=True)
@@ -1049,12 +1196,13 @@ def _on_reconcile(view: OrderView, event: ReconcileObserved) -> OrderView:
         return _quarantine(view, f"TERMINAL_CONTRADICTED: venue says {status.value}, view is {view.state.value}")
     if event.provider_order_id in view.prior_provider_order_ids:
         return _note(view, "STALE_SNAPSHOT: reconcile named a replaced provider id")
-    out = _adopt_provider_id(view, event.provider_order_id)
+    out = _link_provider_id(view, event.provider_order_id)
     out = replace(out, established=True, last_venue_status=status.value)
     old_total = out.total_quantity
     out = _merge_venue_counts(view, out, status, event.filled_quantity, event.remaining_quantity,
-                              event.total_quantity, authoritative=True, as_of_utc=event.as_of_utc, price=event.price)
-    if out.quarantine_reasons != view.quarantine_reasons:
+                              event.total_quantity, authoritative=True, complete=event.authoritative_complete,
+                              as_of_utc=event.as_of_utc, source="reconcile", price=event.price)
+    if _changed(view, out):
         return out
     ambiguity, still_unknown = out.ambiguous_operation, False
     if ambiguity is Operation.CANCEL and status is not VenueStatus.CANCELED:
@@ -1068,13 +1216,33 @@ def _on_reconcile(view: OrderView, event: ReconcileObserved) -> OrderView:
             out = _note(replace(out, amend_pending=None), "AMEND_NOT_APPLIED_PER_RECONCILE")
     if status is VenueStatus.CANCELED:
         out = replace(out, cancel_requested=False)
-        if out.terminal_reason is None and out.canceled_quantity > 0:
+        if out.terminal_reason is None:
             out = replace(out, terminal_reason="canceled")
     if not still_unknown:
         out = replace(out, ambiguous_operation=None)
-    if out.parked_fills and out.amend_pending is None:
-        out = _replay_parked(out)
-    return _settle(view, out)
+    return _finish(view, out)
+
+
+def _on_not_found(view: OrderView, event: ReconcileObserved) -> OrderView:
+    problem = _identity_problem(view, event.provider_order_id, event.client_order_id, require=True)
+    if problem:
+        return _quarantine(view, problem)
+    out = replace(view, not_found_observations=view.not_found_observations + 1)
+    if not event.authoritative_complete:
+        return _note(out, "NOT_FOUND (not proof of absence: the query was not complete)")
+    as_of, sent = _time(event.as_of_utc), _time(view.sent_at_utc)
+    if as_of is None:
+        return _note(out, "NOT_FOUND (not proof of absence: the snapshot has no usable time)")
+    if view.send_stage is SendStage.UNSENT or view.is_terminal:
+        return _note(out, "NOT_FOUND (authoritative, complete)")
+    if sent is None or as_of < sent + NOT_FOUND_MIN_DELAY:
+        return _note(out, f"NOT_FOUND_TOO_EARLY: snapshot {event.as_of_utc} is not {NOT_FOUND_MIN_DELAY} after the "
+                          f"send at {view.sent_at_utc}; not proof of absence")
+    out = _note(out, "NOT_FOUND (authoritative, complete)")
+    if view.established or view.filled_quantity > 0:
+        return _quarantine(out, "NOT_FOUND_CONTRADICTS_EVIDENCE: the order was established or filled")
+    out = replace(out, terminal_reason="never accepted (authoritative not-found)", ambiguous_operation=None)
+    return _move(view, out, OrderState.REJECTED)
 
 
 _HANDLERS = {
@@ -1085,9 +1253,15 @@ _HANDLERS = {
 }
 
 
+def _counts_text(view: OrderView) -> str:
+    return (f"total {view.total_quantity} filled {view.filled_quantity} remaining {view.remaining_quantity} "
+            f"canceled {view.canceled_quantity} floor {view.canceled_floor}")
+
+
 def reduce(view: OrderView, event: object) -> OrderView:
     """Fold one receipt into `view`. Pure and total: venue data never raises here. Every event is
-    recorded in `receipts`; one that cannot be applied coherently quarantines the view instead."""
+    recorded in `receipts`; one that cannot be applied coherently quarantines the view instead. Every
+    change of a count is logged in `count_log`."""
     if not isinstance(view, OrderView):
         raise TypeError("view must be an OrderView")
     recorded = replace(view, receipts=view.receipts + (event,))
@@ -1098,6 +1272,9 @@ def reduce(view: OrderView, event: object) -> OrderView:
     problems = invariant_problems(out)
     if problems:
         return _quarantine(recorded, *problems)
+    if any(getattr(out, f) != getattr(view, f) for f in _COUNT_FIELDS):
+        line = (f"#{len(out.receipts)} {type(event).__name__}: {_counts_text(view)} -> {_counts_text(out)}")
+        out = replace(out, count_log=out.count_log + (line,))
     return out
 
 

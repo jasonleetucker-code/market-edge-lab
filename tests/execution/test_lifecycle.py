@@ -21,6 +21,7 @@ from edge_lab.execution_ticket import ORDER_TRANSITIONS, OrderState, transition
 D = Decimal
 CID = "cid-0001"
 PID = "prov-0001"
+SENT = "2026-10-07T15:00:00+00:00"  # when the new order was journaled; t(n) below is n seconds later
 
 
 def t(sec: int) -> str:
@@ -35,7 +36,7 @@ def fresh(**kw) -> lc.OrderView:
 
 
 def sent(**kw) -> lc.OrderView:
-    return reduce(fresh(**kw), SendPrepared())
+    return reduce(fresh(**kw), SendPrepared(SENT))
 
 
 def ack(status="resting", filled="0", remaining="10", pid=PID, cid=CID, total=None, at=None) -> Acknowledged:
@@ -230,10 +231,10 @@ def test_a_terminal_state_never_moves_and_a_contradiction_quarantines(setup, eve
 def test_a_second_send_is_refused_as_blind_resubmission():
     v = sent()
     assert "ALREADY_SENT: reconcile, never resubmit blindly" in lc.may_send_new_order(v)
-    quarantined(reduce(v, SendPrepared()), "RESEND_REFUSED")
+    quarantined(reduce(v, SendPrepared(SENT)), "RESEND_REFUSED")
     unknown = reduce(v, AMB(Operation.NEW_ORDER))
     assert lc.may_send_new_order(unknown)
-    quarantined(reduce(unknown, SendPrepared()), "RESEND_REFUSED")
+    quarantined(reduce(unknown, SendPrepared(SENT)), "RESEND_REFUSED")
 
 
 def test_timeout_of_the_new_order_is_outcome_unknown_and_a_fill_does_not_establish_it():
@@ -314,8 +315,8 @@ def test_a_timeout_at_each_stage(stage):
 
 @pytest.mark.parametrize("events,fragment", [
     ([AMB(Operation.NEW_ORDER)], "AMBIGUOUS_WITHOUT_SEND"),
-    ([SendPrepared(), ack(), AMB(Operation.CANCEL)], "AMBIGUOUS_WITHOUT_REQUEST"),
-    ([SendPrepared(), ack(), AMB(Operation.AMEND)], "AMBIGUOUS_WITHOUT_REQUEST"),
+    ([SendPrepared(SENT), ack(), AMB(Operation.CANCEL)], "AMBIGUOUS_WITHOUT_REQUEST"),
+    ([SendPrepared(SENT), ack(), AMB(Operation.AMEND)], "AMBIGUOUS_WITHOUT_REQUEST"),
     ([ack()], "RECEIPT_FOR_UNSENT_ORDER"),
     ([fill("f1", "1")], "RECEIPT_FOR_UNSENT_ORDER"),
     ([recon()], "RECEIPT_FOR_UNSENT_ORDER"),
@@ -389,11 +390,20 @@ def test_duplicate_acks_are_idempotent():
 
 
 def test_an_ack_with_counts_establishes_partial_fills_owed():
-    v = ok(reduce(sent(), ack("resting", "4", "6")))
+    v = ok(reduce(sent(), ack("resting", "4", "6", at=t(10))))
     assert v.state is OrderState.RESTING and v.filled_quantity == 4 and v.unreceived_fill_quantity == 4
     assert v.fees_known == 0 and not v.fees_complete  # unseen fills: fees unknown, not zero
-    v = ok(reduce(v, fill("f1", "4", fee="0.07")))
+    v = ok(reduce(v, fill("f1", "4", fee="0.07", at=t(5))))  # executed before the snapshot: covered by it
     assert counts(v) == (D(10), D(4), D(6), D(0)) and v.fees_complete and v.fees_known == D("0.07")
+
+
+def test_an_untimed_count_leaves_which_fills_it_covers_unknown():
+    v = ok(reduce_all(sent(), [ack("resting", "4", "6"), fill("f1", "4", at=t(5))]))
+    assert v.filled_quantity == 4 and v.fill_timing_uncertain and not v.fees_complete  # 4 or 8: a lower bound
+    v = ok(reduce(v, recon("resting", "4", "6", as_of=t(20))))
+    assert v.filled_quantity == 4 and v.fill_timing_uncertain  # still: the first count has no time
+    final = ok(reduce(v, CancelConfirmed(PID, reduced_by=D(6))))
+    assert not final.fill_timing_uncertain and final.fees_complete  # a final count settles it
 
 
 def test_an_ack_with_missing_counts_establishes_without_inventing_zeroes():
@@ -538,8 +548,8 @@ def test_late_fills_that_erase_a_cancel_quarantine_the_terminal_state():
     (CancelConfirmed(PID, reduced_by=D(11)), "exceeds total"),
     (CancelConfirmed(PID, remaining_quantity=D(3)), "remaining 3 after a full cancel"),
     (CancelConfirmed(PID, reduced_by=D(6), filled_quantity=D(3)), "!= total"),
-    (CancelConfirmed(PID, reduced_by=D(9)), "CANCEL_COUNT_CONTRADICTS_FILLS"),
-    (CancelConfirmed(PID, filled_quantity=D(1)), "COUNT_BELOW_KNOWN_FILLS"),
+    (CancelConfirmed(PID, reduced_by=D(9)), "COUNT_BELOW_APPLIED_FILLS"),
+    (CancelConfirmed(PID, filled_quantity=D(1)), "COUNT_BELOW_APPLIED_FILLS"),
     (CancelConfirmed("prov-other"), "IDENTITY_MISMATCH"),
     (CancelConfirmed(None), "IDENTITY_MISSING"),
 ])
@@ -574,7 +584,7 @@ def test_a_cancel_after_the_order_filled_is_harmless():
     assert v.state is OrderState.FILLED
     out = ok(reduce(v, CancelConfirmed(PID, reduced_by=D(0))))
     assert out.state is OrderState.FILLED and not out.cancel_requested
-    quarantined(reduce(v, CancelConfirmed(PID, reduced_by=D(3))), "CANCEL_COUNT_CONTRADICTS_FILLS")
+    quarantined(reduce(v, CancelConfirmed(PID, reduced_by=D(3))), "COUNT_BELOW_APPLIED_FILLS")
 
 
 def test_an_unsolicited_venue_cancel_is_recorded():
@@ -622,7 +632,8 @@ def test_rejection_rules():
     quarantined(reduce(reduce(sent(), fill("f1", "1", cid=CID)), Rejected(Operation.NEW_ORDER, "X")),
                 "REJECT_CONTRADICTS_EVIDENCE")
     unknown = reduce(sent(), AMB(Operation.NEW_ORDER))
-    assert ok(reduce(unknown, Rejected(Operation.NEW_ORDER, "LATE_REPLY"))).state is OrderState.REJECTED
+    named = Rejected(Operation.NEW_ORDER, "LATE_REPLY", client_order_id=CID)
+    assert ok(reduce(unknown, named)).state is OrderState.REJECTED
 
 
 # ---------------------------------------------------------------- amendments
@@ -673,7 +684,8 @@ def test_an_amend_the_venue_reports_below_filled_quarantines():
 def test_an_amend_with_prior_fills_delayed():
     """The venue had filled 4 before the amendment; their fill receipts arrive afterwards."""
     v = reduce_all(resting(), [AmendRequested(new_total=D(6))])
-    v = ok(reduce(v, AmendAcknowledged(PID, D(6), D("0.42"), filled_quantity=D(4), remaining_quantity=D(2))))
+    v = ok(reduce(v, AmendAcknowledged(PID, D(6), D("0.42"), filled_quantity=D(4), remaining_quantity=D(2),
+                                       venue_time_utc=t(10))))
     assert counts(v) == (D(6), D(4), D(2), D(0)) and v.unreceived_fill_quantity == 4
     v = ok(reduce_all(v, [fill("f1", "1", at=t(1)), fill("f2", "3", at=t(2))]))
     assert counts(v) == (D(6), D(4), D(2), D(0)) and v.unreceived_fill_quantity == 0 and v.fees_complete
@@ -806,7 +818,7 @@ def _random_event(rng: random.Random, view: lc.OrderView, n: int):
     remaining = D(rng.randint(-1, 10))
     choice = rng.randrange(14)
     if choice == 0:
-        return SendPrepared()
+        return SendPrepared(SENT)
     if choice == 1:
         return AMB(rng.choice(list(Operation)))
     if choice in (2, 3):
@@ -854,7 +866,8 @@ def test_randomized_sequences_hold_the_invariants_or_quarantine(seed):
         if prev.is_terminal:
             assert v.state is prev.state
         assert v.fill_quantity_applied <= v.filled_quantity
-        assert v.filled_quantity >= prev.filled_quantity or v.quarantined  # fills are never undone
+        assert v.filled_quantity >= prev.filled_quantity  # fills are never undone
+        _assert_monotonic(prev, v)
     assert reduce_all(fresh() if seed % 3 == 0 else sent(), events) == v  # deterministic replay
 
 
@@ -902,4 +915,153 @@ def test_plausible_randomized_sequences_hold_the_invariants(seed):
             assert v.state in ORDER_TRANSITIONS[prev.state]
         if prev.is_terminal:
             assert v.state is prev.state
-        assert v.filled_quantity >= prev.filled_quantity or v.quarantined
+        assert v.filled_quantity >= prev.filled_quantity
+        _assert_monotonic(prev, v)
+
+
+def _assert_monotonic(prev: lc.OrderView, v: lc.OrderView) -> None:
+    """Properties every step keeps, quarantined or not."""
+    assert v.canceled_floor >= prev.canceled_floor  # a venue-stated cancel count never shrinks
+    if prev.cancel_basis is lc.CancelBasis.VENUE_COUNT:
+        assert v.cancel_basis is lc.CancelBasis.VENUE_COUNT and v.canceled_floor == prev.canceled_floor
+    assert set(prev.count_observations) <= set(v.count_observations)  # venue evidence is never dropped
+    assert v.filled_quantity <= v.venue_filled_reported + v.fill_quantity_applied
+    assert v.filled_quantity >= max(v.venue_filled_reported, v.fill_quantity_applied)
+    fields = ("total_quantity", "filled_quantity", "remaining_quantity", "canceled_quantity", "canceled_floor")
+    changed = any(getattr(prev, f) != getattr(v, f) for f in fields)
+    assert len(v.count_log) == len(prev.count_log) + (1 if changed else 0)  # no count change goes unlogged
+    if changed:
+        assert type(v.receipts[-1]).__name__ in v.count_log[-1]
+
+
+# ---------------------------------------------------------------- review regressions (REQUEST_CHANGES on 9c31ef1)
+
+
+@pytest.mark.parametrize("first,second", [
+    (CancelConfirmed(PID, reduced_by=D(6)), CancelConfirmed(PID, reduced_by=D(4))),
+    (CancelConfirmed(PID, reduced_by=D(10)), ack("canceled", "3", "0")),
+    (CancelConfirmed(PID, reduced_by=D(10)), Expired(PID, filled_quantity=D(3))),
+    (CancelConfirmed(PID, reduced_by=D(10)), recon("canceled", "3", "0")),
+    (Expired(PID, filled_quantity=D(3)), CancelConfirmed(PID, reduced_by=D(5))),
+], ids=["reduced-6-then-4", "reduced-10-then-ack-3", "reduced-10-then-expired-3", "reduced-10-then-reconcile-3",
+        "expired-3-then-reduced-5"])
+def test_finding1_a_venue_stated_cancel_count_is_never_overwritten(first, second):
+    v = ok(reduce_all(resting(), [CancelRequested(), first]))
+    floor, filled = v.canceled_floor, v.filled_quantity
+    out = reduce(v, second)
+    assert out.quarantined and any(r.startswith(("CANCEL_COUNT_CONFLICT", "COUNT_BELOW", "FINAL_COUNTS"))
+                                   for r in out.quarantine_reasons), out.quarantine_reasons
+    assert (out.canceled_floor, out.filled_quantity) == (floor, filled)  # nothing filled without a receipt
+
+
+def test_finding1_the_same_venue_cancel_count_again_is_idempotent():
+    v = reduce_all(resting(), [CancelRequested(), CancelConfirmed(PID, reduced_by=D(6))])
+    again = ok(reduce_all(v, [CancelConfirmed(PID, reduced_by=D(6)), ack("canceled", "4", "0"),
+                              recon("canceled", "4", "0")]))
+    assert counts(again) == counts(v) == (D(10), D(4), D(0), D(6)) and again.canceled_floor == 6
+
+
+def test_finding2_counts_and_fills_that_interleave_are_not_undercounted():
+    """Fill A (3) is delayed, B (2) arrives, a snapshot says 5, then maker fill C (4): the venue has 9."""
+    v = reduce_all(resting(), [fill("B", "2", at=t(2)), recon("resting", "5", "5", as_of=t(3))])
+    assert v.filled_quantity == 5 and v.unreceived_fill_quantity == 3 and not v.fees_complete
+    v = ok(reduce(v, fill("C", "4", at=t(4), liq=Liquidity.MAKER)))
+    assert v.filled_quantity == 9 and v.fill_quantity_applied == 6 and not v.fees_complete
+    v = ok(reduce(v, fill("A", "3", at=t(1))))
+    assert counts(v) == (D(10), D(9), D(1), D(0)) and v.fees_complete and not v.fill_timing_uncertain
+
+
+def test_finding2_received_and_reported_are_kept_apart():
+    v = ok(reduce_all(resting(), [ack("resting", "4", "6", at=t(10)), fill("f1", "1", at=t(20))]))
+    assert (v.venue_filled_reported, v.fill_quantity_applied, v.filled_quantity) == (D(4), D(1), D(5))
+    assert [o.count for o in v.count_observations] == [D(0), D(4)]
+
+
+def test_finding3_a_fill_at_the_pending_amend_price_is_within_the_limit():
+    v = reduce(resting(), AmendRequested(new_price=D("0.45")))
+    out = ok(reduce(v, fill("f1", "2", price="0.45")))
+    assert out.filled_quantity == 2
+    quarantined(reduce(v, fill("f1", "2", price="0.46")), "FILL_PRICE_BEYOND_LIMIT")
+    quarantined(reduce(resting(), fill("f1", "2", price="0.45")), "FILL_PRICE_BEYOND_LIMIT")  # no amend pending
+
+
+def test_finding4_a_replacement_id_seen_before_the_amend_reply_joins_the_lineage():
+    v = reduce(resting(), AmendRequested(new_total=D(12)))
+    v = ok(reduce(v, ack("resting", "0", "12", pid="prov-0002", cid=CID)))
+    assert v.provider_order_id == "prov-0002" and v.prior_provider_order_ids == (PID,)
+    assert v.total_quantity == 12 and v.amend_pending is None and v.amend_reply_owed
+    assert lc.amend_problems(v, D(13), None)  # the reply is still owed
+    v = ok(reduce(v, fill("f1", "1", pid="prov-0002", cid=CID)))
+    v = ok(reduce(v, AmendAcknowledged(PID, D(12), D("0.42"), new_provider_order_id="prov-0002")))
+    assert not v.amend_reply_owed and "DUPLICATE_AMEND_ACK" in v.notes[-1] and v.filled_quantity == 1
+
+
+def test_finding4_a_replacement_id_after_an_ambiguous_amend():
+    v = reduce_all(resting(), [AmendRequested(new_total=D(12)), AMB(Operation.AMEND)])
+    v = ok(reduce(v, fill("f1", "11", pid="prov-0002", cid=CID)))  # beyond the old total: waits for the amend
+    assert v.parked_fills and v.provider_order_id == "prov-0002"
+    v = ok(reduce(v, recon("resting", "11", "1", pid="prov-0002", total="12", price="0.42")))
+    assert v.state is OrderState.RESTING and counts(v) == (D(12), D(11), D(1), D(0)) and not v.parked_fills
+    assert v.prior_provider_order_ids == (PID,)
+
+
+def test_finding4_an_unknown_provider_id_still_mismatches_without_a_pending_amend():
+    quarantined(reduce(resting(), fill("f1", "1", pid="prov-0002", cid=CID)), "IDENTITY_MISMATCH")
+    pending = reduce(resting(), AmendRequested(new_total=D(12)))
+    quarantined(reduce(pending, fill("f1", "1", pid="prov-0002")), "IDENTITY_MISMATCH")  # no client id
+    quarantined(reduce(pending, fill("f1", "1", pid="prov-0002", cid="cid-other")), "IDENTITY_MISMATCH")
+
+
+def test_finding4_nit_the_same_fill_id_under_the_new_provider_id_matches_the_lineage():
+    v = reduce_all(resting(), [fill("f1", "2", pid=PID), AmendRequested(new_total=D(12)),
+                               AmendAcknowledged(PID, D(12), D("0.42"), new_provider_order_id="prov-0002")])
+    again = ok(reduce(v, fill("f1", "2", pid="prov-0002")))
+    assert len(again.fills) == 1 and again.filled_quantity == 2 and "DUPLICATE_FILL" in again.notes[-1]
+    quarantined(reduce(v, fill("f1", "2", pid="prov-9999", cid=CID)), "IDENTITY_MISMATCH")
+
+
+def test_finding5_a_bare_reject_does_not_settle_a_lost_send():
+    v = reduce(sent(), AMB(Operation.NEW_ORDER))
+    out = ok(reduce(v, Rejected(Operation.NEW_ORDER, "SOMETHING")))
+    assert out.state is OrderState.OUTCOME_UNKNOWN and "BARE_REJECT_WHILE_UNKNOWN" in out.notes[-1]
+    assert ok(reduce(out, recon(found=False, as_of=t(59)))).state is OrderState.REJECTED
+    assert ok(reduce(out, Rejected(Operation.NEW_ORDER, "X", client_order_id=CID))).state is OrderState.REJECTED
+    direct = ok(reduce(sent(), Rejected(Operation.NEW_ORDER, "INSUFFICIENT_FUNDS")))  # the send's own reply
+    assert direct.state is OrderState.REJECTED
+
+
+def test_finding6_absence_needs_a_timed_snapshot_taken_after_the_send():
+    v = reduce(sent(), AMB(Operation.NEW_ORDER))
+    assert v.sent_at_utc == SENT
+    untimed = ok(reduce(v, ReconcileObserved(CID, None, False, authoritative_complete=True, as_of_utc=None)))
+    assert untimed.state is OrderState.OUTCOME_UNKNOWN and "no usable time" in untimed.notes[-1]
+    before = ok(reduce(v, recon(found=False, as_of="2026-10-07T14:59:00+00:00")))
+    assert before.state is OrderState.OUTCOME_UNKNOWN and "NOT_FOUND_TOO_EARLY" in before.notes[-1]
+    soon = ok(reduce(v, recon(found=False, as_of=t(29))))
+    assert soon.state is OrderState.OUTCOME_UNKNOWN  # within NOT_FOUND_MIN_DELAY of the send
+    assert ok(reduce(v, recon(found=False, as_of=t(30)))).state is OrderState.REJECTED
+    for bad in (None, "2026-10-07T15:00:00", "yesterday"):
+        with pytest.raises((TypeError, ValueError)):
+            SendPrepared(bad)
+
+
+@pytest.mark.parametrize("complete,fragment", [(True, None), (False, "COUNT_BELOW_EARLIER_VENUE_COUNT")])
+def test_finding8_a_reconcile_below_an_earlier_venue_count(complete, fragment):
+    v = reduce(resting(), ack("resting", "5", "5", at=t(10)))
+    out = reduce(v, recon("resting", "3", "7", as_of=t(20), complete=complete))
+    if fragment is None:
+        quarantined(out, "COUNT_BELOW_KNOWN_FILLS")
+    else:
+        assert not out.quarantined and fragment in out.notes[-1] and out.filled_quantity == 5
+    older = ok(reduce(v, recon("resting", "3", "7", as_of=t(5))))
+    assert older.filled_quantity == 5 and "COUNT_BELOW_EARLIER_VENUE_COUNT" in older.notes[-1]
+
+
+def test_nit_executed_without_counts_is_noted():
+    out = ok(reduce(sent(), Acknowledged(PID, CID, "executed", None, None)))
+    assert "EXECUTED_WITHOUT_COUNTS" in out.notes[-1] and out.filled_quantity == 0
+
+
+def test_every_count_change_is_logged():
+    v = reduce_all(resting(), [fill("f1", "4"), CancelRequested(), CancelConfirmed(PID)])
+    assert len(v.count_log) == 2 and "Fill" in v.count_log[0] and "CancelConfirmed" in v.count_log[1]

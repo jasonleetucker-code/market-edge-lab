@@ -359,22 +359,27 @@ class Harness:
     def place(self, cid, *, side=YES, action=BUY, count="10", price="0.42", tif=GTC, **kw) -> lc.OrderView:
         self.views[cid] = lc.open_view(client_order_id=cid, market_ticker=MKT, side=side, action=action,
                                        quantity=D(count), limit_price=D(price))
-        self.apply(cid, lc.SendPrepared())
+        self.apply(cid, lc.SendPrepared(self.venue.now_text()))
         assert lc.may_send_new_order(self.views[cid]) == ["ALREADY_SENT: reconcile, never resubmit blindly"]
         reply = place(self.venue, cid, side=side, action=action, count=count, price=price, tif=tif, **kw)
         return self.apply(cid, *fv.events_from_reply(Operation.NEW_ORDER, reply))
 
-    def cancel(self, cid) -> lc.OrderView:
+    def cancel(self, cid, *, pump_first=False) -> lc.OrderView:
         view = self.apply(cid, lc.CancelRequested())
         assert view.cancel_requested, view.refusals
-        return self.apply(cid, *fv.events_from_reply(Operation.CANCEL, self.venue.cancel(view.provider_order_id)))
+        reply = self.venue.cancel(view.provider_order_id)
+        if pump_first:  # the feed races ahead of the reply
+            self.pump()
+        return self.apply(cid, *fv.events_from_reply(Operation.CANCEL, reply))
 
-    def amend(self, cid, total=None, price=None) -> lc.OrderView:
+    def amend(self, cid, total=None, price=None, *, pump_first=False) -> lc.OrderView:
         view = self.apply(cid, lc.AmendRequested(None if total is None else D(total),
                                                  None if price is None else D(price)))
         assert view.amend_pending is not None, view.refusals
         reply = self.venue.amend(view.provider_order_id, total_count=None if total is None else D(total),
                                  price=None if price is None else D(price))
+        if pump_first:
+            self.pump()
         return self.apply(cid, *fv.events_from_reply(Operation.AMEND, reply))
 
     def pump(self) -> int:
@@ -488,6 +493,9 @@ def test_e2e_lost_request_reconciles_to_never_accepted():
     h = Harness(venue())
     h.venue.inject(Fault.LOSE_REQUEST, operation=Operation.NEW_ORDER)
     assert h.place("c1").state is OrderState.OUTCOME_UNKNOWN
+    v = h.reconcile("c1")  # too soon after the send to prove absence
+    assert v.state is OrderState.OUTCOME_UNKNOWN and "NOT_FOUND_TOO_EARLY" in v.notes[-1]
+    h.venue.advance(31)
     v = h.reconcile("c1")
     assert v.state is OrderState.REJECTED and "never accepted" in v.terminal_reason
     h.assert_matches_venue()
@@ -630,6 +638,95 @@ def test_e2e_randomized_sessions_agree_with_the_venue(seed):
     h.venue.clear(Fault.OUT_OF_ORDER)
     h.settle()
     h.assert_matches_venue()
+    for cid in list(h.views):
+        h.reconcile(cid)
+    h.assert_matches_venue()
+
+
+# ---------------------------------------------------------------- review regressions (REQUEST_CHANGES on 9c31ef1)
+
+
+def test_e2e_finding2_a_delayed_fill_a_snapshot_and_a_later_maker_fill():
+    h = Harness(venue())
+    h.place("c1")
+    h.venue.inject(Fault.DELAY_FILL)
+    h.venue.add_liquidity(MKT, NO, D("0.58"), D(3))  # fill A: delayed
+    h.venue.add_liquidity(MKT, NO, D("0.58"), D(2))  # fill B
+    h.pump()
+    v = h.reconcile("c1")  # the venue says 5
+    assert (v.filled_quantity, v.fill_quantity_applied) == (D(5), D(2))
+    h.venue.add_liquidity(MKT, NO, D("0.58"), D(4))  # maker fill C, after the snapshot
+    h.pump()
+    v = h.views["c1"]
+    assert v.filled_quantity == 9 == h.venue.list_orders()[0]["fill_count"] and not v.fees_complete
+    h.settle()
+    assert h.views["c1"].fees_complete
+    h.assert_matches_venue()
+
+
+@pytest.mark.parametrize("timeout", [False, True], ids=["reply-ok", "reply-timeout"])
+def test_e2e_finding4_the_feed_with_the_new_order_id_arrives_before_the_amend_reply(timeout):
+    h = Harness(venue(amend_assigns_new_order_id=True))
+    old = h.place("c1").provider_order_id
+    h.venue.add_liquidity(MKT, NO, D("0.58"), D(2))
+    if timeout:
+        h.venue.inject(Fault.ACCEPT_THEN_TIMEOUT, operation=Operation.AMEND)
+    h.venue.add_liquidity(MKT, NO, D("0.55"), D(3))  # rests: fills the amended price when it crosses
+    v = h.amend("c1", total="12", price="0.45", pump_first=True)
+    assert not v.quarantined, v.quarantine_reasons
+    new = h.venue.replaced_by(old)
+    assert v.provider_order_id == new and v.prior_provider_order_ids == (old,)
+    assert v.limit_price == D("0.45") and v.total_quantity == 12 and v.state is OrderState.RESTING
+    assert any("PROVIDER_ID_REPLACED" in n for n in v.notes)
+    h.settle()
+    h.assert_matches_venue()
+
+
+@pytest.mark.parametrize("seed", range(60))
+def test_e2e_randomized_sessions_with_ambiguous_replies_agree_after_reconciling(seed):
+    """As above, plus replies that time out after the venue acted, lost requests and a feed that races
+    ahead of replies. After settling and reconciling, every view agrees with the venue."""
+    rng = random.Random(50_000 + seed)
+    h = Harness(venue(cash="100000", amend_assigns_new_order_id=seed % 2 == 0))
+    n = 0
+    for step in range(rng.randint(10, 40)):
+        roll = rng.random()
+        if roll < 0.2:
+            fault = rng.choice([Fault.DUPLICATE_ACK, Fault.DELAY_FILL, Fault.OUT_OF_ORDER, Fault.ACCEPT_THEN_TIMEOUT,
+                                Fault.LOSE_REQUEST])
+            if fault in (Fault.ACCEPT_THEN_TIMEOUT, Fault.LOSE_REQUEST):
+                h.venue.inject(fault, operation=rng.choice([Operation.CANCEL, Operation.AMEND]))
+            else:
+                h.venue.inject(fault, times=rng.randint(1, 3))
+        elif roll < 0.45:
+            n += 1
+            h.place(f"c{n}", side=rng.choice([YES, NO]), count=str(rng.randint(1, 8)),
+                    price=f"0.{rng.randint(30, 60)}", tif=rng.choice([GTC, GTC, IOC]))
+        elif roll < 0.7:
+            h.venue.add_liquidity(MKT, rng.choice([YES, NO]), D(f"0.{rng.randint(40, 70)}"), D(rng.randint(1, 6)))
+        elif roll < 0.8:
+            unknown = [cid for cid, v in h.views.items() if v.state is OrderState.OUTCOME_UNKNOWN]
+            if unknown:
+                h.reconcile(rng.choice(unknown))
+        else:
+            live = [cid for cid, v in h.views.items() if v.state is OrderState.RESTING and not v.cancel_requested
+                    and v.amend_pending is None and not v.amend_reply_owed]
+            if live:
+                cid = rng.choice(live)
+                h.pump()
+                v = h.views[cid]
+                if v.state is OrderState.RESTING and not lc.amend_problems(v, v.filled_quantity + 1, None):
+                    if rng.random() < 0.5:
+                        h.cancel(cid, pump_first=rng.random() < 0.5)
+                    else:
+                        h.amend(cid, total=str(int(v.filled_quantity) + rng.randint(1, 6)),
+                                pump_first=rng.random() < 0.5)
+        if rng.random() < 0.4:
+            h.pump()
+        for cid, v in h.views.items():
+            assert not v.quarantined, (seed, step, cid, v.quarantine_reasons)
+    h.venue.clear(Fault.OUT_OF_ORDER)
+    h.settle()
     for cid in list(h.views):
         h.reconcile(cid)
     h.assert_matches_venue()
