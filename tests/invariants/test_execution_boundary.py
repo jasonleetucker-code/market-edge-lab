@@ -646,7 +646,10 @@ def test_network_attribute_rule_ignores_comments_and_object_attributes():
 _PYTHON_CLASS_DUNDERS = frozenset({"__module__", "__qualname__", "__doc__", "__dict__", "__weakref__", "__annotations__",
                                    "__dataclass_fields__", "__dataclass_params__", "__match_args__", "__slots__",
                                    "__orig_bases__", "__parameters__", "__static_attributes__", "__firstlineno__",
-                                   "__abstractmethods__", "__hash__", "__annotate__", "__type_params__"})
+                                   "__abstractmethods__", "__hash__", "__annotate__", "__type_params__",
+                                   # typing.Protocol machinery
+                                   "__protocol_attrs__", "__non_callable_proto_members__", "_is_protocol",
+                                   "_is_runtime_protocol", "__subclasshook__"})
 _ENUM_INTERNALS = re.compile(r"^_(member_map|value2member_map|member_names|unhashable_values|value_repr|missing|"
                              r"generate_next_value|use_args|member_type|new_member|hashable_values|singles_mask|"
                              r"all_bits|flag_mask|boundary|inverted|sort_order)_?$")
