@@ -1,8 +1,12 @@
 """The private, durable execution journal (#160 package D, ADR 0043). Offline: nothing here sends anything.
 
 One SQLite file per executor, named `*.execution.sqlite3` so the research store can never be opened by
-mistake. It is opened with WAL, `synchronous=FULL`, foreign keys on and a short `busy_timeout`, and it
-refuses a store whose schema version is unknown or newer than this code.
+mistake. Before anything is changed, an existing file must already be an execution journal of a known
+schema version; only then is it opened with WAL, `synchronous=FULL`, foreign keys on and a short
+`busy_timeout`. Every table, index and trigger must match this code's schema exactly (SQL included).
+
+**Account identity.** `AccountScope.account_ref` must map 1:1 to one venue account and subaccount: every
+intent, approval, snapshot and reservation is keyed by `scope.key()`. Package G enforces the binding.
 
 **Write path.** Every write is one `BEGIN IMMEDIATE` transaction, so the read-check-write of a decision is
 serialized across processes.
@@ -11,14 +15,21 @@ serialized across processes.
    - the intent (idempotent);
    - the check that no earlier attempt for the intent could still be live;
    - the consumed approval;
-   - the reservation (`reservations.ReservationAuthority.reserve`);
+   - the reservation;
    - a PENDING_EGRESS attempt row;
    - their audit events.
 
-   If any part fails, nothing is committed and the caller must not send.
+   If any part fails, nothing is committed and the caller must not send. Approvals and reservations
+   exist only through this path, so neither a nonce nor capacity can be used up without an attempt.
 2. After the network call returns, or fails ambiguously, the caller records `mark_sent`, then one of
    `mark_acknowledged`, `mark_rejected` or `mark_outcome_unknown`.
-3. `reconcile_attempt` resolves OUTCOME_UNKNOWN from a recorded receipt: ACKNOWLEDGED, REJECTED or ABSENT.
+3. `reconcile_attempt` resolves OUTCOME_UNKNOWN from an order lookup: ACKNOWLEDGED, REJECTED or ABSENT.
+   ABSENT is refused while the latest snapshot still lists the order as open.
+
+**Evidence.** Every state change that claims a venue outcome names a recorded receipt. The receipt must be
+the unconflicted original, of a kind allowed for that change (`reservations.ReceiptKind`), and bound to
+the same attempt: its `attempt_id` matches, or it has none and its `provider_id` is the attempt's
+provider order id.
 
 **Attempt states.**
 - PENDING_EGRESS → SENT or OUTCOME_UNKNOWN.
@@ -40,7 +51,7 @@ the live lease become OUTCOME_UNKNOWN, because nobody can know whether they were
 **Failures are loud.** A SQLite error raises:
 - JournalBusy for a lock timeout;
 - JournalCorrupt for a record that does not decode or a damaged file;
-- UnknownSchema for a wrong store or version;
+- UnknownSchema for a wrong store, version or schema object;
 - JournalUnavailable for anything else, such as a full disk.
 
 Nothing is swallowed and a failed transaction is rolled back whole.
@@ -57,12 +68,14 @@ Schema version 1. Money and quantities are canonical Decimal text, and times are
   payload_sha256, received_at_utc)`: append-only. One ORIGINAL per receipt_id. A different payload under the
   same id is kept as CONFLICTING_DUPLICATE and never overwrites the original.
 - `events(seq PK, at_utc, kind, subject, body_json, prev_hash, row_hash)`: append-only. Each row hashes
-  its content and its predecessor's hash. Every change to any table above has an event.
+  its content and its predecessor's hash. Every change to any table here has an event.
 - The reservation tables are documented in `reservations.py`.
 
-Append-only tables are enforced by triggers, and a store missing one is refused. `verify_chain` re-checks
-the event chain, checks that every intent and receipt still matches both its own hash and the hash its
-event recorded, and checks that every attempt and reservation state matches its last event.
+Append-only tables carry three triggers: no UPDATE, no DELETE, and no INSERT that collides with an
+existing key (so `INSERT OR REPLACE`, which deletes without firing delete triggers, cannot rewrite a row).
+`verify_chain` recomputes the event chain and checks every append-only row (intents, approvals, receipts,
+snapshots) against the row hash its event recorded, every intent and receipt against its own content
+hash, every attempt and reservation state against its last event, and the lease against its last event.
 """
 
 from __future__ import annotations
@@ -75,11 +88,11 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from enum import Enum
 from pathlib import Path
-from typing import Any, Callable, Iterator
+from typing import Any, Callable, Iterable, Iterator, Mapping
 
 from .model import ApprovalGrant, OrderIntent, canonical_json, environment_authorized, sha256_text, utc_text
-from .reservations import (SCHEMA_SQL as _RESERVATION_SCHEMA_SQL, CorruptRecord, InvalidTransition,
-                           ReleaseReason, ReservationAuthority)
+from .reservations import (APPEND_ONLY_KEYS as _RESERVATION_APPEND_ONLY, SCHEMA_SQL as _RESERVATION_SCHEMA_SQL,
+                           CorruptRecord, InvalidTransition, ReceiptKind, ReleaseReason, ReservationAuthority)
 
 SCHEMA_VERSION = 1
 STORE_KIND = "edge-lab-execution-journal"
@@ -108,7 +121,7 @@ class JournalCorrupt(JournalUnavailable):
 
 
 class UnknownSchema(JournalUnavailable):
-    """The file is not an execution journal, or its schema version is unknown or newer."""
+    """The file is not an execution journal, or its schema version or objects are not this code's."""
 
 
 class IntentConflict(JournalError):
@@ -143,6 +156,10 @@ _TRANSITIONS = {
     AttemptState.SENT: frozenset({AttemptState.ACKNOWLEDGED, AttemptState.REJECTED, AttemptState.OUTCOME_UNKNOWN}),
     AttemptState.OUTCOME_UNKNOWN: frozenset({AttemptState.ACKNOWLEDGED, AttemptState.REJECTED, AttemptState.ABSENT}),
 }
+# The receipt kinds that can justify each attempt outcome (reconciliation is always an order lookup).
+_OUTCOME_KINDS = {AttemptState.ACKNOWLEDGED: (ReceiptKind.ORDER_ACK,),
+                  AttemptState.REJECTED: (ReceiptKind.ORDER_REJECT,)}
+_RECONCILE_KINDS = (ReceiptKind.ORDER_LOOKUP,)
 
 
 class ReceiptOutcome(str, Enum):
@@ -222,7 +239,7 @@ CREATE TABLE approvals (
     scope_key TEXT NOT NULL,
     method TEXT NOT NULL,
     grant_json TEXT NOT NULL,
-    attempt_id TEXT,
+    attempt_id TEXT NOT NULL,
     consumed_at_utc TEXT NOT NULL
 );
 CREATE TABLE attempts (
@@ -268,18 +285,63 @@ CREATE TABLE events (
     row_hash TEXT NOT NULL UNIQUE
 );
 """
-_APPEND_ONLY = ("intents", "approvals", "receipts", "events", "schema_meta")
-_EXPECTED_TABLES = frozenset({"schema_meta", "intents", "approvals", "attempts", "receipts", "events",
-                              "egress_lease", "account_snapshots", "reservations"})
-_EXPECTED_TRIGGERS = frozenset({f"{t}_no_{op}" for t in _APPEND_ONLY + ("account_snapshots",)
-                                for op in ("update", "remove")})
+# Append-only tables and the condition under which an INSERT would collide with an existing row.
+_APPEND_ONLY_COLLISION = {
+    "schema_meta": "key = NEW.key",
+    "intents": "intent_key = NEW.intent_key",
+    "approvals": "nonce = NEW.nonce",
+    "receipts": "receipt_seq = NEW.receipt_seq OR (NEW.status = 'ORIGINAL' AND status = 'ORIGINAL'"
+                " AND receipt_id = NEW.receipt_id)",
+    "events": "seq = NEW.seq OR row_hash = NEW.row_hash",
+    **{t: " AND ".join(f"{c} = NEW.{c}" for c in cols) for t, cols in _RESERVATION_APPEND_ONLY.items()},
+}
+# Append-only rows whose content each has a hash in its creation event: table -> (event kind, subject).
+_HASHED_ROWS = {
+    "intents": ("INTENT_RECORDED", "intent_key"),
+    "approvals": ("APPROVAL_CONSUMED", "nonce"),
+    "receipts": ("RECEIPT_RECORDED", "CAST(receipt_seq AS TEXT)"),
+    "account_snapshots": ("SNAPSHOT_RECORDED", "scope_key || '#' || revision"),
+}
+_HASH_KEYS = {"intents": ("intent_key",), "approvals": ("nonce",), "receipts": ("receipt_seq",),
+              "account_snapshots": ("scope_key", "revision")}
 
 
 def _append_only_triggers() -> str:
-    return "\n".join(
-        f"CREATE TRIGGER {t}_no_update BEFORE UPDATE ON {t} BEGIN SELECT RAISE(ABORT, '{t} is append-only'); END;\n"
-        f"CREATE TRIGGER {t}_no_remove BEFORE DELETE ON {t} BEGIN SELECT RAISE(ABORT, '{t} is append-only'); END;"
-        for t in _APPEND_ONLY)
+    out = []
+    for t, collision in _APPEND_ONLY_COLLISION.items():
+        abort = f"BEGIN SELECT RAISE(ABORT, '{t} is append-only'); END;"
+        out.append(f"CREATE TRIGGER {t}_no_update BEFORE UPDATE ON {t} {abort}")
+        out.append(f"CREATE TRIGGER {t}_no_remove BEFORE DELETE ON {t} {abort}")
+        out.append(f"CREATE TRIGGER {t}_no_replace BEFORE INSERT ON {t} WHEN EXISTS (SELECT 1 FROM {t} WHERE"
+                   f" {collision}) {abort}")
+    return "\n".join(out)
+
+
+def _split_sql(script: str) -> list[str]:
+    """Split the schema script into statements (each trigger is one line). `executescript` is not used
+    because it commits outside our transaction."""
+    out, current = [], []
+    for line in script.splitlines():
+        if not line.strip():
+            continue
+        current.append(line)
+        if line.rstrip().endswith(";"):
+            out.append("\n".join(current).strip())
+            current = []
+    if current:
+        out.append("\n".join(current))
+    return out
+
+
+_SCHEMA_STATEMENTS = _split_sql(_JOURNAL_SCHEMA_SQL + _RESERVATION_SCHEMA_SQL + _append_only_triggers())
+_OBJECT_NAME = re.compile(r"CREATE\s+(?:UNIQUE\s+)?(?:TABLE|INDEX|TRIGGER)\s+(\w+)", re.I)
+
+
+def _normalized(sql: str) -> str:
+    return " ".join(sql.split()).rstrip(";").strip()
+
+
+_EXPECTED_OBJECTS = {_OBJECT_NAME.match(s).group(1): _normalized(s) for s in _SCHEMA_STATEMENTS}  # type: ignore[union-attr]
 
 
 class ExecutionJournal:
@@ -306,6 +368,8 @@ class ExecutionJournal:
         try:
             conn = sqlite3.connect(str(p), timeout=busy_timeout_ms / 1000, isolation_level=None)
             conn.execute(f"PRAGMA busy_timeout = {busy_timeout_ms}")
+            journal = cls(conn, p)
+            empty = journal._check_identity()  # before WAL: a foreign file is refused untouched
             mode = conn.execute("PRAGMA journal_mode = WAL").fetchone()[0]
             if str(mode).lower() != "wal":
                 raise JournalUnavailable(f"WAL journaling could not be enabled (got {mode!r})")
@@ -313,8 +377,10 @@ class ExecutionJournal:
             conn.execute("PRAGMA foreign_keys = ON")
             if conn.execute("PRAGMA foreign_keys").fetchone()[0] != 1:
                 raise JournalUnavailable("foreign keys could not be enabled")
-            journal = cls(conn, p)
-            journal._ensure_schema()
+            if empty:
+                journal._create_schema()
+                journal._check_identity()
+            journal._check_schema_objects()
             return journal
         except JournalError:
             if conn is not None:
@@ -325,20 +391,12 @@ class ExecutionJournal:
                 conn.close()
             raise _map_error(exc) from exc
 
-    def _ensure_schema(self) -> None:
-        with self._reading() as conn:
-            empty = conn.execute("SELECT COUNT(*) FROM sqlite_master").fetchone()[0] == 0
-        if empty:
-            with self._transaction() as conn:  # re-checked under the write lock: two openers may race
-                if conn.execute("SELECT COUNT(*) FROM sqlite_master").fetchone()[0] == 0:
-                    for statement in _split_sql(_JOURNAL_SCHEMA_SQL + _RESERVATION_SCHEMA_SQL
-                                                + _append_only_triggers()):
-                        conn.execute(statement)
-                    conn.execute("INSERT INTO schema_meta (key, value) VALUES ('store_kind', ?), ('schema_version', ?)",
-                                 (STORE_KIND, str(SCHEMA_VERSION)))
+    def _check_identity(self) -> bool:
+        """True for an empty file. Otherwise it must be an execution journal of this schema version."""
         with self._reading() as conn:
             tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
-            triggers = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type = 'trigger'")}
+            if not tables:
+                return True
             if "schema_meta" not in tables:
                 raise UnknownSchema(f"{self.path.name} has tables but no schema_meta: not an execution journal")
             meta = dict(conn.execute("SELECT key, value FROM schema_meta").fetchall())
@@ -352,9 +410,26 @@ class ExecutionJournal:
                                 f"{SCHEMA_VERSION}; refusing to touch it")
         if int(version) != SCHEMA_VERSION:
             raise UnknownSchema(f"{self.path.name} has unknown schema version {version}")
-        missing = sorted((_EXPECTED_TABLES - tables) | (_EXPECTED_TRIGGERS - triggers))
-        if missing:
-            raise UnknownSchema(f"{self.path.name} is missing tables or append-only triggers {missing}")
+        return False
+
+    def _create_schema(self) -> None:
+        with self._transaction() as conn:  # re-checked under the write lock: two openers may race
+            if conn.execute("SELECT COUNT(*) FROM sqlite_master").fetchone()[0] == 0:
+                for statement in _SCHEMA_STATEMENTS:
+                    conn.execute(statement)
+                conn.execute("INSERT INTO schema_meta (key, value) VALUES ('store_kind', ?), ('schema_version', ?)",
+                             (STORE_KIND, str(SCHEMA_VERSION)))
+
+    def _check_schema_objects(self) -> None:
+        """Every table, index and trigger must be exactly this code's, SQL included: a weakened trigger or a
+        changed CHECK is a different schema."""
+        with self._reading() as conn:
+            found = {name: _normalized(sql) for name, sql in conn.execute(
+                "SELECT name, sql FROM sqlite_master WHERE sql IS NOT NULL AND name NOT LIKE 'sqlite_%'")}
+        problems = sorted(n for n in _EXPECTED_OBJECTS if found.get(n) != _EXPECTED_OBJECTS[n])
+        problems += sorted(n for n in found if n not in _EXPECTED_OBJECTS)
+        if problems:
+            raise UnknownSchema(f"{self.path.name} schema objects missing, altered or unexpected: {problems}")
 
     def close(self) -> None:
         self._conn.close()
@@ -416,6 +491,9 @@ class ExecutionJournal:
         except (sqlite3.Error, CorruptRecord) as exc:
             raise _map_error(exc) from exc
 
+    def _in_transaction(self) -> bool:
+        return self._depth > 0
+
     def _audit(self, conn: sqlite3.Connection, *, at: str, kind: str, subject: str, body: dict) -> None:
         """Append one hash-chained event. Only inside a write transaction."""
         if not self._depth:
@@ -426,6 +504,16 @@ class ExecutionJournal:
         conn.execute("INSERT INTO events (seq, at_utc, kind, subject, body_json, prev_hash, row_hash)"
                      " VALUES (?, ?, ?, ?, ?, ?, ?)",
                      (seq, at, kind, subject, body_json, prev, _event_hash(seq, at, kind, subject, body_json, prev)))
+
+    def _row_sha(self, conn: sqlite3.Connection, table: str, where: Mapping[str, Any]) -> str:
+        """SHA-256 of one row's values, in schema column order (the schema is pinned at open)."""
+        if table not in _HASH_KEYS or tuple(where) != _HASH_KEYS[table]:
+            raise ValueError(f"no row hash for {table} by {tuple(where)}")
+        row = conn.execute(f"SELECT * FROM {table} WHERE " + " AND ".join(f"{c} = ?" for c in where),
+                           tuple(where.values())).fetchone()
+        if row is None:
+            raise CorruptRecord(f"{table} row {dict(where)} is missing")
+        return sha256_text(canonical_json(list(row)))
 
     # ------------------------------------------------------------------ intents and approvals
 
@@ -447,32 +535,34 @@ class ExecutionJournal:
                          " VALUES (?, ?, ?, ?, ?)", (intent.intent_key, digest, intent.scope.key(),
                                                       intent.canonical(), at))
             self._audit(conn, at=at, kind="INTENT_RECORDED", subject=intent.intent_key,
-                        body={"digest": digest, "scope_key": intent.scope.key()})
+                        body={"digest": digest, "scope_key": intent.scope.key(),
+                              "row_sha256": self._row_sha(conn, "intents", {"intent_key": intent.intent_key})})
             return IntentRecord(intent.intent_key, digest, created=True)
 
-    def consume_approval(self, grant: ApprovalGrant, intent: OrderIntent, now: datetime, *,
-                         attempt_id: str | None = None) -> None:
-        """Use `grant` for `intent`, once. Refused (ApprovalRefused) if it does not bind the intent at `now`
-        (digest, scope, expiry) or its nonce was already used. Inside `prepare_attempt` this is part of the
-        one prepare transaction."""
+    def _consume_approval(self, conn: sqlite3.Connection, grant: ApprovalGrant, intent: OrderIntent, now: datetime, *,
+                          attempt_id: str) -> None:
+        """Use `grant` for `intent`, once, for `attempt_id`. Private: only `prepare_attempt` calls it, inside
+        its transaction, so a nonce is never burned without the attempt it authorizes. Refused
+        (ApprovalRefused) if the grant does not bind the intent at `now` or its nonce was already used."""
+        if not self._depth:
+            raise JournalUnavailable("an approval is consumed only inside prepare_attempt's transaction")
         if not isinstance(grant, ApprovalGrant):
             raise ValueError("grant must be an ApprovalGrant")
         problems = grant.problems(intent, now=now)
+        if conn.execute("SELECT 1 FROM approvals WHERE nonce = ?", (grant.nonce,)).fetchone() is not None:
+            problems.append("APPROVAL_NONCE_REUSED: this approval was already used")
+        if problems:
+            raise ApprovalRefused(problems)
         at = utc_text(now)
-        with self._transaction() as conn:
-            if conn.execute("SELECT 1 FROM approvals WHERE nonce = ?", (grant.nonce,)).fetchone() is not None:
-                problems.append("APPROVAL_NONCE_REUSED: this approval was already used")
-            if problems:
-                raise ApprovalRefused(problems)
-            self.record_intent(intent, now)
-            grant_json = canonical_json({k: getattr(grant, k) for k in grant.__dataclass_fields__})
-            conn.execute("INSERT INTO approvals (nonce, intent_key, intent_digest, scope_key, method, grant_json,"
-                         " attempt_id, consumed_at_utc) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                         (grant.nonce, intent.intent_key, grant.intent_digest, grant.scope_key, grant.method.value,
-                          grant_json, attempt_id, at))
-            self._audit(conn, at=at, kind="APPROVAL_CONSUMED", subject=grant.nonce,
-                        body={"intent_key": intent.intent_key, "intent_digest": grant.intent_digest,
-                              "grant_sha256": sha256_text(grant_json), "attempt_id": attempt_id})
+        grant_json = canonical_json({k: getattr(grant, k) for k in grant.__dataclass_fields__})
+        conn.execute("INSERT INTO approvals (nonce, intent_key, intent_digest, scope_key, method, grant_json,"
+                     " attempt_id, consumed_at_utc) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                     (grant.nonce, intent.intent_key, grant.intent_digest, grant.scope_key, grant.method.value,
+                      grant_json, attempt_id, at))
+        self._audit(conn, at=at, kind="APPROVAL_CONSUMED", subject=grant.nonce,
+                    body={"intent_key": intent.intent_key, "intent_digest": grant.intent_digest,
+                          "attempt_id": attempt_id,
+                          "row_sha256": self._row_sha(conn, "approvals", {"nonce": grant.nonce})})
 
     # ------------------------------------------------------------------ attempts
 
@@ -499,9 +589,9 @@ class ExecutionJournal:
                                      "exist, so a new attempt would be a blind resubmission")
             attempt_no = len(earlier) + 1
             attempt_id = f"{intent.client_order_id()}#{attempt_no}"
-            self.consume_approval(grant, intent, now, attempt_id=attempt_id)
-            self.reservations.reserve(intent, fence_token, now, snapshot_max_age=snapshot_max_age,
-                                      reservation_id=attempt_id)
+            self._consume_approval(conn, grant, intent, now, attempt_id=attempt_id)
+            self.reservations._reserve(conn, intent, fence_token, now, snapshot_max_age=snapshot_max_age,
+                                       reservation_id=attempt_id)
             conn.execute("INSERT INTO attempts (attempt_id, intent_key, attempt_no, client_order_id, request_digest,"
                          " fence_token, worker_id, approval_nonce, reservation_id, state, state_reason,"
                          " provider_order_id, created_at_utc, updated_at_utc)"
@@ -520,13 +610,15 @@ class ExecutionJournal:
         return self._move(attempt_id, AttemptState.SENT, now, reason=None)
 
     def mark_acknowledged(self, attempt_id: str, *, provider_order_id: str, receipt_id: str, now: datetime) -> Attempt:
+        """The venue accepted the order: an ORDER_ACK receipt bound to this attempt says so."""
         if not isinstance(provider_order_id, str) or not provider_order_id:
             raise ValueError("provider_order_id is required")
         return self._move(attempt_id, AttemptState.ACKNOWLEDGED, now, reason=None, receipt_id=receipt_id,
                           provider_order_id=provider_order_id)
 
     def mark_rejected(self, attempt_id: str, *, receipt_id: str, now: datetime) -> Attempt:
-        """The venue refused the order (a recorded receipt says so). Its reservation is released."""
+        """The venue refused the order (an ORDER_REJECT receipt bound to this attempt). Its reservation is
+        released."""
         return self._move(attempt_id, AttemptState.REJECTED, now, reason=None, receipt_id=receipt_id)
 
     def mark_outcome_unknown(self, attempt_id: str, *, reason: str, now: datetime) -> Attempt:
@@ -538,11 +630,9 @@ class ExecutionJournal:
 
     def reconcile_attempt(self, attempt_id: str, resolution: AttemptState, *, receipt_id: str, now: datetime,
                           provider_order_id: str | None = None) -> Attempt:
-        """Resolve an OUTCOME_UNKNOWN attempt from a recorded receipt (an order lookup by client order id):
-        ACKNOWLEDGED (it exists; needs provider_order_id), REJECTED, or ABSENT (no such order exists)."""
-        current = self.attempt(attempt_id)
-        if current.state is not AttemptState.OUTCOME_UNKNOWN:
-            raise InvalidTransition(f"{attempt_id} is {current.state.value}; only OUTCOME_UNKNOWN is reconciled")
+        """Resolve an OUTCOME_UNKNOWN attempt from an ORDER_LOOKUP receipt bound to it: ACKNOWLEDGED (it exists;
+        needs provider_order_id), REJECTED, or ABSENT (no such order exists; refused while the latest
+        snapshot still lists it as open)."""
         if resolution is AttemptState.ACKNOWLEDGED and not provider_order_id:
             raise ValueError("an ACKNOWLEDGED resolution needs the provider_order_id")
         return self._move(attempt_id, resolution, now, reason="RECONCILED", receipt_id=receipt_id,
@@ -563,7 +653,12 @@ class ExecutionJournal:
             if new not in _TRANSITIONS.get(a.state, frozenset()):
                 raise InvalidTransition(f"{attempt_id}: {a.state.value} -> {new.value} is not allowed")
             if receipt_id is not None:
-                self._require_receipt(conn, receipt_id)
+                kinds = _RECONCILE_KINDS if expect is AttemptState.OUTCOME_UNKNOWN else _OUTCOME_KINDS[new]
+                self._require_receipt(conn, receipt_id, kinds=kinds, attempt_id=attempt_id,
+                                      provider_order_id=provider_order_id)
+            if new is AttemptState.ABSENT and self.reservations._listed_open(conn, a.reservation_id):
+                raise InvalidTransition(f"{attempt_id}: the latest snapshot still lists the order as open; "
+                                        "it is not absent")
             conn.execute("UPDATE attempts SET state = ?, state_reason = ?, provider_order_id = COALESCE(?, provider_order_id),"
                          " updated_at_utc = ? WHERE attempt_id = ?",
                          (new.value, reason, provider_order_id, at, attempt_id))
@@ -652,7 +747,10 @@ class ExecutionJournal:
     def record_receipt(self, *, receipt_id: str, kind: str, source: str, payload_json: str, received_at: datetime,
                        provider_id: str | None = None, attempt_id: str | None = None) -> ReceiptResult:
         """Append a raw provider payload, exactly as received. Same id and hash: DUPLICATE (nothing written).
-        Same id, different hash: kept as CONFLICTING_DUPLICATE beside the original, which is never changed."""
+        Same id, different hash: kept as CONFLICTING_DUPLICATE beside the original, which is never changed.
+        `kind` is a label; only `ReceiptKind` values can justify a state change."""
+        if isinstance(kind, ReceiptKind):
+            kind = kind.value
         for name, value in (("receipt_id", receipt_id), ("kind", kind), ("source", source)):
             if not isinstance(value, str) or not _LABEL.fullmatch(value):
                 raise ValueError(f"{name} must be a short label, not {value!r}")
@@ -665,6 +763,9 @@ class ExecutionJournal:
         at = utc_text(received_at)
         sha = sha256_text(payload_json)
         with self._transaction() as conn:
+            if attempt_id is not None and conn.execute("SELECT 1 FROM attempts WHERE attempt_id = ?",
+                                                       (attempt_id,)).fetchone() is None:
+                raise InvalidTransition(f"receipt {receipt_id!r} names an unknown attempt {attempt_id!r}")
             rows = conn.execute("SELECT receipt_seq, payload_sha256 FROM receipts WHERE receipt_id = ?"
                                 " ORDER BY receipt_seq", (receipt_id,)).fetchall()
             for seq, existing in rows:
@@ -677,8 +778,8 @@ class ExecutionJournal:
                                (receipt_id, status, kind, source, provider_id, attempt_id, payload_json, sha, at))
             seq = int(cur.lastrowid)
             self._audit(conn, at=at, kind="RECEIPT_RECORDED", subject=str(seq),
-                        body={"receipt_id": receipt_id, "status": status, "kind": kind, "source": source,
-                              "provider_id": provider_id, "attempt_id": attempt_id, "payload_sha256": sha})
+                        body={"receipt_id": receipt_id, "status": status, "payload_sha256": sha,
+                              "row_sha256": self._row_sha(conn, "receipts", {"receipt_seq": seq})})
             return ReceiptResult(outcome, seq, sha)
 
     def receipts(self, receipt_id: str) -> list[dict[str, Any]]:
@@ -690,26 +791,48 @@ class ExecutionJournal:
                 "payload_sha256", "received_at_utc")
         return [dict(zip(keys, r)) for r in rows]
 
-    def _require_receipt(self, conn: sqlite3.Connection, receipt_id: str) -> None:
-        """A state change backed by evidence: the receipt must exist and must not be in conflict."""
-        statuses = {r[0] for r in conn.execute("SELECT status FROM receipts WHERE receipt_id = ?", (receipt_id,))}
-        if not statuses:
+    def _require_receipt(self, conn: sqlite3.Connection, receipt_id: str, *, kinds: Iterable[ReceiptKind],
+                         attempt_id: str, provider_order_id: str | None = None) -> None:
+        """A state change backed by evidence: the receipt exists, is not in conflict, is of an allowed kind,
+        and is bound to `attempt_id` (by its attempt_id, or, when it has none, by the attempt's provider
+        order id)."""
+        rows = conn.execute("SELECT status, kind, attempt_id, provider_id FROM receipts WHERE receipt_id = ?",
+                            (receipt_id,)).fetchall()
+        if not rows:
             raise InvalidTransition(f"RECEIPT_NOT_RECORDED: {receipt_id!r}")
-        if "CONFLICTING_DUPLICATE" in statuses:
+        if any(r[0] == "CONFLICTING_DUPLICATE" for r in rows):
             raise InvalidTransition(f"RECEIPT_CONFLICTED: {receipt_id!r} has conflicting payloads; reconcile first")
+        _, kind, bound_attempt, provider_id = next(r for r in rows if r[0] == "ORIGINAL")
+        allowed = {k.value for k in kinds}
+        if kind not in allowed:
+            raise InvalidTransition(f"RECEIPT_KIND_NOT_ALLOWED: {receipt_id!r} is {kind}, not one of {sorted(allowed)}")
+        if bound_attempt is not None:
+            if bound_attempt != attempt_id:
+                raise InvalidTransition(f"RECEIPT_FOR_ANOTHER_ATTEMPT: {receipt_id!r} is for {bound_attempt}, "
+                                        f"not {attempt_id}")
+            return
+        row = conn.execute("SELECT provider_order_id FROM attempts WHERE attempt_id = ?", (attempt_id,)).fetchone()
+        known = {p for p in (provider_order_id, row[0] if row else None) if p}
+        if provider_id is None or provider_id not in known:
+            raise InvalidTransition(f"RECEIPT_NOT_BOUND: {receipt_id!r} names neither {attempt_id} nor its provider "
+                                    "order id")
 
     # ------------------------------------------------------------------ verification
 
     def verify_chain(self) -> ChainVerification:
-        """Recompute the event chain; check every intent and receipt against its own hash and the hash its
-        event recorded; check every attempt and reservation state against the last state its events record.
-        Read-only. Problems are reported, never repaired. A truncated tail of the chain is not detectable
-        without an external anchor."""
+        """Recompute the event chain, then check (read-only; problems are reported, never repaired):
+        - every append-only row (intent, approval, receipt, snapshot) against the row hash its event recorded;
+        - every intent and receipt against its own content hash;
+        - every attempt and reservation state, and the lease, against their last event.
+        A truncated tail of the chain is not detectable without an external anchor."""
         problems: list[str] = []
         with self._reading() as conn:
             prev, expected_seq, count = GENESIS_HASH, 1, 0
-            recorded: dict[tuple[str, str], str] = {}
+            row_hashes: dict[tuple[str, str], str] = {}
+            intent_digests: dict[str, str] = {}
             last_state: dict[tuple[str, str], str] = {}  # the projections must equal what their events say
+            last_lease: dict | None = None
+            kind_table = {kind: table for table, (kind, _) in _HASHED_ROWS.items()}
             for seq, at, kind, subject, body_json, prev_hash, row_hash in conn.execute(
                     "SELECT seq, at_utc, kind, subject, body_json, prev_hash, row_hash FROM events ORDER BY seq"):
                 count += 1
@@ -724,52 +847,45 @@ class ExecutionJournal:
                 except ValueError:
                     problems.append(f"EVENT_BODY_UNREADABLE: seq {seq}")
                     body = {}
+                if kind in kind_table:
+                    row_hashes[(kind_table[kind], subject)] = body.get("row_sha256")
                 if kind == "INTENT_RECORDED":
-                    recorded[("intent", subject)] = body.get("digest")
-                elif kind == "RECEIPT_RECORDED":
-                    recorded[("receipt", subject)] = body.get("payload_sha256")
+                    intent_digests[subject] = body.get("digest")
                 elif kind == "ATTEMPT_PREPARED":
                     last_state[("attempt", subject)] = AttemptState.PENDING_EGRESS.value
                 elif kind == "ATTEMPT_STATE":
                     last_state[("attempt", subject)] = body.get("to")
                 elif kind == "RESERVATION_CREATED":
                     last_state[("reservation", subject)] = "OUTSTANDING"
-                elif kind in ("RESERVATION_STATE", "RESERVATION_FILL"):
-                    last_state[("reservation", subject)] = body.get("to")
+                elif kind.startswith("RESERVATION_") and "to" in body:
+                    last_state[("reservation", subject)] = body["to"]
+                elif kind in ("LEASE_ACQUIRED", "LEASE_RENEWED"):
+                    last_lease = body
                 prev, expected_seq = row_hash, seq + 1
+            for table, (_, subject_sql) in _HASHED_ROWS.items():
+                keys = _HASH_KEYS[table]
+                for row in conn.execute(f"SELECT {subject_sql}, {', '.join(keys)} FROM {table}").fetchall():
+                    subject, key_values = row[0], dict(zip(keys, row[1:]))
+                    if self._row_sha(conn, table, key_values) != row_hashes.get((table, subject)):
+                        problems.append(f"ROW_ALTERED: {table} {subject} does not match the hash its event recorded")
             for key, digest, canonical in conn.execute("SELECT intent_key, digest, canonical_json FROM intents"):
                 if sha256_text(canonical) != digest:
                     problems.append(f"INTENT_ALTERED: {key} content does not match its digest")
-                if recorded.get(("intent", key)) != digest:
+                if intent_digests.get(key) != digest:
                     problems.append(f"INTENT_UNAUDITED: {key} digest differs from its recorded event")
-            for attempt_id, state in conn.execute("SELECT attempt_id, state FROM attempts"):
-                if last_state.get(("attempt", attempt_id)) != state:
-                    problems.append(f"PROJECTION_DIVERGED: attempt {attempt_id} is {state}, its events say "
-                                    f"{last_state.get(('attempt', attempt_id))}")
-            for reservation_id, state in conn.execute("SELECT reservation_id, state FROM reservations"):
-                if last_state.get(("reservation", reservation_id)) != state:
-                    problems.append(f"PROJECTION_DIVERGED: reservation {reservation_id} is {state}, its events say "
-                                    f"{last_state.get(('reservation', reservation_id))}")
             for seq, payload, sha in conn.execute("SELECT receipt_seq, payload_json, payload_sha256 FROM receipts"):
                 if sha256_text(payload) != sha:
                     problems.append(f"RECEIPT_ALTERED: receipt {seq} payload does not match its hash")
-                if recorded.get(("receipt", str(seq))) != sha:
-                    problems.append(f"RECEIPT_UNAUDITED: receipt {seq} hash differs from its recorded event")
+            for table, label in (("attempts", "attempt"), ("reservations", "reservation")):
+                for ident, state in conn.execute(f"SELECT {label}_id, state FROM {table}"):
+                    if last_state.get((label, ident)) != state:
+                        problems.append(f"PROJECTION_DIVERGED: {label} {ident} is {state}, its events say "
+                                        f"{last_state.get((label, ident))}")
+            lease = conn.execute("SELECT worker_id, fence_token, acquired_at_utc, expires_at_utc FROM egress_lease"
+                                 ).fetchone()
+            expected_lease = None if last_lease is None else (
+                last_lease.get("worker_id"), last_lease.get("fence_token"), last_lease.get("acquired_at_utc"),
+                last_lease.get("expires_at_utc"))
+            if (None if lease is None else tuple(lease)) != expected_lease:
+                problems.append("PROJECTION_DIVERGED: the egress lease differs from its last event")
         return ChainVerification(not problems, count, tuple(problems))
-
-
-def _split_sql(script: str) -> list[str]:
-    """Split the schema script into statements (triggers keep their inner `;`). `executescript` is not used
-    because it commits outside our transaction."""
-    out, current = [], []
-    for line in script.splitlines():
-        if not line.strip():
-            continue
-        current.append(line)
-        text = "\n".join(current).strip()
-        if text.endswith(";") and (not text.upper().startswith("CREATE TRIGGER") or text.upper().endswith("END;")):
-            out.append(text)
-            current = []
-    if current:
-        out.append("\n".join(current))
-    return out

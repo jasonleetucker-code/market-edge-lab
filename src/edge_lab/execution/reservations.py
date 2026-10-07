@@ -1,9 +1,14 @@
 """Atomic cash and inventory reservations with fencing (#160 package E, ADR 0043). Offline.
 
 `ReservationAuthority` lives in the execution journal's SQLite store and runs inside the journal's
-transactions (`BEGIN IMMEDIATE`). A reservation and the PENDING_EGRESS attempt it backs therefore
-commit together or not at all, and two processes can never both spend the same capacity: the
-second transaction waits for the write lock and then sees the first one's reservation.
+transactions (`BEGIN IMMEDIATE`). A reservation is created only inside `ExecutionJournal.prepare_attempt`,
+so it and the PENDING_EGRESS attempt it backs commit together or not at all. Two processes can never both
+spend the same capacity: the second transaction waits for the write lock and then sees the first one's
+reservation. A reservation's id is its attempt's id.
+
+**Account identity.** An `AccountScope` (environment, `account_ref`, subaccount) must map 1:1 to one venue
+account and subaccount: every snapshot, reservation and capacity check is per `scope.key()`. Two refs for
+one venue account would split its cash in two. Package G (account reconciliation) enforces that binding.
 
 **Arithmetic has one owner.** Cash capacity is decided by
 `execution_ticket.reserve_simultaneous_obligations`. This module only builds its `Obligation`s:
@@ -11,12 +16,17 @@ second transaction waits for the write lock and then sees the first one's reserv
 - every external open order in the latest account snapshot;
 - the candidate.
 
+Every Decimal operation here, the owner's sum included, runs in an exact local context that traps
+rounding (`_EXACT`), so the caller's thread-wide `decimal` precision can never change a decision.
+
 Cash worst cases:
 - ENTRY and REDUCTION: `intent.max_total_cost` (for a REDUCTION that is its fee bound);
-- a local order the venue lists as open in the latest snapshot (provider-held): the venue already holds its
-  cash, so only the residual the snapshot reports (`AttributedOrder.unreflected_cash`) counts. A local
-  reservation the snapshot does not list is local-only and counts in full, so nothing is spent twice;
-- an external order: its `unreflected_cash`; None is unknown and blocks new risk.
+- a local order the latest snapshot lists as open, bound to its reservation id with a matching remaining
+  quantity and price (`AttributedOrder`), is provider-held: the venue already holds its cash, so only the
+  residual the snapshot reports (`unreflected_cash`) counts. Every other held reservation is local-only and
+  counts in full, so nothing is spent twice;
+- an external order: its `unreflected_cash`; None is unknown and blocks new risk;
+- a quarantined reservation (below): unknown, which blocks all new risk in its scope.
 
 Inventory (REDUCTION only, keyed by `(market_ticker, side)`, never netted across markets or sides):
 `quantity <= position - every held local reduction - every external open sell`. An external order whose
@@ -29,16 +39,21 @@ unknown positions, unknown external orders or an unknown worst case all mean no 
 - OUTSTANDING: prepared, sent or acknowledged;
 - CANCEL_REQUESTED: still held, because a request is not a confirmation;
 - UNKNOWN: still held until reconciled;
-- BOUND: filled, or cancelled/expired after a partial fill, but no snapshot yet confirms the position. Still
-  held: the venue cash or position in the latest snapshot may not reflect the fill;
-- RELEASED: cancel confirmed, rejected, expired, absent at the venue, or converted to a position.
-  Terminal. A reservation with any fill goes to BOUND, never straight to RELEASED.
+- BOUND: the order is over at the venue (cancel confirmed, expired, or completely filled) but no snapshot
+  observed strictly after its end and its last fill has confirmed the result. Still held in full: a fill can arrive
+  after the cancel confirmation, and the latest snapshot may not reflect either;
+- RELEASED: rejected or absent at the venue (it never existed), or `confirm_by_snapshot` after BOUND.
+
+A confirmed cancel or expiry carries the venue's cumulative filled quantity. A fill is always recorded,
+in any state. A fill that contradicts the journal (it shrinks, exceeds the order, or arrives after
+release) quarantines the reservation: it goes back to UNKNOWN, held, with `quarantine_reason` set, and its
+worst case becomes unknown until `resolve_quarantine` records the venue's answer.
 
 **Fencing.** One egress lease per store. `acquire_lease` returns a strictly increasing fence token and
 refuses while another worker's lease is unexpired. A takeover does not prove the old worker stopped, so
 every PENDING_EGRESS or SENT attempt of an older fence becomes OUTCOME_UNKNOWN and keeps its reservation.
-`reserve` (and so `prepare_attempt`) checks the token inside its transaction: a stale token is refused
-before anything is committed. The lease clock is the caller's `now`.
+Reserving checks the token inside the prepare transaction: a stale token is refused before anything is
+committed. The lease clock is the caller's `now`.
 
 Schema (part of journal schema version 1; money and quantities are canonical Decimal text, never REAL):
 - `egress_lease(lease_name PK, worker_id, fence_token, acquired_at_utc, expires_at_utc)`: one row.
@@ -46,26 +61,32 @@ Schema (part of journal schema version 1; money and quantities are canonical Dec
   positions_json, external_orders_json, attributed_json, consistent, problems_json)`: append-only,
   revisions strictly increasing per scope. NULL means unknown.
 - `reservations(reservation_id PK, intent_key FK, scope_key, market_ticker, side, kind, client_order_id,
-  quantity, filled_quantity, cash_worst_case, state, release_reason, fence_token, created_at_utc,
-  updated_at_utc, last_fill_at_utc)`: a mutable projection; every change is a hash-chained journal event.
+  quantity, limit_price, filled_quantity, cash_worst_case, state, release_reason, end_reason, ended_at_utc,
+  quarantine_reason, fence_token, created_at_utc, updated_at_utc, last_fill_at_utc)`: a mutable projection;
+  every change is a hash-chained journal event.
 """
 
 from __future__ import annotations
 
 import json
 import sqlite3
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from decimal import Decimal
+from decimal import Context, Decimal, Inexact, InvalidOperation, Rounded, localcontext
 from enum import Enum
-from typing import Any, ContextManager, Iterable, Mapping, Protocol
+from typing import Any, ContextManager, Iterable, Iterator, Mapping, Protocol
 
 from .. import freshness
 from ..execution_ticket import Obligation, ObligationState, reserve_simultaneous_obligations
-from .model import (AccountScope, Action, ExactValueError, IntentKind, OrderIntent, Side, canonical_json,
+from .model import (MAX_DIGITS, AccountScope, Action, ExactValueError, IntentKind, OrderIntent, Side, canonical_json,
                     decimal_text, exact_decimal, parse_utc_text, utc_text)
 
 EGRESS_LEASE = "egress"
+# How far a snapshot's observed_at may be ahead of the recorder's clock. Beyond it the clocks disagree.
+SNAPSHOT_CLOCK_SKEW = timedelta(seconds=5)
+# Exact arithmetic: a result that would need rounding raises instead of being rounded.
+_EXACT = Context(prec=2 * MAX_DIGITS + 10, traps=[InvalidOperation, Inexact, Rounded])
 
 SCHEMA_SQL = """
 CREATE TABLE egress_lease (
@@ -89,10 +110,6 @@ CREATE TABLE account_snapshots (
     problems_json TEXT NOT NULL,
     PRIMARY KEY (scope_key, revision)
 );
-CREATE TRIGGER account_snapshots_no_update BEFORE UPDATE ON account_snapshots
-    BEGIN SELECT RAISE(ABORT, 'account_snapshots is append-only'); END;
-CREATE TRIGGER account_snapshots_no_remove BEFORE DELETE ON account_snapshots
-    BEGIN SELECT RAISE(ABORT, 'account_snapshots is append-only'); END;
 CREATE TABLE reservations (
     reservation_id TEXT PRIMARY KEY,
     intent_key TEXT NOT NULL REFERENCES intents(intent_key),
@@ -102,10 +119,14 @@ CREATE TABLE reservations (
     kind TEXT NOT NULL CHECK (kind IN ('ENTRY', 'REDUCTION')),
     client_order_id TEXT NOT NULL,
     quantity TEXT NOT NULL,
+    limit_price TEXT NOT NULL,
     filled_quantity TEXT NOT NULL,
     cash_worst_case TEXT NOT NULL,
     state TEXT NOT NULL CHECK (state IN ('OUTSTANDING', 'CANCEL_REQUESTED', 'UNKNOWN', 'BOUND', 'RELEASED')),
     release_reason TEXT,
+    end_reason TEXT CHECK (end_reason IS NULL OR end_reason IN ('CANCEL_CONFIRMED', 'EXPIRED', 'FILLED')),
+    ended_at_utc TEXT,
+    quarantine_reason TEXT,
     fence_token INTEGER NOT NULL,
     created_at_utc TEXT NOT NULL,
     updated_at_utc TEXT NOT NULL,
@@ -113,6 +134,8 @@ CREATE TABLE reservations (
 );
 CREATE INDEX reservations_held ON reservations(scope_key, state);
 """
+# Append-only tables owned here, with the key columns an INSERT OR REPLACE would collide on.
+APPEND_ONLY_KEYS = {"account_snapshots": ("scope_key", "revision")}
 
 
 class CashBasis(str, Enum):
@@ -132,11 +155,32 @@ class ExternalOrigin(str, Enum):
 
 
 class ReleaseReason(str, Enum):
-    CANCEL_CONFIRMED = "CANCEL_CONFIRMED"
+    CANCEL_CONFIRMED = "CANCEL_CONFIRMED"  # cancelled with nothing filled, confirmed by a later snapshot
     REJECTED = "REJECTED"
-    EXPIRED = "EXPIRED"
+    EXPIRED = "EXPIRED"  # expired with nothing filled, confirmed by a later snapshot
     ABSENT_AT_VENUE = "ABSENT_AT_VENUE"  # reconciliation found no such order: it never existed
-    CONVERTED_TO_POSITION = "CONVERTED_TO_POSITION"
+    CONVERTED_TO_POSITION = "CONVERTED_TO_POSITION"  # its fills are in a later snapshot's position
+
+
+class EndReason(str, Enum):
+    """Why the order is over at the venue (BOUND until a snapshot confirms the result)."""
+
+    CANCEL_CONFIRMED = "CANCEL_CONFIRMED"
+    EXPIRED = "EXPIRED"
+    FILLED = "FILLED"
+
+
+class ReceiptKind(str, Enum):
+    """Receipt kinds that can justify a state change. The journal accepts other labels as evidence, but
+    only these kinds, bound to the same attempt, move an attempt or a reservation."""
+
+    ORDER_ACK = "ORDER_ACK"  # the venue accepted the order
+    ORDER_REJECT = "ORDER_REJECT"  # the venue refused it: no order exists
+    ORDER_LOOKUP = "ORDER_LOOKUP"  # a read of the order's current state by id or client order id
+    CANCEL_CONFIRM = "CANCEL_CONFIRM"  # the venue confirmed a cancel (with its cumulative filled quantity)
+    CANCEL_REJECT = "CANCEL_REJECT"  # the venue refused a cancel: the order is still open
+    ORDER_EXPIRED = "ORDER_EXPIRED"  # the venue reports the order expired
+    FILL = "FILL"  # a fill report with the cumulative filled quantity
 
 
 class ReservationError(Exception):
@@ -158,7 +202,7 @@ class LeaseHeld(ReservationError):
 
 
 class SnapshotRefused(ReservationError):
-    """The snapshot cannot be recorded (a revision that does not increase)."""
+    """The snapshot cannot be recorded (a revision that does not increase, or a time from the future)."""
 
 
 class InvalidTransition(ReservationError):
@@ -176,12 +220,29 @@ class _Store(Protocol):
 
     def _reading(self) -> ContextManager[sqlite3.Connection]: ...
 
+    def _in_transaction(self) -> bool: ...
+
     def _audit(self, conn: sqlite3.Connection, *, at: str, kind: str, subject: str, body: dict) -> None: ...
 
-    def _require_receipt(self, conn: sqlite3.Connection, receipt_id: str) -> None: ...
+    def _row_sha(self, conn: sqlite3.Connection, table: str, where: Mapping[str, Any]) -> str: ...
+
+    def _require_receipt(self, conn: sqlite3.Connection, receipt_id: str, *, kinds: Iterable[ReceiptKind],
+                         attempt_id: str, provider_order_id: str | None = None) -> None: ...
 
     def _quarantine_superseded_fences(self, conn: sqlite3.Connection, *, live_token: int | None,
                                       at: str) -> list[str]: ...
+
+
+@contextmanager
+def _exact(refusal: type[ReservationError] = ReservationRefused) -> Iterator[None]:
+    """Run Decimal arithmetic exactly; a result that would need rounding refuses instead."""
+    try:
+        with localcontext(_EXACT):
+            yield
+    except (Inexact, Rounded, InvalidOperation) as exc:
+        if refusal is ReservationRefused:
+            raise ReservationRefused([f"ARITHMETIC_NOT_EXACT: {type(exc).__name__}"]) from exc
+        raise refusal(f"ARITHMETIC_NOT_EXACT: {type(exc).__name__}") from exc
 
 
 @dataclass(frozen=True)
@@ -235,18 +296,36 @@ class ExternalOrder:
 
 @dataclass(frozen=True)
 class AttributedOrder:
-    """A local attempt's order that the venue lists as open in this snapshot (matched by client order id).
-    Its cash is already held by the venue. `unreflected_cash` is any residual the venue does not hold
-    (None: unknown, which blocks new risk)."""
+    """A local order the venue lists as open in this snapshot. It is bound to one reservation (its attempt
+    id), never to the client order id alone, which every attempt of an intent shares. The venue's
+    `remaining_quantity` and `limit_price` must match the reservation (quantity minus recorded fills, and
+    the intent's limit), or the snapshot is inconsistent. Its cash is held by the venue; `unreflected_cash`
+    is any residual it does not hold (None: unknown, which blocks new risk)."""
 
+    reservation_id: str
     client_order_id: str
+    remaining_quantity: Decimal
+    limit_price: Decimal
     unreflected_cash: Decimal | None
 
     def __post_init__(self) -> None:
-        if not isinstance(self.client_order_id, str) or not self.client_order_id:
-            raise ValueError("client_order_id is required")
+        for name in ("reservation_id", "client_order_id"):
+            if not isinstance(getattr(self, name), str) or not getattr(self, name):
+                raise ValueError(f"{name} is required")
+        for name in ("remaining_quantity", "limit_price"):
+            object.__setattr__(self, name, exact_decimal(getattr(self, name), name=name))
         if self.unreflected_cash is not None:
             object.__setattr__(self, "unreflected_cash", exact_decimal(self.unreflected_cash, name="unreflected_cash"))
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"reservation_id": self.reservation_id, "client_order_id": self.client_order_id,
+                "remaining_quantity": self.remaining_quantity, "limit_price": self.limit_price,
+                "unreflected_cash": self.unreflected_cash}
+
+    @classmethod
+    def from_dict(cls, d: Mapping[str, Any]) -> "AttributedOrder":
+        return cls(d["reservation_id"], d["client_order_id"], d["remaining_quantity"], d["limit_price"],
+                   d["unreflected_cash"])
 
 
 @dataclass(frozen=True)
@@ -259,13 +338,16 @@ class AccountSnapshot:
     cash_basis: CashBasis
     positions: Mapping[tuple[str, Side], Decimal] | None
     external_orders: tuple[ExternalOrder, ...] | None
-    attributed: Mapping[str, Decimal | None]
+    attributed: Mapping[str, AttributedOrder]  # by reservation id
     consistent: bool
     problems: tuple[str, ...]
 
     def usable_cash(self) -> Decimal | None:
         """The spendable cash, or None when its basis or value is unknown."""
         return self.cash if self.cash_basis is CashBasis.AVAILABLE_AFTER_VENUE_HOLDS else None
+
+    def lists_client_order(self, client_order_id: str) -> bool:
+        return any(a.client_order_id == client_order_id for a in self.attributed.values())
 
 
 @dataclass(frozen=True)
@@ -289,15 +371,19 @@ class ReservationView:
     kind: IntentKind
     client_order_id: str
     quantity: Decimal
+    limit_price: Decimal
     filled_quantity: Decimal
     cash_worst_case: Decimal
     state: ObligationState
     release_reason: ReleaseReason | None
+    end_reason: EndReason | None
+    ended_at_utc: str | None
+    quarantine_reason: str | None
     fence_token: int
     created_at_utc: str
     updated_at_utc: str
     last_fill_at_utc: str | None
-    provider_held: bool  # the latest snapshot lists this order as open: the venue holds its cash
+    provider_held: bool  # the latest snapshot lists this reservation's order as open: the venue holds its cash
 
 
 @dataclass(frozen=True)
@@ -314,12 +400,13 @@ _TRANSITIONS: dict[ObligationState, frozenset[ObligationState]] = {
     ObligationState.OUTSTANDING: frozenset({ObligationState.CANCEL_REQUESTED, ObligationState.UNKNOWN,
                                             ObligationState.BOUND, ObligationState.RELEASED}),
     ObligationState.CANCEL_REQUESTED: frozenset({ObligationState.OUTSTANDING, ObligationState.UNKNOWN,
-                                                 ObligationState.BOUND, ObligationState.RELEASED}),
+                                                 ObligationState.BOUND}),
     ObligationState.UNKNOWN: frozenset({ObligationState.OUTSTANDING, ObligationState.CANCEL_REQUESTED,
                                         ObligationState.BOUND, ObligationState.RELEASED}),
     ObligationState.BOUND: frozenset({ObligationState.RELEASED}),
     ObligationState.RELEASED: frozenset(),
 }
+# Only a quarantine moves a reservation outside this table (to UNKNOWN, from any state, RELEASED included).
 
 
 def _dec(text: str | None, *, name: str) -> Decimal | None:
@@ -345,6 +432,11 @@ def _opt_text(value: Decimal | None) -> str | None:
 def _positive_ttl(ttl: timedelta) -> None:
     if not isinstance(ttl, timedelta) or ttl <= timedelta(0):
         raise ValueError("ttl must be a positive timedelta")
+
+
+def _later(*times: str | None) -> datetime | None:
+    parsed = [parse_utc_text(t) for t in times if t is not None]
+    return max(parsed) if parsed else None
 
 
 class ReservationAuthority:
@@ -374,7 +466,8 @@ class ReservationAuthority:
                          " fence_token = excluded.fence_token, acquired_at_utc = excluded.acquired_at_utc,"
                          " expires_at_utc = excluded.expires_at_utc", (EGRESS_LEASE, worker_id, token, at, expires))
             self._store._audit(conn, at=at, kind="LEASE_ACQUIRED", subject=EGRESS_LEASE,
-                               body={"worker_id": worker_id, "fence_token": token, "expires_at_utc": expires,
+                               body={"worker_id": worker_id, "fence_token": token, "acquired_at_utc": at,
+                                     "expires_at_utc": expires,
                                      "previous_worker_id": current.worker_id if current else None,
                                      "previous_fence_token": current.fence_token if current else None})
             self._store._quarantine_superseded_fences(conn, live_token=token, at=at)
@@ -391,7 +484,8 @@ class ReservationAuthority:
             expires = utc_text(now + ttl)
             conn.execute("UPDATE egress_lease SET expires_at_utc = ? WHERE lease_name = ?", (expires, EGRESS_LEASE))
             self._store._audit(conn, at=at, kind="LEASE_RENEWED", subject=EGRESS_LEASE,
-                               body={"worker_id": worker_id, "fence_token": fence_token, "expires_at_utc": expires})
+                               body={"worker_id": worker_id, "fence_token": fence_token,
+                                     "acquired_at_utc": current.acquired_at_utc, "expires_at_utc": expires})
 
     def lease(self) -> Lease | None:
         with self._store._reading() as conn:
@@ -423,11 +517,11 @@ class ReservationAuthority:
                                 now: datetime) -> AccountSnapshot:
         """Record what the venue reported for `scope` at `observed_at`, as revision `revision`.
 
-        Revisions strictly increase per scope; an older or equal one raises SnapshotRefused. None for
-        cash, positions or external orders is unknown, never zero or flat. A snapshot that contradicts
-        itself or the journal (negative cash or quantities, an attributed order with no held local
-        reservation, time going backwards) is recorded as evidence but marked inconsistent, and an
-        inconsistent latest snapshot allows no new risk."""
+        Refused (SnapshotRefused): a revision that does not strictly increase, or an `observed_at` more
+        than SNAPSHOT_CLOCK_SKEW after `now`. None for cash, positions or external orders is unknown, never
+        zero or flat. A snapshot that contradicts itself or the journal (negative cash or quantities, an
+        attributed order that does not match a held reservation, time going backwards) is recorded as
+        evidence but marked inconsistent, and an inconsistent latest snapshot allows no new risk."""
         if not isinstance(scope, AccountScope):
             raise ValueError("scope must be an AccountScope")
         if isinstance(revision, bool) or not isinstance(revision, int) or revision < 1:
@@ -436,6 +530,8 @@ class ReservationAuthority:
             raise ValueError("cash_basis must be a CashBasis")
         observed = utc_text(observed_at)
         at = utc_text(now)
+        if observed_at > now + SNAPSHOT_CLOCK_SKEW:
+            raise SnapshotRefused(f"observed_at {observed} is more than {SNAPSHOT_CLOCK_SKEW} after now {at}")
         cash = None if cash is None else exact_decimal(cash, name="cash")
         pos: dict[tuple[str, Side], Decimal] | None = None
         if positions is not None:
@@ -453,60 +549,81 @@ class ReservationAuthority:
             raise ValueError("attributed_open_orders must be AttributedOrder values")
 
         with self._store._transaction() as conn:
-            latest = self._latest_snapshot(conn, scope.key())
+            latest = self._snapshot(conn, scope.key())
             if latest is not None and revision <= latest.revision:
                 raise SnapshotRefused(f"revision {revision} does not increase on {latest.revision} for {scope.key()}")
-            problems: list[str] = []
-            if latest is not None and parse_utc_text(observed) < parse_utc_text(latest.observed_at_utc):
-                problems.append(f"OBSERVED_BEFORE_PREVIOUS_REVISION: {observed} < {latest.observed_at_utc}")
-            if cash is not None and cash < 0:
-                problems.append(f"NEGATIVE_CASH: {cash}")
-            for (ticker, side), qty in (pos or {}).items():
-                if qty < 0:
-                    problems.append(f"NEGATIVE_POSITION: {ticker} {side.value} {qty}")
-            refs = [e.order_ref for e in externals or ()]
-            if len(refs) != len(set(refs)):
-                problems.append("DUPLICATE_EXTERNAL_ORDER")
-            for e in externals or ():
-                for name in ("remaining_quantity", "unreflected_cash"):
-                    value = getattr(e, name)
-                    if value is not None and value < 0:
-                        problems.append(f"NEGATIVE_EXTERNAL_{name.upper()}: {e.order_ref}")
-            ids = [a.client_order_id for a in attributed]
-            if len(ids) != len(set(ids)):
-                problems.append("DUPLICATE_ATTRIBUTED_ORDER")
-            held_ids = {r[0] for r in conn.execute(
-                "SELECT client_order_id FROM reservations WHERE scope_key = ? AND state != 'RELEASED'",
-                (scope.key(),))}
-            for a in attributed:
-                if a.client_order_id not in held_ids:
-                    problems.append(f"ATTRIBUTION_UNKNOWN: {a.client_order_id} has no held local reservation")
-                if a.unreflected_cash is not None and a.unreflected_cash < 0:
-                    problems.append(f"NEGATIVE_ATTRIBUTED_CASH: {a.client_order_id}")
+            with _exact(SnapshotRefused):
+                problems = self._snapshot_problems(conn, scope.key(), latest, observed, cash, pos, externals,
+                                                   attributed)
             positions_json = None if pos is None else canonical_json(
                 sorted([t, s.value, decimal_text(q)] for (t, s), q in pos.items()))
             externals_json = None if externals is None else canonical_json(
                 sorted((e.to_dict() for e in externals), key=lambda d: d["order_ref"]))
-            attributed_json = canonical_json(sorted(
-                ({"client_order_id": a.client_order_id, "unreflected_cash": a.unreflected_cash} for a in attributed),
-                key=lambda d: d["client_order_id"]))
+            attributed_json = canonical_json(sorted((a.to_dict() for a in attributed),
+                                                    key=lambda d: d["reservation_id"]))
             conn.execute("INSERT INTO account_snapshots (scope_key, revision, observed_at_utc, recorded_at_utc, cash,"
                          " cash_basis, positions_json, external_orders_json, attributed_json, consistent, problems_json)"
                          " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                          (scope.key(), revision, observed, at, _opt_text(cash), cash_basis.value, positions_json,
                           externals_json, attributed_json, 0 if problems else 1, canonical_json(problems)))
-            self._store._audit(conn, at=at, kind="SNAPSHOT_RECORDED", subject=f"{scope.key()}#{revision}",
-                               body={"observed_at_utc": observed, "cash": cash, "cash_basis": cash_basis,
-                                     "positions_known": pos is not None, "externals_known": externals is not None,
+            subject = f"{scope.key()}#{revision}"
+            self._store._audit(conn, at=at, kind="SNAPSHOT_RECORDED", subject=subject,
+                               body={"row_sha256": self._store._row_sha(conn, "account_snapshots",
+                                                                        {"scope_key": scope.key(), "revision": revision}),
                                      "consistent": not problems, "problems": problems})
-            return self._latest_snapshot(conn, scope.key())  # type: ignore[return-value]
+            return self._snapshot(conn, scope.key())  # type: ignore[return-value]
+
+    @staticmethod
+    def _snapshot_problems(conn: sqlite3.Connection, scope_key: str, latest: AccountSnapshot | None, observed: str,
+                           cash: Decimal | None, pos: Mapping[tuple[str, Side], Decimal] | None,
+                           externals: tuple[ExternalOrder, ...] | None,
+                           attributed: tuple[AttributedOrder, ...]) -> list[str]:
+        problems: list[str] = []
+        if latest is not None and parse_utc_text(observed) < parse_utc_text(latest.observed_at_utc):
+            problems.append(f"OBSERVED_BEFORE_PREVIOUS_REVISION: {observed} < {latest.observed_at_utc}")
+        if cash is not None and cash < 0:
+            problems.append(f"NEGATIVE_CASH: {cash}")
+        for (ticker, side), qty in (pos or {}).items():
+            if qty < 0:
+                problems.append(f"NEGATIVE_POSITION: {ticker} {side.value} {qty}")
+        refs = [e.order_ref for e in externals or ()]
+        if len(refs) != len(set(refs)):
+            problems.append("DUPLICATE_EXTERNAL_ORDER")
+        for e in externals or ():
+            for name in ("remaining_quantity", "unreflected_cash"):
+                value = getattr(e, name)
+                if value is not None and value < 0:
+                    problems.append(f"NEGATIVE_EXTERNAL_{name.upper()}: {e.order_ref}")
+        ids = [a.reservation_id for a in attributed]
+        if len(ids) != len(set(ids)) or len({a.client_order_id for a in attributed}) != len(attributed):
+            problems.append("DUPLICATE_ATTRIBUTED_ORDER")
+        for a in attributed:
+            row = conn.execute("SELECT client_order_id, quantity, filled_quantity, limit_price, created_at_utc, state"
+                               " FROM reservations WHERE reservation_id = ? AND scope_key = ?",
+                               (a.reservation_id, scope_key)).fetchone()
+            if row is None or row[5] == ObligationState.RELEASED.value:
+                problems.append(f"ATTRIBUTION_UNKNOWN: {a.reservation_id} is not a held local reservation")
+                continue
+            remaining = _req_dec(row[1], name="quantity") - _req_dec(row[2], name="filled_quantity")
+            if row[0] != a.client_order_id:
+                problems.append(f"ATTRIBUTION_MISMATCH: {a.reservation_id} client order id differs")
+            if parse_utc_text(observed) < parse_utc_text(row[4]):
+                problems.append(f"ATTRIBUTION_BEFORE_RESERVATION: {a.reservation_id} was created after {observed}")
+            if a.remaining_quantity != remaining:
+                problems.append(f"ATTRIBUTION_SIZE_MISMATCH: {a.reservation_id} venue remaining "
+                                f"{a.remaining_quantity} != local {remaining}")
+            if a.limit_price != _req_dec(row[3], name="limit_price"):
+                problems.append(f"ATTRIBUTION_PRICE_MISMATCH: {a.reservation_id} venue price {a.limit_price}")
+            if a.unreflected_cash is not None and a.unreflected_cash < 0:
+                problems.append(f"NEGATIVE_ATTRIBUTED_CASH: {a.reservation_id}")
+        return problems
 
     def latest_snapshot(self, scope: AccountScope) -> AccountSnapshot | None:
         with self._store._reading() as conn:
-            return self._latest_snapshot(conn, scope.key())
+            return self._snapshot(conn, scope.key())
 
-    def _latest_snapshot(self, conn: sqlite3.Connection, scope_key: str,
-                         revision: int | None = None) -> AccountSnapshot | None:
+    def _snapshot(self, conn: sqlite3.Connection, scope_key: str, revision: int | None = None) -> AccountSnapshot | None:
+        """The latest snapshot for `scope_key`, or the given revision."""
         sql = ("SELECT scope_key, revision, observed_at_utc, recorded_at_utc, cash, cash_basis, positions_json,"
                " external_orders_json, attributed_json, consistent, problems_json FROM account_snapshots"
                " WHERE scope_key = ?")
@@ -518,70 +635,64 @@ class ReservationAuthority:
             positions = None if row[6] is None else {
                 (t, Side(s)): _req_dec(q, name="position") for t, s, q in json.loads(row[6])}
             externals = None if row[7] is None else tuple(ExternalOrder.from_dict(d) for d in json.loads(row[7]))
-            attributed = {d["client_order_id"]: _dec(d["unreflected_cash"], name="unreflected_cash")
-                          for d in json.loads(row[8])}
+            attributed = {a.reservation_id: a for a in (AttributedOrder.from_dict(d) for d in json.loads(row[8]))}
             return AccountSnapshot(row[0], int(row[1]), row[2], row[3], _dec(row[4], name="cash"),
                                    CashBasis(row[5]), positions, externals, attributed, bool(row[9]),
                                    tuple(json.loads(row[10])))
         except (ValueError, KeyError, TypeError) as exc:
             raise CorruptRecord(f"account snapshot {scope_key}#{row[1]} does not decode: {exc}") from exc
 
-    # ------------------------------------------------------------------ reserving
+    # ------------------------------------------------------------------ reserving (only inside prepare_attempt)
 
     def evaluate(self, intent: OrderIntent, now: datetime, *, snapshot_max_age: timedelta) -> ReservationDecision:
         """Whether `intent` would fit now. Read-only: it reserves nothing."""
         with self._store._reading() as conn:
             return self._evaluate(conn, intent, now, snapshot_max_age=snapshot_max_age, candidate_id="candidate")
 
-    def reserve(self, intent: OrderIntent, fence_token: int, now: datetime, *, snapshot_max_age: timedelta,
-                reservation_id: str | None = None) -> ReservationView:
+    def _reserve(self, conn: sqlite3.Connection, intent: OrderIntent, fence_token: int, now: datetime, *,
+                 snapshot_max_age: timedelta, reservation_id: str) -> ReservationView:
         """Reserve `intent`'s cash worst case (and, for a REDUCTION, its inventory) under the current fence.
-
-        Inside `prepare_attempt` this runs in the journal's transaction, so the reservation commits with
-        the attempt. Raises StaleFence or ReservationRefused, and then nothing is committed."""
-        if not isinstance(intent, OrderIntent):
-            raise ValueError("intent must be an OrderIntent")
+        Private: only `prepare_attempt` calls it, inside its transaction, so a reservation never exists
+        without the attempt it backs. Raises StaleFence or ReservationRefused, and then nothing commits."""
+        if not self._store._in_transaction():
+            raise ReservationError("a reservation is made only inside prepare_attempt's transaction")
         if not isinstance(snapshot_max_age, timedelta) or snapshot_max_age <= timedelta(0):
             raise ValueError("snapshot_max_age must be a positive timedelta")
         at = utc_text(now)
-        with self._store._transaction() as conn:
-            self._check_fence(conn, fence_token, now)
-            row = conn.execute("SELECT digest FROM intents WHERE intent_key = ?", (intent.intent_key,)).fetchone()
-            if row is None or row[0] != intent.digest():
-                raise ReservationRefused([f"INTENT_NOT_RECORDED: {intent.intent_key} with this digest"])
-            held = conn.execute("SELECT reservation_id FROM reservations WHERE intent_key = ? AND state != 'RELEASED'",
-                                (intent.intent_key,)).fetchone()
-            if held is not None:
-                raise ReservationRefused([f"INTENT_ALREADY_RESERVED: {held[0]} is still held"])
-            if reservation_id is None:
-                count = conn.execute("SELECT COUNT(*) FROM reservations WHERE intent_key = ?",
-                                     (intent.intent_key,)).fetchone()[0]
-                reservation_id = f"res-{intent.digest()[:16]}-{count + 1}"
-            decision = self._evaluate(conn, intent, now, snapshot_max_age=snapshot_max_age,
-                                      candidate_id=reservation_id)
-            if not decision.allowed:
-                raise ReservationRefused(decision.reasons)
-            conn.execute("INSERT INTO reservations (reservation_id, intent_key, scope_key, market_ticker, side, kind,"
-                         " client_order_id, quantity, filled_quantity, cash_worst_case, state, release_reason,"
-                         " fence_token, created_at_utc, updated_at_utc, last_fill_at_utc)"
-                         " VALUES (?, ?, ?, ?, ?, ?, ?, ?, '0', ?, 'OUTSTANDING', NULL, ?, ?, ?, NULL)",
-                         (reservation_id, intent.intent_key, intent.scope.key(), intent.market_ticker,
-                          intent.side.value, intent.kind.value, intent.client_order_id(),
-                          decimal_text(intent.quantity), decimal_text(intent.max_total_cost), fence_token, at, at))
-            self._store._audit(conn, at=at, kind="RESERVATION_CREATED", subject=reservation_id,
-                               body={"intent_key": intent.intent_key, "intent_digest": intent.digest(),
-                                     "fence_token": fence_token, "kind": intent.kind,
-                                     "cash_worst_case": intent.max_total_cost, "quantity": intent.quantity,
-                                     "snapshot_revision": decision.snapshot_revision,
-                                     "cash_required": decision.cash_required,
-                                     "cash_available": decision.cash_available,
-                                     "inventory_available": decision.inventory_available})
-            return self._view(conn, reservation_id)
+        self._check_fence(conn, fence_token, now)
+        row = conn.execute("SELECT digest FROM intents WHERE intent_key = ?", (intent.intent_key,)).fetchone()
+        if row is None or row[0] != intent.digest():
+            raise ReservationRefused([f"INTENT_NOT_RECORDED: {intent.intent_key} with this digest"])
+        held = conn.execute("SELECT reservation_id FROM reservations WHERE intent_key = ? AND state != 'RELEASED'",
+                            (intent.intent_key,)).fetchone()
+        if held is not None:
+            raise ReservationRefused([f"INTENT_ALREADY_RESERVED: {held[0]} is still held"])
+        decision = self._evaluate(conn, intent, now, snapshot_max_age=snapshot_max_age, candidate_id=reservation_id)
+        if not decision.allowed:
+            raise ReservationRefused(decision.reasons)
+        conn.execute("INSERT INTO reservations (reservation_id, intent_key, scope_key, market_ticker, side, kind,"
+                     " client_order_id, quantity, limit_price, filled_quantity, cash_worst_case, state, release_reason,"
+                     " end_reason, ended_at_utc, quarantine_reason, fence_token, created_at_utc, updated_at_utc,"
+                     " last_fill_at_utc)"
+                     " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, '0', ?, 'OUTSTANDING', NULL, NULL, NULL, NULL, ?, ?, ?, NULL)",
+                     (reservation_id, intent.intent_key, intent.scope.key(), intent.market_ticker, intent.side.value,
+                      intent.kind.value, intent.client_order_id(), decimal_text(intent.quantity),
+                      decimal_text(intent.limit_price), decimal_text(intent.max_total_cost), fence_token, at, at))
+        self._store._audit(conn, at=at, kind="RESERVATION_CREATED", subject=reservation_id,
+                           body={"intent_key": intent.intent_key, "intent_digest": intent.digest(),
+                                 "fence_token": fence_token, "kind": intent.kind,
+                                 "cash_worst_case": intent.max_total_cost, "quantity": intent.quantity,
+                                 "snapshot_revision": decision.snapshot_revision,
+                                 "cash_required": decision.cash_required, "cash_available": decision.cash_available,
+                                 "inventory_available": decision.inventory_available})
+        return self._view(conn, reservation_id)
 
     def _evaluate(self, conn: sqlite3.Connection, intent: OrderIntent, now: datetime, *,
                   snapshot_max_age: timedelta, candidate_id: str) -> ReservationDecision:
+        if not isinstance(intent, OrderIntent):
+            raise ValueError("intent must be an OrderIntent")
         scope_key = intent.scope.key()
-        snap = self._latest_snapshot(conn, scope_key)
+        snap = self._snapshot(conn, scope_key)
         if snap is None:
             return ReservationDecision(False, ("NO_ACCOUNT_SNAPSHOT: account state is unknown; no new risk",),
                                        None, None, None, None)
@@ -593,47 +704,53 @@ class ReservationAuthority:
             reasons.append(f"SNAPSHOT_INCONSISTENT: revision {snap.revision}: {list(snap.problems)}")
         if snap.cash_basis is CashBasis.UNKNOWN:
             reasons.append("CASH_BASIS_UNKNOWN: the snapshot does not say what its cash means")
-        held = self._held(conn, scope_key)
+        held = self._held(conn, scope_key, snap)
 
-        # Cash: every held obligation binds at once (the canonical owner decides).
-        obligations: list[Obligation] = []
-        for r in held:
-            worst = snap.attributed[r.client_order_id] if r.client_order_id in snap.attributed else r.cash_worst_case
-            worst = None if worst is not None and worst < 0 else worst  # a negative residual is not a known one
-            obligations.append(Obligation(f"local:{r.reservation_id}", r.state, worst,
-                                          (f"{r.market_ticker}:{r.side.value}",)))
-        if snap.external_orders is None:
-            obligations.append(Obligation("external:unlisted", ObligationState.UNKNOWN, None))
-            reasons.append("EXTERNAL_ORDERS_UNKNOWN: the snapshot does not list open orders")
-        else:
-            for n, e in enumerate(snap.external_orders):  # the index keeps ids unique even if a ref repeats
-                keys = (f"{e.market_ticker}:{e.side.value}",) if e.market_ticker and e.side else ()
-                worst = None if e.unreflected_cash is not None and e.unreflected_cash < 0 else e.unreflected_cash
-                obligations.append(Obligation(f"external:{n}:{e.order_ref}", ObligationState.OUTSTANDING, worst,
-                                              keys))
-        candidate = Obligation(f"candidate:{candidate_id}", ObligationState.OUTSTANDING, intent.max_total_cost,
-                               (f"{intent.market_ticker}:{intent.side.value}",))
-        cash = snap.usable_cash()
-        result = reserve_simultaneous_obligations(tuple(obligations), available_cash=cash, candidate=candidate)
-        if not result.new_risk_allowed:
-            reasons.extend(result.reasons)
-            if not result.reasons:
-                reasons.append("NEW_RISK_NOT_ALLOWED")
+        with _exact():
+            # Cash: every held obligation binds at once (the canonical owner decides).
+            obligations: list[Obligation] = []
+            for r in held:
+                worst: Decimal | None = r.cash_worst_case
+                if r.quarantine_reason is not None:
+                    worst = None  # its exposure is in question: unknown, never the old number
+                elif r.provider_held:
+                    worst = snap.attributed[r.reservation_id].unreflected_cash
+                worst = None if worst is not None and worst < 0 else worst  # a negative residual is not known
+                obligations.append(Obligation(f"local:{r.reservation_id}", r.state, worst,
+                                              (f"{r.market_ticker}:{r.side.value}",)))
+            if snap.external_orders is None:
+                obligations.append(Obligation("external:unlisted", ObligationState.UNKNOWN, None))
+                reasons.append("EXTERNAL_ORDERS_UNKNOWN: the snapshot does not list open orders")
+            else:
+                for n, e in enumerate(snap.external_orders):  # the index keeps ids unique even if a ref repeats
+                    keys = (f"{e.market_ticker}:{e.side.value}",) if e.market_ticker and e.side else ()
+                    worst = None if e.unreflected_cash is not None and e.unreflected_cash < 0 else e.unreflected_cash
+                    obligations.append(Obligation(f"external:{n}:{e.order_ref}", ObligationState.OUTSTANDING, worst,
+                                                  keys))
+            candidate = Obligation(f"candidate:{candidate_id}", ObligationState.OUTSTANDING, intent.max_total_cost,
+                                   (f"{intent.market_ticker}:{intent.side.value}",))
+            cash = snap.usable_cash()
+            result = reserve_simultaneous_obligations(tuple(obligations), available_cash=cash, candidate=candidate)
+            if not result.new_risk_allowed:
+                reasons.extend(result.reasons)
+                if not result.reasons:
+                    reasons.append("NEW_RISK_NOT_ALLOWED")
 
-        # Inventory: a REDUCTION sells only what the snapshot shows is held and not already being sold.
-        inventory: Decimal | None = None
-        if intent.kind is IntentKind.REDUCTION:
-            inventory, why = self._inventory(snap, held, intent.market_ticker, intent.side)
-            if why:
-                reasons.append(why)
-            elif intent.quantity > inventory:  # type: ignore[operator]
-                reasons.append(f"INSUFFICIENT_INVENTORY: selling {intent.quantity} {intent.market_ticker} "
-                               f"{intent.side.value} > {inventory} held and not already reserved")
+            # Inventory: a REDUCTION sells only what the snapshot shows is held and not already being sold.
+            inventory: Decimal | None = None
+            if intent.kind is IntentKind.REDUCTION:
+                inventory, why = self._inventory(snap, held, intent.market_ticker, intent.side)
+                if why:
+                    reasons.append(why)
+                elif intent.quantity > inventory:  # type: ignore[operator]
+                    reasons.append(f"INSUFFICIENT_INVENTORY: selling {intent.quantity} {intent.market_ticker} "
+                                   f"{intent.side.value} > {inventory} held and not already reserved")
         return ReservationDecision(not reasons, tuple(reasons), snap.revision, result.required, cash, inventory)
 
     @staticmethod
     def _inventory(snap: AccountSnapshot, held: list[ReservationView], market_ticker: str,
                    side: Side) -> tuple[Decimal | None, str | None]:
+        """Call inside `_exact()`."""
         if snap.positions is None:
             return None, "POSITIONS_UNKNOWN: the snapshot does not list positions"
         if snap.external_orders is None:
@@ -642,6 +759,8 @@ class ReservationAuthority:
         available = snap.positions.get((market_ticker, side), Decimal(0))
         for r in held:
             if r.kind is IntentKind.REDUCTION and r.market_ticker == market_ticker and r.side is side:
+                if r.quarantine_reason is not None:
+                    return None, f"INVENTORY_UNKNOWN: local reduction {r.reservation_id} is quarantined"
                 available -= r.quantity  # full size: unfilled remainder plus fills no snapshot confirms yet
         for e in snap.external_orders:
             if e.could_sell(market_ticker, side):
@@ -654,68 +773,136 @@ class ReservationAuthority:
 
     def request_cancel(self, reservation_id: str, now: datetime) -> ReservationView:
         """A cancel was requested. Nothing is released: a request is not a confirmation."""
-        return self._transition(reservation_id, ObligationState.CANCEL_REQUESTED, now, event="CANCEL_REQUESTED")
+        at = utc_text(now)
+        with self._store._transaction() as conn:
+            r = self._view(conn, reservation_id)
+            self._set_state(conn, r, ObligationState.CANCEL_REQUESTED, at, extra={"event": "CANCEL_REQUESTED"})
+            return self._view(conn, reservation_id)
 
     def mark_open(self, reservation_id: str, now: datetime, *, receipt_id: str) -> ReservationView:
         """The venue shows the order open (a cancel was refused, or an unknown state was reconciled)."""
-        return self._transition(reservation_id, ObligationState.OUTSTANDING, now, event="OPEN_CONFIRMED",
-                                receipt_id=receipt_id)
+        at = utc_text(now)
+        with self._store._transaction() as conn:
+            self._store._require_receipt(conn, receipt_id, kinds=(ReceiptKind.ORDER_LOOKUP, ReceiptKind.CANCEL_REJECT),
+                                         attempt_id=reservation_id)
+            r = self._view(conn, reservation_id)
+            self._set_state(conn, r, ObligationState.OUTSTANDING, at,
+                            extra={"event": "OPEN_CONFIRMED", "receipt_id": receipt_id})
+            return self._view(conn, reservation_id)
 
     def mark_unknown(self, reservation_id: str, now: datetime, *, reason: str) -> ReservationView:
         """The order's state was lost (a cancel answer never came, a stream gap). It stays reserved."""
-        return self._transition(reservation_id, ObligationState.UNKNOWN, now, event="STATE_UNKNOWN",
-                                extra={"reason": reason})
+        at = utc_text(now)
+        with self._store._transaction() as conn:
+            r = self._view(conn, reservation_id)
+            self._set_state(conn, r, ObligationState.UNKNOWN, at, extra={"event": "STATE_UNKNOWN", "reason": reason})
+            return self._view(conn, reservation_id)
 
-    def confirm_cancel(self, reservation_id: str, now: datetime, *, receipt_id: str) -> ReservationView:
-        """The venue confirmed the cancel: RELEASED, or BOUND when anything had filled."""
-        return self._finish(reservation_id, ReleaseReason.CANCEL_CONFIRMED, now, receipt_id=receipt_id)
+    def confirm_cancel(self, reservation_id: str, now: datetime, *, receipt_id: str,
+                       venue_filled: Decimal) -> ReservationView:
+        """The venue confirmed the cancel, reporting `venue_filled` contracts filled in total. The order is
+        over, but nothing is released yet: it is BOUND, held in full, until `confirm_by_snapshot` (a fill
+        may still arrive). A `venue_filled` below the recorded fills, or above the order, quarantines it."""
+        return self._end(reservation_id, EndReason.CANCEL_CONFIRMED, now, receipt_id=receipt_id,
+                         venue_filled=venue_filled,
+                         kinds=(ReceiptKind.CANCEL_CONFIRM, ReceiptKind.ORDER_LOOKUP))
 
-    def mark_expired(self, reservation_id: str, now: datetime, *, receipt_id: str) -> ReservationView:
-        """The venue confirmed the order expired: RELEASED, or BOUND when anything had filled."""
-        return self._finish(reservation_id, ReleaseReason.EXPIRED, now, receipt_id=receipt_id)
+    def mark_expired(self, reservation_id: str, now: datetime, *, receipt_id: str,
+                     venue_filled: Decimal) -> ReservationView:
+        """The venue reports the order expired, with `venue_filled` contracts filled in total. As
+        `confirm_cancel`: BOUND until a later snapshot confirms it."""
+        return self._end(reservation_id, EndReason.EXPIRED, now, receipt_id=receipt_id, venue_filled=venue_filled,
+                         kinds=(ReceiptKind.ORDER_EXPIRED, ReceiptKind.ORDER_LOOKUP))
 
     def record_fill(self, reservation_id: str, cumulative_filled: Decimal, now: datetime, *,
                     receipt_id: str) -> ReservationView:
-        """The venue reports `cumulative_filled` contracts filled in total. Nothing is released: a fill
-        becomes a position, and only a later snapshot confirms the position
-        (`confirm_converted_to_position`). A complete fill moves the reservation to BOUND."""
+        """The venue reports `cumulative_filled` contracts filled in total. Always recorded, in any state:
+        - a larger total updates the reservation (a complete fill makes it BOUND); a late fill on a BOUND
+          reservation moves its release point later;
+        - the same total again is idempotent;
+        - a total that shrinks, exceeds the order, or arrives after release quarantines it.
+        Nothing is released by a fill."""
         filled = exact_decimal(cumulative_filled, name="cumulative_filled")
         at = utc_text(now)
         with self._store._transaction() as conn:
-            self._store._require_receipt(conn, receipt_id)
+            self._store._require_receipt(conn, receipt_id, kinds=(ReceiptKind.FILL, ReceiptKind.ORDER_LOOKUP),
+                                         attempt_id=reservation_id)
             r = self._view(conn, reservation_id)
-            if filled < r.filled_quantity or filled > r.quantity:
-                raise InvalidTransition(f"fill {filled} of {reservation_id} is outside [{r.filled_quantity}, "
-                                        f"{r.quantity}] (fills only grow and never exceed the order)")
-            if filled == r.filled_quantity:
-                return r  # the same report again: idempotent
-            if r.state in (ObligationState.RELEASED, ObligationState.BOUND):
-                raise InvalidTransition(f"{reservation_id} is {r.state.value}; a new fill contradicts it")
-            new_state = ObligationState.BOUND if filled == r.quantity else r.state
-            conn.execute("UPDATE reservations SET filled_quantity = ?, state = ?, last_fill_at_utc = ?,"
-                         " updated_at_utc = ? WHERE reservation_id = ?",
-                         (decimal_text(filled), new_state.value, at, at, reservation_id))
+            with _exact(InvalidTransition):
+                if filled == r.filled_quantity:
+                    return r
+                contradiction = None
+                if filled < r.filled_quantity or filled < 0:
+                    contradiction = f"FILL_SHRANK: venue total {filled} < recorded {r.filled_quantity}"
+                elif filled > r.quantity:
+                    contradiction = f"FILL_EXCEEDS_ORDER: venue total {filled} > order {r.quantity}"
+                elif r.state is ObligationState.RELEASED:
+                    contradiction = f"FILL_AFTER_RELEASE: venue total {filled} after {r.release_reason}"
+                if contradiction is not None or r.quarantine_reason is not None:
+                    self._quarantine(conn, r, contradiction or r.quarantine_reason, at,  # type: ignore[arg-type]
+                                     extra={"reported_filled": filled, "receipt_id": receipt_id})
+                    return self._view(conn, reservation_id)
+                complete = filled == r.quantity
+            ended = r.state is ObligationState.BOUND
+            new_state = ObligationState.BOUND if complete or ended else r.state
+            end_reason = r.end_reason if ended else (EndReason.FILLED if complete else None)
+            conn.execute("UPDATE reservations SET filled_quantity = ?, state = ?, end_reason = ?, ended_at_utc = ?,"
+                         " last_fill_at_utc = ?, updated_at_utc = ? WHERE reservation_id = ?",
+                         (decimal_text(filled), new_state.value, end_reason.value if end_reason else None,
+                          r.ended_at_utc if ended else (at if complete else None), at, at, reservation_id))
             self._store._audit(conn, at=at, kind="RESERVATION_FILL", subject=reservation_id,
                                body={"cumulative_filled": filled, "from": r.state, "to": new_state,
-                                     "receipt_id": receipt_id})
+                                     "late": ended, "receipt_id": receipt_id})
             return self._view(conn, reservation_id)
 
-    def confirm_converted_to_position(self, reservation_id: str, snapshot_revision: int,
-                                      now: datetime) -> ReservationView:
-        """BOUND → RELEASED once snapshot `snapshot_revision`, observed no earlier than the last fill and
-        consistent, shows the fill as a position (the caller has checked the position itself)."""
+    def confirm_by_snapshot(self, reservation_id: str, snapshot_revision: int, now: datetime) -> ReservationView:
+        """BOUND → RELEASED once snapshot `snapshot_revision` shows the result: consistent, observed strictly
+        after the order's end and its last fill, and no longer listing the order as open. The caller
+        has checked that its position reflects the fills. Released as CONVERTED_TO_POSITION when anything
+        filled, otherwise as the cancel or expiry it was."""
         at = utc_text(now)
         with self._store._transaction() as conn:
             r = self._view(conn, reservation_id)
-            if r.state is not ObligationState.BOUND:
-                raise InvalidTransition(f"{reservation_id} is {r.state.value}, not BOUND")
-            snap = self._latest_snapshot(conn, r.scope_key, revision=snapshot_revision)
+            if r.state is not ObligationState.BOUND or r.quarantine_reason is not None:
+                raise InvalidTransition(f"{reservation_id} is {r.state.value}"
+                                        f"{' (quarantined)' if r.quarantine_reason else ''}, not BOUND")
+            snap = self._snapshot(conn, r.scope_key, revision=snapshot_revision)
             if snap is None or not snap.consistent:
                 raise InvalidTransition(f"snapshot {r.scope_key}#{snapshot_revision} is missing or inconsistent")
-            if r.last_fill_at_utc is None or parse_utc_text(snap.observed_at_utc) < parse_utc_text(r.last_fill_at_utc):
-                raise InvalidTransition(f"snapshot {snapshot_revision} was observed before the last fill")
-            self._set_state(conn, r, ObligationState.RELEASED, at, release=ReleaseReason.CONVERTED_TO_POSITION,
+            point = _later(r.ended_at_utc, r.last_fill_at_utc)
+            if point is None or parse_utc_text(snap.observed_at_utc) <= point:  # strictly after: the same instant
+                raise InvalidTransition(f"snapshot {snapshot_revision} was observed before the order's end or last "
+                                        "fill (it must be strictly later)")
+            if reservation_id in snap.attributed or snap.lists_client_order(r.client_order_id):
+                raise InvalidTransition(f"snapshot {snapshot_revision} still lists {reservation_id} as open")
+            if r.filled_quantity > 0:
+                reason = ReleaseReason.CONVERTED_TO_POSITION
+            else:
+                reason = ReleaseReason(r.end_reason.value)  # type: ignore[union-attr]
+            self._set_state(conn, r, ObligationState.RELEASED, at, release=reason,
                             extra={"snapshot_revision": snapshot_revision})
+            return self._view(conn, reservation_id)
+
+    def resolve_quarantine(self, reservation_id: str, now: datetime, *, receipt_id: str,
+                           venue_filled: Decimal) -> ReservationView:
+        """Record the venue's answer to a quarantine (an order lookup): its cumulative filled quantity. The
+        reservation stays UNKNOWN and held; the normal lifecycle then continues from what the venue shows."""
+        filled = exact_decimal(venue_filled, name="venue_filled")
+        at = utc_text(now)
+        with self._store._transaction() as conn:
+            self._store._require_receipt(conn, receipt_id, kinds=(ReceiptKind.ORDER_LOOKUP,), attempt_id=reservation_id)
+            r = self._view(conn, reservation_id)
+            if r.quarantine_reason is None:
+                raise InvalidTransition(f"{reservation_id} is not quarantined")
+            if filled < 0 or filled > r.quantity:
+                raise InvalidTransition(f"venue_filled {filled} is outside [0, {r.quantity}]")
+            conn.execute("UPDATE reservations SET quarantine_reason = NULL, filled_quantity = ?, last_fill_at_utc = ?,"
+                         " updated_at_utc = ? WHERE reservation_id = ?",
+                         (decimal_text(filled), at if filled != r.filled_quantity else r.last_fill_at_utc, at,
+                          reservation_id))
+            self._store._audit(conn, at=at, kind="RESERVATION_RESOLVED", subject=reservation_id,
+                               body={"from": r.state, "to": r.state, "venue_filled": filled, "receipt_id": receipt_id,
+                                     "was": r.quarantine_reason})
             return self._view(conn, reservation_id)
 
     def reservation(self, reservation_id: str) -> ReservationView:
@@ -724,36 +911,47 @@ class ReservationAuthority:
 
     def held_reservations(self, scope: AccountScope) -> list[ReservationView]:
         with self._store._reading() as conn:
-            return self._held(conn, scope.key())
+            return self._held(conn, scope.key(), self._snapshot(conn, scope.key()))
 
-    def _transition(self, reservation_id: str, new: ObligationState, now: datetime, *, event: str,
-                    receipt_id: str | None = None, extra: dict | None = None) -> ReservationView:
+    def _end(self, reservation_id: str, reason: EndReason, now: datetime, *, receipt_id: str, venue_filled: Decimal,
+             kinds: tuple[ReceiptKind, ...]) -> ReservationView:
+        filled = exact_decimal(venue_filled, name="venue_filled")
         at = utc_text(now)
         with self._store._transaction() as conn:
-            if receipt_id is not None:
-                self._store._require_receipt(conn, receipt_id)
+            self._store._require_receipt(conn, receipt_id, kinds=kinds, attempt_id=reservation_id)
             r = self._view(conn, reservation_id)
-            self._set_state(conn, r, new, at, extra={"event": event, "receipt_id": receipt_id, **(extra or {})})
+            with _exact(InvalidTransition):
+                contradiction = None
+                if filled < r.filled_quantity or filled < 0:
+                    contradiction = f"END_FILL_SHRANK: venue total {filled} < recorded {r.filled_quantity}"
+                elif filled > r.quantity:
+                    contradiction = f"END_FILL_EXCEEDS_ORDER: venue total {filled} > order {r.quantity}"
+                elif r.state is ObligationState.RELEASED and filled > 0:
+                    contradiction = f"END_FILL_AFTER_RELEASE: venue total {filled} after {r.release_reason}"
+            if contradiction is not None:
+                self._quarantine(conn, r, contradiction, at, extra={"reported_filled": filled, "receipt_id": receipt_id,
+                                                                    "ended": reason})
+                return self._view(conn, reservation_id)
+            grew = filled != r.filled_quantity
+            if r.state is ObligationState.BOUND:  # already over: a repeat, or a later report with more fills
+                if not grew:
+                    return r
+                conn.execute("UPDATE reservations SET filled_quantity = ?, last_fill_at_utc = ?, updated_at_utc = ?"
+                             " WHERE reservation_id = ?", (decimal_text(filled), at, at, reservation_id))
+                self._store._audit(conn, at=at, kind="RESERVATION_FILL", subject=reservation_id,
+                                   body={"cumulative_filled": filled, "from": r.state, "to": r.state, "late": True,
+                                         "receipt_id": receipt_id})
+                return self._view(conn, reservation_id)
+            if ObligationState.BOUND not in _TRANSITIONS[r.state]:
+                raise InvalidTransition(f"{reservation_id}: {r.state.value} cannot end ({reason.value})")
+            conn.execute("UPDATE reservations SET state = 'BOUND', end_reason = ?, ended_at_utc = ?, filled_quantity = ?,"
+                         " last_fill_at_utc = ?, updated_at_utc = ? WHERE reservation_id = ?",
+                         (reason.value, at, decimal_text(filled), at if grew else r.last_fill_at_utc, at,
+                          reservation_id))
+            self._store._audit(conn, at=at, kind="RESERVATION_STATE", subject=reservation_id,
+                               body={"from": r.state, "to": ObligationState.BOUND, "ended": reason,
+                                     "venue_filled": filled, "receipt_id": receipt_id})
             return self._view(conn, reservation_id)
-
-    def _finish(self, reservation_id: str, reason: ReleaseReason, now: datetime, *, receipt_id: str) -> ReservationView:
-        at = utc_text(now)
-        with self._store._transaction() as conn:
-            self._store._require_receipt(conn, receipt_id)
-            r = self._view(conn, reservation_id)
-            self._finish_in(conn, r, reason, at, extra={"receipt_id": receipt_id})
-            return self._view(conn, reservation_id)
-
-    def _finish_in(self, conn: sqlite3.Connection, r: ReservationView, reason: ReleaseReason, at: str, *,
-                   extra: dict | None = None) -> None:
-        """The order is over at the venue. With no fill it is RELEASED; with any fill it is BOUND until a
-        snapshot confirms the position. A rejected or absent order cannot have filled."""
-        if r.filled_quantity > 0:
-            if reason in (ReleaseReason.REJECTED, ReleaseReason.ABSENT_AT_VENUE):
-                raise InvalidTransition(f"{r.reservation_id} has fills; it cannot be {reason.value}")
-            self._set_state(conn, r, ObligationState.BOUND, at, extra={"ended": reason, **(extra or {})})
-        else:
-            self._set_state(conn, r, ObligationState.RELEASED, at, release=reason, extra=extra)
 
     def _set_state(self, conn: sqlite3.Connection, r: ReservationView, new: ObligationState, at: str, *,
                    release: ReleaseReason | None = None, extra: dict | None = None) -> None:
@@ -761,12 +959,21 @@ class ReservationAuthority:
             raise InvalidTransition(f"{r.reservation_id}: {r.state.value} -> {new.value} is not allowed")
         if (new is ObligationState.RELEASED) != (release is not None):
             raise InvalidTransition("a release, and only a release, needs a reason")
-        if r.state is ObligationState.BOUND and release is not ReleaseReason.CONVERTED_TO_POSITION:
-            raise InvalidTransition(f"{r.reservation_id} is BOUND: only a confirmed position releases it")
+        if new is ObligationState.RELEASED and (r.quarantine_reason is not None or r.filled_quantity > 0) \
+                and release is not ReleaseReason.CONVERTED_TO_POSITION:
+            raise InvalidTransition(f"{r.reservation_id} has fills or is quarantined; it cannot be {release.value}")
         conn.execute("UPDATE reservations SET state = ?, release_reason = ?, updated_at_utc = ? WHERE reservation_id = ?",
                      (new.value, release.value if release else None, at, r.reservation_id))
         self._store._audit(conn, at=at, kind="RESERVATION_STATE", subject=r.reservation_id,
                            body={"from": r.state, "to": new, "release_reason": release, **(extra or {})})
+
+    def _quarantine(self, conn: sqlite3.Connection, r: ReservationView, reason: str, at: str, *,
+                    extra: dict | None = None) -> None:
+        """A contradiction: back to UNKNOWN (held, RELEASED included), worst case unknown until resolved."""
+        conn.execute("UPDATE reservations SET state = 'UNKNOWN', release_reason = NULL, quarantine_reason = ?,"
+                     " updated_at_utc = ? WHERE reservation_id = ?", (reason, at, r.reservation_id))
+        self._store._audit(conn, at=at, kind="RESERVATION_QUARANTINED", subject=r.reservation_id,
+                           body={"from": r.state, "to": ObligationState.UNKNOWN, "reason": reason, **(extra or {})})
 
     # ------------------------------------------------------------------ journal-driven changes (inside its transaction)
 
@@ -777,21 +984,31 @@ class ReservationAuthority:
 
     def _attempt_acknowledged(self, conn: sqlite3.Connection, reservation_id: str, at: str) -> None:
         r = self._view(conn, reservation_id)
-        if r.state is ObligationState.UNKNOWN:
+        if r.state is ObligationState.UNKNOWN and r.quarantine_reason is None:
             self._set_state(conn, r, ObligationState.OUTSTANDING, at, extra={"event": "ATTEMPT_ACKNOWLEDGED"})
 
     def _attempt_never_placed(self, conn: sqlite3.Connection, reservation_id: str, reason: ReleaseReason,
                               at: str) -> None:
-        self._finish_in(conn, self._view(conn, reservation_id), reason, at)
+        """REJECTED or ABSENT: no order ever existed, so nothing can have filled. Released at once."""
+        r = self._view(conn, reservation_id)
+        if r.filled_quantity > 0 or r.quarantine_reason is not None:
+            raise InvalidTransition(f"{reservation_id} has fills or is quarantined; it cannot be {reason.value}")
+        self._set_state(conn, r, ObligationState.RELEASED, at, release=reason)
+
+    def _listed_open(self, conn: sqlite3.Connection, reservation_id: str) -> bool:
+        """Whether the latest snapshot lists this reservation's order (or its client order id) as open."""
+        r = self._view(conn, reservation_id)
+        snap = self._snapshot(conn, r.scope_key)
+        return snap is not None and (reservation_id in snap.attributed or snap.lists_client_order(r.client_order_id))
 
     # ------------------------------------------------------------------ reads
 
     _COLUMNS = ("reservation_id, intent_key, scope_key, market_ticker, side, kind, client_order_id, quantity,"
-                " filled_quantity, cash_worst_case, state, release_reason, fence_token, created_at_utc,"
-                " updated_at_utc, last_fill_at_utc")
+                " limit_price, filled_quantity, cash_worst_case, state, release_reason, end_reason, ended_at_utc,"
+                " quarantine_reason, fence_token, created_at_utc, updated_at_utc, last_fill_at_utc")
 
-    def _held(self, conn: sqlite3.Connection, scope_key: str) -> list[ReservationView]:
-        attributed = self._attributed(conn, scope_key)
+    def _held(self, conn: sqlite3.Connection, scope_key: str, snap: AccountSnapshot | None) -> list[ReservationView]:
+        attributed = frozenset(snap.attributed) if snap is not None else frozenset()
         rows = conn.execute(f"SELECT {self._COLUMNS} FROM reservations WHERE scope_key = ? AND state != 'RELEASED'"
                             " ORDER BY reservation_id", (scope_key,)).fetchall()
         return [self._decode(row, attributed) for row in rows]
@@ -801,23 +1018,23 @@ class ReservationAuthority:
                            (reservation_id,)).fetchone()
         if row is None:
             raise InvalidTransition(f"no reservation {reservation_id!r}")
-        return self._decode(row, self._attributed(conn, row[2]))
-
-    def _attributed(self, conn: sqlite3.Connection, scope_key: str) -> frozenset[str]:
-        snap = self._latest_snapshot(conn, scope_key)
-        return frozenset(snap.attributed) if snap is not None else frozenset()
+        snap = self._snapshot(conn, row[2])
+        return self._decode(row, frozenset(snap.attributed) if snap is not None else frozenset())
 
     @staticmethod
     def _decode(row: tuple, attributed: frozenset[str]) -> ReservationView:
         try:
-            state = ObligationState(row[10])
+            state = ObligationState(row[11])
             return ReservationView(
                 reservation_id=row[0], intent_key=row[1], scope_key=row[2], market_ticker=row[3], side=Side(row[4]),
                 kind=IntentKind(row[5]), client_order_id=row[6], quantity=_req_dec(row[7], name="quantity"),
-                filled_quantity=_req_dec(row[8], name="filled_quantity"),
-                cash_worst_case=_req_dec(row[9], name="cash_worst_case"), state=state,
-                release_reason=None if row[11] is None else ReleaseReason(row[11]), fence_token=int(row[12]),
-                created_at_utc=row[13], updated_at_utc=row[14], last_fill_at_utc=row[15],
-                provider_held=state is not ObligationState.RELEASED and row[6] in attributed)
+                limit_price=_req_dec(row[8], name="limit_price"),
+                filled_quantity=_req_dec(row[9], name="filled_quantity"),
+                cash_worst_case=_req_dec(row[10], name="cash_worst_case"), state=state,
+                release_reason=None if row[12] is None else ReleaseReason(row[12]),
+                end_reason=None if row[13] is None else EndReason(row[13]), ended_at_utc=row[14],
+                quarantine_reason=row[15], fence_token=int(row[16]), created_at_utc=row[17], updated_at_utc=row[18],
+                last_fill_at_utc=row[19],
+                provider_held=state is not ObligationState.RELEASED and row[0] in attributed)
         except (ValueError, TypeError) as exc:
             raise CorruptRecord(f"reservation {row[0]!r} does not decode: {exc}") from exc

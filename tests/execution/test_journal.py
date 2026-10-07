@@ -17,7 +17,7 @@ from edge_lab.execution import model as m
 from edge_lab.execution.journal import (AttemptRefused, AttemptState, ApprovalRefused, ExecutionJournal,
                                         IntentConflict, JournalBusy, JournalCorrupt, JournalUnavailable,
                                         ReceiptOutcome, UnknownSchema)
-from edge_lab.execution.reservations import InvalidTransition, StaleFence
+from edge_lab.execution.reservations import InvalidTransition, ReceiptKind as K, StaleFence
 from edge_lab.execution_ticket import ObligationState
 
 NOW = f.NOW
@@ -110,6 +110,45 @@ def test_a_store_missing_an_append_only_trigger_is_refused(path):
         ExecutionJournal.open(path)
 
 
+def test_a_weakened_trigger_with_the_right_name_is_refused(path):
+    """Review finding 6: the schema check compares SQL, not names."""
+    ExecutionJournal.open(path).close()
+    conn = sqlite3.connect(path)
+    conn.execute("DROP TRIGGER receipts_no_update")
+    conn.execute("CREATE TRIGGER receipts_no_update BEFORE UPDATE ON receipts WHEN 0 BEGIN SELECT 1; END")
+    conn.commit()
+    conn.close()
+    with pytest.raises(UnknownSchema, match="receipts_no_update"):
+        ExecutionJournal.open(path)
+
+
+@pytest.mark.parametrize("ddl", ["CREATE INDEX extra ON intents(scope_key)",
+                                 "CREATE TRIGGER sneaky AFTER INSERT ON intents BEGIN SELECT 1; END"])
+def test_an_unexpected_schema_object_is_refused(path, ddl):
+    ExecutionJournal.open(path).close()
+    conn = sqlite3.connect(path)
+    conn.execute(ddl)
+    conn.commit()
+    conn.close()
+    with pytest.raises(UnknownSchema, match="unexpected"):
+        ExecutionJournal.open(path)
+
+
+def test_a_foreign_file_is_refused_before_it_is_switched_to_wal(tmp_path):
+    p = tmp_path / "research.execution.sqlite3"
+    conn = sqlite3.connect(p)
+    conn.execute("CREATE TABLE schema_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+    conn.execute("INSERT INTO schema_meta VALUES ('store_kind', 'edge-lab-research'), ('schema_version', '1')")
+    conn.commit()
+    conn.close()
+    with pytest.raises(UnknownSchema, match="edge-lab-research"):
+        ExecutionJournal.open(p)
+    conn = sqlite3.connect(p)
+    assert conn.execute("PRAGMA journal_mode").fetchone()[0] == "delete"  # untouched
+    conn.close()
+    assert not p.with_name(p.name + "-wal").exists()
+
+
 def test_a_rewritten_projection_is_detected(ready, path):
     journal, token = ready
     attempt = f.prepare(journal, f.entry(), token)
@@ -175,14 +214,33 @@ def test_a_conflicting_intent_in_prepare_commits_nothing_and_leaves_the_approval
 
 def test_approval_nonce_reuse_is_refused(ready, path):
     journal, token = ready
-    intent = f.entry()
-    journal.consume_approval(f.grant(intent, "n-1"), intent, NOW)
+    first = f.prepare(journal, f.entry(), token, nonce="n-1")
+    journal.mark_sent(first.attempt_id, now=NOW)
+    journal.mark_rejected(first.attempt_id, receipt_id=f.receipt(journal, "rej", K.ORDER_REJECT, first.attempt_id),
+                          now=NOW)
     before = f.counts(path)
     with pytest.raises(ApprovalRefused, match="APPROVAL_NONCE_REUSED"):
-        journal.consume_approval(f.grant(intent, "n-1"), intent, NOW)
+        f.prepare(journal, f.entry(), token, nonce="n-1")  # same intent, retry allowed, but not with a used nonce
     with pytest.raises(ApprovalRefused, match="APPROVAL_NONCE_REUSED"):
-        f.prepare(journal, intent, token, nonce="n-1")
+        f.prepare(journal, f.entry("EXP-TEST:other"), token, nonce="n-1")  # nor for another intent
     assert f.counts(path) == before
+
+
+def test_approvals_and_reservations_exist_only_through_prepare(ready, path):
+    """Review finding 3: neither can be committed on its own (an orphan reservation would block its intent for
+    good; a lone consumption would burn a nonce)."""
+    journal, token = ready
+    assert not hasattr(journal, "consume_approval") and not hasattr(journal.reservations, "reserve")
+    intent = f.entry()
+    journal.record_intent(intent, NOW)
+    before = f.counts(path)
+    with pytest.raises(JournalUnavailable, match="only inside prepare_attempt"):
+        journal._consume_approval(journal._conn, f.grant(intent), intent, NOW, attempt_id="x")
+    with pytest.raises(Exception, match="only inside prepare_attempt"):
+        journal.reservations._reserve(journal._conn, intent, token, NOW, snapshot_max_age=f.MAX_AGE,
+                                      reservation_id="x")
+    assert f.counts(path) == before
+    assert f.prepare(journal, intent, token).state is AttemptState.PENDING_EGRESS
 
 
 @pytest.mark.parametrize("make,problem", [
@@ -250,7 +308,8 @@ def test_happy_path_and_evidence_backed_transitions(ready):
     journal.mark_sent(attempt.attempt_id, now=NOW)
     with pytest.raises(InvalidTransition, match="RECEIPT_NOT_RECORDED"):
         journal.mark_acknowledged(attempt.attempt_id, provider_order_id="p-1", receipt_id="r-1", now=NOW)
-    _receipt(journal, "r-1", '{"order":{"id":"p-1"}}', provider_id="p-1", attempt_id=attempt.attempt_id)
+    _receipt(journal, "r-1", '{"order":{"id":"p-1"}}', provider_id="p-1", attempt_id=attempt.attempt_id,
+             kind="ORDER_ACK")
     done = journal.mark_acknowledged(attempt.attempt_id, provider_order_id="p-1", receipt_id="r-1", now=NOW)
     assert done.state is AttemptState.ACKNOWLEDGED and done.provider_order_id == "p-1"
     assert journal.reservations.reservation(attempt.reservation_id).state is ObligationState.OUTSTANDING
@@ -268,7 +327,7 @@ def test_no_new_attempt_while_an_earlier_one_could_exist(ready):
     journal.mark_sent(first.attempt_id, now=NOW)
     with pytest.raises(AttemptRefused, match="SENT"):
         f.prepare(journal, intent, token, nonce="n-2")
-    _receipt(journal, "r-ack", provider_id="p-1")
+    _receipt(journal, "r-ack", provider_id="p-1", kind="ORDER_ACK")  # bound by the provider order id
     journal.mark_acknowledged(first.attempt_id, provider_order_id="p-1", receipt_id="r-ack", now=NOW)
     with pytest.raises(AttemptRefused, match="ACKNOWLEDGED"):  # the order exists: never a second one
         f.prepare(journal, intent, token, nonce="n-2")
@@ -279,7 +338,7 @@ def test_a_rejected_attempt_releases_and_allows_a_new_approved_attempt(ready):
     intent = f.entry()
     first = f.prepare(journal, intent, token, nonce="n-1")
     journal.mark_sent(first.attempt_id, now=NOW)
-    _receipt(journal, "r-rej", '{"error":"insufficient_balance"}')
+    _receipt(journal, "r-rej", '{"error":"insufficient_balance"}', kind="ORDER_REJECT", attempt_id=first.attempt_id)
     journal.mark_rejected(first.attempt_id, receipt_id="r-rej", now=NOW)
     assert journal.reservations.reservation(first.reservation_id).state is ObligationState.RELEASED
     with pytest.raises(ApprovalRefused, match="NONCE_REUSED"):
@@ -301,7 +360,7 @@ def test_an_ambiguous_timeout_keeps_the_reservation_and_blocks_until_reconciled(
         f.prepare(journal, intent, token, nonce="n-2")
     with pytest.raises(InvalidTransition, match="only reconcile_attempt"):
         journal.mark_rejected(first.attempt_id, receipt_id="x", now=NOW)
-    _receipt(journal, "lookup-1", '{"orders":[]}', kind="ORDER_LOOKUP")
+    _receipt(journal, "lookup-1", '{"orders":[]}', kind="ORDER_LOOKUP", attempt_id=first.attempt_id)
     absent = journal.reconcile_attempt(first.attempt_id, AttemptState.ABSENT, receipt_id="lookup-1", now=NOW)
     assert absent.state is AttemptState.ABSENT and absent.state_reason == "RECONCILED"
     assert journal.reservations.reservation(first.reservation_id).state is ObligationState.RELEASED
@@ -313,7 +372,7 @@ def test_reconciling_an_unknown_attempt_as_found_keeps_it_reserved_and_blocks_re
     intent = f.entry()
     first = f.prepare(journal, intent, token, nonce="n-1")
     journal.mark_outcome_unknown(first.attempt_id, reason="connection reset during send", now=NOW)  # from PENDING
-    _receipt(journal, "lookup-1", '{"orders":[{"id":"p-9"}]}')
+    _receipt(journal, "lookup-1", '{"orders":[{"id":"p-9"}]}', kind="ORDER_LOOKUP", attempt_id=first.attempt_id)
     with pytest.raises(ValueError):
         journal.reconcile_attempt(first.attempt_id, AttemptState.ACKNOWLEDGED, receipt_id="lookup-1", now=NOW)
     found = journal.reconcile_attempt(first.attempt_id, AttemptState.ACKNOWLEDGED, receipt_id="lookup-1", now=NOW,
@@ -322,6 +381,47 @@ def test_reconciling_an_unknown_attempt_as_found_keeps_it_reserved_and_blocks_re
     assert journal.reservations.reservation(first.reservation_id).state is ObligationState.OUTSTANDING
     with pytest.raises(AttemptRefused):
         f.prepare(journal, intent, token, nonce="n-2")
+
+
+def test_a_receipt_for_another_attempt_or_of_the_wrong_kind_justifies_nothing(ready):
+    """Review finding 2, reproduced: a receipt for attempt x justified mark_rejected(y), and an ack receipt
+    justified a cancel confirmation."""
+    journal, token = ready
+    x = f.prepare(journal, f.entry("EXP-TEST:x"), token)
+    y = f.prepare(journal, f.entry("EXP-TEST:y"), token)
+    for a in (x, y):
+        journal.mark_sent(a.attempt_id, now=NOW)
+    f.receipt(journal, "rej-x", K.ORDER_REJECT, x.attempt_id)
+    with pytest.raises(InvalidTransition, match="RECEIPT_FOR_ANOTHER_ATTEMPT"):
+        journal.mark_rejected(y.attempt_id, receipt_id="rej-x", now=NOW)
+    f.receipt(journal, "ack-y", K.ORDER_ACK, y.attempt_id)
+    with pytest.raises(InvalidTransition, match="RECEIPT_KIND_NOT_ALLOWED"):
+        journal.mark_rejected(y.attempt_id, receipt_id="ack-y", now=NOW)
+    f.receipt(journal, "unbound", K.ORDER_REJECT, provider_id="p-elsewhere")
+    with pytest.raises(InvalidTransition, match="RECEIPT_NOT_BOUND"):
+        journal.mark_rejected(y.attempt_id, receipt_id="unbound", now=NOW)
+    assert journal.attempt(y.attempt_id).state is AttemptState.SENT
+    journal.mark_acknowledged(y.attempt_id, provider_order_id="p-y", receipt_id="ack-y", now=NOW)
+    with pytest.raises(InvalidTransition, match="RECEIPT_KIND_NOT_ALLOWED"):
+        journal.reservations.confirm_cancel(y.reservation_id, NOW, receipt_id="ack-y", venue_filled=0)
+    with pytest.raises(InvalidTransition, match="RECEIPT_FOR_ANOTHER_ATTEMPT"):
+        journal.reservations.record_fill(y.reservation_id, 1, NOW,
+                                         receipt_id=f.receipt(journal, "fill-x", K.FILL, x.attempt_id))
+    # Bound by the provider order id alone (no attempt id on the receipt) is accepted.
+    f.receipt(journal, "cancel-y", K.CANCEL_CONFIRM, provider_id="p-y")
+    assert journal.reservations.confirm_cancel(y.reservation_id, NOW, receipt_id="cancel-y",
+                                               venue_filled=0).state is ObligationState.BOUND
+    with pytest.raises(InvalidTransition, match="unknown attempt"):
+        f.receipt(journal, "ghost", K.FILL, "no-such-attempt")
+
+
+def test_reconciling_needs_an_order_lookup(ready):
+    journal, token = ready
+    a = f.prepare(journal, f.entry(), token)
+    journal.mark_outcome_unknown(a.attempt_id, reason="timeout", now=NOW)
+    f.receipt(journal, "rej", K.ORDER_REJECT, a.attempt_id)
+    with pytest.raises(InvalidTransition, match="RECEIPT_KIND_NOT_ALLOWED"):
+        journal.reconcile_attempt(a.attempt_id, AttemptState.ABSENT, receipt_id="rej", now=NOW)
 
 
 # ---------------------------------------------------------------- receipts
@@ -341,7 +441,7 @@ def test_duplicate_receipt_is_idempotent_and_a_different_payload_is_a_conflict_t
                                                                 ("CONFLICTING_DUPLICATE", '{"count":"30"}')]
     assert rows[0]["payload_sha256"] == m.sha256_text('{"count":"3"}') and rows[0]["provider_id"] == "p-1"
     with pytest.raises(InvalidTransition, match="RECEIPT_CONFLICTED"):
-        journal._require_receipt(journal._conn, "fill-77")
+        journal._require_receipt(journal._conn, "fill-77", kinds=(K.FILL,), attempt_id="any")
     with pytest.raises(ValueError):
         _receipt(journal, "bad", "{not json")
     assert journal.verify_chain().ok
@@ -358,6 +458,29 @@ def test_receipts_and_events_are_append_only(ready, path):
         with pytest.raises(sqlite3.DatabaseError, match="append-only"):
             conn.execute(sql)
     conn.close()
+
+
+@pytest.mark.parametrize("table", ["schema_meta", "intents", "approvals", "receipts", "events", "account_snapshots"])
+@pytest.mark.parametrize("verb", ["INSERT OR REPLACE", "REPLACE"])
+def test_insert_or_replace_cannot_rewrite_an_append_only_row(ready, path, table, verb):
+    """Review finding 5: REPLACE deletes the old row without firing delete triggers (recursive triggers are
+    off), so a BEFORE INSERT collision trigger refuses it."""
+    journal, token = ready
+    f.prepare(journal, f.entry(), token)
+    _receipt(journal, "r-1")
+    conn = sqlite3.connect(path)
+    before = conn.execute(f"SELECT * FROM {table} ORDER BY 1").fetchall()
+    with pytest.raises(sqlite3.DatabaseError, match="append-only"):
+        conn.execute(f"{verb} INTO {table} SELECT * FROM {table}")
+    if table == "receipts":  # a new row claiming to be a second ORIGINAL of an existing receipt id
+        with pytest.raises(sqlite3.DatabaseError, match="append-only"):
+            conn.execute(f"{verb} INTO receipts (receipt_id, status, kind, source, payload_json, payload_sha256,"
+                         " received_at_utc) SELECT receipt_id, 'ORIGINAL', kind, source, '{}', payload_sha256,"
+                         " received_at_utc FROM receipts")
+    conn.commit()
+    assert conn.execute(f"SELECT * FROM {table} ORDER BY 1").fetchall() == before
+    conn.close()
+    assert journal.verify_chain().ok
 
 
 def test_an_altered_receipt_payload_in_the_file_is_detected(ready, path):
@@ -419,6 +542,28 @@ def test_a_rewritten_intent_is_detected_even_when_its_digest_is_rewritten_too(re
     conn.close()
     report = journal.verify_chain()
     assert any(p.startswith("INTENT_UNAUDITED") for p in report.problems), report
+
+
+@pytest.mark.parametrize("trigger,tamper,problem", [
+    ("approvals_no_update", "UPDATE approvals SET method = 'POLICY'", "ROW_ALTERED: approvals"),
+    ("account_snapshots_no_update", "UPDATE account_snapshots SET cash = '1000000'", "ROW_ALTERED: account_snapshots"),
+    ("receipts_no_update", "UPDATE receipts SET attempt_id = NULL, provider_id = 'p-forged'", "ROW_ALTERED: receipts"),
+    (None, "UPDATE egress_lease SET fence_token = 99", "PROJECTION_DIVERGED: the egress lease"),
+    (None, "UPDATE egress_lease SET expires_at_utc = '2099-01-01T00:00:00+00:00'", "PROJECTION_DIVERGED: the egress"),
+])
+def test_verify_chain_covers_approvals_snapshots_receipt_rows_and_the_lease(ready, path, trigger, tamper, problem):
+    journal, token = ready
+    a = f.prepare(journal, f.entry(), token)
+    f.receipt(journal, "r-1", K.FILL, a.attempt_id)
+    assert journal.verify_chain().ok
+    conn = sqlite3.connect(path)
+    if trigger:
+        conn.execute(f"DROP TRIGGER {trigger}")
+    conn.execute(tamper)
+    conn.commit()
+    conn.close()
+    report = journal.verify_chain()
+    assert not report.ok and any(p.startswith(problem) for p in report.problems), report
 
 
 def test_a_corrupt_reservation_record_fails_closed_and_commits_nothing(ready, path):

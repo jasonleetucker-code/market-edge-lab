@@ -79,6 +79,24 @@ def prepare(journal: ExecutionJournal, intent: m.OrderIntent, token: int, *, non
                                    request_digest=request_digest(intent.intent_key), snapshot_max_age=MAX_AGE, now=at)
 
 
+def receipt(journal: ExecutionJournal, receipt_id: str, kind, attempt_id: str | None = None, *,
+            payload: str = '{"ok":true}', provider_id: str | None = None, at: datetime = NOW) -> str:
+    """Record a receipt and return its id (for the transition that cites it)."""
+    journal.record_receipt(receipt_id=receipt_id, kind=kind, source="fixture-transport", payload_json=payload,
+                           received_at=at, provider_id=provider_id, attempt_id=attempt_id)
+    return receipt_id
+
+
+def attributed(view, *, unreflected: str | None = "0", remaining: str | None = None, price: str | None = None):
+    """The venue's listing of a local reservation's open order, matching it unless told otherwise."""
+    from edge_lab.execution.reservations import AttributedOrder
+
+    rest = view.quantity - view.filled_quantity if remaining is None else Decimal(remaining)
+    return AttributedOrder(view.reservation_id, view.client_order_id, rest,
+                           view.limit_price if price is None else Decimal(price),
+                           None if unreflected is None else Decimal(unreflected))
+
+
 def counts(path: Path) -> dict[str, int]:
     import sqlite3
 
