@@ -1,0 +1,14 @@
+{
+  "settlements": [
+    {
+      "ticker": "KXHIGHNY-26SEP02-T58",
+      "exchange_index": 0,
+      "event_ticker": "KXHIGHNY-26SEP02",
+      "market_result": "yes",
+      "yes_count_fp": "2.00",
+      "no_count_fp": "0.00",
+      "settled_time": "2026-09-03T12:00:00Z"
+    }
+  ],
+  "cursor": null
+}
