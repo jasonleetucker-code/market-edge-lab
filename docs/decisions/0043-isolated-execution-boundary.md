@@ -56,6 +56,16 @@ Two opposite failures are possible:
    `shadow_ledger` for the `AccountState` type of the legacy shadow `assess()`, and `shadow_ledger` does not reach
    the research store. Package I gives risk rules a versioned account projection and removes that edge.
 
+   Inside the package the rules are structural, not name lists:
+   - **Capability modules.** `transport` and `signer` may be imported only by the files on a reviewed
+     allowlist (`CAPABILITY_USERS`): today only `transport → signer`, with no user of `transport` yet. The
+     executor is added to that list by a reviewed change.
+   - **No file changes another module's state.** That rules out assignment, `del` or mutating calls on an
+     imported module's or class's attributes, and `setattr`, `vars` or `globals`.
+   - **No reflection.** No `__closure__`, `__dict__`, `__code__`, private `getattr`, `inspect`, `gc` or
+     `sys.modules`.
+   - **Private safety state is named only by its owner:** `_HOSTS` in conformance.py, `_sign` in signer.py.
+
    Outside the package (`src/`, `scripts/`, `deploy/`), no import, attribute path, naming string or
    path-building string may reach it. These static scans catch ordinary and careless paths. They do not catch
    determined obfuscation; the hard control is the separate executor process and service user (package O)
