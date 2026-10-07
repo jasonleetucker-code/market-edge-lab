@@ -52,4 +52,9 @@ Under the 2026-10-07 Kalshi execution campaign directive (#160):
   file-exact relaxations (signer, transport, wire); nothing else imports it; FIXTURE is the only authorized
   environment; `cryptography` is an optional extra used only by the signer.
 
-New decisions start at 0044.
+- 0044: the execution risk gate. `execution/risk_gate.py` evaluates a typed intent against a versioned account
+  projection with every check listed in order. Formulas stay with their owners (`reserve_simultaneous_obligations`,
+  `risk.assess`, fee schedules). `risk.py` reads accounts through the `RiskAccount` protocol, removing the
+  `shadow_ledger` edge. Placeholder limits block every order until the owner sets real ones.
+
+New decisions start at 0045.
