@@ -17,7 +17,7 @@ one venue account would split its cash in two. Package G (account reconciliation
 - the candidate.
 
 Every Decimal operation here, the owner's sum included, runs in an exact local context that traps
-rounding (`_EXACT`), so the caller's thread-wide `decimal` precision can never change a decision.
+rounding (`_exact_context()`), so the caller's thread-wide `decimal` precision can never change a decision.
 
 Cash worst cases:
 - ENTRY and REDUCTION: `intent.max_total_cost` (for a REDUCTION that is its fee bound);
@@ -87,8 +87,14 @@ from .model import (MAX_DIGITS, AccountScope, Action, ExactValueError, IntentKin
 EGRESS_LEASE = "egress"
 # How far a snapshot's observed_at may be ahead of the recorder's clock. Beyond it the clocks disagree.
 SNAPSHOT_CLOCK_SKEW = timedelta(seconds=5)
-# Exact arithmetic: a result that would need rounding raises instead of being rounded.
-_EXACT = Context(prec=2 * MAX_DIGITS + 10, traps=[InvalidOperation, Inexact, Rounded])
+
+
+def _exact_context() -> Context:
+    """Exact arithmetic: a result that would need rounding raises instead of being rounded. A fresh context
+    per use, because a shared module-level Context would be mutable state."""
+    return Context(prec=2 * MAX_DIGITS + 10, traps=[InvalidOperation, Inexact, Rounded])
+
+
 
 SCHEMA_SQL = """
 CREATE TABLE egress_lease (
@@ -239,7 +245,7 @@ class _Store(Protocol):
 def _exact(refusal: type[ReservationError] = ReservationRefused) -> Iterator[None]:
     """Run Decimal arithmetic exactly; a result that would need rounding refuses instead."""
     try:
-        with localcontext(_EXACT):
+        with localcontext(_exact_context()):
             yield
     except (Inexact, Rounded, InvalidOperation) as exc:
         if refusal is ReservationRefused:
@@ -909,7 +915,7 @@ class ReservationAuthority:
                          " updated_at_utc = ? WHERE reservation_id = ?",
                          (decimal_text(filled), at if filled != r.filled_quantity else r.last_fill_at_utc, at,
                           reservation_id))
-            with localcontext(_EXACT):
+            with localcontext(_exact_context()):
                 reduced = filled < r.filled_quantity
             self._store._audit(conn, at=at, kind="RESERVATION_RESOLVED", subject=reservation_id,
                                body={"from": r.state, "to": r.state, "venue_filled": filled, "receipt_id": receipt_id,
@@ -1053,7 +1059,7 @@ class ReservationAuthority:
             state = ObligationState(row[11])
             quantity, filled = _req_dec(row[7], name="quantity"), _req_dec(row[9], name="filled_quantity")
             listing = attributed.get(row[0])
-            with localcontext(_EXACT):
+            with localcontext(_exact_context()):
                 held = (state is not ObligationState.RELEASED and listing is not None
                         and listing.remaining_quantity == quantity - filled)
             return ReservationView(
