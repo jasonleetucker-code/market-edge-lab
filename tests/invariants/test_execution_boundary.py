@@ -51,8 +51,11 @@ PROTECTED = frozenset({"sports_evidence", "exp002_timing", "odds_schedule", "pri
 TRANSITIVE_EXEMPT = {("risk", "shadow_ledger"): "AccountState type for legacy shadow assess(); package I removes it"}
 
 THIRD_PARTY = {"cryptography": frozenset({"edge_lab/execution/signer.py"})}
-NETWORK_MODULES = frozenset({"socket", "ssl", "http", "urllib", "ftplib", "smtplib", "poplib", "imaplib", "telnetlib",
-                             "xmlrpc", "asyncio", "selectors", "socketserver", "webbrowser", "email"})
+NETWORK_MODULES = frozenset({"socket", "_socket", "ssl", "_ssl", "http", "urllib", "ftplib", "smtplib", "poplib",
+                             "imaplib", "telnetlib", "xmlrpc", "asyncio", "selectors", "socketserver", "webbrowser",
+                             "email", "wsgiref"})
+# Network-capable submodules of otherwise harmless packages (HTTPHandler, SocketHandler, config.listen()).
+NETWORK_SUBMODULES = ("logging.handlers", "logging.config")
 NETWORK_FILES = frozenset({"edge_lab/execution/transport.py"})
 SQLITE_FILES = frozenset({"edge_lab/execution/journal.py", "edge_lab/execution/reservations.py"})
 BANNED_IN_PACKAGE = frozenset({"subprocess", "multiprocessing", "concurrent", "ctypes", "pty", "importlib", "runpy",
@@ -191,7 +194,7 @@ def _inside_violations(rel: str, text: str) -> list[str]:
 # package name, through which `urllib.request` or `http.client` is reachable once any module loaded it.
 _NETWORK_FROM_OK = {"urllib.parse": None, "http": frozenset({"HTTPStatus"})}  # None: any name
 _NETWORK_ATTRIBUTE = re.compile(r"\b(urllib\s*\.\s*(request|response|error|robotparser)|http\s*\.\s*(client|server|"
-                                r"cookiejar|cookies)|socket\s*\.|ssl\s*\.)")
+                                r"cookiejar|cookies)|logging\s*\.\s*(handlers|config))|(?<![A-Za-z0-9])_?(socket|ssl)\s*\.")
 
 
 def _network_and_os_hits(rel: str, text: str) -> list[str]:
@@ -203,6 +206,8 @@ def _network_and_os_hits(rel: str, text: str) -> list[str]:
                 top = alias.name.split(".")[0]
                 if top in NETWORK_MODULES and rel not in NETWORK_FILES:
                     hits.append(f"{rel}:{line}: plain import of network package {alias.name}")
+                if alias.name.startswith(NETWORK_SUBMODULES) and rel not in NETWORK_FILES:
+                    hits.append(f"{rel}:{line}: imports network-capable {alias.name}")
                 if top == "os" and alias.asname:
                     hits.append(f"{rel}:{line}: os imported under an alias (hides banned calls)")
         elif isinstance(node, ast.ImportFrom) and not node.level and node.module:
@@ -210,14 +215,37 @@ def _network_and_os_hits(rel: str, text: str) -> list[str]:
             names = {a.name for a in node.names}
             if top == "os" and "*" in names:
                 hits.append(f"{rel}:{line}: from os import *")
+            if rel not in NETWORK_FILES and (node.module.startswith(NETWORK_SUBMODULES) or (
+                    node.module == "logging" and names & {"handlers", "config", "*"})):
+                hits.append(f"{rel}:{line}: imports network-capable logging parts")
             if top in NETWORK_MODULES and rel not in NETWORK_FILES:
                 allowed = _NETWORK_FROM_OK.get(node.module, frozenset())
                 if not (node.module in _NETWORK_FROM_OK and (allowed is None or names <= allowed)):
                     hits.append(f"{rel}:{line}: imports network names from {node.module}")
+        elif isinstance(node, ast.ImportFrom) and node.level == 1 and node.module == "transport" \
+                and rel not in NETWORK_FILES:
+            leaked = {a.name for a in node.names} & (_transport_network_names() | {"*"})
+            if leaked:
+                hits.append(f"{rel}:{line}: re-imports transport's network names {sorted(leaked)}")
     if rel not in NETWORK_FILES:
         hits += [f"{rel}:{n}: uses a network module by attribute" for n, src_line in enumerate(text.splitlines(), 1)
                  if _NETWORK_ATTRIBUTE.search(src_line)]
     return hits
+
+
+def _transport_network_names() -> set[str]:
+    """Every name transport.py binds from a network module (Request, urlopen, HTTPError, ...)."""
+    path = PACKAGE / "transport.py"
+    names = {"Request", "urlopen", "build_opener", "HTTPSHandler", "HTTPConnection", "HTTPSConnection", "socket",
+             "create_connection", "SSLContext", "create_default_context"}
+    if path.is_file():
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+            if isinstance(node, ast.ImportFrom) and node.module and node.module.split(".")[0] in NETWORK_MODULES:
+                names |= {a.asname or a.name for a in node.names}
+            elif isinstance(node, ast.Import):
+                names |= {(a.asname or a.name).split(".")[0] for a in node.names
+                          if a.name.split(".")[0] in NETWORK_MODULES}
+    return names
 
 
 def _outside_files():
@@ -314,6 +342,17 @@ def test_the_package_imports_only_what_its_files_may():
     ("edge_lab/execution/lifecycle.py", "from http import HTTPStatus, client"),
     ("edge_lab/execution/journal.py", "import os as o\no.system('x')"),
     ("edge_lab/execution/journal.py", "from os import *"),
+    ("edge_lab/execution/lifecycle.py", "from logging.handlers import HTTPHandler"),
+    ("edge_lab/execution/lifecycle.py", "import logging.handlers"),
+    ("edge_lab/execution/lifecycle.py", "from logging import handlers"),
+    ("edge_lab/execution/lifecycle.py", "import logging\nlogging.config.listen(9999)"),
+    ("edge_lab/execution/lifecycle.py", "import logging\nh = logging.handlers.HTTPHandler(h, u, 'POST')"),
+    ("edge_lab/execution/lifecycle.py", "from wsgiref.simple_server import make_server"),
+    ("edge_lab/execution/lifecycle.py", "import _socket"),
+    ("edge_lab/execution/lifecycle.py", "s = _socket.socket()"),
+    ("edge_lab/execution/lifecycle.py", "import _ssl"),
+    ("edge_lab/execution/lifecycle.py", "from .transport import Request"),
+    ("edge_lab/execution/lifecycle.py", "from .transport import *"),
 ])
 def test_a_forbidden_package_import_is_caught(rel, line):
     assert _inside_violations(rel, line + "\n"), line
@@ -330,6 +369,7 @@ def test_allowed_imports_pass():
                                   "from http import HTTPStatus\n")
     assert not _inside_violations("edge_lab/execution/transport.py", "import urllib.request\nimport http.client\n"
                                   "r = urllib.request.Request(u)\n")
+    assert not _inside_violations("edge_lab/execution/lifecycle.py", "import logging\nlog = logging.getLogger(__name__)\n")
 
 
 def test_protected_owners_are_never_allowed():
@@ -382,3 +422,41 @@ def test_authorization_has_one_owner():
             for n, line in enumerate(p.read_text(encoding="utf-8").splitlines(), 1)
             if re.search(r"AUTHORIZED_ENVIRONMENTS\s*(\|=|=|\+=)(?!=)", line)]
     assert not hits, hits
+
+
+# ---------------------------------------------------------------- tampering with execution safety state
+
+# Only the owning file may assign these; nobody may reach a signer's closure or private signing method.
+_TAMPERING = re.compile(r"\b(_HOSTS|AUTHORIZED_ENVIRONMENTS|PLANNED_EXECUTION_EXCEPTIONS)\b\s*(\[[^\]]*\]\s*)?"
+                        r"(\+|\||-)?=(?!=)|__closure__|cell_contents|\._sign\b"
+                        r"|setattr\([^)]*[\"'](_HOSTS|AUTHORIZED_ENVIRONMENTS|_sign)[\"']")
+_TAMPER_OWNERS = {"edge_lab/execution/model.py": {"AUTHORIZED_ENVIRONMENTS"},
+                  "edge_lab/execution/conformance.py": {"_HOSTS"},
+                  "edge_lab/execution/signer.py": {"_sign"}}
+
+
+def _tamper_hits(rel: str, text: str) -> list[str]:
+    owned = _TAMPER_OWNERS.get(rel, set())
+    hits = []
+    for n, line in enumerate(text.splitlines(), 1):
+        m = _TAMPERING.search(line)
+        if m and not any(name in line for name in owned):
+            hits.append(f"{rel}:{n}: {line.strip()}")
+    return hits
+
+
+def test_nothing_tampers_with_hosts_authorization_or_the_signer():
+    files = [p for p in SRC.rglob("*.py")] + [p for p in _outside_files() if SRC not in p.parents]
+    hits = [h for p in set(files) for h in _tamper_hits(_rel(p), p.read_text(encoding="utf-8"))]
+    assert not hits, "\n".join(hits)
+
+
+@pytest.mark.parametrize("rel,line", [
+    ("edge_lab/execution/journal.py", "conformance._HOSTS[Environment.FIXTURE] = 'external-api.kalshi.com'"),
+    ("edge_lab/cli.py", "model.AUTHORIZED_ENVIRONMENTS = frozenset(Environment)"),
+    ("edge_lab/execution/transport.py", "key = signer._sign.__closure__[0].cell_contents"),
+    ("edge_lab/execution/transport.py", "sig = self._signer._sign(b'anything')"),
+    ("edge_lab/execution/lifecycle.py", "setattr(conformance, '_HOSTS', {})"),
+])
+def test_tampering_is_caught(rel, line):
+    assert _tamper_hits(rel, line + "\n"), line
