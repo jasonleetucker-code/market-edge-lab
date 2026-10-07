@@ -15,11 +15,20 @@ Coarse state and detail
 How `filled` is known
 - Two kinds of evidence are kept apart: the fills received (by fill id) and the venue's cumulative
   fill counts (`count_observations`, each with the venue time it was true at).
-- A count observed at time t covers the fills executed at or before t. Fills received with a later
-  venue time are on top of it. So `filled` is the largest of: the fills received, and, for each
-  observation, its count plus the received fills timestamped after it. It never decreases.
-- When a fill or an observation has no usable time, which fills an observation covers is unknown. The
-  lower bound is kept, `fill_timing_uncertain` is set, and fees are never reported complete.
+- A count observed at time t covers the fills executed at or before t. Fills received with a venue time
+  clearly later (beyond `TIMESTAMP_SKEW`) are on top of it. So `filled` is the largest of: the fills
+  received, and, for each observation, its count plus the received fills clearly after it. It never
+  decreases.
+- Each new count is checked against the count implied at its own time: an earlier count plus the fills
+  clearly between the two, or the fills clearly before it. A lower count is a dispute: it quarantines
+  when authoritative or final, and is noted otherwise. Fills within the skew of a snapshot get the
+  benefit of the doubt in both directions (not "clearly before" for a dispute, not "clearly after" for
+  the lower bound).
+- When a fill or an observation has no usable time, a fill falls within the skew window after a count,
+  or a count is disputed, which fills a count covers is unknown. The lower bound is kept,
+  `fill_timing_uncertain` is set, and fees are never reported complete.
+- A reconcile's remaining quantity must equal its total minus its fill count (checked), so comparing its
+  remaining with the view is the same comparison as its fill count with the implied count.
 - A final count (a canceled or executed order) cannot be exceeded. A venue-stated cancel count
   (`canceled_floor`) never changes once known; a second, different one quarantines.
 - A count below fills the snapshot must already include, or below an earlier venue count, is noted.
@@ -46,7 +55,9 @@ Cancellation, amendment and terminal states
   pending, fills at its new price are within the limit.
 - An amendment keeps the order's identity. If the venue assigns a new provider id, the old one moves to
   `prior_provider_order_ids`, and fills for either id still match. A receipt with our client order id
-  and an unknown provider id, while an amendment is pending or ambiguous, is taken as that replacement.
+  and an unknown provider id, while an amendment is pending or ambiguous, is taken provisionally as that
+  replacement (`provisional_provider_order_id`): nothing may be canceled or amended against it, and an
+  amendment reject, or a reconcile showing the amendment not applied, quarantines the view.
 - A terminal view still records every later receipt (`receipts`). If a receipt contradicts the terminal
   state, the view is quarantined; the state never moves back.
 
@@ -63,6 +74,7 @@ from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 from decimal import Decimal
 from enum import Enum
+from types import MappingProxyType
 from typing import Iterable, Union
 
 from ..execution_ticket import OrderState, transition
@@ -74,6 +86,10 @@ TERMINAL_STATES = frozenset({OrderState.FILLED, OrderState.CANCELLED, OrderState
 # How long after our recorded send a complete not-found snapshot must be taken to prove the order never
 # arrived. Provisional: it covers transit and clock disagreement; the conformance pack should set it.
 NOT_FOUND_MIN_DELAY = timedelta(seconds=30)
+# How far a fill's venue time may disagree with a snapshot's `as_of` (different endpoints, different
+# clocks). Provisional: the conformance pack should measure it. Within it, the reducer gives each side the
+# benefit of the doubt in the safe direction (see `_relation`).
+TIMESTAMP_SKEW = timedelta(seconds=2)
 
 
 class Operation(str, Enum):
@@ -345,6 +361,7 @@ class CountObservation:
     as_of_utc: str | None
     final: bool
     source: str
+    authoritative: bool = False
 
 
 @dataclass(frozen=True)
@@ -374,6 +391,7 @@ class OrderView:
     established: bool  # an Acknowledged or a found ReconcileObserved has shown the order exists
     provider_order_id: str | None
     prior_provider_order_ids: tuple[str, ...]
+    provisional_provider_order_id: str | None  # a replacement id seen before its amendment was confirmed
     limit_price: Decimal
     limit_prices: tuple[Decimal, ...]  # every limit the order has carried, in order
     total_quantity: Decimal
@@ -425,12 +443,21 @@ class OrderView:
     def fill_timing_uncertain(self) -> bool:
         """True when it is unknown which received fills a venue count already covers, so `filled` is a
         lower bound that may be short."""
-        if any(o.final for o in self.count_observations) or not self.fills:
+        if any(o.final for o in self.count_observations):
             return False
-        if self.filled_quantity >= self.total_quantity and self.amend_pending is None:
+        for o in self.count_observations:
+            at = _time(o.as_of_utc)
+            if at is not None and _implied_at(self, at) > o.count:
+                return True  # a disputed count: noted, and `filled` may overstate as well as understate
+        if not self.fills or (self.filled_quantity >= self.total_quantity and self.amend_pending is None):
             return False
-        fills_untimed = any(_time(f.venue_time_utc) is None for f in self.fills)
-        return any(o.count > 0 and (fills_untimed or _time(o.as_of_utc) is None) for o in self.count_observations)
+        for o in self.count_observations:
+            if o.count <= 0:
+                continue
+            at = _time(o.as_of_utc)
+            if at is None or any(_relation(f, at) in ("unknown", "window") for f in self.fills):
+                return True
+        return False
 
     @property
     def fees_known(self) -> Decimal:
@@ -472,6 +499,7 @@ def open_view(*, client_order_id: str, market_ticker: str, side: Side, action: A
         client_order_id=client_order_id, intent_digest=intent_digest, market_ticker=market_ticker, side=side,
         action=action, original_quantity=qty, state=OrderState.PENDING, send_stage=SendStage.UNSENT,
         sent_at_utc=None, established=False, provider_order_id=None, prior_provider_order_ids=(),
+        provisional_provider_order_id=None,
         limit_price=price, limit_prices=(price,), total_quantity=qty, total_history=(qty,), filled_quantity=ZERO,
         remaining_quantity=qty, canceled_quantity=ZERO, cancel_basis=None, canceled_floor=ZERO, fills=(),
         count_observations=(), parked_fills=(), cancel_requested=False, amend_pending=None, amend_reply_owed=False,
@@ -547,6 +575,8 @@ def cancel_problems(view: OrderView) -> list[str]:
         out.append("CANCEL_ALREADY_PENDING")
     if view.ambiguous_operation is not None:
         out.append(f"RECONCILE_FIRST: {view.ambiguous_operation.value} outcome unknown")
+    if view.provisional_provider_order_id is not None:
+        out.append("PROVIDER_ID_PROVISIONAL: the replacement id is not confirmed; reconcile first")
     return out
 
 
@@ -569,6 +599,9 @@ def amend_problems(view: OrderView, new_total: Decimal | None, new_price: Decima
         out.append(f"RECONCILE_FIRST: {view.ambiguous_operation.value} outcome unknown")
     if new_total is None and new_price is None:
         out.append("AMEND_EMPTY")
+    elif (view.total_quantity if new_total is None else new_total) == view.total_quantity and \
+            (view.limit_price if new_price is None else new_price) == view.limit_price:
+        out.append("AMEND_NO_CHANGE: the amendment would change neither total nor price")
     if new_total is not None:
         if new_total < view.filled_quantity:
             out.append(f"AMEND_BELOW_FILLED: total {new_total} < filled {view.filled_quantity} (the amend count is "
@@ -628,26 +661,62 @@ def _identity_problem(view: OrderView, provider_order_id: str | None, client_ord
     return None
 
 
-def _link_provider_id(view: OrderView, provider_order_id: str | None) -> OrderView:
-    """Record a provider id the identity check accepted: the first one, or a replacement id."""
+def _link_provider_id(view: OrderView, provider_order_id: str | None, *, confirmed: bool = False) -> OrderView:
+    """Record a provider id the identity check accepted: the first one, or a replacement id. A replacement
+    seen before the venue confirmed the amendment is provisional."""
     if provider_order_id is None or provider_order_id in view.provider_ids():
         return view
     if view.provider_order_id is None:
         return replace(view, provider_order_id=provider_order_id)
     out = replace(view, provider_order_id=provider_order_id,
-                  prior_provider_order_ids=view.prior_provider_order_ids + (view.provider_order_id,))
-    return _note(out, f"PROVIDER_ID_REPLACED: {view.provider_order_id} -> {provider_order_id} (amendment lineage)")
+                  prior_provider_order_ids=view.prior_provider_order_ids + (view.provider_order_id,),
+                  provisional_provider_order_id=None if confirmed else provider_order_id)
+    kind = "confirmed" if confirmed else "provisional until the amendment is confirmed"
+    return _note(out, f"PROVIDER_ID_REPLACED: {view.provider_order_id} -> {provider_order_id} ({kind})")
+
+
+def _relation(fill: FillRecord, at: datetime) -> str:
+    """Where a fill's venue time falls relative to a snapshot time `at`:
+    - "before": at or before `at`, so the snapshot covers it;
+    - "window": within `TIMESTAMP_SKEW` after `at`, so it may be covered;
+    - "after": clearly after `at`, so it is on top of the snapshot;
+    - "unknown": the fill has no usable time.
+    For a dispute check only fills at least the skew before `at` count as before (`_clearly_before`)."""
+    ft = _time(fill.venue_time_utc)
+    if ft is None:
+        return "unknown"
+    if ft <= at:
+        return "before"
+    return "window" if ft <= at + TIMESTAMP_SKEW else "after"
+
+
+def _clearly_before(fill: FillRecord, at: datetime) -> bool:
+    ft = _time(fill.venue_time_utc)
+    return ft is not None and ft <= at - TIMESTAMP_SKEW
 
 
 def _implied_filled(fills: tuple[FillRecord, ...], observations: tuple[CountObservation, ...]) -> Decimal:
-    """The largest of the fills received and, per venue count, the count plus the fills received with a
-    later venue time. Untimed fills or counts are treated as covered (a lower bound)."""
+    """The largest of the fills received and, per venue count, the count plus the fills received clearly
+    after it. Untimed fills, untimed counts and fills in the skew window count as covered (a lower bound)."""
     best = sum((f.quantity for f in fills), ZERO)
-    timed = [(f.quantity, _time(f.venue_time_utc)) for f in fills]
     for o in observations:
         at = _time(o.as_of_utc)
-        after = ZERO if at is None else sum((q for q, ft in timed if ft is not None and ft > at), ZERO)
+        after = ZERO if at is None else sum((f.quantity for f in fills if _relation(f, at) == "after"), ZERO)
         best = max(best, o.count + after)
+    return best
+
+
+def _implied_at(view: OrderView, at: datetime) -> Decimal:
+    """The least the venue's count at `at` must be: the fills clearly before `at`, or an earlier timed count
+    plus the fills clearly after it and clearly before `at`. Skew-window fills get the benefit of the doubt."""
+    best = sum((f.quantity for f in view.fills if _clearly_before(f, at)), ZERO)
+    for o in view.count_observations:
+        earlier = _time(o.as_of_utc)
+        if earlier is None or earlier > at:
+            continue
+        between = sum((f.quantity for f in view.fills if _relation(f, earlier) == "after" and _clearly_before(f, at)),
+                      ZERO)
+        best = max(best, o.count + between)
     return best
 
 
@@ -739,14 +808,18 @@ def _observe(view: OrderView, count: Decimal, as_of_utc: str | None, *, final: b
         return f"MALFORMED_COUNTS: fill count {count} is negative"
     at = _time(as_of_utc)
     received = view.fill_quantity_applied
-    covered = ZERO if at is None else sum((f.quantity for f in view.fills if (ft := _time(f.venue_time_utc))
-                                           is not None and ft <= at), ZERO)
-    if covered > count:
+    implied = ZERO if at is None else _implied_at(view, at)
+    clearly_before = ZERO if at is None else sum((f.quantity for f in view.fills if _clearly_before(f, at)), ZERO)
+    if implied > count:
+        reason = (f"{count} at {as_of_utc} < {implied} implied at that time by earlier counts and the fills "
+                  f"clearly before it ({source})")
         if final or authoritative:
-            return f"COUNT_BELOW_APPLIED_FILLS: venue count {count} < {covered} received fills executed by {as_of_utc}"
-        view = _note(view, f"STALE_FILL_COUNT: {count} < {covered} received fills executed by its time ({source})")
+            if clearly_before > count:
+                return f"COUNT_BELOW_APPLIED_FILLS: venue count {reason}"
+            return f"COUNT_BELOW_IMPLIED_FILLS: venue count {reason}"
+        view = _note(view, f"COUNT_DISPUTED: {reason}; the higher evidence is kept and fees stay incomplete")
     elif received > count:
-        if final or (authoritative and covered + _untimed_fills(view, at) > count):
+        if final or (authoritative and clearly_before + _untimed_fills(view, at) > count):
             return (f"COUNT_BELOW_APPLIED_FILLS: venue count {count} < fills received {received} and not shown "
                     f"to be older ({source})")
         view = _note(view, f"STALE_FILL_COUNT: {count} < fills received {received} ({source})")
@@ -760,8 +833,8 @@ def _observe(view: OrderView, count: Decimal, as_of_utc: str | None, *, final: b
     if higher:
         view = _note(view, f"COUNT_BELOW_EARLIER_VENUE_COUNT: {count} ({source}) < {max(o.count for o in higher)}; "
                            f"stale or not shown to be newer")
-    return replace(view, count_observations=view.count_observations + (CountObservation(count, as_of_utc, final,
-                                                                                        source),))
+    observation = CountObservation(count, as_of_utc, final, source, authoritative or final)
+    return replace(view, count_observations=view.count_observations + (observation,))
 
 
 def _untimed_fills(view: OrderView, at: datetime | None) -> Decimal:
@@ -861,7 +934,10 @@ def _apply_amend(view: OrderView, new_total: Decimal, new_price: Decimal,
     out = replace(out, limit_price=new_price, limit_prices=prices, amend_pending=None,
                   ambiguous_operation=None if out.ambiguous_operation is Operation.AMEND else out.ambiguous_operation)
     if new_provider_order_id is not None and new_provider_order_id not in out.provider_ids():
-        out = _link_provider_id(out, new_provider_order_id)
+        out = _link_provider_id(out, new_provider_order_id, confirmed=True)
+    if out.provisional_provider_order_id is not None:
+        out = _note(replace(out, provisional_provider_order_id=None),
+                    f"PROVIDER_ID_CONFIRMED: {out.provisional_provider_order_id} (the amendment applied)")
     return out
 
 
@@ -981,6 +1057,9 @@ def _on_rejected(view: OrderView, event: Rejected) -> OrderView:
             return _quarantine(replace(view, amend_reply_owed=False),
                                f"AMEND_REJECT_CONTRADICTS_SNAPSHOT: {event.reason!r}, but a snapshot showed it applied")
         return _note(view, f"STRAY_AMEND_REJECT: {event.reason}")
+    if view.provisional_provider_order_id is not None:
+        return _quarantine(view, f"PROVISIONAL_ID_UNCONFIRMED: the amendment was rejected ({event.reason!r}), but "
+                                 f"receipts named {view.provisional_provider_order_id} as its replacement")
     out = replace(view, amend_pending=None, ambiguous_operation=None if view.ambiguous_operation is Operation.AMEND
                   else view.ambiguous_operation)
     return _finish(view, _note(out, f"AMEND_REJECTED: {event.reason}"))
@@ -1162,6 +1241,10 @@ def _on_amend_ack(view: OrderView, event: AmendAcknowledged) -> OrderView:
         if event.remaining_quantity is not None and event.filled_quantity + event.remaining_quantity != event.new_total:
             return _quarantine(before, f"MALFORMED_AMEND_ACK: filled {event.filled_quantity} + remaining "
                                        f"{event.remaining_quantity} != total {event.new_total}")
+    provisional = view.provisional_provider_order_id
+    if provisional is not None and event.new_provider_order_id != provisional:
+        return _quarantine(before, f"PROVISIONAL_ID_UNCONFIRMED: receipts named {provisional} as the replacement, "
+                                   f"the amend reply names {event.new_provider_order_id}")
     amended = _apply_amend(view, event.new_total, event.new_price, event.new_provider_order_id)
     if isinstance(amended, str):
         return _quarantine(before, amended)
@@ -1195,6 +1278,9 @@ def _on_reconcile(view: OrderView, event: ReconcileObserved) -> OrderView:
     if status in (VenueStatus.RESTING, VenueStatus.PENDING) and view.is_terminal:
         return _quarantine(view, f"TERMINAL_CONTRADICTED: venue says {status.value}, view is {view.state.value}")
     if event.provider_order_id in view.prior_provider_order_ids:
+        if view.provisional_provider_order_id is not None:
+            return _quarantine(view, f"PROVISIONAL_ID_UNCONFIRMED: the venue still holds {event.provider_order_id}, "
+                                     f"not the provisional {view.provisional_provider_order_id}")
         return _note(view, "STALE_SNAPSHOT: reconcile named a replaced provider id")
     out = _link_provider_id(view, event.provider_order_id)
     out = replace(out, established=True, last_venue_status=status.value)
@@ -1204,6 +1290,17 @@ def _on_reconcile(view: OrderView, event: ReconcileObserved) -> OrderView:
                               as_of_utc=event.as_of_utc, source="reconcile", price=event.price)
     if _changed(view, out):
         return out
+    if out.provisional_provider_order_id is not None and event.provider_order_id == out.provisional_provider_order_id:
+        # The venue holds the replacement order: the amendment that created it applied.
+        target = out.amend_pending or AmendTarget(out.total_quantity, out.limit_price)
+        if (target.new_total, target.new_price) != (out.total_quantity, out.limit_price) and \
+                (event.total_quantity is not None or event.price is not None):
+            return _quarantine(view, "PROVISIONAL_ID_UNCONFIRMED: the replacement order does not carry the requested "
+                                     "total and price")
+        amended = _apply_amend(out, out.total_quantity, out.limit_price, None)
+        if isinstance(amended, str):
+            return _quarantine(view, amended)
+        out = replace(amended, amend_reply_owed=True)
     ambiguity, still_unknown = out.ambiguous_operation, False
     if ambiguity is Operation.CANCEL and status is not VenueStatus.CANCELED:
         out = _note(replace(out, cancel_requested=False), "CANCEL_NOT_APPLIED_PER_RECONCILE")
@@ -1213,6 +1310,9 @@ def _on_reconcile(view: OrderView, event: ReconcileObserved) -> OrderView:
             still_unknown = True  # a price change cannot be judged without the venue's price
             out = _note(out, "AMEND_OUTCOME_STILL_UNKNOWN: the snapshot has no price")
         elif out.total_quantity == old_total:
+            if out.provisional_provider_order_id is not None:
+                return _quarantine(view, "PROVISIONAL_ID_UNCONFIRMED: the reconcile shows the amendment not applied, "
+                                         f"but receipts named {out.provisional_provider_order_id} as its replacement")
             out = _note(replace(out, amend_pending=None), "AMEND_NOT_APPLIED_PER_RECONCILE")
     if status is VenueStatus.CANCELED:
         out = replace(out, cancel_requested=False)
@@ -1245,12 +1345,12 @@ def _on_not_found(view: OrderView, event: ReconcileObserved) -> OrderView:
     return _move(view, out, OrderState.REJECTED)
 
 
-_HANDLERS = {
+_HANDLERS = MappingProxyType({
     SendPrepared: _on_send_prepared, SendReturnedAmbiguous: _on_ambiguous, Acknowledged: _on_ack,
     Rejected: _on_rejected, Fill: _on_fill, CancelRequested: _on_cancel_requested,
     CancelConfirmed: _on_cancel_confirmed, AmendRequested: _on_amend_requested, AmendAcknowledged: _on_amend_ack,
     Expired: _on_expired, ReconcileObserved: _on_reconcile,
-}
+})
 
 
 def _counts_text(view: OrderView) -> str:

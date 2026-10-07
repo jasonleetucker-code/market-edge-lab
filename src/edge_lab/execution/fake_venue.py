@@ -131,9 +131,22 @@ class _Entry:
 class FakeVenue:
     def __init__(self, *, fee: FeeHook | None = None, price_grid: Grid = CENT_GRID,
                  quantity_grid: Grid = WHOLE_CONTRACTS, cash: object = "1000", start: datetime = DEFAULT_START,
-                 amend_assigns_new_order_id: bool = False) -> None:
+                 amend_assigns_new_order_id: bool = False, tick_seconds: int = 10,
+                 fill_time_offsets: tuple[int, ...] = ()) -> None:
         if not isinstance(price_grid, Grid) or not isinstance(quantity_grid, Grid):
             raise TypeError("grids must be model.Grid values")
+        if isinstance(tick_seconds, bool) or not isinstance(tick_seconds, int) or tick_seconds < 1:
+            raise ValueError("tick_seconds must be a positive int")
+        # Each venue action advances the clock by `tick_seconds`: wider than the reducer's timestamp-skew
+        # tolerance, so the fake's own times are unambiguous unless a test narrows it on purpose.
+        self._tick_seconds = tick_seconds
+        self._clock_seconds = 0
+        # Skew injection: fill n is stamped `fill_time_offsets[n % len]` seconds off the venue clock, as if
+        # fills and order snapshots came from endpoints whose clocks disagree.
+        if not isinstance(fill_time_offsets, tuple) or not all(
+                isinstance(x, int) and not isinstance(x, bool) for x in fill_time_offsets):
+            raise TypeError("fill_time_offsets must be a tuple of ints")
+        self._fill_time_offsets = fill_time_offsets
         self.price_grid, self.quantity_grid = price_grid, quantity_grid
         self._fee = fee
         self._start = start
@@ -157,17 +170,18 @@ class FakeVenue:
     # ---------------------------------------------------------------- clock and ids
 
     def _tick(self) -> str:
-        self._seq += 1
-        return utc_text(self._start + timedelta(seconds=self._seq))
+        self._seq += 1  # arrival sequence (time priority)
+        self._clock_seconds += self._tick_seconds
+        return self.now_text()
 
     def advance(self, seconds: int) -> None:
         """Move the fake clock forward (a test hook)."""
         if isinstance(seconds, bool) or not isinstance(seconds, int) or seconds < 0:
             raise ValueError("seconds must be a non-negative int")
-        self._seq += seconds
+        self._clock_seconds += seconds
 
     def now_text(self) -> str:
-        return utc_text(self._start + timedelta(seconds=self._seq))
+        return utc_text(self._start + timedelta(seconds=self._clock_seconds))
 
     def _next_order_id(self) -> str:
         self._order_counter += 1
@@ -323,6 +337,10 @@ class FakeVenue:
         order.remaining_count -= quantity
         at = self._tick()
         order.last_update_time = at
+        stamped = at
+        if self._fill_time_offsets:
+            offset = self._fill_time_offsets[self._fill_counter % len(self._fill_time_offsets)]
+            stamped = utc_text(self._start + timedelta(seconds=self._clock_seconds + offset))
         if order.remaining_count == 0 and order.status == "resting":
             order.status = "executed"
         key = (order.ticker, order.side)
@@ -335,7 +353,7 @@ class FakeVenue:
             self.positions[key] = self.positions.get(key, ZERO) - quantity
         fill = {"fill_id": self._next_fill_id(), "order_id": order.order_id, "client_order_id": order.client_order_id,
                 "ticker": order.ticker, "side": order.side.value, "action": order.action.value, "count": quantity,
-                "price": price, "is_taker": liquidity is lc.Liquidity.TAKER, "fee": fee, "created_time": at}
+                "price": price, "is_taker": liquidity is lc.Liquidity.TAKER, "fee": fee, "created_time": stamped}
         self._fills.append(fill)
         self._emit({"type": "fill", "fill": dict(fill)})
 

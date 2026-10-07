@@ -664,6 +664,7 @@ def test_an_amend_at_or_below_filled_is_refused_locally(total, fragment):
 
 @pytest.mark.parametrize("setup,request_,fragment", [
     ([], AmendRequested(), "AMEND_EMPTY"),
+    ([], AmendRequested(new_total=D(10), new_price=D("0.42")), "AMEND_NO_CHANGE"),
     ([], AmendRequested(new_price=D(1)), "AMEND_PRICE_OUT_OF_RANGE"),
     ([AmendRequested(new_total=D(8))], AmendRequested(new_total=D(7)), "AMEND_ALREADY_PENDING"),
     ([CancelRequested()], AmendRequested(new_total=D(7)), "AMEND_WHILE_CANCEL_PENDING"),
@@ -876,7 +877,8 @@ def _plausible_event(rng: random.Random, view: lc.OrderView, n: int):
     total, filled = view.total_quantity, view.filled_quantity
     k = rng.randint(1, 8)
     fill_event = fill(f"f{k}", str(k % 3 + 1), price="0.42" if k % 2 else "0.41", fee=None if k == 5 else "0.01",
-                      cid=CID, at=t(k))  # the same id always carries the same content
+                      cid=CID, at=t((k * 7) % 60))  # the same id always carries the same content
+    snap_at = t(rng.randint(0, 59))  # snapshots before, after and within the skew of fills
     venue_filled = D(rng.randint(int(filled), int(total))) if total >= filled else filled
     choice = rng.randrange(13)
     if choice == 0:
@@ -884,7 +886,7 @@ def _plausible_event(rng: random.Random, view: lc.OrderView, n: int):
                                        (Operation.AMEND, view.amend_pending is not None)) if live]
         return AMB(rng.choice(pending)) if pending else CancelRequested()
     if choice in (1, 2):
-        return ack("resting", str(venue_filled), str(total - venue_filled), total=str(total), at=t(n % 60))
+        return ack("resting", str(venue_filled), str(total - venue_filled), total=str(total), at=snap_at)
     if choice in (3, 4, 5, 6):
         return fill_event
     if choice == 7:
@@ -900,7 +902,7 @@ def _plausible_event(rng: random.Random, view: lc.OrderView, n: int):
         return rng.choice([Rejected(Operation.CANCEL, "R"), Rejected(Operation.AMEND, "R"), Expired(PID)])
     status = rng.choice(["resting", "canceled"])
     return recon(status, str(venue_filled), str(total - venue_filled) if status == "resting" else "0",
-                 total=str(total), price=str(view.limit_price), as_of=t(59))
+                 total=str(total), price=str(view.limit_price), as_of=snap_at)
 
 
 @pytest.mark.parametrize("seed", range(300))
@@ -963,9 +965,9 @@ def test_finding1_the_same_venue_cancel_count_again_is_idempotent():
 
 def test_finding2_counts_and_fills_that_interleave_are_not_undercounted():
     """Fill A (3) is delayed, B (2) arrives, a snapshot says 5, then maker fill C (4): the venue has 9."""
-    v = reduce_all(resting(), [fill("B", "2", at=t(2)), recon("resting", "5", "5", as_of=t(3))])
+    v = reduce_all(resting(), [fill("B", "2", at=t(2)), recon("resting", "5", "5", as_of=t(10))])
     assert v.filled_quantity == 5 and v.unreceived_fill_quantity == 3 and not v.fees_complete
-    v = ok(reduce(v, fill("C", "4", at=t(4), liq=Liquidity.MAKER)))
+    v = ok(reduce(v, fill("C", "4", at=t(20), liq=Liquidity.MAKER)))
     assert v.filled_quantity == 9 and v.fill_quantity_applied == 6 and not v.fees_complete
     v = ok(reduce(v, fill("A", "3", at=t(1))))
     assert counts(v) == (D(10), D(9), D(1), D(0)) and v.fees_complete and not v.fill_timing_uncertain
@@ -1045,16 +1047,15 @@ def test_finding6_absence_needs_a_timed_snapshot_taken_after_the_send():
             SendPrepared(bad)
 
 
-@pytest.mark.parametrize("complete,fragment", [(True, None), (False, "COUNT_BELOW_EARLIER_VENUE_COUNT")])
-def test_finding8_a_reconcile_below_an_earlier_venue_count(complete, fragment):
+@pytest.mark.parametrize("complete", [True, False])
+def test_finding8_a_reconcile_below_an_earlier_venue_count(complete):
+    """Tightened by N1: any authoritative count newer than a higher one quarantines; an older one is noted."""
     v = reduce(resting(), ack("resting", "5", "5", at=t(10)))
-    out = reduce(v, recon("resting", "3", "7", as_of=t(20), complete=complete))
-    if fragment is None:
-        quarantined(out, "COUNT_BELOW_KNOWN_FILLS")
-    else:
-        assert not out.quarantined and fragment in out.notes[-1] and out.filled_quantity == 5
-    older = ok(reduce(v, recon("resting", "3", "7", as_of=t(5))))
+    quarantined(reduce(v, recon("resting", "3", "7", as_of=t(20), complete=complete)), "COUNT_BELOW_IMPLIED_FILLS")
+    older = ok(reduce(v, recon("resting", "3", "7", as_of=t(5), complete=complete)))
     assert older.filled_quantity == 5 and "COUNT_BELOW_EARLIER_VENUE_COUNT" in older.notes[-1]
+    lower_ack = ok(reduce(v, ack("resting", "3", "7", at=t(20))))  # not authoritative: a dispute, noted
+    assert any("COUNT_DISPUTED" in n for n in lower_ack.notes) and lower_ack.fill_timing_uncertain
 
 
 def test_nit_executed_without_counts_is_noted():
@@ -1065,3 +1066,95 @@ def test_nit_executed_without_counts_is_noted():
 def test_every_count_change_is_logged():
     v = reduce_all(resting(), [fill("f1", "4"), CancelRequested(), CancelConfirmed(PID)])
     assert len(v.count_log) == 2 and "Fill" in v.count_log[0] and "CancelConfirmed" in v.count_log[1]
+
+
+# ---------------------------------------------------------------- re-review regressions (N1, N2 on 5ecf566)
+
+
+def test_n1_a_newer_authoritative_count_below_the_implied_count_quarantines():
+    """Ack 5 @t2, fill 3 @t10 (filled 8), then an authoritative reconcile 5 @t30: the venue disagrees."""
+    v = ok(reduce_all(resting(), [ack("resting", "5", "5", at=t(2)), fill("f3", "3", at=t(10))]))
+    assert counts(v) == (D(10), D(8), D(2), D(0))
+    out = reduce(v, recon("resting", "5", "5", total="10", as_of=t(30), complete=True))
+    quarantined(out, "COUNT_BELOW_IMPLIED_FILLS")
+    assert counts(out) == counts(v)
+    quarantined(reduce(v, recon("resting", "5", "5", total="10", as_of=t(30), complete=False)),
+                "COUNT_BELOW_IMPLIED_FILLS")
+
+
+def test_n1_a_newer_non_authoritative_count_below_the_implied_count_is_a_noted_dispute():
+    v = reduce_all(resting(), [ack("resting", "5", "5", at=t(2)), fill("f3", "3", at=t(10))])
+    out = ok(reduce(v, ack("resting", "5", "5", at=t(29))))
+    assert any("COUNT_DISPUTED" in n for n in out.notes)
+    assert out.fill_timing_uncertain and not out.fees_complete and out.filled_quantity == 8
+
+
+def test_n1_a_count_below_fills_clearly_before_it_quarantines():
+    v = reduce_all(resting(), [fill("f1", "4", at=t(5))])
+    quarantined(reduce(v, recon("resting", "2", "8", as_of=t(30))), "COUNT_BELOW_APPLIED_FILLS")
+
+
+def test_n1_fills_within_the_skew_get_the_benefit_of_the_doubt():
+    """A fill stamped 1 s before a snapshot may have executed after it (different clocks): no dispute."""
+    v = reduce_all(resting(), [ack("resting", "5", "5", at=t(2)), fill("f3", "3", at=t(29))])
+    out = ok(reduce(v, recon("resting", "5", "5", total="10", as_of=t(30))))
+    assert out.filled_quantity == 8  # the earlier count plus a fill the snapshot cannot cover consistently
+
+
+def test_n1_a_fill_just_after_a_snapshot_is_not_added_on_top_and_leaves_the_count_uncertain():
+    v = ok(reduce_all(resting(), [recon("resting", "5", "5", as_of=t(30)), fill("f1", "3", at=t(31))]))
+    assert v.filled_quantity == 5 and v.fill_timing_uncertain and not v.fees_complete  # 5 or 8
+    clear = ok(reduce_all(resting(), [recon("resting", "5", "5", as_of=t(30)), fill("f1", "3", at=t(40))]))
+    assert clear.filled_quantity == 8 and not clear.fill_timing_uncertain
+
+
+def test_n1_the_reconcile_remaining_is_checked_through_its_fill_count():
+    v = reduce_all(resting(), [ack("resting", "5", "5", at=t(2)), fill("f3", "3", at=t(10))])
+    quarantined(reduce(v, recon("resting", "5", "4", total="10", as_of=t(30))), "MALFORMED_COUNTS")
+    quarantined(reduce(v, recon("resting", "5", "6", as_of=t(30))), "TOTAL_MISMATCH")
+
+
+def test_n2_a_provisional_replacement_id_blocks_cancels_and_a_reject_quarantines():
+    v = reduce(resting(), AmendRequested(new_total=D(12)))
+    v = ok(reduce(v, fill("f1", "1", pid="pZZ", cid=CID)))
+    assert v.provider_order_id == "pZZ" and v.provisional_provider_order_id == "pZZ"
+    assert any(p.startswith("PROVIDER_ID_PROVISIONAL") for p in lc.cancel_problems(v))
+    quarantined(reduce(v, Rejected(Operation.AMEND, "NOT_AMENDABLE")), "PROVISIONAL_ID_UNCONFIRMED")
+
+
+def test_n2_a_reconcile_showing_the_amend_not_applied_quarantines_a_provisional_id():
+    v = reduce_all(resting(), [AmendRequested(new_total=D(12)), AMB(Operation.AMEND), fill("f1", "1", pid="pZZ",
+                                                                                          cid=CID)])
+    assert v.provisional_provider_order_id == "pZZ"
+    quarantined(reduce(v, recon("resting", "1", "9", pid=PID, total="10")), "PROVISIONAL_ID_UNCONFIRMED")
+    quarantined(reduce(v, recon("resting", "1", "9", pid="pZZ", total="10", price="0.42")),
+                "PROVISIONAL_ID_UNCONFIRMED")
+
+
+def test_n2_the_amend_reply_confirms_or_contradicts_the_provisional_id():
+    v = reduce_all(resting(), [AmendRequested(new_total=D(12)), fill("f1", "1", pid="pZZ", cid=CID)])
+    done = ok(reduce(v, AmendAcknowledged(PID, D(12), D("0.42"), new_provider_order_id="pZZ")))
+    assert done.provisional_provider_order_id is None and any("PROVIDER_ID_CONFIRMED" in n for n in done.notes)
+    assert lc.cancel_problems(done) == []
+    quarantined(reduce(v, AmendAcknowledged(PID, D(12), D("0.42"))), "PROVISIONAL_ID_UNCONFIRMED")
+    quarantined(reduce(v, AmendAcknowledged(PID, D(12), D("0.42"), new_provider_order_id="pYY")),
+                "PROVISIONAL_ID_UNCONFIRMED")
+
+
+def test_n2_an_old_id_ack_after_a_provisional_link_is_stale_not_a_cancel_target():
+    v = reduce_all(resting(), [AmendRequested(new_total=D(12)), fill("f1", "1", pid="pZZ", cid=CID)])
+    out = ok(reduce(v, ack("resting", "1", "9", pid=PID)))
+    assert "STALE_SNAPSHOT" in out.notes[-1] and lc.cancel_problems(out)
+
+
+def test_handlers_table_is_immutable():
+    with pytest.raises(TypeError):
+        lc._HANDLERS[object] = None
+
+
+def test_n2_a_reconcile_naming_the_provisional_id_confirms_it():
+    v = reduce_all(resting(), [AmendRequested(new_price=D("0.44")), AMB(Operation.AMEND),
+                               fill("f1", "1", pid="pZZ", cid=CID, price="0.44")])
+    out = ok(reduce(v, recon("resting", "1", "9", pid="pZZ", total="10", price="0.44")))
+    assert out.provisional_provider_order_id is None and out.limit_price == D("0.44")
+    assert out.state is OrderState.RESTING and lc.cancel_problems(out) == []

@@ -632,7 +632,10 @@ def test_e2e_randomized_sessions_agree_with_the_venue(seed):
                         h.cancel(cid)
                     else:
                         filled = int(h.views[cid].filled_quantity)
-                        h.amend(cid, total=str(filled + rng.randint(1, 6)))
+                        total = filled + rng.randint(1, 6)
+                        if total == h.views[cid].total_quantity:
+                            total += 1  # a no-change amendment is refused locally
+                        h.amend(cid, total=str(total))
         if rng.random() < 0.4:
             h.pump()
     h.venue.clear(Fault.OUT_OF_ORDER)
@@ -687,7 +690,8 @@ def test_e2e_randomized_sessions_with_ambiguous_replies_agree_after_reconciling(
     """As above, plus replies that time out after the venue acted, lost requests and a feed that races
     ahead of replies. After settling and reconciling, every view agrees with the venue."""
     rng = random.Random(50_000 + seed)
-    h = Harness(venue(cash="100000", amend_assigns_new_order_id=seed % 2 == 0))
+    offsets = ((), (0, -1, 1), (1, 2, -2))[seed % 3]  # fill stamps skewed within the reducer's tolerance
+    h = Harness(venue(cash="100000", amend_assigns_new_order_id=seed % 2 == 0, fill_time_offsets=offsets))
     n = 0
     for step in range(rng.randint(10, 40)):
         roll = rng.random()
@@ -719,7 +723,9 @@ def test_e2e_randomized_sessions_with_ambiguous_replies_agree_after_reconciling(
                     if rng.random() < 0.5:
                         h.cancel(cid, pump_first=rng.random() < 0.5)
                     else:
-                        h.amend(cid, total=str(int(v.filled_quantity) + rng.randint(1, 6)),
+                        total = int(v.filled_quantity) + rng.randint(1, 6)
+                        total += 1 if total == v.total_quantity else 0  # no-change amendments are refused
+                        h.amend(cid, total=str(total),
                                 pump_first=rng.random() < 0.5)
         if rng.random() < 0.4:
             h.pump()
@@ -730,3 +736,26 @@ def test_e2e_randomized_sessions_with_ambiguous_replies_agree_after_reconciling(
     for cid in list(h.views):
         h.reconcile(cid)
     h.assert_matches_venue()
+
+
+def test_e2e_n1_skewed_fill_stamps_still_agree_with_the_venue():
+    h = Harness(venue(fill_time_offsets=(2, -2)))
+    h.place("c1")
+    h.venue.add_liquidity(MKT, NO, D("0.58"), D(3))
+    v = h.reconcile("c1")
+    h.venue.add_liquidity(MKT, NO, D("0.58"), D(2))
+    h.pump()
+    h.venue.add_liquidity(MKT, NO, D("0.58"), D(1))
+    h.settle()
+    assert [f["created_time"][-11:-6] for f in h.venue.list_fills()] == ["00:32", "00:48", "01:12"]
+    for cid in list(h.views):
+        h.reconcile(cid)
+    h.assert_matches_venue()
+    assert not v.quarantined
+
+
+def test_fake_clock_options_are_checked():
+    with pytest.raises(ValueError):
+        FakeVenue(tick_seconds=0)
+    with pytest.raises(TypeError):
+        FakeVenue(fill_time_offsets=[1])
