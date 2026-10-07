@@ -140,7 +140,7 @@ def test_replay_applies_stored_outcomes_and_never_re_decides():
                            now=now(30))  # judged live at T+30: the grant has expired
     assert isinstance(refused, c.ArmRefused)
     events = (c.ReconciliationObserved(c.Reconciliation.COMPLETE, at(0)), c.IncidentRaised("inc-1", "x", at(1)), refused)
-    after = c.replay(FIX, events)
+    _, after = c.boot(FIX, events, at_utc=at(31))
     assert after.mode is c.Mode.DISARMED and after.open_incidents == ("inc-1",)
     assert any("REFUSED" in line for line in after.log)
 
@@ -151,11 +151,11 @@ def test_restart_is_disarmed_and_keeps_latches_closeouts_and_incidents():
               c.SetLatch(c.LatchScope.MARKET, "kxtest-1", "manual stop", at(2)),
               c.CloseoutAuthorized(c.LatchScope.MARKET, "KXTEST-1", "owner", at(3), at(60)),
               c.IncidentRaised("inc-9", "lost ack", at(4)))
-    after = c.replay(FIX, events)
+    _, after = c.boot(FIX, events, at_utc=at(5))
     assert after.mode is c.Mode.DISARMED and after.reconciliation is c.Reconciliation.NOT_RUN
     assert (c.LatchScope.MARKET, "KXTEST-1") in after.latches and after.closeouts
     assert after.open_incidents == ("inc-9",)
-    assert c.replay(FIX, events[:2]).mode is c.Mode.DISARMED  # an armed mode is never restored
+    assert c.boot(FIX, events[:2], at_utc=at(5))[1].mode is c.Mode.DISARMED  # an armed mode is never restored
 
 
 def test_latch_keys_are_normalized():
@@ -356,3 +356,26 @@ def test_demo_mode_reductions_under_a_latch_also_need_a_closeout():
     s = c.reduce(s, c.SetLatch(c.LatchScope.GLOBAL, "*", "kill", at(2)))
     assert any("REDUCTION_UNDER_LATCH_NEEDS_CLOSEOUT" in p for p in
                c.action_problems(s, c.ControlAction.REDUCE, now=now(3), **KW))
+
+
+def test_two_restarts_replay_the_live_record_exactly():
+    """Regression: an arm accepted live after a restart replays as accepted; acknowledged incidents stay acknowledged."""
+    journal: list = [c.IncidentRaised("inc-1", "x", at(0))]
+    started, live = c.boot(FIX, tuple(journal), at_utc=at(1))
+    journal.append(started)
+    recon = c.ReconciliationObserved(c.Reconciliation.COMPLETE, at(2))
+    live = c.reduce(live, recon)
+    journal.append(recon)
+    accepted = c.decide_arm(live, c.ArmRequest(c.Mode.HUMAN_CONFIRMATION, "owner", ("inc-1",), at(3)), grants=(),
+                            now=now(3))
+    assert isinstance(accepted, c.ArmAccepted)
+    live = c.reduce(live, accepted)
+    journal.append(accepted)
+    assert live.mode is c.Mode.HUMAN_CONFIRMATION and live.open_incidents == ()
+    assert c.replay(FIX, tuple(journal)) == live  # the journal reproduces the live state exactly
+    started2, after = c.boot(FIX, tuple(journal), at_utc=at(4))
+    assert after.mode is c.Mode.DISARMED and after.open_incidents == ()
+    assert not any("STALE_DECISION" in line for line in after.log)
+    journal.append(started2)
+    _, after3 = c.boot(FIX, tuple(journal), at_utc=at(5))
+    assert not any("STALE_DECISION" in line for line in after3.log) and after3.open_incidents == ()

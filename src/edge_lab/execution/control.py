@@ -10,7 +10,9 @@ persists events through the journal and rebuilds state with `replay`.
   drop an incident that was never acknowledged.
 
 **Modes:** DISARMED, OBSERVE_ONLY, SHADOW, DEMO, HUMAN_CONFIRMATION, BOUNDED_AUTO.
-- Startup and replay always end DISARMED.
+- Every process start goes through `boot`, which persists a `Started` event, so startup is always DISARMED and a
+  replay reproduces the live state exactly. Any event between an arm decision and its outcome makes the outcome
+  stale (STALE_DECISION), harmless ones included. That is deliberate: re-decide.
 - Leaving DISARMED needs the scope's environment authorized (`model.AUTHORIZED_ENVIRONMENTS`, today FIXTURE
   only), because every other mode at least reads.
 - SHADOW and the sending modes also need a COMPLETE reconciliation and no unacknowledged incident.
@@ -420,12 +422,20 @@ def reduce(state: ControlState, event: Event) -> ControlState:
 
 
 def replay(scope: AccountScope, events: tuple[Event, ...]) -> ControlState:
-    """Rebuild state from persisted events, then apply an implied restart. The result is DISARMED, with latches,
-    closeout authorizations and open incidents kept."""
+    """Fold the persisted events exactly as they were applied live. There is no implied event: the state after
+    `replay` is the state the live process had after the same events, so every stored outcome's `basis` matches."""
     state = initial_state(scope)
     for event in events:
         state = reduce(state, event)
-    return reduce(state, Started(at_utc=events[-1].at_utc if events else "1970-01-01T00:00:00+00:00"))
+    return state
+
+
+def boot(scope: AccountScope, events: tuple[Event, ...], *, at_utc: str) -> tuple[Started, ControlState]:
+    """A process start. It returns the `Started` event the caller must persist *before* acting, and the booted state:
+    DISARMED, with latches, closeout authorizations and open incidents kept. Because `Started` is persisted, the next
+    replay reproduces this exact state, and decisions made after it keep a matching basis."""
+    started = Started(at_utc=at_utc)
+    return started, reduce(replay(scope, events), started)
 
 
 def _matching_latches(state: ControlState, *, venue: str, strategy_id: str, market_ticker: str) -> list[tuple]:
