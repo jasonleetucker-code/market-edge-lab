@@ -15,6 +15,9 @@ Modules:
   `execution_ticket.reserve_simultaneous_obligations`. A terminal order stays BOUND until a later account
   snapshot confirms it, and contradictions quarantine with no new risk.
 
+- `control` (packages L/N): operating modes DISARMED … BOUNDED_AUTO, kill latches, incidents with
+  acknowledged rearm, and automated-policy grant objects. It is pure: the orchestrator persists its events.
+
 Later packages add the lifecycle, the wire format, a signer and a transport, each under the boundary's
 file-exact rules.
 """
