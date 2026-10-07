@@ -77,12 +77,13 @@ for our implementation of the documented format, not for venue acceptance).
 | AUTH-01 | Supported key types | `Ed25519 (recommended)`, `RSA 2048-bit` | SUPPORTED | DOCUMENTED | https://docs.kalshi.com/getting_started/api_keys | 2026-10-07 |
 | AUTH-02 | Ed25519 signing | `Ed25519 (RFC 8032) signs the pre-sign text directly` | SUPPORTED | DOCUMENTED | https://docs.kalshi.com/getting_started/api_keys | 2026-10-07 |
 | AUTH-03 | RSA signing parameters | `RSA-PSS with SHA-256, MGF1 with SHA-256, salt length equal to the digest length` | SUPPORTED | DOCUMENTED | https://docs.kalshi.com/getting_started/api_keys | 2026-10-07 |
-| AUTH-04 | Key type identification | `the PEM header does not identify the key type; use the parsed key` | SUPPORTED | DOCUMENTED | https://docs.kalshi.com/getting_started/api_keys | 2026-10-07 |
+| AUTH-04 | Key type identification | `Kalshi generates PKCS#8 (PRIVATE KEY) for Ed25519 and PKCS#1 (RSA PRIVATE KEY) for RSA, but PKCS#8 RSA keys share the PRIVATE KEY label, so the PEM header does not identify the type; determine it from the parsed key` | SUPPORTED | DOCUMENTED | https://docs.kalshi.com/getting_started/api_keys | 2026-10-07 |
+| AUTH-10 | Mislabelled PEM handling (our inference) | `our inference: refusing an RSA-labelled PEM whose body is not PKCS#1 RSA is safe` | UNKNOWN | DOCUMENTED | https://docs.kalshi.com/getting_started/api_keys | 2026-10-07 |
 | AUTH-05 | Pre-sign text (exact bytes signed, UTF-8) | `timestamp + METHOD + path from the API root, without the query; the host is not signed` | SUPPORTED | DOCUMENTED | https://docs.kalshi.com/getting_started/api_environments | 2026-10-07 |
 | AUTH-06 | Signature encoding | `the signature is base64-encoded` | SUPPORTED | DOCUMENTED | https://docs.kalshi.com/getting_started/api_keys | 2026-10-07 |
 | AUTH-07 | Documented pre-sign text example | `1703123456789GET/trade-api/v2/portfolio/balance` | SUPPORTED | DOCUMENTED | https://docs.kalshi.com/getting_started/quick_start_authenticated_requests | 2026-10-07 |
 | AUTH-08 | Timestamp skew tolerance | `accepted clock skew for the timestamp` | UNKNOWN | DOCUMENTED | https://docs.kalshi.com/getting_started/api_keys | 2026-10-07 |
-| AUTH-09 | RSA key sizes | `RSA key sizes other than 2048 bits` | UNKNOWN | DOCUMENTED | https://docs.kalshi.com/getting_started/api_keys | 2026-10-07 |
+| AUTH-09 | RSA key sizes (only 2048 is accepted) | `RSA key sizes other than 2048 bits` | UNKNOWN | DOCUMENTED | https://docs.kalshi.com/getting_started/api_keys | 2026-10-07 |
 
 ### Auth headers
 
@@ -98,7 +99,7 @@ for our implementation of the documented format, not for venue acceptance).
 | DIR-01 | V2 book side and price convention | `bid = buy YES; ask = sell YES; the price is always the YES price` | SUPPORTED | DOCUMENTED | https://docs.kalshi.com/getting_started/order_direction | 2026-10-07 |
 | DIR-02 | Legacy (action, side) to book side | `buy yes -> bid`, `sell no -> bid`, `buy no -> ask`, `sell yes -> ask` | SUPPORTED | DOCUMENTED | https://docs.kalshi.com/getting_started/order_direction | 2026-10-07 |
 | DIR-03 | book_side and outcome_side on responses | `bid = outcome_side yes; ask = outcome_side no` | SUPPORTED | DOCUMENTED | https://docs.kalshi.com/getting_started/order_direction | 2026-10-07 |
-| DIR-04 | Legacy direction field removal date (two pages disagree) | `legacy side/action removal date: May 14, 2026 (reference) vs May 28, 2026 (guide)` | UNKNOWN | DOCUMENTED | https://docs.kalshi.com/getting_started/order_direction | 2026-10-07 |
+| DIR-04 | Legacy direction field removal date (two pages disagree) | `legacy side/action are not removed before May 14, 2026 (reference) vs not before May 28, 2026 (guide)` | UNKNOWN | DOCUMENTED | https://docs.kalshi.com/getting_started/order_direction | 2026-10-07 |
 
 ### Prices
 
@@ -168,6 +169,7 @@ for our implementation of the documented format, not for venue acceptance).
 | ORD-31 | Batch endpoints in this profile | `batch create and batch cancel` | UNSUPPORTED | DOCUMENTED | https://docs.kalshi.com/getting_started/rate_limits | 2026-10-07 |
 | ORD-32 | Order record required fields | `order_id`, `user_id`, `client_order_id`, `ticker`, `outcome_side`, `book_side`, `type`, `status`, `yes_price_dollars`, `no_price_dollars`, `fill_count_fp`, `remaining_count_fp`, `initial_count_fp`, `taker_fees_dollars`, `maker_fees_dollars`, `taker_fill_cost_dollars`, `maker_fill_cost_dollars` | SUPPORTED | DOCUMENTED | https://docs.kalshi.com/api-reference/orders/get-orders | 2026-10-07 |
 | ORD-33 | Market orders in this profile | `market orders (type market)` | UNSUPPORTED | DOCUMENTED | https://docs.kalshi.com/api-reference/orders/get-orders | 2026-10-07 |
+| ORD-34 | Decrease reduce_to semantics | `whether decrease reduce_to counts the filled part or only the resting remainder` | UNKNOWN | DOCUMENTED | https://docs.kalshi.com/api-reference/orders/decrease-order-v2 | 2026-10-07 |
 
 ### Account reads
 
@@ -266,6 +268,11 @@ Kalshi.
 | Subaccount | Every request names the subaccount explicitly (primary = 0) | Defaults differ by endpoint (`SUB-03`) and for restricted keys (`SUB-02`) |
 | Positions read | `settlement_status` is always explicit | The default is `unsettled` (`ACC-07`) |
 | Amend | Only a resting GTC order; total = filled + desired remainder; never above the approved quantity or more aggressive than the approved limit | `ORD-21`; the approval binds the intent digest |
+| Amend client id | The caller must pass the id the order carries now; after an amend that set `updated_client_order_id`, later amends send that updated id | `ORD-20` |
+| Decrease | `reduce_by` only; `reduce_to` is refused and is never protective | `ORD-34` is UNKNOWN |
+| 409 on a write | AMBIGUOUS (reconcile), never REJECTED | `ORD-16` is UNKNOWN; "resource already exists" may mean the original order rests |
+| 2xx write that does not parse | AMBIGUOUS (`Transport.send_and_parse`) | The venue may have acted |
+| RSA key size | Exactly 2048 bits | `AUTH-09` is UNKNOWN |
 | Page size | At most 100 | `PAG-01` vs `PAG-02` conflict: 100 satisfies both |
 | Rate budget | Basic tier, 10 tokens per request, 30% of each bucket reserved for cancels, decreases and reads | `RL-01`, `RL-03`, `RL-04`; `RL-07`, `RL-08` UNKNOWN |
 | Write retries | None. An unknowable write result is AMBIGUOUS and goes to reconciliation | `ORD-16` is UNKNOWN, so a resend is never assumed safe |
@@ -280,19 +287,28 @@ more trading.
    Whether resting-order collateral is already held out of `balance` is not stated. Reservations must not assume
    either way (package E).
 2. **`updated_ts` unit (`ACC-03`).** "Unix timestamp", unit not stated. The parser keeps the raw integer.
-3. **Legacy direction field removal (`DIR-04`).** The order and fill references say "not removed before May 14,
-   2026"; the order-direction guide says "not before May 28, 2026". The parsers never read the legacy fields.
+3. **Legacy direction field removal (`DIR-04`).** The order and fill references say the fields are not removed
+   before May 14, 2026; the order-direction guide says not before May 28, 2026. Both are lower bounds, not removal
+   dates. The parsers never read the legacy fields.
 4. **Cancel response (`ORD-19`).** The description lists `{order_id, client_order_id, reduced_by}`; the schema
    also requires `ts_ms`. The parser follows the schema; a response without `ts_ms` fails parsing, which a
    caller treats as AMBIGUOUS.
 5. **Page size (`PAG-01`, `PAG-02`).** The references allow 1-1000; the pagination guide says "typically 1-100".
 6. **post_only crossing (`ORD-12`).** Whether a crossing post-only order is rejected or repriced is not stated.
 7. **409 on create (`ORD-16`).** Documented as "resource already exists or cannot be modified"; whether a reused
-   `client_order_id` reliably returns 409 is not stated. A client order id is never treated as exactly-once proof.
+   `client_order_id` reliably returns 409, and whether the original order then rests, is not stated. The transport
+   therefore reports every 409 on a write as AMBIGUOUS, so the journal reconciles instead of closing the intent. A
+   client order id is never treated as exactly-once proof.
+7a. **Decrease `reduce_to` (`ORD-34`).** The page says exactly one of `reduce_by` or `reduce_to`, but not whether
+   the `reduce_to` target includes the filled part. The profile sends `reduce_by` only.
+7b. **Mislabelled PEMs (`AUTH-10`).** The docs say the label does not identify the key type (`AUTH-04`, documented).
+   That refusing an RSA-labelled PEM whose body is not PKCS#1 RSA loses nothing is our inference, not a documented
+   fact; the signer either refuses such a PEM or uses the parsed type, never the label.
 8. **Token costs (`RL-07`) and tier (`RL-08`).** `GET /account/endpoint_costs` and `GET /account/limits` need an
    authenticated account read, which is not authorized. The batch example implies 2 tokens per cancel; the budget
    still charges the default 10 (conservative for cancels, possibly low for a costlier endpoint).
-9. **Timestamp skew (`AUTH-08`)** and **RSA sizes other than 2048 bits (`AUTH-09`).** Not documented.
+9. **Timestamp skew (`AUTH-08`)** and **RSA sizes other than 2048 bits (`AUTH-09`).** Not documented. The signer
+   accepts exactly 2048-bit RSA keys.
 10. **Maximum order size (`QTY-04`).** Not documented on the pages read.
 11. **Settlement floors (`MKT-04`, `SET-03`, `SET-04`).** Not live yet ("launch timeline is TBA"); floor markets are
     refused by the profile.

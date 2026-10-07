@@ -6,6 +6,7 @@ from __future__ import annotations
 import base64
 import inspect
 import json
+import re
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
@@ -257,16 +258,34 @@ def test_an_unknowable_write_is_ambiguous_and_never_retried(signer, failure, rea
 
 
 @pytest.mark.parametrize("status,outcome", [(400, t.Outcome.REJECTED), (401, t.Outcome.REJECTED),
-                                            (409, t.Outcome.REJECTED), (429, t.Outcome.THROTTLED)])
+                                            (403, t.Outcome.REJECTED), (429, t.Outcome.THROTTLED)])
 def test_definitive_write_refusals_are_reported_not_retried(signer, status, outcome):
     opener = Opener(Response(status, b'{"error": "too many requests"}'), Response(201, CREATE_ACK))
     result = transport(signer, opener).send(create_request())
     assert result.outcome is outcome and result.status == status and len(opener.calls) == 1
 
 
-def test_http_error_statuses_from_a_real_style_opener_are_classified(signer):
-    err = HTTPError(f"{BASE}/portfolio/events/orders", 409, "conflict", {}, None)
-    result = transport(signer, Opener(err)).send(create_request())
+@pytest.mark.parametrize("make", [
+    lambda: create_request(),
+    lambda: w.build_cancel(SCOPE, ORDER_ID, exchange_index=0),
+    lambda: w.build_decrease(SCOPE, ORDER_ID, exchange_index=0, reduce_by=Decimal("1")),
+])
+@pytest.mark.parametrize("style", ["response", "http_error"])
+def test_a_409_on_any_write_is_ambiguous_never_rejected(signer, make, style):
+    """ORD-16: "resource already exists" may mean the original order is resting. REJECTED would let the journal
+    close the intent; AMBIGUOUS makes it reconcile first."""
+    req = make()
+    conflict = Response(409, b'{"code": "conflict"}') if style == "response" else \
+        HTTPError(f"{BASE}{req.path}", 409, "conflict", {}, None)
+    opener = Opener(conflict, Response(201, CREATE_ACK))
+    result = transport(signer, opener).send(req, priority=t.Priority.PROTECTIVE if req.endpoint.value.protective
+                                            else t.Priority.ORDINARY)
+    assert result.outcome is t.Outcome.AMBIGUOUS and result.reason == "VENUE_CONFLICT" and result.status == 409
+    assert len(opener.calls) == 1
+
+
+def test_a_409_on_a_read_is_a_plain_rejection(signer):
+    result = transport(signer, Opener(Response(409))).send(w.build_get_balance(SCOPE))
     assert result.outcome is t.Outcome.REJECTED and result.status == 409
 
 
@@ -362,3 +381,112 @@ def test_results_and_errors_never_carry_headers_signatures_or_bodies(signer):
         assert "ticker" not in text and CREATE_ACK.decode()[:20] not in text and req.body.decode()[:20] not in text
     with pytest.raises(TypeError):
         __import__("pickle").dumps(tr)
+
+
+# ---------------------------------------------------------------------------------------------- review regressions
+
+
+def test_frequent_polling_does_not_lose_fractional_refill():
+    """Review finding 2: draining the basic write bucket, then polling every 9 us for 1.8 s, must still let about
+    18 protective cancels through (100 tokens/s x 1.8 s / 10 tokens). Flooring each refill used to allow 0."""
+    clock = Clock()
+    budget = t.RateBudget(monotonic_ns=clock)
+    while budget.try_acquire(w.Bucket.WRITE, 0, t.Priority.PROTECTIVE):
+        pass
+    allowed = 0
+    for _ in range(200_000):  # 200,000 x 9 us = 1.8 s
+        clock.ns += 9_000
+        allowed += budget.try_acquire(w.Bucket.WRITE, 0, t.Priority.PROTECTIVE)
+    assert allowed == 18
+
+
+def test_refill_never_exceeds_the_documented_rate():
+    clock = Clock()
+    budget = t.RateBudget(monotonic_ns=clock)
+    while budget.try_acquire(w.Bucket.WRITE, 0, t.Priority.PROTECTIVE):
+        pass
+    allowed = 0
+    for _ in range(10_000):  # 10 s in 1 ms steps at 100 tokens/s and 10 tokens each: at most 100
+        clock.ns += 1_000_000
+        allowed += budget.try_acquire(w.Bucket.WRITE, 0, t.Priority.PROTECTIVE)
+    assert allowed == 100
+    clock.ns += 60 * 1_000_000_000  # idle time banks no more than the 1 s capacity
+    burst = 0
+    while budget.try_acquire(w.Bucket.WRITE, 0, t.Priority.PROTECTIVE):
+        burst += 1
+    assert burst == 10
+
+
+def test_tokens_are_charged_only_after_signing_succeeds(signer):
+    clock = Clock()
+    budget = t.RateBudget(monotonic_ns=clock)
+    opener = Opener()
+    early = t.Transport(m.Environment.FIXTURE, signer, opener, lambda: datetime(1970, 1, 21, tzinfo=UTC),
+                        budget=budget)
+    for _ in range(20):
+        with pytest.raises(s.SigningRefused):
+            early.send(create_request())
+    assert opener.calls == []
+    ordinary = 0
+    while budget.try_acquire(w.Bucket.WRITE, 0, t.Priority.ORDINARY):
+        ordinary += 1
+    assert ordinary == 7  # the bucket is untouched by the refused signatures
+
+
+def test_send_and_parse_returns_the_parsed_ack(signer):
+    result = transport(signer, Opener(Response(201, CREATE_ACK))).send_and_parse(create_request(), w.parse_create_ack)
+    assert result.outcome is t.Outcome.OK and result.parsed.order_id == ORDER_ID
+    assert "order_id" not in repr(result)
+
+
+@pytest.mark.parametrize("raw", [b"", b"<html>ok</html>", b'{"order_id": "x"}', b'{"order_id": "x", "fill_count": 0, '
+                                 b'"remaining_count": "1.00", "ts_ms": 1}'])
+def test_a_2xx_write_whose_body_does_not_parse_is_ambiguous(signer, raw):
+    opener = Opener(Response(201, raw), Response(201, CREATE_ACK))
+    result = transport(signer, opener).send_and_parse(create_request(), w.parse_create_ack)
+    assert result.outcome is t.Outcome.AMBIGUOUS and result.reason == "UNPARSEABLE_SUCCESS" and result.parsed is None
+    assert len(opener.calls) == 1  # never resent
+
+
+def test_a_2xx_read_whose_body_does_not_parse_is_unavailable_not_ok(signer):
+    result = transport(signer, Opener(Response(200, b'{"balance": "100"}'))).send_and_parse(
+        w.build_get_balance(SCOPE), w.parse_balance)
+    assert result.outcome is t.Outcome.UNAVAILABLE and result.parsed is None
+
+
+def test_send_and_parse_passes_failures_through_and_refuses_a_non_callable(signer):
+    result = transport(signer, Opener(TimeoutError())).send_and_parse(create_request(), w.parse_create_ack)
+    assert result.outcome is t.Outcome.AMBIGUOUS and result.reason == "NO_RESPONSE"
+    with pytest.raises(t.RequestNotAllowed):
+        transport(signer, Opener()).send_and_parse(create_request(), "parse_create_ack")
+
+
+def test_real_opener_requirements_are_pinned_and_no_opener_or_ssl_context_is_built_here():
+    """Review finding 5. Credential non-forwarding and TLS verification live in the opener. Until the DEMO approval
+    PR adds a real one, this module must build none, and the requirements that PR must meet stay written down."""
+    import ast
+
+    text = " ".join(t.REAL_OPENER_REQUIREMENTS)
+    for phrase in ("refuse every redirect", "ssl.create_default_context()", "CERT_REQUIRED", "check_hostname=True",
+                   "never an unverified context", "allowlisted host", "timeout"):
+        assert phrase in text, phrase
+    tree = ast.parse(Path(t.__file__).read_text(encoding="utf-8"))
+    imported = {a.name for n in ast.walk(tree) if isinstance(n, (ast.Import, ast.ImportFrom)) for a in n.names}
+    modules = {n.module for n in ast.walk(tree) if isinstance(n, ast.ImportFrom)} | \
+        {a.name for n in ast.walk(tree) if isinstance(n, ast.Import) for a in n.names}
+    assert not modules & {"ssl", "http.client", "socket"}
+    assert not imported & {"urlopen", "build_opener", "HTTPSHandler", "HTTPRedirectHandler", "OpenerDirector"}
+    names = {n.attr for n in ast.walk(tree) if isinstance(n, ast.Attribute)} | \
+        {n.id for n in ast.walk(tree) if isinstance(n, ast.Name)}
+    assert not names & {"_create_unverified_context", "CERT_NONE", "check_hostname", "verify_mode", "context"}
+    assert inspect.signature(t.Transport).parameters["opener"].default is inspect.Parameter.empty
+
+
+def test_only_the_signer_touches_its_private_signing_closure():
+    """Review finding 4 (also enforced by the boundary invariant): transport signs through `Signer.sign` only."""
+    for path in Path(t.__file__).resolve().parent.glob("*.py"):
+        if path.name == "signer.py":
+            continue
+        text = path.read_text(encoding="utf-8")
+        assert not re.search(r"\._sign\b|__closure__|cell_contents", text), path.name
+    assert "self._signer.sign(" in Path(t.__file__).read_text(encoding="utf-8")
