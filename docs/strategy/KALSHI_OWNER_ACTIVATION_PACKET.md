@@ -107,8 +107,10 @@ further, each item below is its own approval:
   families. Both are taken: EXP-002 (family A) holds one, and paused EXP-003 still holds the other, since the plan
   says its pause frees no slot. Protected EXP-001 uses none. This is your choice: end or replace a family, or grant
   an `owner_exception`.
-- **Execution eligibility.** Polymarket international lists the United States as close-only. Polymarket US is a
-  separate product. Copying on the same product therefore needs a venue you can legally trade.
+- **Execution eligibility.** Polymarket's international geoblock documentation lists the United States as
+  close-only (as stated by the research handoff of 2026-10-07, source https://docs.polymarket.com/api-reference/geoblock;
+  evidence class DOCUMENTED as reported, re-verified in the W1 source matrix). Polymarket US is a separate
+  product. Copying on the same product therefore needs a venue you can legally trade.
   - *Recommended:* treat wallet activity as a signal for Kalshi (use C), and only where the contracts are proven
     equivalent.
 - **Paid feeds** (Nansen, GMGN, Helius). Not recommended until free data shows a measured gap.
@@ -123,4 +125,9 @@ A BOUNDED_AUTO grant must bind all of the following:
 - per-event limits;
 - expiry.
 
-Nothing is issued until a strategy is STRATEGY_QUALIFIED and decisions 1–3 hold.
+A grant is never issued automatically. Each one is its own owner decision, recorded in EXECUTION_PLAN, and
+it needs all of the following first:
+- a STRATEGY_QUALIFIED strategy;
+- decisions 1–3 (demo, production reads, a tiny live pilot);
+- decision 4 (unattended automation), since BOUNDED_AUTO runs without per-trade confirmation;
+- risk-limit values you have set.

@@ -85,7 +85,7 @@ Extend the owner named here; never fork it into a feature-specific copy. `PLANNE
 | RFQ research and lifecycle fixtures (joint pricing PLANNED later) | `src/edge_lab/rfq_research.py` | BUILT (PR B, ADR 0042: pure, fixture-fed observation and exposure contract; reuses venues (execution never authorized), provenance and freshness, and reserves through execution_ticket's canonical obligation primitive; RFQ stages stay separate from execution_ticket orders; payoff_constraints stays the logical-relation owner; joint pricing PLANNED later (R7); no gateway or generic pricing engine) | #145 #30 |
 | Shadow / live ledger boundary | `src/edge_lab/shadow_ledger.py` | BUILT (shadow only; ledger_anchor.py checkpoints, F09) | #6 #3 #32 |
 | Isolated execution package (Kalshi ordinary-event profile) | `src/edge_lab/execution/` | BUILT in part (ADR 0043; model, journal, reservations merged; lifecycle, wire, signer, transport in review; FIXTURE only) | #160 #6 #32 |
-| Autonomous orchestration (one supervised service, DISARMED → BOUNDED_AUTO) | `src/edge_lab/execution/orchestrator.py` | PLANNED (2026-10-07 evening directive; no second scheduler; starts DISARMED) | #160 #168 #82 |
+| Autonomous orchestration (one supervised service, DISARMED → BOUNDED_AUTO) | `src/edge_lab/execution/orchestrator.py` | PLANNED (2026-10-07 evening directive; starts DISARMED). It runs one cycle per invocation of a single systemd unit, the same pattern as the existing timers. It is not a second scheduler and not a Freshness Fabric source schedule (#74): it consumes freshness verdicts and never schedules collection | #160 #168 #82 |
 | Wallet / trader intelligence and copyability | `src/edge_lab/wallet_intel.py` | PLANNED (#168; extends sources/provenance; no second ledger, graph platform or scheduler; outside the execution package) | #168 #50 #82 #30 |
 | Risk engine | `src/edge_lab/risk.py` | BUILT (limits, capital release, withdrawal contract) | #6 #3 |
 | Stake sizing (research challenger) | `src/edge_lab/sizing_v2.py` | BUILT, research only (ADR 0026); sizing.py stays the frozen operational path | #6 #3 #32 |
@@ -149,7 +149,8 @@ Entries before 2026-09-29 (evening), with their classifications and supersession
   - The wallet lane runs alongside it as offline research.
   - UI journeys follow once the schemas stabilize.
 - **Dependencies:**
-  - wallet → execution only through a reviewed typed bridge, after the orchestrator and risk gate exist;
+  - wallet → execution only through a reviewed typed bridge, after the orchestrator and risk gate exist. That
+    bridge needs an explicit ADR 0043 amendment, because the boundary forbids any outside import;
   - any empirical wallet result needs a #96 slot and budget;
   - any live source read or execution venue needs the activation packet.
 - **Shared infrastructure:**

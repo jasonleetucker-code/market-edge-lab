@@ -49,15 +49,18 @@ means no mock balance shown as real, no silent zeros and no fake readiness badge
 | J8 | Outcome board | DONE_V1 (backend), REQUIRED_V1 (integration) | Real-world outcomes for actual permitted positions, from canonical records (#3) |
 | J9 | Private command surface | REQUIRED_V1 | Authentication and authorization, CSRF and same-origin checks, anti-replay, expiring exact-command approvals; no signer in the browser and no arbitrary execute endpoint (package N) |
 
-## 3. Execution and automation (packages from the ledger)
+## 3. Execution and automation (classes only; live state is in the ledger)
+
+This table gives the v1 *class* of each package. Its current state, PR, review and evidence are in
+`KALSHI_EXECUTION_LEDGER.md` and nowhere else. A package counts as DONE_V1 only once the ledger shows it MERGED.
 
 | Pkg | Class | Note |
 |---|---|---|
-| A, C | DONE_V1 | #164 |
-| D, E | DONE_V1 | #165 |
-| H | REQUIRED_V1 (in merge) | #166, reviewed and approved |
-| B, F | REQUIRED_V1 (in merge) | #167, reviewed and approved |
-| I | REQUIRED_V1 (in progress) | The risk gate and account projection; removes the `risk → shadow_ledger` edge |
+| A, C | REQUIRED_V1 | Foundation |
+| D, E | REQUIRED_V1 | Journal and reservations |
+| H | REQUIRED_V1 | Lifecycle and fake venue |
+| B, F | REQUIRED_V1 | Conformance, wire, signer and transport |
+| I | REQUIRED_V1 | The risk gate and account projection; removes the `risk → shadow_ledger` edge |
 | G | REQUIRED_V1 | Complete account reads on fixtures: live and historical partition, pagination, subaccounts |
 | J | REQUIRED_V1 | Stream and account recovery on fixtures |
 | K + ORCH | REQUIRED_V1 | The supervised orchestrator (`execution/orchestrator.py`) and the fixture runner. One service, bounded queues, expired backlog rejected after restart, starts DISARMED |
@@ -84,7 +87,7 @@ The owner (`wallet_intel.py`) is PLANNED. It extends `sources`/provenance, `rese
 | W5 | Follower replay and copyability | REQUIRED_V1 | The follower timeline starts at our observation time, with depth, fees, slippage, partial fills and exits. Size and delay ladders; benchmarks per §10. Unknown fills are never wins |
 | W6 | Follower policy and attribution | REQUIRED_V1 | Virtual attribution separate from inventory; no cash or inventory reuse; no shorts from missed entries; no catch-up by default |
 | W7 | Defensive and threat tests | REQUIRED_V1 | Every §11 and §20 scenario, as tests |
-| W8 | Typed bridge to execution | REQUIRED_V1 (software), disabled | The wallet → opportunity → risk-gate path, with no execution capability in the wallet code |
+| W8 | Typed bridge to execution | REQUIRED_V1 (software), disabled | The wallet → opportunity → risk-gate path, with no execution capability in the wallet code. ADR 0043 forbids any import of the execution package from outside it, so W8 needs an **explicit ADR 0043 amendment** in its own reviewed PR |
 | W9 | AI-assisted filters | LATER | Deterministic baselines first. A model is added only after a measured gain, versioned, with no authority |
 | W10 | Live public reads, paid feeds, empirical evaluation | BLOCKED_EXTERNAL | A recorded approval, rights, budget and a #96 slot |
 | W11 | On-chain execution | LATER | A separate conformance profile; not a v1 dependency |
