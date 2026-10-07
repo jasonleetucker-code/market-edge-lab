@@ -47,4 +47,9 @@ Under the 2026-09-30 roadmap integration and RFQ feasibility directive (#145, PR
 - 0042: the RFQ research lifecycle contract: pure and fixture-fed; private quotes stay UNAVAILABLE, requested size is
   not volume, accepts are not fills, and collateral is never shared across legs; no participation (R4, PR B).
 
-New decisions start at 0043.
+Under the 2026-10-07 Kalshi execution campaign directive (#160):
+- 0043: the isolated execution boundary. `src/edge_lab/execution/` is the only place execution code may live, with
+  file-exact relaxations (signer, transport, wire); nothing else imports it; FIXTURE is the only authorized
+  environment; `cryptography` is an optional extra used only by the signer.
+
+New decisions start at 0044.
