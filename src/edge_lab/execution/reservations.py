@@ -95,7 +95,6 @@ def _exact_context() -> Context:
     return Context(prec=2 * MAX_DIGITS + 10, traps=[InvalidOperation, Inexact, Rounded])
 
 
-
 SCHEMA_SQL = """
 CREATE TABLE egress_lease (
     lease_name TEXT PRIMARY KEY,
