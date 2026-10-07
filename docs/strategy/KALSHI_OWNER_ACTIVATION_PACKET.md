@@ -47,8 +47,11 @@ but the rehearsal.
 
 Unlocks `PRODUCTION_ACCOUNT_SHADOW_VERIFIED`. No order is ever sent.
 
-**Open fact that decides this packet** (*pending conformance*): can a Kalshi production API key be limited to
-reads? The campaign rule is "no provider default-full-access key accepted without scope evidence".
+**The fact that decides this packet:** Kalshi's API-keys documentation describes no permission scopes, no
+read-only keys, no withdrawal setting and no IP allowlist, and says the process is the same for demo and
+production (checked 2026-10-07, https://docs.kalshi.com/getting_started/api_keys). So a key that can read can
+also trade. The campaign rule is "no provider default-full-access key accepted without scope evidence", which
+makes this a risk decision for you rather than a setup step.
 
 - If read-only scope exists: create a read-only production key and install it as in Decision 1, on the executor
   host only.
