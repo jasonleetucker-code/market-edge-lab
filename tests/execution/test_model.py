@@ -181,9 +181,9 @@ def test_canonical_json_refuses_floats_and_nan():
 def test_digest_is_independent_of_the_callers_decimal_context():
     import decimal
 
-    a = intent(max_total_cost=Decimal("4.6000000000000000000001"))
-    b = intent(max_total_cost=Decimal("4.6000000000000000000002"))
-    assert a.digest() != b.digest()  # normalize() at 28 digits used to merge them
+    a = intent(max_total_cost=Decimal("4.60000001"))
+    b = intent(max_total_cost=Decimal("4.60000002"))
+    assert a.digest() != b.digest()  # distinct exact values never share an identity
     baseline = intent(max_total_cost=Decimal("4.2345678")).digest()
     with decimal.localcontext() as ctx:
         ctx.prec = 3
@@ -191,7 +191,7 @@ def test_digest_is_independent_of_the_callers_decimal_context():
         assert m.decimal_text(Decimal("1.2345678")) == "1.2345678"
 
 
-@pytest.mark.parametrize("value", ["9E+100000", "1" * 31, "0." + "0" * 40 + "1", "١٢", "１２"])
+@pytest.mark.parametrize("value", ["9E+100000", "1" * 14, "0.000000001", "1.000000001", "١٢", "１２"])
 def test_huge_tiny_and_non_ascii_numbers_are_refused(value):
     with pytest.raises(m.ExactValueError):
         m.exact_decimal(value if "E" not in value else Decimal(value), name="x")
@@ -230,3 +230,9 @@ def test_problems_refuses_a_naive_now_and_grants_validate_types():
 def test_a_lookalike_string_is_never_an_authorized_environment():
     assert not m.environment_authorized("FIXTURE")
     assert m.environment_authorized(m.Environment.FIXTURE)
+
+
+def test_trailing_zeros_do_not_count_as_decimal_places():
+    assert m.exact_decimal("1.5000000000000", name="x") == Decimal("1.5")
+    assert m.exact_decimal("9999999999999", name="x") == Decimal("9999999999999")
+    assert m.exact_decimal("0.00000001", name="x") == Decimal("0.00000001")
