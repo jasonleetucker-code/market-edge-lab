@@ -83,3 +83,9 @@ LIVE_AUTHORIZED and UNATTENDED_LIVE_AUTHORIZED remain separate.
    VPS through the runbook before Saturday Oct 10, 4:10 PM ET?" Answer: **"Yes, deploy it via the runbook
    (Recommended)"**. The option text read: "Code-only deploy outside the protected windows, with the deployed SHA
    verified afterwards. No timer, budget or schema changes."
+4. Question: "Deploys install a whole main SHA. Once #161 merges, the next deploy will also carry #153's in-play
+   provenance fix (41 lines in inplay_evidence.py, which the read-only dashboard's in-play view uses), plus test- and
+   docs-only changes. It won't carry the execution package. May the #161 deploy include #153?" Answer: **"Yes,
+   deploy main with #153 (Recommended)"**. The option text read: "One code-only deploy of the merged main SHA via the
+   runbook, outside protected windows, with the deployed SHA, the dashboard and the timers verified. #153 is reviewed,
+   approved and CI-green."
