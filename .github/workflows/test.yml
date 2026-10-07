@@ -27,7 +27,8 @@ jobs:
           python-version: ${{ matrix.python-version }}
           cache: "pip"
       - name: Install
-        run: python -m pip install -e ".[dev]"
+        # The execution extra installs `cryptography` for the isolated signer (ADR 0043).
+        run: python -m pip install -e ".[dev,execution]"
       - name: Test
         run: python -m pytest
       - name: Validate experiment registry
