@@ -519,15 +519,25 @@ class ReservationAuthority:
         return None if row is None else Lease(row[0], int(row[1]), row[2], row[3])
 
     def _check_fence(self, conn: sqlite3.Connection, fence_token: int, now: datetime) -> Lease:
-        if isinstance(fence_token, bool) or not isinstance(fence_token, int):
-            raise StaleFence(f"fence token must be an int, not {fence_token!r}")
         current = self._lease(conn)
+        problem = self.fence_problem(current, fence_token, now)
+        if problem is not None:
+            raise StaleFence(problem)
+        return current  # type: ignore[return-value]
+
+    @staticmethod
+    def fence_problem(current: Lease | None, fence_token: object, now: datetime) -> str | None:
+        """Why `fence_token` may not egress at `now` against the lease `current` (None: it may). The rule
+        `_check_fence` enforces inside a transaction; the orchestrator asks it before any send, and the account-aware
+        shadow (ADR 0047) before any WOULD_SUBMIT, so an expired lease blocks both the same way."""
+        if isinstance(fence_token, bool) or not isinstance(fence_token, int):
+            return f"fence token must be an int, not {fence_token!r}"
         if current is None or current.fence_token != fence_token:
-            raise StaleFence(f"fence {fence_token} is not the current egress lease "
-                             f"({current.fence_token if current else 'none'})")
+            return (f"fence {fence_token} is not the current egress lease "
+                    f"({current.fence_token if current else 'none'})")
         if not current.live_at(now):
-            raise StaleFence(f"fence {fence_token} expired at {current.expires_at_utc}")
-        return current
+            return f"fence {fence_token} expired at {current.expires_at_utc}"
+        return None
 
     # ------------------------------------------------------------------ account snapshots
 
@@ -694,14 +704,16 @@ class ReservationAuthority:
         decision = self._evaluate(conn, intent, now, snapshot_max_age=snapshot_max_age, candidate_id=reservation_id)
         if not decision.allowed:
             raise ReservationRefused(decision.reasons)
+        new = self.new_reservation(intent, reservation_id=reservation_id, fence_token=fence_token, at_utc=at)
         conn.execute("INSERT INTO reservations (reservation_id, intent_key, scope_key, market_ticker, side, kind,"
                      " client_order_id, quantity, limit_price, filled_quantity, cash_worst_case, state, release_reason,"
                      " end_reason, ended_at_utc, quarantine_reason, fence_token, created_at_utc, updated_at_utc,"
                      " last_fill_at_utc)"
-                     " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, '0', ?, 'OUTSTANDING', NULL, NULL, NULL, NULL, ?, ?, ?, NULL)",
-                     (reservation_id, intent.intent_key, intent.scope.key(), intent.market_ticker, intent.side.value,
-                      intent.kind.value, intent.client_order_id(), decimal_text(intent.quantity),
-                      decimal_text(intent.limit_price), decimal_text(intent.max_total_cost), fence_token, at, at))
+                     " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, ?, ?, ?, NULL)",
+                     (new.reservation_id, new.intent_key, new.scope_key, new.market_ticker, new.side.value,
+                      new.kind.value, new.client_order_id, decimal_text(new.quantity), decimal_text(new.limit_price),
+                      decimal_text(new.filled_quantity), decimal_text(new.cash_worst_case), new.state.value,
+                      new.fence_token, new.created_at_utc, new.updated_at_utc))
         self._store._audit(conn, at=at, kind="RESERVATION_CREATED", subject=reservation_id,
                            body={"intent_key": intent.intent_key, "intent_digest": intent.digest(),
                                  "fence_token": fence_token, "kind": intent.kind,
@@ -711,12 +723,39 @@ class ReservationAuthority:
                                  "inventory_available": decision.inventory_available})
         return self._view(conn, reservation_id)
 
+    @staticmethod
+    def new_reservation(intent: OrderIntent, *, reservation_id: str, fence_token: int, at_utc: str) -> ReservationView:
+        """The reservation `_reserve` creates for `intent` (pure): OUTSTANDING, nothing filled, its full
+        `max_total_cost` held. The account-aware shadow (ADR 0047) builds its hypothetical reservation with this same
+        function, under fence token 0, which the store's CHECK (fence_token >= 1) can never hold."""
+        if not isinstance(intent, OrderIntent):
+            raise ValueError("intent must be an OrderIntent")
+        return ReservationView(
+            reservation_id=reservation_id, intent_key=intent.intent_key, scope_key=intent.scope.key(),
+            market_ticker=intent.market_ticker, side=intent.side, kind=intent.kind,
+            client_order_id=intent.client_order_id(), quantity=intent.quantity, limit_price=intent.limit_price,
+            filled_quantity=Decimal(0), cash_worst_case=intent.max_total_cost, state=ObligationState.OUTSTANDING,
+            release_reason=None, end_reason=None, ended_at_utc=None, quarantine_reason=None, fence_token=fence_token,
+            created_at_utc=at_utc, updated_at_utc=at_utc, last_fill_at_utc=None, provider_held=False)
+
     def _evaluate(self, conn: sqlite3.Connection, intent: OrderIntent, now: datetime, *,
                   snapshot_max_age: timedelta, candidate_id: str) -> ReservationDecision:
         if not isinstance(intent, OrderIntent):
             raise ValueError("intent must be an OrderIntent")
         scope_key = intent.scope.key()
         snap = self._snapshot(conn, scope_key)
+        held = [] if snap is None else self._held(conn, scope_key, snap)
+        return self.decide(snap, held, intent, now, snapshot_max_age=snapshot_max_age, candidate_id=candidate_id)
+
+    @staticmethod
+    def decide(snap: AccountSnapshot | None, held: list[ReservationView], intent: OrderIntent, now: datetime, *,
+               snapshot_max_age: timedelta, candidate_id: str) -> ReservationDecision:
+        """The capacity rule itself, pure: would `intent` fit next to `held` against `snap` at `now`? `_reserve`
+        (inside `prepare_attempt`) and `evaluate` call it on one read of the store; the account-aware shadow (package
+        M, ADR 0047) calls it on an `account_view` plus the cycle's hypothetical reservations, so a shadow verdict and
+        a real reservation are decided by this same code. `held` must come from the same read as `snap`."""
+        if not isinstance(intent, OrderIntent):
+            raise ValueError("intent must be an OrderIntent")
         if snap is None:
             return ReservationDecision(False, ("NO_ACCOUNT_SNAPSHOT: account state is unknown; no new risk",),
                                        None, None, None, None)
@@ -728,7 +767,8 @@ class ReservationAuthority:
             reasons.append(f"SNAPSHOT_INCONSISTENT: revision {snap.revision}: {list(snap.problems)}")
         if snap.cash_basis is CashBasis.UNKNOWN:
             reasons.append("CASH_BASIS_UNKNOWN: the snapshot does not say what its cash means")
-        held = self._held(conn, scope_key, snap)
+        if snap.scope_key != intent.scope.key() or any(r.scope_key != snap.scope_key for r in held):
+            raise ValueError("the snapshot and the held reservations must be the intent's scope")
 
         with _exact():
             # Cash: every held obligation binds at once (the canonical owner decides).
@@ -763,7 +803,7 @@ class ReservationAuthority:
             # Inventory: a REDUCTION sells only what the snapshot shows is held and not already being sold.
             inventory: Decimal | None = None
             if intent.kind is IntentKind.REDUCTION:
-                inventory, why = self.inventory_for(snap, held, intent.market_ticker, intent.side)
+                inventory, why = ReservationAuthority.inventory_for(snap, held, intent.market_ticker, intent.side)
                 if why:
                     reasons.append(why)
                 elif intent.quantity > inventory:  # type: ignore[operator]
