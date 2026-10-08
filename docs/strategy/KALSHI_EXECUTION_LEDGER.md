@@ -53,8 +53,8 @@ These are values or semantics the offline code depends on that the documentation
 to be confirmed against the venue (DEMO_OBSERVED or PRODUCTION_READ_VERIFIED) before it is relied on.
 
 - **`lifecycle.TIMESTAMP_SKEW` (provisionally 2 s).** If the venue's fill stamps and snapshot times drift
-  further apart than this, normal flows quarantine falsely.
-- **`account.CLOCK_SKEW` (provisionally 5 s) and the venue's user-data lag (`max_data_lag`, 1 min).** An order
+  further apart than this, normal flows quarantine falsely. With it, `account.CLOCK_SKEW` (provisionally 5 s) and
+  the venue's user-data lag (`max_data_lag`, 1 min) bound when a count is true: an order
   listing's fill count is taken as true somewhere between the snapshot's `observed_at` and
   `ReadManifest.data_true_by` (read end + `CLOCK_SKEW`, or the closing as_of if later); fills stamped in between
   are never added on top of it and leave fees incomplete (ADR 0046 rule 14, P-3). If the venue's clock leads ours
