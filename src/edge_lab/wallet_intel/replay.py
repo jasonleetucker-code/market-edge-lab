@@ -13,8 +13,9 @@ ages and the policy quarantines it.
 - the pluggable fee function never invents a fee: None means UNKNOWN, which blocks net economics;
 - a request can fail (retried up to `max_attempts` against a fresh book) or end UNKNOWN. An UNKNOWN
   fill changes no inventory and makes the run's economics UNKNOWN: it is never a win;
-- a buy is skipped when the same leader's exit of that token was observable before our order arrived
-  (the leader exits while we are entering);
+- a buy is skipped when the same leader's exit of that token was already observable when we decided
+  (the leader exits while we are entering); an exit we could only see later cannot cancel the decision;
+- after an UNKNOWN request outcome, the run makes no new entry and no further request on that token;
 - nothing trades after its market resolves; holdings settle at the final payout.
 
 **Two economics, never merged.** LEADER_OBSERVED_ECONOMICS: the leader's own per-unit outcome for each
@@ -143,6 +144,7 @@ class _Run:
     bought: dict[str, tuple[Decimal, str]] = field(default_factory=dict)  # signal -> (qty, event)
     settlements: list[tuple[str, Decimal, Decimal]] = field(default_factory=list)
     unknown_fills: int = 0
+    unknown_tokens: set[str] = field(default_factory=set)  # a request on these ended UNKNOWN
 
 
 @dataclass(frozen=True)
@@ -248,10 +250,15 @@ def replay(signals: Sequence[FollowSignal], policy: FollowerPolicy, *, initial_c
         if intent.kind not in (IntentKind.BUY, IntentKind.SELL):
             record(intent.kind.value, intent.reason)
             continue
+        # After an UNKNOWN outcome our cash (and that token's inventory) is unknown: no new entry anywhere,
+        # and no further request on that token, so later counts and cash are never optimistic.
+        if run.unknown_fills and (intent.kind is IntentKind.BUY or s.instrument_id in run.unknown_tokens):
+            record("SKIP", "STOPPED_AFTER_UNKNOWN_FILL: cash or inventory is unknown")
+            continue
         arrived = at + config.arrival_delay
         if intent.kind is IntentKind.BUY and any(
                 e.leader_key == s.leader_key and e.instrument_id == s.instrument_id and e.leader_time > s.leader_time
-                and e.observable_at <= arrived for e in exits):
+                and e.observable_at <= at for e in exits):  # what we could know when deciding
             record("SKIP", "LEADER_EXITED_BEFORE_ENTRY")
             continue
         fill = _execute(s, intent.kind, intent.quantity, intent.limit_price, intent.max_cash, run, books, config,
@@ -283,6 +290,7 @@ def _execute(s: FollowSignal, kind: IntentKind, qty: Decimal | None, limit: Deci
         outcome = config.request_outcome(s.signal_id, attempt)
         if outcome is RequestResult.UNKNOWN:
             run.unknown_fills += 1
+            run.unknown_tokens.add(s.instrument_id)
             return result(FillStatus.UNKNOWN, "REQUEST_OUTCOME_UNKNOWN: inventory unchanged, economics UNKNOWN",
                           attempt, at)
         if outcome is RequestResult.FAILED:
@@ -493,7 +501,7 @@ class LadderRow:
     follower_gross: Labeled
     follower_net: Labeled
     leader_scaled: Labeled
-    filled: int
+    filled: int | None  # None once a fill is UNKNOWN: the count would be optimistic
     unknown_fills: int
 
     def to_dict(self) -> dict:
@@ -513,9 +521,9 @@ def ladder(signals: Sequence[FollowSignal], limits: PolicyLimits, enrollments: M
             pol = FollowerPolicy(replace(limits, risk_per_signal=size), enrollments=enrollments)
             r = replay(with_detection_delay(signals, delay), pol, initial_cash=initial_cash, books=books,
                        resolutions=resolutions, config=replace(config, detection_delay=delay), horizon=horizon)
+            known_fills = r.follower.fill_statuses.get("FILLED", 0) + r.follower.fill_statuses.get("PARTIAL", 0)
             rows.append(LadderRow(size, delay, r.follower.gross_pnl, r.follower.net_pnl, r.leader.scaled_to_follower,
-                                  r.follower.fill_statuses.get("FILLED", 0) + r.follower.fill_statuses.get("PARTIAL", 0),
-                                  r.follower.unknown_fills))
+                                  None if r.follower.unknown_fills else known_fills, r.follower.unknown_fills))
     return tuple(rows)
 
 

@@ -144,3 +144,37 @@ def test_f5_spec_citations_carry_the_owner_ruling_and_docs_pages_are_preferred()
     for line in _text().splitlines():  # every other spec citation in the document carries the ruling too
         if line.startswith("|") and "openapi.json" in line:
             assert ruling in line, line[:80]
+
+
+# F6: the leader-exit skip uses only exits observable when we decided -------------------------------
+def test_f6_an_exit_seen_only_after_our_decision_does_not_cancel_the_entry():
+    from edge_lab.wallet_intel.policy import FollowerPolicy
+    from edge_lab.wallet_intel.replay import replay
+    from wallet_support import Books, book, config, enrolled, limits, signal
+
+    buy = signal("b", when=at(0), delay=timedelta(minutes=2))  # decided at 2:01, arrives at 2:02
+    exit_ = signal("x", Action.TRADE_SELL, when=at(1), delay=timedelta(seconds=61, milliseconds=500), before="100")
+    assert buy.observable_at + timedelta(seconds=1) < exit_.observable_at <= buy.observable_at + timedelta(seconds=2)
+    r = replay([buy, exit_], FollowerPolicy(limits(), enrollments=enrolled("L1")), initial_cash=D(100),
+               books=Books(book(captured=at(0))), resolutions={}, config=config(), horizon=at(days=1))
+    assert {o.signal_id: o.decision for o in r.outcomes}["b"] == "BUY"
+
+
+# F7: after an UNKNOWN fill the run stops new entries and the ladder count is not optimistic --------
+def test_f7_unknown_fill_stops_new_entries_and_blanks_the_ladder_count():
+    from edge_lab.wallet_intel.policy import FollowerPolicy
+    from edge_lab.wallet_intel.replay import RequestResult, ladder, replay
+    from wallet_support import Books, book, config, enrolled, limits, signal
+
+    first_unknown = lambda sid, n: RequestResult.UNKNOWN if sid == "a" else RequestResult.OK  # noqa: E731
+    sigs = [signal("a"), signal("b", token="m2-yes", market="m2", event="evt-m2", when=at(5))]
+    books = Books(book(captured=at(1)), book("m2-yes", captured=at(6)))
+    r = replay(sigs, FollowerPolicy(limits(), enrollments=enrolled("L1")), initial_cash=D(100), books=books,
+               resolutions={}, config=config(request_outcome=first_unknown), horizon=at(days=1))
+    by = {o.signal_id: o for o in r.outcomes}
+    assert by["a"].fill.status.value == "UNKNOWN"
+    assert by["b"].decision == "SKIP" and "STOPPED_AFTER_UNKNOWN_FILL" in by["b"].reason
+    assert r.final_book.cash == D(100) and r.final_book.inventory == {}
+    rows = ladder(sigs, limits(), enrolled("L1"), sizes=[D(10)], delays=[timedelta(minutes=1)], initial_cash=D(100),
+                  books=books, resolutions={}, config=config(request_outcome=first_unknown), horizon=at(days=1))
+    assert rows[0].filled is None and rows[0].unknown_fills == 1 and rows[0].to_dict()["filled"] is None
