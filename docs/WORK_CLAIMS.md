@@ -6,4 +6,3 @@ The expiry is a UTC date no more than 7 days out. An expired row is not a live c
 
 | Claim | Agent | Branch | Paths | Expires |
 |---|---|---|---|---|
-| #160 BF2: merge main; ReadOnlySender uses the kalshi_wire spec functions | Claude BF2 writer | exec/bf2-exact-request | src/edge_lab/execution/shadow.py, tests/execution/test_shadow.py, tests/execution/test_wire_exact_request.py | 2026-10-15 |
