@@ -100,6 +100,16 @@ def test_names_placeholders_and_hashes_are_not_findings(benign):
     assert list(scan.scan_text(benign, {})) == []
 
 
+def test_an_unquoted_value_ends_at_an_ampersand():
+    """A query or form string: the value before `&` is judged on its own, so a redacted placeholder is not a
+    finding, while a real value before `&` still is (and only that value is fingerprinted)."""
+    for benign in ("secret=" + "REDACTED" + "&x=1", "password=" + "REDACTED" + "&next=" + "a1b2c3d4" * 2):
+        assert [f for f in scan.scan_text(benign, {}) if f["pattern"] == "assigned credential"] == [], benign
+    leak = "password=" + "hunter2" + "hunter2"
+    found = [f for f in scan.scan_text(leak + "&next=1", {}) if f["pattern"] == "assigned credential"]
+    assert [f["fingerprint"] for f in found] == [scan.fingerprint(leak)]
+
+
 def test_the_scan_covers_every_pattern_of_the_tracked_file_invariant():
     invariant = _module("no_secrets_invariant", ROOT / "tests" / "invariants" / "test_no_secrets.py")
     for label, pattern in invariant.PATTERNS.items():

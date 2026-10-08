@@ -57,10 +57,11 @@ PATTERNS = {
     # A credential assigned to a credential-like NAME, in any of the forms config files use: `NAME=value`, `NAME =
     # "value"`, `NAME: value` (YAML) and `"name": "value"` (JSON). NAME ends in KEY, SECRET, TOKEN, PASSWORD, PASSWD
     # or TOPIC (case-insensitive, `_`, `-` or `.` allowed before it, so ODDS_API_KEY and ntfy_topic count). Each match
-    # is then judged by `_credential_value` below, which drops placeholders and references.
+    # is then judged by `_credential_value` below, which drops placeholders and references. An unquoted value ends at
+    # `&` as at whitespace (a query or form string: `secret=REDACTED&x=1` holds the placeholder REDACTED).
     "assigned credential": re.compile(
         r"""(?ix)(?<![A-Za-z0-9])(?P<q>["']?)(?P<name>[A-Za-z0-9_.-]*?(?:key|secret|token|passw(?:or)?d|topic))(?P=q)
-        \s*(?::|=(?!=))\s*(?P<value>"[^"\n]*"|'[^'\n]*'|[^\s,;#}\])"']+)"""),
+        \s*(?::|=(?!=))\s*(?P<value>"[^"\n]*"|'[^'\n]*'|[^\s,;#}\])"'&]+)"""),
 }
 
 _STRONG_NAME = re.compile(r"(?i)(secret|passw(?:or)?d)$")  # a bare SECRET or PASSWORD is already a credential name
@@ -125,6 +126,9 @@ ALLOWED: dict[str, tuple[tuple[str, ...], str]] = {
                          "history only: sample topic for parse_topic_url"),
     "786a7680c76b6130": (("tests/test_redaction.py",), "synthetic signature sample the redaction tests redact"),
     "f15f811d2afb97e7": (("tests/test_redaction.py",), "synthetic key-id sample the redaction tests redact"),
+    "1a5d44a2dca19669": (("tests/test_redaction_corpus.py",),
+                         "history only (commit c035baa): AWS's published documentation example access key id "
+                         "AKIA...EXAMPLE in a redaction corpus sample; split into pieces from the next commit"),
     "4e3abb493b8bb9f0": (("tests/test_secret_scan.py",),
                          "this scanner's own 'assigned secret' sample, assembled from string pieces at run time"),
     # Not synthetic: coordinator ruling 2026-10-08. A third party's CDN issued this short-lived bot-challenge value
