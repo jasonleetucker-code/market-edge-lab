@@ -185,7 +185,15 @@ def test_annotations_do_not_enter_identity_or_dedup():
     assert (annotated.observation_id, annotated.semantic_key) == SUPPORT_PIN
     log = ObservationLog()
     log.ingest([o])
-    assert log.ingest([annotated]) == {"added": 0, "duplicates": 1, "conflicts": 0}  # documented limit
+    assert log.ingest([annotated]) == {"added": 0, "duplicates": 1, "conflicts": 0}  # a duplicate, not a conflict
+    # ...but the later copy is kept, and its stated role shows from its own receipt time on.
+    late = replace(annotated, receipt_time=o.receipt_time + timedelta(hours=1))
+    log2 = ObservationLog()
+    log2.ingest([o, late])
+    assert log2.version_at(o.observation_id, o.receipt_time).liquidity_role is LiquidityRole.UNKNOWN
+    seen = log2.version_at(o.observation_id, late.receipt_time)
+    assert seen.liquidity_role is LiquidityRole.MAKER and seen.counterparty == acct(2)
+    assert (seen.observation_id, seen.semantic_key) == SUPPORT_PIN
 
 
 def test_demo_report_and_v1_manifest_digest_are_unchanged():

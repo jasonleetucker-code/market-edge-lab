@@ -236,6 +236,25 @@ That print is ordinary. It is not evidence of manipulation, and it does not mean
    - The leader's price consistency is carried alongside and never used to decide. Lane D owns the full
      follower-replay study.
 
+**Point-in-time log fix (lane WA finding).** `ObservationLog` views depended on ingest order. Version A of an
+identity received on day 2 and a conflicting version B received on day 5 gave `[A]` at a day-3 cutoff when
+ingested A then B, but nothing when ingested B then A, because conflict detection times and the stored version
+were set by arrival order. `version_at`, `as_known_at`, `conflicted_ids` and `first_receipt` are now pure
+functions of the copies received by the cutoff and the corrections recorded by it:
+- every received copy is kept, append-only;
+- copies are ordered by receipt time, then by semantic key, then by the full record, so ties are deterministic;
+- an identity conflicts at a cutoff when two contents are known by then, and a transaction conflicts when two
+  block times are known by then;
+- the version used is the earliest-received known copy;
+- corrections apply in `(recorded_at, correction_id)` order;
+- `first_receipt` is the earliest receipt of any copy or version.
+
+`ingest`'s counts and the `conflicts` list remain an audit of what each retrieval revealed as it arrived, and do
+depend on ingest order. `tests/wallet/test_wallet_threats_role_log_order.py` ingests the same rows in 60 seeded
+shuffles with random batching and checks identical views at every cutoff, including WA's exact example. The
+pre-fix log fails it. Observation ids, semantic keys, the v1 manifest digest and the demo `report_sha256` are
+unchanged.
+
 **Versions.** `off_market_fills` is kept unchanged as v1 (`wallet-off-market-v1`, role-unaware), with
 `off_market_report_v1` and an explicit interpretation note. The v2 report is `quality_report` →
 `wallet-quality-diagnostics-v2`, which carries a `DataClass` (SYNTHETIC, FIXTURE, OBSERVED or UNKNOWN). Synthetic
@@ -249,9 +268,14 @@ changes. Tests pin the Polymarket fixture identities, the v1 manifest digest and
 on `c34221c`.
 
 **Tradeoffs and limits.**
-- **Annotations are outside the identity.** Re-receiving a fill with a role its first receipt lacked counts as a
-  duplicate, and the first receipt is kept. A later identity schema could bind the role. That needs coordination
-  with the selection receipts (Deliverable A).
+- **Annotations are outside the identity.** Re-receiving a fill with a role or counterparty its first receipt
+  lacked counts as a duplicate, not a conflict, and identity does not change. The later copy is not lost: the log
+  keeps every received copy. From that copy's receipt time on, `version_at` and `as_known_at` return the
+  earliest-received copy carrying the annotation the later copy states, so `liquidity_role` and the counterparty
+  detectors see it, and earlier views do not. Copies of the same content that state different roles or
+  counterparties leave the annotation UNKNOWN / None and add `CONFLICTING_LIQUIDITY_ROLE_ANNOTATIONS` or
+  `CONFLICTING_COUNTERPARTY_ANNOTATIONS` to `ambiguities`. Binding the role into identity would need
+  coordination with the selection receipts (Deliverable A).
 - **The maker case rests on the capture.** A maker print below the bid is INSUFFICIENT_EVIDENCE, not INCONSISTENT.
   So a cheap allocation with an unknown role is no longer flagged OFF_MARKET by v2. It is not cleared either.
   The v1 screen still reports it.

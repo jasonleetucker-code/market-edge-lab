@@ -21,14 +21,17 @@ raw evidence reference, the parser version, confidence/coverage notes and correc
 **Optional annotations (amendment 2026-10-08 B).** `liquidity_role` (MAKER / TAKER / MIXED / UNKNOWN)
 and a source-reported `counterparty`, each with the field that states it. They default to UNKNOWN /
 None, are never inferred, and are not part of the v1 semantic identity: re-receiving a fill with an
-annotation the first receipt lacked is a duplicate (the earliest receipt is kept), not a conflict.
+annotation the first receipt lacked is a duplicate, not a conflict. The later copy is still kept, and
+its annotation is visible in point-in-time views from that copy's receipt time on (copies that state
+different annotations leave it UNKNOWN and record the disagreement).
 
 **Taxonomy.** Only TRADE_BUY and TRADE_SELL are directional. Transfers, splits, merges, redemptions,
 rewards and conversions are not buys or sells, and an UNKNOWN action is never followed.
 
 **Corrections are appended** (`Correction`): a retraction, a supersession or a finality change
-(a reorg). `as_known_at(t)` replays the log as it stood at knowledge time `t`. History is never
-rewritten, and a retracted leader event never undoes anything a follower did (W6 keeps its own
+(a reorg). `as_known_at(t)` replays the log as it stood at knowledge time `t`: a pure function of
+the copies received by `t` and the corrections recorded by `t`, so the ingest order never changes a
+point-in-time view. History is never rewritten, and a retracted leader event never undoes anything a follower did (W6 keeps its own
 records).
 
 **Position effects** (`classify_effects`) are judged against the reconstructed position. Without a
@@ -39,7 +42,7 @@ UNKNOWN, never a guess.
 from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
-from datetime import datetime, timezone
+from datetime import datetime
 from decimal import Decimal
 from enum import Enum
 from typing import Iterable, Sequence
@@ -113,7 +116,6 @@ def combined_role(roles: Iterable[LiquidityRole]) -> LiquidityRole:
 
 
 CASH_ASSETS = frozenset({"USDC", "PUSD", "USD"})
-_NEVER = datetime.max.replace(tzinfo=timezone.utc)
 
 
 @dataclass(frozen=True)
@@ -311,9 +313,24 @@ class _Entry:
     receipts: int = 1
 
 
+def _receipt_order(o: WalletObservation) -> tuple:
+    """A total order over received copies: receipt time, then a deterministic tie-break (content, then
+    the full record), so two copies received at the same instant are ordered the same way whatever
+    order they were ingested in."""
+    return (o.receipt_time, o.semantic_key, repr(o))
+
+
 @dataclass
 class ObservationLog:
-    """Append-only. Entries, corrections and conflicts are only ever added."""
+    """Append-only. Entries, corrections and conflicts are only ever added.
+
+    **Point-in-time views are a pure function of what was received by the cutoff** (amendment
+    2026-10-08 B): `version_at`, `as_known_at`, `conflicted_ids` and `first_receipt` read every
+    received copy (`_receipts`) and use only copies with `receipt_time <= known_at`, ordered by
+    receipt time with a deterministic tie-break. Ingesting the same rows in any order, in any
+    batches, gives the same view at every cutoff. `ingest`'s counts and the `conflicts` list are
+    an audit of what each retrieval added as it arrived, and do depend on ingest order.
+    """
 
     _entries: dict[str, _Entry] = field(default_factory=dict)
     _order: list[str] = field(default_factory=list)
@@ -321,23 +338,23 @@ class ObservationLog:
     _conflicts: list[Conflict] = field(default_factory=list)
     _variants: dict[str, list[WalletObservation]] = field(default_factory=dict)
     _tx_times: dict[str, datetime] = field(default_factory=dict)
-    _conflicted_tx: dict[str, datetime] = field(default_factory=dict)  # tx key -> earliest detection
-    _conflicted_ids: dict[str, datetime] = field(default_factory=dict)  # identity -> earliest detection
+    _receipts: dict[str, list[WalletObservation]] = field(default_factory=dict)  # identity -> every copy
+    _tx_ids: dict[str, set[str]] = field(default_factory=dict)  # source|tx -> identities
 
     def ingest(self, observations: Iterable[WalletObservation]) -> dict[str, int]:
         """Add one retrieval's observations (occurrences already assigned). Returns counts."""
         added = dup = conflicts = 0
         for obs in observations:
             oid = obs.observation_id
+            self._receipts.setdefault(oid, []).append(obs)
             tx = obs.transaction_id.lower() if obs.transaction_id else None
             if tx is not None:
                 key = f"{obs.source}|{tx}"
+                self._tx_ids.setdefault(key, set()).add(oid)
                 seen = self._tx_times.get(key)
                 if seen is None:
                     self._tx_times[key] = obs.source_time
                 elif seen != obs.source_time:
-                    if key not in self._conflicted_tx or obs.receipt_time < self._conflicted_tx[key]:
-                        self._conflicted_tx[key] = obs.receipt_time
                     self._conflicts.append(Conflict("TRANSACTION_TIME_MISMATCH", key, utc_text(seen),
                                                     utc_text(obs.source_time), obs.receipt_time))
                     conflicts += 1
@@ -356,8 +373,6 @@ class ObservationLog:
             variants = self._variants.setdefault(oid, [])
             if all(v.semantic_key != obs.semantic_key for v in variants):
                 variants.append(obs)
-                if oid not in self._conflicted_ids or obs.receipt_time < self._conflicted_ids[oid]:
-                    self._conflicted_ids[oid] = obs.receipt_time
                 self._conflicts.append(Conflict("SAME_IDENTITY_DIFFERENT_CONTENT", oid, entry.obs.semantic_key,
                                                 obs.semantic_key, obs.receipt_time))
                 conflicts += 1
@@ -372,27 +387,36 @@ class ObservationLog:
 
     @property
     def conflicts(self) -> tuple[Conflict, ...]:
+        """The ingest audit: conflicts as each retrieval revealed them (ingest-order dependent)."""
         return tuple(self._conflicts)
 
     @property
     def corrections(self) -> tuple[Correction, ...]:
         return tuple(self._corrections)
 
+    def _known(self, observation_id: str, known_at: datetime | None) -> list[WalletObservation]:
+        copies = self._receipts.get(observation_id, [])
+        return sorted((o for o in copies if known_at is None or o.receipt_time <= known_at), key=_receipt_order)
+
+    def _is_conflicted(self, observation_id: str, known_at: datetime | None) -> bool:
+        known = self._known(observation_id, known_at)
+        if len({o.semantic_key for o in known}) > 1:
+            return True
+        if not known or not known[0].transaction_id:
+            return False
+        key = f"{known[0].source}|{known[0].transaction_id.lower()}"
+        times = {o.source_time for oid in self._tx_ids.get(key, ()) for o in self._known(oid, known_at)}
+        return len(times) > 1
+
     def conflicted_ids(self, known_at: datetime | None = None) -> frozenset[str]:
-        """Identities with two contents, plus every observation of a transaction with two block times.
-
-        With `known_at`, only conflicts detected by then count: a version that arrives later never
-        changes what an earlier point-in-time view contained."""
-
-        def by(when: datetime) -> bool:
-            return known_at is None or when <= known_at
-
-        tx_hit = {oid for oid, e in self._entries.items() if e.obs.transaction_id
-                  and by(self._conflicted_tx.get(f"{e.obs.source}|{e.obs.transaction_id.lower()}", _NEVER))}
-        return frozenset(oid for oid, when in self._conflicted_ids.items() if by(when)) | frozenset(tx_hit)
+        """Identities with two contents, plus every observation of a transaction with two block times,
+        among the copies received by `known_at` (all copies when None). A version that arrives later
+        never changes what an earlier point-in-time view contained, whatever the ingest order."""
+        return frozenset(oid for oid in self._receipts if self._is_conflicted(oid, known_at))
 
     def first_receipt(self, observation_id: str) -> datetime:
-        return self._entries[observation_id].first_receipt
+        """The earliest receipt of any copy or version of this identity."""
+        return min(o.receipt_time for o in self._receipts[observation_id])
 
     def all_ids(self) -> tuple[str, ...]:
         return tuple(self._order)
@@ -400,16 +424,23 @@ class ObservationLog:
     def version_at(self, observation_id: str, known_at: datetime, *, include_conflicted: bool = False,
                    _conflicted: frozenset[str] | None = None) -> WalletObservation | None:
         """One identity as it stood at knowledge time `known_at` (None: not yet received, retracted,
-        reorged out, or conflicted by then)."""
+        reorged out, or conflicted by then).
+
+        The version is the earliest-received copy known by then. Optional annotations a later copy of
+        the *same content* states (liquidity role, counterparty), when the chosen copy lacks them, are
+        carried over once that copy is known; copies that disagree leave the annotation UNKNOWN / None
+        and record `CONFLICTING_<NAME>_ANNOTATIONS`. Identity is never affected."""
         require_aware(known_at, "known_at")
-        entry = self._entries.get(observation_id)
-        if entry is None or entry.first_receipt > known_at:
+        known = self._known(observation_id, known_at)
+        if not known:
             return None
-        conflicted = self.conflicted_ids(known_at) if _conflicted is None else _conflicted
-        if not include_conflicted and observation_id in conflicted:
+        conflicted = (observation_id in _conflicted) if _conflicted is not None else \
+            self._is_conflicted(observation_id, known_at)
+        if not include_conflicted and conflicted:
             return None
-        obs: WalletObservation | None = entry.obs
-        for c in self._corrections:
+        obs: WalletObservation | None = _with_annotations(known[0], [o for o in known
+                                                                     if o.semantic_key == known[0].semantic_key])
+        for c in sorted(self._corrections, key=lambda c: (c.recorded_at, c.correction_id)):
             if c.target_id != observation_id or c.recorded_at > known_at or obs is None:
                 continue
             if c.kind is CorrectionKind.RETRACTED:
@@ -423,13 +454,36 @@ class ObservationLog:
     def as_known_at(self, known_at: datetime, *, include_conflicted: bool = False) -> tuple[WalletObservation, ...]:
         """The log as it stood at knowledge time `known_at`, with corrections recorded by then.
 
-        An observation counts only once its first receipt is at or before `known_at`. Conflicted
+        An observation counts only once a copy of it was received at or before `known_at`. Conflicted
         identities are left out unless asked for (they are reported, not resolved)."""
         require_aware(known_at, "known_at")
         conflicted = self.conflicted_ids(known_at)
         out = [o for o in (self.version_at(oid, known_at, include_conflicted=include_conflicted,
-                                           _conflicted=conflicted) for oid in self._order) if o is not None]
+                                           _conflicted=conflicted) for oid in sorted(self._receipts)) if o is not None]
         return tuple(sorted(out, key=lambda o: (o.source_time, o.observation_id)))
+
+
+def _with_annotations(chosen: WalletObservation, same_content: Sequence[WalletObservation]) -> WalletObservation:
+    """`chosen` with the optional annotations stated by any known copy of the same content."""
+    changes: dict = {}
+    notes = set(chosen.ambiguities)
+    roles = {o.liquidity_role for o in same_content if o.liquidity_role is not LiquidityRole.UNKNOWN}
+    if len(roles) > 1:
+        changes.update(liquidity_role=LiquidityRole.UNKNOWN, liquidity_role_source=None)
+        notes.add("CONFLICTING_LIQUIDITY_ROLE_ANNOTATIONS")
+    elif roles and chosen.liquidity_role is LiquidityRole.UNKNOWN:
+        first = next(o for o in same_content if o.liquidity_role is not LiquidityRole.UNKNOWN)
+        changes.update(liquidity_role=first.liquidity_role, liquidity_role_source=first.liquidity_role_source)
+    parties = {o.counterparty.key for o in same_content if o.counterparty is not None}
+    if len(parties) > 1:
+        changes.update(counterparty=None, counterparty_source=None)
+        notes.add("CONFLICTING_COUNTERPARTY_ANNOTATIONS")
+    elif parties and chosen.counterparty is None:
+        first = next(o for o in same_content if o.counterparty is not None)
+        changes.update(counterparty=first.counterparty, counterparty_source=first.counterparty_source)
+    if notes != set(chosen.ambiguities):
+        changes["ambiguities"] = tuple(sorted(notes))
+    return replace(chosen, **changes) if changes else chosen
 
 
 # --- Position effects ------------------------------------------------------------------------------
