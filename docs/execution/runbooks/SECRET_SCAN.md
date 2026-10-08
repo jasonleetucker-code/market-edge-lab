@@ -82,7 +82,7 @@ by the rules in `docs/SECURITY.md` and [KEYS.md](KEYS.md), not by this scan.
 |---|---|---|
 | 2026-10-07 | an earlier pattern-based scan of 787 commits (reported by the campaign coordinator) | clean |
 | 2026-10-08 | `--history` with the first version of this script, on branch `exec/o-ops` at `d617faa` (all local refs): 836 commits, 339 refs, 2,578 text blobs | clean. 101 matches across 10 fingerprints were reviewed and allowlisted, all synthetic test values |
-| 2026-10-08 | `--history` and `--tree` with the assigned-credential detector: SCAN_RESULT_PLACEHOLDER | **NOT CLEAN: 1 finding pending a decision** (below) |
+| 2026-10-08 | `--history` and `--tree` with the assigned-credential detector, on branch `exec/o-ops` at `d45120b`. History (all local refs): 852 commits, 341 refs, 2,652 text blobs, 852 commit messages, 55 binary blobs skipped, none over the size bound. Tree: 743 files. 106 history and 38 tree matches across 11 path-bound entries were reviewed as synthetic test values and allowlisted | **NOT CLEAN: 1 finding pending a decision** (below) |
 
 **Pending decision (not allowlisted).**
 - `experiments/EXP-002-nfl-consensus-vs-event-market/fee_evidence/kalshi-fee-schedule_current_2026-09-29T002418Z_HTTP429.headers.txt`,
