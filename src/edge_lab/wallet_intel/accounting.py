@@ -404,13 +404,19 @@ class LeaderDimensions:
 
 
 def event_outcomes(account: LeaderAccount) -> dict[str, Decimal]:
-    """Realized gross P&L per independent event (markets of one event are one cluster)."""
+    """Realized gross P&L per independent event (markets of one event are one cluster).
+
+    An event counts only when every one of its markets is closed or settled with a known P&L. One open
+    or UNKNOWN market makes the whole event UNKNOWN, so it is left out: never a partial win."""
     out: dict[str, Decimal] = {}
+    unknown: set[str] = set()
     for r in account.markets:
+        key = r.event_id or r.market_id
         if r.state in (MarketState.CLOSED, MarketState.SETTLED) and r.pnl_gross.value is not None:
-            key = r.event_id or r.market_id
             out[key] = add(out.get(key, ZERO), r.pnl_gross.value)
-    return out
+        else:
+            unknown.add(key)
+    return {k: v for k, v in out.items() if k not in unknown}
 
 
 def leader_dimensions(account: LeaderAccount, observations: Sequence[WalletObservation], *,

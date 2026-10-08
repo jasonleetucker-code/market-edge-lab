@@ -105,3 +105,21 @@ def test_f3_the_demo_builds_signals_point_in_time():
     from edge_lab.wallet_intel import demo
     source = inspect.getsource(demo.run_synthetic_demo)
     assert "signals_from_log(" in source and "signal_from_observation(" not in source
+
+
+# F4: an event with any unknown market is unknown, never a win --------------------------------------
+def test_f4_a_partly_unknown_event_is_not_a_win_and_is_not_pooled():
+    from edge_lab.wallet_intel.accounting import event_outcomes, reconstruct
+    from edge_lab.wallet_intel.exact import Labeled
+
+    a = acct(1)
+    rows = [obs(a, Action.TRADE_BUY, "m1-yes", 10, "0.40", at(0), market="m1", event="E"),
+            obs(a, Action.TRADE_SELL, "m1-yes", 10, "0.60", at(5), market="m1", event="E"),  # +2 in E
+            obs(a, Action.TRANSFER_IN, "m2-yes", 50, "0", at(1), market="m2", event="E")]  # E's other market unknown
+    acc = reconstruct(rows, as_of=at(days=1), history_complete=True, cash_flows_observed=True,
+                      opening_balance=Labeled.observed(D(10)), marks={}, mark_max_age=timedelta(minutes=5))
+    assert "E" not in event_outcomes(acc)
+    open_rows = rows[:2] + [obs(a, Action.TRADE_BUY, "m3-yes", 5, "0.5", at(2), market="m3", event="E")]
+    acc = reconstruct(open_rows, as_of=at(days=1), history_complete=True, cash_flows_observed=True,
+                      opening_balance=Labeled.observed(D(10)), marks={}, mark_max_age=timedelta(minutes=5))
+    assert "E" not in event_outcomes(acc)  # a still-open market also keeps the event out
