@@ -1,0 +1,34 @@
+{
+ "retrieved": "2026-10-07",
+ "class": "DOCUMENTED_SHAPE_SYNTHETIC_VALUES",
+ "statement": "Field names, types, envelope, pagination, statuses and error schema follow the Polymarket Data API v2 documentation retrieved 2026-10-07. The documentation publishes no example payloads, so every value (addresses, hashes, token ids, sizes, prices, times, cursors) is SYNTHETIC. No data endpoint was called.",
+ "docs": {
+  "migration": "https://docs.polymarket.com/migrate/data-api-v1-to-v2",
+  "overview": "https://docs.polymarket.com/api-reference/data-api/overview",
+  "openapi": "https://data-api.polymarket.com/v2/openapi.json",
+  "activity_v1_reference": "https://docs.polymarket.com/api-reference/core/get-user-activity"
+ },
+ "fixtures": {
+  "activity_cursor_without_has_more.json": "NEGATIVE_CASE",
+  "activity_data_empty.json": "DOCUMENTED_SHAPE",
+  "activity_data_null.json": "DOCUMENTED_SHAPE",
+  "activity_has_more_without_cursor.json": "NEGATIVE_CASE",
+  "activity_loop_page.json": "NEGATIVE_CASE",
+  "activity_missing_usdc_size.json": "NEGATIVE_CASE",
+  "activity_overview_pagination_shape.json": "DOCUMENTED_SHAPE",
+  "activity_page1.json": "DOCUMENTED_SHAPE",
+  "activity_page2.json": "DOCUMENTED_SHAPE",
+  "activity_trade_without_side.json": "NEGATIVE_CASE",
+  "activity_unknown_type.json": "NEGATIVE_CASE",
+  "activity_v1_bare_camel.json": "NEGATIVE_CASE",
+  "activity_v1_camel_in_envelope.json": "NEGATIVE_CASE",
+  "error_400_bad_cursor.json": "DOCUMENTED_ERROR_SCHEMA",
+  "error_429_rate_limited.json": "DOCUMENTED_ERROR_SCHEMA",
+  "error_503_request_timeout.json": "DOCUMENTED_ERROR_SCHEMA",
+  "error_missing_code.json": "NEGATIVE_CASE",
+  "positions_bad_status.json": "NEGATIVE_CASE",
+  "positions_page.json": "DOCUMENTED_SHAPE",
+  "trades_page.json": "DOCUMENTED_SHAPE"
+ },
+ "conflict": "The overview page's example pagination object includes limit and offset; the OpenAPI Pagination schema has only next_cursor and has_more. activity_overview_pagination_shape.json pins that the parser accepts both."
+}

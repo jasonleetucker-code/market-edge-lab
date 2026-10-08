@@ -1,0 +1,6 @@
+{
+ "error": "no database connection within budget",
+ "code": "request_timeout",
+ "retryable": true,
+ "trace_id": "trace-synthetic-3"
+}

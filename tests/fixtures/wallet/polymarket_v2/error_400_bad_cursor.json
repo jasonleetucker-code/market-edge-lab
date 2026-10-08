@@ -1,0 +1,7 @@
+{
+ "error": "bad cursor",
+ "code": "invalid_request",
+ "retryable": false,
+ "trace_id": "trace-synthetic-1",
+ "parameter": "cursor"
+}

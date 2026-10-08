@@ -1,0 +1,15 @@
+[
+ {
+  "proxyWallet": "0x00000000000000000000000000000000000a0001",
+  "timestamp": 1767268800,
+  "conditionId": "0xc1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1",
+  "type": "TRADE",
+  "size": 10,
+  "usdcSize": 4.8,
+  "transactionHash": "0xa1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+  "price": 0.48,
+  "asset": "1000000000000000000000000000000000000000000000000000000000000000001",
+  "side": "BUY",
+  "outcomeIndex": 0
+ }
+]
