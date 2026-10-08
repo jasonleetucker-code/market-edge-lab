@@ -803,6 +803,72 @@ be written here when they are made.
       still needs its own ADR 0043 amendment);
     - every item already listed as not authorized in the 2026-10-07 entries.
 
+- **2026-10-08 (America/New_York), owner directive: master research and experimentation directive — Track B,
+  rapid edge discovery (#184).** Recorded in `docs/owner/2026-10-08-rapid-alpha-discovery-directive.md`, with the
+  authority sections verbatim. Track B runs in parallel with Track A (#160, #181, #168), and neither track
+  pauses the other.
+  - **Authorized (research, offline, existing data only):**
+    - **Research.** Literature, practitioner and documentation research from public sources: a source register,
+      a hypothesis scorecard, ranked shortlists, and experiment protocols.
+    - **Candidate registration.** Candidates may be registered in the existing registry (`experiments/`,
+      `protocol.toml`) with `status = "DRAFT"` and **`slot_status = "QUEUED"`** under new family labels, never
+      family A or B. A slot is held by `slot_status`, not by lifecycle status (`experiments.family_slot_problems`).
+      Setting `slot_status = "ACTIVE"` needs an owner slot decision. The #96 cap of two new ACTIVE families
+      beside EXP-001 stands, and paused EXP-003 frees no slot.
+    - **Retrospective diagnostics on data already held.** Data collected under existing grants may be used only
+      under these conditions:
+      - Diagnostics run only under a registered candidate whose `evidence_use.jsonl` and `covered_scopes` exist
+        before the first look. Every use is recorded through `research_evidence`.
+      - Each candidate protocol declares at least EXP-003's full `prohibited_inputs` list (including `exp001:`,
+        `shadow_ledger:`, `nws_pfm:`, `nws_cli:` and `kalshi_settlement:`), plus
+        `prohibited_label_scopes` covering at least `kalshi:KXHIGHNY`, `sports:nfl:moneyline`, `kalshi:KXNFLGAME`
+        and `kalshi:KXNHLGAME`, so `record-use` refuses those labels mechanically, and the settled-field
+        `prohibited_fields`. Settled fields
+        must be dropped; a reader that does not consume the protocol drops them explicitly.
+      - Excluded from Track B diagnostics:
+        - family A's mechanism (sportsbook information versus executable event-market pricing) on any sport;
+        - family B's mechanism (same-venue payoff consistency) on any series;
+        - NFL moneyline outcomes and markouts (EXP-002's `sports:nfl:moneyline`, protected until EXP-002 freezes
+          its settings). Feature-only inspection of NFL books is logged as FEATURE_INSPECTION in EXP-002's log;
+        - NHL outcome analysis. NHL is DEVELOPMENT_ONLY and not a research family, and an NHL model is not
+          authorized (2026-09-29 entry).
+
+        What remains testable on held data is feature-only: depth, spreads, $100 fill-cost ladders and capacity,
+        and no-trade-filter attrition counts. Non-outcome family-B scans (complement or partition sums) are
+        excluded while EXP-003 is paused. The approval packet asks whether Track B may run them.
+      - An inspected outcome window is consumed (`holdout-status`) and can never support an untouched or
+        prospective claim.
+      - Per the directive's §11, these diagnostics are exploratory. They are not an ACTIVE family and not tuning
+        for family A or B.
+      - Every result is labelled RETROSPECTIVE EXPLORATORY and is never presented as prospective or as an edge.
+    - **Offline evaluation harness.** Only for uses outside the excluded mechanisms and scopes, it reuses `research_economics`, `research_evidence`, `experiments`,
+      `opportunity`, `payoff_constraints`, `best_price`, `sports_evidence`, `sources`/`freshness` and
+      `wallet_intel/`. No new engine, registry, database, collector, ledger or trading bot, and no import of
+      `edge_lab.execution`.
+    - **One consolidated owner approval packet.**
+  - **Merge:** this directive quotes no merge grant.
+    - Track B docs-only PRs merge under the standing docs-only rule below.
+    - Track B code whose change falls inside another entry's authorized list (for example JEV items A–G, or the
+      2026-10-07 evening wallet-lane items) merges under that entry's conditions. Touching an owner that entry
+      covers is not enough.
+    - Any other Track B research code PR needs the owner's merge approval. The approval packet asks for a
+      standing delegation.
+  - **Not authorized (each needs its own recorded owner approval):**
+    - new market-data collection of any kind, including venue or vendor API pulls of historical trades, books or
+      odds, X/web/news scraping, and one-off data-route pulls;
+    - reading or downloading published replication datasets. This item is asked in the approval packet;
+    - paid services or data, and spending of any kind, including paid model tokens or paid cloud compute;
+    - running, installing or vendoring third-party code, including bundled replication code and trading-bot
+      repositories;
+    - account access or credentials;
+    - a new ACTIVE family, or reusing paused EXP-003's slot;
+    - demo or real-money orders, unattended execution, or deployment;
+    - new schedules;
+    - changes to source budgets (including the joint 450-credit NFL/NHL Odds API pilot, NFL reservation first),
+      protected windows, or EXP-001/EXP-002/EXP-003 protocols;
+    - any AI model or provider call;
+    - declaring a profit using an unverified fee (KXNFLGAME fees remain a blocker);
+    - every item already listed as not authorized in the 2026-10-07 and 2026-10-08 JEV entries.
 ## Standing merge rule: docs-only and test-only PRs
 
 Owner rule of 2026-09-22 (verbatim source: `docs/owner/2026-09-22-overnight-build-directive.md`).
