@@ -1,0 +1,33 @@
+{
+ "data": [
+  {
+   "proxy_wallet": "0x00000000000000000000000000000000000a0001",
+   "timestamp": 1767268800,
+   "condition_id": "0xc1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1",
+   "type": "TRADE",
+   "size": 1,
+   "usdc_size": 0.5,
+   "transaction_hash": "0xa1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+   "price": 0.5,
+   "token_id": "1000000000000000000000000000000000000000000000000000000000000000001",
+   "side": "BUY",
+   "outcome_index": 0,
+   "title": "Synthetic market A",
+   "slug": "synthetic-market-a",
+   "icon": null,
+   "event_slug": "synthetic-event-a",
+   "outcome": "Yes",
+   "name": null,
+   "pseudonym": "Synthetic-Pseudonym-One",
+   "bio": null,
+   "profile_image": null,
+   "profile_image_optimized": null
+  }
+ ],
+ "pagination": {
+  "limit": 1,
+  "offset": 0,
+  "has_more": false,
+  "next_cursor": null
+ }
+}

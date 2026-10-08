@@ -1,0 +1,27 @@
+{
+ "data": [
+  {
+   "proxy_wallet": "0x00000000000000000000000000000000000a0002",
+   "timestamp": 1767268800,
+   "condition_id": "0xc2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2",
+   "size": 4,
+   "usdc_size": 1.2,
+   "price": 0.3,
+   "token_id": "1000000000000000000000000000000000000000000000000000000000000000002",
+   "side": "BUY",
+   "outcome_index": 1,
+   "title": "Synthetic market B",
+   "slug": "synthetic-market-b",
+   "icon": null,
+   "event_slug": "synthetic-event-b",
+   "outcome": "No",
+   "transaction_hash": "0xa2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2",
+   "taker_volume": 1.2,
+   "maker_volume": 0
+  }
+ ],
+ "pagination": {
+  "next_cursor": null,
+  "has_more": false
+ }
+}

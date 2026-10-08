@@ -1,0 +1,16 @@
+{
+ "data": [
+  {
+   "proxy_wallet": "0x00000000000000000000000000000000000a0001",
+   "condition_id": "0xc1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1",
+   "token_id": "1000000000000000000000000000000000000000000000000000000000000000001",
+   "current_size": 1,
+   "status": "LIQUIDATED",
+   "outcome_index": 0
+  }
+ ],
+ "pagination": {
+  "next_cursor": null,
+  "has_more": false
+ }
+}
