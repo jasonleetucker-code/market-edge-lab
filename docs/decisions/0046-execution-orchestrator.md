@@ -22,9 +22,10 @@ Composition is where the dangerous paths live:
 1. **One module, `execution/orchestrator.py`, and no capability.** It imports no transport and no signer. The
    caller supplies `send(WireRequest) -> reply` (the `TransportResult` shape). `CAPABILITY_USERS` is unchanged:
    the orchestrator is not a capability user, because it never needs the transport's internals, only one call.
-2. **Start only through `control.boot`.** `Started` is persisted first. Every start is DISARMED. Only an
-   operator's `request_arm` changes the mode, judged once by `control.decide_arm` and persisted. The egress
-   lease is taken at start, so an older fence's in-flight attempts become OUTCOME_UNKNOWN.
+2. **Start only through `control.boot`.** The egress lease is taken first, so an older fence's in-flight
+   attempts become OUTCOME_UNKNOWN, and a start refused because another worker holds a live lease writes nothing.
+   Then `Started` is persisted, before anything acts. Every start is DISARMED. Only an operator's `request_arm`
+   changes the mode, judged once by `control.decide_arm` and persisted.
 3. **Persistence through the journal, with no schema change.** Control events (`append_control_event`) and
    orchestrator records (`append_control_record`: signals, decisions, planned intents, P&L observations,
    settlements, attributions, cycles) are ordinary hash-chained rows of `events`, subject = scope key. The
@@ -84,20 +85,25 @@ Composition is where the dangerous paths live:
     make that worker's replay diverge from its live state. Only attempts of this instance's own fence are turned
     unknown at a cycle start.
 
-    *What the check is.* Each journal write after boot re-reads the lease from the store immediately before it
+    *What the check is.* Each journal write re-reads the lease from the store immediately before it
     (`_check_writer` calls `_lease_held`); a cached "fenced out" flag is never trusted on its own. The check is per
     write, not per group of writes: control events and records go through `_apply`/`_record`, and every direct
     journal write goes through `_write` (the in-flight sweep, the snapshot, lookup receipts, attempt resolution,
     fills, cancels, releases, each write recording a send's reply, and each write of a shutdown cancel, from
-    `request_cancel` to the receipt and the reservation move). Three writes are not behind it, each for a reason:
-    the boot rows (`Started`, `GENESIS`, the lease acquisition and `recover`), written by the instance that is
-    taking over; `renew_lease`, which is itself the fence check, in one transaction; and `prepare_attempt`, whose
-    fence check runs inside its own transaction. The original text said "re-read before every writing phase"; the
-    package K review showed that was not enough. A supervisor restart under the **same worker id** takes a new
-    fence while the old instance is mid-cycle; the old instance's cached flag stayed false, and its
-    `_raise_pending` appended
-    `IncidentRaised:journal-refused` to the control log after the new instance's `Started`
-    (`test_orchestrator_fencing.py` reproduces it and now proves the old instance appends nothing).
+    `request_cancel` to the receipt and the reservation move); at boot, `Started` and `GENESIS` go through
+    `_write` too. Three writes are not behind it, each because it is its own fence check in one transaction:
+    `acquire_lease` (the first thing a boot does: refused with LeaseHeld, writing nothing, while another worker's
+    lease is live; `recover` then runs as the new holder), `renew_lease`, and `prepare_attempt`.
+
+    The original text said "re-read before every writing phase"; the package K review showed that was not enough.
+    A supervisor restart under the **same worker id** takes a new fence while the old instance is mid-cycle; the
+    old instance's cached flag stayed false, and its `_raise_pending` appended `IncidentRaised:journal-refused` to
+    the control log after the new instance's `Started` (`test_orchestrator_fencing.py` reproduces it and now
+    proves the old instance appends nothing). The package J re-review found the mirror case at boot: `Started`
+    used to be appended before the lease was taken, so a second worker refused with LeaseHeld still left a
+    `Started` in the live worker's log, and a replay of that log (the status export's) showed DISARMED while the
+    live worker could send. A boot now writes nothing until it holds the lease
+    (`test_a_boot_refused_by_a_live_lease_writes_nothing`).
 
     *What happens on loss.* A write that finds the lease lost raises `OrchestratorFencedOut`; `run_cycle` turns
     that into a `fenced_out` report and nothing further is written. Every later `run_cycle` raises
@@ -113,13 +119,12 @@ Composition is where the dangerous paths live:
     between a lease read and the write that follows it still lets **that one write** land (for example the ack
     receipt that comes before `mark_sent`). The next write re-reads and stops; `test_orchestrator_fencing.py`
     takes the lease over between two writes of a reply and of a cancel reply and proves the second is never
-    attempted. The boot rows (`Started`, `GENESIS`) are written before the lease is taken, by design: the
-    booting instance is the one taking over. A request already handed to `send` before a takeover can still reach
-    the venue; the journal's transactional fence check in `prepare_attempt` remains the hard stop for starting a
-    send, and the new holder reconciles anything in flight. The lease's expiry is not checked by `_lease_held`
-    (only identity and fence token): an expired but untaken lease still lets this instance write evidence, and
-    `prepare_attempt` refuses any send on it. Closing the window entirely needs fenced appends in the journal
-    (a journal change, outside packages J and K).
+    attempted. A request already handed to `send` before a takeover can still reach the venue; the journal's
+    transactional fence check in `prepare_attempt` remains the hard stop for starting a send, and the new holder
+    reconciles anything in flight. The lease's expiry is not checked by `_lease_held` (only identity and fence
+    token): an expired but untaken lease still lets this instance write evidence, and `prepare_attempt` refuses
+    any send on it. Closing the window entirely needs fenced appends in the journal (a journal change, outside
+    packages J and K).
 12. **FIXTURE cash basis.** Package G reports the cash basis as UNKNOWN (ACC-02), so nothing could ever pass. A
     FIXTURE caller may declare `fixture_cash_basis`, the basis its fixture venue implements. It only fills a basis
     package G reports as UNKNOWN, never replaces a known one (F5); it is refused for every other environment and

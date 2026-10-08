@@ -223,3 +223,36 @@ def test_a_takeover_between_two_writes_of_a_cancel_reply_stops_before_the_second
     assert report.cancel_outcomes[rid] == "CANCEL_OUTCOME_UNKNOWN: the egress lease was lost while recording the reply"
     assert journal.verify_chain().events == seen["events"] and not journal.control_records(h.SCOPE, "SHUTDOWN")
     assert journal.reservations.reservation(rid).state.value != "BOUND"  # confirm_cancel never ran here
+
+
+def test_a_boot_refused_by_a_live_lease_writes_nothing(env):
+    """The re-review's reproduction: worker-k is armed; a second worker boots on the same journal while worker-k's
+    lease is live. Its boot is refused (LeaseHeld) before it writes anything, so the control log still replays to
+    worker-k's live mode (a dashboard replaying it never shows DISARMED while worker-k can send)."""
+    from edge_lab.execution.reservations import LeaseHeld
+
+    journal, adapter, clock = env
+    orch, _ = armed(journal, adapter, clock)
+    assert orch.state.mode is ctl.Mode.BOUNDED_AUTO
+    events, chain = journal.control_events(h.SCOPE), journal.verify_chain().events
+    with pytest.raises(LeaseHeld):
+        o.Orchestrator(journal, h.config(worker_id="worker-other"), send=adapter, feed=h.Feed(adapter),
+                       strategies=(h.DemoStrategy(),), clock=clock, sleep=clock.sleep)
+    assert journal.control_events(h.SCOPE) == events and journal.verify_chain().events == chain
+    assert ctl.replay(h.SCOPE, journal.control_events(h.SCOPE)).mode is orch.state.mode is ctl.Mode.BOUNDED_AUTO
+    orch.submit_signal(h.signal("s1", B70, at=clock(), limit="0.45"))
+    report = orch.run_cycle()  # worker-k is not fenced and keeps working
+    assert not report.fenced_out and [d.outcome for d in report.decisions] == [o.Outcome.SUBMITTED]
+
+
+def test_a_same_worker_restart_still_takes_over_and_writes_started_as_the_lease_holder(env, jpath):
+    journal, adapter, clock = env
+    a, _ = armed(journal, adapter, clock)
+    journal_b = ExecutionJournal.open(jpath)
+    b = o.Orchestrator(journal_b, h.config(), send=adapter, feed=h.Feed(adapter), strategies=(h.DemoStrategy(),),
+                       clock=clock, sleep=clock.sleep)
+    assert b.fence_token == a.fence_token + 1 and b.state.mode is ctl.Mode.DISARMED
+    assert type(journal_b.control_events(h.SCOPE)[-1]).__name__ == "Started"
+    with pytest.raises(o.OrchestratorFencedOut):
+        a.disarm("owner", "late")
+    journal_b.close()

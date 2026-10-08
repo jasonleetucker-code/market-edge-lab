@@ -5,11 +5,12 @@ or process: the caller runs `run_cycle()` or `run(n)` with an injected clock and
 module: every network request goes through the caller's `send(WireRequest) -> reply` (the reply has `outcome`,
 `status` and `body`, as `transport.TransportResult` has), so the transport stays unimported (ADR 0043).
 
-**Start.** The constructor reads the persisted control events and starts only through `control.boot`, persisting
-`Started` before anything else: every start is DISARMED. It never arms itself; only an operator's `request_arm`
-(judged once by `control.decide_arm`, and persisted) changes the mode. It then takes the egress lease (which turns
-an older fence's in-flight attempts into OUTCOME_UNKNOWN), recovers the journal and quarantines every queued signal
-whose validity ended while it was down: a backlog is never replayed as fresh.
+**Start.** The constructor first takes the egress lease (which turns an older fence's in-flight attempts into
+OUTCOME_UNKNOWN) and recovers the journal; a start refused because another worker holds a live lease writes nothing.
+It then reads the persisted control events and starts only through `control.boot`, persisting `Started` before
+anything acts: every start is DISARMED. It never arms itself; only an operator's `request_arm` (judged once by
+`control.decide_arm`, and persisted) changes the mode. Finally it quarantines every queued signal whose validity
+ended while it was down: a backlog is never replayed as fresh.
 
 **One cycle**, in this order, so that reconciliation and safety always come before new risk. Every anomaly a step
 finds is raised as a control incident (which disarms) before the next step runs, so an evidence anomaly found in
@@ -50,7 +51,7 @@ bounded; the persisted records stay the authority.
 **Fencing.** Only the holder of the egress lease writes. If the lease is lost (another worker took it over), this
 instance is FENCED OUT: it still reads the account, but it writes nothing to the journal (no snapshot, no control
 event, no record, no attempt change) and sends nothing, because its live state is no longer the replay of what is
-stored. Every journal write after boot re-reads the lease immediately before it (`_record`, `_apply` and `_write`;
+stored. Every journal write (boot included) re-reads the lease immediately before it (`_record`, `_apply` and `_write`;
 a cached flag is never trusted alone); the cycle that finds it lost returns a `fenced_out` report, and every later
 `run_cycle` raises `OrchestratorFencedOut` (`run(n)` stops). The read and the write are separate transactions, so a
 takeover between them can still let that one write land (ADR 0046 §11); the journal's fence check inside
@@ -592,16 +593,20 @@ class Orchestrator:
         self._stream_state = None if stream is None else rc.initial(config.recovery)
         now = self._now()
 
-        # Start only through control.boot; Started is persisted before anything acts.
+        # The egress lease comes first: a boot refused because another worker holds a live lease (LeaseHeld) has
+        # written nothing, so the live worker's control log still replays to its live state. Taking the lease turns
+        # an older fence's in-flight attempts into OUTCOME_UNKNOWN, and `recover` lists what is not terminal.
+        self._fence: int | None = journal.reservations.acquire_lease(config.worker_id, config.lease_ttl, now)
+        recovered = journal.recover(now)
+
+        # Start only through control.boot; Started is persisted (as the lease holder) before anything acts.
         events = journal.control_events(self._scope)
         started, state = ctl.boot(self._scope, events, at_utc=utc_text(now))
-        journal.append_control_event(self._scope, started, now=now)
+        self._write(journal.append_control_event, self._scope, started, now=now)
         self._state = state
         self._raised = _Recent(RECENT_MEMORY, tuple(e.incident_id for e in events if isinstance(e, ctl.IncidentRaised)))
 
         self._load_records(now)
-        self._fence: int | None = journal.reservations.acquire_lease(config.worker_id, config.lease_ttl, now)
-        recovered = journal.recover(now)
         quarantined = self._quarantine_backlog(now)
         self._record("BOOT", {"worker_id": config.worker_id, "fence_token": self._fence,
                               "grants": sorted(g.digest() for g in config.grants),
@@ -617,7 +622,8 @@ class Orchestrator:
         genesis = next((r.body["account_genesis_utc"] for r in records if r.record_type == "GENESIS"), None)
         if genesis is None:
             genesis = utc_text(now)
-            self._journal.append_control_record(self._scope, "GENESIS", {"account_genesis_utc": genesis}, now=now)
+            self._write(self._journal.append_control_record, self._scope, "GENESIS", {"account_genesis_utc": genesis},
+                        now=now)
         self._genesis = genesis
         self._planned: dict[str, OrderIntent] = {}
         self._attempts_known: dict[str, tuple] = {}  # intent key -> ((attempt id, created), ...) once definitive
