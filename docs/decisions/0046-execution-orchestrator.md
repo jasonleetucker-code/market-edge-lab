@@ -103,7 +103,12 @@ Composition is where the dangerous paths live:
     used to be appended before the lease was taken, so a second worker refused with LeaseHeld still left a
     `Started` in the live worker's log, and a replay of that log (the status export's) showed DISARMED while the
     live worker could send. A boot now writes nothing until it holds the lease
-    (`test_a_boot_refused_by_a_live_lease_writes_nothing`).
+    (`test_a_boot_refused_by_a_live_lease_writes_nothing`). Package P's chaos lane reproduced both (P-1, the
+    refused boot; P-2, a worker stalled inside a send past its lease that still recorded its DECISION and an
+    incident) against the pre-review code; both reproductions pass on this design. No control event or record is
+    appended anywhere except through `_apply`, `_record` or (for `Started` and `GENESIS` at boot) `_write`, so
+    decisions, incidents, disarms, latches and every other control write are behind the per-write lease re-read;
+    the three exceptions above are the only ones.
 
     *What happens on loss.* A write that finds the lease lost raises `OrchestratorFencedOut`; `run_cycle` turns
     that into a `fenced_out` report and nothing further is written. Every later `run_cycle` raises
