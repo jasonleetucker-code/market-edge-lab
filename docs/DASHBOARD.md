@@ -30,7 +30,7 @@ never writes to any store, and never recommends a withdrawal.
 |---|---|---|
 | `--db` | evidence SQLite store | `SnapshotStore.open_readonly` (SQLite `mode=ro` + `query_only`); `forward.summary`, `latest_source_health`; The Odds API capture targets (`odds_targets`, `odds_transitions`, captured snapshots parsed by `odds_api.parse_odds`) |
 | `--ledger` | shadow ledger SQLite file | `ShadowLedger.open_readonly`; `accounts`, `entries`, `state` (hash-chain replay) |
-| `--status-dir` | `latest.json` (collector), `shadow_daily.json` (pipeline receipt), `freshness.json` (Freshness Fabric supervisor), `last_failure.json` (production unit failures), `last_verification.json` (deployment verification records) | JSON, fixed names only, 2 MB cap, every field optional |
+| `--status-dir` | `latest.json` (collector), `shadow_daily.json` (pipeline receipt), `freshness.json` (Freshness Fabric supervisor), `last_failure.json` (production unit failures), `last_verification.json` (deployment verification records), `execution_status.json` (the execution package's status export, schema `edge-lab-execution-status/1`) | JSON, fixed names only, 2 MB cap, every field optional |
 | `--odds-ledger` | The Odds API quota ledger (default `odds_quota_ledger.json` beside `--db`) and its `<ledger>.pilot.json` runner state | `odds_pilot.dashboard_status`: read without locking or writing, no key, no network |
 | `--experiments-root` | `experiments/` (defaults to this checkout's) | `experiments.validate_all` / `load`; Stage A result JSON; report **file names** only |
 
@@ -142,11 +142,38 @@ disclosures.
 | `/experiments` | Research & Data | Tabs: Research (experiments, forward valid days, next preregistered look, then "Economic evidence": Family A paired sportsbook-vs-Kalshi evidence from `sports_evidence.terminal_view` with its protocol attrition, economic screen, size ladder and data gaps, and Family B from the newest verified EXP-003 payoff-scan result file, with its source store shown and laptop or fixture results labelled "not production evidence") and Data sources (source freshness from the Freshness Fabric, venues, The Odds API card and its capture-target table with the research-benchmark consensus at each capture shown, related Polymarket US markets per event, source health, fees, venue registry, full receipt). |
 | `/alerts` | Alerts | Attention items from blockers, failure records and the local notification outbox, grouped by origin (only production needs attention); nothing is sent. |
 | `/more` | More | Links to Risk, Research & Data, Alerts, System & evidence. |
+| `/setup` | none (under More) | Operator journey J1, setup and readiness: every missing environment, owner approval, permission and provider fact with its safe next step, from a static manifest pinned to EXECUTION_PLAN, the execution ledger and the activation packet (`views/ops_manifest.py`), plus the code's authorized environments and limit state from `execution_status.json`. |
+| `/experiments/wallet` | none (under Research & Data) | Journey J4, wallet research: production shows "No wallet source is approved" and the copying status (research only, no execution); demo mode shows Demonstration A (`wallet_intel.demo.run_synthetic_demo`), SYNTHETIC on every section. |
+| `/positions/execution` | none (under Portfolio) | Journey J5, execution portfolio from `execution_status.json`: actual holdings ("Access not connected"), the FIXTURE account's cash with its basis, reserves, positions, pending and unknown orders, fills and partial exits, settlement and venue-reported P&L. |
+| `/risk/automation` | none (under Risk) | Journey J6, automation from `execution_status.json`: mode, reconciliation, armed grant and scope (TEST grants labelled), next action with the exporter's arm readiness per mode, stop reasons, limits and bounds, the rearm procedure and the control log. No control of any kind. |
 | `/gallery` | none | Component gallery, demo mode only. |
 | `/healthz` | none | Plain `ok`. No data. |
 
 `?account=research` selects the frozen research account on account-scoped pages; operational
 is the default. The two are never shown summed.
+
+### The execution status export (journeys J1, J5, J6)
+
+The dashboard never imports `src/edge_lab/execution/` (ADR 0043). The execution package writes a sanitized,
+versioned projection of its journal (`execution/status_export.py`: `build_status`, `status_for_path`,
+`write_status`) to `execution_status.json` in the status directory, and the dashboard reads that file
+(`data.execution_status`) the way it reads `freshness.json`:
+
+- labelled with its environment (today only FIXTURE can exist: a fake venue, never a real account);
+- money, prices and quantities as exact decimal text, never floats; unknown as `null`, never 0;
+- no approval nonce, request digest, receipt payload, venue order id, key, signature or credential; free text is
+  redacted and the file is refused if it still looks like it holds a secret;
+- states: no file ("No execution export": nothing is known, never an empty portfolio), unreadable, foreign schema
+  or malformed shape (error, `data.execution_shape_problems`), an environment outside this Terminal's own allowlist
+  (`views/ops_common.TERMINAL_ENVIRONMENTS`, FIXTURE only, pinned to `AUTHORIZED_ENVIRONMENTS`: refused, nothing
+  shown, whatever the export's own list says) or an authorized list that differs from it (mismatch error), no
+  journal, journal error, stale (older than 15 minutes: every figure reads "as of", never current), and the journal's own
+  reconciliation, paused and empty states.
+
+No timer or service writes the export today: the call site is the executor process (package O), which is not
+activated. Browser fixture states `journeys`, `journeys_paused`, `journeys_idle`, `journeys_stale` and
+`journeys_none` (`tests/browser/fixture_states.py`) write it from FIXTURE journals that the real orchestrator wrote
+against the test fake venue (`tests/browser/journey_fixtures.py`).
 
 ## Security properties (tested)
 

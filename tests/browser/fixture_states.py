@@ -23,6 +23,10 @@ and status-file shapes, and returns a dashboard Config with a fixed clock:
   shown hidden);
 - odds_label_proxy: `odds` plus the first game's T-60m sportsbook capture with SYNTHETIC prices (an EXP-002
   label proxy: its consensus is shown hidden).
+- journeys / journeys_paused / journeys_idle / journeys_stale / journeys_none: the operator journeys (Market v1 J1, J5,
+  J6) over a FIXTURE execution status export (`journey_fixtures`): armed with a TEST grant and an unknown order;
+  disarmed by an incident with a latch; never armed with an empty account; the populated export two hours old; and no
+  export at all.
 - nhl: Kalshi KXNHLGAME prospective evidence (ADR 0040) for the 2026-10-01 games: the recorded listing, T-6h books
   captured through a fake fetch (recorded order book), one failed game-horizon, one rescheduled game, one unmapped
   team; viewed at 17:00 ET.
@@ -646,7 +650,42 @@ def nhl(root: Path | None = None) -> tuple[Config, Path]:
     return cfg, root
 
 
+def _journeys(scenario: str | None, *, later: timedelta = timedelta(minutes=1)) -> tuple[Config, Path]:
+    """The operator journeys (J1, J5, J6) over a FIXTURE execution export written by the real exporter from a journal
+    the real orchestrator wrote against the test FakeVenue (`journey_fixtures`). `scenario` None writes no export."""
+    import journey_fixtures as jf
+
+    root = Path(tempfile.mkdtemp(prefix="edge-ui-journeys-"))
+    if scenario is None:
+        at = jf.h.T0 + timedelta(minutes=10)
+    else:
+        _, at = jf.build(scenario, root)
+    return Config(status_dir=root, experiments_root=REPO / "experiments", clock=lambda: at + later), root
+
+
+def journeys() -> tuple[Config, Path]:
+    return _journeys("populated")
+
+
+def journeys_paused() -> tuple[Config, Path]:
+    return _journeys("paused")
+
+
+def journeys_idle() -> tuple[Config, Path]:
+    return _journeys("idle")
+
+
+def journeys_none() -> tuple[Config, Path]:
+    return _journeys(None)
+
+
+def journeys_stale() -> tuple[Config, Path]:
+    return _journeys("populated", later=timedelta(hours=2))
+
+
 BUILDERS = {"early": early, "demo": demo, "broken": broken, "odds": odds_pilot, "odds_issues": odds_issues,
+            "journeys": journeys, "journeys_paused": journeys_paused, "journeys_idle": journeys_idle,
+            "journeys_none": journeys_none, "journeys_stale": journeys_stale,
             "freshness": freshness, "freshness_deferred": freshness_deferred,
             "polymarket": polymarket, "polymarket_issues": polymarket_issues,
             "polymarket_label_proxy": polymarket_label_proxy, "odds_label_proxy": odds_label_proxy,

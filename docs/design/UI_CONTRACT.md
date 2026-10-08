@@ -214,6 +214,19 @@ unavailable, the whole panel unavailable, contract not installed, read error.
 Closed / All; position rows; "How these balances are calculated"; settlement evidence. Never
 counts unrealized gains; an unreadable ledger is an error, not an empty portfolio.
 
+**Execution journeys (read-only; Market v1 J1/J4/J5/J6)**: `/setup`, `/experiments/wallet`,
+`/positions/execution` and `/risk/automation`. They are reached from More and joined by one journey tab strip,
+with no new global navigation item.
+- **Data source.** They render `execution_status.json` (written by `execution/status_export.py`; the dashboard
+  never imports the execution package, ADR 0043) and `wallet_intel` research.
+- **Labels.** Every execution figure is labelled with its environment (FIXTURE today). "Actual holdings" reads
+  "Access not connected" until approved real account reads exist. The wallet page shows demonstration A only in
+  demo mode, labelled SYNTHETIC; in production it shows the blocked state.
+- **States.** Missing export, error, stale, no journal, known-empty versus unknown, paused and incomplete
+  reconciliation. Unknown is "—", never 0.
+- **No controls.** No arm, approve, cancel or send control exists. The private command surface (J9) is separate,
+  later work.
+
 **Outcomes `/outcome-board`** ("What matters today") — summary strip, rows ranked by
 canonical account impact, exposure bars from canonical exposure, max loss/gain labelled as
 bounds, "Why it matters" disclosure.
@@ -724,3 +737,16 @@ directive), and the screenshots that justify it.
     capture.py audit. Two review fixes followed: blocker rows carry one
     status word, because a second badge squeezed the title at 390 px; and turnover prints as a multiple, not 12
     decimals. Emulation, not a physical phone; described in the PR, not attached.
+- **2026-10-07 — execution journeys (J1/J4/J5/J6), read-only.** Approved by the 2026-10-07 evening owner
+  directive (`docs/owner/2026-10-07-market-v1-autonomy-wallet-directive.md`; EXECUTION_PLAN: "operator Terminal
+  journeys rendered from canonical or fixture data, honestly labelled").
+  - §8 gains four pages, `/setup`, `/experiments/wallet`, `/positions/execution` and `/risk/automation`, reached
+    from More, with one journey tab strip and no new global navigation item.
+  - They are composed from the existing shell, section, facts, row, badge, table, state-text and disclosure
+    components. Their state words (export and journal states, controller modes, readiness and setup states) are
+    local tables in the `views/ops_*.py` modules, passed to `badge` / `state_text` as plain labels with the code in
+    the title; no word is added to `presentation.STATES`, and none is green. No new token, CSS or layout.
+  - Screenshots: five fixture states (`journeys`, `journeys_paused`, `journeys_idle`, `journeys_stale`,
+    `journeys_none`) and `demo`, at 360x800 and 1440x900, at normal and 200% root text, plus every disclosure
+    open (`tests/browser/capture.py`; 0 overflow, clipping, contrast or foreign-request findings).
+  - Reviewed by the author and the coordinator (sampled), and described in the PR (not attached).
