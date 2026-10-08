@@ -167,6 +167,16 @@ class AttemptRefused(JournalError):
     """A new attempt is not allowed (an earlier one may be live, or the environment is not authorized)."""
 
 
+def live_attempt_problem(earlier: Iterable["Attempt"]) -> str | None:
+    """Why a new attempt of an intent is refused given its earlier attempts (None: it is not). The rule
+    `prepare_attempt` enforces; the account-aware shadow (ADR 0047) asks it read-only with the same words."""
+    live = [a for a in earlier if a.state not in NO_ORDER_STATES]
+    if not live:
+        return None
+    return (f"ATTEMPT_BLOCKED: {live[-1].attempt_id} is {live[-1].state.value}; an order may exist, so a new attempt "
+            "would be a blind resubmission")
+
+
 class AttemptState(str, Enum):
     PENDING_EGRESS = "PENDING_EGRESS"  # committed before the network; not known to be sent
     SENT = "SENT"  # the network call returned, or failed after egress may have happened
@@ -646,10 +656,9 @@ class ExecutionJournal:
             earlier = [self._decode_attempt(r) for r in conn.execute(
                 f"SELECT {self._ATTEMPT_COLUMNS} FROM attempts WHERE intent_key = ? ORDER BY attempt_no",
                 (intent.intent_key,))]
-            live = [a for a in earlier if a.state not in NO_ORDER_STATES]
-            if live:
-                raise AttemptRefused(f"ATTEMPT_BLOCKED: {live[-1].attempt_id} is {live[-1].state.value}; an order may "
-                                     "exist, so a new attempt would be a blind resubmission")
+            blocked = live_attempt_problem(earlier)
+            if blocked is not None:
+                raise AttemptRefused(blocked)
             attempt_no = len(earlier) + 1
             attempt_id = f"{intent.client_order_id()}#{attempt_no}"
             self._consume_approval(conn, grant, intent, now, attempt_id=attempt_id)

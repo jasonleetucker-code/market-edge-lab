@@ -4,6 +4,8 @@ Owner directive and new research requirement: **#145**. Planning date: **2026-09
 
 This is the **current dependency-ordered delivery plan for the entire indexed Market roadmap**, not a new authorization file. Read [OWNER_IDEAS](../OWNER_IDEAS.md) for issue traceability and canonical owners; `EXECUTION_PLAN.md` alone defines permitted runtime work. The [next Claude handoff](CLAUDE_SPORTS_INTELLIGENCE_RFQ_V1.md) executes the next bounded batch. The previous index/roadmap is [archived byte-for-byte](archive/OWNER_IDEAS_pre_podcast_2026-09-29.md).
 
+**2026-10-08 addendum:** see §11 below for the JEV/crawler/wallet intelligence ordering. Historical September completion ledger and live authority are unchanged.
+
 ## 1. What the owner is asking us to finish
 
 Build a coherent system that can discover, test and eventually capture a genuine after-cost edge; know the useful size, risks and source of that edge; then add another supported strategy. The owner wants the **whole roadmap accounted for and worked through in a sensible order**, not endless idea intake, duplicated infrastructure or fifteen unfinished experiments.
@@ -314,3 +316,30 @@ ledger. Detail: [`docs/engineering/ARCHITECTURE_RECONCILIATION_2026-09-30.md`](.
   - both shown in the existing in-play page under the UI contract.
 
   Capture, recorder, rights and research slot stay BLOCKED on the owner.
+
+## 11. October 8, 2026 research intake: JEV/crawler intelligence (#181, #168)
+
+**Additive sequencing update to the dated R0–R11 ledger; it does not rewrite the September completion states or grant new authorization.** The main current-status/permission sources remain `HANDOFF.md`, the current code and `docs/EXECUTION_PLAN.md`; the execution campaign ledger governs #160. The implementing-agent handoff is [`CLAUDE_JEV_CRAWLER_WALLET_V1.md`](CLAUDE_JEV_CRAWLER_WALLET_V1.md).
+
+The owner wants useful ideas from Jev/GROKBOT, wash-trade crawlers, smart-wallet analysis and typed decision models added to Market. The social account's $100→$15,220 claim was not verified against actual deposits/fills/costs; a related author-linked code example explicitly uses simulation. **No return claim supplies a strategy baseline or permission to trade.**
+
+### Changed priority/dependency order (without displacing execution #160)
+
+| Lane | Priority and current placement | Canonical owner | Acceptance / blocker |
+|---|---|---|---|
+| IE1 Wallet evidence integrity | **NOW / P0 offline** | `src/edge_lab/wallet_intel/selection.py`, provenance | v2 causal manifests bind every rule/coverage/clock/source/trial input; replay/mutation tests fail closed; v1 honestly marked legacy |
+| IE2 Role/price/contamination distinction | **NOW / P0 offline**, after IE1 receipt shape | `wallet_intel/threats.py` and market data | passive maker 0.45 bid/0.55 ask not accused; suspect patterns not asserted as proven wash/collusion; absent counterparties UNOBSERVABLE |
+| IE3 Skill and copyability sensitivity | **NOW / P0 offline**, after IE1/IE2 | `wallet_intel/stats.py`, `replay.py`, `research_economics.py` | 98% wins at 99¢ is -$1 gross; proper train/holdout, event clusters, fee UNKNOWN, finite capital and latency/depth/partial/no-fill cases |
+| IE4 Fixture source-change intelligence | **NOW / P1 code only**, disjoint path | `sources.py`, provenance, `freshness`, in-play evidence | first receipt, revisions/dedup/state/time precision; fixture-only, no wiring into live collectors; no new network/cron or budget change |
+| IE5 Typed semantic Jev/Kev-style judgments | **NOW / P1 fixture-only**, disjoint path | source/research value types (small subordinate module only if absent) | strict version/evidence/cutoff/abstention; adversarial injection tests; no model API calls and no execution authority |
+| IE6 Truthful operator integration | **NEXT / P1**, after contracts stabilize; builds on the journeys merged in #176 and #180 | existing `dashboard/` and UI contract | real vs synthetic, leader vs follower, complete vs unknown, error/empty/stale/blocked states; no invented agent activity |
+| IE7 External source/model experiments | **BLOCKED / owner decision** | #74 / #82 / #96 / #168 / #181 | rights, exact route/fields/cost, permissions, protected budget, hypothesis slot and preregistration before empirical claims |
+| IE8 Multi-agent autonomy, paid intelligence, advanced RL | **LATER** | existing #160 orchestrator/#82 learning only if justified | demonstrated incremental out-of-sample after-cost advantage and independently approved boundaries; no competing platform |
+
+**Safe parallel lanes:** one writer for IE1–IE3 (wallet); a non-overlapping writer for IE4–IE5 (fixture source/semantic contracts); an independent reviewer and later read-only IE6 writer only after API contracts settle. Reconcile `docs/WORK_CLAIMS.md` and open UI branches before claiming paths (UI PR #180 merged as `c34221c`). #160 execution continues independently under its current grants and ledger; it is not the financial backend for these research modules.
+
+**Shared primitive question:** each new feature must use the existing one-owner evidence path, freshness supervisor, market/payoff identity, wallet replay, `research_evidence`, `research_economics` and Terminal. Explicitly reject a new autonomous chief framework, duplicate timer, data lake, wallet P&L, and separate risk engine in this batch.
+
+**October 22 checkpoint impact:** more honest research readiness and software validation, not an earlier first trade or extension of the frozen sports research windows. Preserve EXP-001; frozen EXP-002; EXP-003 pause; at most two new ACTIVE experiment families; NFL-first joint sports-credit ledger. A separately approved source-activation packet and a qualifying preregistered empirical study are the *next* gates for real data. Synthetic tests are not a detected edge.
+
+**Authority:** owner-requested implementation means a coding agent can begin the **offline/fixture engineering tranche after recording exact scope in `docs/EXECUTION_PLAN.md`**. It does not authorize accounts, fresh wallet or market collection, paid models, X scraping, scheduled jobs, keys, demo or live orders, unattended trade, deployment, or gate changes. Record actual work/tests/CI/PR status rather than claiming success in advance.

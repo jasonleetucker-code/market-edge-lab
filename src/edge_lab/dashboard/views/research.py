@@ -34,20 +34,165 @@ def progress_bar(done: int, target: int, label: str) -> str:
             f'<rect class="bar-fill limit" x="0" y="0" width="{frac * 100:.2f}" height="8" rx="4"></rect></svg>')
 
 
+# --------------------------------------------------------------------------- research stages (Market v1 journey J7)
+
+# Learning stages, grouped from each experiment's registry status and its protocol's family slot (presentation
+# grouping only; the registry decides every status). Nothing is green: a stage is a place in the process, not a
+# result. A strategy is qualified only by the STRATEGY_QUALIFIED readiness track (acceptance manifest §1), never by a
+# registry status: a concluded pass is not a qualified strategy.
+STAGES = (
+    ("CANDIDATE", "Candidate", "A drafted hypothesis without an active family slot: no evidence work is scheduled."),
+    ("DEVELOPMENT", "Development", "Drafted with an active family slot, or preregistered: evidence is being built or "
+                                   "frozen; nothing is evaluated as a result yet."),
+    ("SHADOW", "Shadow", "Running prospectively on recorded shadow decisions with no real money."),
+    ("QUALIFIED", "Qualified", "A named strategy that met its own evidence requirements (STRATEGY_QUALIFIED)."),
+    ("REJECTED", "Rejected", "Concluded as a failure or abandoned; kept on record, never deleted."),
+)
+STAGE_EXTRA = (("CONCLUDED", "Concluded · not a qualification",
+                "Concluded with a pass or an inconclusive result. A pass is the experiment's own test, not a qualified "
+                "strategy."),
+               ("UNRECOGNIZED", "Status unrecognized", "The registry status is missing or not one this Terminal knows; "
+                                                       "the experiment is shown, never placed in a stage."))
+SLOT_WORDS = {"ACTIVE": ("Active family slot", pr.INFO_K), "QUEUED": ("Queued · waiting for a family slot", pr.WARN_K),
+              "ENDED": ("Family slot ended", pr.ND_K)}
+
+
+def experiment_stage(e: dict) -> str:
+    status, slot = e.get("status"), e.get("slot_status")
+    if status == "DRAFT":
+        return "DEVELOPMENT" if slot == "ACTIVE" else "CANDIDATE"
+    return {"PREREGISTERED": "DEVELOPMENT", "RUNNING": "SHADOW", "CONCLUDED_FAIL": "REJECTED", "ABANDONED": "REJECTED",
+            "CONCLUDED_PASS": "CONCLUDED", "CONCLUDED_INCONCLUSIVE": "CONCLUDED"}.get(status, "UNRECOGNIZED")
+
+
+def protected_text(e: dict) -> str:
+    """How the experiment's held-out evidence is protected, from its protocol configuration only (scope names and
+    window counts). No outcome, label, result or count of results is ever read here."""
+    if e.get("manifest_error"):
+        return c.state_text("MANIFEST_UNREADABLE", label="Manifest unreadable · treated as protected", kind=pr.WARN_K)
+    if e.get("protocol_error"):
+        return c.state_text("PROTOCOL_UNREADABLE", label="Protocol unreadable · treated as protected", kind=pr.WARN_K)
+    scopes, windows = e.get("protected_scopes") or (), e.get("holdout_windows")
+    parts = []
+    try:
+        from ...sports_evidence import FAMILY_ID as family_a
+    except Exception:  # noqa: BLE001 - the Family A view is optional here; its own section says so
+        family_a = None
+    if family_a is not None and e.get("family") == family_a:
+        parts.append("outcome labels hidden on this Terminal (holdout protection; shown only by a logged run)")
+    if scopes:
+        parts.append(f"may never view the outcome labels of {', '.join(scopes)}")
+    if windows is None:
+        parts.append("untouched window settled in prose: treated as protected")
+    elif windows:
+        parts.append(f"{pr.count(len(windows))} holdout window(s) declared, never shown")
+    if e.get("protocol") == "LEGACY":
+        parts.append("legacy manifest: forward results count only at preregistered valid-day looks")
+    if not parts:
+        return c.txt("No protected window declared yet")
+    text = "; ".join(parts)
+    return esc(text[:1].upper() + text[1:])
+
+
+def forward_days(ctx: d.Context) -> tuple[Any, str | None]:
+    """EXP-001's forward valid days and, when the collector status is not current, why (stale is never current)."""
+    if ctx.collector_status.status == d.OK:
+        doc = ctx.collector_status.value
+        state, _ = d.freshness(doc.get("generated_at_utc"), ctx.now)
+        if state == "FRESH":
+            return doc.get("valid_days"), None
+        when = pr.datetime_et(doc.get("generated_at_utc"))
+        return doc.get("valid_days"), (f"as of {when} · stale, not current" if state == "STALE" and when
+                                       else "status time unknown · not current")
+    if ctx.collector_db.status == d.OK:
+        return ctx.collector_db.value.get("valid_days"), None
+    return None, None
+
+
+def stage_row(e: dict, ctx: d.Context) -> str:
+    status = e.get("status")
+    word = pr.state_word(status) if status else pr.StateWord("Not recorded", pr.ND_K)
+    kind = pr.ND_K if word.kind == pr.OK_K else word.kind  # the registry's word; a stage is never green
+    slot = e.get("slot_status")
+    if e.get("manifest_error"):
+        slot_html = c.na("manifest unreadable")
+    elif e.get("protocol") == "LEGACY":
+        slot_html = c.txt("Legacy · predates family slots")
+    elif slot in SLOT_WORDS:
+        slot_html = c.state_text(f"SLOT_{slot}", label=SLOT_WORDS[slot][0], kind=SLOT_WORDS[slot][1])
+    else:
+        slot_html = c.na("protocol missing or unreadable" if e.get("protocol") != "PRESENT" else "slot not recorded")
+    facts = [("Registry status", c.state_text(status, label=word.label, kind=kind)), ("Family slot", slot_html),
+             ("Protected evidence", protected_text(e))]
+    if e.get("id") == "EXP-001":
+        days, note = forward_days(ctx)
+        facts.append(("Forward valid days", c.num(pr.count(days), reason="no collector status") + _sub(note)))
+    problems = e.get("problems") or []
+    if problems or e.get("protocol") == "MISSING":
+        facts.append(("Incomplete", c.state_text("EXP_INCOMPLETE", label=(
+            f"{pr.count(len(problems))} manifest problem(s)" if problems else "Protocol sidecar missing"),
+            kind=pr.WARN_K)))
+    sub = " · ".join(x for x in (e.get("id") or e.get("key"), f"family {e['family']}" if e.get("family") else None)
+                     if x)
+    title = e.get("title") or ("Unreadable manifest" if e.get("manifest_error") else "Untitled experiment")
+    return c.row(esc(title), sub=sub,
+                 body=c.facts(facts, text_cols=tuple(i for i, (k, _) in enumerate(facts)
+                                                     if k != "Forward valid days")))
+
+
+def stages_body(ctx: d.Context) -> str:
+    """Every state: registry missing or unreadable, no experiments, and each stage populated or known empty."""
+    exps = ctx.experiments
+    missing = cm.loaded_state("Experiment registry", exps)
+    if missing:
+        return missing
+    if not exps.value:
+        return c.empty_state("No experiment registered", "The registry loaded and holds no manifest.")
+    groups: dict[str, list] = {}
+    for e in exps.value:
+        groups.setdefault(experiment_stage(e), []).append(e)
+    from .ops_manifest import ACCEPTANCE, TRACKS
+
+    qualified = next((state for name, state, _ in TRACKS if name == "STRATEGY_QUALIFIED"), None)
+    parts = []
+    for code, title, meaning in STAGES + STAGE_EXTRA:
+        items = groups.get(code, [])
+        if code in ("CONCLUDED", "UNRECOGNIZED") and not items:
+            continue
+        count = "" if code == "QUALIFIED" else f" · {pr.count(len(items))}"
+        head = f'<h3 class="eyebrow">{esc(title + count)}</h3><p class="meta">{esc(meaning)}</p>'
+        if code == "QUALIFIED" and qualified == "NONE":
+            body = c.empty_state("No strategy is qualified", f"STRATEGY_QUALIFIED is NONE ({ACCEPTANCE}). No registry "
+                                 "status can qualify a strategy here.", kind="nd")
+        elif code == "QUALIFIED":  # the track changed: show it as recorded, never as a green readiness badge
+            body = c.status_line("warn", f"STRATEGY_QUALIFIED is {qualified or 'not recorded'}",
+                                 f"As recorded in {ACCEPTANCE}; read the manifest for the strategy and its evidence.")
+        elif items:
+            body = '<ul class="rows">' + "".join(stage_row(e, ctx) for e in items) + "</ul>"
+        else:
+            body = '<p class="meta">None in the registry.</p>'
+        parts.append(head + body)
+    return "".join(parts) + ('<p class="note">Stages group the registry\'s own statuses and family slots; nothing here '
+                             "is computed from results. Held-out outcomes stay hidden: only the protocol's protected "
+                             "scopes and windows are named.</p>")
+
+
+def stages_section(ctx: d.Context) -> str:
+    return c.section("Research stages", stages_body(ctx), meta="Candidate · development · shadow · qualified · rejected",
+                     sid="stg-h")
+
+
 def research_tab(ctx: d.Context) -> str:
     exps = ctx.experiments
     out = []
     if ctx.config.demo:
         out.append(c.status_line("warn", "Demo mode", "The experiment registry below is read from the repository (real "
                                  "manifests). Source health, fees-in-receipt and the receipt are synthetic."))
+    out.append(stages_section(ctx))
     missing = cm.loaded_state("Experiment registry", exps)
     if missing:
         return "".join(out) + c.section("Experiments", missing, sid="ex-h") + economics_section(ctx)
-    valid_days = None
-    if ctx.collector_status.status == d.OK:
-        valid_days = ctx.collector_status.value.get("valid_days")
-    elif ctx.collector_db.status == d.OK:
-        valid_days = ctx.collector_db.value.get("valid_days")
+    valid_days, days_note = forward_days(ctx)
     cards = []
     for e in exps.value:
         stage = e["stage_a"]
@@ -57,15 +202,15 @@ def research_tab(ctx: d.Context) -> str:
             ("Research stage", c.badge(e["status"]) if e["status"] else c.na("no status")),
             ("Historical result", (c.badge(stage.get("verdict")) if stage and stage.get("verdict") else
                                    c.na("no historical result recorded"))),
-            ("Forward valid days", c.num(pr.count(valid_days), reason="no collector status") if e["id"] == "EXP-001"
-             else c.na("not tracked here")),
+            ("Forward valid days", c.num(pr.count(valid_days), reason="no collector status") + _sub(days_note)
+             if e["id"] == "EXP-001" else c.na("not tracked here")),
             ("Next preregistered look", c.num(f"{nxt}th valid day" if nxt else None, reason="no look in the plan")),
         ]
         bar = ""
         if e["id"] == "EXP-001" and isinstance(valid_days, int) and nxt:
             bar = (f'<p class="meta">Observations toward the next scheduled evaluation: {esc(valid_days)} of '
-                   f"{esc(nxt)} valid forward days. Historical test days do not count; this is not a countdown to "
-                   "success.</p>" + progress_bar(valid_days, nxt, f"{valid_days} of {nxt} valid forward days"))
+                   f"{esc(nxt)} valid forward days{esc(f' ({days_note})' if days_note else '')}. Historical test "
+                   "days do not count; this is not a countdown to success.</p>" + progress_bar(valid_days, nxt, f"{valid_days} of {nxt} valid forward days"))
         limits = e.get("limitations") or []
         detail_pairs = [("manifest", c.code(e["key"])), ("manifest validation",
                         c.badge("VALID", label="Valid manifest") if not e["problems"] else c.ul(e["problems"])),
@@ -563,6 +708,49 @@ def needs_attention(src: Any) -> bool:
             or bool(_texts(src.get("disagreements"))))
 
 
+# Market v1 journey J2 (docs/strategy/MARKET_V1_ACCEPTANCE.md §2): per source, besides freshness (current), schedule
+# and next due (due) and last successful receipt (succeeded): the last attempt, completeness, the latest failure,
+# provenance and cost. Each is the artifact's own field, only formatted; a field it does not record reads unknown.
+# The fabric records no completeness of its own: the Health fact (canonical HEALTH_* words) is labelled with it and
+# says so, rather than rewording health into a completeness claim it does not support. Cost is the policy's
+# `budget` (words); a policy without one has no recorded cost, never $0.
+NO_COMPLETENESS = "no separate completeness record"
+NO_COST = "cost not recorded: the source's policy names no budget or quota"
+REGISTRY_NO_COST = "cost not recorded: the source registry has no cost field"
+
+
+def source_failure(src: dict, trusted: bool = True) -> str:
+    """The newest recorded miss (the fabric writes `recent_misses` oldest first). Without one, a degraded or failing
+    source says its failure reason is not recorded: the schedule text (`why_due`) is never shown as a failure reason.
+    "None recorded" only for a healthy source with no miss; under a report that is not fresh it says so."""
+    misses = _texts(src.get("recent_misses"))
+    stale = None if trusted else "report not current"
+    if misses:
+        more = f"newest of {pr.count(len(misses))} recent misses" if len(misses) > 1 else None
+        return esc(misses[-1]) + _sub(" · ".join(x for x in (more, stale) if x) or None)
+    health = src.get("health")
+    if health in ("FAILING", "DEGRADED"):
+        word = pr.prefixed_word("HEALTH", health).label.lower()
+        return c.txt("Reason not recorded") + _sub(f"health {word}; the report records no failure reason")
+    if health == "OK":
+        return c.txt("None recorded at evaluation") + _sub(stale)
+    return c.na("not recorded in the report")
+
+
+def source_provenance(src: dict, policy: dict) -> str:
+    """What the data is (the policy's description, as written) and which policy version records it."""
+    what = _text(policy.get("description"))
+    version = _text(src.get("policy_version"))
+    if not what and not version:
+        return c.na("provenance not recorded in the report")
+    return esc(_scrub(what or "description not recorded")) + _sub(f"policy {version}" if version else None)
+
+
+def source_cost(policy: dict) -> str:
+    budget = _text(policy.get("budget"))
+    return esc(_scrub(budget)) if budget else c.na(NO_COST)
+
+
 def fabric_source_row(src: Any, policy: Any, now: Any, *, trusted: bool = True, report_word: str = "stale",
                       judged_at: Any = None) -> str:
     """One supervised source: freshness and usability at evaluation, schedule state, health, next due,
@@ -582,12 +770,17 @@ def fabric_source_row(src: Any, policy: Any, now: Any, *, trusted: bool = True, 
             f"objective {objective}" if objective else "no objective") if x))),
         ("Schedule", _trusted_badge(src.get("schedule_state"), pr.prefixed_word("SCHEDULE", src.get("schedule_state")),
                                     trusted) + _sub(f"as of {pr.datetime_et(carried)}" if carried else None)),
-        ("Health", _trusted_badge(src.get("health"), pr.prefixed_word("HEALTH", src.get("health")), trusted)),
+        ("Health · completeness", _trusted_badge(src.get("health"), pr.prefixed_word("HEALTH", src.get("health")),
+                                                 trusted) + _sub(NO_COMPLETENESS)),
         ("Next due", c.txt(pr.datetime_et(src.get("next_due_utc")), reason="nothing planned or not known")),
         ("Last successful receipt", c.txt(pr.datetime_et(src.get("last_success_receipt_utc")),
                                           reason="no successful receipt recorded")),
         ("Usable for", _usable(src, trusted, report_word) + _sub(at_text if trusted else None)),
         ("Why", esc(_scrub(_text(src.get("why_due")) or "not stated"))),
+        ("Last attempt", c.txt(pr.datetime_et(src.get("last_attempt_utc")), reason="no attempt recorded")),
+        ("Latest failure", source_failure(src, trusted)),
+        ("Provenance", source_provenance(src, policy)),
+        ("Cost", source_cost(policy)),
     ]
     misses = src.get("missed_count")
     disagreements = _texts(src.get("disagreements"))
@@ -625,7 +818,7 @@ def fabric_source_row(src: Any, policy: Any, now: Any, *, trusted: bool = True, 
         sub += f" · run by {_text(src.get('schedule_owner')) or 'an owner not recorded'}"
     return c.row(esc(_text(src.get("source_id")) or "unnamed source"), sub=sub,
                  aside=_trusted_badge(fresh_code, pr.state_word(fresh_code), trusted),
-                 body=c.facts(facts, wide=True, text_cols=(0, 1, 2, 3, 4, 5, 6)) + detail)
+                 body=c.facts(facts, wide=True, text_cols=tuple(range(11))) + detail)
 
 
 def supervisor_state(doc: Any, report: d.FreshnessReport, now: Any) -> str:
@@ -1764,6 +1957,20 @@ def nhl_section(ctx: d.Context) -> str:
                           "development only", sid="nhl-h")
 
 
+TIER_WORDS = {"OFFICIAL_API": "Official API", "OFFICIAL_DOWNLOAD": "Official download",
+              "PERMITTED_PUBLIC_ENDPOINT": "Permitted public endpoint", "FEED": "Feed", "HTTP_FETCH": "HTTP fetch",
+              "BROWSER_AUTOMATION": "Browser automation"}
+
+
+def registry_provenance(spec: Any) -> str:
+    """How a registered source is reached (`sources.REGISTRY`): access tier, registry status and credential kind."""
+    if spec is None:
+        return c.na("not in the source registry")
+    tier = TIER_WORDS.get(spec.access_tier.name, spec.access_tier.name)
+    cred = "no credential" if spec.credential_kind == sources.CredentialKind.NONE else "read-only data key"
+    return esc(f"{tier} · {spec.status.value.capitalize()} · {cred}") + _sub(f"parser v{spec.parser_version}")
+
+
 def sources_tab(ctx: d.Context) -> str:
     out = [freshness_section(ctx)]
     rows = []
@@ -1804,7 +2011,7 @@ def sources_tab(ctx: d.Context) -> str:
                 spec = sources.get_source(h.get("source_id"))
                 scope = spec.description
             except Exception:  # noqa: BLE001 - an unknown id is shown, never hidden
-                scope = "not in the source registry"
+                spec, scope = None, "not in the source registry"
             items.append(c.row(esc(h.get("source_id")), sub=scope, aside=c.badge(h.get("status")),
                                body=c.facts([
                                    ("Last run", c.txt(pr.datetime_et(h.get("completed_at_utc")), reason="not recorded")),
@@ -1812,7 +2019,11 @@ def sources_tab(ctx: d.Context) -> str:
                                    ("Last successful observation", c.txt(pr.datetime_et(h.get("last_ok_at_utc")),
                                                                          reason="no successful run recorded")),
                                    ("Last error", esc(h.get("error")) if h.get("error") else c.txt("none recorded")),
-                               ], text_cols=(1, 3))))
+                                   ("Records", c.num(pr.count(h.get("records")), reason="not recorded")),
+                                   ("Due", c.na("not scheduled in this record: see Source freshness")),
+                                   ("Provenance", registry_provenance(spec)),
+                                   ("Cost", c.na(REGISTRY_NO_COST)),
+                               ], text_cols=(1, 3, 6))))
         detail = c.table(["source", "status", "completed", "age", "freshness (26 h)", "last ok", "records",
                           "http errors", "retries", "error"],
                          [[esc(h.get("source_id")), c.code(h.get("status")), esc(h.get("completed_at_utc")),
