@@ -762,3 +762,123 @@ def recheck_due(now: datetime | str) -> list[str]:
 
 
 RECHECK_WARNING = timedelta(days=7)
+
+
+# --------------------------------------------------------------------------- maker fees (Track B, #184)
+#
+# The schedules above are taker-only. A maker (resting-order) fill is priced here only where a primary
+# source already cited in this repository documents the maker terms for that scope, inside a dated
+# verification record whose MAKER_FEES component is VERIFIED:
+# - Kalshi KXHIGHNY: maker fee 0 (fee-schedule PDF of 2026-07-07, p.2: maker multiplier "default is 0";
+#   KXHIGHNY is not on the Non-Standard Fees list), record kalshi-kxhighny-fee-verification-2026-09-23;
+# - Polymarket US exchange scope: no maker charge and a maker rebate of theta 0.0125 per fill, banker's
+#   rounded to the cent (docs.polymarket.us/fees, "Maker Rebate, Theta -0.0125", "applied at the point of
+#   trade"), record polymarket-us-fee-verification-2026-09-24.
+# Every other venue or scope is FEE_UNSUPPORTED. That includes every other Kalshi series: the PDF's
+# maker default of 0 conflicts with the API changelog of 2026-08-20/22 ("Maker fees will be enabled",
+# standard maker multiplier 0.25; docs/research/EXP002_FEE_VERIFICATION.md), so outside a verified
+# record the maker fee is unknown, never 0. A rebate is reported on its own line and never replaces the
+# unsubsidized cost. Nothing here models whether a resting order fills (no queue or fill evidence exists).
+
+MAKER_FEE_VERSION = "maker-fee-v1"
+
+
+class MakerFeeState(str, Enum):
+    VERIFIED_ZERO = "VERIFIED_ZERO"  # the primary source sets the maker charge to 0 and no rebate applies
+    DOCUMENTED_REBATE = "DOCUMENTED_REBATE"  # no maker charge; a documented per-fill rebate
+    FEE_UNSUPPORTED = "FEE_UNSUPPORTED"  # no primary source for this scope: the maker fee is UNKNOWN
+
+
+@dataclass(frozen=True)
+class MakerTerms:
+    verification_id: str
+    state: MakerFeeState
+    rebate_theta: Decimal  # rebate = theta x C x p x (1 - p), per fill; 0 = no rebate
+    price_range: tuple[Decimal, Decimal] | None  # the documented price range of the rebate formula
+    rounding: str
+    evidence: str
+
+
+# Keyed by verification id: maker terms exist only inside a dated record (its window and re-check apply).
+MAKER_TERMS = MappingProxyType({
+    KALSHI_KXHIGHNY_VERIFICATION_2026_09_23.verification_id: MakerTerms(
+        KALSHI_KXHIGHNY_VERIFICATION_2026_09_23.verification_id, MakerFeeState.VERIFIED_ZERO, Decimal(0), None,
+        "no maker charge and no rebate",
+        f"{_EVIDENCE_DIR}/kalshi-fee-schedule_effective-2026-07-07_received-2026-09-23.pdf p.2 (maker M default 0) "
+        "and pp.6-11 (KXHIGHNY not listed)"),
+    POLYMARKET_US_VERIFICATION_2026_09_24.verification_id: MakerTerms(
+        POLYMARKET_US_VERIFICATION_2026_09_24.verification_id, MakerFeeState.DOCUMENTED_REBATE, Decimal("0.0125"),
+        (_PMUS_P_MIN, _PMUS_P_MAX), "rebate per fill, banker's rounding to $0.01 (fees page, Fee Rules)",
+        f"{_PMUS_EVIDENCE} (fees page: Maker Rebate, Theta -0.0125; applied at the point of trade)"),
+})
+
+
+@dataclass(frozen=True)
+class MakerFeeQuote:
+    """One maker fill of `contracts` at `price`. FEE_UNSUPPORTED leaves every cost None (UNKNOWN), never 0."""
+
+    version: str
+    venue: str
+    scope: str | None
+    state: str
+    contracts: Decimal
+    price: Decimal
+    notional: Decimal  # price x contracts, exact; the venue's cash rounding is not applied here
+    fee: Decimal | None  # the maker charge
+    rebate: Decimal | None  # credited separately; never netted into `unsubsidized_cost`
+    unsubsidized_cost: Decimal | None  # notional + fee
+    cost_after_rebate: Decimal | None  # shown beside the unsubsidized cost, never instead of it
+    claim_basis: str  # the record's claim basis at as_of (ClaimBasis value)
+    verification_id: str | None
+    evidence: str
+    detail: str
+
+
+def maker_fee(venue: str, scope: str | None, contracts: Decimal | int, price: Decimal, *,
+              as_of: datetime | str) -> MakerFeeQuote:
+    """The maker cost of one fill, or FEE_UNSUPPORTED with the reason. Point in time: only a record known
+    and effective at `as_of`, and not past its re-check date, counts (the rules of `verification_at`)."""
+    at = parse_utc(as_of)
+    if at is None:
+        raise ValueError("as_of must be a timezone-aware time")
+    if isinstance(contracts, bool) or not isinstance(contracts, (int, Decimal)):
+        raise ValueError("contracts must be an int or a Decimal")
+    qty = Decimal(contracts)
+    if not qty.is_finite() or qty <= 0:
+        raise ValueError("contracts must be positive and finite")
+    p = price if isinstance(price, Decimal) else Decimal(str(price))
+    if not valid_price(p):
+        raise ValueError(f"{p} is not a valid binary-contract price")
+    notional = p * qty
+
+    def unsupported(why: str, verification_id: str | None = None) -> MakerFeeQuote:
+        return MakerFeeQuote(MAKER_FEE_VERSION, venue, scope, MakerFeeState.FEE_UNSUPPORTED.value, qty, p, notional,
+                             None, None, None, None, ClaimBasis.NONE.value, verification_id, "", why)
+
+    if qty != qty.to_integral_value():
+        return unsupported("a fractional fill: no maker rule for fractional contracts is documented")
+    schedule = schedule_for(venue, scope, as_of=at)
+    if schedule.status is FeeScheduleStatus.UNSUPPORTED:
+        return unsupported(f"no fee schedule: {getattr(schedule, 'reason', schedule.schedule_id)}")
+    usable = [r for r in _records_for(schedule, scope)
+              if parse_utc(r.knowledge_time_utc) <= at and parse_utc(r.applies_from_utc) <= at]
+    if not usable:
+        return unsupported(f"no dated fee verification record for {venue}/{scope} at {at.isoformat()}: the maker fee "
+                           "is UNKNOWN (for Kalshi, the PDF maker default conflicts with the 2026-08-20 changelog)")
+    record = max(usable, key=lambda r: parse_utc(r.knowledge_time_utc))
+    if at > parse_utc(record.recheck_by_utc):
+        return unsupported(f"{record.verification_id} is past its re-check date {record.recheck_by_utc}",
+                           record.verification_id)
+    states = {c.component: c.state for c in record.components}
+    terms = MAKER_TERMS.get(record.verification_id)
+    if states.get(VerificationComponent.MAKER_FEES) is not ComponentState.VERIFIED or terms is None:
+        return unsupported(f"{record.verification_id} does not verify maker fees for {scope}", record.verification_id)
+    if terms.price_range is not None and not terms.price_range[0] <= p <= terms.price_range[1]:
+        return unsupported(f"price {p} is outside the documented range {terms.price_range[0]}..{terms.price_range[1]}",
+                           record.verification_id)
+    fee = Decimal(0)
+    rebate = bankers_fee(terms.rebate_theta, int(qty), p) if terms.rebate_theta else Decimal(0)
+    state = _state_from(schedule, record, at)
+    return MakerFeeQuote(MAKER_FEE_VERSION, venue, scope, terms.state.value, qty, p, notional, fee, rebate,
+                         notional + fee, notional + fee - rebate, state.claim_basis.value, record.verification_id,
+                         terms.evidence, f"{terms.rounding}; {state.detail}")

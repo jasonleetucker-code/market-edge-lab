@@ -3,7 +3,9 @@
 Kalshi publishes a bid-only binary book: `yes_dollars` and `no_dollars` are lists of
 [price, size] bids. A YES buyer crosses the best NO bid, so the executable YES price is
 1 − (best NO bid) and the size offered there is that NO bid's size. The NO side mirrors
-this. Only captured book levels are used. There is no midpoint and no last price.
+this. Only captured book levels are used. There is no midpoint and no last price in any quote or
+ladder. `market_activity` (Track B, #184) reads the record's last trade price, volume and open
+interest as separate, non-executable context (`MarketActivity.fillable` is always False).
 `quotes_from_orderbook` gives the best level only (the frozen EXP-001 path);
 `ladders_from_orderbook` gives every captured level for depth walks
 (`opportunity.walk_ladder`).
@@ -12,8 +14,10 @@ this. Only captured book levels are used. There is no midpoint and no last price
 from __future__ import annotations
 
 import hashlib
+from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
-from typing import Any, Mapping
+from enum import Enum
+from typing import Any, Mapping, Sequence
 
 from . import settlement
 from .opportunity import (
@@ -264,3 +268,124 @@ def check_event_identity(event: Event, raw_event: Mapping[str, Any] | None, expe
     if body.get("event_ticker") != expected_ticker:
         return f"captured event {body.get('event_ticker')!r} is not {expected_ticker!r} ({event.event_id})"
     return None
+
+
+# --------------------------------------------------------------------------- market activity (Track B, #184)
+#
+# Kalshi's market record carries activity fields beside its quote and settlement fields (docs.kalshi.com Get
+# Market, OpenAPI 3.31.0, captured in experiments/EXP-002-nfl-consensus-vs-event-market/fee_evidence/
+# docs_api-reference_market_get-market.md):
+# - `last_price_dollars`: "Price for the last traded YES contract" (FixedPointDollars string);
+# - `volume_fp`, `volume_24h_fp`: market volume and 24h volume in contracts (FixedPointCount, 2 decimals);
+# - `open_interest_fp`: "the number of contracts bought on this market disconsidering netting".
+# `market_activity` lifts these, and nothing else. A last trade price is context, never an executable price:
+# the record says so (`fillable` False) and it is never an `ExecutableQuote` or `DepthLadder`.
+# Settled and post-close fields (`payoff_constraints.PROHIBITED_MARKET_FIELDS`) are never read. The last
+# trade price is itself a label proxy once trading has closed, so it is withheld unless the market is open
+# and the record was received before its close time (an unknown status or time withholds it: fail closed).
+
+ACTIVITY_VERSION = "kalshi-market-activity-v1"
+ACTIVITY_PRICE_KIND = "LAST_TRADE_NOT_EXECUTABLE"
+ACTIVITY_FIELDS = (("last_trade_price", "last_price_dollars"), ("volume", "volume_fp"),
+                   ("volume_24h", "volume_24h_fp"), ("open_interest", "open_interest_fp"))
+
+
+class ActivityState(str, Enum):
+    OBSERVED = "OBSERVED"
+    MISSING = "MISSING"  # absent or empty: unknown, never zero
+    MALFORMED = "MALFORMED"  # not a finite fixed-point number, or negative
+    NOT_A_TRADE_PRICE = "NOT_A_TRADE_PRICE"  # outside (0, 1): no trade can print there (e.g. "0.0000" with no trade)
+    WITHHELD_PROHIBITED = "WITHHELD_PROHIBITED"  # the caller's protocol prohibits the field
+    WITHHELD_POST_CLOSE = "WITHHELD_POST_CLOSE"  # a last trade at or after close (or of unknown timing)
+
+
+@dataclass(frozen=True)
+class ActivityField:
+    name: str
+    source_field: str
+    value: Decimal | None
+    state: str
+
+
+@dataclass(frozen=True)
+class MarketActivity:
+    version: str
+    ticker: str | None
+    event_ticker: str | None
+    status: str | None
+    received_at_utc: str | None
+    close_time_utc: str | None
+    pre_close: bool | None  # open status and received before close; None when either is unknown
+    last_trade_price: ActivityField
+    volume: ActivityField
+    volume_24h: ActivityField
+    open_interest: ActivityField
+    fields_never_read: tuple[str, ...]
+    payload_sha256: str  # of the record with every never-read field removed
+    price_kind: str = ACTIVITY_PRICE_KIND
+    fillable: bool = False  # a last trade price is never fillable
+
+    def to_dict(self) -> dict[str, Any]:
+        def plain(v: Any) -> Any:
+            if isinstance(v, Decimal):
+                return str(v)
+            if isinstance(v, ActivityField):
+                return {k: plain(getattr(v, k)) for k in ("name", "source_field", "value", "state")}
+            if isinstance(v, tuple):
+                return [plain(x) for x in v]
+            return v
+        return {k: plain(getattr(self, k)) for k in self.__dataclass_fields__}
+
+
+def _activity_number(raw: Any, *, price: bool) -> tuple[Decimal | None, ActivityState]:
+    if raw is None or (isinstance(raw, str) and not raw.strip()):
+        return None, ActivityState.MISSING
+    if isinstance(raw, bool) or not isinstance(raw, (str, int)):
+        return None, ActivityState.MALFORMED  # documented as fixed-point strings; a float is never trusted
+    try:
+        value = Decimal(str(raw).strip())
+    except InvalidOperation:
+        return None, ActivityState.MALFORMED
+    if not value.is_finite() or value < 0:
+        return None, ActivityState.MALFORMED
+    if price and not Decimal(0) < value < Decimal(1):
+        return None, ActivityState.NOT_A_TRADE_PRICE
+    return value, ActivityState.OBSERVED
+
+
+def market_activity(raw: Mapping[str, Any], *, received_at_utc: str | None,
+                    prohibited_fields: Sequence[str]) -> MarketActivity:
+    """Last trade price, volume, 24h volume and open interest from one Kalshi market record.
+
+    `prohibited_fields` is the consuming protocol's list (pass `()` only when the protocol has none). The
+    settled fields are dropped whatever it says. Pure: nothing is fetched."""
+    from .freshness import parse_utc
+    from .payoff_constraints import PROHIBITED_MARKET_FIELDS
+    from .provenance import canonical_json, sha256_hex
+
+    caller = {str(f) for f in prohibited_fields}
+    sources = {source for _, source in ACTIVITY_FIELDS}
+    never_read = (set(PROHIBITED_MARKET_FIELDS) | caller) - sources
+    clean = {k: v for k, v in raw.items() if k not in never_read}
+    status = _text(clean, "status")
+    close = _text(clean, "close_time")
+    received, closes = parse_utc(received_at_utc), parse_utc(close)
+    if status is None or received is None or closes is None:
+        pre_close = None
+    else:
+        pre_close = status.lower() in OPEN_STATUSES and received < closes
+    out: dict[str, ActivityField] = {}
+    for name, source in ACTIVITY_FIELDS:
+        if source in caller:
+            out[name] = ActivityField(name, source, None, ActivityState.WITHHELD_PROHIBITED.value)
+            continue
+        if name == "last_trade_price" and pre_close is not True:
+            out[name] = ActivityField(name, source, None, ActivityState.WITHHELD_POST_CLOSE.value)
+            continue
+        value, state = _activity_number(clean.get(source), price=name == "last_trade_price")
+        out[name] = ActivityField(name, source, value, state.value)
+    hashed = {k: v for k, v in clean.items() if k not in caller}
+    return MarketActivity(ACTIVITY_VERSION, _text(clean, "ticker"), _text(clean, "event_ticker"), status,
+                          received_at_utc, close, pre_close, out["last_trade_price"], out["volume"],
+                          out["volume_24h"], out["open_interest"], tuple(sorted(never_read | (caller & sources))),
+                          sha256_hex(canonical_json(hashed)))
