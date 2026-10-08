@@ -19,6 +19,12 @@ How `filled` is known
   clearly later (beyond `TIMESTAMP_SKEW`) are on top of it. So `filled` is the largest of: the fills
   received, and, for each observation, its count plus the received fills clearly after it. It never
   decreases.
+- A count read over an interval carries two times: `as_of_utc`, the earliest time it can be true at (the
+  lower bound), and optionally `as_of_upper_utc`, the latest (the upper bound; for an account read, its end
+  plus the read's clock tolerance, `account.ReadManifest.data_true_by`). A fill is on top of the count only
+  when stamped after the upper bound; one between the bounds may already be inside the count, so it is never
+  added on top and `fill_timing_uncertain` is set. The upper bound only widens the skew window, never narrows
+  it. Dispute checks and the not-found delay use the lower bound.
 - Each new count is checked against the count implied at its own time: an earlier count plus the fills
   clearly between the two, or the fills clearly before it. A lower count is a dispute: it quarantines
   when authoritative or final, and is noted otherwise. Fills within the skew of a snapshot get the
@@ -312,7 +318,11 @@ class ReconcileObserved:
 
     `found=False` is NOT_FOUND evidence. It ends an order as never accepted only when
     `authoritative_complete` says the query covered the whole scope (every order of the account, by
-    client order id, including terminal ones)."""
+    client order id, including terminal ones).
+
+    `as_of_utc` is the earliest time the counts can be true at; `as_of_upper_utc` (optional) the latest. A
+    query read over an interval, or against a clock that may disagree with the venue's, states both: fills
+    stamped between them may already be in the count (module docstring)."""
 
     client_order_id: str | None
     provider_order_id: str | None
@@ -324,10 +334,12 @@ class ReconcileObserved:
     price: Decimal | None = None
     authoritative_complete: bool = False
     as_of_utc: str | None = None
+    as_of_upper_utc: str | None = None
 
     def __post_init__(self) -> None:
         _ident(self.provider_order_id, "provider_order_id")
         _ident(self.client_order_id, "client_order_id")
+        _ident(self.as_of_upper_utc, "as_of_upper_utc")
         if not isinstance(self.found, bool) or not isinstance(self.authoritative_complete, bool):
             raise TypeError("found and authoritative_complete must be bools")
         for f in ("filled_quantity", "remaining_quantity", "total_quantity", "price"):
@@ -354,14 +366,16 @@ class FillRecord:
 
 @dataclass(frozen=True)
 class CountObservation:
-    """The venue said `count` contracts were filled, true at `as_of_utc` (None: time unknown). A final
-    count belongs to a canceled or executed order: nothing can fill beyond it."""
+    """The venue said `count` contracts were filled, true at `as_of_utc` (None: time unknown) or, when
+    `as_of_upper_utc` is stated, at some time between the two. A final count belongs to a canceled or executed
+    order: nothing can fill beyond it."""
 
     count: Decimal
     as_of_utc: str | None
     final: bool
     source: str
     authoritative: bool = False
+    as_of_upper_utc: str | None = None
 
 
 @dataclass(frozen=True)
@@ -454,8 +468,7 @@ class OrderView:
         for o in self.count_observations:
             if o.count <= 0:
                 continue
-            at = _time(o.as_of_utc)
-            if at is None or any(_relation(f, at) in ("unknown", "window") for f in self.fills):
+            if _bounds(o) is None or any(_relation(f, o) in ("unknown", "window") for f in self.fills):
                 return True
         return False
 
@@ -675,19 +688,33 @@ def _link_provider_id(view: OrderView, provider_order_id: str | None, *, confirm
     return _note(out, f"PROVIDER_ID_REPLACED: {view.provider_order_id} -> {provider_order_id} ({kind})")
 
 
-def _relation(fill: FillRecord, at: datetime) -> str:
-    """Where a fill's venue time falls relative to a snapshot time `at`:
-    - "before": at or before `at`, so the snapshot covers it;
-    - "window": within `TIMESTAMP_SKEW` after `at`, so it may be covered;
-    - "after": clearly after `at`, so it is on top of the snapshot;
-    - "unknown": the fill has no usable time.
-    For a dispute check only fills at least the skew before `at` count as before (`_clearly_before`)."""
-    ft = _time(fill.venue_time_utc)
-    if ft is None:
+def _bounds(observation: CountObservation) -> tuple[datetime, datetime] | None:
+    """The times a count can be true at: its `as_of` (lower) and the later of `as_of + TIMESTAMP_SKEW` and its
+    stated upper bound (upper). None when the count has no usable time. A stated upper bound only widens the
+    window: one earlier than `as_of + TIMESTAMP_SKEW`, or unparseable, leaves the skew window as it is."""
+    at = _time(observation.as_of_utc)
+    if at is None:
+        return None
+    upper = at + TIMESTAMP_SKEW
+    stated = _time(observation.as_of_upper_utc)
+    return at, upper if stated is None or stated <= upper else stated
+
+
+def _relation(fill: FillRecord, observation: CountObservation) -> str:
+    """Where a fill's venue time falls relative to a count's times (`_bounds`):
+    - "before": at or before the lower bound, so the count covers it;
+    - "window": after the lower bound, at or before the upper bound, so it may be covered;
+    - "after": clearly after the upper bound, so it is on top of the count;
+    - "unknown": the fill or the count has no usable time.
+    For a dispute check only fills at least the skew before the lower bound count as before
+    (`_clearly_before`)."""
+    ft, bounds = _time(fill.venue_time_utc), _bounds(observation)
+    if ft is None or bounds is None:
         return "unknown"
+    at, upper = bounds
     if ft <= at:
         return "before"
-    return "window" if ft <= at + TIMESTAMP_SKEW else "after"
+    return "window" if ft <= upper else "after"
 
 
 def _clearly_before(fill: FillRecord, at: datetime) -> bool:
@@ -700,8 +727,7 @@ def _implied_filled(fills: tuple[FillRecord, ...], observations: tuple[CountObse
     after it. Untimed fills, untimed counts and fills in the skew window count as covered (a lower bound)."""
     best = sum((f.quantity for f in fills), ZERO)
     for o in observations:
-        at = _time(o.as_of_utc)
-        after = ZERO if at is None else sum((f.quantity for f in fills if _relation(f, at) == "after"), ZERO)
+        after = sum((f.quantity for f in fills if _relation(f, o) == "after"), ZERO)
         best = max(best, o.count + after)
     return best
 
@@ -714,8 +740,7 @@ def _implied_at(view: OrderView, at: datetime) -> Decimal:
         earlier = _time(o.as_of_utc)
         if earlier is None or earlier > at:
             continue
-        between = sum((f.quantity for f in view.fills if _relation(f, earlier) == "after" and _clearly_before(f, at)),
-                      ZERO)
+        between = sum((f.quantity for f in view.fills if _relation(f, o) == "after" and _clearly_before(f, at)), ZERO)
         best = max(best, o.count + between)
     return best
 
@@ -801,7 +826,7 @@ def _status(text: str | None) -> VenueStatus | None:
 
 
 def _observe(view: OrderView, count: Decimal, as_of_utc: str | None, *, final: bool, authoritative: bool,
-             complete: bool, source: str) -> OrderView | str:
+             complete: bool, source: str, as_of_upper_utc: str | None = None) -> OrderView | str:
     """Record a venue fill count. A reason string if it contradicts what is known; a note if it is only
     stale. Counts are cumulative at the venue, so a lower count is either older or a contradiction."""
     if count < 0:
@@ -833,7 +858,7 @@ def _observe(view: OrderView, count: Decimal, as_of_utc: str | None, *, final: b
     if higher:
         view = _note(view, f"COUNT_BELOW_EARLIER_VENUE_COUNT: {count} ({source}) < {max(o.count for o in higher)}; "
                            f"stale or not shown to be newer")
-    observation = CountObservation(count, as_of_utc, final, source, authoritative or final)
+    observation = CountObservation(count, as_of_utc, final, source, authoritative or final, as_of_upper_utc)
     return replace(view, count_observations=view.count_observations + (observation,))
 
 
@@ -844,14 +869,15 @@ def _untimed_fills(view: OrderView, at: datetime | None) -> Decimal:
     return sum((f.quantity for f in view.fills if _time(f.venue_time_utc) is None), ZERO)
 
 
-def _cancel_firm(view: OrderView, floor: Decimal, as_of_utc: str | None, source: str) -> OrderView | str:
+def _cancel_firm(view: OrderView, floor: Decimal, as_of_utc: str | None, source: str,
+                 as_of_upper_utc: str | None = None) -> OrderView | str:
     """The venue stated how many contracts the cancel removed. Fixed once known."""
     if floor < 0 or floor > view.total_quantity:
         return f"MALFORMED_CANCEL: canceled count {floor} outside [0, {view.total_quantity}]"
     if view.cancel_basis is CancelBasis.VENUE_COUNT and floor != view.canceled_floor:
         return f"CANCEL_COUNT_CONFLICT: the venue stated {view.canceled_floor} canceled, now {floor} ({source})"
     out = _observe(view, view.total_quantity - floor, as_of_utc, final=True, authoritative=True, complete=True,
-                   source=source)
+                   source=source, as_of_upper_utc=as_of_upper_utc)
     if isinstance(out, str):
         return out
     return replace(out, cancel_basis=CancelBasis.VENUE_COUNT, canceled_floor=floor)
@@ -865,7 +891,8 @@ def _cancel_soft(view: OrderView) -> OrderView:
 
 def _merge_venue_counts(before: OrderView, view: OrderView, status: VenueStatus, filled: Decimal | None,
                         remaining: Decimal | None, total: Decimal | None, *, authoritative: bool, complete: bool,
-                        as_of_utc: str | None, source: str, price: Decimal | None = None) -> OrderView:
+                        as_of_utc: str | None, source: str, price: Decimal | None = None,
+                        as_of_upper_utc: str | None = None) -> OrderView:
     """Fold a venue snapshot into `view` (not yet recounted)."""
     for name, value in (("filled", filled), ("remaining", remaining), ("total", total)):
         if value is not None and value < 0:
@@ -908,10 +935,10 @@ def _merge_venue_counts(before: OrderView, view: OrderView, status: VenueStatus,
     if filled is not None:
         final = status in (VenueStatus.CANCELED, VenueStatus.EXECUTED)
         if status is VenueStatus.CANCELED:
-            observed = _cancel_firm(view, view.total_quantity - filled, as_of_utc, source)
+            observed = _cancel_firm(view, view.total_quantity - filled, as_of_utc, source, as_of_upper_utc)
         else:
             observed = _observe(view, filled, as_of_utc, final=final, authoritative=authoritative, complete=complete,
-                                source=source)
+                                source=source, as_of_upper_utc=as_of_upper_utc)
         if isinstance(observed, str):
             return _quarantine(before, observed)
         view = observed
@@ -1287,7 +1314,8 @@ def _on_reconcile(view: OrderView, event: ReconcileObserved) -> OrderView:
     old_total = out.total_quantity
     out = _merge_venue_counts(view, out, status, event.filled_quantity, event.remaining_quantity,
                               event.total_quantity, authoritative=True, complete=event.authoritative_complete,
-                              as_of_utc=event.as_of_utc, source="reconcile", price=event.price)
+                              as_of_utc=event.as_of_utc, source="reconcile", price=event.price,
+                              as_of_upper_utc=event.as_of_upper_utc)
     if _changed(view, out):
         return out
     if out.provisional_provider_order_id is not None and event.provider_order_id == out.provisional_provider_order_id:

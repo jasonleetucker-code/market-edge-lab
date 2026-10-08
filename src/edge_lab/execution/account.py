@@ -91,7 +91,7 @@ from .reservations import AccountSnapshot, AttributedOrder, CashBasis, ExternalO
 MAX_RESAMPLES = 5
 MAX_PAGES_CAP = 10_000
 MAX_REQUESTS_CAP = 100_000
-CLOCK_SKEW = timedelta(seconds=5)
+CLOCK_SKEW = timedelta(seconds=5)  # how far the venue's clock may lead ours in a read (ReadManifest.data_true_by)
 POSITIONS_SETTLEMENT_STATUS = "all"  # explicit: the venue default `unsettled` omits settled rows (ACC-07)
 READ_ENDPOINTS = frozenset(e for e in Endpoint if e.value.method is HttpMethod.GET)
 # The cash basis a COMPLETE reconciliation may report. ACC-02 (whether the available balance already excludes
@@ -389,6 +389,17 @@ class ReadManifest:
     as_of_end: datetime | None
     cutoffs: tuple[w.HistoricalCutoff, ...]
     coverage: Mapping[tuple[int, AccountEndpoint], bool]  # final data complete, per subaccount and endpoint
+
+    @property
+    def data_true_by(self) -> datetime:
+        """The latest venue time anything this read returned can be true at: the read's end on our clock plus
+        CLOCK_SKEW (the venue's clock may lead ours by that much; beyond it the read reports
+        USER_DATA_AS_OF_IN_FUTURE), or the venue's closing user-data as_of if that is later. The snapshot's
+        `observed_at` (the earlier of the read start and the opening as_of) is the earliest. A listed fill count is
+        true somewhere between the two, so a fill stamped between them may already be in it
+        (`lifecycle.ReconcileObserved.as_of_upper_utc`)."""
+        upper = self.finished_at + CLOCK_SKEW
+        return self.as_of_end if self.as_of_end is not None and self.as_of_end > upper else upper
 
 
 @dataclass(frozen=True)
