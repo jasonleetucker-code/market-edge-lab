@@ -1,0 +1,155 @@
+# Research-protocol sidecar (research-protocol-v1). DRAFT and QUEUED: explicit UNKNOWN / MISSING_* values
+# are honest placeholders; every decision field must be settled before PREREGISTERED
+# (experiments/README.md, Research-protocol sidecar). Nothing here is a validated strategy.
+# Track B candidate TB-03 (docs/research/ALPHA_DISCOVERY_2026-10.md), designed as R6's two-sided bound.
+# Registered under the 2026-10-08 Track B scope entry of docs/EXECUTION_PLAN.md: DRAFT, slot_status
+# QUEUED, a new family label (never A or B). EXP-005 (taker) and EXP-006 (maker) share family TB_FLB.
+
+protocol_version = "research-protocol-v1"
+experiment_id = "EXP-006"
+family = "TB_FLB"
+family_title = "Track B: favourite-longshot pricing on Kalshi outside sports game markets (taker and maker variants)"
+slot_status = "QUEUED"
+authority = "docs/owner/2026-10-08-rapid-alpha-discovery-directive.md; docs/EXECUTION_PLAN.md 2026-10-08 Track B entry (PR #185); issue #184; family slots per #96"
+mechanism = "Makers sell longshots to takers with an affirmative/longshot bias, i.e. buy the favourite; whatever incumbents earned net of the maker fee is an upper bound on what a slow new maker at the back of the queue could earn."
+named_hypothesis = "H-TB03: for Kalshi non-sports markets in the post-2025-07 regime, the optimistic bound (event-clustered, event-equal-weight mean net return per dollar of all maker fills buying the favourite at 0.70 to 0.95, net of the per-series maker fee) is above zero."
+baseline = "No-trade (zero). Reference bounds: (1) optimistic bound (incumbent maker fills); (2) pessimistic bound (trade-through fills of a hypothetical bid at the touch); (3) the same bounds in the [0.30, 0.50] band (control); (4) the taker side of the same prints (its mirror image, which must equal minus the gross maker return before fees, a data-integrity check)."
+open_decisions = [
+  "prohibited_fields lists the settled-field names required by the Track B scope (dropped from held kalshi_public feature records). Labels come from the approved A2 read through a logged LABEL use; a protocol amendment must scope prohibited_fields to feature records, or the label reader must be separate, before any label reader consumes this protocol",
+  "Universe: categories and series (non-sports only), and the covered_scopes of the evidence-use log (created when the universe is frozen and before the first look)",
+  "Hypothetical posting grid and the trade-through definition at deci-cent tick structures",
+  "Which side the hypothetical bid takes when both YES and NO books exist (the favourite side, one per market)",
+]
+
+[universe]
+eligible = "Kalshi binary markets outside Sports, scheduled close on or after 2025-07-01, series fee_type history readable, in the approved read; one market per event."
+exclusions = [
+  "All sports markets (R6 near-KILL; NFL sports:nfl:moneyline and KXNFLGAME; NHL KXNHLGAME and sports:nhl), combos (KXMVE*)",
+  "KXHIGHNY (EXP-001, protected), whatever the dataset",
+  "Baskets of several markets of one mutually exclusive event, and YES/NO complement pairs (EXP-003 Family B, PAUSED)",
+  "Markets without captured rules text or with unenumerated settlement states",
+]
+
+[observation]
+unit = "Event: one cluster; every fill, hypothetical bid and minute of the event's selected market is nested inside it."
+clusters = [
+  "event",
+  "series x date (shared drivers); sensitivity by series-date cluster",
+]
+dependence = "Many maker fills in one market share one outcome; fills of one event are one cluster. Event-equal weighting is primary; trade-weighted figures are reported beside it, never alone."
+
+[endpoints]
+primary = "Candidate (to settle before preregistration): optimistic bound = event-clustered, event-equal-weight mean net return per dollar of maker fills buying the favourite at 0.70 to 0.95, net of the per-series maker fee at the fill time."
+secondary = [
+  "Pessimistic bound: trade-through fills of a hypothetical bid at the touch",
+  "Post-fill markouts at 1, 5 and 60 minutes and at settlement (adverse selection)",
+  "By category and by half-year",
+  "Mirror check: taker side of the same prints",
+  "Attrition waterfall (research_evidence.attrition_report)",
+]
+
+[information]
+cutoff = "A hypothetical bid uses only candles and prints completed at or before its posting minute and metadata listed before it. The result and any settlement field are never features; the realized close is never information."
+max_input_age = "One completed one-minute candle at posting."
+clock_uncertainty = "Clocks: (1) publication = the underlying information release, unobserved (UNKNOWN); (2) first observable = candle period end or print timestamp; (3) receipt = first observable retrospectively; (4) decision = the posting minute on the frozen grid; (5) hypothetical arrival = the next minute, after which the bid rests unchanged (no cancel on news); (6) fill = optimistic: any incumbent maker fill in band; pessimistic: a print strictly through the bid level after arrival; else NO_FILL; (7) settlement = settlement time and payout state."
+
+[data_roles]
+data = [
+  "NOT HELD: approved one-time Kalshi read of settled non-sports markets, trades and one-minute candlesticks (decision packet item 1)",
+  "per-series fee_type history and fee schedule records",
+  "captured rules text",
+]
+features = [
+  "per print: time, price, count, taker side; per minute: yes_bid/yes_ask OHLC",
+]
+labels = [
+  "market payout state from the approved read, only through a logged LABEL use; never KXHIGHNY, NFL or NHL labels; never the kalshi_settlement collector",
+]
+permission_lineage = "Kalshi market data under its published terms (DATA_RIGHTS UNRESOLVED). Research use only; no redistribution."
+prohibited_inputs = [
+  "exp001:",
+  "shadow_ledger:",
+  "nws_pfm:",
+  "nws_cli:",
+  "kalshi_settlement:",
+]
+prohibited_label_scopes = ["kalshi:KXHIGHNY", "sports:nfl:moneyline", "kalshi:KXNFLGAME", "kalshi:KXNHLGAME", "sports:nhl"]
+prohibited_fields = ["result", "expiration_value", "settlement_value", "settlement_value_dollars", "settlement_ts"]
+
+[variants]
+allowed = [
+  "V0 only while DRAFT: favourite band [0.70, 0.95], non-sports, post-2025-07, optimistic and pessimistic bounds",
+  "R6's KILLED late-game sports maker variant (bids at 0.90 or more in the final ten minutes) is not a variant here",
+  "Any other band, category subset or posting grid is a registered variant",
+]
+multiple_testing = "One primary (optimistic bound); the pessimistic bound and markouts are secondary. Any added variant is counted, Holm-corrected (to settle before preregistration)."
+
+[costs_fills]
+fees = "Maker fee round-up(M x 0.0175 x C x P x (1-P)) where the series fee_type at the fill time is quadratic_with_maker_fees, else zero (schedule effective 2026-07-07; API Get Series fee types). As a share of outlay 0.0175 x (1 - P): 0.525 percent at 0.70, 0.175 percent at 0.90 (R6). The 2026-08-20 changelog entry is an exemption for independent NFL combos, not a start date for maker fees (R6 section 7). Direct-member rounding; non-direct sensitivity."
+fills = "Bounds only: the optimistic bound uses incumbent fills (our fills would be no better); the pessimistic bound uses trade-throughs (certain and maximally adverse). Neither is an estimate of our fills."
+evidence_quality = "Public trades carry taker side and count; one-minute candles carry top-of-book OHLC; no depth, queue or order-level history (R6 section 2.3). Fee schedule VERIFIED-DOC for 2026-07-07; per-series fee_type history not yet read."
+
+[size_capital]
+size_ladder = "One contract per hypothetical bid in v1."
+capital_scenarios = "Illustrative $100 scenarios only (ILLUSTRATIVE_SCENARIO_NOT_APPROVED_BANKROLL); see docs/research/ALPHA_DISCOVERY_2026-10.md section f."
+capital_assumptions = "A resting bid reserves its cost while resting (exchange collateral treatment for resting orders UNVERIFIED) and the filled position until settlement cash release; settlement delay per series UNKNOWN; reserve MISSING_OWNER_INPUT."
+
+[evaluation]
+chronological = "Development, validation and retrospective test blocks strictly chronological by scheduled close, all on or after 2025-07-01; no event in two blocks."
+untouched_future_window = "Not applicable to this retrospective bound; any prospective evidence comes from the separate forward virtual-maker study, which needs its own grant and its own untouched window."
+exposure_history = "No evidence-use log yet: it is created with frozen covered_scopes when the universe is frozen, before the first look. Retrospective outcomes predate any log and are UNKNOWN_LEGACY."
+controls = [
+  "[0.30, 0.50] band, same bounds",
+  "Mirror check against the taker side",
+  "Event-equal vs trade-weighted",
+]
+
+[budget]
+research_cash_usd = "0: no paid data or services are authorized (2026-10-08 Track B scope)."
+owner_hours = "MISSING_OWNER_INPUT: shared with EXP-004 and EXP-005."
+data_costs = "0 cash; one-time public read per the decision packet; no recurring collection."
+review_date = "2026-10-22"
+
+[stopping]
+futility = "KILL (R6, written in now and to be frozen unchanged): record FALSIFIED if, on the validation block, the optimistic bound's event-clustered 95% upper bound is at or below zero or its point estimate is at or below zero; also FALSIFIED if positive only at trade weight. If the optimistic bound is positive and the pessimistic bound is at or below zero, record INSUFFICIENT_EVIDENCE (uninformative about our fills) and request the forward virtual-maker study rather than continuing retrospectively."
+stop = [
+  "ACCESS_BLOCKED: no A2 grant, or no non-sports series with readable fee_type history, by the review date",
+  "STATISTICAL_FUTILITY: the KILL rule above",
+  "INSUFFICIENT_EVIDENCE: bounds straddle zero",
+  "BUDGET_EXHAUSTED: review date passes without the named missing observation",
+]
+continue_rule = "Continue only to the forward virtual-maker study (separate collection grant), and only if the optimistic bound's lower 95% bound is above zero; never to orders."
+verdicts = ["ACCESS_BLOCKED", "ECONOMICALLY_UNVIABLE", "STATISTICAL_FUTILITY", "OPERATIONALLY_UNUSABLE", "BUDGET_EXHAUSTED", "INSUFFICIENT_EVIDENCE", "CONTINUE"]
+
+[economics]
+minimum_useful_effect = "MISSING_OWNER_INPUT: not set; a bound cannot clear an economic bar for us, it can only rule the hypothesis out."
+power_analysis = "MISSING_POWER_ANALYSIS: indicative only, return sd about 0.33 per dollar (Whelan), one-sided alpha 0.05, power 0.80: about 996 events to detect 2.6 percent, 6,733 events for 1 percent. Event counts per category after 2025-07 unknown until a feature-only count."
+min_episodes_for_scenario = "MISSING_POWER_ANALYSIS: needs development-block counts."
+min_independent_clusters = "MISSING_POWER_ANALYSIS: indicative 996 to 6,733 events (see power_analysis)."
+
+[readiness]
+product = "Existing research_evidence, research_economics.cluster_bootstrap_mean and markouts, fee_schedules (taker-only; the maker-fee path is planned in the research/tb-harness lane). A Kalshi trades/candlesticks adapter does not exist (gap)."
+strategy = "None. R6 verdict WEAKEN (sports near-KILL, excluded); no edge is established, and this experiment cannot establish one."
+permitted_uses = [
+  "protocol design and power analysis",
+  "feature-only counts of an approved dataset before any label look",
+  "retrospective exploratory bounds after the A2 grant and log creation, logged",
+]
+remaining_blockers = [
+  "No Kalshi trades or candles are held",
+  "Maker-fee modelling not merged (tb-harness lane); per-series fee_type history not read",
+  "Evidence-use log and covered_scopes not created (universe not frozen)",
+  "Forward virtual-maker study needs a collection grant",
+  "Family slot (both new slots occupied)",
+]
+
+[episode]
+definition = "One hypothetical bid per selected market per posting instant on the frozen grid; the optimistic bound aggregates incumbent maker fills per event."
+start_threshold = "Band [0.70, 0.95]; posting grid UNKNOWN until frozen."
+end_merge_gap = "Not applicable: bids rest until filled or the market closes."
+minimum_size = "One contract (v1)."
+
+[knowledge]
+source_independence = "UNKNOWN: Becker and Le share one tape; only Whelan is independent and clustered (R6 section 7 item 14)."
+annual_episode_count = "UNKNOWN: never annualized from a few observations."
+fill_probability = "UNKNOWN: a tape bounds fills; it cannot estimate them."

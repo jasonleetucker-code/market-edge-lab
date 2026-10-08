@@ -1,0 +1,95 @@
+id = "EXP-006"
+title = "Track B TB-03: maker favourite-side premium on Kalshi non-sports markets after maker fees, two-sided retrospective fill bound (DRAFT, QUEUED)"
+status = "DRAFT"
+owner = "jasonleetucker-code"
+created = "2026-10-08"
+
+hypothesis = """
+DRAFT, not preregistered. A WEAKENED hypothesis (adversarial review R6, 2026-10-08; near-KILL in
+sports, which this experiment excludes), not an edge. On Kalshi non-sports markets, a resting bid on
+the favourite side at prices from 0.70 to 0.95 earns a positive event-clustered mean net return per
+dollar after the per-series maker fee. A retrospective tape cannot estimate what our resting orders
+would have filled; it can only bound it. Optimistic bound: the return of all maker fills on the
+favourite side in band, net of the maker fee (what incumbents with queue priority earned).
+Pessimistic bound: the return of trade-through fills only (prints strictly through our level while
+the one-minute candle shows the level at or inside the touch). The null hypothesis for this
+experiment is that the optimistic bound is at or below zero, which would kill the hypothesis for
+us. A positive bound only earns a forward virtual-maker study; it never shows an edge.
+"""
+
+economic_rationale = """
+Takers pay for immediacy and for affirmative longshots; the maker on the other side of a longshot
+purchase is buying the favourite. Becker reports makers +1.12 percent and takers -1.12 percent
+(gross, trade-level, naive CIs); category maker returns reach about +3.6 percent (media and world
+events; the +7.3 figure is the maker-taker gap, R6 section 7). Whelan reports makers buying at 50
+cents or more earning +2.6 percent after commission (2021 to April 2025, no-maker-fee regime), not
+replicated day by day. Against it: the maker gain is the mirror image of the taker loss among
+incumbents; takers won until 2024 Q2; a new maker queues last and is filled disproportionately by
+informed sweeps; a slow maker cannot cancel on news; Kalshi's affiliated sports market maker was
+said to be not profitable.
+"""
+
+market = "Kalshi binary markets outside the Sports category with series fee_type read (candidate categories: economics, financials, crypto, climate other than KXHIGHNY, entertainment, media, world). Excluded: all sports (near-KILL per R6, and NFL/NHL scopes), combos (KXMVE*), KXHIGHNY, exclusive-event baskets and complement pairs (EXP-003 Family B)"
+decision_time = "TBD: hypothetical bid posting instants on a fixed grid relative to scheduled close (for example every hour from 24 h to 1 h before close), frozen before any label look"
+model = "No fitted model. Deterministic bounds from trades with taker side and one-minute candles. The optimistic bound reads incumbent maker fills; the pessimistic bound reads trade-through fills of a hypothetical bid at the touch"
+
+data_sources = [
+  "NOT HELD. Requires owner approval A2 for the frozen non-sports universe: a one-time Kalshi public read of settled markets, trades (taker side, count) and one-minute candlesticks (decision packet item 1)",
+  "Optional cross-check of the mechanism on another venue: Novig daily files (maker/taker roles), not Kalshi fills (decision packet item 5)",
+  "Per-series fee_type history (quadratic vs quadratic_with_maker_fees) at each fill time; sports maker fees existed since 2025, so non-sports series must be read individually",
+  "Settlement outcome per market from the approved read, only through a logged LABEL use; never from the kalshi_settlement collector (prohibited input)",
+]
+
+features = [
+  "Per print: time, price, count, taker side (the maker bought the opposite side); per minute: yes_bid/yes_ask OHLC",
+  "Per hypothetical bid: price level, posting minute, whether the level was at or inside the touch",
+]
+
+success_criteria = [
+  "TBD: this experiment cannot pass to an edge. Its only positive outcome is that the optimistic bound is positive with an event-clustered lower 95% bound above zero, which justifies requesting the forward virtual-maker study (decision packet item 9). A positive pessimistic bound would be genuinely interesting",
+]
+
+failure_criteria = [
+  "KILL (preregistered futility, R6): the optimistic bound's event-clustered 95% upper bound is at or below zero, or its point estimate is at or below zero",
+  "KILL: the optimistic bound is positive only before 2025-07 (wrong regime) or only at trade weight",
+  "Any result that treats incumbent maker returns as our attainable return, uses trade-level CIs, or buys a basket of an exclusive event, is void",
+]
+
+risk_constraints = [
+  "Research only: no orders, no resting orders, no account, no credentials, no demo, no execution import (EXECUTION_NOT_AUTHORIZED)",
+  "No data read or download without the owner grant named in data_sources; the forward virtual maker needs its own collection grant",
+  "Never reads KXHIGHNY, NFL or NHL labels, EXP-001 forecasts or the shadow ledger (protocol.toml [data_roles])",
+  "Every retrospective result is RETROSPECTIVE EXPLORATORY and never presented as prospective or as an edge",
+]
+
+limitations = [
+  "No historical depth, queue or order-level data exists in the public read: the tape bounds our fills and cannot estimate them",
+  "Real queue dynamics (cancels ahead of us) are only measured by real orders, which is Gate 9 and not authorized",
+  "Thin categories carry rules-interpretation risk and long lockups",
+  "Becker's tape ends 2025-11-25, so it holds only about five months of the post-2025-07 regime",
+]
+
+gates_required = [
+  "Owner approval A2 for the non-sports universe with DATA_RIGHTS resolved (decision packet)",
+  "Per-series maker fee_type history readable for every series in the universe",
+  "A forward virtual-maker collection grant before any step beyond the bounds (decision packet)",
+  "Family-slot decision before slot_status can become ACTIVE (#96)",
+]
+
+[periods]
+train = "TBD: development block = chronologically first part of the approved read by scheduled close, on or after 2025-07-01, frozen before any label look"
+validation = "TBD: next chronological block"
+test = "TBD: retrospective test block (exploratory, UNKNOWN_LEGACY); any prospective step is the separate forward virtual-maker study"
+
+[costs]
+fee_model = "Kalshi maker fee round-up(M x 0.0175 x C x P x (1-P)) per the 2026-07-07 schedule where the series fee_type is quadratic_with_maker_fees at the fill time, zero where it is quadratic; series whose fee_type history cannot be read are excluded. Direct-member rounding ($0.0001); non-direct cent rounding as a sensitivity"
+spread = "A maker earns the spread by construction; the bound is computed at the maker's own fill price, never at a mid"
+
+[execution]
+fill_model = "TBD: optimistic = every print whose maker side bought the favourite in band; pessimistic = only prints strictly through a hypothetical bid level that the one-minute candle shows at or inside the touch at posting time"
+latency = "TBD: hypothetical bids are posted on completed candles and never cancelled on news (slow-maker assumption)"
+
+[artifacts]
+spec = "experiments/EXP-006-tb-maker-favorite-bound/experiment.toml"
+protocol = "experiments/EXP-006-tb-maker-favorite-bound/protocol.toml"
+log = "experiments/EXP-006-tb-maker-favorite-bound/README.md"

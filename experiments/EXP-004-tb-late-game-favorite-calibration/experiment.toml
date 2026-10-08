@@ -1,0 +1,98 @@
+id = "EXP-004"
+title = "Track B TB-01: late-game favourite underpricing in Kalshi NBA/MLB game markets, scheduled-start clock, scored at the ask (DRAFT, QUEUED)"
+status = "DRAFT"
+owner = "jasonleetucker-code"
+created = "2026-10-08"
+
+hypothesis = """
+DRAFT, not preregistered. A WEAKENED hypothesis (adversarial review R6, 2026-10-08), not an edge.
+In Kalshi NBA and MLB game-winner markets, at the first minute in which the game is late by a
+clock known before the game (minutes since the scheduled start, not the realized market close)
+and the favourite's one-minute-candle yes_ask close is between 0.60 and 0.90, buying the favourite
+at that ask (conservatively, at the next minute's ask high) has a game-clustered mean net return
+per dollar above zero after the taker fee, with one decision per game. The null hypothesis is that
+this mean is at or below zero. The published effect (Moshrefi, arXiv 2607.14430) bucketed trades by
+the market close, which for these markets is the realized end of the game; that conditions on the
+future, and overtime and extra-innings selection predicts the paper's league ordering
+(NHL 4.56 > MLB 2.05 > NBA 1.62). This experiment asks whether anything survives a decision-time
+clock and the ask.
+"""
+
+economic_rationale = """
+A residual "Yogi Berra" bias (losing-side hope, Page 2012 on Intrade) could keep late favourites
+cheap, and makers may withdraw late in games. Competitors would not remove a few-cent effect if size
+per game is small and books are fast. Against it (R6): realized-close bucketing plus overtime
+selection plausibly explains most of the MLB effect and part of the NBA effect; sweep prints after
+decisive plays are the footprint of makers being picked off by the fastest takers, not an edge for
+a slow participant; trade-count weighting amplifies both; Le (2026), quantity-weighted and
+event-clustered, finds Kalshi sports close to calibrated at 0-48 h (0-1 h slope 1.10). The prior
+is that the taker version fails at the ask.
+"""
+
+market = "Kalshi NBA and MLB full-game winner series (KXNBAGAME, KXMLBGAME as named in fee_schedules.py; confirmed against the approved dataset). Excluded: NFL (EXP-002 scope), NHL (Track B excludes NHL outcomes), combos (KXMVE*), KXHIGHNY"
+decision_time = "TBD: the first one-minute candle at or after the late threshold (minutes since scheduled start; one threshold per league) in which the favourite's yes_ask close is in [0.60, 0.90]; thresholds frozen from league schedules and feature-only candle-time distributions before any label is viewed"
+model = "No fitted model. Deterministic rule: one decision per game, buy the favourite at the candle ask. Calibration curves by price x clock bucket are secondary (planned research_diagnostics.calibration_report, research/tb-harness lane, not merged)"
+
+data_sources = [
+  "NOT HELD. Requires owner approval A2: a one-time Kalshi public read of settled NBA/MLB game markets, their trades (taker side, count, created_time) and one-minute candlesticks (yes_bid/yes_ask OHLC). docs/owner/2026-10-08-alpha-discovery-decision-packet.md item 1",
+  "Optional partial substitute: the Becker MIT trade tape (to 2025-11-25) for prints only; it has no quotes, so it cannot score the primary endpoint (decision packet item 2)",
+  "Scheduled start per game from a point-in-time source (Kalshi event metadata as listed before the game, or an official schedule); field UNVERIFIED",
+  "Settlement outcome per market from the approved read, only through a logged LABEL use; never from the kalshi_settlement collector (prohibited input)",
+  "Versioned Kalshi fee schedule records; NBA/MLB series fees are not verified (decision packet item 3)",
+]
+
+features = [
+  "Per game: scheduled start; per minute: yes_bid/yes_ask OHLC per team market; per print: time, price, count, taker side",
+  "Per decision: favourite side, its ask close, the next minute's ask high",
+]
+
+success_criteria = [
+  "TBD: preregistered after fee verification. Candidate primary: game-clustered mean net return per dollar at the conservative ask after the taker fee, one decision per game, lower 95% bootstrap bound above zero on the retrospective test block and then on the untouched prospective NBA window, with the positive and discriminating controls behaving as stated in protocol.toml",
+]
+
+failure_criteria = [
+  "KILL (preregistered futility, R6): the game-clustered 95% upper bound of mean net return per dollar is at or below zero, or the point estimate is at or below zero",
+  "ARTEFACT: the effect appears under realized-close bucketing and vanishes under the scheduled-start clock",
+  "UNINFORMATIVE: the positive control fails (realized-close bucketing does not reproduce the published S-shape on our sample), so the sample differs from the paper's",
+  "The mid-game negative control (60-120 minutes into the game) shows an effect of similar size",
+  "Any result that uses the realized close, the final score, trade prints or mids as the fill, or counts both team markets of one game, is void",
+]
+
+risk_constraints = [
+  "Research only: no orders, no account, no credentials, no demo, no execution import (EXECUTION_NOT_AUTHORIZED)",
+  "No data read or download without the owner grant named in data_sources",
+  "Never reads NFL or NHL outcomes, KXHIGHNY labels, EXP-001 forecasts or the shadow ledger (protocol.toml [data_roles])",
+  "Every retrospective result is RETROSPECTIVE EXPLORATORY and never presented as prospective or as an edge",
+]
+
+limitations = [
+  "One-minute candles give top-of-book prices without size; a survivor still needs depth evidence before any size claim",
+  "Minutes since the scheduled start is a noisy proxy for the game clock (delays, stoppages, pace); play-by-play needs its own source grant",
+  "Sports maker fees have applied since 2025 (flat 0.25 cents before 2025-07-01, quadratic after; inGame 2025-07-07, secondary); the taker multiplier for NBA/MLB is UNVERIFIED",
+  "The fast-taker (courtsider) part of any late effect is unavailable to a 1-60 s poller; a possible Kalshi order-execution delay on live sports is UNVERIFIED",
+]
+
+gates_required = [
+  "Owner approval A2 (or a narrower substitute) with DATA_RIGHTS resolved (decision packet)",
+  "Fee verification for the NBA and MLB series; until then results are gross with a fee band, never a net profit claim",
+  "Family-slot decision before slot_status can become ACTIVE (#96; both new slots are occupied)",
+  "PREREGISTERED only after every protocol.toml decision field is settled and frozen before outcomes in the evaluation windows are viewed",
+]
+
+[periods]
+train = "TBD: development block = chronologically first part of the approved read by scheduled start (candidate: MLB 2025 regular season), frozen before any label look"
+validation = "TBD: next chronological block (candidate: NBA 2025-26, October 2025 to February 2026), non-overlapping with Moshrefi's March-May 2026 window"
+test = "TBD: retrospective test block (exploratory, UNKNOWN_LEGACY) and an untouched prospective window of NBA games after the freeze, identified by scope kalshi:kxnbagame and window (research_evidence)"
+
+[costs]
+fee_model = "Kalshi taker fee round-up(M x 0.07 x C x P x (1-P)) per the 2026-07-07 schedule; M for NBA/MLB UNVERIFIED (gross with a fee band until verified). Rounding: the owner's account is OWNER_ATTESTED direct, so balances align to $0.0001; a non-direct ($0.01) sensitivity is reported"
+spread = "Crossed in full at the candle ask (conservatively the next minute's ask high); never a mid, a trade print or a close"
+
+[execution]
+fill_model = "TBD: fill at the conservative candle ask for one contract; a minute with no ask is NO_FILL and stays in the denominator; candle asks carry no size, so no size above one contract is claimed"
+latency = "TBD: the decision uses the completed candle; arrival is the next minute (the next-minute ask high is the conservative fill); longer-latency sensitivity"
+
+[artifacts]
+spec = "experiments/EXP-004-tb-late-game-favorite-calibration/experiment.toml"
+protocol = "experiments/EXP-004-tb-late-game-favorite-calibration/protocol.toml"
+log = "experiments/EXP-004-tb-late-game-favorite-calibration/README.md"

@@ -1,0 +1,94 @@
+id = "EXP-005"
+title = "Track B TB-05: taker favourite-side favourite-longshot bias in short-dated Kalshi non-sports markets, event-equal weight, scored at the ask (DRAFT, QUEUED)"
+status = "DRAFT"
+owner = "jasonleetucker-code"
+created = "2026-10-08"
+
+hypothesis = """
+DRAFT, not preregistered. A WEAKENED hypothesis (adversarial review R6, 2026-10-08), not an edge.
+In Kalshi non-sports binary markets scheduled to close within a fixed horizon of the decision,
+buying the favourite side (YES or NO, whichever is quoted in the favourite band [0.70, 0.95]) at the
+one-minute-candle ask has an event-clustered, event-equal-weight mean net return per dollar above
+zero after the taker fee, with one decision per event. The null hypothesis is that this mean is at
+or below zero. Published support is at trade prices and trade or contract weight: Burgi, Deng and
+Whelan (2026) report small positive post-fee returns above 70 cents through April 2025, with the
+yearly slope halving in 2025; on Polymarket the bias reverses at event-equal weight (Cardozo and
+Rivero-Wildemauwe 2026).
+"""
+
+economic_rationale = """
+Takers overpay for affirmative longshots (probability weighting, lottery demand), so the favourite
+side may be cheap. The edge is at most low single-digit percent with sd about 30 percent per
+contract, and it is concentrated near prices where one tick is a large share of the edge: at 0.99
+the Becker-implied gross edge (about 0.41 percent) is below one 1-cent tick (about 1 percent of
+outlay), which is why the band stops at 0.95. Competitors may not remove a small, high-variance,
+capital-intensive edge. Against it: decay since 2025, event-weight reversal, and Becker's effect is
+YES-specific (affirmative bias), not a pure price-level effect.
+"""
+
+market = "Kalshi binary markets outside the Sports category with a scheduled close within the frozen horizon (candidate categories: economics, financials, crypto, climate other than KXHIGHNY, entertainment, politics, mentions, world). Excluded: all sports, combos (KXMVE*), KXHIGHNY, and any multi-market basket of a mutually exclusive event (EXP-003 Family B mechanism)"
+decision_time = "TBD: fixed horizons before the scheduled close (candidates 24 h, 6 h, 1 h), frozen before any label look; the scheduled close is read point-in-time, and early closes are never used as information"
+model = "No fitted model. Deterministic rule: at the decision minute, for the single eligible market of the event (selection rule frozen before any label look), buy the side whose candle ask close is in [0.70, 0.95] at the next minute's ask high. Calibration by price band x horizon is secondary (planned research_diagnostics.calibration_report)"
+
+data_sources = [
+  "NOT HELD. Requires owner approval A2 extended to the frozen non-sports universe: a one-time Kalshi public read of settled markets, trades and one-minute candlesticks (decision packet item 1)",
+  "Optional partial substitute: the Becker MIT trade tape (to 2025-11-25) for prints only; no quotes, so not for the primary endpoint (decision packet item 2)",
+  "Market metadata as listed before the decision: category, series, scheduled close, rules text, per-series fee_type",
+  "Settlement outcome per market from the approved read, only through a logged LABEL use; never from the kalshi_settlement collector (prohibited input)",
+]
+
+features = [
+  "Per market: category, series, scheduled close, yes_bid/yes_ask OHLC per minute, print sizes and taker side",
+  "Per event: market count (binary or multi-outcome), so the event is the unit",
+]
+
+success_criteria = [
+  "TBD: preregistered after per-series fee verification. Candidate primary: event-clustered, event-equal-weight mean net return per dollar at the conservative ask after the taker fee, lower 95% bootstrap bound above zero on the retrospective test block and then on an untouched prospective window",
+]
+
+failure_criteria = [
+  "KILL (preregistered futility): validation-block event-clustered 95% upper bound of mean net return per dollar at or below zero for the primary cell, or point estimate at or below zero",
+  "ARTEFACT: positive at trade weight and not at event-equal weight (composition, as Cardozo found on Polymarket)",
+  "DECAYED: positive only in blocks before 2025-07 and not after",
+  "Any result that uses trade prints or mids as the fill, the realized close as information, or buys every outcome of an exclusive event, is void",
+]
+
+risk_constraints = [
+  "Research only: no orders, no account, no credentials, no demo, no execution import (EXECUTION_NOT_AUTHORIZED)",
+  "No data read or download without the owner grant named in data_sources",
+  "Never reads KXHIGHNY, NFL or NHL labels, EXP-001 forecasts or the shadow ledger (protocol.toml [data_roles])",
+  "Never a partition or complement basket (EXP-003 Family B, PAUSED); one market per event",
+  "Every retrospective result is RETROSPECTIVE EXPLORATORY and never presented as prospective or as an edge",
+]
+
+limitations = [
+  "Candle asks carry no size; a survivor needs depth evidence before any size claim",
+  "Thin categories have few independent events; one event can hold many correlated markets",
+  "Rules for mentions/entertainment markets are resolution-sensitive and must be read per market",
+  "Long-dated categories lock capital for weeks; the horizon cap limits but does not remove this",
+]
+
+gates_required = [
+  "Owner approval A2 for the non-sports universe with DATA_RIGHTS resolved (decision packet)",
+  "Per-series fee_type and multiplier read for every series in the frozen universe; unverifiable series are excluded",
+  "Family-slot decision before slot_status can become ACTIVE (#96)",
+  "PREREGISTERED only after every protocol.toml decision field is settled and frozen before outcomes in the evaluation windows are viewed",
+]
+
+[periods]
+train = "TBD: development block = chronologically first part of the approved read by scheduled close (post-2025-07 only, R6 regime rule), frozen before any label look"
+validation = "TBD: next chronological block"
+test = "TBD: retrospective test block (exploratory, UNKNOWN_LEGACY) and an untouched prospective window after the freeze, identified by scope and window"
+
+[costs]
+fee_model = "Kalshi taker fee round-up(M x 0.07 x C x P x (1-P)) per the 2026-07-07 schedule with the series multiplier read per series; series with unknown fees are excluded. Rounding: owner account OWNER_ATTESTED direct ($0.0001 alignment); non-direct cent rounding as a sensitivity"
+spread = "Crossed in full at the candle ask (conservatively the next minute's ask high); never a mid or a trade print"
+
+[execution]
+fill_model = "TBD: fill at the conservative candle ask for one contract; a minute with no ask is NO_FILL, kept in the denominator"
+latency = "TBD: decision on the completed candle; arrival the next minute; longer-latency sensitivity"
+
+[artifacts]
+spec = "experiments/EXP-005-tb-taker-favorite-flb/experiment.toml"
+protocol = "experiments/EXP-005-tb-taker-favorite-flb/protocol.toml"
+log = "experiments/EXP-005-tb-taker-favorite-flb/README.md"

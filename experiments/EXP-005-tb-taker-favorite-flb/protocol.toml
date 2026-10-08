@@ -1,0 +1,157 @@
+# Research-protocol sidecar (research-protocol-v1). DRAFT and QUEUED: explicit UNKNOWN / MISSING_* values
+# are honest placeholders; every decision field must be settled before PREREGISTERED
+# (experiments/README.md, Research-protocol sidecar). Nothing here is a validated strategy.
+# Track B candidate TB-05 (docs/research/ALPHA_DISCOVERY_2026-10.md), redesigned to the R6 adversarial
+# review (quotes, event-equal weight, post-2025-07 regime). Registered under the 2026-10-08 Track B scope
+# entry of docs/EXECUTION_PLAN.md: DRAFT, slot_status QUEUED, a new family label (never A or B).
+# EXP-005 (taker) and EXP-006 (maker) share family TB_FLB: one mechanism, one slot.
+
+protocol_version = "research-protocol-v1"
+experiment_id = "EXP-005"
+family = "TB_FLB"
+family_title = "Track B: favourite-longshot pricing on Kalshi outside sports game markets (taker and maker variants)"
+slot_status = "QUEUED"
+authority = "docs/owner/2026-10-08-rapid-alpha-discovery-directive.md; docs/EXECUTION_PLAN.md 2026-10-08 Track B entry (PR #185); issue #184; family slots per #96"
+mechanism = "Takers overpay for affirmative longshots, so the favourite side may be underpriced; only an underpricing that exceeds the taker fee at the quoted ask, at event-equal weight and in the post-2025-07 regime, counts."
+named_hypothesis = "H-TB05: for Kalshi non-sports binary markets at a fixed horizon before the scheduled close, one decision per event, buying the side whose one-minute ask close is in [0.70, 0.95] at the next minute's ask high has an event-clustered, event-equal-weight mean net return per dollar after the taker fee above zero."
+baseline = "Market baseline: the ask itself (expected net return about minus the fee if quotes are calibrated). Controls: (1) the same rule at [0.30, 0.50] (expected below zero by about the fee); (2) random side at the same minutes; (3) finance category alone (smallest published maker-taker gap, expected about zero); (4) trade-weighted vs event-equal-weighted (composition); (5) no-trade (zero)."
+open_decisions = [
+  "prohibited_fields lists the settled-field names required by the Track B scope (dropped from held kalshi_public feature records). Labels come from the approved A2 read through a logged LABEL use; a protocol amendment must scope prohibited_fields to feature records, or the label reader must be separate, before any label reader consumes this protocol",
+  "Universe: categories, series and horizon set, and the covered_scopes of the evidence-use log (created when the universe is frozen and before the first look)",
+  "Single-market selection rule inside multi-outcome events (one market per event, never a basket)",
+  "Horizon set; band [0.70, 0.95] is set",
+]
+
+[universe]
+eligible = "Kalshi binary markets outside Sports with a scheduled close within the frozen horizon after the decision, scheduled close on or after 2025-07-01, in the approved read; one market and one decision per event per horizon."
+exclusions = [
+  "All sports markets, including NFL (sports:nfl:moneyline, KXNFLGAME) and NHL (KXNHLGAME, sports:nhl), and combos (KXMVE*)",
+  "KXHIGHNY (EXP-001, protected), whatever the dataset",
+  "Baskets of several markets of one mutually exclusive event, and YES/NO complement pairs (EXP-003 Family B, PAUSED)",
+  "Markets whose rules text is not captured, whose series fee_type cannot be read, or whose settlement states are not enumerated",
+  "Markets with no ask in the decision or arrival minute (counted in attrition, never silently dropped)",
+]
+
+[observation]
+unit = "Event: one decision per event per horizon; all markets, minutes and prints of the event are nested inside it."
+clusters = [
+  "event: all markets, horizons and minutes of one event",
+  "series x date: events of one series on one date share drivers (for example one macro release); sensitivity by series-date cluster",
+]
+dependence = "Markets of one event are dependent and horizons re-observe the same book. One decision per event per horizon; event-level bootstrap; event-equal and trade-weighted figures side by side; never trade-count inference (Becker's trade-level CIs understate SEs)."
+
+[endpoints]
+primary = "Candidate (to settle before preregistration): event-clustered, event-equal-weight mean net return per dollar = (payout - ask_fill - taker fee) / (ask_fill + taker fee), ask_fill = next minute's ask high, NO_FILL rate beside it."
+secondary = [
+  "By category, by half-year (decay), YES-side vs NO-side favourites (affirmative bias)",
+  "Calibration by price band x horizon at candle mids and asks (planned research_diagnostics.calibration_report)",
+  "Controls in the baseline field",
+  "Fee band: multiplier as read, unrounded vs non-direct cent rounding",
+  "Attrition waterfall (research_evidence.attrition_report)",
+]
+
+[information]
+cutoff = "At decision minute t_d only completed candles and prints at or before t_d and metadata listed before t_d are used. The realized close (markets may close early), the result and any settlement field are never features."
+max_input_age = "One completed one-minute candle (the decision minute)."
+clock_uncertainty = "Clocks: (1) publication = the underlying information release, unobserved in v1 (UNKNOWN); (2) first observable = the candle period end or print timestamp; (3) receipt = first observable retrospectively, our received_at_utc prospectively; (4) decision = scheduled close minus horizon h, on the completed candle; (5) hypothetical arrival = the next minute; (6) fill = that minute's ask high, one contract, else NO_FILL; (7) settlement = settlement time and payout state (economic markets cease trading before the release; settlement delays per series UNKNOWN)."
+
+[data_roles]
+data = [
+  "NOT HELD: approved one-time Kalshi read of settled markets, trades and one-minute candlesticks for the frozen non-sports universe (decision packet item 1)",
+  "market and event metadata listed before the decision (category, scheduled close, rules, fee_type)",
+  "versioned fee schedule records, per series",
+]
+features = [
+  "per market and minute: yes_bid/yes_ask OHLC; per print: time, price, count, taker side; per event: market count",
+]
+labels = [
+  "market payout state from the approved read, only through a logged LABEL use; never KXHIGHNY, NFL or NHL labels; never the kalshi_settlement collector",
+]
+permission_lineage = "Kalshi market data under its published terms (DATA_RIGHTS UNRESOLVED). Research use only; no redistribution. A third-party tape (Becker, MIT) inherits its licence and the venue's terms."
+prohibited_inputs = [
+  "exp001:",
+  "shadow_ledger:",
+  "nws_pfm:",
+  "nws_cli:",
+  "kalshi_settlement:",
+]
+prohibited_label_scopes = ["kalshi:KXHIGHNY", "sports:nfl:moneyline", "kalshi:KXNFLGAME", "kalshi:KXNHLGAME", "sports:nhl"]
+prohibited_fields = ["result", "expiration_value", "settlement_value", "settlement_value_dollars", "settlement_ts"]
+
+[variants]
+allowed = [
+  "V0 only while DRAFT: band [0.70, 0.95], one horizon per registered cell, ask fill, one contract, one market per event",
+  "Any other band, horizon, category subset or side restriction is a registered variant that consumes research budget",
+]
+multiple_testing = "UNKNOWN: the horizon set fixes the number of primary cells; Holm correction across registered cells, settled before preregistration; every tried variant is counted, including failures."
+
+[costs_fills]
+fees = "Kalshi taker fee round-up(M x 0.07 x C x P x (1-P)) (schedule effective 2026-07-07, repo copy sha256 c326a69f...); series multiplier and fee_type read per series; UNKNOWN fees exclude the series. Direct-member rounding ($0.0001); non-direct cent rounding as a sensitivity (at 0.95 the unrounded fee is 0.33 cents, the non-direct one-contract fee 1 cent)."
+fills = "Fill at the next minute's candle ask high for one contract; no fill if no ask (kept in the denominator). Trade prints are never fills."
+evidence_quality = "One-minute candlesticks carry yes_bid/yes_ask OHLC (Kalshi docs read by R6 on 2026-10-08); historical availability for settled markets UNVERIFIED until A2's sampled count. Fee schedule VERIFIED-DOC for 2026-07-07; currency UNVERIFIED (live PDF HTTP 429 on 2026-10-08). Per-series fee types not yet read."
+
+[size_capital]
+size_ladder = "One contract only in v1; candles carry no depth."
+capital_scenarios = "Illustrative $100 scenarios only (ILLUSTRATIVE_SCENARIO_NOT_APPROVED_BANKROLL); see docs/research/ALPHA_DISCOVERY_2026-10.md section f."
+capital_assumptions = "Ask plus fee locked from fill to settlement cash release; settlement delay per series UNKNOWN; reserve MISSING_OWNER_INPUT."
+
+[evaluation]
+chronological = "Development, validation and retrospective test blocks strictly chronological by scheduled close, all on or after 2025-07-01; no event in two blocks."
+untouched_future_window = "UNKNOWN: events scheduled to close after the freeze, by scope and window; requires the evidence-use log with its covered_scopes before the window starts."
+exposure_history = "No evidence-use log yet: it is created with frozen covered_scopes when the universe is frozen, before the first look. Retrospective outcomes predate any log and are UNKNOWN_LEGACY. Whelan, Becker and Le have viewed 2021-2025 Kalshi outcomes."
+controls = [
+  "[0.30, 0.50] band, same rule",
+  "Random side at the same minutes",
+  "Finance category alone",
+  "Event-equal vs trade-weighted",
+]
+
+[budget]
+research_cash_usd = "0: no paid data or services are authorized (2026-10-08 Track B scope)."
+owner_hours = "MISSING_OWNER_INPUT: owner time for A2 and fee reads (shared with EXP-004 and EXP-006)."
+data_costs = "0 cash; one-time public read per the decision packet; no recurring collection."
+review_date = "2026-10-22"
+
+[stopping]
+futility = "KILL (written in now and to be frozen unchanged): record FALSIFIED if, on the validation block, the event-clustered 95% upper bound of the primary endpoint is at or below zero or its point estimate is at or below zero, for each registered cell. ARTEFACT: record FALSIFIED (composition) if positive at trade weight only. DECAYED: record FALSIFIED (decayed) if the latest chronological block's point estimate is at or below zero."
+stop = [
+  "ACCESS_BLOCKED: no A2 grant, or no series with a verifiable fee, by the review date",
+  "STATISTICAL_FUTILITY: the KILL rule above",
+  "ECONOMICALLY_UNVIABLE: point estimate below the owner's minimum useful effect after the fee band",
+  "OPERATIONALLY_UNUSABLE: the effect exists only in minutes without an ask",
+]
+continue_rule = "Continue to a prospective window only if the validation lower 95% bound is above zero at the conservative ask with fees verified and controls behaving; otherwise stop with the named verdict."
+verdicts = ["ACCESS_BLOCKED", "ECONOMICALLY_UNVIABLE", "STATISTICAL_FUTILITY", "OPERATIONALLY_UNUSABLE", "BUDGET_EXHAUSTED", "INSUFFICIENT_EVIDENCE", "CONTINUE"]
+
+[economics]
+minimum_useful_effect = "MISSING_OWNER_INPUT: not set. Proposal for the owner only: at least 1 percent net return per dollar after the taker fee at the ask."
+power_analysis = "MISSING_POWER_ANALYSIS: indicative only, one decision per event, return sd about 0.30 per dollar (Whelan reports about 0.33 for makers), one-sided alpha 0.05, power 0.80: about 1,392 events for 2 percent, 5,565 for 1 percent. R6 (est.) at 95-cent NO: sd about 23 percent of outlay, about 2,000 events to see a 1 percent mean at 2 sigma. Event counts per category and horizon unknown until a feature-only count."
+min_episodes_for_scenario = "MISSING_POWER_ANALYSIS: needs development-block counts."
+min_independent_clusters = "MISSING_POWER_ANALYSIS: indicative 1,392 to 5,565 events (see power_analysis)."
+
+[readiness]
+product = "Planned harness (research/tb-harness, not merged): research_diagnostics.calibration_report, evaluate_entries, bankroll_ladder; existing research_evidence, research_economics.cluster_bootstrap_mean, fee_schedules. A Kalshi trades/candlesticks adapter does not exist (gap)."
+strategy = "None. R6 verdict WEAKEN; no edge is established."
+permitted_uses = [
+  "protocol design and power analysis",
+  "feature-only counts of an approved dataset before any label look",
+  "retrospective exploratory evaluation after the A2 grant and log creation, logged",
+]
+remaining_blockers = [
+  "No Kalshi trades or candles are held",
+  "Per-series fee types and multipliers not read; schedule currency unverified",
+  "Evidence-use log and covered_scopes not created (universe not frozen)",
+  "Family slot (both new slots occupied)",
+  "open_decisions above",
+]
+
+[episode]
+definition = "One episode per event per horizon: the decision minute at scheduled close minus h, if the selected market's ask close is in band."
+start_threshold = "Band [0.70, 0.95]; horizons UNKNOWN until frozen."
+end_merge_gap = "Not applicable: one decision per event per horizon."
+minimum_size = "One contract (v1)."
+
+[knowledge]
+source_independence = "UNKNOWN: Whelan, Becker and Le use overlapping Kalshi records; Becker and Le share one tape (R6 section 7 item 14)."
+annual_episode_count = "UNKNOWN: never annualized from a few observations."
+fill_probability = "UNKNOWN: candle asks carry no size or queue."

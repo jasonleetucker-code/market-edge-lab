@@ -1,0 +1,159 @@
+# Research-protocol sidecar (research-protocol-v1). DRAFT and QUEUED: explicit UNKNOWN / MISSING_* values
+# are honest placeholders; every decision field must be settled before PREREGISTERED
+# (experiments/README.md, Research-protocol sidecar). Nothing here is a validated strategy.
+# Track B candidate TB-01 (docs/research/ALPHA_DISCOVERY_2026-10.md), redesigned to the R6 adversarial
+# review's bias-proof test. Registered under the 2026-10-08 Track B scope entry of docs/EXECUTION_PLAN.md:
+# DRAFT, slot_status QUEUED, a new family label (never A or B).
+
+protocol_version = "research-protocol-v1"
+experiment_id = "EXP-004"
+family = "TB_TTE"
+family_title = "Track B: time-to-expiry calibration of in-game sports event markets (NBA/MLB only)"
+slot_status = "QUEUED"
+authority = "docs/owner/2026-10-08-rapid-alpha-discovery-directive.md; docs/EXECUTION_PLAN.md 2026-10-08 Track B entry (PR #185); issue #184; family slots per #96"
+mechanism = "A residual late-game hope bias (losing-side holders, thin late books) may keep favourites below their win frequency; R6 judges most of the published effect to be realized-close look-ahead, overtime/extra-innings selection and sweep prints, so only an effect that survives a decision-time clock at the ask counts."
+named_hypothesis = "H-TB01: for Kalshi NBA/MLB game-winner markets, one decision per game at the first one-minute candle past the league's late threshold (minutes since scheduled start) with the favourite's yes_ask close in [0.60, 0.90], buying the favourite at the next minute's ask high has a game-clustered mean net return per dollar after the taker fee above zero."
+baseline = "Market baseline: the ask itself (expected net return of about minus the fee if quotes are calibrated). Deterministic baselines and controls: (1) positive control: the same games bucketed by realized close on trade prints must reproduce the published S-shape; (2) discriminating control: under realized-close bucketing MLB > NBA (overtime selection), and the ordering must vanish under the scheduled-start clock if the effect is an artefact; (3) sweep control: exclude prints within 60 s of a 20-cent one-minute move; (4) negative control: the same rule at 60-120 minutes into the game; (5) no-trade (zero)."
+open_decisions = [
+  "prohibited_fields lists the settled-field names required by the Track B scope (dropped from held kalshi_public feature records). Labels for this candidate come from the approved A2 read through a logged LABEL use; a protocol amendment must scope prohibited_fields to feature records, or the label reader must be separate, before any label reader consumes this protocol",
+  "Dataset ids for the A2 read (trades, candlesticks, settled markets) and, if used, the Becker tape",
+  "Point-in-time source and field for the scheduled start",
+  "Late threshold per league (minutes since scheduled start), frozen from league schedules and feature-only candle-time distributions, never from realized game lengths",
+  "Whether play-by-play (game clock, score margin) is requested later as a separate source grant for a v2 clock",
+]
+
+[universe]
+eligible = "Kalshi NBA and MLB full-game winner markets in the approved retrospective read (candidates: MLB 2025 regular season; NBA October 2025 to February 2026, non-overlapping with Moshrefi's March-May 2026), and prospectively NBA games after the freeze. One decision per game; the two team markets of a game are one unit."
+exclusions = [
+  "NFL (EXP-002 scope sports:nfl:moneyline, KXNFLGAME) and NHL (Track B excludes NHL outcomes; KXNHLGAME, sports:nhl), whatever the dataset",
+  "Combos and parlays (KXMVE*), spreads, totals, props, and any market whose payoff is not one team winning the game",
+  "Games without a point-in-time scheduled start, games postponed before start, and markets whose suspension/postponement rules text is not captured (payoff states unproven)",
+  "Any decision that would need the realized close, the final score or play-by-play (not in v1)",
+]
+
+[observation]
+unit = "Game: one decision per game; both team markets and every candle and print of the game are nested inside it."
+clusters = [
+  "game: all minutes, prints and both team markets of one game",
+  "date x league: games on one date share market-wide flow; sensitivity by date cluster",
+]
+dependence = "Minutes of one game re-observe the same book; the two team markets are complements (pooling both double-counts, R6). One decision per game; game-level bootstrap (research_economics.cluster_bootstrap_mean); never trade-count or market-count inference."
+
+[endpoints]
+primary = "Candidate (to settle before preregistration): game-clustered mean net return per dollar = (payout - ask_fill - taker fee) / (ask_fill + taker fee), over games with a decision, ask_fill = next minute's ask high; NO_FILL rate beside it."
+secondary = [
+  "Same rule at the decision minute's ask close (less conservative)",
+  "Positive, discriminating, sweep and negative controls (baseline field)",
+  "NBA and MLB separately",
+  "Calibration by price band x clock bucket at candle mids and asks, game-weighted (planned research_diagnostics.calibration_report)",
+  "Attrition waterfall with separate denominators (research_evidence.attrition_report)",
+  "Fee band: gross, multiplier 1 unrounded, multiplier 1 with non-direct cent rounding",
+]
+
+[information]
+cutoff = "At decision minute t_d only completed one-minute candles and prints with exchange timestamps at or before t_d, plus pre-game metadata, are used. The realized close, final score and any settlement field are never features."
+max_input_age = "One completed one-minute candle (the decision minute); a game with no candle ask in that minute is not decided there."
+clock_uncertainty = "Clocks: (1) publication = the in-game event that moved the price, unobserved in v1 (UNKNOWN without play-by-play); (2) first observable = the candle's period end or the print's exchange timestamp (second-level); (3) receipt = first observable retrospectively, our received_at_utc prospectively; (4) decision = end of the first qualifying candle; (5) hypothetical arrival = the next minute; (6) fill = the next minute's ask high for one contract, NO_FILL if that minute has no ask; (7) settlement = the market's settlement time and payout state, capital released then (settlement delay per series UNKNOWN)."
+
+[data_roles]
+data = [
+  "NOT HELD: approved one-time Kalshi read of settled NBA/MLB game markets, trades and one-minute candlesticks (decision packet item 1)",
+  "pre-game market/event metadata for the scheduled start (point-in-time)",
+  "captured rules text for NBA/MLB game markets (postponement, suspension, tie states)",
+  "versioned fee schedule records",
+]
+features = [
+  "per game: scheduled start; per minute and team market: yes_bid/yes_ask OHLC; per print: time, price, count, taker side",
+]
+labels = [
+  "market payout state per team market from the approved read, only through a logged LABEL use; never NFL, NHL or KXHIGHNY labels; never the kalshi_settlement collector",
+]
+permission_lineage = "Kalshi market data under its published terms (DATA_RIGHTS UNRESOLVED, docs/owner/2026-09-29-vf-decision-packet.md item B). Research use only; no redistribution. A third-party tape (Becker, MIT) inherits both its licence and the venue's terms."
+prohibited_inputs = [
+  "exp001:",
+  "shadow_ledger:",
+  "nws_pfm:",
+  "nws_cli:",
+  "kalshi_settlement:",
+]
+prohibited_label_scopes = ["kalshi:KXHIGHNY", "sports:nfl:moneyline", "kalshi:KXNFLGAME", "kalshi:KXNHLGAME", "sports:nhl"]
+prohibited_fields = ["result", "expiration_value", "settlement_value", "settlement_value_dollars", "settlement_ts"]
+
+[variants]
+allowed = [
+  "V0 only while DRAFT: one primary cell (favourite ask in [0.60, 0.90], scheduled-start late threshold, next-minute ask high, one contract, one decision per game)",
+  "R6's KILLED variant (resting maker bids at 0.90 or more in the final ten minutes) is not a variant of this experiment",
+  "Any other band, threshold, league split, maker variant or clock is a registered variant that consumes research budget",
+]
+multiple_testing = "One preregistered primary cell; controls are diagnostics, not extra tests of the hypothesis. Any added variant is counted and the family is corrected with Holm across registered variants (to settle before preregistration)."
+
+[costs_fills]
+fees = "Kalshi taker fee round-up(M x 0.07 x C x P x (1-P)) (schedule effective 2026-07-07, repo copy sha256 c326a69f...). NBA/MLB multipliers UNVERIFIED (fee_schedules.py: KXMLBGAME unsupported; KXNBAGAME falls to the general schedule as UNVERIFIED), so fees fail closed: report gross with a fee band and never declare net profit until verified. Direct-member rounding to $0.0001 (owner account OWNER_ATTESTED direct); non-direct cent rounding as a sensitivity."
+fills = "Fill at the next minute's candle ask high for one contract; no fill if that minute has no ask (kept in the denominator). Candles carry no size, so no larger size is claimed. Trade prints are never fills."
+evidence_quality = "Kalshi one-minute candlesticks carry yes_bid/yes_ask OHLC (docs.kalshi.com Get Market Candlesticks, read by R6 on 2026-10-08); historical availability for settled 2025 markets is UNVERIFIED until A2's sampled count. Fee schedule VERIFIED-DOC for 2026-07-07; currency UNVERIFIED (live PDF HTTP 429 on 2026-10-08)."
+
+[size_capital]
+size_ladder = "One contract only in v1; no depth evidence exists in candles."
+capital_scenarios = "Illustrative $100 scenarios only (ILLUSTRATIVE_SCENARIO_NOT_APPROVED_BANKROLL); see docs/research/ALPHA_DISCOVERY_2026-10.md section f."
+capital_assumptions = "Ask plus fee locked from fill to settlement cash release; settlement delay per series UNKNOWN; reserve MISSING_OWNER_INPUT."
+
+[evaluation]
+chronological = "Development, validation and retrospective test blocks are strictly chronological by scheduled start; no game appears in two blocks."
+untouched_future_window = "UNKNOWN: NBA games scheduled after the freeze, scope kalshi:kxnbagame; the covering evidence log started 2026-10-08T10:37:29Z."
+exposure_history = "Every access is logged in evidence_use.jsonl (created 2026-10-08 with covered_scopes kalshi:kxnbagame, kalshi:kxmlbgame, sports:nba:moneyline, sports:mlb:moneyline). Retrospective outcomes predate the log and are UNKNOWN_LEGACY: they can falsify or motivate, never support an untouched claim. Moshrefi (March-May 2026) and Le (to 2025-12) have viewed Kalshi sports outcomes."
+controls = [
+  "Positive control: realized-close bucketing on trade prints reproduces the S-shape (else the test is uninformative)",
+  "Discriminating control: MLB > NBA ordering under realized close must vanish under the scheduled-start clock if the effect is an artefact",
+  "Sweep control: exclude prints within 60 s of a 20-cent one-minute move",
+  "Negative control: same rule 60-120 minutes into the game",
+]
+
+[budget]
+research_cash_usd = "0: no paid data or services are authorized (2026-10-08 Track B scope)."
+owner_hours = "MISSING_OWNER_INPUT: owner time for A2, the fee read and a slot decision (shared with EXP-005 and EXP-006)."
+data_costs = "0 cash; one-time public read per the decision packet; no recurring collection."
+review_date = "2026-10-22"
+
+[stopping]
+futility = "KILL (R6, written in now and to be frozen unchanged): stop and record FALSIFIED if, on the validation block, the game-clustered 95% upper bound of the primary endpoint is at or below zero, or its point estimate is at or below zero. ARTEFACT: record FALSIFIED (artefact) if the effect is present under realized-close bucketing and absent under the scheduled-start clock. UNINFORMATIVE: if the positive control fails, record INSUFFICIENT_EVIDENCE rather than a pass or a kill."
+stop = [
+  "ACCESS_BLOCKED: no A2 grant, or DATA_RIGHTS unresolved, by the review date",
+  "STATISTICAL_FUTILITY: the KILL rule above",
+  "ECONOMICALLY_UNVIABLE: point estimate below the owner's minimum useful effect after the fee band",
+  "OPERATIONALLY_UNUSABLE: the effect exists only in minutes without an ask or only in sweep minutes",
+]
+continue_rule = "Continue to a prospective NBA window only if the validation lower 95% bound is above zero at the conservative ask, all controls behave, and the fee is verified; otherwise stop with the named verdict."
+verdicts = ["ACCESS_BLOCKED", "ECONOMICALLY_UNVIABLE", "STATISTICAL_FUTILITY", "OPERATIONALLY_UNUSABLE", "BUDGET_EXHAUSTED", "INSUFFICIENT_EVIDENCE", "CONTINUE"]
+
+[economics]
+minimum_useful_effect = "MISSING_OWNER_INPUT: not set. Proposal for the owner only: at least 2 cents per contract (about 2.5 percent of outlay at 0.80) net of the taker fee at multiplier 1."
+power_analysis = "MISSING_POWER_ANALYSIS: indicative only. R6 (est.): per-game sd about 50 percent of outlay, so about 500 qualifying games give SE about 2.2 percent, enough for the 4-6 percent edge implied by gamma 1.3 and not for smaller ones. Binary check at p = 0.80 (sd 0.40), one-sided alpha 0.05, power 0.80: about 448 games for 4.7 cents, 1,100 for 3 cents, 2,474 for 2 cents. Qualifying-game counts per season are unknown until a feature-only count."
+min_episodes_for_scenario = "MISSING_POWER_ANALYSIS: needs the development-block count of qualifying games."
+min_independent_clusters = "MISSING_POWER_ANALYSIS: indicative 448 to 2,474 games (see power_analysis)."
+
+[readiness]
+product = "Planned harness (research/tb-harness lane, not merged): research_diagnostics.calibration_report, evaluate_entries, bankroll_ladder, protocol_guard_problems; existing research_evidence, research_economics.cluster_bootstrap_mean, fee_schedules. A Kalshi trades/candlesticks adapter does not exist (gap; A2 needs it)."
+strategy = "None. R6 verdict WEAKEN; no edge is established."
+permitted_uses = [
+  "protocol design and power analysis",
+  "feature-only counts of an approved dataset before any label look",
+  "retrospective exploratory evaluation after the A2 grant, logged",
+]
+remaining_blockers = [
+  "No NBA/MLB trades or candles are held (R3: no Kalshi trade prints are collected anywhere)",
+  "NBA/MLB fee multipliers unverified",
+  "Family slot (both new slots occupied)",
+  "Settlement-state rules for postponed or suspended NBA/MLB games not captured",
+  "open_decisions above",
+]
+
+[episode]
+definition = "One episode per game: the first one-minute candle past the league's late threshold with the favourite's ask close in band."
+start_threshold = "UNKNOWN: the late threshold per league (minutes since scheduled start); the band [0.60, 0.90] is set."
+end_merge_gap = "Not applicable: one decision per game."
+minimum_size = "One contract (v1)."
+
+[knowledge]
+source_independence = "UNKNOWN: the A2 read and the Becker tape are the same venue's records; Moshrefi and Le used overlapping Kalshi data."
+annual_episode_count = "UNKNOWN: never annualized from a few observations; NBA plus MLB schedule about 3,660 regular-season games a year, but the qualifying share is unknown."
+fill_probability = "UNKNOWN: candle asks carry no size and no queue; our latency is untested."
