@@ -5,11 +5,12 @@ or process: the caller runs `run_cycle()` or `run(n)` with an injected clock and
 module: every network request goes through the caller's `send(WireRequest) -> reply` (the reply has `outcome`,
 `status` and `body`, as `transport.TransportResult` has), so the transport stays unimported (ADR 0043).
 
-**Start.** The constructor reads the persisted control events and starts only through `control.boot`, persisting
-`Started` before anything else: every start is DISARMED. It never arms itself; only an operator's `request_arm`
-(judged once by `control.decide_arm`, and persisted) changes the mode. It then takes the egress lease (which turns
-an older fence's in-flight attempts into OUTCOME_UNKNOWN), recovers the journal and quarantines every queued signal
-whose validity ended while it was down: a backlog is never replayed as fresh.
+**Start.** The constructor first takes the egress lease (which turns an older fence's in-flight attempts into
+OUTCOME_UNKNOWN) and recovers the journal; a start refused because another worker holds a live lease writes nothing.
+It then reads the persisted control events and starts only through `control.boot`, persisting `Started` before
+anything acts: every start is DISARMED. It never arms itself; only an operator's `request_arm` (judged once by
+`control.decide_arm`, and persisted) changes the mode. Finally it quarantines every queued signal whose validity
+ended while it was down: a backlog is never replayed as fresh.
 
 **One cycle**, in this order, so that reconciliation and safety always come before new risk. Every anomaly a step
 finds is raised as a control incident (which disarms) before the next step runs, so an evidence anomaly found in
@@ -50,8 +51,17 @@ bounded; the persisted records stay the authority.
 **Fencing.** Only the holder of the egress lease writes. If the lease is lost (another worker took it over), this
 instance is FENCED OUT: it still reads the account, but it writes nothing to the journal (no snapshot, no control
 event, no record, no attempt change) and sends nothing, because its live state is no longer the replay of what is
-stored. The lease is re-checked before every writing phase; the journal's fence check inside `prepare_attempt`
-remains the hard stop for a send.
+stored. Every journal write (boot included) re-reads the lease immediately before it (`_record`, `_apply` and `_write`;
+a cached flag is never trusted alone); the cycle that finds it lost returns a `fenced_out` report, and every later
+`run_cycle` raises `OrchestratorFencedOut` (`run(n)` stops). The read and the write are separate transactions, so a
+takeover between them can still let that one write land (ADR 0046 §11); the journal's fence check inside
+`prepare_attempt` remains the hard stop for a send.
+
+**Stream recovery** (package J, optional). With a `StreamSource` and `OrchestratorConfig.recovery`, the cycle drains
+the stream (bounded) before the read, before proposing (taking `recovery.marks`), at the start of each decision and
+once more just before it acts; a COMPLETE read proves or contradicts it (`recovery.prove`). A decision whose market
+changed since the marks, is quarantined, or lacks a live subscription is BLOCKED and never sent. A reconnect cancels
+nothing.
 
 **Shutdown.** `shutdown()` persists a Disarm (no new risk), leaves resting orders alone unless `cancel_owned=True`
 asks to cancel our own resting orders (never anyone else's, and only while this process still holds the egress
@@ -85,6 +95,7 @@ from . import control as ctl
 from . import conformance
 from . import kalshi_wire as w
 from . import lifecycle as lc
+from . import recovery as rc
 from . import risk_gate as gate
 from .journal import AttemptState, ExecutionJournal, JournalError, JournalUnavailable
 from .model import (MAX_DIGITS, AccountScope, Action, ApprovalGrant, ApprovalMethod, Environment, Grid, IntentKind,
@@ -226,6 +237,13 @@ class StrategyContext:
     markets: Mapping[str, gate.MarketState | None]
 
 
+class StreamSource(Protocol):
+    """The caller's private stream (a future, separately approved transport; a fixture in tests): up to
+    `max_items` stream items (`recovery.StreamItem`) received since the last call, in arrival order."""
+
+    def drain(self, max_items: int) -> tuple: ...
+
+
 class Strategy(Protocol):
     """A typed policy. It proposes; it never sends, reserves or approves anything."""
 
@@ -286,6 +304,7 @@ class OrchestratorConfig:
     external_cash_policy: acct.ExternalCashPolicy = acct.ExternalCashPolicy.UNKNOWN_BLOCKS
     fixture_cash_basis: CashBasis | None = None  # FIXTURE only (module docstring)
     max_pending_approvals: int = 100
+    recovery: rc.RecoveryConfig | None = None  # set exactly when a StreamSource is given (package J)
 
     def __post_init__(self) -> None:
         if not isinstance(self.scope, AccountScope) or self.scope.subaccount is not None:
@@ -306,6 +325,8 @@ class OrchestratorConfig:
                     isinstance(k, str) and isinstance(v, frozenset) for k, v in self.signal_sources.items()):
                 raise OrchestratorError("signal_sources maps a strategy id to a frozenset of source ids")
             object.__setattr__(self, "signal_sources", MappingProxyType(dict(self.signal_sources)))
+        if self.recovery is not None and not isinstance(self.recovery, rc.RecoveryConfig):
+            raise OrchestratorError("recovery must be a recovery.RecoveryConfig")
         if not isinstance(self.external_cash_policy, acct.ExternalCashPolicy):
             raise OrchestratorError("external_cash_policy must be an account.ExternalCashPolicy")
         if self.fixture_cash_basis is not None:
@@ -363,6 +384,7 @@ class CycleReport:
     records_written: int  # control events and records this cycle (journal rows of every kind are bounded)
     deadline_hit: bool
     fenced_out: bool = False  # the lease was lost: this cycle read only and wrote nothing
+    stream: Mapping[str, Any] | None = None  # the stream recovery summary (None: no stream configured)
 
 
 @dataclass(frozen=True)
@@ -446,6 +468,23 @@ def _ack_status(ack: w.CreateAck, quantity: Decimal) -> str:
     return lc.VenueStatus.EXECUTED.value if ack.fill_count == quantity else lc.VenueStatus.CANCELED.value
 
 
+def _frozen(value: Any) -> Any:
+    """A JSON-shaped value made read-only: mappings become MappingProxyType, lists tuples."""
+    if isinstance(value, Mapping):
+        return MappingProxyType({k: _frozen(v) for k, v in value.items()})
+    if isinstance(value, (list, tuple)):
+        return tuple(_frozen(v) for v in value)
+    return value
+
+
+def _thawed(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return {k: _thawed(v) for k, v in value.items()}
+    if isinstance(value, tuple):
+        return [_thawed(v) for v in value]
+    return value
+
+
 class _Recent:
     """A bounded, insertion-ordered set of recent keys. Forgetting a key only allows a duplicate record or a repeated
     incident later, never a send: the journal and the control state remain the authority."""
@@ -513,6 +552,9 @@ class _Cycle:
     control_disarmed_on_recon: bool = False
     detail: str = ""
     read_done: bool = False
+    stream_marks: rc.Marks | None = None  # taken when the strategies start proposing
+    stream_items: int = 0
+    stream_findings: list = field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------------------------- the service
@@ -523,7 +565,7 @@ class Orchestrator:
 
     def __init__(self, journal: ExecutionJournal, config: OrchestratorConfig, *, send: Sender, feed: MarketFeed,
                  strategies: tuple[Strategy, ...], clock: Callable[[], datetime],
-                 sleep: Callable[[float], None]):
+                 sleep: Callable[[float], None], stream: StreamSource | None = None):
         if not isinstance(journal, ExecutionJournal):
             raise OrchestratorError("journal must be an ExecutionJournal")
         if not isinstance(config, OrchestratorConfig):
@@ -533,6 +575,9 @@ class Orchestrator:
             raise OrchestratorError("send, clock, sleep and feed.market_state must be callables")
         if not isinstance(strategies, tuple):
             raise OrchestratorError("strategies must be a tuple")
+        if (stream is None) != (config.recovery is None) or (
+                stream is not None and not callable(getattr(stream, "drain", None))):
+            raise OrchestratorError("a stream (with drain) and config.recovery are given together, or neither")
         ids = [s.strategy_id for s in strategies]
         if len(set(ids)) != len(ids) or not all(isinstance(i, str) and _ID.fullmatch(i) for i in ids):
             raise OrchestratorError("strategy ids must be unique short identifiers")
@@ -544,18 +589,24 @@ class Orchestrator:
         self._signals_rejected = 0
         self._recorded = _Recent(RECENT_MEMORY)  # decision verdicts recorded once per (key, outcome, why)
         self._fenced_out = False
+        self._stream = stream
+        self._stream_state = None if stream is None else rc.initial(config.recovery)
         now = self._now()
 
-        # Start only through control.boot; Started is persisted before anything acts.
+        # The egress lease comes first: a boot refused because another worker holds a live lease (LeaseHeld) has
+        # written nothing, so the live worker's control log still replays to its live state. Taking the lease turns
+        # an older fence's in-flight attempts into OUTCOME_UNKNOWN, and `recover` lists what is not terminal.
+        self._fence: int | None = journal.reservations.acquire_lease(config.worker_id, config.lease_ttl, now)
+        recovered = journal.recover(now)
+
+        # Start only through control.boot; Started is persisted (as the lease holder) before anything acts.
         events = journal.control_events(self._scope)
         started, state = ctl.boot(self._scope, events, at_utc=utc_text(now))
-        journal.append_control_event(self._scope, started, now=now)
+        self._write(journal.append_control_event, self._scope, started, now=now)
         self._state = state
         self._raised = _Recent(RECENT_MEMORY, tuple(e.incident_id for e in events if isinstance(e, ctl.IncidentRaised)))
 
         self._load_records(now)
-        self._fence: int | None = journal.reservations.acquire_lease(config.worker_id, config.lease_ttl, now)
-        recovered = journal.recover(now)
         quarantined = self._quarantine_backlog(now)
         self._record("BOOT", {"worker_id": config.worker_id, "fence_token": self._fence,
                               "grants": sorted(g.digest() for g in config.grants),
@@ -571,7 +622,8 @@ class Orchestrator:
         genesis = next((r.body["account_genesis_utc"] for r in records if r.record_type == "GENESIS"), None)
         if genesis is None:
             genesis = utc_text(now)
-            self._journal.append_control_record(self._scope, "GENESIS", {"account_genesis_utc": genesis}, now=now)
+            self._write(self._journal.append_control_record, self._scope, "GENESIS", {"account_genesis_utc": genesis},
+                        now=now)
         self._genesis = genesis
         self._planned: dict[str, OrderIntent] = {}
         self._attempts_known: dict[str, tuple] = {}  # intent key -> ((attempt id, created), ...) once definitive
@@ -694,6 +746,10 @@ class Orchestrator:
     def fenced_out(self) -> bool:
         return self._fenced_out
 
+    @property
+    def stream_state(self) -> rc.RecoveryState | None:
+        return self._stream_state
+
     def request_arm(self, request: ctl.ArmRequest) -> ctl.ArmAccepted | ctl.ArmRefused:
         """An operator's arm request, judged once (`control.decide_arm`); the outcome is persisted, then applied."""
         self._check_running()
@@ -732,12 +788,16 @@ class Orchestrator:
     def submit_signal(self, signal: Signal) -> SignalAdmission:
         """Queue one signal. Refused: a stopped service, another account scope, an unknown strategy or source, a
         duplicate id, a signal from the future, expired or valid for too long, or a full queue."""
-        reason = "FENCED_OUT" if self._fenced_out else self._signal_problem(signal)
+        reason = self._signal_problem(signal) or (None if self._lease_held() else "FENCED_OUT")
         if reason is not None:
             self._signals_rejected += 1
             return SignalAdmission(False, reason)
         now = self._now()
-        self._record("SIGNAL_ACCEPTED", {"signal": signal.to_dict()}, now)  # persisted before it is queued
+        try:
+            self._record("SIGNAL_ACCEPTED", {"signal": signal.to_dict()}, now)  # persisted before it is queued
+        except OrchestratorFencedOut:
+            self._signals_rejected += 1
+            return SignalAdmission(False, "FENCED_OUT")
         self._signal_ids[signal.signal_id] = parse_utc_text(signal.expires_at_utc)
         self._queue.append(signal)
         return SignalAdmission(True, None)
@@ -774,8 +834,16 @@ class Orchestrator:
         if self._stopped:
             raise OrchestratorStopped("this orchestrator has shut down")
 
+    def _write(self, operation: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
+        """Every direct journal write goes through here: the lease is re-read immediately before it (ADR 0046 §11)."""
+        self._check_writer()
+        return operation(*args, **kwargs)
+
     def _check_writer(self) -> None:
-        if self._fenced_out:
+        """Before every write: re-read the lease from the store. The cached flag alone would miss a takeover this
+        instance has not yet noticed (a supervisor restart under the same worker id takes a new fence while this
+        instance is mid-cycle). Losing the lease fences this instance out for good."""
+        if not self._lease_held():
             raise OrchestratorFencedOut("another worker holds the egress lease: this instance writes nothing")
 
     def _lease_held(self) -> bool:
@@ -791,30 +859,46 @@ class Orchestrator:
     # ------------------------------------------------------------------ the cycle
 
     def run(self, n: int) -> tuple[CycleReport, ...]:
-        """`n` cycles, sleeping `cycle_interval` between them through the injected sleep. No timer is installed."""
+        """`n` cycles, sleeping `cycle_interval` between them through the injected sleep. No timer is installed.
+        It stops after the cycle that finds this instance fenced out (that report is the last one returned)."""
         if isinstance(n, bool) or not isinstance(n, int) or n < 0:
             raise OrchestratorError("n must be a non-negative int")
         out = []
         for i in range(n):
-            out.append(self.run_cycle())
+            report = self.run_cycle()
+            out.append(report)
+            if report.fenced_out:
+                break  # a fenced-out instance never cycles again (run_cycle would raise)
             if i < n - 1:
                 self._sleep(self._config.cycle_interval.total_seconds())
         return tuple(out)
 
     def run_cycle(self) -> CycleReport:
+        """One cycle (module docstring). The cycle that finds the lease lost returns a `fenced_out` report; every
+        later call raises `OrchestratorFencedOut`: a fenced-out instance neither writes nor keeps reading."""
         self._check_running()
+        if self._fenced_out:
+            raise OrchestratorFencedOut("this instance lost the egress lease: it runs no further cycle")
         now = self._now()
         bounds = self._config.bounds
         self._cycle += 1
         cy = _Cycle(self._cycle, now, now + bounds.cycle_deadline, _Budget(bounds.max_requests_per_cycle, self._send),
                     self._state.mode)
+        try:
+            return self._run_cycle(cy)
+        except OrchestratorFencedOut:  # a write found the lease lost mid-cycle: nothing was written from then on
+            return self._fenced_cycle(cy)
+
+    def _run_cycle(self, cy: _Cycle) -> CycleReport:
         self._renew_lease(cy)
         if self._fenced_out:
             return self._fenced_cycle(cy)
+        self._drain_stream(cy)  # before the read: what arrived so far can be proven by it
         self._settle_own_in_flight(cy)
         self._reconcile(cy)
         if not self._lease_held():
             return self._fenced_cycle(cy)
+        self._prove_stream(cy)
         self._apply(ctl.ReconciliationObserved(cy.status, utc_text(self._now()), cy.detail), self._now(), cy)
         self._apply_venue_evidence(cy)
         self._safety_review(cy)  # every anomaly so far is an incident (a disarm) before any decision
@@ -825,6 +909,9 @@ class Orchestrator:
                                  "DEMO is not an authorized environment for this orchestrator"))
             self._raise_pending(cy)
         elif mode in (ctl.Mode.SHADOW, ctl.Mode.HUMAN_CONFIRMATION, ctl.Mode.BOUNDED_AUTO):
+            if self._stream is not None:
+                self._drain_stream(cy)
+                cy.stream_marks = rc.marks(self._stream_state)  # decisions are judged against these
             selected = self._propose_and_arbitrate(cy, delivered)
             self._raise_pending(cy)
             for proposal, strategy in selected:
@@ -847,6 +934,54 @@ class Orchestrator:
             self._read_account(cy)
         return replace(self._report(cy), records_written=cy.records, fenced_out=True)
 
+    # stream recovery (package J) --------------------------------------
+
+    def _drain_stream(self, cy: _Cycle) -> None:
+        """Fold what the stream source has (bounded) into the recovery state. In memory only: nothing is written.
+        A failing source, a malformed item or a saturated drain quarantines like a stream anomaly."""
+        if self._stream is None:
+            return
+        limit, now = self._config.recovery.max_items_per_drain, self._now()
+        state = self._stream_state
+        try:
+            items = self._stream.drain(limit)
+        except Exception as exc:  # a failing source is a stream problem, never a crash of the cycle
+            self._stream_state = rc.note_problem(state, rc.Reason.SOURCE_FAILED, at=now,
+                                                 detail=f"drain raised {type(exc).__name__}")
+            return
+        if not isinstance(items, tuple) or len(items) > limit:
+            self._stream_state = rc.note_problem(state, rc.Reason.SOURCE_FAILED, at=now,
+                                                 detail="drain must return a tuple of at most max_items items")
+            return
+        for item in items:
+            try:
+                state = rc.apply(state, item).state
+            except ValueError as exc:
+                state = rc.note_problem(state, rc.Reason.SOURCE_FAILED, at=now, detail=f"{exc}"[:200])
+            cy.stream_items += 1
+        if len(items) == limit:  # the source may hold more: what is still queued is unseen
+            state = rc.note_problem(state, rc.Reason.BACKLOG, at=now, detail=f"a full drain of {limit} items")
+        self._stream_state = state
+
+    def _prove_stream(self, cy: _Cycle) -> None:
+        """A COMPLETE reconciliation proves (or contradicts) the stream-dependent state. A REST/stream disagreement
+        is an evidence anomaly: an incident (a disarm) before any decision, and the market stays quarantined."""
+        if self._stream is None or cy.recon is None or cy.status is not ctl.Reconciliation.COMPLETE:
+            return
+        proof = rc.prove(self._stream_state, cy.recon, scope=self._scope)
+        self._stream_state = proof.state
+        for f in proof.findings:
+            cy.stream_findings.append([f.kind, f.market_ticker, f.order_id, f.detail])
+            if f.kind == rc.Reason.DISAGREEMENT.value:
+                cy.anomalies.append((_incident_id("stream-disagreement", f.order_id), f"{f.detail}"[:300]))
+
+    def _stream_problems(self, cy: _Cycle, intent: OrderIntent) -> tuple[str, ...]:
+        """Drain, then: may a decision on this market, taken at the cycle's marks, still proceed?"""
+        if self._stream is None:
+            return ()
+        self._drain_stream(cy)
+        return rc.decision_problems(self._stream_state, intent.market_ticker, cy.stream_marks)
+
     # step 1 ---------------------------------------------------------
 
     def _renew_lease(self, cy: _Cycle) -> None:
@@ -868,7 +1003,8 @@ class Orchestrator:
         attempts are never touched here (the journal's lease takeover and `recover` handle superseded fences)."""
         for a in self._journal.non_terminal_attempts():
             if a.state in (AttemptState.PENDING_EGRESS, AttemptState.SENT) and a.fence_token == self._fence:
-                self._journal.mark_outcome_unknown(a.attempt_id, reason="IN_FLIGHT_AT_CYCLE_START", now=cy.start)
+                self._write(self._journal.mark_outcome_unknown,
+                            a.attempt_id, reason="IN_FLIGHT_AT_CYCLE_START", now=cy.start)
 
     def _read_account(self, cy: _Cycle) -> None:
         """The account read (package G) through `send`, within the cycle's budget and deadline. Writes nothing."""
@@ -911,7 +1047,7 @@ class Orchestrator:
             latest = self._journal.reservations.latest_snapshot(self._scope)
             revision = 1 if latest is None else latest.revision + 1
             try:
-                cy.snapshot = inputs.record(self._journal.reservations, revision, now=self._now())
+                cy.snapshot = self._write(inputs.record, self._journal.reservations, revision, now=self._now())
             except ReservationError as exc:
                 status, detail = ctl.Reconciliation.FAILED, f"SNAPSHOT_REFUSED: {exc}"[:400]
             if cy.snapshot is not None and not cy.snapshot.consistent and status is ctl.Reconciliation.COMPLETE:
@@ -1009,11 +1145,12 @@ class Orchestrator:
             payload = canonical_json({"lookup": "client_order_id", "found": True, "order": _order_record(o)})
             receipt = f"lookup:{a.attempt_id}:{sha256_text(payload)[:16]}"
             try:
-                self._journal.record_receipt(receipt_id=receipt, kind=ReceiptKind.ORDER_LOOKUP,
-                                             source="account-reconciliation", payload_json=payload,
-                                             received_at=self._now(), provider_id=o.order_id, attempt_id=a.attempt_id)
-                self._journal.reconcile_attempt(a.attempt_id, AttemptState.ACKNOWLEDGED, receipt_id=receipt,
-                                                now=self._now(), provider_order_id=o.order_id)
+                self._write(self._journal.record_receipt, receipt_id=receipt, kind=ReceiptKind.ORDER_LOOKUP,
+                            source="account-reconciliation", payload_json=payload,
+                            received_at=self._now(), provider_id=o.order_id, attempt_id=a.attempt_id)
+                self._write(self._journal.reconcile_attempt,
+                            a.attempt_id, AttemptState.ACKNOWLEDGED, receipt_id=receipt,
+                            now=self._now(), provider_order_id=o.order_id)
                 cy.resolved.append(a.attempt_id)
             except (JournalError, ReservationError) as exc:
                 cy.anomalies.append((_incident_id("unknown-unresolved", a.attempt_id), f"{exc}"[:300]))
@@ -1030,10 +1167,11 @@ class Orchestrator:
                                   "client_order_id": a.client_order_id})
         receipt = f"lookup:{a.attempt_id}:{sha256_text(payload)[:16]}"
         try:
-            self._journal.record_receipt(receipt_id=receipt, kind=ReceiptKind.ORDER_LOOKUP,
-                                         source="account-reconciliation", payload_json=payload,
-                                         received_at=self._now(), attempt_id=a.attempt_id)
-            self._journal.reconcile_attempt(a.attempt_id, AttemptState.ABSENT, receipt_id=receipt, now=self._now())
+            self._write(self._journal.record_receipt, receipt_id=receipt, kind=ReceiptKind.ORDER_LOOKUP,
+                        source="account-reconciliation", payload_json=payload,
+                        received_at=self._now(), attempt_id=a.attempt_id)
+            self._write(self._journal.reconcile_attempt,
+                        a.attempt_id, AttemptState.ABSENT, receipt_id=receipt, now=self._now())
             cy.resolved.append(a.attempt_id)
         except (JournalError, ReservationError) as exc:
             cy.anomalies.append((_incident_id("unknown-unresolved", a.attempt_id), f"{exc}"[:300]))
@@ -1068,19 +1206,21 @@ class Orchestrator:
                 o.status == lc.VenueStatus.CANCELED.value and r.state is not ObligationState.BOUND) or (
                 o.status == lc.VenueStatus.RESTING.value and r.state is ObligationState.UNKNOWN)
             if needs_receipt:
-                self._journal.record_receipt(receipt_id=receipt, kind=ReceiptKind.ORDER_LOOKUP,
-                                             source="account-reconciliation", payload_json=payload,
-                                             received_at=self._now(), provider_id=o.order_id,
-                                             attempt_id=r.reservation_id)
+                self._write(self._journal.record_receipt, receipt_id=receipt, kind=ReceiptKind.ORDER_LOOKUP,
+                            source="account-reconciliation", payload_json=payload,
+                            received_at=self._now(), provider_id=o.order_id,
+                            attempt_id=r.reservation_id)
             if view.filled_quantity > r.filled_quantity:
-                r = auth.record_fill(r.reservation_id, view.filled_quantity, self._now(), receipt_id=receipt)
+                r = self._write(auth.record_fill,
+                                r.reservation_id, view.filled_quantity, self._now(), receipt_id=receipt)
                 cy.fills += 1
             if r.quarantine_reason is not None:
                 return
             if o.status == lc.VenueStatus.CANCELED.value and r.state is not ObligationState.BOUND:
-                r = auth.confirm_cancel(r.reservation_id, self._now(), receipt_id=receipt, venue_filled=o.fill_count)
+                r = self._write(auth.confirm_cancel,
+                                r.reservation_id, self._now(), receipt_id=receipt, venue_filled=o.fill_count)
             elif o.status == lc.VenueStatus.RESTING.value and r.state is ObligationState.UNKNOWN:
-                r = auth.mark_open(r.reservation_id, self._now(), receipt_id=receipt)
+                r = self._write(auth.mark_open, r.reservation_id, self._now(), receipt_id=receipt)
             if r.state is ObligationState.BOUND and r.quarantine_reason is None:
                 self._maybe_release(cy, r, o, sub, view)
         except (JournalError, ReservationError) as exc:
@@ -1098,7 +1238,8 @@ class Orchestrator:
         ended = [t for t in (r.ended_at_utc, r.last_fill_at_utc) if t is not None]
         if not ended or parse_utc_text(snap.observed_at_utc) <= max(parse_utc_text(t) for t in ended):
             return  # a snapshot strictly after the end is needed: the next cycle
-        released = self._journal.reservations.confirm_by_snapshot(r.reservation_id, snap.revision, self._now())
+        released = self._write(self._journal.reservations.confirm_by_snapshot,
+                               r.reservation_id, snap.revision, self._now())
         cy.released.append(released.reservation_id)
         if released.filled_quantity > 0 and released.reservation_id not in self._attributed:
             intent = self._planned.get(released.intent_key)
@@ -1235,6 +1376,10 @@ class Orchestrator:
             cy.deadline_hit = True
             self._decision(cy, intent, Outcome.BLOCKED, ("CYCLE_DEADLINE: the cycle ran out of time",))
             return
+        stream = self._stream_problems(cy, intent)
+        if stream:  # invalidated or unproven since the strategies proposed: dropped, never sent
+            self._decision(cy, intent, Outcome.BLOCKED, stream)
+            return
         mode = self._state.mode
         market = self._market(cy, intent.market_ticker)
         view = self._journal.reservations.account_view(self._scope)
@@ -1274,6 +1419,10 @@ class Orchestrator:
         reasons = tuple(f"{v.code.value}: {v.detail}"[:300] for v in decision.reasons) + tuple(problems)
         if reasons:
             self._decision(cy, intent, Outcome.BLOCKED, reasons)
+            return
+        stream = self._stream_problems(cy, intent)  # once more, just before acting
+        if stream:
+            self._decision(cy, intent, Outcome.BLOCKED, stream)
             return
         if mode is ctl.Mode.SHADOW:
             self._decision(cy, intent, Outcome.WOULD_SUBMIT, ())
@@ -1340,6 +1489,8 @@ class Orchestrator:
         body = None if reply is None else getattr(reply, "body", None)
         text = _body_text(body)
         event: lc.Event
+        # Each write below re-reads the lease (`_write`): after a takeover during the send the reply is the live
+        # worker's to reconcile, not ours, and OrchestratorFencedOut ends the cycle before the next write.
         try:
             if outcome == "OK" and text is not None:
                 try:
@@ -1347,16 +1498,18 @@ class Orchestrator:
                 except w.WireFormatError:
                     ack = None
                 if ack is None or ack.client_order_id not in (None, intent.client_order_id()):
-                    j.mark_sent(attempt_id, now=now)
-                    j.mark_outcome_unknown(attempt_id, reason="ACK_UNREADABLE_OR_FOR_ANOTHER_ORDER", now=now)
+                    self._write(j.mark_sent, attempt_id, now=now)
+                    self._write(j.mark_outcome_unknown,
+                                attempt_id, reason="ACK_UNREADABLE_OR_FOR_ANOTHER_ORDER", now=now)
                     event = lc.SendReturnedAmbiguous(lc.Operation.NEW_ORDER, "ack unreadable")
                 else:
                     receipt = f"ack:{attempt_id}"
-                    j.record_receipt(receipt_id=receipt, kind=ReceiptKind.ORDER_ACK, source="venue-reply",
-                                     payload_json=text, received_at=now, provider_id=ack.order_id,
-                                     attempt_id=attempt_id)
-                    j.mark_sent(attempt_id, now=now)
-                    j.mark_acknowledged(attempt_id, provider_order_id=ack.order_id, receipt_id=receipt, now=now)
+                    self._write(j.record_receipt, receipt_id=receipt, kind=ReceiptKind.ORDER_ACK, source="venue-reply",
+                                payload_json=text, received_at=now, provider_id=ack.order_id,
+                                attempt_id=attempt_id)
+                    self._write(j.mark_sent, attempt_id, now=now)
+                    self._write(j.mark_acknowledged,
+                                attempt_id, provider_order_id=ack.order_id, receipt_id=receipt, now=now)
                     event = lc.Acknowledged(provider_order_id=ack.order_id, client_order_id=intent.client_order_id(),
                                             status=_ack_status(ack, intent.quantity), filled_quantity=ack.fill_count,
                                             remaining_quantity=ack.remaining_count)
@@ -1364,15 +1517,15 @@ class Orchestrator:
                 receipt = f"reject:{attempt_id}"
                 payload = text if text is not None else canonical_json(
                     {"outcome": "REJECTED", "status": getattr(reply, "status", None)})
-                j.record_receipt(receipt_id=receipt, kind=ReceiptKind.ORDER_REJECT, source="venue-reply",
-                                 payload_json=payload, received_at=now, attempt_id=attempt_id)
-                j.mark_sent(attempt_id, now=now)
-                j.mark_rejected(attempt_id, receipt_id=receipt, now=now)
+                self._write(j.record_receipt, receipt_id=receipt, kind=ReceiptKind.ORDER_REJECT, source="venue-reply",
+                            payload_json=payload, received_at=now, attempt_id=attempt_id)
+                self._write(j.mark_sent, attempt_id, now=now)
+                self._write(j.mark_rejected, attempt_id, receipt_id=receipt, now=now)
                 event = lc.Rejected(lc.Operation.NEW_ORDER, f"status {getattr(reply, 'status', None)}",
                                     client_order_id=intent.client_order_id())
             else:
-                j.mark_sent(attempt_id, now=now)
-                j.mark_outcome_unknown(attempt_id, reason=f"SEND_{outcome}"[:200], now=now)
+                self._write(j.mark_sent, attempt_id, now=now)
+                self._write(j.mark_outcome_unknown, attempt_id, reason=f"SEND_{outcome}"[:200], now=now)
                 event = lc.SendReturnedAmbiguous(lc.Operation.NEW_ORDER, outcome)
         except (JournalError, ReservationError) as exc:
             cy.anomalies.append((_incident_id("journal-refused", attempt_id), f"{exc}"[:300]))
@@ -1507,7 +1660,12 @@ class Orchestrator:
                            None if cy.snapshot is None else cy.snapshot.revision, cy.budget.used,
                            MappingProxyType(dict(sorted(cy.signal_counts.items()))), self._take_rejections(),
                            cy.proposals, cy.ignored, tuple(cy.decisions), tuple(cy.resolved), cy.fills,
-                           tuple(cy.released), tuple(cy.incidents), cy.records, cy.deadline_hit)
+                           tuple(cy.released), tuple(cy.incidents), cy.records, cy.deadline_hit,
+                           stream=None if self._stream is None else _frozen(self._stream_summary(cy)))
+
+    def _stream_summary(self, cy: _Cycle) -> dict[str, Any]:
+        return {**rc.summary(self._stream_state), "items_this_cycle": cy.stream_items,
+                "findings": [list(f) for f in cy.stream_findings]}
 
     def _take_rejections(self) -> int:
         n, self._signals_rejected = self._signals_rejected, 0
@@ -1525,7 +1683,8 @@ class Orchestrator:
                 "released": list(report.released), "incidents": list(report.incidents),
                 "deadline_hit": report.deadline_hit,
                 "fixture_cash_basis": None if self._config.fixture_cash_basis is None
-                else self._config.fixture_cash_basis.value}
+                else self._config.fixture_cash_basis.value,
+                **({} if report.stream is None else {"stream": json.loads(canonical_json(_thawed(report.stream)))})}
 
     # ------------------------------------------------------------------ shutdown
 
@@ -1538,6 +1697,20 @@ class Orchestrator:
         if self._fenced_out or not self._lease_held():
             self._stopped = True  # the live worker owns the account: nothing is written or cancelled from here
             return ShutdownReport(utc_text(now), (), MappingProxyType({}), ())
+        requested: list[str] = []
+        outcomes: dict[str, str] = {}
+        left: list[str] = []
+        try:
+            self._shutdown(operator_ref, reason, cancel_owned, now, requested, outcomes, left)
+        except OrchestratorFencedOut:  # the lease was lost during the shutdown: nothing more is written from here
+            pass
+        self._stopped = True
+        return ShutdownReport(utc_text(now), tuple(requested), MappingProxyType(dict(outcomes)), tuple(sorted(left)))
+
+    def _shutdown(self, operator_ref: str, reason: str, cancel_owned: bool, now: datetime, requested: list[str],
+                  outcomes: dict[str, str], left: list[str]) -> None:
+        """The shutdown's steps; `requested`, `outcomes` and `left` are filled as it goes, so a shutdown cut short
+        by a lost lease still reports what it did."""
         self._apply(ctl.Disarm(operator_ref, reason, utc_text(now)), now)
         resting: list[tuple[ReservationView, Any]] = []
         for r in self._journal.reservations.held_reservations(self._scope):
@@ -1545,7 +1718,6 @@ class Orchestrator:
             if attempt.state is AttemptState.ACKNOWLEDGED and attempt.provider_order_id is not None \
                     and r.state is ObligationState.OUTSTANDING and r.quarantine_reason is None:
                 resting.append((r, attempt))
-        requested, outcomes, left = [], {}, []
         for r, attempt in resting:
             if not cancel_owned:
                 left.append(r.reservation_id)
@@ -1555,8 +1727,6 @@ class Orchestrator:
         self._record("SHUTDOWN", {"operator_ref": operator_ref, "reason": reason, "cancel_owned": cancel_owned,
                                   "cancels": dict(sorted(outcomes.items())), "resting_left": sorted(left)},
                      self._now())
-        self._stopped = True
-        return ShutdownReport(utc_text(now), tuple(requested), MappingProxyType(dict(outcomes)), tuple(sorted(left)))
 
     def _cancel_owned(self, r: ReservationView, attempt: Any) -> str:
         now = self._now()
@@ -1581,40 +1751,49 @@ class Orchestrator:
             return "REFUSED: the market's shard is unknown"
         request = w.build_cancel(self._scope, attempt.provider_order_id, exchange_index=market.exchange_index)
         auth = self._journal.reservations
-        auth.request_cancel(r.reservation_id, now)  # requested in the journal before it is sent
+        try:
+            self._write(auth.request_cancel, r.reservation_id, now)  # requested in the journal before it is sent
+        except OrchestratorFencedOut:
+            return "REFUSED: NO_EGRESS_LEASE (another worker holds the lease)"
         try:
             reply = self._send(request)
             outcome = _outcome_text(reply)
         except Exception as exc:
             reply, outcome = None, f"SEND_RAISED: {type(exc).__name__}"
         text = None if reply is None else _body_text(getattr(reply, "body", None))
+        if not self._lease_held():  # a takeover during the send: the live worker reconciles this order, not us
+            return "CANCEL_OUTCOME_UNKNOWN: the egress lease was lost during the send (nothing recorded here)"
         try:
             if outcome == "OK" and text is not None:
                 ack = w.parse_cancel_ack(reply.body)
                 if ack.order_id != attempt.provider_order_id or ack.client_order_id not in (None, r.client_order_id):
                     # An answer for another order proves nothing about ours: kept as evidence, the order is unknown.
-                    self._journal.record_receipt(receipt_id=f"cancel-mismatch:{r.reservation_id}",
-                                                 kind="CANCEL_REPLY_MISMATCH", source="venue-reply",
-                                                 payload_json=text, received_at=self._now(),
-                                                 provider_id=ack.order_id, attempt_id=r.reservation_id)
-                    auth.mark_unknown(r.reservation_id, self._now(), reason="CANCEL_ACK_FOR_ANOTHER_ORDER")
+                    self._write(self._journal.record_receipt, receipt_id=f"cancel-mismatch:{r.reservation_id}",
+                                kind="CANCEL_REPLY_MISMATCH", source="venue-reply",
+                                payload_json=text, received_at=self._now(),
+                                provider_id=ack.order_id, attempt_id=r.reservation_id)
+                    self._write(auth.mark_unknown, r.reservation_id, self._now(), reason="CANCEL_ACK_FOR_ANOTHER_ORDER")
                     return "CANCEL_OUTCOME_UNKNOWN: the reply names another order"
                 receipt = f"cancel:{r.reservation_id}"
-                self._journal.record_receipt(receipt_id=receipt, kind=ReceiptKind.CANCEL_CONFIRM, source="venue-reply",
-                                             payload_json=text, received_at=self._now(), provider_id=ack.order_id,
-                                             attempt_id=r.reservation_id)
+                self._write(self._journal.record_receipt,
+                            receipt_id=receipt, kind=ReceiptKind.CANCEL_CONFIRM, source="venue-reply",
+                            payload_json=text, received_at=self._now(), provider_id=ack.order_id,
+                            attempt_id=r.reservation_id)
                 with localcontext(_exact_context()):
                     filled = r.quantity - ack.reduced_by
-                auth.confirm_cancel(r.reservation_id, self._now(), receipt_id=receipt, venue_filled=filled)
+                self._write(auth.confirm_cancel, r.reservation_id, self._now(), receipt_id=receipt, venue_filled=filled)
                 return "CANCEL_CONFIRMED"
             if outcome == "REJECTED":
                 receipt = f"cancel-reject:{r.reservation_id}"
-                self._journal.record_receipt(receipt_id=receipt, kind=ReceiptKind.CANCEL_REJECT, source="venue-reply",
-                                             payload_json=text or canonical_json({"outcome": "REJECTED"}),
-                                             received_at=self._now(), attempt_id=r.reservation_id)
-                auth.mark_open(r.reservation_id, self._now(), receipt_id=receipt)
+                self._write(self._journal.record_receipt,
+                            receipt_id=receipt, kind=ReceiptKind.CANCEL_REJECT, source="venue-reply",
+                            payload_json=text or canonical_json({"outcome": "REJECTED"}),
+                            received_at=self._now(), attempt_id=r.reservation_id)
+                self._write(auth.mark_open, r.reservation_id, self._now(), receipt_id=receipt)
                 return "CANCEL_REJECTED"
-            auth.mark_unknown(r.reservation_id, self._now(), reason=f"CANCEL_{outcome}"[:200])
+            self._write(auth.mark_unknown, r.reservation_id, self._now(), reason=f"CANCEL_{outcome}"[:200])
             return "CANCEL_OUTCOME_UNKNOWN"
+        except OrchestratorFencedOut:  # lost between two writes: what is not recorded is the live worker's to reconcile
+            return "CANCEL_OUTCOME_UNKNOWN: the egress lease was lost while recording the reply"
         except (JournalError, ReservationError, w.WireFormatError) as exc:
             return f"CANCEL_RECORD_FAILED: {exc}"[:300]
