@@ -622,8 +622,8 @@ def test_a_manual_order_is_an_external_obligation_that_consumes_capacity_under_p
     (dict(limit_price=Decimal("0.55")), "YES price"),
     (dict(side=m.Side.NO, limit_price=Decimal("0.44")), "book side"),
     (dict(market_ticker="KXOTHER-26OCT08-T60"), "ticker"),
-    (dict(client_order_id="00000000-0000-4000-8000-000000000000"), "client order id differs"),
-    (dict(provider_order_id="ffffffff-0000-4000-8000-000000000000"), "acknowledged as venue order"),
+    (dict(client_order_id="00000000-0000-4000-8000-000000000000"), "is not one local res-1 carries"),
+    (dict(provider_order_id="ffffffff-0000-4000-8000-000000000000"), "acknowledged as another venue order"),
 ])
 def test_an_attribution_that_does_not_hold_keeps_the_order_external(change, why):
     r = run(locals_=(local(**change),))
@@ -782,3 +782,132 @@ def test_the_reply_contract_is_the_fixture_transports_result():
                             local_orders=(local(),))
     assert r.status is a.ReconciliationStatus.COMPLETE, r.problems
     assert r.manifest.requests == 23
+
+
+# ---------------------------------------------------------------- review findings (F1-F4)
+
+
+def _moving_position(v, name, q):
+    if name == "GET_POSITIONS" and q.get("cursor") is None:
+        row = page_of(v, "GET_POSITIONS")["market_positions"][0]
+        row["position_fp"] = f"{Decimal(row['position_fp']) + 1:.2f}"
+    return None
+
+
+def test_f1_an_unstable_read_returns_no_live_result_fields():
+    venue = Venue()
+    venue.hooks.append(_moving_position)
+    r = run(venue, max_resamples=2)
+    s = r.subaccounts[0]
+    assert s.stability is a.Stability.UNSTABLE
+    # Nothing from the unstable live tier is presented as known; open_orders is unknown, not "no resting orders".
+    assert (s.balance, s.positions, s.open_orders, s.orders, s.fills, s.fills_by_order, s.settlements) == (None,) * 7
+    assert s.historical_positions is not None  # the archival tier is not resampled and passed its own gate
+
+
+def test_f1_a_conflicting_duplicate_position_returns_no_positions():
+    venue = Venue()
+    twin = copy.deepcopy(page_of(venue, "GET_POSITIONS")["market_positions"][0])
+    twin["position_fp"] = "9.00"
+    page_of(venue, "GET_POSITIONS", cursor="positions-page-2")["market_positions"].append(twin)
+    r = run(venue)
+    s = r.subaccounts[0]
+    assert "CONFLICTING_DUPLICATE" in codes(r)
+    assert s.positions is None and s.snapshot.positions is None
+    venue = Venue()
+    twin = copy.deepcopy(page_of(venue, "GET_ORDERS")["orders"][0])
+    twin["remaining_count_fp"] = "1.00"
+    page_of(venue, "GET_ORDERS", cursor="orders-page-2")["orders"].append(twin)
+    s = run(venue).subaccounts[0]
+    assert s.open_orders is None and s.orders is None
+
+
+def test_f1_stale_user_data_returns_no_live_result_fields():
+    venue = Venue()
+    venue.single["GET_USER_DATA_TIMESTAMP"] = {"as_of_time": "2026-10-07T14:50:00Z"}
+    s = run(venue).subaccounts[0]
+    assert (s.balance, s.positions, s.open_orders) == (None, None, None)
+
+
+@pytest.mark.parametrize("stream,cursor,key", [
+    ("GET_POSITIONS", None, "market_positions"),
+    ("GET_FILLS", "fills-page-2", "fills"),
+    ("GET_ORDERS", "orders-page-2", "orders"),
+    ("GET_SETTLEMENTS", None, "settlements"),
+    ("GET_HISTORICAL_POSITIONS", None, "market_positions"),
+])
+def test_f2_a_record_on_another_shard_is_never_complete(stream, cursor, key):
+    venue = Venue()  # the balance breakdown names shard 0 only
+    page_of(venue, stream, cursor=cursor)[key][0]["exchange_index"] = 1
+    r = run(venue)
+    assert r.status is a.ReconciliationStatus.PARTIAL
+    assert any(p.startswith("SHARDS_NOT_ENUMERATED") and "records on shards [1]" in p for p in r.problems)
+    s = r.subaccounts[0]
+    assert s.positions is None and s.snapshot.positions is None and s.snapshot.cash is None
+
+
+def test_f3_an_amended_client_order_id_still_attributes():
+    venue = Venue()
+    page_of(venue, "GET_ORDERS")["orders"][0]["client_order_id"] = "amended-client-id-0001"
+    r = run(venue, locals_=(local(current_client_order_id="amended-client-id-0001"),))
+    assert r.status is a.ReconciliationStatus.COMPLETE, r.problems
+    (att,) = r.subaccounts[0].snapshot.attributed_open_orders
+    assert att.reservation_id == "res-1" and att.client_order_id == LOCAL_CID  # the journal's id for its own check
+    assert any(o.startswith("AMENDED_CLIENT_ID") for o in r.observations)
+    # Without the amended id recorded, the same order is not ours: external, never dropped.
+    r = run(venue, locals_=(local(),))
+    assert "ATTRIBUTION_MISMATCH" in codes(r)
+    assert O1 in {e.order_ref for e in r.subaccounts[0].snapshot.external_open_orders}
+
+
+def test_f3_a_unique_provider_id_wins_over_a_shared_client_id():
+    held = (local(), local(reservation_id="res-2", provider_order_id=None, filled_quantity=Decimal("0")))
+    r = run(locals_=held)  # two held attempts of one intent share the client order id by design
+    assert r.status is a.ReconciliationStatus.COMPLETE, r.problems
+    s = r.subaccounts[0]
+    assert [x.reservation_id for x in s.snapshot.attributed_open_orders] == ["res-1"]
+    assert s.unlisted_local == ("res-2",)
+
+
+def test_f3_without_a_unique_identity_the_order_stays_external():
+    held = (local(provider_order_id=None), local(reservation_id="res-2", provider_order_id=None))
+    r = run(locals_=held)
+    assert any(p.startswith("ATTRIBUTION_MISMATCH") and "several unacknowledged" in p for p in r.problems)
+    snap = r.subaccounts[0].snapshot
+    assert snap.attributed_open_orders == () and O1 in {e.order_ref for e in snap.external_open_orders}
+
+
+def _settlement_page(*records):
+    return {None: {"settlements": list(records), "cursor": None}}
+
+
+def test_f4_one_incomplete_record_does_not_weaken_another():
+    venue = Venue()
+    full = copy.deepcopy(load("settlements.json")["settlements"][0])
+    old = copy.deepcopy(load("settlements_missing_old_fields.json")["settlements"][0])
+    venue.streams[("GET_SETTLEMENTS", 0)] = _settlement_page(full, old)
+    r = run(venue)
+    assert r.status is a.ReconciliationStatus.COMPLETE, r.problems
+    by = {x.ticker: x for x in r.subaccounts[0].settlements}
+    assert by[T_SETTLED].source is a.SettlementSource.VENUE_RECORD and by[T_SETTLED].exchange_index == 0
+    assert by["KXHIGHNY-26SEP02-T58"].source is a.SettlementSource.VENUE_RECORD_INCOMPLETE
+    assert by["KXHIGHNY-26SEP02-T58"].exchange_index == 0  # preserved by the lenient reader too
+    assert by[T_ARCH].exchange_index == 0 and "exchange_index" not in by[T_ARCH].missing
+
+
+@pytest.mark.parametrize("mutate", [
+    lambda full, old: full.update(revenue=-100),  # a complete record: strict parser, then no negative revenue
+    lambda full, old: old.update(revenue=-100),  # an incomplete record: the same rule
+    lambda full, old: old.update(exchange_index=-1),
+    lambda full, old: full.update(fee_cost=0.01),  # a JSON number where fixed-point text is documented
+    lambda full, old: old.update(yes_count_fp=2.0),
+])
+def test_f4_every_present_field_keeps_the_strict_rules(mutate):
+    venue = Venue()
+    full = copy.deepcopy(load("settlements.json")["settlements"][0])
+    old = copy.deepcopy(load("settlements_missing_old_fields.json")["settlements"][0])
+    mutate(full, old)
+    venue.streams[("GET_SETTLEMENTS", 0)] = _settlement_page(full, old)
+    r = run(venue)
+    assert any("SETTLEMENTS LIVE: MALFORMED_PAGE" in p for p in r.problems), r.problems
+    assert r.subaccounts[0].settlements is None
