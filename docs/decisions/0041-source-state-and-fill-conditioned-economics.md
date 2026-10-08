@@ -131,3 +131,91 @@ Extend the existing owners. No new module is added.
   leadership series could be admitted, for pre-holdout dates only.
 - Account-verified venue semantics for RFQ binding and partial acceptance: the reservation rule in
   the gap note changes for that venue only.
+
+## Addendum 2026-10-08: source change/event envelope (#181 Deliverable E, offline)
+
+**Scope.** The 2026-10-08 directive (`docs/owner/2026-10-08-jev-crawler-wallet-directive.md`, EXECUTION_PLAN
+entry E). Fixture-only code, tests and docs. No transport, poll, stream, scraper, scheduler, timer, budget change,
+credential, model call or `edge_lab.execution` import. Nothing above in this ADR changes.
+
+**Problem.** Deliverable E asks for one reusable contract for "a source said something changed". It must carry
+identity, permission, receipt and claimed publication times, revision, sequence, links, coverage, freshness, evidence
+class and fetch cost. It must also support novelty, dedup and change detection, observation-to-market response
+latency and conditional lead-lag. Most of the parts already had owners. The missing piece was the composition: a
+keyed, append-only change history across sources, with honest ordering rules and cost.
+
+**Already covered, reused unchanged (and demonstrated by tests):**
+- permission: `sources.REGISTRY` status;
+- content digests: `provenance.payload_sha256`;
+- freshness: `freshness.combine`, `require_fresh`;
+- clocks, ordering and latency bounds: `ClockReading`, `clock_order`, `measure_between`;
+- evidence class: `DataKind`, `EvidenceStatus`, `check_evidence`;
+- content freshness on the publication clock: `content_freshness`;
+- price-series lead-lag: `source_leadership`, unchanged;
+- read coverage: `discovery.CoverageState`.
+
+**Decision.** One new module, `src/edge_lab/source_changes.py` (`source-change-v1`). It composes those owners and
+copies none of them. It is a module rather than another `inplay_evidence` section because envelopes cover
+documents, rules, schedules and listings as well as in-play feeds, and `inplay_evidence` is already the largest
+evidence module. The first rejected alternative of this ADR (a separate `source_state.py`) is still respected: no
+clock, journal, data-kind or leadership type is redefined here.
+
+**Rules:**
+- **Permission is never self-asserted.** An envelope's `source_permission` must equal the registry's. RECORDED
+  content needs a registered ACTIVE source. FIXTURE and SYNTHETIC content may name any source, so fixture work
+  needs no collection permission.
+- **Receipt order alone never orders two copies of one source.** Supersession needs one of:
+  - a source sequence with the same documented scope;
+  - provably ordered publication stamps;
+  - non-overlapping fetch windows (the older copy's receipt provably before the newer copy's request).
+
+  Otherwise the copy is ORDER_UNKNOWN. The key then has several current copies, and its freshness is UNKNOWN
+  until a provably newer copy resolves it. A provably older copy is a LATE_ARRIVAL and never becomes current. The
+  same sequence number with different content is a SEQUENCE_CONFLICT.
+- **Duplicates are availability, not news.** The same copy again is REPLAYED. The same content from the same
+  source is a DUPLICATE. Content another source already reported is an ECHO. Only content never seen on the key is
+  `novel`.
+- **Contradictions are recorded, never resolved.** A source's current content that differs from another source's
+  current content gets a CONTRADICTS link. Decision use of both sources fails closed: `key_freshness` gives UNKNOWN,
+  so `require_current` raises through `require_fresh`.
+- **Origin is not established here.** "First observed by us" is not first published. A site name, a stated
+  attribution (`attributed_to`) or a recent stamp is a claim. `attribution` reports who we saw first and who
+  claims the earliest stamp, and keeps `original_publication` UNKNOWN.
+- **Response latency is a window.** It runs from the last unchanged market capture to the first changed capture
+  provably after the observation, each widened by its clock error bound. It is UNKNOWN when:
+  - identity is not linked (SAME_ID or a named, versioned DECLARED_MAPPING);
+  - a capture is on another market (an identity mismatch, never a silent filter);
+  - there is no baseline capture;
+  - a cross-clock bound is unknown.
+
+  A change that cannot be placed before or after the observation is UNORDERED. A market that never changed gives
+  only a lower bound.
+- **First-report leadership** compares report windows in both directions, conditioned on a stated
+  `SourceContext`. A RECEIVED-basis window opens at the last earlier capture without the content. Without such a
+  capture it is unbounded below, so polling cadence bounds every claim. Windows wider than the required resolution,
+  or with unknown clock bounds, give INSUFFICIENT_RESOLUTION. Shared or unknown families are reported as dependence.
+  The count of variants tried is a required input.
+- **Reports are fixture- and synthetic-fed in this batch.** `response_latency` and `first_report_leadership`
+  refuse RECORDED input. Real input needs an approved collector, an allocated experiment id and an evidence-use
+  record first.
+- **Cost: unknown is never zero.** `FetchCost` with an UNKNOWN basis carries no amounts. Zero money needs MEASURED
+  or DOCUMENTED evidence and a reference. Totals take the worst basis, and one unknown amount makes that total
+  unknown. `SourceYield.money_per_novel` is None unless the cost is known.
+
+**Tradeoffs.**
+- Validating permission against the current registry means that a later registry change makes older envelopes
+  fail to load until they are migrated in a reviewed change. This is deliberate, and today no RECORDED envelope
+  exists.
+- Strict ordering will leave many real poll pairs ORDER_UNKNOWN unless collectors record request times. That is
+  the intended pressure on any future collector.
+- The ledger is in-memory and O(n) per append. That fits fixtures. A persistent store would be a separate,
+  additive `storage.py` change with its own review.
+
+**Reconsider when:**
+- a source documents a sequence or revision field (its copies then order without fetch windows);
+- the owner approves a collector for a source in `docs/research/SOURCE_ACTIVATION_PACKET.md` (its envelopes then
+  need persistence and an evidence-use record);
+- measured clock bounds per source exist (fewer UNKNOWN latencies).
+
+Tests: `tests/test_source_changes.py`, `tests/test_source_changes_reports.py`. Each rule above was mutation-checked
+(23 deliberate breaks, all caught).
