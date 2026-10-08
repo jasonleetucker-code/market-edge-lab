@@ -61,4 +61,10 @@ Under the 2026-10-07 Kalshi execution campaign directive (#160):
   the real components. It starts only via `control.boot`, sends at most one attempt per intent key, uses bounded
   budgets and installs no scheduler. Demonstration B runs on fixtures.
 
+Under the 2026-10-08 JEV/crawler/wallet directive (#181, #168):
+- 0049: typed semantic-triage value types (Deliverable F). `semantic_judgments.py` holds provider-neutral
+  request/result types for four bounded tasks, deterministic validation, abstention and two no-model baselines.
+  Outputs are FIXTURE only, and no hosted model version is pinned, so zero model calls. Retrieved text is untrusted
+  data. A boundary invariant keeps the module away from credentials, execution, sizing, fees, risk and grants.
+
 New decisions start at 0045 (wallet intelligence, #174) and 0047.
