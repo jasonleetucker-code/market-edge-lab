@@ -176,3 +176,96 @@ The re-review approved `070eb51` with one fix and two documentation notes.
   unknown events may be losers. The rate is a rate over known events only, and `unknown_markets` reports how
   much is missing. Eligibility does not rest on the rate: it rejects any account with an unknown market
   (`UNKNOWN_MARKETS`) and any with incomplete coverage.
+
+## Amendment 2026-10-08 B: role-aware quality diagnostics
+
+**Authority.** Deliverable B of the 2026-10-08 owner directive (`docs/owner/2026-10-08-jev-crawler-wallet-directive.md`,
+scope in the 2026-10-08 entry of `docs/EXECUTION_PLAN.md`; spec `docs/strategy/CLAUDE_JEV_CRAWLER_WALLET_V1.md`).
+Offline, SYNTHETIC fixtures only. It authorizes nothing beyond that.
+
+**Problem.** `threats.off_market_fills` (W7) compares a buy to the best ask and a sale to the best bid. A
+legitimate passive fill therefore reads OFF_MARKET. Regression fixture: bid 0.45, ask 0.55, a maker BUY at 0.45.
+That print is ordinary. It is not evidence of manipulation, and it does not mean a follower can buy at 0.45.
+
+**Decision.** `threats.py` reports four separately typed concepts. They are never merged into one score.
+
+1. **`liquidity_role`** (MAKER / TAKER / MIXED / UNKNOWN). It is an optional `WalletObservation` field, set only
+   with `liquidity_role_source`, the source field or explicit fixture that states it. It is never inferred from
+   the side of the spread. `events.combined_role` gives the role of several fills of one order. A mix of maker
+   and taker fills is MIXED, and any unknown fill makes the whole UNKNOWN.
+2. **`price_consistency`** (CONSISTENT / INCONSISTENT / INSUFFICIENT_EVIDENCE). Could the captured book have
+   produced the print for the stated role?
+   - A taker buy must be at or through the ask, and within the captured asks unless that side is truncated.
+     Sales mirror this.
+   - A maker buy must not be above the ask. Below the best bid, it is INSUFFICIENT_EVIDENCE: only a sweep the
+     capture cannot show reaches it.
+   - With an UNKNOWN or MIXED role, the print is CONSISTENT when either role explains it, and the row names that
+     role (`consistent_roles`). It is INCONSISTENT only when every role contradicts the book.
+   - The following are always INSUFFICIENT_EVIDENCE, never cleared:
+     - missing price;
+     - unknown price unit, or a price outside (0, 1);
+     - a price that disagrees with the cash leg;
+     - an observation received before its stated trade time (beyond `max_clock_skew`);
+     - an invalid capture (a crossed or locked book cannot be built);
+     - no book;
+     - a book captured after the trade, or less than `max_clock_skew` before it;
+     - a book older than `max_book_age` once the skew is added.
+   - Each row carries provenance: the observation's source, raw reference and parser version, the role source,
+     and the book's optional `source`, `raw_ref` and `received_at` (new optional `Book` fields).
+3. **`contamination_evidence`.** `ContaminationEvidence` rows have a status (PROVISIONAL_FLAG, NO_FLAG or
+   UNOBSERVABLE), an observability (OBSERVED, PARTIAL or UNOBSERVABLE), an evidence kind and uncertainty notes.
+   Every flag is provisional and must state `NOT_PROOF_OF_COMMON_OWNERSHIP_OR_WRONGDOING`. The detectors are:
+   - shared activity, the evidence behind `co_trading_clusters`, whose output is unchanged. A public event
+     just before the trades is recorded as an alternative explanation.
+   - stated funding links.
+   - churn. Its flag notes when the round trips are maker fills, which is what market making looks like. It also
+     notes unknown roles and token transfers.
+   - self-trades and circular token flows, built only from source-reported counterparties (a new optional
+     `counterparty` field with its source). With no reported counterparty these two detectors are UNOBSERVABLE,
+     not clean.
+4. **`follower_copyability`** (COPYABLE / PARTIALLY_COPYABLE / NOT_COPYABLE / UNKNOWN / NOT_ATTEMPTED). It is
+   read from `replay.replay`'s outcomes and fills. It is not a second fill engine.
+   - A missing, stale or future book, or an UNKNOWN request outcome, is UNKNOWN, never NOT_COPYABLE and never a
+     fill.
+   - A policy skip is NOT_ATTEMPTED and stays in the denominator.
+   - The verdict carries:
+     - the follower's simulated average price and per-unit gap to the leader (ESTIMATED);
+     - the fee as replay labelled it;
+     - our decision and arrival times;
+     - the age of the book at arrival, when a provider is given (otherwise unknown, not zero).
+   - The leader's price consistency is carried alongside and never used to decide. Lane D owns the full
+     follower-replay study.
+
+**Versions.** `off_market_fills` is kept unchanged as v1 (`wallet-off-market-v1`, role-unaware), with
+`off_market_report_v1` and an explicit interpretation note. The v2 report is `quality_report` →
+`wallet-quality-diagnostics-v2`, which carries a `DataClass` (SYNTHETIC, FIXTURE, OBSERVED or UNKNOWN). Synthetic
+observations cannot be reported as OBSERVED. `read_threat_report` dispatches on the schema. v1 reads back as
+`LegacyOffMarketView(role_aware=False)` and is never upgraded, because it has no role to upgrade with. An unknown
+schema is refused.
+
+**Compatibility.** The new `WalletObservation` and `Book` fields are optional and default to UNKNOWN or None. They
+are outside the v1 semantic identity, so no observation id, semantic key, selection digest or demo report
+changes. Tests pin the Polymarket fixture identities, the v1 manifest digest and the demo `report_sha256` captured
+on `c34221c`.
+
+**Tradeoffs and limits.**
+- **Annotations are outside the identity.** Re-receiving a fill with a role its first receipt lacked counts as a
+  duplicate, and the first receipt is kept. A later identity schema could bind the role. That needs coordination
+  with the selection receipts (Deliverable A).
+- **The maker case rests on the capture.** A maker print below the bid is INSUFFICIENT_EVIDENCE, not INCONSISTENT.
+  So a cheap allocation with an unknown role is no longer flagged OFF_MARKET by v2. It is not cleared either.
+  The v1 screen still reports it.
+- **Some current inputs carry no role or counterparty.** The Polymarket v2 trades rows carry `maker_volume` and
+  `taker_volume`, but the parser does not yet map them to a role. Until it does, every parsed row is UNKNOWN.
+
+**Seams.** `replay.py` and `polymarket_v2.py` are not changed here:
+- `FollowerFill` does not record the `captured_at` of the book it filled against, so copyability re-reads the
+  provider at arrival time to report book age.
+- `FollowerFill.reason` is free text. Copyability matches its documented prefixes, and a typed no-fill reason
+  would be safer.
+- `replay._execute` lets a provider's `ValueError` (an invalid, crossed capture) propagate and abort the run,
+  where it could record NO_FILL / UNKNOWN for that signal.
+
+**What would make us reconsider.** A real source documents a per-fill maker or taker flag, or counterparties. The
+maker sweep rule could then use the trade tape. Separately, the follower study (Deliverable D) may show that
+copyability needs queue position, which the canonical replay does not model.

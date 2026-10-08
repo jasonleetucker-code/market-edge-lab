@@ -128,11 +128,13 @@ def test_crossed_or_locked_capture_is_insufficient_never_cleared():
 
 
 def test_no_book_and_book_after_the_trade():
-    assert judge(trade(Action.TRADE_BUY, "0.45", M), Books()).reasons == ("NO_BOOK",)
+    none = judge(trade(Action.TRADE_BUY, "0.45", M), Books())
+    assert none.verdict is N and none.reasons == ("NO_BOOK",) and none.best_bid is None
 
     def future(token, when):  # type: ignore[no-untyped-def]
         return book(token, bid="0.45", ask="0.55", captured=when + timedelta(seconds=1))
-    assert judge(trade(Action.TRADE_BUY, "0.45", M), future).reasons == ("BOOK_AFTER_TRADE",)
+    after = judge(trade(Action.TRADE_BUY, "0.45", M), future)
+    assert after.verdict is N and after.reasons == ("BOOK_AFTER_TRADE",)
 
 
 def test_truncated_side_makes_beyond_depth_insufficient_not_inconsistent():
