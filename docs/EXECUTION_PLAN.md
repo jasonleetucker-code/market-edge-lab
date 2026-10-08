@@ -745,7 +745,8 @@ be written here when they are made.
 
 - **2026-10-08 (America/New_York), owner directive: JEV/GROKBOT, crawler and wallet-intelligence improvements
   (#181, #168).** Recorded in `docs/owner/2026-10-08-jev-crawler-wallet-directive.md` (authority sections
-  verbatim). The bounded specification is `docs/strategy/CLAUDE_JEV_CRAWLER_WALLET_V1.md` (PR #182). The
+  verbatim). The bounded specification is `docs/strategy/CLAUDE_JEV_CRAWLER_WALLET_V1.md` (PR #182, at `c650946`);
+  this entry's own A–G list and exclusions govern over any later edit of that file. The
   2026-10-07 entries above stand unchanged, and the Kalshi campaign (#160) continues on its own paths.
   - **Authorized (offline, fixture-only code, tests and internal docs):**
     - **A.** Versioned v2 causal wallet-selection receipts in `wallet_intel/selection.py`. The digest binds the
@@ -775,7 +776,11 @@ be written here when they are made.
     - current-main reconciliation;
     - mergeability;
     - no open review blocker;
-    - frozen-experiment checks unchanged.
+    - `edge-lab experiments check-frozen --base <base>` passes.
+
+    The 2026-10-07 delegation covered that campaign's PRs (#160, #168). Applying the same conditions to the new
+    #181 scope (E, F, G) is this entry's reading of the owner's STEP 5 items 5–9. Like the 2026-10-07 entry, it
+    delegates no deploy, credential, source, grant or gate authority.
 
     PR #182 (docs only) merges under the standing docs-only rule below.
   - **Not authorized (each needs its own recorded owner approval):**
@@ -787,9 +792,13 @@ be written here when they are made.
     - new scheduled jobs, timers or cron;
     - demo or real-money orders, grants or unattended trading;
     - production deployment;
-    - changes to financial risk limits, source budgets, protected windows or EXP-001/EXP-002/EXP-003
-      protocols;
-    - an empirical evaluation needing a #96 family slot;
+    - running, installing or vendoring third-party code, including the referenced Jev, Kev, jev-bot and
+      TradingAgents repositories;
+    - spending of any kind, including paid model tokens or paid cloud compute;
+    - changes to financial risk limits, protected windows, EXP-001/EXP-002/EXP-003 protocols, or source budgets
+      (including the joint 450-credit NFL/NHL Odds API pilot, NFL reservation first);
+    - an empirical evaluation needing a #96 family slot. At most two new families are ACTIVE beside EXP-001,
+      and paused EXP-003 frees no slot;
     - any import of `edge_lab.execution` by wallet, semantic or source code, or any wallet-to-order path (W8
       still needs its own ADR 0043 amendment);
     - every item already listed as not authorized in the 2026-10-07 entries.
