@@ -283,7 +283,8 @@ def run_synthetic_demo(seed: int) -> dict:
                                 independent_count(list(clusters), clusters),
                                 "wash_round_trip_share": None if (s := round_trip_share(
                                     leader_obs["wash"], max_hold=timedelta(hours=1))) is None else decimal_text(s),
-                                "multiple_testing": {"trials": mt.trials, "survivors": sorted(mt.survivors),
+                                "multiple_testing": {"trials": mt.trials, "hypotheses": mt.hypotheses,
+                                                     "survivors": sorted(mt.survivors),
                                                      "note": mt.note}}),
         "replay": section({
             "signals": len(signals),

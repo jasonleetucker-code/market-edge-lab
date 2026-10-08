@@ -101,35 +101,61 @@ def test_package_files_have_no_network_execution_env_or_third_party_imports():
     assert not hits, "\n".join(hits)
 
 
-def _owner_imports(owner: str) -> set[str]:
+def _real_owner(owner: str) -> str | None:
     path = SRC / "edge_lab" / f"{owner}.py"
-    if not path.is_file():
-        return set()
-    return {m.split(".")[1] for m in _imports(path.read_text(encoding="utf-8"), f"edge_lab/{owner}.py")
-            if m.startswith("edge_lab.") and len(m.split(".")) >= 2}
+    return path.read_text(encoding="utf-8") if path.is_file() else None
 
 
-def test_transitive_edge_lab_imports_reach_no_forbidden_owner_or_network_module():
+def transitive_violations(package: dict[str, str], read_owner=_real_owner) -> list[str]:  # type: ignore[no-untyped-def]
+    """Follow every `edge_lab` owner the package imports, transitively, and apply every rule (forbidden
+    owner, network, banned module, third party, environment read, dynamic code) to each one reached."""
     direct = set()
-    for path in _files():
-        for mod in _imports(path.read_text(encoding="utf-8"), path.relative_to(SRC).as_posix()):
+    for rel, text in package.items():
+        for mod in _imports(text, rel):
             pieces = mod.split(".")
             if pieces[0] == "edge_lab" and len(pieces) >= 2 and pieces[1] != "wallet_intel":
                 direct.add(pieces[1])
-    seen, todo = set(), list(direct)
+    hits, seen, todo = [], set(), sorted(direct)
     while todo:
         owner = todo.pop()
         if owner in seen:
             continue
         seen.add(owner)
-        todo += sorted(_owner_imports(owner) - seen)
-    assert not (seen & FORBIDDEN_OWNERS), sorted(seen & FORBIDDEN_OWNERS)
-    for owner in seen:
-        path = SRC / "edge_lab" / f"{owner}.py"
-        if path.is_file():
-            hits = [h for h in violations(path.read_text(encoding="utf-8"), f"edge_lab/{owner}.py")
-                    if h.startswith("network") or h.startswith("binds") or h.startswith("third-party")]
-            assert not hits, f"{owner}: {hits}"
+        if owner in FORBIDDEN_OWNERS:
+            hits.append(f"reaches forbidden owner {owner}")
+            continue
+        text = read_owner(owner)
+        if text is None:
+            continue
+        rel = f"edge_lab/{owner}.py"
+        hits += [f"{owner}: {h}" for h in violations(text, rel)]
+        todo += sorted({m.split(".")[1] for m in _imports(text, rel)
+                        if m.startswith("edge_lab.") and len(m.split(".")) >= 2} - seen)
+    return hits
+
+
+def test_transitive_edge_lab_imports_reach_no_forbidden_owner_network_or_env_read():
+    package = {p.relative_to(SRC).as_posix(): p.read_text(encoding="utf-8") for p in _files()}
+    assert transitive_violations(package) == []
+
+
+@pytest.mark.parametrize("owner_text,expected", [
+    ("from . import storage", "forbidden owner storage"),
+    ("from .execution import model", "forbidden owner execution"),
+    ("from . import inner", "forbidden owner shadow_ledger"),  # two hops
+    ("import socket", "network module socket"),
+    ("import os\nKEY = os.environ.get('K')", "environment read"),
+    ("import os\nKEY = os.getenv('K')", "environment read"),
+    ("import subprocess", "banned module subprocess"),
+    ("import requests", "network module requests"),
+])
+def test_transitive_probes_are_caught(owner_text, expected):
+    fakes = {"probe_owner": owner_text, "inner": "from .shadow_ledger import AccountState"}
+    package = {"edge_lab/wallet_intel/x.py": "from ..probe_owner import thing"}
+    hits = transitive_violations(package, read_owner=lambda o: fakes.get(o))
+    assert any(expected in h for h in hits), hits
+    assert transitive_violations({"edge_lab/wallet_intel/x.py": "from ..probe_owner import t"},
+                                 read_owner=lambda o: "import json" if o == "probe_owner" else None) == []
 
 
 def test_importing_the_package_loads_no_network_or_execution_module():

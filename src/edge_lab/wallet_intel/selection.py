@@ -219,16 +219,21 @@ def walk_forward(start: datetime, end: datetime, *, train: timedelta, test: time
 class MultipleTestingReport:
     trials: int
     p_values: dict[str, float]
+    hypotheses: int  # trials x candidates tested: the m used by Benjamini-Hochberg
     survivors: frozenset[str]
     q: float
     note: str = ("One-sided binomial p-values of per-event wins against 0.5. Prices make 0.5 the wrong null "
-                 "for most binary contracts, so this is a screen for small lucky samples, not an edge test.")
+                 "for most binary contracts, so this is a screen for small lucky samples, not an edge test. "
+                 "Every earlier selection trial is counted as having tested every candidate again.")
 
 
 def multiple_testing(manifest: SelectionManifest, *, q: float = 0.10) -> MultipleTestingReport:
+    """Benjamini-Hochberg over this manifest's candidates, with m = cumulative trials x candidates, so
+    re-running selection rules on the same data makes survival harder, never easier."""
     p = {}
     for r in manifest.records:
         rate = r.dimensions.get("event_win_rate") if r.dimensions else None
         if rate:
             p[r.account_key] = binomial_tail_p(rate["wins"], rate["trials"])
-    return MultipleTestingReport(manifest.trials, p, benjamini_hochberg(p, q=q) if p else frozenset(), q)
+    m = max(1, manifest.trials) * len(p)
+    return MultipleTestingReport(manifest.trials, p, m, benjamini_hochberg(p, q=q, m=m) if p else frozenset(), q)

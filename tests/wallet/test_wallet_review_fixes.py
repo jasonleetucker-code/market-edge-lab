@@ -178,3 +178,29 @@ def test_f7_unknown_fill_stops_new_entries_and_blanks_the_ladder_count():
     rows = ladder(sigs, limits(), enrolled("L1"), sizes=[D(10)], delays=[timedelta(minutes=1)], initial_cash=D(100),
                   books=books, resolutions={}, config=config(request_outcome=first_unknown), horizon=at(days=1))
     assert rows[0].filled is None and rows[0].unknown_fills == 1 and rows[0].to_dict()["filled"] is None
+
+
+# F8: Benjamini-Hochberg counts the cumulative selection trials --------------------------------------
+def test_f8_more_trials_make_survival_harder_never_easier():
+    from edge_lab.wallet_intel.selection import multiple_testing
+    from edge_lab.wallet_intel.stats import benjamini_hochberg
+
+    p = {"x": 0.001, "y": 0.04, "z": 0.9}
+    assert benjamini_hochberg(p, q=0.1) == {"x", "y"}
+    assert benjamini_hochberg(p, q=0.1, m=30) == {"x"}  # ten trials of three candidates
+    a = acct(1)
+    rows = [obs(a, Action.TRADE_BUY, f"m{i}-yes", 10, "0.40", at(days=i), market=f"m{i}") for i in range(10)]
+    log = ObservationLog()
+    log.ingest(rows)
+    marks = {f"m{i}-yes": Mark(f"m{i}-yes", MarkKind.RESOLVED_PAYOUT, D(1), None, at(days=i, hours=6))
+             for i in range(10)}
+
+    def report(trials):  # type: ignore[no-untyped-def]
+        m = select_at(at(days=12), candidates=[Candidate(a, at(-1), "u", "v1")], logs={a.key: log},
+                      history_complete={a.key: True}, marks=marks, rule=RULE, label_version="v1", trials=trials,
+                      mark_max_age=timedelta(minutes=5))
+        return multiple_testing(m, q=0.05)
+
+    one, many = report(1), report(1000)
+    assert one.hypotheses == 1 and many.hypotheses == 1000
+    assert one.survivors == {a.key} and many.survivors == frozenset()  # 10/10 wins: p ~ 0.001 > 0.05/1000

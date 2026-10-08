@@ -149,17 +149,22 @@ def cluster_bootstrap(values_by_cluster: Mapping[str, float], *, seed: int = BOO
     return math.fsum(values) / n, lower, upper
 
 
-def benjamini_hochberg(p_values: Mapping[str, float], *, q: float = 0.10) -> frozenset[str]:
-    """Hypotheses rejected at false-discovery rate `q` (step-up procedure)."""
+def benjamini_hochberg(p_values: Mapping[str, float], *, q: float = 0.10, m: int | None = None) -> frozenset[str]:
+    """Hypotheses rejected at false-discovery rate `q` (step-up procedure).
+
+    `m` is the total number of hypotheses tested, which may exceed the p-values passed in (earlier
+    selection trials whose p-values are not at hand count as untested p = 1). It defaults to len(p)."""
     if not (0 < q < 1):
         raise ValueError("q must be in (0, 1)")
     ranked = sorted(p_values.items(), key=lambda kv: (kv[1], kv[0]))
-    m = len(ranked)
+    total = len(ranked) if m is None else m
+    if total < len(ranked):
+        raise ValueError("m cannot be smaller than the number of p-values")
     cutoff = 0
     for i, (_, p) in enumerate(ranked, 1):
         if not (0 <= p <= 1):
             raise ValueError("p-values must be in [0, 1]")
-        if p <= q * i / m:
+        if p <= q * i / total:
             cutoff = i
     return frozenset(k for k, _ in ranked[:cutoff])
 
