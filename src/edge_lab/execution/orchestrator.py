@@ -56,8 +56,8 @@ takeover between a lease read and the write after it can still let that one writ
 journal's fence check inside `prepare_attempt` remains the hard stop for a send.
 
 **Stream recovery** (package J, optional). With a `StreamSource` and `OrchestratorConfig.recovery`, the cycle drains
-the stream (bounded) before the read, before proposing (taking `recovery.marks`), and before and just after each
-decision's checks; a COMPLETE read proves or contradicts it (`recovery.prove`). A decision whose market changed since
+the stream (bounded) before the read, before proposing (taking `recovery.marks`), at the start of each decision and
+once more just before it acts; a COMPLETE read proves or contradicts it (`recovery.prove`). A decision whose market changed since
 the marks, is quarantined, or lacks a live subscription is BLOCKED and never sent. A reconnect cancels nothing.
 
 **Shutdown.** `shutdown()` persists a Disarm (no new risk), leaves resting orders alone unless `cancel_owned=True`
