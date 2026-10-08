@@ -178,6 +178,61 @@ Composition is where the dangerous paths live:
       by `dedupe_window` and `max_tracked`; past `max_tracked` the state quarantines (account-wide) rather than
       forgetting silently, except books, which forget the least recently observed one (re-seeing it is a change).
 
+14. **When a listed fill count is true (package P finding P-3; amended 2026-10-08).** Step 6 rebuilds each order's
+    lifecycle view from one read: the order listing's cumulative fill count plus the same read's fills. That count
+    was read at some moment inside the read, which no single time names. It therefore carries two times:
+    - the **lower bound** `as_of_utc`: the snapshot's `observed_at`, min(read start, `manifest.as_of_start`), as
+      before. The dispute check (a count below fills clearly before it) and the not-found delay
+      (`NOT_FOUND_MIN_DELAY`) use it;
+    - the **upper bound** `as_of_upper_utc`: `ReadManifest.data_true_by`, the latest of the read's end plus
+      `account.CLOCK_SKEW`, the closing `as_of_end`, and the latest order or fill stamp the read returned
+      (`latest_record_at`: a record existed when it was read).
+
+    A fill is on top of the count only if stamped after the upper bound (and never inside the lifecycle's own
+    `TIMESTAMP_SKEW` window, which the upper bound only widens). A fill between the bounds may already be inside
+    the count: it is never added on top, and the view stays `fill_timing_uncertain` (fees are not reported
+    complete). Uncertain is never coerced to "not covered" or to "covered and settled"; the fills received remain
+    a lower bound, so a fill listing read after the order listing still raises `filled`. The same holds for a final
+    count: an order canceled or executed inside the band keeps the venue's count (before, the band's fills on top
+    of it exceeded it, FILL_EXCEEDS_OPEN_QUANTITY, and the order quarantined).
+
+    *What is guaranteed, and what is checked.* Because the upper bound covers every order and fill of the read, no
+    fill of one read is ever added on top of that read's own count, whatever the clocks do. Separately, a venue
+    clock leading ours by more than `CLOCK_SKEW` breaks the read's timing assumption. The opening as_of check
+    (USER_DATA_AS_OF_IN_FUTURE) misses such a lead when the as_of itself lags (a lead L with as_of lag A is caught
+    there only if L - A > 5 s), so the read also checks its records: an order or fill stamped after the read's end
+    plus `CLOCK_SKEW` is RECORD_STAMPED_IN_FUTURE. Either problem makes the read not COMPLETE and leaves live orders
+    and fills unknown (None), so step 6 folds nothing from it and the incident disarms. A lead that neither the as_of
+    nor any record shows goes undetected, but then no record of the read is stamped beyond the clock bound either.
+    The package P review reproduced the gap this closes: a venue 7 s ahead with its as_of 3 s behind gave a COMPLETE
+    read and 6 fills recorded against the venue's 3.
+
+    Before this rule the count was labelled with the lower bound alone. Any fill stamped more than 2 s after it
+    was added on top of a count that already held it, whenever the venue's user-data as_of lagged the read start by
+    more than 2 s (accepted up to `max_data_lag`) or our clock trailed the venue's by 2-5 s (accepted up to
+    `CLOCK_SKEW`). The journal then recorded 6 fills where the venue had 3, and the reservation went BOUND while
+    the order rested (`tests/execution/test_fill_label.py`). This rule involves two tolerances, and the
+    orchestrator defines neither: `account.CLOCK_SKEW` (how far the venue's clock may lead ours in an account read)
+    and `lifecycle.TIMESTAMP_SKEW` (how far a fill stamp and a snapshot time may disagree). They are not the only
+    clock tolerances in the package: `reservations.SNAPSHOT_CLOCK_SKEW` (a snapshot's observation time ahead of
+    `now`), `recovery`'s `max_clock_skew` (stream stamps ahead of receipt) and the orchestrator's
+    `SIGNAL_CLOCK_SKEW` (a signal's issue time) are separate, each owned by its module; consolidating them is out
+    of scope here.
+
+    A one-sided alternative (label the count with the upper bound only) also fixes P-3, but it would judge disputes
+    at the read's end. A fill listing and an order listing that race inside one read would then quarantine falsely.
+
+    *The lookup receipt.* Its payload now records everything `filled_quantity` is derived from: the order and fill
+    records, `as_of_utc` (lower), `as_of_upper_utc` (upper), `authoritative_complete`, and the view's conclusion
+    (`fill_timing_uncertain`, `fees_complete`). Re-folding the payload with the versioned lifecycle code reproduces
+    the recorded count (`test_a_fill_just_before_a_read_is_recorded_once`); before, the payload held only the lower
+    bound and re-derived 6 where the receipt said 3. This changes the payload, and so the receipt ids, of every
+    lookup receipt. Demonstration B's pinned hash (`d331d6eb…`) is nevertheless unchanged, and was not re-pinned:
+    its summary hashes cycle outcomes, counts, states, the venue's end state, attempts, the chain's event count and
+    record-type counts, none of which includes a receipt id or payload. The demonstration summary was dumped before
+    and after the payload change and is byte-identical. Its fixture venue also stamps fills 10 minutes behind every
+    read, so no fill falls between the bounds there.
+
 ## Alternatives rejected
 
 - **Make the orchestrator a capability user (import transport).** That is not needed, and it would widen
