@@ -55,7 +55,8 @@ def test_a_kill_at_a_random_point_then_restart_keeps_every_invariant(tmp_path, s
     state = tmp_path / "venue.pickle"
     rig.adapter.save(str(state))
     rig.journal.close()  # this process's orchestrator is abandoned; the child takes over the store
-    plan = {"seed": seed, "kill_at": 0, "cycles": CHILD_CYCLES, "at": cs.at_text(rig.clock),
+    cycles = CHILD_CYCLES if label is None else 3 * CHILD_CYCLES  # sends are rarer than commits
+    plan = {"seed": seed, "kill_at": 0, "cycles": cycles, "at": cs.at_text(rig.clock),
             "markets": list(rig.markets), "label": label}
 
     dry = tmp_path / "dry"
@@ -64,7 +65,9 @@ def test_a_kill_at_a_random_point_then_restart_keeps_every_invariant(tmp_path, s
     shutil.copy(state, dry / state.name)
     counted = _child(rig, dry / rig.jpath.name, dry / state.name, plan)
     assert counted.returncode == 3, counted.stderr[-3000:]
-    points = json.loads(re.search(r"SURVIVED (\{.*\})", counted.stdout).group(1))[label or "all"]
+    points = json.loads(re.search(r"SURVIVED (\{.*\})", counted.stdout).group(1)).get(label or "all", 0)
+    if points == 0:  # recorded, not hidden: this seed's plan sends nothing (every signal was blocked or expired)
+        pytest.skip(f"seed={seed}: the plan has no {label} kill point")
 
     plan["kill_at"] = rng.randint(1, points)
     proc = _child(rig, rig.jpath, state, plan)

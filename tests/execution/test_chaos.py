@@ -179,7 +179,8 @@ def test_a_journal_locked_mid_cycle_loses_nothing(tmp_path, seed):
     except JournalBusy:
         raised = True
     assert raised == (calls["n"] >= at), (seed, at, calls["n"])  # once the lock is taken, the cycle fails loud
-    holder.execute("ROLLBACK")
+    if holder.in_transaction:
+        holder.execute("ROLLBACK")
     holder.close()
     rig.send = rig.adapter
     cs.check_invariants(rig.journal, rig.adapter, live=rig.orch)
