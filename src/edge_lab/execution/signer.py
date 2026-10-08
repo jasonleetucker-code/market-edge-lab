@@ -10,8 +10,9 @@ The signature is standard base64.
 - **Key type from the parsed key** (AUTH-04): an `Ed25519PrivateKey` signs the text directly (AUTH-02); an
   `RSAPrivateKey` signs with RSA-PSS, SHA-256, MGF1(SHA-256) and a salt as long as the digest (AUTH-03). The PEM
   label is never read: a PKCS#8 "PRIVATE KEY" block can hold either type.
-- **No arbitrary signing.** `Signer.sign` accepts only a `kalshi_wire.WireRequest`, re-validated against the
-  endpoint allowlist, for the signer's own environment and account.
+- **No arbitrary signing.** `Signer.sign` accepts only an exact `kalshi_wire.WireRequest` (no subclass),
+  re-validated against the endpoint allowlist, for the signer's own environment and account. The method and path
+  come from the endpoint spec and the validated fields, never from the request's own methods.
 - **The caller supplies the key** as PEM bytes or a parsed key object. Nothing here reads a file or an
   environment variable. The key is never returned, logged, printed, copied or pickled, and `repr` is redacted.
 - **Only authorized environments.** A signer cannot be built for DEMO or PRODUCTION while
@@ -185,7 +186,9 @@ class Signer:
     def presign_text(request: kalshi_wire.WireRequest, timestamp_ms: int) -> str:
         """The exact text that is signed for `request` at `timestamp_ms` (AUTH-05)."""
         kalshi_wire.check_allowlisted(request)
-        return f"{_timestamp_text(timestamp_ms)}{request.method.value}{request.full_path}"
+        # From the endpoint spec and the validated path, never the request's own (overridable) methods.
+        return (f"{_timestamp_text(timestamp_ms)}{kalshi_wire.request_method(request).value}"
+                f"{kalshi_wire.request_full_path(request)}")
 
     def sign(self, request: kalshi_wire.WireRequest, *, timestamp_ms: int) -> AuthValues:
         kalshi_wire.check_allowlisted(request)

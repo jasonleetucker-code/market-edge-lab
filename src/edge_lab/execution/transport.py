@@ -8,6 +8,8 @@
 - **No default opener.** The caller injects `opener(request, timeout)`. There is no network default.
 - **Allowlists.** The host must be one of the environment's hosts (conformance); the method and path must match
   an allowlisted endpoint template (kalshi_wire); the request must be for the signer's environment and account.
+  The request must be exactly a `WireRequest`, not a subclass, and the method, URL, write-ness and retry policy
+  come from its endpoint spec and validated fields, never from its own (overridable) methods.
 - **Redirects and TLS depend on the opener.** The transport never follows a redirect it can see: a 3xx status,
   a 3xx `HTTPError` or a final URL that differs from the one sent is refused (AMBIGUOUS for a write). It creates
   no SSL context and passes none. Whether credentials are forwarded on a redirect, and whether certificates are
@@ -250,12 +252,13 @@ class Transport:
             raise RequestNotAllowed(f"{name}: priority must be a Priority")
         if priority is Priority.PROTECTIVE and not request.endpoint.value.protective:
             raise RequestNotAllowed(f"{name}: only cancels, decreases and reads may use reserved capacity")
-        url = f"https://{self._host}{request.full_path}"
+        full_path = kalshi_wire.request_full_path(request)
+        url = f"https://{self._host}{full_path}"
         if request.query:
-            url += "?" + request.query_string()
+            url += "?" + kalshi_wire.request_query_string(request)
         parts = urlsplit(url)
         if parts.scheme != "https" or parts.hostname != self._host or parts.port is not None or parts.username \
-                or parts.password or parts.path != request.full_path:
+                or parts.password or parts.path != full_path:
             raise HostNotAllowed(f"{name}: the built URL left the allowlisted host")
         return url
 
@@ -265,10 +268,11 @@ class Transport:
         headers["KALSHI-ACCESS-KEY"] = auth.key_id
         headers["KALSHI-ACCESS-SIGNATURE"] = auth.signature
         headers["KALSHI-ACCESS-TIMESTAMP"] = auth.timestamp_ms
-        if request.method is HttpMethod.POST:
+        method = kalshi_wire.request_method(request)  # from the endpoint spec, never the request's own property
+        if method is HttpMethod.POST:
             headers["Content-Type"] = "application/json"
             return Request(url, data=request.body, headers=headers, method="POST")
-        if request.method is HttpMethod.DELETE:
+        if method is HttpMethod.DELETE:
             return Request(url, headers=headers, method="DELETE")
         return Request(url, headers=headers, method="GET")
 
@@ -277,7 +281,7 @@ class Transport:
     def send(self, request: WireRequest, *, priority: Priority = Priority.ORDINARY) -> TransportResult:
         url = self._check(request, priority)
         name = request.endpoint.name
-        if request.is_write():
+        if kalshi_wire.request_is_write(request):  # the retry policy follows the endpoint spec
             return self._attempt(request, url, write=True, priority=priority, attempt=1)
         result = TransportResult(Outcome.UNAVAILABLE, name, None, 0, "no attempt made")
         for attempt in range(1, self._read_attempts + 1):
@@ -300,7 +304,7 @@ class Transport:
         try:
             parsed = parser(result.body)
         except Exception:  # a parser bug is as unknowable as a malformed body
-            outcome = Outcome.AMBIGUOUS if request.is_write() else Outcome.UNAVAILABLE
+            outcome = Outcome.AMBIGUOUS if kalshi_wire.request_is_write(request) else Outcome.UNAVAILABLE
             return TransportResult(outcome, result.endpoint, result.status, result.attempts, "UNPARSEABLE_SUCCESS",
                                    result.body)
         return TransportResult(Outcome.OK, result.endpoint, result.status, result.attempts, "OK", result.body, parsed)

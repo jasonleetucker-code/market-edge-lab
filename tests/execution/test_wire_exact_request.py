@@ -17,7 +17,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
-from dataclasses import fields
+from dataclasses import dataclass, fields
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
@@ -143,11 +143,13 @@ GENUINE_METHOD = {e: e.value.method.value for e in w.Endpoint}
 WIRE_PIN = "e8b925f11326f6649e61960b3eecc6ad5e3787abb7974f5222eba31a5a8d0d9f"
 
 
-def wire_record(signer) -> list[dict]:
+def wire_record(signer, wrap=lambda request: request) -> list[dict]:
+    """What reaches the opener for each endpoint's genuine request, sent as `wrap(request)`. The pre-sign text
+    is always computed from the genuine request, so a lying wrapper cannot vouch for its own signature."""
     rows = []
     for endpoint, request in every_endpoint().items():
         opener = Opener(Response(500), Response(500), Response(500))  # unknown: reads retry, writes never do
-        result = transport(signer, opener).send(request, priority=priority_for(request))
+        result = transport(signer, opener).send(wrap(request), priority=priority_for(request))
         sent = opener.calls[0]
         headers = {k.lower(): v for k, v in sent.header_items()}
         signature = headers.pop("kalshi-access-signature")
@@ -175,3 +177,219 @@ def test_every_allowlisted_endpoint_goes_out_byte_identical(signer):
         assert (row["body"] is not None) == (endpoint.value.method is w.HttpMethod.POST)
     blob = json.dumps(rows, sort_keys=True, separators=(",", ":")).encode("utf-8")
     assert hashlib.sha256(blob).hexdigest() == WIRE_PIN
+
+
+# ---------------------------------------------------------------------------------------------- lying subclasses
+
+
+class WriteClaimingRead(w.WireRequest):
+    def is_write(self) -> bool:
+        return False
+
+
+class ReadClaimingWrite(w.WireRequest):
+    def is_write(self) -> bool:
+        return True
+
+
+class ClaimsGet(w.WireRequest):
+    @property
+    def method(self) -> w.HttpMethod:
+        return w.HttpMethod.GET
+
+
+class PathElsewhere(w.WireRequest):
+    @property
+    def full_path(self) -> str:
+        return c.API_PATH_PREFIX + "/portfolio/balance"
+
+
+class QueryElsewhere(w.WireRequest):
+    def query_string(self) -> str:
+        return "subaccount=7"
+
+
+class Liar(w.WireRequest):
+    """Every overridable answer is wrong: write-ness negated, the method swapped, the path pointed at another
+    allowlisted route and the query replaced."""
+
+    def _genuine_write(self) -> bool:
+        return self.endpoint.value.bucket is w.Bucket.WRITE
+
+    def is_write(self) -> bool:
+        return not self._genuine_write()
+
+    @property
+    def method(self) -> w.HttpMethod:
+        return w.HttpMethod.POST if self.endpoint.value.method is w.HttpMethod.GET else w.HttpMethod.GET
+
+    @property
+    def full_path(self) -> str:
+        return c.API_PATH_PREFIX + ("/portfolio/balance" if self._genuine_write() else "/portfolio/events/orders")
+
+    def query_string(self) -> str:
+        return "subaccount=7"
+
+
+class Plain(w.WireRequest):
+    """Overrides nothing: still not the exact type."""
+
+
+@dataclass(frozen=True)
+class DataclassSub(w.WireRequest):
+    pass
+
+
+def as_(cls, request: w.WireRequest) -> w.WireRequest:
+    return cls(**{f.name: getattr(request, f.name) for f in fields(w.WireRequest)})
+
+
+def balance():
+    return w.build_get_balance(SCOPE)
+
+
+LYING = [
+    (WriteClaimingRead, lambda: every_endpoint()[w.Endpoint.ORDER_CREATE]),
+    (ReadClaimingWrite, balance),
+    (ClaimsGet, lambda: w.build_cancel(SCOPE, ORDER_ID, exchange_index=0)),
+    (PathElsewhere, lambda: every_endpoint()[w.Endpoint.ORDER_CREATE]),
+    (QueryElsewhere, lambda: every_endpoint()[w.Endpoint.GET_ORDERS]),
+    (Liar, balance),
+    (Plain, balance),
+    (DataclassSub, balance),
+]
+LYING_IDS = [cls.__name__ for cls, _ in LYING]
+
+
+def test_the_lying_subclasses_really_lie():
+    """Guard against a vacuous suite: each subclass's overridden answer differs from the genuine one."""
+    create = every_endpoint()[w.Endpoint.ORDER_CREATE]
+    assert create.is_write() and not as_(WriteClaimingRead, create).is_write()
+    assert not balance().is_write() and as_(ReadClaimingWrite, balance()).is_write()
+    cancel = w.build_cancel(SCOPE, ORDER_ID, exchange_index=0)
+    assert cancel.method is w.HttpMethod.DELETE and as_(ClaimsGet, cancel).method is w.HttpMethod.GET
+    assert as_(PathElsewhere, create).full_path != create.full_path
+    orders = every_endpoint()[w.Endpoint.GET_ORDERS]
+    assert as_(QueryElsewhere, orders).query_string() != orders.query_string()
+    for request in every_endpoint().values():
+        liar = as_(Liar, request)
+        assert liar.is_write() != request.is_write() and liar.method is not request.method
+        assert liar.full_path != request.full_path and liar.query_string() != request.query_string()
+        assert all(getattr(liar, f.name) == getattr(request, f.name) for f in fields(w.WireRequest))  # same fields
+
+
+@pytest.mark.parametrize("cls,make", LYING, ids=LYING_IDS)
+def test_check_allowlisted_refuses_anything_but_the_exact_type(cls, make):
+    genuine = make()
+    assert w.check_allowlisted(genuine) is genuine
+    with pytest.raises(ValueError):
+        w.check_allowlisted(as_(cls, genuine))
+
+
+def test_a_subclass_built_without_init_is_refused_too():
+    tampered = object.__new__(Plain)
+    for f in fields(w.WireRequest):
+        object.__setattr__(tampered, f.name, getattr(balance(), f.name))
+    with pytest.raises(ValueError):
+        w.check_allowlisted(tampered)
+
+
+@pytest.mark.parametrize("cls,make", LYING, ids=LYING_IDS)
+def test_signer_transport_and_account_refuse_a_lying_subclass(signer, cls, make):
+    lying = as_(cls, make())
+    with pytest.raises(ValueError):
+        signer.sign(lying, timestamp_ms=NOW_MS)
+    with pytest.raises(ValueError):
+        s.Signer.presign_text(lying, NOW_MS)
+    opener = Opener(Response(201, CREATE_ACK), Response(201, CREATE_ACK), Response(201, CREATE_ACK))
+    with pytest.raises(t.RequestNotAllowed):
+        transport(signer, opener).send(lying, priority=priority_for(lying))
+    with pytest.raises(t.RequestNotAllowed):
+        transport(signer, opener).send_and_parse(lying, w.parse_create_ack, priority=priority_for(lying))
+    assert opener.calls == []
+    with pytest.raises(a.AccountReadError):
+        a.check_read_request(lying)
+
+
+def test_the_package_m_probe_is_refused_before_anything_is_sent(signer):
+    """The finding: an ORDER_CREATE whose subclass said `is_write() == False` went out as POST three times and was
+    reported UNAVAILABLE. It is now refused before signing; nothing reaches the opener."""
+    opener = Opener(Response(500), Response(500), Response(500))
+    with pytest.raises(t.RequestNotAllowed):
+        transport(signer, opener).send(as_(WriteClaimingRead, every_endpoint()[w.Endpoint.ORDER_CREATE]))
+    assert opener.calls == []
+
+
+# ---------------------------------------------------------------------------------------------- guard bypassed
+
+
+def _isinstance_only(request: object) -> w.WireRequest:
+    """The guard as it was before this change: any subclass passes, fields re-validated."""
+    if not isinstance(request, w.WireRequest):
+        raise ValueError("only a kalshi_wire.WireRequest is accepted")
+    w.WireRequest(request.endpoint, request.scope, request.path, request.query, request.body, request.exchange_index)
+    return request
+
+
+@pytest.fixture
+def bypass(monkeypatch):
+    """Defence in depth: as if the exact-type check were missing. Every decision must still follow the spec."""
+    monkeypatch.setattr(w, "check_allowlisted", _isinstance_only)
+    assert w.check_allowlisted(as_(Liar, balance())) is not None
+
+
+def test_bypassed_every_endpoint_still_goes_out_as_its_spec_says(signer, bypass):
+    """Method, URL (path and query), body, auth headers, signature and retry count, for every allowlisted endpoint,
+    are those of the genuine request although every overridable answer of the subclass is wrong."""
+    assert wire_record(signer, lambda r: as_(Liar, r)) == wire_record(signer)
+
+
+def test_bypassed_the_package_m_probe_is_sent_once_and_ambiguous(signer, bypass):
+    opener = Opener(Response(500), Response(500), Response(201, CREATE_ACK))
+    result = transport(signer, opener).send(as_(WriteClaimingRead, every_endpoint()[w.Endpoint.ORDER_CREATE]))
+    assert result.outcome is t.Outcome.AMBIGUOUS and result.attempts == 1 and len(opener.calls) == 1
+    assert opener.calls[0].get_method() == "POST"
+
+
+def test_bypassed_a_read_claiming_write_is_still_retried_as_a_read(signer, bypass):
+    opener = Opener(Response(500), Response(500), Response(200, BALANCE_BODY))
+    result = transport(signer, opener).send(as_(ReadClaimingWrite, balance()))
+    assert result.outcome is t.Outcome.OK and result.attempts == 3 and len(opener.calls) == 3
+
+
+@pytest.mark.parametrize("cls,make,outcome", [
+    (WriteClaimingRead, lambda: every_endpoint()[w.Endpoint.ORDER_CREATE], t.Outcome.AMBIGUOUS),
+    (ReadClaimingWrite, balance, t.Outcome.UNAVAILABLE),
+], ids=["write-claiming-read", "read-claiming-write"])
+def test_bypassed_an_unparseable_2xx_is_classified_by_the_spec(signer, bypass, cls, make, outcome):
+    opener = Opener(Response(201, b"<html>ok</html>"))
+    result = transport(signer, opener).send_and_parse(as_(cls, make()), w.parse_create_ack)
+    assert result.outcome is outcome and result.reason == "UNPARSEABLE_SUCCESS" and len(opener.calls) == 1
+
+
+@pytest.mark.parametrize("endpoint", list(w.Endpoint), ids=lambda e: e.name)
+def test_bypassed_the_signer_signs_what_the_spec_says(signer, bypass, endpoint):
+    genuine = every_endpoint()[endpoint]
+    liar = as_(Liar, genuine)
+    text = s.Signer.presign_text(genuine, NOW_MS)
+    assert text == f"{NOW_MS}{endpoint.value.method.value}{c.API_PATH_PREFIX}{genuine.path}"
+    assert s.Signer.presign_text(liar, NOW_MS) == text
+    for cls in (ClaimsGet, PathElsewhere):
+        assert s.Signer.presign_text(as_(cls, genuine), NOW_MS) == text
+    auth = signer.sign(liar, timestamp_ms=NOW_MS)
+    signer.public_key().verify(base64.b64decode(auth.signature), text.encode("utf-8"))
+
+
+def test_bypassed_the_account_read_guard_follows_the_spec(bypass):
+    reading = as_(ReadClaimingWrite, w.build_get_balance(SCOPE))
+    assert a.check_read_request(reading) is reading  # a read is a read, whatever it claims
+    with pytest.raises(a.AccountReadError):
+        a.check_read_request(as_(WriteClaimingRead, w.build_cancel(SCOPE, ORDER_ID, exchange_index=0)))
+
+
+def test_the_spec_helpers_agree_with_the_genuine_methods():
+    for request in every_endpoint().values():
+        assert w.request_method(request) is request.method
+        assert w.request_is_write(request) is request.is_write()
+        assert w.request_full_path(request) == request.full_path
+        assert w.request_query_string(request) == request.query_string()

@@ -2,7 +2,8 @@
 
 - **Builders** turn a `model.OrderIntent` (or an account read) into a `WireRequest`: an allowlisted endpoint, a
   path relative to the API root, a canonical query and a deterministic JSON body. Nothing here sends, signs or
-  holds a credential; `transport.py` sends and `signer.py` signs, and both accept only a `WireRequest`.
+  holds a credential; `transport.py` sends and `signer.py` signs, and both accept only an exact `WireRequest`
+  (`check_allowlisted`) and decide from its endpoint spec (`request_method`, `request_is_write`, ...).
 - **Parsers** turn response bytes into typed, frozen records with `Decimal` values. A missing or null required
   field raises `WireFormatError`; it is never read as zero. Unknown extra fields are kept in `extra`.
 
@@ -208,28 +209,54 @@ class WireRequest:
         elif self.exchange_index is not None:
             raise ValueError("only writes carry a billing shard")
 
+    # Conveniences for callers. Safety code (signer, transport, account) never calls these: a subclass could
+    # override them. It uses the module functions below, which read the endpoint spec and the validated fields.
+
     @property
     def method(self) -> HttpMethod:
-        return self.endpoint.value.method
+        return request_method(self)
 
     @property
     def full_path(self) -> str:
         """The path from the host root: the API prefix plus `path`. This is what is signed (AUTH-05)."""
-        return c.API_PATH_PREFIX + self.path
+        return request_full_path(self)
 
     def query_string(self) -> str:
-        return urlencode(self.query)
+        return request_query_string(self)
 
     def is_write(self) -> bool:
-        return self.endpoint.value.bucket is Bucket.WRITE
+        return request_is_write(self)
 
 
 def check_allowlisted(request: object) -> WireRequest:
-    """`request` if it is a `WireRequest` on the allowlist (re-validated); otherwise raises."""
-    if not isinstance(request, WireRequest):
-        raise ValueError("only a kalshi_wire.WireRequest is accepted")
+    """`request` if it is exactly a `WireRequest` on the allowlist (re-validated); otherwise raises.
+
+    The type must be exactly `WireRequest`, not a subclass: a subclass can override `is_write`, `method`,
+    `full_path` or `query_string` and so disagree with the endpoint it names (ADR 0043, exact-type rule)."""
+    if type(request) is not WireRequest:
+        raise ValueError("only a kalshi_wire.WireRequest (exactly, not a subclass) is accepted")
     WireRequest(request.endpoint, request.scope, request.path, request.query, request.body, request.exchange_index)
     return request
+
+
+# Spec-derived answers for safety decisions. Each reads only the endpoint specification and the request's plain,
+# validated fields, never a method a subclass could override.
+
+
+def request_method(request: WireRequest) -> HttpMethod:
+    return request.endpoint.value.method
+
+
+def request_is_write(request: WireRequest) -> bool:
+    return request.endpoint.value.bucket is Bucket.WRITE
+
+
+def request_full_path(request: WireRequest) -> str:
+    return c.API_PATH_PREFIX + request.path
+
+
+def request_query_string(request: WireRequest) -> str:
+    return urlencode(request.query)
 
 
 # ---------------------------------------------------------------------------------------------- formatting
