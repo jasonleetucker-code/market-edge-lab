@@ -759,11 +759,15 @@ be written here when they are made.
       under these conditions:
       - Diagnostics run only under a registered candidate whose `evidence_use.jsonl` and `covered_scopes` exist
         before the first look. Every use is recorded through `research_evidence`.
-      - Each candidate protocol declares `prohibited_inputs` (`exp001:`, `shadow_ledger:`),
-        `prohibited_label_scopes = ["kalshi:KXHIGHNY"]` and the settled-field `prohibited_fields`, as EXP-003
-        does. KXHIGHNY labels therefore cannot arrive through settled fields in market snapshots.
-      - NFL moneyline (EXP-002's covered scope `sports:nfl:moneyline`, family A's hypothesis) is excluded from
-        Track B diagnostics.
+      - Each candidate protocol declares at least EXP-003's full `prohibited_inputs` list (including `exp001:`,
+        `shadow_ledger:`, `nws_pfm:`, `nws_cli:` and `kalshi_settlement:`), plus
+        `prohibited_label_scopes = ["kalshi:KXHIGHNY"]` and the settled-field `prohibited_fields`. Settled fields
+        must be dropped; a reader that does not consume the protocol drops them explicitly.
+      - Excluded from Track B diagnostics:
+        - family A's mechanism (sportsbook information versus executable event-market pricing) on any sport;
+        - family B's mechanism (same-venue payoff consistency) on any series;
+        - NHL outcome analysis. NHL is DEVELOPMENT_ONLY and not a research family, and an NHL model is not
+          authorized (2026-09-29 entry).
       - An inspected outcome window is consumed (`holdout-status`) and can never support an untouched or
         prospective claim.
       - Per the directive's §11, these diagnostics are exploratory. They are not an ACTIVE family and not tuning
@@ -776,9 +780,9 @@ be written here when they are made.
     - **One consolidated owner approval packet.**
   - **Merge:** this directive quotes no merge grant.
     - Track B docs-only PRs merge under the standing docs-only rule below.
-    - Track B code that extends an owner already covered by a recorded delegation (for example `wallet_intel/`
-      under the 2026-10-07 evening entry, or #181 scope under the 2026-10-08 JEV entry) merges under that
-      delegation's conditions.
+    - Track B code whose change falls inside another entry's authorized list (for example JEV items A–G, or the
+      2026-10-07 evening wallet-lane items) merges under that entry's conditions. Touching an owner that entry
+      covers is not enough.
     - Any other Track B research code PR needs the owner's merge approval. The approval packet asks for a
       standing delegation.
   - **Not authorized (each needs its own recorded owner approval):**
