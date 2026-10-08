@@ -68,3 +68,13 @@ def _replacement(match: re.Match[str]) -> str:
 
 def contains_secret(text: str) -> bool:
     return any(p.search(text) for p in _PATTERNS)
+
+
+# A value `redact_text` already replaced, in the forms it writes ("name=REDACTED") or a header keeps ("Name: REDACTED").
+_REDACTED_VALUE = re.compile(r"\s*[:=]\s*" + re.escape(REDACTED) + r"(?![A-Za-z0-9_])")
+
+
+def contains_unredacted_secret(text: str) -> bool:
+    """Whether text that has already been through `redact_text` still holds a secret: the same patterns, with every
+    value redaction replaced set aside (otherwise "Authorization=REDACTED" would itself look like a credential)."""
+    return contains_secret(_REDACTED_VALUE.sub("", text))

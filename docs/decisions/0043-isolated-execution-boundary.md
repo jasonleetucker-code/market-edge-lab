@@ -41,7 +41,8 @@ Two opposite failures are possible:
    the full research rules. A copy, a rename or a new file inherits nothing.
 3. **The package imports only reviewed owners and a restricted standard library.**
    - Network modules (`socket`, `ssl`, `http`, `urllib`, ...) only in `transport.py`.
-   - `sqlite3` only in the journal and reservation files.
+   - `sqlite3` only in the journal and reservation files. Amended 2026-10-08 (package O, ADR 0048): `sqlite3` is also
+     allowed in `journal_backup.py`, only for read-only consistent snapshots and for restores to a new path.
    - No process, dynamic-import or serialization modules (`subprocess`, `multiprocessing`, `importlib`, `runpy`,
      `pickle`, ...) and no environment access, anywhere in the package.
 
