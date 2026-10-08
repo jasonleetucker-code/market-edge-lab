@@ -28,7 +28,9 @@ Pinned from the documentation (retrieved 2026-10-07; facts and URLs in
   error. Vendor P&L and value fields are kept as vendor-reported numbers and never used as ROI.
 - **Errors:** `{"error", "code", "retryable", "trace_id", "parameter"?}`; codes invalid_request=400,
   not_found=404, method_not_allowed=405, rate_limited=429, internal=500, request_timeout=503,
-  dependency_unavailable=503. 429 and 503 carry Retry-After.
+  dependency_unavailable=503. 429 and 503 carry Retry-After. The rate-limits page says over-limit requests
+  are throttled rather than rejected (`/v2/activity` 200 requests per 10 s); the overview says heavy load
+  answers 429. Both end a walk as incomplete or slow it, never as the end of the data.
 - **Windows:** an omitted or 0 `start` floors to three years back; `start=1` asks for full history.
   Deposits and withdrawals are excluded by default.
 

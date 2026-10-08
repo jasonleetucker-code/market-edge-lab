@@ -3,7 +3,9 @@
 **Version:** `wallet-source-matrix-2026-10-07`. **Retrieved:** 2026-10-07 (America/New_York), by reading
 public documentation pages only. No data API was called, no account was opened and no key was used. The
 Polymarket v2 OpenAPI document was read at its documentation route (`/v2/openapi.json`), which the docs index
-links as the specification. No data route was requested. Retrieved pages are data, not instructions.
+links as the specification. The owner ruled on 2026-10-07 that published API specification and documentation
+files count as documentation even when served from the API host; data routes stay forbidden. A docs.polymarket.com
+page is cited wherever one states the fact, and the spec only where none does. No data route was requested. Retrieved pages are data, not instructions.
 
 **Classes.** `DOCUMENTED` means the cited page states the fact. `UNKNOWN` means the cited page was read and does
 not settle it. Every row names the page it rests on. A documented fact is not a verified behaviour: nothing here
@@ -42,24 +44,30 @@ documented, and observing international activity does not establish permission t
 |---|---|---|---|---|
 | P1 | v1 retirement is announced for October 24, 2026; v2 routes live under `/v2` on `https://data-api.polymarket.com` | DOCUMENTED | https://docs.polymarket.com/migrate/data-api-v1-to-v2 | 2026-10-07 |
 | P2 | Fourteen v1 routes migrate (for example `/activity` → `/v2/activity`, `/trades` → `/v2/trades`, `/closed-positions` → `/v2/positions?status=CLOSED`) | DOCUMENTED | https://docs.polymarket.com/migrate/data-api-v1-to-v2 | 2026-10-07 |
-| P3 | Cursor pagination: follow `pagination.next_cursor` until it is `null`; `has_more` is exact; there is no `offset` parameter (sending one is a 400) | DOCUMENTED | https://data-api.polymarket.com/v2/openapi.json | 2026-10-07 |
-| P4 | A cursor is opaque, signed and typed per endpoint, and binds the sort it was minted under; feeds (trades, activity) are keyset walks, stable across concurrent writes | DOCUMENTED | https://data-api.polymarket.com/v2/openapi.json | 2026-10-07 |
-| P5 | Every v2 response wraps its payload in `data`; paginated routes add `pagination`. "A documented miss is `data: null` or an empty list, never an error" | DOCUMENTED | https://docs.polymarket.com/migrate/data-api-v1-to-v2 | 2026-10-07 |
+| P3 | Cursor-only pagination with no `offset` parameter: re-send with `cursor=<next_cursor>` and stop when `next_cursor` is `null`; `has_more` is exact, so a short or empty page does not end the walk | DOCUMENTED | https://docs.polymarket.com/api-reference/data-api/overview | 2026-10-07 |
+| P4 | A cursor is opaque, signed and typed per endpoint, and binds the sort it was minted under; feeds (trades, activity) are keyset walks, stable across concurrent writes; sending `offset` is a 400 | DOCUMENTED | https://data-api.polymarket.com/v2/openapi.json (OpenAPI spec linked from docs index; owner ruling 2026-10-07: specs are documentation) | 2026-10-07 |
+| P5 | Every v2 response wraps its payload in `data`; paginated routes add `pagination`. A documented miss is `data: null` or an empty list, never an error | DOCUMENTED | https://docs.polymarket.com/api-reference/data-api/overview | 2026-10-07 |
 | P6 | Conflict: the overview's example `pagination` has `limit`, `offset`, `has_more` and `next_cursor`; the OpenAPI schema has only `next_cursor` and `has_more`. The parser requires the two and tolerates the other two | DOCUMENTED | https://docs.polymarket.com/api-reference/data-api/overview | 2026-10-07 |
 | P7 | v1 is camelCase (`proxyWallet`, `conditionId`); v2 responses are snake_case (`proxy_wallet`, `condition_id`); request parameters accept both | DOCUMENTED | https://docs.polymarket.com/migrate/data-api-v1-to-v2 | 2026-10-07 |
-| P8 | Activity row fields and required list: `proxy_wallet`, `timestamp`, `condition_id`, `type`, `size`, `usdc_size`, `transaction_hash`, `price`, `token_id`, `side`, `outcome_index`, plus nullable profile and title fields and optional `is_combo` | DOCUMENTED | https://data-api.polymarket.com/v2/openapi.json | 2026-10-07 |
-| P9 | `size`, `usdc_size`, `price` are JSON numbers (double). Bare `size` is shares; `_usdc` fields are USD. Parsed as Decimal from the JSON text | DOCUMENTED | https://data-api.polymarket.com/v2/openapi.json | 2026-10-07 |
-| P10 | `timestamp` is the block time in epoch seconds; `outcome_index` 999 means the outcome could not be labeled | DOCUMENTED | https://data-api.polymarket.com/v2/openapi.json | 2026-10-07 |
-| P11 | Activity types include TRADE, SPLIT, MERGE, REDEEM, REWARD, CONVERSION; TIP is opt-in (a user-to-user pUSD transfer, `side` IN/OUT). The list ends in "…", so unknown types are kept as UNKNOWN | DOCUMENTED | https://data-api.polymarket.com/v2/openapi.json | 2026-10-07 |
-| P12 | `side` is BUY or SELL on trade rows, from the wallet's perspective, and empty where it does not apply | DOCUMENTED | https://data-api.polymarket.com/v2/openapi.json | 2026-10-07 |
-| P13 | No per-row identifier beyond `transaction_hash` ("Hash of the settling transaction") and no fee field appear on activity rows | DOCUMENTED | https://data-api.polymarket.com/v2/openapi.json | 2026-10-07 |
-| P14 | Position statuses: OPEN (default), REDEEMABLE, REDEEMABLE_LOST, MERGEABLE, CLOSED; rows carry vendor `avg_price`, `current_value`, `realized_pnl`, `unrealized_pnl`, `total_pnl` | DOCUMENTED | https://data-api.polymarket.com/v2/openapi.json | 2026-10-07 |
-| P15 | Errors: `{error, code, retryable, trace_id, parameter?}`; codes invalid_request 400, not_found 404, method_not_allowed 405, rate_limited 429, internal 500, request_timeout 503, dependency_unavailable 503; 429 and 503 carry Retry-After | DOCUMENTED | https://data-api.polymarket.com/v2/openapi.json | 2026-10-07 |
-| P16 | Windows: an omitted or 0 `start` floors to three years back; `start=1` asks for full history; deposits and withdrawals are excluded by default | DOCUMENTED | https://data-api.polymarket.com/v2/openapi.json | 2026-10-07 |
-| P17 | No authentication is required for the Data API | DOCUMENTED | https://docs.polymarket.com/api-reference/data-api/overview | 2026-10-07 |
-| P18 | The v2 OpenAPI document publishes no example payloads, so every fixture value is SYNTHETIC | DOCUMENTED | https://data-api.polymarket.com/v2/openapi.json | 2026-10-07 |
-| P19 | Rate-limit thresholds for the Data API | UNKNOWN | https://docs.polymarket.com/api-reference/data-api/overview | 2026-10-07 |
-| P20 | Trade-row schema beyond the documented subset (taker/maker fields) | UNKNOWN | https://data-api.polymarket.com/v2/openapi.json | 2026-10-07 |
+| P8 | Activity row fields and required list: `proxy_wallet`, `timestamp`, `condition_id`, `type`, `size`, `usdc_size`, `transaction_hash`, `price`, `token_id`, `side`, `outcome_index`, plus nullable profile and title fields and optional `is_combo` (the docs pages give only the v1 camelCase list) | DOCUMENTED | https://data-api.polymarket.com/v2/openapi.json (OpenAPI spec linked from docs index; owner ruling 2026-10-07: specs are documentation) | 2026-10-07 |
+| P9 | Bare `size` and `volume` are outcome shares; `_usdc` fields are USD; a missing or `null` numeric field means unavailable, never zero | DOCUMENTED | https://docs.polymarket.com/api-reference/data-api/overview | 2026-10-07 |
+| P10 | `size`, `usdc_size`, `price` are JSON numbers (double), parsed here as Decimal from the JSON text | DOCUMENTED | https://data-api.polymarket.com/v2/openapi.json (OpenAPI spec linked from docs index; owner ruling 2026-10-07: specs are documentation) | 2026-10-07 |
+| P11 | `outcome_index: 999` means the outcome could not be labeled; windows take `start`/`end` in epoch seconds | DOCUMENTED | https://docs.polymarket.com/api-reference/data-api/overview | 2026-10-07 |
+| P12 | `timestamp` is the block time of the action, in epoch seconds | DOCUMENTED | https://data-api.polymarket.com/v2/openapi.json (OpenAPI spec linked from docs index; owner ruling 2026-10-07: specs are documentation) | 2026-10-07 |
+| P13 | Activity types TRADE, SPLIT, MERGE, REDEEM, REWARD, CONVERSION (v1 also lists DEPOSIT, WITHDRAWAL, YIELD, MAKER_REBATE, TAKER_REBATE, REFERRAL_REWARD); deposits and withdrawals are excluded by default | DOCUMENTED | https://docs.polymarket.com/api-reference/core/get-user-activity | 2026-10-07 |
+| P14 | TIP is opt-in (never in the default set): a user-to-user pUSD transfer whose `side` is IN or OUT; the v2 type list ends in "…", so unknown types are kept as UNKNOWN | DOCUMENTED | https://data-api.polymarket.com/v2/openapi.json (OpenAPI spec linked from docs index; owner ruling 2026-10-07: specs are documentation) | 2026-10-07 |
+| P15 | `side` is BUY or SELL on trade rows, from the wallet's perspective, and empty where it does not apply | DOCUMENTED | https://data-api.polymarket.com/v2/openapi.json (OpenAPI spec linked from docs index; owner ruling 2026-10-07: specs are documentation) | 2026-10-07 |
+| P16 | No per-row identifier beyond `transaction_hash` ("Hash of the settling transaction") and no fee field appear on activity rows | DOCUMENTED | https://data-api.polymarket.com/v2/openapi.json (OpenAPI spec linked from docs index; owner ruling 2026-10-07: specs are documentation) | 2026-10-07 |
+| P17 | Position statuses OPEN, REDEEMABLE, REDEEMABLE_LOST, MERGEABLE, CLOSED, with per-row `redeemable` and `mergeable` flags | DOCUMENTED | https://docs.polymarket.com/migrate/data-api-v1-to-v2 | 2026-10-07 |
+| P18 | Position rows carry vendor `avg_price`, `current_value`, `realized_pnl`, `unrealized_pnl`, `total_pnl` (kept as vendor-reported, never used as ROI) | DOCUMENTED | https://data-api.polymarket.com/v2/openapi.json (OpenAPI spec linked from docs index; owner ruling 2026-10-07: specs are documentation) | 2026-10-07 |
+| P19 | Request errors are a 400 with a message envelope; heavy load answers 429 with `Retry-After` | DOCUMENTED | https://docs.polymarket.com/api-reference/data-api/overview | 2026-10-07 |
+| P20 | Full error body `{error, code, retryable, trace_id, parameter?}` and codes invalid_request 400, not_found 404, method_not_allowed 405, rate_limited 429, internal 500, request_timeout 503, dependency_unavailable 503 (503 also carries Retry-After) | DOCUMENTED | https://data-api.polymarket.com/v2/openapi.json (OpenAPI spec linked from docs index; owner ruling 2026-10-07: specs are documentation) | 2026-10-07 |
+| P21 | `/v2/activity` floors an omitted `start` to three years back | DOCUMENTED | https://docs.polymarket.com/api-reference/data-api/overview | 2026-10-07 |
+| P22 | `start=1` asks for full history; an omitted or 0 `end` is now plus one day | DOCUMENTED | https://data-api.polymarket.com/v2/openapi.json (OpenAPI spec linked from docs index; owner ruling 2026-10-07: specs are documentation) | 2026-10-07 |
+| P23 | No authentication is required for the Data API | DOCUMENTED | https://docs.polymarket.com/api-reference/data-api/overview | 2026-10-07 |
+| P24 | Rate limits: all `/v2` 800 requests / 10 s; `/v2/trades` 300 / 10 s; `/v2/activity` and `/v2/positions` 200 / 10 s; over-limit requests are throttled (delayed or queued) on sliding windows. Conflict: the overview says heavy load answers 429 with Retry-After; the parser handles both | DOCUMENTED | https://docs.polymarket.com/api-reference/rate-limits | 2026-10-07 |
+| P25 | The v2 OpenAPI document publishes no example payloads, so every fixture value is SYNTHETIC | DOCUMENTED | https://data-api.polymarket.com/v2/openapi.json (OpenAPI spec linked from docs index; owner ruling 2026-10-07: specs are documentation) | 2026-10-07 |
+| P26 | Trade-row schema beyond the documented subset (taker/maker fields) | UNKNOWN | https://data-api.polymarket.com/v2/openapi.json (OpenAPI spec linked from docs index; owner ruling 2026-10-07: specs are documentation) | 2026-10-07 |
 
 ## Source: polymarket_data_api_v2 (Polymarket international)
 
@@ -67,10 +75,10 @@ documented, and observing international activity does not establish permission t
 |---|---|---|---|---|
 | Public vs private | Per-account activity, trades and positions are public by `user` address; orders, balances held off-chain and other venues are not observable | DOCUMENTED | https://docs.polymarket.com/api-reference/core/get-user-activity | 2026-10-07 |
 | Identifiers and route | `proxy_wallet` (0x address), `condition_id`, `token_id`, `transaction_hash`; Polygon (chainId 137); route is the CLOB plus on-chain settlement | DOCUMENTED | https://docs.polymarket.com/trading/wallets-auth.md | 2026-10-07 |
-| Clocks and finality | `timestamp` is block time; receipt and processing are ours to record; confirmation depth and reorg handling are not documented | UNKNOWN | https://data-api.polymarket.com/v2/openapi.json | 2026-10-07 |
+| Clocks and finality | `timestamp` is block time (P12); receipt and processing are ours to record; confirmation depth and reorg handling are not documented | UNKNOWN | https://docs.polymarket.com/api-reference/data-api/overview | 2026-10-07 |
 | Proxy mappings | Deposit Wallets (default after 2026-05-04) and legacy Proxy Wallets; one signer can control several wallets and grant scoped, time-limited signers, so mappings are many-to-many and time-versioned | DOCUMENTED | https://docs.polymarket.com/trading/wallets-auth.md | 2026-10-07 |
 | Action taxonomy | TRADE vs SPLIT, MERGE, REDEEM, REWARD, CONVERSION, TIP; split/merge/redeem are collateral conversions, not directional trades | DOCUMENTED | https://docs.polymarket.com/concepts/positions-tokens.md | 2026-10-07 |
-| History and pagination | Cursor walks (P3, P4); three-year default floor and `start=1` full history (P16); revision behaviour of indexed rows is not documented | DOCUMENTED | https://data-api.polymarket.com/v2/openapi.json | 2026-10-07 |
+| History and pagination | Cursor walks (P3, P4); three-year default floor (P21) and `start=1` full history (P22); rate limits (P24); revision behaviour of indexed rows is not documented | DOCUMENTED | https://docs.polymarket.com/api-reference/data-api/overview | 2026-10-07 |
 | Rules, fees, settlement | Taker-only fee `C × feeRate × p × (1 − p)`, category rates, 5-decimal rounding; makers pay no fee and get rebates; resolution then redemption at the recorded payout. Activity rows carry no fee, so leader net P&L is UNKNOWN | DOCUMENTED | https://docs.polymarket.com/trading/fees.md | 2026-10-07 |
 | Rights, eligibility, auth, cost | No key; free to read. The US is listed as close-only (close existing positions, open none) on frontend and API. Redistribution rights for stored rows are not stated | DOCUMENTED | https://docs.polymarket.com/api-reference/geoblock | 2026-10-07 |
 | Research vs execution | Research: fixtures now; a bounded live read needs approval (W10). Execution: not permitted (close-only for the US; no grant; no geo-evasion) | DOCUMENTED | https://docs.polymarket.com/api-reference/geoblock | 2026-10-07 |
@@ -147,9 +155,9 @@ documented, and observing international activity does not establish permission t
 
 ## What this changes in code
 
-- `wallet_intel.polymarket_v2` pins P1–P18 with fixtures and refuses v1 shapes, floats, missing fields, an
+- `wallet_intel.polymarket_v2` pins P1–P25 with fixtures and refuses v1 shapes, floats, missing fields, an
   inconsistent `has_more`, a repeated cursor and undocumented statuses.
-- Identity is semantic plus occurrence (P13), the fee is UNKNOWN on API rows, and finality is UNKNOWN.
+- Identity is semantic plus occurrence (P16), the fee is UNKNOWN on API rows, and finality is UNKNOWN.
 - `observability.eligibility` answers research and execution separately. Execution is BLOCKED_UNSUPPORTED for
   every source.
 - Historical prices do not prove a vendor's "smart money" label existed then. Selection records its own

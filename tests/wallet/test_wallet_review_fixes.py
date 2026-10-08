@@ -123,3 +123,24 @@ def test_f4_a_partly_unknown_event_is_not_a_win_and_is_not_pooled():
     acc = reconstruct(open_rows, as_of=at(days=1), history_complete=True, cash_flows_observed=True,
                       opening_balance=Labeled.observed(D(10)), marks={}, mark_max_age=timedelta(minutes=5))
     assert "E" not in event_outcomes(acc)  # a still-open market also keeps the event out
+
+
+# F5 / F8 (P19): facts cite docs.polymarket.com where a page states them; spec citations carry the ruling --
+def test_f5_spec_citations_carry_the_owner_ruling_and_docs_pages_are_preferred():
+    from test_wallet_source_matrix import _rows, _text
+
+    ruling = "owner ruling 2026-10-07: specs are documentation"
+    rows = _rows("## Polymarket Data API v2 pins")
+    for number, fact, klass, url, retrieved in rows:
+        if "openapi.json" in url:
+            assert ruling in url, number
+        else:
+            assert url.startswith("https://docs.polymarket.com/"), number
+    docs_sourced = {r[0] for r in rows if r[3].startswith("https://docs.polymarket.com/")}
+    assert {"P3", "P5", "P9", "P17", "P19", "P21", "P23", "P24"} <= docs_sourced
+    rate = next(r for r in rows if r[0] == "P24")
+    assert rate[2] == "DOCUMENTED" and rate[3] == "https://docs.polymarket.com/api-reference/rate-limits"
+    assert "ruling pending" not in _text()
+    for line in _text().splitlines():  # every other spec citation in the document carries the ruling too
+        if line.startswith("|") and "openapi.json" in line:
+            assert ruling in line, line[:80]
