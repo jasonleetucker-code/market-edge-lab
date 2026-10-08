@@ -233,6 +233,15 @@ Composition is where the dangerous paths live:
     and after the payload change and is byte-identical. Its fixture venue also stamps fills 10 minutes behind every
     read, so no fill falls between the bounds there.
 
+15. **SHADOW is the account-aware shadow (package M; added 2026-10-08; ADR 0047).** SHADOW runs `_decide` up to
+    egress and then stops. The steps between an allowed decision and `prepare_attempt` are one function,
+    `_egress_request`, shared with a real send: the lease, the request budget and the exact create request. SHADOW
+    then makes `prepare_attempt`'s own checks read-only: no live earlier attempt, and the reservation authority's
+    `decide`. A WOULD_SUBMIT holds a hypothetical reservation for the rest of its cycle only, and every SHADOW
+    verdict is a `SHADOW_VERDICT` record. A `READ_ONLY` identity (its own `shadow-` store; a `ReadOnlySender`;
+    OBSERVE_ONLY and SHADOW only; no grant; no cancels) makes the no-write guarantee structural. The live
+    (non-SHADOW) path is unchanged, and demonstration B's pinned hash with it.
+
 ## Alternatives rejected
 
 - **Make the orchestrator a capability user (import transport).** That is not needed, and it would widen

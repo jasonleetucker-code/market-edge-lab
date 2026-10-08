@@ -42,6 +42,15 @@ step 3 stops new risk in the same cycle:
 **Modes.** DISARMED and OBSERVE_ONLY read only. SHADOW runs steps 4-8 and records WOULD_SUBMIT or BLOCKED, sending
 nothing. HUMAN_CONFIRMATION and BOUNDED_AUTO send. DEMO is refused (an incident): only FIXTURE is authorized.
 
+**The account-aware shadow** (package M, ADR 0047). SHADOW is the same `_decide` as a real decision up to egress: the
+shared pre-egress steps (`_egress_request`: lease, request budget, the exact create request), then what
+`prepare_attempt` would check (no live earlier attempt; the reservation authority's own capacity rule,
+`ReservationAuthority.decide`). A WOULD_SUBMIT carries a hypothetical reservation (`shadow.hypothetical_reservation`)
+that the cycle's later decisions see as held and that nothing persists as a reservation; every SHADOW verdict is
+also a `SHADOW_VERDICT` record with the full intent and every input version. A process started with
+`identity=READ_ONLY` holds only a `shadow.ReadOnlySender`, arms only OBSERVE_ONLY or SHADOW, holds no grant, cancels
+nothing and runs only on a shadow store.
+
 **Bounds** (`CycleBounds`): queued signals, signals drained, proposals and intents per cycle, network requests per
 cycle (account reads and sends share one budget) and a deadline per cycle. Every record a cycle writes is bounded
 by these. Grant usage is kept as running aggregates (turnover per day, realized P&L per day, equity and peak),
@@ -97,12 +106,13 @@ from . import kalshi_wire as w
 from . import lifecycle as lc
 from . import recovery as rc
 from . import risk_gate as gate
-from .journal import AttemptState, ExecutionJournal, JournalError, JournalUnavailable
+from . import shadow as sh
+from .journal import NO_ORDER_STATES, AttemptState, ExecutionJournal, JournalError, JournalUnavailable
 from .model import (MAX_DIGITS, AccountScope, Action, ApprovalGrant, ApprovalMethod, Environment, Grid, IntentKind,
                     OrderIntent, Side, TimeInForce, canonical_json, decimal_text, environment_authorized,
                     exact_decimal, parse_utc_text, sha256_text, utc_text)
 from .reservations import (AccountSnapshot, AccountView, CashBasis, ReceiptKind, ReservationAuthority,
-                           ReservationError, ReservationView, StaleFence)
+                           ReservationDecision, ReservationError, ReservationView, StaleFence)
 
 VENUE = "kalshi"
 SIGNAL_SCHEMA = "edge-lab-orchestrator-signal/1"
@@ -305,6 +315,7 @@ class OrchestratorConfig:
     fixture_cash_basis: CashBasis | None = None  # FIXTURE only (module docstring)
     max_pending_approvals: int = 100
     recovery: rc.RecoveryConfig | None = None  # set exactly when a StreamSource is given (package J)
+    identity: sh.ProcessIdentity = sh.ProcessIdentity.EXECUTOR  # READ_ONLY: the account-aware shadow (package M)
 
     def __post_init__(self) -> None:
         if not isinstance(self.scope, AccountScope) or self.scope.subaccount is not None:
@@ -327,6 +338,14 @@ class OrchestratorConfig:
             object.__setattr__(self, "signal_sources", MappingProxyType(dict(self.signal_sources)))
         if self.recovery is not None and not isinstance(self.recovery, rc.RecoveryConfig):
             raise OrchestratorError("recovery must be a recovery.RecoveryConfig")
+        if not isinstance(self.identity, sh.ProcessIdentity):
+            raise OrchestratorError("identity must be a shadow.ProcessIdentity")
+        read_only = self.identity is sh.ProcessIdentity.READ_ONLY
+        if read_only != sh.is_shadow_worker(self.worker_id):
+            raise OrchestratorError(f"a READ_ONLY process, and only one, has a worker id starting "
+                                    f"{sh.SHADOW_WORKER_PREFIX!r} (its store is a shadow store)")
+        if read_only and self.grants:
+            raise OrchestratorError("a READ_ONLY process holds no automation grant")
         if not isinstance(self.external_cash_policy, acct.ExternalCashPolicy):
             raise OrchestratorError("external_cash_policy must be an account.ExternalCashPolicy")
         if self.fixture_cash_basis is not None:
@@ -385,6 +404,7 @@ class CycleReport:
     deadline_hit: bool
     fenced_out: bool = False  # the lease was lost: this cycle read only and wrote nothing
     stream: Mapping[str, Any] | None = None  # the stream recovery summary (None: no stream configured)
+    shadow_verdicts: tuple[sh.ShadowVerdict, ...] = ()  # SHADOW: every verdict of this cycle (package M)
 
 
 @dataclass(frozen=True)
@@ -555,6 +575,10 @@ class _Cycle:
     stream_marks: rc.Marks | None = None  # taken when the strategies start proposing
     stream_items: int = 0
     stream_findings: list = field(default_factory=list)
+    shadow: bool = False  # the cycle decides in SHADOW mode (package M)
+    hypothetical: list = field(default_factory=list)  # (ReservationView, OrderIntent) of this cycle's WOULD_SUBMITs
+    shadow_sends: int = 0  # requests this cycle's WOULD_SUBMITs would have sent (they share the request budget)
+    verdicts: list = field(default_factory=list)  # shadow.ShadowVerdict
 
 
 # ---------------------------------------------------------------------------------------------- the service
@@ -581,6 +605,9 @@ class Orchestrator:
         ids = [s.strategy_id for s in strategies]
         if len(set(ids)) != len(ids) or not all(isinstance(i, str) and _ID.fullmatch(i) for i in ids):
             raise OrchestratorError("strategy ids must be unique short identifiers")
+        self._read_only = config.identity is sh.ProcessIdentity.READ_ONLY
+        if self._read_only:  # the only network capability a read-only process holds refuses every write
+            send = sh.ReadOnlySender(send)
         self._journal, self._config, self._send, self._feed = journal, config, send, feed
         self._strategies, self._clock, self._sleep = strategies, clock, sleep
         self._scope = config.scope
@@ -593,6 +620,9 @@ class Orchestrator:
         self._stream_state = None if stream is None else rc.initial(config.recovery)
         now = self._now()
 
+        # A shadow store and an executor store are never the same store (ADR 0047): checked by reads only, before the
+        # lease, so a read-only process never takes (or even contends for) a live executor's egress lease.
+        self._check_store_identity(journal, config)
         # The egress lease comes first: a boot refused because another worker holds a live lease (LeaseHeld) has
         # written nothing, so the live worker's control log still replays to its live state. Taking the lease turns
         # an older fence's in-flight attempts into OUTCOME_UNKNOWN, and `recover` lists what is not terminal.
@@ -609,6 +639,7 @@ class Orchestrator:
         self._load_records(now)
         quarantined = self._quarantine_backlog(now)
         self._record("BOOT", {"worker_id": config.worker_id, "fence_token": self._fence,
+                              "identity": config.identity.value,
                               "grants": sorted(g.digest() for g in config.grants),
                               "non_terminal_attempts": [a.attempt_id for a in recovered],
                               "backlog_quarantined": quarantined, "backlog_kept": [s.signal_id for s in self._queue],
@@ -616,6 +647,23 @@ class Orchestrator:
                               else config.fixture_cash_basis.value}, now)
 
     # ------------------------------------------------------------------ persisted state
+
+    @staticmethod
+    def _check_store_identity(journal: ExecutionJournal, config: OrchestratorConfig) -> None:
+        """Refuse a store of the other identity, by reads only: the lease holder's worker id (store-wide) and this
+        scope's BOOT records. A read-only process also refuses a store with any attempt in flight (a shadow store
+        never has one: nothing in it can prepare an attempt)."""
+        read_only = config.identity is sh.ProcessIdentity.READ_ONLY
+        lease = journal.reservations.lease()
+        if lease is not None and sh.is_shadow_worker(lease.worker_id) != read_only:
+            raise OrchestratorError(f"STORE_IDENTITY_MISMATCH: a {config.identity.value} process does not run on a "
+                                    f"store last leased by {'an executor' if read_only else 'a shadow process'}")
+        for boot in journal.control_records(config.scope, "BOOT"):
+            booted_read_only = boot.body.get("identity") == sh.ProcessIdentity.READ_ONLY.value
+            if booted_read_only != read_only:
+                raise OrchestratorError("STORE_IDENTITY_MISMATCH: this store was booted by another identity")
+        if read_only and journal.non_terminal_attempts():
+            raise OrchestratorError("STORE_IDENTITY_MISMATCH: a store with attempts in flight is an executor's")
 
     def _load_records(self, now: datetime) -> None:
         records = self._journal.control_records(self._scope)
@@ -750,13 +798,23 @@ class Orchestrator:
     def stream_state(self) -> rc.RecoveryState | None:
         return self._stream_state
 
+    @property
+    def identity(self) -> sh.ProcessIdentity:
+        return self._config.identity
+
     def request_arm(self, request: ctl.ArmRequest) -> ctl.ArmAccepted | ctl.ArmRefused:
         """An operator's arm request, judged once (`control.decide_arm`); the outcome is persisted, then applied."""
         self._check_running()
         if not isinstance(request, ctl.ArmRequest):
             raise OrchestratorError("an ArmRequest is required")
         now = self._now()
-        outcome = ctl.decide_arm(self._state, request, grants=self._config.grants, now=now)
+        outcome: ctl.ArmAccepted | ctl.ArmRefused
+        if self._read_only and request.mode not in sh.READ_ONLY_MODES:
+            outcome = ctl.ArmRefused(request.mode, request.operator_ref, (
+                f"READ_ONLY_IDENTITY: a read-only process arms only {sorted(x.value for x in sh.READ_ONLY_MODES)}",),
+                request.at_utc)
+        else:
+            outcome = ctl.decide_arm(self._state, request, grants=self._config.grants, now=now)
         self._apply(outcome, now)
         return outcome
 
@@ -909,6 +967,7 @@ class Orchestrator:
                                  "DEMO is not an authorized environment for this orchestrator"))
             self._raise_pending(cy)
         elif mode in (ctl.Mode.SHADOW, ctl.Mode.HUMAN_CONFIRMATION, ctl.Mode.BOUNDED_AUTO):
+            cy.shadow = mode is ctl.Mode.SHADOW
             if self._stream is not None:
                 self._drain_stream(cy)
                 cy.stream_marks = rc.marks(self._stream_state)  # decisions are judged against these
@@ -1363,10 +1422,17 @@ class Orchestrator:
     # steps 7-10 -----------------------------------------------------
 
     def _decision(self, cy: _Cycle, intent: OrderIntent, outcome: Outcome, reasons: tuple[str, ...],
-                  attempt_id: str | None = None, attempt_state: str | None = None) -> None:
+                  attempt_id: str | None = None, attempt_state: str | None = None, *,
+                  reservation: ReservationView | None = None, capacity: ReservationDecision | None = None,
+                  request_digest_: str | None = None, inputs: tuple[tuple[str, str | None], ...] = ()) -> None:
         d = Decision(intent.intent_key, intent.digest(), intent.strategy_id, intent.market_ticker, intent.kind,
                      outcome, reasons, attempt_id, attempt_state)
         cy.decisions.append(d)
+        verdict = None
+        if cy.shadow:  # every SHADOW verdict carries the full intent and what it was concluded from (package M)
+            verdict = sh.ShadowVerdict(cy.n, utc_text(self._now()), intent, outcome.value, reasons, reservation,
+                                       capacity, request_digest_, inputs + (("verdict_schema", sh.VERDICT_SCHEMA),))
+            cy.verdicts.append(verdict)
         once = outcome in (Outcome.AWAITING_APPROVAL, Outcome.WOULD_SUBMIT, Outcome.BLOCKED)
         mark = (intent.intent_key, outcome.value, sha256_text(canonical_json(list(reasons))))
         if once and mark in self._recorded:
@@ -1377,6 +1443,8 @@ class Orchestrator:
                                   "market_ticker": intent.market_ticker, "kind": intent.kind.value,
                                   "outcome": outcome.value, "reasons": list(reasons), "attempt_id": attempt_id,
                                   "attempt_state": attempt_state}, self._now(), cy)
+        if verdict is not None:  # its own record type: never loaded as a planned intent, attempt or reservation
+            self._record(sh.SHADOW_RECORD, verdict.to_record(), self._now(), cy)
 
     def _decide(self, cy: _Cycle, proposal: Proposal, strategy: Any) -> None:
         intent, evidence = proposal.intent, proposal.evidence
@@ -1392,7 +1460,10 @@ class Orchestrator:
         mode = self._state.mode
         market = self._market(cy, intent.market_ticker)
         view = self._journal.reservations.account_view(self._scope)
+        if cy.hypothetical:  # SHADOW: this cycle's WOULD_SUBMITs hold capacity, as their real reservations would
+            view = AccountView(view.scope_key, view.snapshot, view.held + tuple(r for r, _ in cy.hypothetical))
         projection = self._projection(cy, view, intent)
+        capacity = self._capacity(cy, view, intent, now) if cy.shadow else None
         action = ctl.ControlAction.NEW_RISK if intent.kind is IntentKind.ENTRY else ctl.ControlAction.REDUCE
         problems = ctl.action_problems(self._state, action, venue=VENUE, strategy_id=intent.strategy_id,
                                        market_ticker=intent.market_ticker, now=now, grants=self._config.grants)
@@ -1426,18 +1497,84 @@ class Orchestrator:
             decision = gate.evaluate(intent, account=projection, market=market, policy=r.policy, limits=r.limits,
                                      ticket_limits=r.ticket_limits, evidence=evidence, now=now)
         reasons = tuple(f"{v.code.value}: {v.detail}"[:300] for v in decision.reasons) + tuple(problems)
+        inputs = self._verdict_inputs(view, decision, strategy) if cy.shadow else ()
         if reasons:
-            self._decision(cy, intent, Outcome.BLOCKED, reasons)
+            self._decision(cy, intent, Outcome.BLOCKED, reasons, capacity=capacity, inputs=inputs)
             return
         stream = self._stream_problems(cy, intent)  # once more, just before acting
         if stream:
-            self._decision(cy, intent, Outcome.BLOCKED, stream)
+            self._decision(cy, intent, Outcome.BLOCKED, stream, capacity=capacity, inputs=inputs)
             return
         if mode is ctl.Mode.SHADOW:
-            self._decision(cy, intent, Outcome.WOULD_SUBMIT, ())
+            self._shadow_tail(cy, intent, market, capacity, inputs, now)
             return
         self._prepare_and_send(cy, intent, approval, market)
         self._approvals.pop(intent.digest(), None)  # an approval is single use (the journal refuses its nonce again)
+
+    def _capacity(self, cy: _Cycle, view: AccountView, intent: OrderIntent, now: datetime) -> ReservationDecision:
+        """SHADOW: the reservation authority's own capacity rule (`ReservationAuthority.decide`, the code
+        `prepare_attempt` reserves with) on the view the gate saw, this cycle's hypothetical reservations included."""
+        candidate = f"{sh.SHADOW_PREFIX}{intent.client_order_id()}"
+        try:
+            return ReservationAuthority.decide(view.snapshot, list(view.held), intent, now,
+                                               snapshot_max_age=self._config.snapshot_max_age, candidate_id=candidate)
+        except ReservationError as exc:  # inexact arithmetic: refused, as `_reserve` would refuse it
+            return ReservationDecision(False, (f"{exc}"[:300],), view.snapshot_revision, None, None, None)
+
+    def _verdict_inputs(self, view: AccountView, decision: gate.GateDecision,
+                        strategy: Any) -> tuple[tuple[str, str | None], ...]:
+        """The version of every input a SHADOW verdict was concluded from: the gate's own list (intent, policy,
+        limits, evidence, market, book, fee schedule and verification, projection, genesis, history digests), the
+        snapshot, the control state and the strategy's hashes."""
+        snap = view.snapshot
+        own = {"snapshot_revision": None if snap is None else str(snap.revision),
+               "snapshot_observed_at": None if snap is None else snap.observed_at_utc,
+               "control_basis": ctl.state_basis(self._state),
+               "ticket_limits": sha256_text(repr(self._config.risk.ticket_limits)),
+               "strategy_model_hash": str(getattr(strategy, "model_hash", None)),
+               "strategy_policy_hash": str(getattr(strategy, "policy_hash", None)),
+               "snapshot_max_age_s": str(self._config.snapshot_max_age.total_seconds())}
+        merged = dict(decision.inputs)
+        merged.update({f"shadow.{k}": v for k, v in own.items()})
+        return tuple(sorted(merged.items()))
+
+    def _egress_request(self, cy: _Cycle, intent: OrderIntent,
+                        market: gate.MarketState) -> tuple[w.WireRequest | None, str | None]:
+        """The steps between an allowed decision and `prepare_attempt`, shared by a real send and a SHADOW verdict:
+        the egress lease, the cycle's request budget (a SHADOW verdict counts the request it would have sent) and
+        the exact create request. (request, None), or (None, why)."""
+        if self._fence is None:
+            return None, "NO_EGRESS_LEASE"
+        if cy.budget.remaining - cy.shadow_sends < 1:
+            cy.budget.exhausted = True
+            return None, "REQUEST_BUDGET_EXHAUSTED"
+        try:
+            profile = conformance.MarketTradingProfile(market.ticker, market.exchange_index, market.price_bands)
+            return w.build_create(intent, profile), None
+        except ValueError as exc:  # UnsupportedByProfile included
+            return None, f"WIRE_REFUSED: {exc}"[:300]
+
+    def _shadow_tail(self, cy: _Cycle, intent: OrderIntent, market: gate.MarketState,
+                     capacity: ReservationDecision | None, inputs: tuple, now: datetime) -> None:
+        """SHADOW, after every check of the chain passed: the pre-egress steps, then what `prepare_attempt` would
+        check (no earlier attempt of the intent may still be live; the reservation must fit), and the hypothetical
+        reservation. Nothing is prepared, reserved or sent; nothing reaches `prepare_attempt` or `send`."""
+        request, why = self._egress_request(cy, intent, market)
+        reasons = [] if why is None else [why]
+        attempts = self._journal.attempts_for(intent.intent_key)
+        live = [a for a in attempts if a.state not in NO_ORDER_STATES]
+        if live:
+            reasons.append(f"ATTEMPT_BLOCKED: {live[-1].attempt_id} is {live[-1].state.value}")
+        if capacity is None or not capacity.allowed:
+            reasons += [f"RESERVATION_REFUSED: {r}"[:300] for r in (capacity.reasons if capacity else ("unknown",))]
+        if reasons:
+            self._decision(cy, intent, Outcome.BLOCKED, tuple(reasons), capacity=capacity, inputs=inputs)
+            return
+        reservation = sh.hypothetical_reservation(intent, attempt_no=len(attempts) + 1, at_utc=utc_text(now))
+        cy.hypothetical.append((reservation, intent))
+        cy.shadow_sends += 1
+        self._decision(cy, intent, Outcome.WOULD_SUBMIT, (), reservation=reservation, capacity=capacity,
+                       request_digest_=request_digest(request), inputs=inputs)
 
     def _policy_approval(self, intent: OrderIntent, grant: ctl.AutomationGrant, now: datetime) -> ApprovalGrant | None:
         expires = min(intent.expires_at(), parse_utc_text(grant.expires_at_utc), now + POLICY_APPROVAL_TTL)
@@ -1450,18 +1587,12 @@ class Orchestrator:
 
     def _prepare_and_send(self, cy: _Cycle, intent: OrderIntent, approval: ApprovalGrant,
                           market: gate.MarketState) -> None:
-        if self._fence is None:
-            self._decision(cy, intent, Outcome.BLOCKED, ("NO_EGRESS_LEASE",))
+        if self._read_only:  # unreachable (a read-only process never arms a sending mode); kept as a second stop
+            self._decision(cy, intent, Outcome.BLOCKED, ("READ_ONLY_IDENTITY: this process never sends a write",))
             return
-        if cy.budget.remaining < 1:
-            cy.budget.exhausted = True
-            self._decision(cy, intent, Outcome.BLOCKED, ("REQUEST_BUDGET_EXHAUSTED",))
-            return
-        try:
-            profile = conformance.MarketTradingProfile(market.ticker, market.exchange_index, market.price_bands)
-            request = w.build_create(intent, profile)
-        except ValueError as exc:  # UnsupportedByProfile included
-            self._decision(cy, intent, Outcome.BLOCKED, (f"WIRE_REFUSED: {exc}"[:300],))
+        request, why = self._egress_request(cy, intent, market)
+        if request is None:
+            self._decision(cy, intent, Outcome.BLOCKED, (why,))
             return
         now = self._now()
         # The planned record is the index of every intent this service may have sent: written before the attempt.
@@ -1570,12 +1701,19 @@ class Orchestrator:
             m = self._market(cy, t)
             if m is not None:
                 keys[t] = gate.MarketKeys(m.event_key, m.cluster_key)
+        intents = dict(self._planned)
+        history = self._order_history()
+        if cy.hypothetical:  # SHADOW: this cycle's WOULD_SUBMITs, as their real attempts would appear
+            intents.update({i.intent_key: i for _, i in cy.hypothetical})
+            history += tuple(gate.OrderHistoryEntry(r.reservation_id, i.market_ticker, i.kind, r.created_at_utc,
+                                                    i.max_total_cost if i.kind is IntentKind.ENTRY else _ZERO)
+                             for r, i in cy.hypothetical)
         return gate.project_account(
-            view, projection_id=f"c{cy.n}:{intent.intent_key}"[:200], intents=MappingProxyType(dict(self._planned)),
+            view, projection_id=f"c{cy.n}:{intent.intent_key}"[:200], intents=MappingProxyType(intents),
             market_keys=MappingProxyType(keys),
             pnl_history=tuple(self._ledger) if self._pnl_baseline else None,
             pnl_history_since_utc=self._genesis if self._pnl_baseline else None,
-            order_history=self._order_history(), order_history_since_utc=self._genesis,
+            order_history=history, order_history_since_utc=self._genesis,
             account_genesis_utc=self._genesis)
 
     def _usage(self, cy: _Cycle, grant: ctl.AutomationGrant, view: AccountView, event_key: str,
@@ -1670,7 +1808,8 @@ class Orchestrator:
                            MappingProxyType(dict(sorted(cy.signal_counts.items()))), self._take_rejections(),
                            cy.proposals, cy.ignored, tuple(cy.decisions), tuple(cy.resolved), cy.fills,
                            tuple(cy.released), tuple(cy.incidents), cy.records, cy.deadline_hit,
-                           stream=None if self._stream is None else _frozen(self._stream_summary(cy)))
+                           stream=None if self._stream is None else _frozen(self._stream_summary(cy)),
+                           shadow_verdicts=tuple(cy.verdicts))
 
     def _stream_summary(self, cy: _Cycle) -> dict[str, Any]:
         return {**rc.summary(self._stream_state), "items_this_cycle": cy.stream_items,
@@ -1702,6 +1841,8 @@ class Orchestrator:
         own: each is a CANCEL_OWNED action, requested in the journal before it is sent and confirmed only by the
         venue's answer. No further cycle runs on this instance."""
         self._check_running()
+        if cancel_owned and self._read_only:
+            raise OrchestratorError("READ_ONLY_IDENTITY: a read-only process cancels nothing")
         now = self._now()
         if self._fenced_out or not self._lease_held():
             self._stopped = True  # the live worker owns the account: nothing is written or cancelled from here
@@ -1738,6 +1879,8 @@ class Orchestrator:
                      self._now())
 
     def _cancel_owned(self, r: ReservationView, attempt: Any) -> str:
+        if self._read_only:  # unreachable (shutdown refuses cancel_owned first); kept as a second stop
+            return "REFUSED: READ_ONLY_IDENTITY"
         now = self._now()
         problems = ctl.action_problems(self._state, ctl.ControlAction.CANCEL_OWNED, venue=VENUE,
                                        strategy_id="-", market_ticker=r.market_ticker, now=now,
