@@ -18,10 +18,15 @@ Unlocks `DEMO_LIFECYCLE_VERIFIED`. Mock funds only.
 2. In the demo web app, create an API key. You download its private key file once. *Pending conformance:* whether
    demo keys can be Ed25519, which is the recommended type, and whether any scope or permission setting exists.
 3. Put the private key file on the executor host only:
-   - in a path outside the repository, owned by the executor's own service user, with mode 0600;
-   - never in git, `.env`, a chat or a backup bundle meant for research data.
+   - at `/etc/market-edge-lab-exec/credentials/kalshi-demo-<YYYYMMDD>.pem`, `root:root 0600`, in a `root:root 0700`
+     directory. systemd hands it only to the executor service (`edgelab-exec`, `LoadCredential=`), so no service
+     account can read it at rest;
+   - never in git, `.env`, a chat or any backup bundle. Executor journal backups cannot see that directory.
 
-   Package O defines the exact path and user. Until then the key is not installed anywhere.
+   Package O (ADR 0047) defined the path and user; the steps are in `docs/execution/runbooks/KEYS.md`. This
+   supersedes an earlier draft of this step, which had the key file owned by the service user. Before any key is
+   installed, the full-history secret scan (`docs/execution/runbooks/SECRET_SCAN.md`) must be clean on the release
+   commit. Until then the key is not installed anywhere.
 4. Tell the session, in words, that the demo key is installed. Do not paste its contents.
 
 **What you would approve (proposed wording):**

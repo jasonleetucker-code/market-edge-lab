@@ -1,0 +1,56 @@
+[Unit]
+Description=Market Edge Lab: verified private backup of the execution journal (not a research backup; NOT INSTALLED)
+Documentation=file:///opt/market-edge-lab-exec/app/docs/execution/runbooks/BACKUP_AND_RESTORE.md
+OnFailure=edgelab-alert@%n.service
+
+# Package O (ADR 0047). Shipped DISABLED and without a timer: a schedule is its own owner approval (the proposed
+# timer is in BACKUP_AND_RESTORE.md). Run by hand only after the install approval.
+#
+# A consistent snapshot through the SQLite online backup API while the executor may be writing, verified by a
+# disposable restore (schema, hash chain, intent/receipt identity) before it is published into the PRIVATE journal
+# backup root. Never the research backup directory, never deleted automatically. No network, no key.
+[Service]
+Type=oneshot
+Slice=edgelab-exec.slice
+User=edgelab-exec
+Group=edgelab-exec
+WorkingDirectory=/var/lib/market-edge-lab-exec-backup
+ExecStart=/opt/market-edge-lab-exec/venv/bin/python -m edge_lab.execution.ops backup --journal /var/lib/market-edge-lab-exec/journal/kalshi.execution.sqlite3 --out /var/lib/market-edge-lab-exec-backup/journal
+TimeoutStartSec=20min
+UMask=0077
+MemoryHigh=192M
+MemoryMax=256M
+MemorySwapMax=0
+CPUQuota=25%
+TasksMax=16
+Nice=10
+IOSchedulingClass=idle
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+# The journal directory is writable only for SQLite's shared-memory index of a WAL reader; the copy is query-only.
+ReadWritePaths=/var/lib/market-edge-lab-exec/journal /var/lib/market-edge-lab-exec-backup
+InaccessiblePaths=-/var/lib/market-edge-lab -/etc/market-edge-lab -/etc/market-edge-lab-exec/credentials -/var/lib/market-edge-lab-exec-status
+RestrictAddressFamilies=AF_UNIX
+IPAddressDeny=any
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictSUIDSGID=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+LockPersonality=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+ProcSubset=pid
+RemoveIPC=yes
+KeyringMode=private
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged

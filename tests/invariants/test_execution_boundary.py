@@ -57,7 +57,10 @@ NETWORK_MODULES = frozenset({"socket", "_socket", "ssl", "_ssl", "http", "urllib
 # Network-capable submodules of otherwise harmless packages (HTTPHandler, SocketHandler, config.listen()).
 NETWORK_SUBMODULES = ("logging.handlers", "logging.config")
 NETWORK_FILES = frozenset({"edge_lab/execution/transport.py"})
-SQLITE_FILES = frozenset({"edge_lab/execution/journal.py", "edge_lab/execution/reservations.py"})
+# `journal_backup.py` (package O, ADR 0047) reads a journal file read-only and copies it with the SQLite backup API;
+# it opens, writes and verifies journals only through `ExecutionJournal` and its own new files.
+SQLITE_FILES = frozenset({"edge_lab/execution/journal.py", "edge_lab/execution/reservations.py",
+                          "edge_lab/execution/journal_backup.py"})
 BANNED_IN_PACKAGE = frozenset({"subprocess", "multiprocessing", "concurrent", "ctypes", "pty", "importlib", "runpy",
                                "pkgutil", "zipimport", "code", "codeop", "pickle", "shelve", "marshal"})
 # Names that may not be imported from `os` (`from os import system`), nor used as `os.<name>`.
