@@ -32,7 +32,8 @@ Nothing in this module builds a write, a cancel or a flatten.
 (STREAM_INCOMPLETE with the reason, ACCESS_DENIED for 401/403); a malformed page (MALFORMED_PAGE); CURSOR_LOOP;
 PAGE_BUDGET_EXHAUSTED, REQUEST_BUDGET_EXHAUSTED, DEADLINE_EXCEEDED; a record of another subaccount
 (UNKNOWN_SUBACCOUNT_RECORD); CONFLICTING_DUPLICATE; UNSTABLE; STALE_UPDATE; STALE_USER_DATA, USER_DATA_AS_OF_IN_FUTURE,
-USER_DATA_AS_OF_REGRESSED, USER_DATA_AS_OF_UNAVAILABLE; CUTOFF_UNAVAILABLE, CUTOFF_REGRESSED, CUTOFF_MOVING;
+USER_DATA_AS_OF_REGRESSED, USER_DATA_AS_OF_UNAVAILABLE, RECORD_STAMPED_IN_FUTURE (an order or fill stamped after the
+read's end plus CLOCK_SKEW); CUTOFF_UNAVAILABLE, CUTOFF_REGRESSED, CUTOFF_MOVING;
 TIER_PARTITION_VIOLATION; RECORD_VANISHED (an order or fill seen live that is in neither tier at the end);
 UNIT_MISMATCH (balance cents vs dollars, settlement revenue vs count); ATTRIBUTION_MISMATCH;
 SHARDS_UNKNOWN, SHARDS_NOT_ENUMERATED (a balance or any record off shard 0); LOCAL_SCOPE_ALIAS;
@@ -91,7 +92,7 @@ from .reservations import AccountSnapshot, AttributedOrder, CashBasis, ExternalO
 MAX_RESAMPLES = 5
 MAX_PAGES_CAP = 10_000
 MAX_REQUESTS_CAP = 100_000
-CLOCK_SKEW = timedelta(seconds=5)
+CLOCK_SKEW = timedelta(seconds=5)  # how far the venue's clock may lead ours in a read (ReadManifest.data_true_by)
 POSITIONS_SETTLEMENT_STATUS = "all"  # explicit: the venue default `unsettled` omits settled rows (ACC-07)
 READ_ENDPOINTS = frozenset(e for e in Endpoint if e.value.method is HttpMethod.GET)
 # The cash basis a COMPLETE reconciliation may report. ACC-02 (whether the available balance already excludes
@@ -389,6 +390,24 @@ class ReadManifest:
     as_of_end: datetime | None
     cutoffs: tuple[w.HistoricalCutoff, ...]
     coverage: Mapping[tuple[int, AccountEndpoint], bool]  # final data complete, per subaccount and endpoint
+    latest_record_at: datetime | None = None  # the latest order or fill stamp the read returned
+
+    @property
+    def data_true_by(self) -> datetime:
+        """The latest venue time anything this read returned can be true at: the latest of the read's end on our
+        clock plus CLOCK_SKEW, the venue's closing user-data as_of, and the latest order or fill stamp the read
+        returned (a record existed when it was read). The snapshot's `observed_at` (the earlier of the read start and
+        the opening as_of) is the earliest. A listed fill count is true somewhere between the two, so a fill of the
+        same read stamped between them may already be in it (`lifecycle.ReconcileObserved.as_of_upper_utc`).
+
+        What is guaranteed: no order or fill of this read is stamped after this time, so none is ever added on top
+        of this read's own counts, whatever the clocks do. What is checked: a venue clock leading ours by more than
+        CLOCK_SKEW is reported (not COMPLETE, live orders and fills unknown) when the opening as_of shows it
+        (USER_DATA_AS_OF_IN_FUTURE) or when any order or fill stamp does (RECORD_STAMPED_IN_FUTURE). A lead that
+        neither shows (the as_of lags and no record is that recent) goes undetected, but then no fill of the read is
+        stamped past `finished_at + CLOCK_SKEW` either."""
+        return max(t for t in (self.finished_at + CLOCK_SKEW, self.as_of_end, self.latest_record_at)
+                   if t is not None)
 
 
 @dataclass(frozen=True)
@@ -1013,6 +1032,19 @@ class _Work:
 _IMMUTABLE_IDS = (AccountEndpoint.ORDERS, AccountEndpoint.FILLS)  # records that never leave both tiers
 
 
+def _latest_record_stamp(works: Iterable[_Work]) -> datetime | None:
+    """The latest venue stamp (created or last updated) on any order or fill the read returned, in either tier."""
+    stamps = []
+    for wk in works:
+        for tier in (wk.live, wk.historical):
+            for endpoint, fields in ((AccountEndpoint.ORDERS, ("created_time", "last_update_time")),
+                                     (AccountEndpoint.FILLS, ("created_time",))):
+                got = tier.get(endpoint)
+                for x in () if got is None or got.items is None else got.items:
+                    stamps += [t for t in (getattr(x, f) for f in fields) if t is not None]
+    return max(stamps, default=None)
+
+
 def _read_subaccount(reader: _Reader, n: int) -> _Work:
     live = _read_live(reader, n, 0)
     historical = _read_historical(reader, n, 0)
@@ -1265,7 +1297,15 @@ def reconcile_account(plan: AccountReadPlan, send: ReadSender, *, clock: Clock,
             problems.append("CUTOFF_REGRESSED: the historical cutoff went backwards during the read")
         elif len(steps) > 1 and steps[1] != "SAME":
             problems.append("CUTOFF_MOVING: the cutoff advanced again after the historical tier was re-read")
-    fresh = not any(p.startswith(("USER_DATA_", "STALE_USER_DATA")) for p in problems)
+    # A record the read returned existed when it was read, so its venue stamp is at most the read's end on the
+    # venue's clock. One later than our end plus CLOCK_SKEW proves the venue's clock leads ours by more than the
+    # tolerance, a lead the opening as_of check misses when the as_of itself lags (P-3 review).
+    finished = reader.now()
+    latest = _latest_record_stamp(works)
+    if latest is not None and latest > finished + CLOCK_SKEW:
+        problems.append(f"RECORD_STAMPED_IN_FUTURE: an order or fill stamped {latest.isoformat()} is after the read's "
+                        f"end {finished.isoformat()} plus {CLOCK_SKEW} (clock disagreement)")
+    fresh = not any(p.startswith(("USER_DATA_", "STALE_USER_DATA", "RECORD_STAMPED_IN_FUTURE")) for p in problems)
     partition_ok = not any(p.startswith("CUTOFF_") for p in problems)
     last_cutoff = cutoffs[-1]
     observed_at = started if as_of_start is None else min(started, as_of_start)
@@ -1292,9 +1332,9 @@ def reconcile_account(plan: AccountReadPlan, send: ReadSender, *, clock: Clock,
             tiers = [wk.live.get(e)] + ([wk.historical.get(e)] if e in _HISTORICAL else [])
             coverage[(s.subaccount, e)] = all(g is not None and g.items is not None for g in tiers) and \
                 wk.stability is Stability.STABLE
-    manifest = ReadManifest(plan, started, reader.now(), reader.requests, tuple(reader.pages), tuple(reader.streams),
+    manifest = ReadManifest(plan, started, finished, reader.requests, tuple(reader.pages), tuple(reader.streams),
                             as_of_start, as_of_end, tuple(x for x in cutoffs if x is not None),
-                            MappingProxyType(coverage))
+                            MappingProxyType(coverage), latest)
     return AccountReconciliation(status, manifest, tuple(subs), tuple(all_problems),
                                  tuple(g for s in subs for g in s.gaps),
                                  tuple(observations + [o for s in subs for o in s.observations]))

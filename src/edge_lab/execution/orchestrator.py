@@ -1095,7 +1095,10 @@ class Orchestrator:
         if sub.orders is None:
             return
         complete = cy.recon.status is acct.ReconciliationStatus.COMPLETE
+        # The listing's counts are true somewhere between these two (lifecycle `as_of_upper_utc`, P-3): `as_of`, the
+        # earliest, decides disputes and the not-found delay; only a fill stamped after `as_of_upper` adds on top.
         as_of = None if cy.snapshot is None else cy.snapshot.observed_at_utc
+        as_of_upper = None if cy.snapshot is None else utc_text(cy.recon.manifest.data_true_by)
         by_client: dict[str, list[w.VenueOrder]] = {}
         for o in sub.orders:
             by_client.setdefault(o.client_order_id, []).append(o)
@@ -1120,7 +1123,7 @@ class Orchestrator:
                                          f"acknowledged order {attempt.provider_order_id} is not in a complete listing"))
                 continue
             fills = None if sub.fills is None else tuple(fills_by_order.get(order.order_id, ()))
-            self._fold_order(cy, r, attempt, order, fills, complete, as_of, sub)
+            self._fold_order(cy, r, attempt, order, fills, complete, as_of, as_of_upper, sub)
 
     def _owns(self, reservation_id: str) -> bool:
         try:
@@ -1178,12 +1181,13 @@ class Orchestrator:
 
     def _fold_order(self, cy: _Cycle, r: ReservationView, attempt: Any, o: w.VenueOrder,
                     fills: tuple[w.VenueFill, ...] | None, complete: bool, as_of: str | None,
-                    sub: acct.SubaccountReconciliation) -> None:
+                    as_of_upper: str | None, sub: acct.SubaccountReconciliation) -> None:
         view = self._view(r, attempt.created_at_utc)
         view = lc.reduce(view, lc.ReconcileObserved(
             client_order_id=o.client_order_id, provider_order_id=o.order_id, found=True, status=o.status,
             filled_quantity=o.fill_count, remaining_quantity=o.remaining_count, total_quantity=o.initial_count,
-            price=_own_price(o, r.side), authoritative_complete=complete, as_of_utc=as_of))
+            price=_own_price(o, r.side), authoritative_complete=complete, as_of_utc=as_of,
+            as_of_upper_utc=as_of_upper))
         for f in sorted(fills or (), key=lambda x: (x.created_time or datetime.min.replace(tzinfo=timezone.utc),
                                                     x.fill_id)):
             view = lc.reduce(view, lc.Fill(fill_id=f.fill_id, quantity=f.count, price=_own_price(f, r.side),
@@ -1198,8 +1202,13 @@ class Orchestrator:
         if r.quarantine_reason is not None:
             return  # a quarantined reservation waits for an explicit resolution (health review raises it)
         auth = self._journal.reservations
+        # Everything the view was derived from (with versioned code, `filled_quantity` re-derives from this payload
+        # alone): both times of the listing's counts, and the uncertainty the view concluded (ADR 0046 rule 14).
         payload = canonical_json({"order": _order_record(o), "fills": [_fill_record(f) for f in fills or ()],
-                                  "filled_quantity": view.filled_quantity, "as_of_utc": as_of})
+                                  "filled_quantity": view.filled_quantity, "as_of_utc": as_of,
+                                  "as_of_upper_utc": as_of_upper, "authoritative_complete": complete,
+                                  "fill_timing_uncertain": view.fill_timing_uncertain,
+                                  "fees_complete": view.fees_complete})
         receipt = f"lookup:{r.reservation_id}:{sha256_text(payload)[:16]}"
         try:
             needs_receipt = view.filled_quantity > r.filled_quantity or (
