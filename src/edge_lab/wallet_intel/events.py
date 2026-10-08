@@ -34,7 +34,7 @@ UNKNOWN, never a guess.
 from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
-from datetime import datetime
+from datetime import datetime, timezone
 from decimal import Decimal
 from enum import Enum
 from typing import Iterable, Sequence
@@ -82,6 +82,7 @@ class IdentityBasis(str, Enum):
 
 
 CASH_ASSETS = frozenset({"USDC", "PUSD", "USD"})
+_NEVER = datetime.max.replace(tzinfo=timezone.utc)
 
 
 @dataclass(frozen=True)
@@ -272,7 +273,8 @@ class ObservationLog:
     _conflicts: list[Conflict] = field(default_factory=list)
     _variants: dict[str, list[WalletObservation]] = field(default_factory=dict)
     _tx_times: dict[str, datetime] = field(default_factory=dict)
-    _conflicted_tx: set[str] = field(default_factory=set)
+    _conflicted_tx: dict[str, datetime] = field(default_factory=dict)  # tx key -> earliest detection
+    _conflicted_ids: dict[str, datetime] = field(default_factory=dict)  # identity -> earliest detection
 
     def ingest(self, observations: Iterable[WalletObservation]) -> dict[str, int]:
         """Add one retrieval's observations (occurrences already assigned). Returns counts."""
@@ -286,7 +288,8 @@ class ObservationLog:
                 if seen is None:
                     self._tx_times[key] = obs.source_time
                 elif seen != obs.source_time:
-                    self._conflicted_tx.add(key)
+                    if key not in self._conflicted_tx or obs.receipt_time < self._conflicted_tx[key]:
+                        self._conflicted_tx[key] = obs.receipt_time
                     self._conflicts.append(Conflict("TRANSACTION_TIME_MISMATCH", key, utc_text(seen),
                                                     utc_text(obs.source_time), obs.receipt_time))
                     conflicts += 1
@@ -305,6 +308,8 @@ class ObservationLog:
             variants = self._variants.setdefault(oid, [])
             if all(v.semantic_key != obs.semantic_key for v in variants):
                 variants.append(obs)
+                if oid not in self._conflicted_ids or obs.receipt_time < self._conflicted_ids[oid]:
+                    self._conflicted_ids[oid] = obs.receipt_time
                 self._conflicts.append(Conflict("SAME_IDENTITY_DIFFERENT_CONTENT", oid, entry.obs.semantic_key,
                                                 obs.semantic_key, obs.receipt_time))
                 conflicts += 1
@@ -325,11 +330,18 @@ class ObservationLog:
     def corrections(self) -> tuple[Correction, ...]:
         return tuple(self._corrections)
 
-    def conflicted_ids(self) -> frozenset[str]:
-        """Identities with two contents, plus every observation of a transaction with two block times."""
+    def conflicted_ids(self, known_at: datetime | None = None) -> frozenset[str]:
+        """Identities with two contents, plus every observation of a transaction with two block times.
+
+        With `known_at`, only conflicts detected by then count: a version that arrives later never
+        changes what an earlier point-in-time view contained."""
+
+        def by(when: datetime) -> bool:
+            return known_at is None or when <= known_at
+
         tx_hit = {oid for oid, e in self._entries.items() if e.obs.transaction_id
-                  and f"{e.obs.source}|{e.obs.transaction_id.lower()}" in self._conflicted_tx}
-        return frozenset(self._variants) | frozenset(tx_hit)
+                  and by(self._conflicted_tx.get(f"{e.obs.source}|{e.obs.transaction_id.lower()}", _NEVER))}
+        return frozenset(oid for oid, when in self._conflicted_ids.items() if by(when)) | frozenset(tx_hit)
 
     def first_receipt(self, observation_id: str) -> datetime:
         return self._entries[observation_id].first_receipt
@@ -344,7 +356,7 @@ class ObservationLog:
         identities are left out unless asked for (they are reported, not resolved)."""
         require_aware(known_at, "known_at")
         out: list[WalletObservation] = []
-        conflicted = self.conflicted_ids()
+        conflicted = self.conflicted_ids(known_at)
         for oid in self._order:
             entry = self._entries[oid]
             if entry.first_receipt > known_at:
