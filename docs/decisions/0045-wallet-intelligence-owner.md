@@ -176,3 +176,98 @@ The re-review approved `070eb51` with one fix and two documentation notes.
   unknown events may be losers. The rate is a rate over known events only, and `unknown_markets` reports how
   much is missing. Eligibility does not rest on the rate: it rejects any account with an unknown market
   (`UNKNOWN_MARKETS`) and any with incomplete coverage.
+
+## Amendment 2026-10-08 A: v2 causal receipts
+
+Authority: the 2026-10-08 owner directive (`docs/owner/2026-10-08-jev-crawler-wallet-directive.md`), item A of its
+scope entry in `docs/EXECUTION_PLAN.md`, and `docs/strategy/CLAUDE_JEV_CRAWLER_WALLET_V1.md` Deliverable A.
+Offline and fixture-only.
+
+**Problem.** A static audit of `select_at()` (reproduced by `test_audit_v1_digest_does_not_bind_these_causal_inputs`)
+found that the v1 `inputs_digest` binds the cutoff, label version, rule id and version, candidates, observation ids
+and marks. It omits every rule threshold, `require_complete_coverage`, `history_complete`, `threat_flags`,
+`mark_max_age`, the discovery source, `trials`, observation contents, correction and conflict state, mark depth,
+source and receipt time, and the engine's implicit parameters (`selection.LEGACY_V1_UNBOUND`). Two selections that
+could decide differently can share one v1 digest. That is incomplete causal input binding, not a hash collision.
+
+**Decision.** A new subordinate module, `wallet_intel/receipts.py`, builds a v2 receipt
+(`wallet-selection-receipt-v2`) over the one eligibility engine, `selection.decide`. `select_at` keeps its v1
+digest unchanged (so persisted v1 records stay as they were) and now calls the same engine.
+- **Typed inputs** (`SelectionInputsV2`). `CoverageAssertion` (complete / partial / UNKNOWN, with source, method
+  version, knowledge time and evidence reference). `FlagAssertion` (THREAT or QUALITY, with codes, or `None` when not
+  assessed). `MarkEvidence` (a `Mark` plus quote basis, source, receipt time and evidence reference). `TrialBasis`
+  (count, source and the digests of the earlier receipts it counts). An optional `IdentityRegistry`.
+- **Point in time.** Every input is filtered by its knowledge time: candidates by `discovered_at`, observations
+  by `ObservationLog.as_known_at`, corrections by `recorded_at`, conflicts by detection time, assertions by
+  `known_at`, marks by `received_at` and identity records by `observed_at`. The latest assertion per account (or
+  per account, kind and source) and the latest mark per instrument known by the cutoff is in force. A tie with
+  different content raises `AmbiguousInputError`. Post-cutoff information never reaches the closure.
+- **Closure** (`wallet-selection-closure-v2`). It holds:
+  - every effective rule field, with canonical Decimal text, exact binary64 text for the float threshold,
+    microsecond durations and a `rule_units` table;
+  - the mark freshness tolerance;
+  - the engine and code versions and their implicit parameters, read from the loaded code;
+  - the trial basis;
+  - per candidate: every discovery known by the cutoff (the first one leads), the identity snapshot (UNKNOWN
+    without a registry), the coverage and flag assertions in force, and the history. The history holds each
+    identity's first receipt and status (EFFECTIVE, WITHDRAWN or CONFLICTED), corrections in per-target append
+    order, conflicts, and the full content and SHA-256 of every effective observation;
+  - the mark in force per instrument.
+  Unordered collections are stored sorted and unique, so a permutation of inputs gives the same digest.
+- **Digests.** `closure_digest` is the v2 selection digest. `outcome_digest` covers the records, the prior and the
+  denominators (visible candidates and counts by status, so inactive and rejected wallets stay counted).
+  `receipt_digest` covers both plus the downstream slots. Hashing reuses `provenance.canonical_json` and
+  `sha256_hex`; there is no second scheme.
+- **Fail closed.** A visible candidate with no log, no coverage assertion or no THREAT assertion in force raises
+  `MissingInputError`. A float money threshold or a bare `Mark` without evidence is refused. An unknown coverage
+  or an unassessed screen is recorded as UNKNOWN and makes the candidate ineligible (`COVERAGE_UNKNOWN`,
+  `THREAT_UNASSESSED:<source>`). A dataclass field without a canonical encoding stops the build, so a new field
+  cannot silently escape the digest.
+- **`rebuild` / `verify` / `load_receipt`.**
+  - `rebuild(record)` decodes the closure from the record alone. The closure must re-encode to itself in
+    canonical order. `rebuild` re-runs the engine and re-hashes.
+  - `verify(record, inputs=None)` returns VERIFIED or exactly one of LEGACY_INCOMPLETE, MALFORMED, TAMPERED,
+    ENGINE_MISMATCH, CAUSALITY_VIOLATION, REPLAY_MISMATCH or SOURCE_MISMATCH. With `inputs` it also checks that
+    the sources rebuild the same closure.
+  - A v1 record verifies as LEGACY_INCOMPLETE, and `load_receipt` / `rebuild` raise `LegacyReceiptError`. v1 is
+    never upgraded, and its `to_dict` now carries `replayability: LEGACY_INCOMPLETE`.
+- **Downstream extension point.** `DownstreamSlot.PRICE_RELATIVE_SKILL` (Deliverable C) and
+  `DownstreamSlot.FOLLOWER_REPLAY` (Deliverable D) start NOT_BOUND. `bind_downstream` attaches a
+  `DownstreamBinding`, which holds a schema id, the selection's `closure_digest` and a plain-JSON closure with
+  Decimals and times already canonical text. The binding is hashed into `receipt_digest` only, so the dependency
+  stays one-way. A bound slot is never replaced by a different closure.
+
+**Tests** (`tests/wallet/test_wallet_receipts.py`, `test_wallet_selection.py`):
+- Every field of every bound type has a mutator, enforced against `dataclasses.fields`. Each mutation changes the
+  closure digest or fails closed.
+- A meta-test drops each field from the encoding in turn and proves its mutation test would then fail. The
+  exceptions are fields also bound elsewhere, or that fail closed regardless, each listed with its reason.
+- Other tests cover permutation invariance, post-cutoff additions and pre-cutoff versus post-cutoff corrections
+  and conflicts, missing and ambiguous inputs, denominators, the JSON round trip, each verify failure, v1
+  legacy handling, the downstream slots, and v1/v2 engine parity.
+
+**Alternatives considered.**
+- *Widen the v1 digest in place.* Rejected: it would silently change what persisted v1 digests mean.
+- *Store only hashes of observations.* Rejected: `rebuild` must re-run from the record alone.
+- *Re-derive the effective view from raw entries during rebuild.* Rejected: it would be a second copy of the
+  correction semantics. Instead, the build uses the canonical owner (`ObservationLog.version_at` /
+  `as_known_at`), and the record binds both the per-identity statuses and the effective contents.
+- *Treat missing coverage or flags as clean* (the v1 default). Rejected: unknown must stay unknown.
+
+**Tradeoffs.**
+- Receipts are large, because they embed effective contents.
+- `ObservationLog` keeps the first-ingested copy of a duplicate. So when re-receipts differ only in provenance
+  (`receipt_time`, `raw_ref`, `parser_version`), the bound content follows ingest order.
+- Conflict detection in `events.py` also depends on ingest order. When two conflicting versions are backfilled out
+  of receipt order, `as_known_at` differs: the first-ingested copy becomes the entry and only variants set the
+  detection time. A receipt replays exactly from its own record. Two logs holding the same rows in a different
+  ingest order can still produce different closures (reported to the `events.py` owner; not changed here).
+- The demo and the Terminal still show the v1 manifest, now labelled LEGACY_INCOMPLETE.
+- Synthetic fixtures prove engineering only.
+
+**What would make us reconsider.**
+- A canonical `events.py` fix for ingest-order-dependent conflicts.
+- Lanes C or D needing a selection-closure input rather than a downstream binding. That would be a v3 closure,
+  never an edit of v2.
+- A real dataset where embedded contents make receipts impractically large. We would then consider
+  content-addressed storage of observations, with the same digests.

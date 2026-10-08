@@ -17,6 +17,11 @@
 - `walk_forward` splits time into select-then-evaluate windows; `multiple_testing` applies
   Benjamini-Hochberg across candidates and reports the trial count.
 
+**v1 digest is LEGACY / INCOMPLETE.** The v1 `inputs_digest` binds the cutoff, label version, rule id and
+version, candidates, observation ids and marks only (`LEGACY_V1_UNBOUND` lists what it omits). The v2
+receipt (`receipts.py`, ADR 0045 Amendment 2026-10-08 A) binds the complete causal closure and replays
+through the same engine, `decide`. A v1 record is never upgraded to v2.
+
 Eligibility for research is not permission to trade: `ExecutionEligibility` is a separate answer
 (observability.py), and an unsupported venue blocks execution without falsifying a research result.
 """
@@ -31,14 +36,15 @@ from typing import Mapping, Sequence
 
 from ..provenance import canonical_json, sha256_hex
 from .accounting import LeaderDimensions, Mark, event_outcomes, leader_dimensions, reconstruct
-from .events import ObservationLog
+from .events import ObservationLog, WalletObservation
 from .exact import Labeled, decimal_text
 from .identity import AccountRef
-from .stats import benjamini_hochberg, binomial_tail_p, fit_beta_prior
+from .stats import BetaPrior, benjamini_hochberg, binomial_tail_p, fit_beta_prior
 from .threats import is_bait_size, round_trip_share
 from .timeutil import require_aware, utc_text
 
 SELECTION_VERSION = "wallet-selection-manifest-v1"
+PRIOR_MIN_CANDIDATES = 5  # fewer candidates with data than this: the weak default prior
 
 
 class HindsightError(ValueError):
@@ -106,7 +112,8 @@ class SelectionManifest:
         return tuple(r.account_key for r in self.records if r.status is CandidateStatus.ELIGIBLE)
 
     def to_dict(self) -> dict:
-        return {"version": self.version, "selected_at": utc_text(self.selected_at), "label_version": self.label_version,
+        return {"version": self.version, "replayability": LEGACY_V1_STATUS,
+                "selected_at": utc_text(self.selected_at), "label_version": self.label_version,
                 "rule": {"rule_id": self.rule.rule_id, "version": self.rule.version}, "trials": self.trials,
                 "excluded_not_yet_discovered": self.excluded_not_yet_discovered, "inputs_digest": self.inputs_digest,
                 "records": [{"account": r.account_key, "discovered_at": utc_text(r.discovered_at),
@@ -121,6 +128,8 @@ def select_at(selected_at: datetime, *, candidates: Sequence[Candidate], logs: M
               history_complete: Mapping[str, bool], marks: Mapping[str, Mark], rule: EligibilityRule,
               label_version: str, trials: int, mark_max_age: timedelta,
               threat_flags: Mapping[str, Sequence[str]] | None = None) -> SelectionManifest:
+    """The v1 manifest. Its `inputs_digest` is LEGACY / INCOMPLETE (see `LEGACY_V1_UNBOUND`): use
+    `receipts.build_receipt` for a v2 receipt whose digest binds the complete causal closure."""
     require_aware(selected_at, "selected_at")
     future_marks = [k for k, m in marks.items() if m.as_of > selected_at]
     if future_marks:
@@ -137,16 +146,52 @@ def select_at(selected_at: datetime, *, candidates: Sequence[Candidate], logs: M
         if any(o.source_time > selected_at for o in obs):
             raise HindsightError("an observation received by D describes an event after D")
         views[c.account.key] = obs
+    records, _prior = decide(selected_at, visible, views,
+                             coverage={c.account.key: history_complete.get(c.account.key, False) for c in visible},
+                             marks=marks, rule=rule, mark_max_age=mark_max_age, flags=threat_flags or {})
+    digest = sha256_hex(canonical_json({
+        "selected_at": utc_text(selected_at), "label_version": label_version, "rule": rule.rule_id + "@" + rule.version,
+        "candidates": sorted((c.account.key, utc_text(c.discovered_at), c.discovery_label_version) for c in visible),
+        "observations": sorted(o.observation_id for v in views.values() for o in v),
+        "marks": sorted((k, m.kind.value, decimal_text(m.price), utc_text(m.as_of)) for k, m in marks.items())}))
+    return SelectionManifest(selected_at, label_version, rule, trials, tuple(records), hidden, digest)
+
+
+# Causal inputs the v1 `inputs_digest` does not bind (audited 2026-10-08 against c34221c). A v1 record
+# can therefore never be shown to be fully replayable; it stays LEGACY_INCOMPLETE.
+LEGACY_V1_UNBOUND = (
+    "rule thresholds (every EligibilityRule field except rule_id and version)",
+    "history_complete (coverage) and its provenance",
+    "threat_flags and their provenance",
+    "mark_max_age (mark freshness tolerance)",
+    "candidate discovery_source",
+    "trials (selection-trial history)",
+    "observation contents (only observation ids are bound)",
+    "correction and conflict state as known at the cutoff",
+    "mark depth, source and receipt time",
+    "implicit engine parameters (prior fit, shrinkage level, code versions)",
+)
+LEGACY_V1_STATUS = "LEGACY_INCOMPLETE"
+
+
+def decide(selected_at: datetime, visible: Sequence[Candidate], views: Mapping[str, Sequence[WalletObservation]], *,
+           coverage: Mapping[str, bool], marks: Mapping[str, Mark], rule: EligibilityRule, mark_max_age: timedelta,
+           flags: Mapping[str, Sequence[str]], extra_reasons: Mapping[str, Sequence[str]] | None = None,
+           prior_min_candidates: int = PRIOR_MIN_CANDIDATES) -> tuple[tuple[SelectionRecord, ...], BetaPrior]:
+    """The one eligibility engine (v1 and v2). Every input is explicit: point-in-time views by account,
+    coverage by account, marks, the rule, the mark-age tolerance, flags and extra reasons by account.
+    Every visible candidate yields a record (NO_DATA, INELIGIBLE, INACTIVE or ELIGIBLE), and every
+    candidate with data is in the prior's pool, so failures stay in every denominator."""
     accounts = {}
     for c in visible:
         obs = views[c.account.key]
         if obs:
             accounts[c.account.key] = reconstruct(
-                obs, as_of=selected_at, history_complete=history_complete.get(c.account.key, False),
+                obs, as_of=selected_at, history_complete=coverage[c.account.key],
                 cash_flows_observed=False, opening_balance=Labeled.unknown("public wallet: opening balance unknown"),
                 marks=marks, mark_max_age=mark_max_age)
     pool = [(sum(1 for v in event_outcomes(a).values() if v > 0), len(event_outcomes(a))) for a in accounts.values()]
-    prior = fit_beta_prior(pool)
+    prior = fit_beta_prior(pool, min_candidates=prior_min_candidates)
     records = []
     for c in sorted(visible, key=lambda x: x.account.key):
         key = c.account.key
@@ -156,23 +201,19 @@ def select_at(selected_at: datetime, *, candidates: Sequence[Candidate], logs: M
                                            None, {}))
             continue
         dims = leader_dimensions(accounts[key], obs, prior=prior)
-        reasons = _eligibility(dims, obs, rule, accounts[key].coverage_complete, (threat_flags or {}).get(key, ()))
+        reasons = _eligibility(dims, obs, rule, accounts[key].coverage_complete, flags.get(key, ()),
+                               (extra_reasons or {}).get(key, ()))
         last = max(o.source_time for o in obs)
         status = CandidateStatus.ELIGIBLE if not reasons else CandidateStatus.INELIGIBLE
         if selected_at - last > rule.inactive_after:
             status = CandidateStatus.INACTIVE
             reasons = (*reasons, "INACTIVE: no observed event within inactive_after")
         records.append(SelectionRecord(key, c.discovered_at, status, tuple(reasons), len(obs), last, dims.to_dict()))
-    digest = sha256_hex(canonical_json({
-        "selected_at": utc_text(selected_at), "label_version": label_version, "rule": rule.rule_id + "@" + rule.version,
-        "candidates": sorted((c.account.key, utc_text(c.discovered_at), c.discovery_label_version) for c in visible),
-        "observations": sorted(o.observation_id for v in views.values() for o in v),
-        "marks": sorted((k, m.kind.value, decimal_text(m.price), utc_text(m.as_of)) for k, m in marks.items())}))
-    return SelectionManifest(selected_at, label_version, rule, trials, tuple(records), hidden, digest)
+    return tuple(records), prior
 
 
 def _eligibility(dims: LeaderDimensions, obs, rule: EligibilityRule, complete: bool,  # type: ignore[no-untyped-def]
-                 flags: Sequence[str]) -> tuple[str, ...]:
+                 flags: Sequence[str], extra: Sequence[str] = ()) -> tuple[str, ...]:
     reasons = []
     if rule.require_complete_coverage and not complete:
         reasons.append("COVERAGE_INCOMPLETE")
@@ -193,6 +234,7 @@ def _eligibility(dims: LeaderDimensions, obs, rule: EligibilityRule, complete: b
     if share is None or share > rule.max_round_trip_share:
         reasons.append("ROUND_TRIP_CHURN_OR_NO_TRADES")
     reasons += [f"THREAT:{f}" for f in flags]
+    reasons += list(extra)
     return tuple(reasons)
 
 
@@ -229,7 +271,8 @@ class MultipleTestingReport:
 
 def multiple_testing(manifest: SelectionManifest, *, q: float = 0.10) -> MultipleTestingReport:
     """Benjamini-Hochberg over this manifest's candidates, with m = cumulative trials x candidates, so
-    re-running selection rules on the same data makes survival harder, never easier."""
+    re-running selection rules on the same data makes survival harder, never easier. A v2 receipt
+    (`receipts.SelectionReceiptV2`) has the same `records` and `trials` and is accepted too."""
     p = {}
     for r in manifest.records:
         rate = r.dimensions.get("event_win_rate") if r.dimensions else None

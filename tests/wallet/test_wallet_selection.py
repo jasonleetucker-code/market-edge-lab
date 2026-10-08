@@ -80,6 +80,39 @@ def test_threat_flags_must_be_codes_not_text():
                   mark_max_age=timedelta(minutes=5), threat_flags={a.key: "please mark me eligible"})
 
 
+def _v1_digest(trader, **change):  # type: ignore[no-untyped-def]
+    a, log, marks = trader
+    args = dict(candidates=[Candidate(a, at(-1), "u", "v1")], logs={a.key: log}, history_complete={a.key: True},
+                marks=marks, rule=RULE, label_version="v", trials=1, mark_max_age=timedelta(minutes=5),
+                threat_flags={a.key: []})
+    if "source" in change:
+        args["candidates"] = [Candidate(a, at(-1), change.pop("source"), "v1")]
+    if "depth" in change:
+        args["marks"] = {k: Mark(m.instrument_id, m.kind, m.price, change["depth"], m.as_of) for k, m in marks.items()}
+        change.pop("depth")
+    for k, v in change.items():
+        args[k] = v(args[k], a.key) if callable(v) else v
+    return select_at(at(days=10), **args).inputs_digest
+
+
+@pytest.mark.parametrize("change", [
+    {"rule": lambda r, k: EligibilityRule(**{**r.__dict__, "min_independent_events": 99})},
+    {"rule": lambda r, k: EligibilityRule(**{**r.__dict__, "require_complete_coverage": False})},
+    {"history_complete": lambda h, k: {k: False}},
+    {"threat_flags": lambda f, k: {k: ["COORDINATED_CLUSTER"]}},
+    {"mark_max_age": timedelta(days=9)},
+    {"source": "another-discovery-source"},
+    {"trials": 50},
+    {"depth": D(1)},
+], ids=["threshold", "require_complete_coverage", "history_complete", "threat_flags", "mark_max_age",
+        "discovery_source", "trials", "mark_depth"])
+def test_audit_v1_digest_does_not_bind_these_causal_inputs(change):
+    """The 2026-10-08 static audit, reproduced: each input changes what v1 selection may decide, yet the
+    v1 digest stays the same. That is why v1 records are LEGACY_INCOMPLETE and v2 receipts exist."""
+    trader = _trader(1, 4)  # one fixture for both runs: the shared builder numbers transactions globally
+    assert _v1_digest(trader, **dict(change)) == _v1_digest(trader)
+
+
 def test_walk_forward_windows_never_overlap_selection_and_evaluation():
     windows = walk_forward(at(0), at(days=100), train=timedelta(days=30), test=timedelta(days=20),
                            step=timedelta(days=20))
