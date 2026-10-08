@@ -869,6 +869,59 @@ be written here when they are made.
     - any AI model or provider call;
     - declaring a profit using an unverified fee (KXNFLGAME fees remain a blocker);
     - every item already listed as not authorized in the 2026-10-07 and 2026-10-08 JEV entries.
+- **2026-10-08 (America/New_York), owner decisions on the Track B decision packet (#184).** Recorded verbatim in
+  `docs/owner/2026-10-08-alpha-discovery-decisions.md`. They answer the packet
+  `docs/owner/2026-10-08-alpha-discovery-decision-packet.md` (branch `research/alpha-shortlist-20261008`, `8c65add`),
+  and they extend the Track B entry above.
+  - **Authorized: A2, a one-time Kalshi public read (packet item 1).** The owner confirmed reading the Kalshi
+    Developer Agreement and that it permits private research storage.
+    - **What is read.** Keyless public endpoints for settled or historical markets, trades and 1-minute
+      candlesticks (bid/ask OHLC).
+    - **Universe.** NBA game markets (Oct 2025 – Feb 2026), MLB game markets (2025 season), and the non-sports
+      series of EXP-005/EXP-006, closing on or after 2025-07-01. The exact series list is frozen and committed in
+      those experiments' protocols **before** the read. Optionally, non-NY KXHIGH*/KXLOW* for TB-09.
+    - **Excluded.** KXHIGHNY, KXNFLGAME and every 2026 NFL moneyline game, KXNHLGAME, and KXMVE* combos.
+    - **Two stages.** Stage 1 is at most 300 GETs, to size availability. Stage 2 is at most 20,000 GETs.
+    - **Pacing and timing.** Requests are paced within Kalshi's published public limits and run outside the
+      protected windows (11:13–11:30, 16:13–16:30 and 17:40–18:50 America/New_York). Windows are checked
+      against an authoritative clock, not the laptop's.
+    - **Storage.** Raw responses are stored once, immutably, with a hash manifest, outside git.
+    - **Conditions.** Research use only; no redistribution, schedule, account, credential or order. The reader
+      runs only from merged, reviewed code.
+  - **Authorized: a standing merge delegation for Track B research code PRs, until 2026-11-15 (packet item 7).**
+    A PR merges without a per-PR owner approval only when **all** of these hold:
+    - it is offline and pure, with fixture/synthetic tests;
+    - exact-head CI is green;
+    - an independent review approves it, with re-review of changed heads;
+    - it is reconciled with current main and mergeable;
+    - it does not import `edge_lab.execution`;
+    - it adds no collector, timer, schedule, credential or network call beyond an approved one-time read
+      (A2 above);
+    - it makes no change to EXP-001/002/003 or to a frozen protocol;
+    - `experiments check-frozen` passes.
+  - **Authorized: item 6a.** An outcome- and price-blind documentation audit of about 20 EIA-linked Kalshi
+    contracts' rules against official EIA release notes. No API and no prices. Any settled result seen on a page
+    is recorded. Item 6b (a vintage archive) is not decided.
+  - **Authorized: item 10.** Research use of the next already-approved off-host O1 backup pull as a laptop
+    research input, for feature-only, logged diagnostics. No extra pull.
+  - **Authorized: item 3.** Extending the unsent Kalshi message in `docs/research/KALSHI_QUESTIONS_2026-09-26.md`
+    with the NBA/MLB/NHL fee multipliers and per-series maker-fee history. The owner reads the current fee PDF,
+    confirms the final text and sends it from their own account. Agents never send it.
+  - **Decided against:**
+    - item 12, non-outcome family-B scans while EXP-003 is paused;
+    - item 8, any Track B or new work on sportsbook consensus vs the Kalshi ask. That stays with EXP-002's own
+      process.
+  - **Not decided** (the packet's recommendation stands):
+    - item 2, Becker tape;
+    - item 4, IEM;
+    - item 5, Novig;
+    - item 6b, vintage archive;
+    - item 9, paper-maker study;
+    - item 11, family slot;
+    - item 13, wallet datasets.
+  - **Still not authorized:** everything listed under the Track B entry above, other than A2 within its stated
+    bounds.
+
 ## Standing merge rule: docs-only and test-only PRs
 
 Owner rule of 2026-09-22 (verbatim source: `docs/owner/2026-09-22-overnight-build-directive.md`).
