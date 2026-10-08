@@ -77,19 +77,72 @@ Composition is where the dangerous paths live:
     only while this process holds the lease. A cancel reply naming another order confirms nothing: it is kept as
     evidence and the reservation becomes UNKNOWN (F4). Nothing amends, and a cancel goes only to an order with no
     unknown outcome, so one operation is in flight per order (the package L requirement).
-11. **Fencing (F2).** Only the egress lease holder writes. A worker that lost the lease is fenced out: it may
-    read the account, but it writes nothing (no snapshot, control event, record or attempt change) and sends
-    nothing, because the live worker's control log and journal are no longer its own. It does not even raise a
-    lease-lost incident, which would land in the live worker's log and make that worker's replay diverge from its
-    live state. The lease is re-read before every writing phase. Only attempts of this instance's own fence are
-    turned unknown at a cycle start. Residual: between a lease check and a write there is no transaction spanning
-    both, so a takeover in that window can let one evidence write land; the journal's fence check in
-    `prepare_attempt` stays the hard stop for any send.
+11. **Fencing (F2; amended 2026-10-07 by package J's review follow-ups).** Only the egress lease holder writes. A
+    worker that lost the lease is fenced out: it writes nothing (no snapshot, control event, record, receipt,
+    attempt or reservation change) and sends nothing, because the live worker's control log and journal are no
+    longer its own. It does not even raise a lease-lost incident, which would land in the live worker's log and
+    make that worker's replay diverge from its live state. Only attempts of this instance's own fence are turned
+    unknown at a cycle start.
+
+    *What the check is.* Every write re-reads the lease from the store first (`_check_writer` calls
+    `_lease_held`); a cached "fenced out" flag is never trusted on its own. That covers control events and records
+    (through `_apply`/`_record`) and every direct journal write: the in-flight sweep, the snapshot, lookup
+    receipts, attempt resolution, fills, cancels, releases, the recording of a send's reply and the shutdown's
+    cancel. The original text said "re-read before every writing phase"; the package K review showed that was not
+    enough. A supervisor restart under the **same worker id** takes a new fence while the old instance is
+    mid-cycle; the old instance's cached flag stayed false, and its `_raise_pending` appended
+    `IncidentRaised:journal-refused` to the control log after the new instance's `Started`
+    (`test_orchestrator_fencing.py` reproduces it and now proves the old instance appends nothing).
+
+    *What happens on loss.* A write that finds the lease lost raises `OrchestratorFencedOut`; `run_cycle` turns
+    that into a `fenced_out` report and nothing further is written. Every later `run_cycle` raises
+    `OrchestratorFencedOut`, and `run(n)` stops after the cycle that found out, so a fenced instance does not keep
+    reading the whole account every interval. Operator calls refuse the same way; `submit_signal` answers
+    FENCED_OUT; a shutdown cut short reports what it did. A reply that comes back after a takeover is not recorded
+    by the old instance: the attempt is already OUTCOME_UNKNOWN (the takeover did that) and the live worker
+    resolves it from the venue's order listing, never by a resend.
+
+    *The remaining window, stated honestly.* The lease read and the write are separate SQLite transactions; nothing
+    spans both, and the journal's control-event and record appends take no fence token. So a takeover that commits
+    between a lease read and the write that follows it still lets **that one write** land (for example a receipt,
+    or the first of the writes that record a reply, such as the receipt before `mark_sent`). The next write
+    re-reads and stops. The boot rows (`Started`, `GENESIS`) are written before the lease is taken, by design: the
+    booting instance is the one taking over. A request already handed to `send` before a takeover can still reach
+    the venue; the journal's transactional fence check in `prepare_attempt` remains the hard stop for starting a
+    send, and the new holder reconciles anything in flight. The lease's expiry is not checked by `_lease_held`
+    (only identity and fence token): an expired but untaken lease still lets this instance write evidence, and
+    `prepare_attempt` refuses any send on it. Closing the window entirely needs fenced appends in the journal
+    (a journal change, outside packages J and K).
 12. **FIXTURE cash basis.** Package G reports the cash basis as UNKNOWN (ACC-02), so nothing could ever pass. A
     FIXTURE caller may declare `fixture_cash_basis`, the basis its fixture venue implements. It only fills a basis
     package G reports as UNKNOWN, never replaces a known one (F5); it is refused for every other environment and
     recorded in BOOT and every CYCLE record. The placeholder risk limits stay the
     default: tests pass explicit TEST limits as typed inputs.
+
+13. **Stream recovery (package J, `execution/recovery.py`; added 2026-10-07).** There is no stream transport: it
+    is future work that needs the owner's credential, source and budget approval. The recovery model is pure and
+    immutable; the orchestrator holds its state in memory and is fed by an optional `StreamSource.drain(n)`,
+    configured together with `OrchestratorConfig.recovery` (both or neither; without them nothing changes, and
+    demonstration B's pinned hash is unchanged).
+    - **Where it drains** (bounded by `max_items_per_drain`): before the account read, so that what arrived so far
+      can be proven by it; before the strategies propose, when the cycle takes its marks (`recovery.marks`); at the
+      start of each decision; and once more just before the decision acts (WOULD_SUBMIT or prepare and send).
+    - **Proof.** After a COMPLETE reconciliation, `recovery.prove` clears every stream quarantine whose
+      `not_before` is at or before the read's start (gaps, conflicts, reconnects, baselines, rate overruns,
+      backlog). A REST/stream disagreement (the stream delivered a fill or a count before the read began that the
+      COMPLETE listing does not show) keeps that market quarantined and is raised as an incident before any
+      decision, like every other evidence anomaly (rule 4).
+    - **Invalidation drops decisions.** A decision is BLOCKED with `STREAM_INVALIDATED`, `STREAM_QUARANTINE` or
+      `STREAM_DOWN` reasons when its market (or the account) changed since the marks, a quarantine covers it, or a
+      required subscription is not live. Nothing is prepared or sent. A dropped decision is not retried: its
+      signal was consumed, and the strategy re-evaluates on its next signal from fresh evidence.
+    - **A reconnect is not a cancellation.** A lost connection or a new subscription id changes no reservation,
+      attempt or order; it only requires a REST proof before stream-dependent decisions proceed.
+    - **Restart.** The recovery state is not persisted: a restart starts disconnected (STREAM_DOWN) and needs new
+      subscriptions plus a COMPLETE read, which is the conservative reading of a lost process.
+    - Every private-stream venue fact is UNKNOWN (`recovery.STREAM_FACTS`; the conformance pack excludes
+      WebSockets). Tradeoff: REST may lag the stream, so a fill the stream delivered just before a read began can
+      show up as a disagreement and disarm. That is fail-closed; revisit once DEMO_OBSERVED latency evidence exists.
 
 ## Alternatives rejected
 
@@ -127,7 +180,10 @@ Composition is where the dangerous paths live:
 
 ## Reconsider when
 
-- Package J adds stream and feed recovery: signals and market state then come from it.
+- A stream transport is approved (package J's model is in place, rule 13): its venue facts (`STREAM_FACTS`) then
+  need DEMO_OBSERVED evidence, signals and market state may come from it, and REST lag decides whether a
+  disagreement should still disarm immediately.
+- The journal gains fenced appends: the remaining window in rule 11 then closes.
 - Package L defines kill latches beyond control's, or amend support: crossing cancel and amend answers then need
   their recovery rule here.
 - Package O moves execution to its own process and service user: `send` becomes the real transport there, and

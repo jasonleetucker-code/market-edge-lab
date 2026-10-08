@@ -50,8 +50,15 @@ bounded; the persisted records stay the authority.
 **Fencing.** Only the holder of the egress lease writes. If the lease is lost (another worker took it over), this
 instance is FENCED OUT: it still reads the account, but it writes nothing to the journal (no snapshot, no control
 event, no record, no attempt change) and sends nothing, because its live state is no longer the replay of what is
-stored. The lease is re-checked before every writing phase; the journal's fence check inside `prepare_attempt`
-remains the hard stop for a send.
+stored. Every write re-reads the lease first (a cached flag is never trusted alone); the cycle that finds it lost
+returns a `fenced_out` report, and every later `run_cycle` raises `OrchestratorFencedOut` (`run(n)` stops). A
+takeover between a lease read and the write after it can still let that one write land (ADR 0046 §11); the
+journal's fence check inside `prepare_attempt` remains the hard stop for a send.
+
+**Stream recovery** (package J, optional). With a `StreamSource` and `OrchestratorConfig.recovery`, the cycle drains
+the stream (bounded) before the read, before proposing (taking `recovery.marks`), and before and just after each
+decision's checks; a COMPLETE read proves or contradicts it (`recovery.prove`). A decision whose market changed since
+the marks, is quarantined, or lacks a live subscription is BLOCKED and never sent. A reconnect cancels nothing.
 
 **Shutdown.** `shutdown()` persists a Disarm (no new risk), leaves resting orders alone unless `cancel_owned=True`
 asks to cancel our own resting orders (never anyone else's, and only while this process still holds the egress
@@ -85,6 +92,7 @@ from . import control as ctl
 from . import conformance
 from . import kalshi_wire as w
 from . import lifecycle as lc
+from . import recovery as rc
 from . import risk_gate as gate
 from .journal import AttemptState, ExecutionJournal, JournalError, JournalUnavailable
 from .model import (MAX_DIGITS, AccountScope, Action, ApprovalGrant, ApprovalMethod, Environment, Grid, IntentKind,
@@ -226,6 +234,13 @@ class StrategyContext:
     markets: Mapping[str, gate.MarketState | None]
 
 
+class StreamSource(Protocol):
+    """The caller's private stream (a future, separately approved transport; a fixture in tests): up to
+    `max_items` stream items (`recovery.StreamItem`) received since the last call, in arrival order."""
+
+    def drain(self, max_items: int) -> tuple: ...
+
+
 class Strategy(Protocol):
     """A typed policy. It proposes; it never sends, reserves or approves anything."""
 
@@ -286,6 +301,7 @@ class OrchestratorConfig:
     external_cash_policy: acct.ExternalCashPolicy = acct.ExternalCashPolicy.UNKNOWN_BLOCKS
     fixture_cash_basis: CashBasis | None = None  # FIXTURE only (module docstring)
     max_pending_approvals: int = 100
+    recovery: rc.RecoveryConfig | None = None  # set exactly when a StreamSource is given (package J)
 
     def __post_init__(self) -> None:
         if not isinstance(self.scope, AccountScope) or self.scope.subaccount is not None:
@@ -306,6 +322,8 @@ class OrchestratorConfig:
                     isinstance(k, str) and isinstance(v, frozenset) for k, v in self.signal_sources.items()):
                 raise OrchestratorError("signal_sources maps a strategy id to a frozenset of source ids")
             object.__setattr__(self, "signal_sources", MappingProxyType(dict(self.signal_sources)))
+        if self.recovery is not None and not isinstance(self.recovery, rc.RecoveryConfig):
+            raise OrchestratorError("recovery must be a recovery.RecoveryConfig")
         if not isinstance(self.external_cash_policy, acct.ExternalCashPolicy):
             raise OrchestratorError("external_cash_policy must be an account.ExternalCashPolicy")
         if self.fixture_cash_basis is not None:
@@ -363,6 +381,7 @@ class CycleReport:
     records_written: int  # control events and records this cycle (journal rows of every kind are bounded)
     deadline_hit: bool
     fenced_out: bool = False  # the lease was lost: this cycle read only and wrote nothing
+    stream: Mapping[str, Any] | None = None  # the stream recovery summary (None: no stream configured)
 
 
 @dataclass(frozen=True)
@@ -513,6 +532,9 @@ class _Cycle:
     control_disarmed_on_recon: bool = False
     detail: str = ""
     read_done: bool = False
+    stream_marks: Any = None  # recovery.Marks taken when the strategies start proposing
+    stream_items: int = 0
+    stream_findings: list = field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------------------------- the service
@@ -523,7 +545,7 @@ class Orchestrator:
 
     def __init__(self, journal: ExecutionJournal, config: OrchestratorConfig, *, send: Sender, feed: MarketFeed,
                  strategies: tuple[Strategy, ...], clock: Callable[[], datetime],
-                 sleep: Callable[[float], None]):
+                 sleep: Callable[[float], None], stream: StreamSource | None = None):
         if not isinstance(journal, ExecutionJournal):
             raise OrchestratorError("journal must be an ExecutionJournal")
         if not isinstance(config, OrchestratorConfig):
@@ -533,6 +555,9 @@ class Orchestrator:
             raise OrchestratorError("send, clock, sleep and feed.market_state must be callables")
         if not isinstance(strategies, tuple):
             raise OrchestratorError("strategies must be a tuple")
+        if (stream is None) != (config.recovery is None) or (
+                stream is not None and not callable(getattr(stream, "drain", None))):
+            raise OrchestratorError("a stream (with drain) and config.recovery are given together, or neither")
         ids = [s.strategy_id for s in strategies]
         if len(set(ids)) != len(ids) or not all(isinstance(i, str) and _ID.fullmatch(i) for i in ids):
             raise OrchestratorError("strategy ids must be unique short identifiers")
@@ -544,6 +569,8 @@ class Orchestrator:
         self._signals_rejected = 0
         self._recorded = _Recent(RECENT_MEMORY)  # decision verdicts recorded once per (key, outcome, why)
         self._fenced_out = False
+        self._stream = stream
+        self._stream_state = None if stream is None else rc.initial(config.recovery)
         now = self._now()
 
         # Start only through control.boot; Started is persisted before anything acts.
@@ -694,6 +721,10 @@ class Orchestrator:
     def fenced_out(self) -> bool:
         return self._fenced_out
 
+    @property
+    def stream_state(self) -> rc.RecoveryState | None:
+        return self._stream_state
+
     def request_arm(self, request: ctl.ArmRequest) -> ctl.ArmAccepted | ctl.ArmRefused:
         """An operator's arm request, judged once (`control.decide_arm`); the outcome is persisted, then applied."""
         self._check_running()
@@ -832,10 +863,12 @@ class Orchestrator:
         self._renew_lease(cy)
         if self._fenced_out:
             return self._fenced_cycle(cy)
+        self._drain_stream(cy)  # before the read: what arrived so far can be proven by it
         self._settle_own_in_flight(cy)
         self._reconcile(cy)
         if not self._lease_held():
             return self._fenced_cycle(cy)
+        self._prove_stream(cy)
         self._apply(ctl.ReconciliationObserved(cy.status, utc_text(self._now()), cy.detail), self._now(), cy)
         self._apply_venue_evidence(cy)
         self._safety_review(cy)  # every anomaly so far is an incident (a disarm) before any decision
@@ -846,6 +879,9 @@ class Orchestrator:
                                  "DEMO is not an authorized environment for this orchestrator"))
             self._raise_pending(cy)
         elif mode in (ctl.Mode.SHADOW, ctl.Mode.HUMAN_CONFIRMATION, ctl.Mode.BOUNDED_AUTO):
+            if self._stream is not None:
+                self._drain_stream(cy)
+                cy.stream_marks = rc.marks(self._stream_state)  # decisions are judged against these
             selected = self._propose_and_arbitrate(cy, delivered)
             self._raise_pending(cy)
             for proposal, strategy in selected:
@@ -867,6 +903,54 @@ class Orchestrator:
         if cy.recon is None and not cy.read_done:
             self._read_account(cy)
         return replace(self._report(cy), records_written=cy.records, fenced_out=True)
+
+    # stream recovery (package J) --------------------------------------
+
+    def _drain_stream(self, cy: _Cycle) -> None:
+        """Fold what the stream source has (bounded) into the recovery state. In memory only: nothing is written.
+        A failing source, a malformed item or a saturated drain quarantines like a stream anomaly."""
+        if self._stream is None:
+            return
+        limit, now = self._config.recovery.max_items_per_drain, self._now()
+        state = self._stream_state
+        try:
+            items = self._stream.drain(limit)
+        except Exception as exc:  # a failing source is a stream problem, never a crash of the cycle
+            self._stream_state = rc.note_problem(state, rc.Reason.SOURCE_FAILED, at=now,
+                                                 detail=f"drain raised {type(exc).__name__}")
+            return
+        if not isinstance(items, tuple) or len(items) > limit:
+            self._stream_state = rc.note_problem(state, rc.Reason.SOURCE_FAILED, at=now,
+                                                 detail="drain must return a tuple of at most max_items items")
+            return
+        for item in items:
+            try:
+                state = rc.apply(state, item).state
+            except ValueError as exc:
+                state = rc.note_problem(state, rc.Reason.SOURCE_FAILED, at=now, detail=f"{exc}"[:200])
+            cy.stream_items += 1
+        if len(items) == limit:  # the source may hold more: what is still queued is unseen
+            state = rc.note_problem(state, rc.Reason.BACKLOG, at=now, detail=f"a full drain of {limit} items")
+        self._stream_state = state
+
+    def _prove_stream(self, cy: _Cycle) -> None:
+        """A COMPLETE reconciliation proves (or contradicts) the stream-dependent state. A REST/stream disagreement
+        is an evidence anomaly: an incident (a disarm) before any decision, and the market stays quarantined."""
+        if self._stream is None or cy.recon is None or cy.status is not ctl.Reconciliation.COMPLETE:
+            return
+        proof = rc.prove(self._stream_state, cy.recon, scope=self._scope)
+        self._stream_state = proof.state
+        for f in proof.findings:
+            cy.stream_findings.append([f.kind, f.market_ticker, f.order_id, f.detail])
+            if f.kind == rc.Reason.DISAGREEMENT.value:
+                cy.anomalies.append((_incident_id("stream-disagreement", f.order_id), f"{f.detail}"[:300]))
+
+    def _stream_problems(self, cy: _Cycle, intent: OrderIntent) -> tuple[str, ...]:
+        """Drain, then: may a decision on this market, taken at the cycle's marks, still proceed?"""
+        if self._stream is None:
+            return ()
+        self._drain_stream(cy)
+        return rc.decision_problems(self._stream_state, intent.market_ticker, cy.stream_marks)
 
     # step 1 ---------------------------------------------------------
 
@@ -1267,6 +1351,10 @@ class Orchestrator:
             cy.deadline_hit = True
             self._decision(cy, intent, Outcome.BLOCKED, ("CYCLE_DEADLINE: the cycle ran out of time",))
             return
+        stream = self._stream_problems(cy, intent)
+        if stream:  # invalidated or unproven since the strategies proposed: dropped, never sent
+            self._decision(cy, intent, Outcome.BLOCKED, stream)
+            return
         mode = self._state.mode
         market = self._market(cy, intent.market_ticker)
         view = self._journal.reservations.account_view(self._scope)
@@ -1306,6 +1394,10 @@ class Orchestrator:
         reasons = tuple(f"{v.code.value}: {v.detail}"[:300] for v in decision.reasons) + tuple(problems)
         if reasons:
             self._decision(cy, intent, Outcome.BLOCKED, reasons)
+            return
+        stream = self._stream_problems(cy, intent)  # once more, just before acting
+        if stream:
+            self._decision(cy, intent, Outcome.BLOCKED, stream)
             return
         if mode is ctl.Mode.SHADOW:
             self._decision(cy, intent, Outcome.WOULD_SUBMIT, ())
@@ -1540,7 +1632,10 @@ class Orchestrator:
                            None if cy.snapshot is None else cy.snapshot.revision, cy.budget.used,
                            MappingProxyType(dict(sorted(cy.signal_counts.items()))), self._take_rejections(),
                            cy.proposals, cy.ignored, tuple(cy.decisions), tuple(cy.resolved), cy.fills,
-                           tuple(cy.released), tuple(cy.incidents), cy.records, cy.deadline_hit)
+                           tuple(cy.released), tuple(cy.incidents), cy.records, cy.deadline_hit,
+                           stream=None if self._stream is None else MappingProxyType(
+                               {**rc.summary(self._stream_state), "items_this_cycle": cy.stream_items,
+                                "findings": [list(f) for f in cy.stream_findings]}))
 
     def _take_rejections(self) -> int:
         n, self._signals_rejected = self._signals_rejected, 0
@@ -1558,7 +1653,8 @@ class Orchestrator:
                 "released": list(report.released), "incidents": list(report.incidents),
                 "deadline_hit": report.deadline_hit,
                 "fixture_cash_basis": None if self._config.fixture_cash_basis is None
-                else self._config.fixture_cash_basis.value}
+                else self._config.fixture_cash_basis.value,
+                **({} if report.stream is None else {"stream": dict(report.stream)})}
 
     # ------------------------------------------------------------------ shutdown
 
