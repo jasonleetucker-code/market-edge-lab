@@ -23,6 +23,9 @@ from .html import STATIC_FILES, Shell, asset_version, esc, page, static_bytes
 from .views import DEMO_PAGES, NAV_KEYS, PAGES, Page
 from .views import common as cm
 from .views.inplay import INPLAY_DEMO_PAGES, INPLAY_PAGES
+from .views.ops_pages import OPS_NAV_KEYS, OPS_PAGES
+
+NAV_KEYS = {**NAV_KEYS, **OPS_NAV_KEYS}
 
 CSP = ("default-src 'none'; script-src 'self'; style-src 'self'; font-src 'self'; img-src 'self'; "
        "connect-src 'self'; base-uri 'none'; object-src 'none'; frame-ancestors 'none'; form-action 'self'")
@@ -77,7 +80,7 @@ def _status_line(code: int) -> str:
 
 def make_app(config: d.Config) -> Callable[[dict[str, Any], Callable], Iterable[bytes]]:
     """A WSGI callable over `config`. Every request opens the sources read-only afresh."""
-    pages = {**PAGES, **INPLAY_PAGES, **({**DEMO_PAGES, **INPLAY_DEMO_PAGES} if config.demo else {})}
+    pages = {**PAGES, **INPLAY_PAGES, **OPS_PAGES, **({**DEMO_PAGES, **INPLAY_DEMO_PAGES} if config.demo else {})}
 
     def shell_for(ctx: d.Context | None, title: str, nav: str, body: str, *, account: str | None = None,
                   params: pr.Params | None = None) -> str:

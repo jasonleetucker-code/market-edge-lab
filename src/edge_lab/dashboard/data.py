@@ -1675,3 +1675,145 @@ def rfq_feasibility(ctx: Context) -> Loaded:
                        "docs_stale": ctx.now - fetched > RFQ_DOCS_MAX_AGE,
                        "document": module.FEASIBILITY_DOCUMENT,
                        "participation_authorized": bool(module.KALSHI.execution_authorized)})
+
+
+# --------------------------------------------------------------------------- operator journeys (Market v1 J1, J4-J6)
+
+# The execution package's projection (ADR 0043: the dashboard never imports that package; it reads this file, as it
+# reads freshness.json). The names are pinned to the writer by tests/execution/test_status_export.py.
+EXECUTION_STATUS_FILE = "execution_status.json"
+EXECUTION_STATUS_SCHEMA = "edge-lab-execution-status/1"
+EXECUTION_STATUS_MAX_BYTES = STATUS_FILE_MAX_BYTES
+EXECUTION_STATUS_MAX_AGE = timedelta(minutes=15)  # older than this, every figure reads "as of" and never current
+JOURNAL_STATES = ("OK", "NO_JOURNAL", "ERROR")
+
+
+# The export's shape, checked before any view reads it: a malformed export is an error state, never a page error and
+# never a silently empty section. (path, allowed types); `None` in the types means the value may be null (unknown).
+# "records" marks a list whose items must be objects; "texts" a list of strings.
+_ALWAYS_SHAPE = (
+    (("environment",), (str,)), (("generated_at_utc",), (str, None)), (("journal",), (dict,)),
+    (("journal", "state"), (str,)), (("environments",), (dict,)), (("environments", "authorized"), ("texts",)),
+    (("environments", "rows"), ("records",)), (("omitted_by_design",), ("texts", None)),
+)
+_JOURNAL_SHAPE = (
+    (("journal", "chain_ok"), (bool, None)), (("journal", "chain_events"), (int, None)),
+    (("journal", "chain_problems"), ("texts", None)),
+    (("control",), (dict,)), (("control", "mode"), (str,)), (("control", "reconciliation"), (str,)),
+    (("control", "open_incidents"), ("records",)), (("control", "latches"), ("records",)),
+    (("control", "closeouts"), ("records",)), (("control", "last_refusals"), ("records",)),
+    (("control", "arm_readiness"), ("records",)), (("control", "log"), ("texts",)),
+    (("control", "armed_grant"), (dict, None)), (("control", "last_reconciliation"), (dict, None)),
+    (("control", "last_disarm"), (dict, None)),
+    (("service",), (dict,)), (("grants",), (dict,)), (("grants", "configured"), ("records", None)),
+    (("limits",), (dict, None)), (("bounds",), (dict, None)),
+    (("account",), (dict,)), (("account", "snapshot"), (dict, None)), (("account", "positions"), ("records", None)),
+    (("account", "external_orders"), ("records", None)), (("account", "reservations"), (dict,)),
+    (("account", "reservations", "held"), ("records",)),
+    (("attempts",), (dict,)), (("attempts", "rows"), ("records",)), (("attempts", "unknown"), ("records",)),
+    (("attempts", "in_flight"), ("records",)), (("attempts", "by_state"), (dict,)),
+    (("decisions",), (dict,)), (("cycles",), (dict,)), (("cycles", "last"), (dict, None)),
+    (("pnl",), (dict,)), (("pnl", "by_market"), ("records",)),
+    (("settlements",), (dict,)), (("settlements", "rows"), ("records",)),
+    (("attribution",), (dict,)), (("attribution", "rows"), ("records",)),
+)
+_MISSING = object()
+
+
+def _shape_ok(value: Any, kinds: tuple) -> bool:
+    for kind in kinds:
+        if kind is None and value is None:
+            return True
+        if kind == "records" and isinstance(value, list) and all(isinstance(x, dict) for x in value):
+            return True
+        if kind == "texts" and isinstance(value, list) and all(isinstance(x, str) for x in value):
+            return True
+        if isinstance(kind, type) and isinstance(value, kind) and not (kind is int and isinstance(value, bool)):
+            return True
+    return False
+
+
+def execution_shape_problems(doc: dict[str, Any]) -> list[str]:
+    """Every place where the export's shape is not the schema's (an empty list when it is)."""
+    problems = []
+    journal = doc.get("journal")
+    state = journal.get("state") if isinstance(journal, dict) else None
+    spec = _ALWAYS_SHAPE + (_JOURNAL_SHAPE if state == "OK" else ())
+    for path, kinds in spec:
+        value: Any = doc
+        for key in path:
+            value = value.get(key, _MISSING) if isinstance(value, dict) else _MISSING
+        if value is _MISSING or not _shape_ok(value, kinds):
+            problems.append(f"{'.'.join(path)} is {'missing' if value is _MISSING else type(value).__name__}")
+    if isinstance(state, str) and state not in JOURNAL_STATES:
+        problems.append(f"journal.state {state[:40]!r} is not a known state")
+    return problems
+
+
+@dataclass(frozen=True)
+class ExecutionStatus:
+    """The projection as written, plus its own age: `export_freshness` is `freshness.assess(generated_at_utc,
+    EXECUTION_STATUS_MAX_AGE, now)` (FRESH | STALE | UNKNOWN). Nothing in `doc` is re-derived here."""
+
+    doc: dict[str, Any]
+    export_freshness: str
+    max_age: timedelta
+
+
+def execution_status(ctx: Context) -> Loaded:
+    """The execution status export from the status directory. NO_DATA when it is not configured or not written (the
+    executor is not running here, or never wrote one: never an empty portfolio); ERROR when it is unreadable, of
+    another schema or malformed; OK with an `ExecutionStatus` otherwise."""
+    loaded = ctx._status_file(EXECUTION_STATUS_FILE)
+    if loaded.status == NO_DATA:
+        if ctx.config.status_dir is None:
+            return loaded
+        return Loaded(NO_DATA, message=f"no {EXECUTION_STATUS_FILE} in the status directory: no executor has written "
+                                       "an export here")
+    if loaded.status != OK:
+        return loaded
+    doc = loaded.value
+    if doc.get("schema") != EXECUTION_STATUS_SCHEMA:
+        return Loaded(ERROR, message=f"{EXECUTION_STATUS_FILE} has schema {str(doc.get('schema'))[:60]!r}, not "
+                                     f"{EXECUTION_STATUS_SCHEMA}")
+    problems = execution_shape_problems(doc)
+    if problems:
+        return Loaded(ERROR, message=f"{EXECUTION_STATUS_FILE} is malformed: " + "; ".join(problems[:3])
+                                     + (f" (+{len(problems) - 3} more)" if len(problems) > 3 else ""))
+    generated = doc.get("generated_at_utc") if isinstance(doc.get("generated_at_utc"), str) else None
+    fresh = assess_freshness(generated, max_age=EXECUTION_STATUS_MAX_AGE, now=ctx.now).value.upper()
+    return Loaded(OK, ExecutionStatus(doc, fresh, EXECUTION_STATUS_MAX_AGE))
+
+
+WALLET_DEMO_MODULE = "edge_lab.wallet_intel.demo"
+WALLET_DEMO_SEED = 20261007
+
+
+def wallet_research(ctx: Context) -> Loaded:
+    """Wallet intelligence (issue 168) for the Terminal. No wallet source is approved, so production reads NOT_AUTHORIZED;
+    demo mode reads Demonstration A (`wallet_intel.demo.run_synthetic_demo`), SYNTHETIC, network-free and
+    deterministic. A report that does not label itself SYNTHETIC is refused (an error state), never shown."""
+    if not ctx.config.demo:
+        return Loaded(OK, {"state": "NOT_AUTHORIZED"})
+    module, missing = _optional_module(WALLET_DEMO_MODULE, "the wallet research lane (wallet_intel) is not installed "
+                                                           "in this build", ctx)
+    if missing is not None:
+        return missing
+    try:
+        report = _wallet_report(module, WALLET_DEMO_SEED)
+    except Exception as exc:  # noqa: BLE001 - shown as an error state, never a failed page
+        return Loaded(ERROR, message=short_error(exc, ctx.config))
+    if not isinstance(report, dict) or report.get("data_class") != "SYNTHETIC":
+        return Loaded(ERROR, message="the wallet report does not label itself SYNTHETIC; it is not shown")
+    return Loaded(OK, {"state": "SYNTHETIC", "report": report})
+
+
+_WALLET_CACHE: dict[tuple[str, int], dict[str, Any]] = {}
+
+
+def _wallet_report(module: Any, seed: int) -> dict[str, Any]:
+    """`run_synthetic_demo(seed)` is pure (the same seed gives the same bytes), so one run per process is kept."""
+    key = (str(getattr(module, "DEMO_VERSION", "")), seed)
+    if key not in _WALLET_CACHE:
+        _WALLET_CACHE[key] = module.run_synthetic_demo(seed)
+    return _WALLET_CACHE[key]
