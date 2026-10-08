@@ -23,6 +23,7 @@ messages and printed (`-s`). Scale: EDGE_LAB_KILL_SEEDS (default N = 4; EDGE_LAB
 from __future__ import annotations
 
 import json
+import os
 import random
 import re
 import shutil
@@ -33,6 +34,14 @@ import pytest
 import chaos_support as cs
 from edge_lab.execution import control as ctl
 
+
+@pytest.fixture(autouse=True)
+def _close_rigs():
+    """Close every rig's journal after each test (Windows keeps open SQLite files locked)."""
+    yield
+    cs.close_all()
+
+
 N = cs.knob("KILL_SEEDS", 4, 60)
 # (seed, kind of kill point): any point, then points around venue writes only (they are a few percent of all points).
 CASES = ([(s, None) for s in range(101, 101 + N)] + [(s, "before_send") for s in range(201, 201 + max(1, N // 2))]
@@ -41,13 +50,14 @@ CHILD_CYCLES = 3
 
 
 def _child(rig: cs.Rig, journal, state, plan: dict) -> subprocess.CompletedProcess:
-    return subprocess.run(cs.kill_command(journal, state, plan), capture_output=True, text=True, timeout=180)
+    env = dict(os.environ, PYTHONHASHSEED="0")  # the child's set and dict orders are reproducible too
+    return subprocess.run(cs.kill_command(journal, state, plan), capture_output=True, text=True, timeout=180, env=env)
 
 
 @pytest.mark.parametrize("seed,label", CASES)
 def test_a_kill_at_a_random_point_then_restart_keeps_every_invariant(tmp_path, seed, label):
     rng = random.Random(seed)
-    rig = cs.Rig(tmp_path)
+    rig = cs.Rig(tmp_path, venue_lag=cs.SHORT_LAG)
     rig.warm()
     workload = cs.Workload(seed)
     for _ in range(2):

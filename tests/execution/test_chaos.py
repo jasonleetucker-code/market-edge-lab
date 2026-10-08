@@ -10,13 +10,15 @@ DISARMED after any incident until it is rearmed, and nothing is prepared unless 
 Seeds are recorded in the parametrization. No statistical claim is made from these fixtures. Scale with
 EDGE_LAB_CHAOS_SCALE=full (or EDGE_LAB_CHAOS_SEEDS / EDGE_LAB_DISK_POINTS); see docs/execution/PERFORMANCE.md.
 
-Bugs found are `xfail(strict=True)` tests at the end of this file, each with its reason.
+Bugs found are `xfail(strict=True)` tests at the end of this file, each with its reason; P-1 and P-2, fixed by
+#177, are regressions there now.
 """
 
 from __future__ import annotations
 
 import random
 import sqlite3
+from collections import Counter
 from datetime import timedelta
 
 import pytest
@@ -28,6 +30,14 @@ from edge_lab.execution import model as m
 from edge_lab.execution import orchestrator as o
 from edge_lab.execution.journal import ExecutionJournal, JournalBusy, JournalUnavailable
 from edge_lab.execution.reservations import LeaseHeld
+
+
+@pytest.fixture(autouse=True)
+def _close_rigs():
+    """Close every rig's journal after each test (Windows keeps open SQLite files locked)."""
+    yield
+    cs.close_all()
+
 
 SEEDS = list(range(1, cs.knob("CHAOS_SEEDS", 3, 25) + 1))
 B70, B72, B74 = h.MARKETS
@@ -71,7 +81,7 @@ def test_a_full_disk_at_any_commit_of_a_cycle_fails_loud_and_recovers(tmp_path, 
     restart (or the same instance) reconciles every attempt from the venue and no invariant breaks."""
     outcomes = []
     for point in _commit_points(seed=20261007):
-        rig = cs.Rig(tmp_path / f"p{point}-{persistent}")
+        rig = cs.Rig(tmp_path / f"p{point}-{persistent}", venue_lag=cs.SHORT_LAG)
         rig.warm()
         workload = cs.Workload(point)
         rig.step(workload, n=2)
@@ -157,7 +167,7 @@ def test_a_journal_locked_mid_cycle_loses_nothing(tmp_path, seed):
     attempt was committed and its order sent). The cycle fails loud with JournalBusy; afterwards every attempt is
     reconciled from the venue, never re-sent."""
     rng = random.Random(seed)
-    rig = cs.Rig(tmp_path)
+    rig = cs.Rig(tmp_path, venue_lag=cs.SHORT_LAG)
     rig.warm()
     workload = cs.Workload(seed)
     rig.step(workload, n=2)
@@ -218,7 +228,7 @@ def test_a_jumping_clock_fails_closed_and_recovers_after_it_is_fixed(tmp_path, j
 def test_clock_jitter_within_tolerance_keeps_every_invariant(tmp_path, seed):
     """Our clock wanders up to 3 s either way of the venue's every cycle (inside every tolerance)."""
     rng = random.Random(seed)
-    rig = cs.Rig(tmp_path)
+    rig = cs.Rig(tmp_path, venue_lag=cs.SHORT_LAG)
     rig.warm()
     workload = cs.Workload(seed)
     for _ in range(15):
@@ -257,7 +267,7 @@ def test_a_seeded_mix_of_http_errors_holds_every_invariant(tmp_path, seed):
     25 cycles; then the network heals and every attempt is reconciled."""
     mix = dict(write_mix=tuple((f, 1) for f in cs.WRITE_FAULTS),
                read_mix=(("ok", 30), ("429", 1), ("503", 1), ("timeout", 1), ("malformed", 1)))
-    rig = cs.Rig(tmp_path, http=mix, seed=seed)
+    rig = cs.Rig(tmp_path, http=mix, seed=seed, venue_lag=cs.SHORT_LAG)
     report = rig.cycle()
     rig.operate(report)
     rig.clock.advance(60)
@@ -270,6 +280,38 @@ def test_a_seeded_mix_of_http_errors_holds_every_invariant(tmp_path, seed):
     rig.settle(8)
 
 
+@pytest.mark.parametrize("fault,resolved,reached", [("raise_before", "ABSENT", 0), ("raise_after", "ACKNOWLEDGED", 1)])
+def test_a_send_that_raises_is_unknown_never_retried_and_reconciled(tmp_path, fault, resolved, reached):
+    """The orchestrator's `send` itself raises (the real transport never does: it turns every failure into a result),
+    before anything left or after the venue acted. Either way the attempt is OUTCOME_UNKNOWN (SEND_RAISED), the
+    create is never sent again, and the listing resolves it."""
+    rig = cs.Rig(tmp_path, venue_lag=cs.SHORT_LAG)
+    rig.warm()
+    rig.adapter.raise_script = [fault]
+    rig.orch.submit_signal(h.signal("s1", B70, at=rig.clock(), limit="0.45", qty="2"))
+    (d,) = submitted(rig.step())
+    assert d.attempt_state == "OUTCOME_UNKNOWN", d
+    rig.settle(6)
+    attempt = rig.journal.attempt(d.attempt_id)
+    assert attempt.state.value == resolved and rig.adapter.raised == [("ORDER_CREATE", fault)]
+    assert rig.adapter.creates.count(attempt.client_order_id) == reached
+
+
+@pytest.mark.parametrize("seed", SEEDS)
+def test_a_seeded_mix_of_raising_sends_holds_every_invariant(tmp_path, seed):
+    """30% of writes (creates and, at the end, cancels) raise, half of them after the venue acted, for 20 workload
+    cycles; then sends stop failing and everything is reconciled."""
+    rig = cs.Rig(tmp_path, venue_lag=cs.SHORT_LAG)
+    rig.warm()
+    rig.adapter.raise_rate, rig.adapter.raise_seed = 0.3, seed
+    workload = cs.Workload(seed)
+    for _ in range(20):
+        rig.step(workload, n=2)
+    assert rig.adapter.raised, "the seed never raised: the scenario exercised nothing"
+    rig.adapter.raise_rate = 0.0
+    rig.settle(8)
+
+
 # ---------------------------------------------------------------------------------------------- receipts
 
 
@@ -278,7 +320,7 @@ def test_a_seeded_mix_of_http_errors_holds_every_invariant(tmp_path, seed):
 def test_duplicate_and_out_of_order_receipts_keep_every_invariant(tmp_path, fault):
     """Duplicated fills in a page, pages served newest first, an older version of every order row (stale update
     stamps), and a create reply that is another order's ack (with or without its client id)."""
-    rig = cs.Rig(tmp_path)
+    rig = cs.Rig(tmp_path, venue_lag=cs.SHORT_LAG)
     rig.warm()
     workload = cs.Workload(31)
     rest_order(rig)
@@ -335,16 +377,31 @@ def test_many_markets_at_once_stay_inside_every_bound(tmp_path):
 
 @pytest.mark.parametrize("seed", SEEDS)
 def test_lease_takeovers_at_random_points_never_double_send(tmp_path, seed):
-    """Workers stall past their lease and new ones take over at seeded points; stalled ones wake up and run cycles.
-    A fenced-out worker reads but writes nothing and sends nothing; the live one reconciles everything."""
+    """Workers stall past their lease and new ones take over at seeded points; stalled ones wake up and run cycles;
+    a worker started while the lease is live is refused. A stale worker's first cycle after the takeover is a
+    `fenced_out` report and every later one raises `OrchestratorFencedOut` (#177); either way it writes nothing and
+    sends nothing, and the live one reconciles everything."""
     rng = random.Random(seed)
-    rig = cs.Rig(tmp_path)
+    rig = cs.Rig(tmp_path, venue_lag=cs.SHORT_LAG)
     rig.warm()
     workload = cs.Workload(seed)
     workers = [rig.orch]
     journals = [rig.journal]
+    outcomes = Counter()
     for step in range(16):
         action = rng.random()
+        if 0.4 <= action < 0.5 and rig.journal.reservations.lease().live_at(rig.clock()):
+            # a second start while the live worker holds the lease: refused before it writes anything (P-1, #177)
+            events = cs.max_seq(rig.journal)
+            journal = ExecutionJournal.open(rig.jpath)
+            with pytest.raises(LeaseHeld):
+                o.Orchestrator(journal, h.config(worker_id=f"x{seed}-{step}"), send=rig.adapter,
+                               feed=h.Feed(rig.adapter), strategies=(h.DemoStrategy(),), clock=rig.clock,
+                               sleep=rig.clock.sleep)
+            journal.close()
+            assert cs.max_seq(rig.journal) == events
+            outcomes["refused_start"] += 1
+            continue
         if action < 0.2:  # the live worker stalls past its lease; a new worker takes over
             rig.clock.advance(400)
             journal = ExecutionJournal.open(rig.jpath)
@@ -357,13 +414,18 @@ def test_lease_takeovers_at_random_points_never_double_send(tmp_path, seed):
         elif action < 0.4 and len(workers) > 1:  # a stalled worker wakes up and runs a cycle
             stale = rng.choice(workers[:-1])
             events, sent = cs.max_seq(rig.journal), len(rig.adapter.creates)
-            report = stale.run_cycle()
-            assert report.fenced_out and report.records_written == 0
+            try:
+                report = stale.run_cycle()
+                assert report.fenced_out and report.records_written == 0
+                outcomes["fenced_report"] += 1
+            except o.OrchestratorFencedOut:  # it already knows it is fenced out: it runs no further cycle
+                outcomes["fenced_raise"] += 1
             assert cs.max_seq(rig.journal) == events and len(rig.adapter.creates) == sent
             cs.check_invariants(rig.journal, rig.adapter, live=rig.orch)
             continue
         rig.step(workload, n=rng.choice([0, 1, 2]))
     rig.settle(8)
+    print(seed, dict(outcomes))  # which paths this seed exercised (-s)
     for j in journals:
         j.close()
 
@@ -405,19 +467,9 @@ def test_a_read_that_overruns_the_deadline_disarms_and_sends_nothing(tmp_path):
     rig.settle(4)
 
 
-# ---------------------------------------------------------------------------------------------- bugs found (xfail)
+# ---------------------------------------------------------------------------------------------- regressions and bugs
 
 
-BUG_P1 = ("BUG P-1: a second Orchestrator started on the same journal while another worker holds the egress lease "
-          "persists `Started` before `acquire_lease` refuses it (LeaseHeld). The live worker never applies that event, "
-          "so the stored control log replays to DISARMED (and the live worker's later ArmAccepted to STALE_DECISION) "
-          "while it keeps sending: the store no longer explains the live mode. Orchestrator.__init__ appends a control "
-          "event before it holds the lease.")
-BUG_P2 = ("BUG P-2: a worker whose lease is taken over while it is inside a send (a stall longer than lease_ttl) still "
-          "records its DECISION and raises an incident into the control log after the takeover: `_check_writer` only "
-          "consults a flag that `_lease_held()` sets at phase boundaries, and control events and records are not "
-          "fenced in the journal. The new lease holder's live state then differs from the replay of the store, and "
-          "its next ArmAccepted replays as STALE_DECISION while it sends.")
 BUG_P3 = ("BUG P-3: fills that execute shortly before an account read are counted twice when the venue's user-data "
           "timestamp lags (here 20 s; account.py accepts up to max_data_lag = 1 min) or our clock trails the venue's "
           "by more than lifecycle.TIMESTAMP_SKEW (2 s; account.py tolerates CLOCK_SKEW = 5 s). "
@@ -427,21 +479,31 @@ BUG_P3 = ("BUG P-3: fills that execute shortly before an account read are counte
           "venue has. It fails closed one or two cycles later (an attribution mismatch, then a lifecycle quarantine).")
 
 
-@pytest.mark.xfail(strict=True, raises=cs.InvariantViolation, reason=BUG_P1)
-def test_bug_a_refused_second_start_does_not_rewrite_the_live_workers_control_log(tmp_path):
+# P-1 and P-2 were found here as strict xfails and fixed by #177 (lease-first boot, per-write lease fencing). They now
+# run as regressions; docs/execution/PERFORMANCE.md keeps their history.
+
+
+def test_p1_a_refused_second_start_writes_nothing_and_the_live_worker_carries_on(tmp_path):
+    """P-1 (fixed by #177): a second orchestrator started while another worker holds the egress lease is refused
+    before it writes anything, so the stored control log still replays to the live worker's state."""
     rig = cs.Rig(tmp_path)
     rig.warm()
+    events = cs.max_seq(rig.journal)
     journal_b = ExecutionJournal.open(rig.jpath)
     with pytest.raises(LeaseHeld):
         o.Orchestrator(journal_b, h.config(worker_id="worker-b"), send=rig.adapter, feed=h.Feed(rig.adapter),
                        strategies=(h.DemoStrategy(),), clock=rig.clock, sleep=rig.clock.sleep)
     journal_b.close()
+    assert cs.max_seq(rig.journal) == events, "the refused start wrote to the journal"
     rig.orch.submit_signal(h.signal("s1", B70, at=rig.clock(), limit="0.45"))
-    rig.step()  # check_invariants: INV7 (prepared while the replayed mode is DISARMED; live != replay)
+    (d,) = submitted(rig.step())  # check_invariants: INV7 (live state == replay; prepared only while sending)
+    assert d.attempt_state == "ACKNOWLEDGED" and rig.orch.state.mode is ctl.Mode.BOUNDED_AUTO
 
 
-@pytest.mark.xfail(strict=True, raises=AssertionError, reason=BUG_P2)
-def test_bug_a_worker_fenced_out_mid_send_writes_nothing_after_the_takeover(tmp_path):
+def test_p2_a_worker_fenced_out_mid_send_writes_nothing_after_the_takeover(tmp_path):
+    """P-2 (fixed by #177): worker A stalls inside a send for longer than its lease and B takes over. A writes
+    nothing after the takeover, its later cycles raise OrchestratorFencedOut, and B reconciles A's in-flight order
+    from the venue (never re-sent), arms and sends with its live state equal to the replay of the store."""
     rig = cs.Rig(tmp_path)
     rig.warm()
     taken = {}
@@ -460,11 +522,19 @@ def test_bug_a_worker_fenced_out_mid_send_writes_nothing_after_the_takeover(tmp_
     rig.orch.submit_signal(h.signal("s1", B70, at=rig.clock(), limit="0.45"))
     report = rig.orch.run_cycle()
     assert report.fenced_out
-    try:
-        assert cs.max_seq(taken["journal"]) == taken["seq"], "the fenced-out worker wrote after the takeover"
-        cs.check_invariants(taken["journal"], rig.adapter, live=taken["b"])
-    finally:
-        taken["journal"].close()
+    a, rig.orch, rig.journal = rig.orch, taken["b"], taken["journal"]
+    rig.send = rig.adapter
+    assert cs.max_seq(rig.journal) == taken["seq"], "the fenced-out worker wrote after the takeover"
+    cs.check_invariants(rig.journal, rig.adapter, live=rig.orch)
+    with pytest.raises(o.OrchestratorFencedOut):
+        a.run_cycle()
+    rig.clock.advance(60)
+    rig.settle(6)  # B reconciles A's unknown attempt from the listing; the operator arms B
+    rig.orch.submit_signal(h.signal("s2", B72, at=rig.clock(), limit="0.45"))
+    (d,) = submitted(rig.step())
+    assert d.attempt_state == "ACKNOWLEDGED"
+    assert len(rig.adapter.creates) == len(set(rig.adapter.creates)) == 2
+    rig.close()
 
 
 @pytest.mark.xfail(strict=True, raises=cs.InvariantViolation, reason=BUG_P3)

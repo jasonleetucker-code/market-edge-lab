@@ -12,9 +12,9 @@ gate, account reads, and the real transport with a fixture signer and rate budge
 
 | Command | What it runs | Time here |
 |---|---|---|
-| `python -m pytest tests/execution/test_chaos.py tests/execution/test_chaos_kill.py tests/execution/test_load.py` | the default (small) suite, part of normal CI | about 50 s (`tests/execution` + `tests/invariants`: 100 s, against 53 s before package P) |
+| `python -m pytest tests/execution/test_chaos.py tests/execution/test_chaos_kill.py tests/execution/test_load.py` | the default (small) suite, part of normal CI | about 50 s (`tests/execution` + `tests/invariants` on 1065c25: 85 s in all) |
 | `EDGE_LAB_CHAOS_SCALE=full python -m pytest tests/execution/test_load.py -s` | 2,000-cycle latency pass, 500-cycle memory pass, full read-ceiling sweep | about 25 min (latency pass about 13 min, the rest 12 min) |
-| `EDGE_LAB_CHAOS_SCALE=full python -m pytest tests/execution/test_chaos.py tests/execution/test_chaos_kill.py` | 25 seeds per seeded chaos test, every commit point of the disk-full sweep, 60 + 30 + 30 kill seeds | about 4 min (226 s) |
+| `EDGE_LAB_CHAOS_SCALE=full python -m pytest tests/execution/test_chaos.py tests/execution/test_chaos_kill.py` | 25 seeds per seeded chaos test, every commit point of the disk-full sweep, 60 + 30 + 30 kill seeds | about 6 min (338 s: 274 passed, 2 xfailed) |
 
 Knobs (each an integer environment variable; `EDGE_LAB_CHAOS_SCALE=full` sets them all to the full value):
 
@@ -24,7 +24,7 @@ Knobs (each an integer environment variable; `EDGE_LAB_CHAOS_SCALE=full` sets th
 | `EDGE_LAB_DISK_POINTS` | 6 sampled | all 32 | commit points of the disk-full sweep |
 | `EDGE_LAB_KILL_SEEDS` | 4 (+2 before-send, +2 after-send) | 60 (+30, +30) | process-kill tests |
 | `EDGE_LAB_LOAD_CYCLES` | 120 | 2,000 | latency pass |
-| `EDGE_LAB_MEMORY_CYCLES` | 60 | 500 | `tracemalloc` pass (12-frame tracebacks make it slow; set it to 2000 explicitly if needed) |
+| `EDGE_LAB_MEMORY_CYCLES` | 30 | 500 | `tracemalloc` pass (12-frame tracebacks make it slow; set it to 2000 explicitly if needed) |
 | `EDGE_LAB_PERF_OUT` | unset | a path | appends every measurement as one JSON line |
 
 `-s` prints every measurement as JSON. Load tests assert bounds (queue, intents, requests, records and events per
@@ -42,7 +42,7 @@ sanity bound on p99 cycle time.
 | OS | Windows 11 Home 10.0.26200 |
 | Python | 3.12.10 (64-bit) |
 | SQLite | 3.49.1; the journal runs WAL with `synchronous=FULL` |
-| Branch | `exec/p-chaos` on `origin/main` 1afe37f |
+| Branch | `exec/p-chaos` on `origin/main` 1afe37f (full-scale runs); spot-checked again on 1065c25 (#177, below) |
 | Measured | 2026-10-07, 22:45-23:55 local time |
 
 The laptop is shared: other agent sessions and test runs were active at times, so tail latencies (p99, max) include
@@ -96,8 +96,10 @@ TRADE_COUNT_LIMIT 110, ARBITRATION_ONE_INTENT_PER_MARKET 92, BOOK_DEPTH_INSUFFIC
 | risk projection (`project_account`) | 1,400 | 0.22 | 0.50 | 0.75 | 1.27 |
 | fake venue per request (harness) | 80,743 | 2.16 | 6.86 | 15.6 | 53.6 |
 
-The same workload over its first 150 cycles (the default-sized run): cycle p50 30.4 ms (p99 92.7), decision p50
-21.5, journal write p50 1.79, risk gate p50 0.60, projection p50 0.11. The difference is history (below), not load.
+The same workload over 150 cycles, re-run after merging #177 (per-write lease fencing, lease-first boot): cycle p50
+37.5 ms (p99 201.6), decision p50 23.2, journal write p50 1.59 (p99 5.9), risk gate p50 0.72, projection p50 0.10;
+87 orders; 12.5 events per cycle; package memory +2.8 KB per cycle over 60 cycles. Nothing moved materially, so the
+2,000-cycle figures (measured on 1afe37f) were not re-run. The difference from them is history (below), not load.
 
 Growth:
 
@@ -157,7 +159,21 @@ Every scenario asserts the global invariants after every step (`chaos_support.ch
 6. `verify_chain` is OK;
 7. replaying the stored control events, every incident leaves the controller DISARMED, only an accepted arm leaves
    DISARMED, every attempt was prepared while the replayed mode was a sending mode, and the live orchestrator's state
-   equals the replay.
+   equals the replay;
+8. no REJECTED or ABSENT attempt has a venue order with its client id (the venue is asked, not the journal).
+
+And whenever a scenario lets the account go quiet (`Rig.settle`, which every scenario ends with), read from the venue
+independently of what the journal concluded:
+
+9. every reservation's filled quantity equals the venue's fill count for its order (0 when there is none);
+10. no reservation is still held once its venue order is over or never existed (a quarantine, which is held and needs
+    an operator, fails it too unless the scenario expects one).
+
+Invariant 4's snapshot half compares what the orchestrator read with what the venue served on that read; 8 to 10 are
+the checks that do not rely on the journal's own conclusions. The seeded scenarios (locked journal, clock jitter, HTTP
+mix, raising sends, receipts, lease races, disk full, process kills) run with a venue clock only 3 s behind the true
+time (`chaos_support.SHORT_LAG`), not the harness's 10 minutes, so the lifecycle's 2 s skew window and the release
+rule (a snapshot strictly after the order's end) are exercised for real. None of them tripped P-3, at 3 or 25 seeds.
 
 | Fault | Test | Expected and observed |
 |---|---|---|
@@ -170,36 +186,56 @@ Every scenario asserts the global invariants after every step (`chaos_support.ch
 | Clock jitter of up to 3 s each way every cycle | `test_clock_jitter_within_tolerance_keeps_every_invariant` | normal operation (but see P-3) |
 | HTTP 429, 5xx before/after the venue acted, timeouts before/after, malformed 2xx, 409, through the real transport | `test_every_http_write_failure_is_unknown_never_retried_and_reconciled` | each create is OUTCOME_UNKNOWN, sent once, and resolved ABSENT when the venue never acted, ACKNOWLEDGED when it did |
 | Seeded mixes of every write fault and read faults (429, 503, timeouts, malformed pages) | `test_a_seeded_mix_of_http_errors_holds_every_invariant` | invariants hold; every attempt reconciled once the network heals |
-| Duplicated fills, reversed pages, stale order rows, crossed create replies (with or without client id) | `test_duplicate_and_out_of_order_receipts_keep_every_invariant` | duplicates collapse and order does not matter (COMPLETE, no incident); stale rows are detected from the second stale read on; crossed acks become unknown and are reconciled |
+| `send` itself raises, before anything left or after the venue acted (the real transport never raises, so this is the orchestrator's own SEND_RAISED path) | `test_a_send_that_raises_is_unknown_never_retried_and_reconciled`, `test_a_seeded_mix_of_raising_sends_holds_every_invariant` | OUTCOME_UNKNOWN, sent once, resolved ABSENT (before) or ACKNOWLEDGED (after); 30% raising writes over 20 cycles keep every invariant |
+| Duplicated fills, reversed pages, stale order rows, crossed create replies (with or without client id) | `test_duplicate_and_out_of_order_receipts_keep_every_invariant` | duplicates collapse and order does not matter (COMPLETE, no incident); stale rows are detected from the second stale read on; a crossed ack with the other order's client id is OUTCOME_UNKNOWN (ACK_UNREADABLE_OR_FOR_ANOTHER_ORDER) and reconciled; without a client id it names an order another attempt owns, so `mark_sent` succeeds, `mark_acknowledged` is refused (PROVIDER_ORDER_OWNED), the decision ends SENT with a journal-refused incident (DISARMED), and the next cycle marks it OUTCOME_UNKNOWN and reconciles it to its own order. The wrong ORDER_ACK receipt stays as evidence bound to the attempt. An ack naming an order no attempt owns cannot come from our own lost reply: while any attempt is unknown the risk gate blocks new orders (RECONCILIATION_UNHEALTHY), traced separately |
 | 60 markets, a signal on each every cycle | `test_many_markets_at_once_stay_inside_every_bound` | one intent per market, at most 3 per cycle, the queue and request bounds and the order-rate limit hold |
-| Lease takeovers at seeded points; stalled workers wake up | `test_lease_takeovers_at_random_points_never_double_send` | a fenced-out worker reads only: no journal row, no send; the live worker reconciles everything |
+| Lease takeovers at seeded points; stalled workers wake up; a second start while the lease is live | `test_lease_takeovers_at_random_points_never_double_send` | the stale worker's first cycle is a `fenced_out` report and later ones raise `OrchestratorFencedOut` (#177); neither writes a journal row or sends; a start against a live lease is refused (`LeaseHeld`) with nothing written; the live worker reconciles everything |
 | Request budget exhausted mid-send | `test_a_request_budget_exhausted_mid_send_blocks_the_rest_and_disarms` | the rest are BLOCKED `REQUEST_BUDGET_EXHAUSTED`; budget incident; DISARMED |
 | A read that overruns the cycle deadline | `test_a_read_that_overruns_the_deadline_disarms_and_sends_nothing` | not COMPLETE; DISARMED; no decision |
 | Signal burst at 10x the queue bound | `test_a_signal_burst_far_above_the_bounds_keeps_the_backlog_bounded` | see Results |
 | Rate budget exhausted by ordinary traffic | `test_reserved_cancel_and_reconcile_headroom_survive_an_exhausted_rate_budget` | see Results |
 | History beyond what one read can cover | `test_the_account_read_ceiling_fails_closed` | see Results |
 
+### Mutation check
+
+The independent review of 2c111f9 mutated `src/edge_lab/execution/orchestrator.py` one change at a time and found that
+three of four survived the P suite, and the fourth was caught only by a scripted assert. After invariants 8 to 10, the
+raising-send scenarios and the short venue lag were added, each mutation was re-applied in a scratch copy of the tree
+(never in the branch) and the default P suite (`test_chaos.py`, `test_chaos_kill.py`, `test_load.py`) was run:
+
+| Mutation | Tests failing | Caught by |
+|---|---|---|
+| a crossed or unreadable ack is recorded as REJECTED | 1 (`receipts[crossed_with_id]`) | invariant 8: a REJECTED attempt whose order the venue holds |
+| reservations are never released | 34 (every scenario that settles: disk full, locked journal, HTTP, raising sends, receipts, lease races, P-2, all 8 kill cases, rate budget) | invariant 10: BOUND reservations whose venue orders are executed or canceled |
+| the create is retried once when `send` raises | 3 (both raising-send tests, the raising mix with seed 2) | invariant 2 (one client id created twice) and invariant 8, plus the scripted OUTCOME_UNKNOWN assert |
+| an unknown create outcome is recorded as REJECTED with a made-up receipt | 14 (7 HTTP write failures, 3 HTTP mixes, 2 raising sends, the raising mix with seed 2, rate budget) | invariant 8 (the venue holds the "rejected" order) and the scripted asserts |
+
+All four now fail the suite; the tree was restored (no src change on the branch).
+
 ## Bugs found
 
-Each is an `xfail(strict=True)` test in `tests/execution/test_chaos.py` with the reason in `BUG_P1`..`BUG_P3`. No
-source file was changed by package P.
+All three were found as `xfail(strict=True)` tests in `tests/execution/test_chaos.py`. No source file was changed by
+package P. **P-1 and P-2 are fixed by #177** (package J, merged as 1065c25: lease-first boot and per-write lease
+fencing). Both XPASSed there and are now ordinary regression tests. **P-3 is open** and stays a strict xfail (reason in
+`BUG_P3`).
 
-**P-1. A refused second start rewrites the live worker's control log.** `Orchestrator.__init__` persists `Started`
+**P-1 (fixed by #177). A refused second start rewrote the live worker's control log.** `Orchestrator.__init__` persists `Started`
 (`control.boot`) before `acquire_lease`, which then raises `LeaseHeld` because another worker holds the lease. The
 live worker never applies that `Started`, so the stored control log now replays to DISARMED, its next `ArmAccepted`
-replays as STALE_DECISION, and the store says DISARMED while the live worker keeps sending. Test:
-`test_bug_a_refused_second_start_does_not_rewrite_the_live_workers_control_log` (invariant 7). Suggested direction:
-take the lease before the first control write, or make control appends check the fence.
+replays as STALE_DECISION, and the store says DISARMED while the live worker keeps sending. #177 takes the lease
+before the first control write. Regression: `test_p1_a_refused_second_start_writes_nothing_and_the_live_worker_carries_on`
+(nothing written by the refused start; invariant 7), and the refused-start step of the lease-race test.
 
-**P-2. A worker fenced out mid-send still writes.** If a worker stalls inside `send` for longer than `lease_ttl` and
+**P-2 (fixed by #177). A worker fenced out mid-send still wrote.** If a worker stalls inside `send` for longer than `lease_ttl` and
 another worker takes the lease over, the stalled worker's `_record_reply` fails (its attempt is now OUTCOME_UNKNOWN,
 correctly), and it then records a DECISION and raises an `IncidentRaised` into the control log before its next
 `_lease_held()` check. `_check_writer` only reads a flag set at phase boundaries, and control events and records are
-not fenced in the journal. The new holder's live state then differs from the store's replay, as in P-1. Test:
-`test_bug_a_worker_fenced_out_mid_send_writes_nothing_after_the_takeover`. Suggested direction: fence control appends
-in the journal (as `prepare_attempt` is), or re-check the lease before every write.
+not fenced in the journal. The new holder's live state then differs from the store's replay, as in P-1. #177 fences
+every write. Regression: `test_p2_a_worker_fenced_out_mid_send_writes_nothing_after_the_takeover` (no row after the
+takeover, later cycles raise `OrchestratorFencedOut`, the new holder reconciles the in-flight order without re-sending
+it, arms and sends).
 
-**P-3. Fills just before a read can be counted twice.** `Orchestrator._fold_order` labels the listing's cumulative
+**P-3 (open). Fills just before a read can be counted twice.** `Orchestrator._fold_order` labels the listing's cumulative
 fill count with `snapshot.observed_at_utc` = min(read start, the venue's user-data `as_of`). That time is earlier
 than the moment the listing was read. The lifecycle adds fills stamped more than `TIMESTAMP_SKEW` (2 s) after the
 label on top of the count, but the count already includes them, so `record_fill` writes more fills than the venue
@@ -256,6 +292,9 @@ because its venue stamps trail our clock by 10 minutes.
 
 - The fake venue is not Kalshi. It has no settlement of its own, no historical tier movement, no rate limiting and no
   network. Its order and fill listings always return the full history.
+- The chaos rig runs the orchestrator without package J's optional stream recovery (`StreamSource`,
+  `OrchestratorConfig.recovery`): every scenario here reconciles from account reads only. Stream faults are covered by
+  J's own tests (`tests/execution/test_recovery*.py`), not re-measured here.
 - Single-threaded. Concurrency is modelled as separate journal connections and processes on one machine, as the
   orchestrator is designed (no threads); no real network partitions.
 - Kill points are journal commits and venue writes; a kill inside SQLite's own write path is covered by SQLite's

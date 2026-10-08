@@ -15,7 +15,7 @@ What is measured (and printed with `-s`; written as JSON to $EDGE_LAB_PERF_OUT w
 - **Read ceiling**: the account history at which one complete read no longer fits the cycle's request budget; past
   it the cycle is not COMPLETE, the controller disarms and nothing is sent.
 
-Defaults are small (EDGE_LAB_LOAD_CYCLES=120, EDGE_LAB_MEMORY_CYCLES=60). EDGE_LAB_CHAOS_SCALE=full runs 2,000 latency
+Defaults are small (EDGE_LAB_LOAD_CYCLES=120, EDGE_LAB_MEMORY_CYCLES=30). EDGE_LAB_CHAOS_SCALE=full runs 2,000 latency
 cycles and 500 memory cycles. Timings are of this machine and this fixture; they are not venue latency and carry no
 statistical claim. Results and the machine they were measured on: docs/execution/PERFORMANCE.md.
 """
@@ -32,6 +32,8 @@ from dataclasses import replace
 from datetime import timedelta
 from decimal import Decimal
 
+import pytest
+
 import chaos_support as cs
 import test_orchestrator_harness as h
 from edge_lab.execution import control as ctl
@@ -40,8 +42,16 @@ from edge_lab.execution import orchestrator as o
 from edge_lab.execution import risk_gate as gate
 from edge_lab.risk import RiskPolicy
 
+
+@pytest.fixture(autouse=True)
+def _close_rigs():
+    """Close every rig's journal after each test (Windows keeps open SQLite files locked)."""
+    yield
+    cs.close_all()
+
+
 CYCLES = cs.knob("LOAD_CYCLES", 120, 2000)
-MEMORY_CYCLES = cs.knob("MEMORY_CYCLES", 60, 500)  # tracemalloc with 12-frame tracebacks is slow
+MEMORY_CYCLES = cs.knob("MEMORY_CYCLES", 30, 500)  # tracemalloc with 12-frame tracebacks is slow
 SEED = 2026
 LOAD_PROFILE = {
     "markets": len(h.MARKETS), "cycle_interval_s": 60, "entries_per_cycle": [0, 0, 1],

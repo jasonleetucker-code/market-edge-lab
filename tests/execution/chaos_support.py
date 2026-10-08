@@ -48,6 +48,9 @@ from edge_lab.execution import orchestrator as o
 from edge_lab.execution.journal import CONTROL_EVENT_KIND, ExecutionJournal
 
 SCALE_ENV = "EDGE_LAB_CHAOS_SCALE"
+# A realistic venue clock for the seeded scenarios: the venue's stamps trail the true time by a few seconds, not by the
+# harness's 10 minutes (which makes the lifecycle's skew window and "a snapshot strictly after the end" trivially true).
+SHORT_LAG = 3.0
 SENDING = frozenset({ctl.Mode.HUMAN_CONFIRMATION, ctl.Mode.BOUNDED_AUTO, ctl.Mode.DEMO})
 
 
@@ -103,6 +106,13 @@ class ChaosAdapter(h.VenueAdapter):
     stale_orders: bool = False  # while set, GET_ORDERS serves each row as last seen before it was set (older stamps)
     crossed_reply: str | None = None  # "with_id" / "without_id": the next create gets the previous create's ack
     kill_point: Any = None  # child only: called with a label at each kill point; never pickled
+    # Writes whose `send` raises: each entry of `raise_script` ("raise_before": nothing reaches the venue;
+    # "raise_after": the venue acts, then the call raises; "ok") is used by the next write in order; once it is empty,
+    # `raise_rate` (with `raise_seed`) draws raise_before / raise_after / ok for each write.
+    raise_script: list = field(default_factory=list)
+    raise_rate: float = 0.0
+    raise_seed: int = 0
+    raised: list = field(default_factory=list)  # (endpoint, fault) per write that raised
     # Clocks. The harness ties the venue to our clock; these separate them. `skew`: the venue's true time minus our
     # clock (a wrong clock on our side). `venue_lag`: how far the venue's stamps trail the true time (the harness's
     # VENUE_LAG). `as_of_lag`: how far the venue's user-data timestamp trails the true time (ACC-16: approximate).
@@ -196,8 +206,28 @@ class ChaosAdapter(h.VenueAdapter):
             self._cache[name] = cache = (key, items)
         return cache[1]
 
+    def _raise_fault(self) -> str:
+        if self.raise_script:
+            return self.raise_script.pop(0)
+        if self.raise_rate <= 0:
+            return "ok"
+        rng = random.Random(self.raise_seed * 1_000_003 + len(self.creates) + len(self.writes))
+        if rng.random() >= self.raise_rate:
+            return "ok"
+        return rng.choice(["raise_before", "raise_after"])
+
     def __call__(self, request):
         name = request.endpoint.name
+        if request.is_write():
+            fault = self._raise_fault()
+            if fault == "raise_before":  # the connection fails before anything leaves: the venue never sees it
+                self.raised.append((name, fault))
+                raise ConnectionRefusedError("fixture: connection refused")
+            reply = super().__call__(request)
+            if fault == "raise_after":  # the venue acted; the reply is lost and the call raises
+                self.raised.append((name, fault))
+                raise ConnectionResetError("fixture: connection reset after the venue acted")
+            return reply
         if name == "GET_USER_DATA_TIMESTAMP" and not self.reads_fail:
             assert request.scope == h.SCOPE
             self.sync()
@@ -422,6 +452,9 @@ def check_invariants(journal: ExecutionJournal, adapter: ChaosAdapter, *, live: 
     7. Control: replaying the persisted control events, every incident leaves the controller DISARMED, only an
        accepted arm leaves DISARMED, and every attempt was prepared while the replayed mode was a sending mode. The
        live, unfenced orchestrator's state equals the replay.
+    8. No REJECTED or ABSENT attempt has a venue order with its client id (the venue is asked, not the journal).
+
+    `settled_problems` adds the checks that need a quiet account (9, 10); `Rig.settle` asserts them.
     """
     problems: list[str] = []
     venue = adapter.venue
@@ -439,6 +472,9 @@ def check_invariants(journal: ExecutionJournal, adapter: ChaosAdapter, *, live: 
     problems += [f"INV1 venue order {c} has no prepared attempt" for c in venue_coids
                  if c not in prepared and c not in adapter.manual]
     problems += [f"INV1 create {c} reached the venue with attempt state {s}" for c, s in adapter.unprepared]
+    # 8. A REJECTED or ABSENT attempt claims that no order exists: the venue must agree (read from the venue itself).
+    problems += [f"INV8 attempt {a} is {s} but the venue holds order {c}" for a, _, c, s in attempts
+                 if s in ("REJECTED", "ABSENT") and c in venue_coids]
 
     by_coid = {x["client_order_id"]: x for x in orders}
     reservations = _rows(journal, "SELECT reservation_id, client_order_id, filled_quantity, state, release_reason"
@@ -526,6 +562,34 @@ def check_invariants(journal: ExecutionJournal, adapter: ChaosAdapter, *, live: 
             "mode": state.mode.value}
 
 
+def settled_problems(journal: ExecutionJournal, adapter: ChaosAdapter) -> list[str]:
+    """What must hold once the account has been quiet for long enough (every attempt terminal, a few complete reads
+    later), each read from the venue independently of what the journal concluded:
+
+    9. every reservation's filled quantity equals the venue's fill count for its order (0 when no order exists);
+    10. no reservation is still held once its venue order is over (or never existed), unless it is quarantined, which
+        is a held, flagged state that needs an operator's resolution and is reported separately.
+    """
+    problems = []
+    by_coid = {x["client_order_id"]: x for x in adapter.venue.list_orders()}
+    rows = _rows(journal, "SELECT reservation_id, client_order_id, filled_quantity, state, quarantine_reason"
+                          " FROM reservations")
+    for rid, coid, filled, state, quarantine in rows:
+        order = by_coid.get(coid)
+        venue_filled = Decimal(0) if order is None else order["fill_count"]
+        if Decimal(filled) != venue_filled:
+            problems.append(f"INV9 {rid} records {filled} filled, the venue {venue_filled}")
+        if state != "RELEASED" and quarantine is None and (order is None or order["status"] != "resting"):
+            problems.append(f"INV10 {rid} is still {state} but its venue order is "
+                            f"{'absent' if order is None else order['status']}")
+    return problems
+
+
+def quarantined(journal: ExecutionJournal) -> list[tuple[str, str]]:
+    return [(r, q) for r, q in _rows(journal, "SELECT reservation_id, quarantine_reason FROM reservations"
+                                              " WHERE quarantine_reason IS NOT NULL")]
+
+
 def unresolved(journal: ExecutionJournal) -> list[tuple[str, str]]:
     """Attempts not yet in a terminal state (PENDING_EGRESS, SENT, OUTCOME_UNKNOWN)."""
     return [(a.attempt_id, a.state.value) for a in journal.non_terminal_attempts()]
@@ -540,13 +604,15 @@ class Rig:
 
     def __init__(self, tmp_path: Path, *, name: str = "p", markets: tuple[str, ...] = h.MARKETS, seed: int = 0,
                  http: dict | None = None, adapter: ChaosAdapter | None = None, clock: h.Clock | None = None,
-                 **config_kw):
+                 venue_lag: float | None = None, **config_kw):
         self.tmp_path, self.markets, self.config_kw = tmp_path, markets, config_kw
         tmp_path.mkdir(parents=True, exist_ok=True)
         self.jpath = tmp_path / f"{name}.execution.sqlite3"
         self.clock = clock or h.Clock()
         if adapter is None:
             adapter = ChaosAdapter(self.clock, journal_path=str(self.jpath))
+            if venue_lag is not None:
+                adapter.venue_lag = venue_lag
             seed_books(adapter, markets)
         self.adapter = adapter
         self.http = None if http is None else HttpVenue(adapter, self.clock, seed=seed, **http)
@@ -557,6 +623,7 @@ class Rig:
         grants = config_kw.get("grants")
         self.grant_digest = None if not grants else grants[0].digest()  # None: the harness's default grant
         self.orch = self.boot()
+        RIGS.append(self)
 
     def boot(self, **kw) -> o.Orchestrator:
         cfg = {**self.config_kw, **kw}
@@ -612,19 +679,32 @@ class Rig:
         assert self.operate(report), self.orch.state.log[-1]
         self.clock.advance(60)
 
-    def settle(self, cycles: int = 6, *, arm: bool = True) -> None:
-        """Quiet cycles (no new signals) until every attempt is terminal; fails if some stays unresolved."""
-        for _ in range(cycles):
+    def settle(self, cycles: int = 6, *, arm: bool = True, allow_quarantine: bool = False) -> None:
+        """Quiet cycles (no new signals) until every attempt is terminal and the journal agrees with the venue
+        (`settled_problems`: fills equal, nothing held for an order that is over). Fails if that is not reached within
+        `cycles` plus three. A quarantine fails it too unless `allow_quarantine`."""
+        for _ in range(cycles + 3):
             self.step(arm=arm)
-            if not unresolved(self.journal):
-                return
+            if not unresolved(self.journal) and not settled_problems(self.journal, self.adapter):
+                break
         assert not unresolved(self.journal), unresolved(self.journal)
+        problems = settled_problems(self.journal, self.adapter)
+        assert not problems, "; ".join(problems[:8])
+        assert allow_quarantine or not quarantined(self.journal), quarantined(self.journal)
 
     def close(self) -> None:
         try:
             self.journal.close()
         except Exception:
             pass
+
+
+RIGS: list[Rig] = []  # every rig a test built, so a fixture can close their journals (Windows file handles)
+
+
+def close_all() -> None:
+    while RIGS:
+        RIGS.pop().close()
 
 
 # ---------------------------------------------------------------------------------------------- measurement
