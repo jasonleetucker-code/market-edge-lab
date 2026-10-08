@@ -107,33 +107,60 @@ def signal_from_observation(obs: WalletObservation, *, observable_at: datetime, 
 
 
 def signals_from_log(log: ObservationLog, *, detection_delay: timedelta, cluster_key: Callable[[str], str],
-                     strategy: str, after: datetime | None = None) -> tuple[FollowSignal, ...]:
+                     strategy: str, after: datetime | None = None,
+                     skipped: list[tuple[str, str]] | None = None) -> tuple[FollowSignal, ...]:
     """Every directional leader trade as our channel would have seen it, point in time.
 
-    For each identity in the log: `observable_at` = max(first receipt, leader time + detection delay).
-    The signal uses the identity's version **as known at observable_at**, and the leader's prior
-    position from the view at that same time. A correction recorded later (a retraction, a reorg)
-    therefore never removes a signal we already acted on, and one recorded earlier means we never saw
-    the trade. Trades at or before `after` (e.g. a selection date) are skipped.
+    For each identity in the log, `observable_at` is the earliest time t such that the version known at
+    t satisfies t >= max(its first receipt, its leader time + detection delay). The search starts from the
+    first-received version and moves later whenever a correction known by then moves the trade later,
+    so a correction recorded before we could see the trade is respected. The signal uses that version
+    and the leader's prior position from the view at the same time. A correction recorded after
+    observable_at (a retraction, a reorg) never removes a signal we already acted on; one recorded
+    earlier means we never saw the trade, or saw its corrected version. Trades at or before `after`
+    (e.g. a selection date) are skipped.
+
+    One bad record never denies the run. A record that cannot become a valid signal is left out, and
+    its (identity, reason) is appended to `skipped` when a list is given.
     """
     out = []
+
+    def skip(oid: str, reason: str) -> None:
+        if skipped is not None:
+            skipped.append((oid, reason))
+
     for oid in log.all_ids():
-        original = log.version_at(oid, log.first_receipt(oid), include_conflicted=True)
-        if original is None:
-            continue
-        seen_at = max(log.first_receipt(oid), original.source_time + detection_delay)
+        seen_at = log.first_receipt(oid)
         obs = log.version_at(oid, seen_at)
-        if obs is None or not obs.directional or (after is not None and obs.source_time <= after):
+        for _ in range(16):  # each step only moves later; corrections are finite
+            if obs is None:
+                break
+            needed = max(seen_at, obs.source_time + detection_delay, obs.receipt_time)
+            if needed == seen_at:
+                break
+            seen_at = needed
+            obs = log.version_at(oid, seen_at)
+        else:
+            skip(oid, "OBSERVABLE_TIME_DID_NOT_SETTLE")
+            continue
+        if obs is None:
+            continue  # retracted, reorged out or conflicted before we could see it: never observed
+        if not obs.directional or (after is not None and obs.source_time <= after):
             continue
         before = ZERO
         for p in log.as_known_at(seen_at):
-            if p.account != obs.account or p.instrument_id != obs.instrument_id or                     (p.source_time, p.observation_id) >= (obs.source_time, obs.observation_id):
+            if p.account != obs.account or p.instrument_id != obs.instrument_id or (
+                    p.source_time, p.observation_id) >= (obs.source_time, obs.observation_id):
                 continue
             q = p.native_quantity or ZERO
             before = add(before, q) if p.action is Action.TRADE_BUY else (
                 sub(before, q) if p.action is Action.TRADE_SELL else before)
-        sig = signal_from_observation(obs, observable_at=seen_at, cluster_key=cluster_key(obs.account.key),
-                                      strategy=strategy, leader_position_before=before)
+        try:
+            sig = signal_from_observation(obs, observable_at=seen_at, cluster_key=cluster_key(obs.account.key),
+                                          strategy=strategy, leader_position_before=before)
+        except (ValueError, TypeError) as exc:  # NotFollowable is a ValueError
+            skip(oid, f"NOT_A_VALID_SIGNAL: {exc}")
+            continue
         out.append(replace(sig, signal_id=oid))  # stable: the identity as first logged
     return tuple(sorted(out, key=lambda x: (x.observable_at, x.signal_id)))
 

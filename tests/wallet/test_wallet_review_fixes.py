@@ -204,3 +204,27 @@ def test_f8_more_trials_make_survival_harder_never_easier():
     one, many = report(1), report(1000)
     assert one.hypotheses == 1 and many.hypotheses == 1000
     assert one.survivors == {a.key} and many.survivors == frozenset()  # 10/10 wins: p ~ 0.001 > 0.05/1000
+
+
+# R1: a correction that moves the trade later re-times the signal; one bad record never denies the run --
+def test_r1_a_pre_observation_correction_that_moves_the_trade_later_retimes_the_signal():
+    from edge_lab.wallet_intel.events import Correction, CorrectionKind
+    from edge_lab.wallet_intel.policy import signals_from_log
+
+    a = acct(1)
+    moved = obs(a, Action.TRADE_BUY, when=at(0), receipt_delay=timedelta(seconds=30))
+    fixed = replace(moved, source_time=at(10), receipt_time=at(0) + timedelta(seconds=45))
+    good = obs(a, Action.TRADE_BUY, "m2-yes", when=at(2), market="m2")
+    bad = obs(a, Action.TRADE_BUY, "m3-yes", price="1.00", when=at(3), market="m3")  # price 1: not a valid signal
+    log = ObservationLog()
+    log.ingest([moved, good, bad])
+    log.append_correction(Correction("c", moved.observation_id, CorrectionKind.SUPERSEDED,
+                                     at(0) + timedelta(seconds=45), "source re-timed the trade", replacement=fixed))
+    skipped: list = []
+    sigs = signals_from_log(log, detection_delay=timedelta(minutes=1), cluster_key=lambda k: k, strategy="s",
+                            skipped=skipped)
+    by = {s.signal_id: s for s in sigs}
+    assert set(by) == {moved.observation_id, good.observation_id}  # the run is not denied
+    assert by[moved.observation_id].leader_time == at(10)
+    assert by[moved.observation_id].observable_at == at(11)  # re-timed from the corrected version
+    assert [oid for oid, _ in skipped] == [bad.observation_id] and "NOT_A_VALID_SIGNAL" in skipped[0][1]
