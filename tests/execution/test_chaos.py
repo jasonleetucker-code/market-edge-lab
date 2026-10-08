@@ -18,7 +18,6 @@ from __future__ import annotations
 import random
 import sqlite3
 from datetime import timedelta
-from decimal import Decimal
 
 import pytest
 
@@ -27,7 +26,8 @@ import test_orchestrator_harness as h
 from edge_lab.execution import control as ctl
 from edge_lab.execution import model as m
 from edge_lab.execution import orchestrator as o
-from edge_lab.execution.journal import AttemptState, ExecutionJournal, JournalBusy, JournalUnavailable
+from edge_lab.execution.journal import ExecutionJournal, JournalBusy, JournalUnavailable
+from edge_lab.execution.reservations import LeaseHeld
 
 SEEDS = list(range(1, cs.knob("CHAOS_SEEDS", 3, 25) + 1))
 B70, B72, B74 = h.MARKETS
@@ -175,8 +175,10 @@ def test_a_journal_locked_mid_cycle_loses_nothing(tmp_path, seed):
     rig.send = send
     try:
         rig.orch.run_cycle()
+        raised = False
     except JournalBusy:
-        pass
+        raised = True
+    assert raised == (calls["n"] >= at), (seed, at, calls["n"])  # once the lock is taken, the cycle fails loud
     holder.execute("ROLLBACK")
     holder.close()
     rig.send = rig.adapter
@@ -245,7 +247,7 @@ def test_every_http_write_failure_is_unknown_never_retried_and_reconciled(tmp_pa
     attempt = rig.journal.attempt(d.attempt_id)
     assert attempt.state.value == resolved
     assert rig.adapter.creates.count(attempt.client_order_id) == (0 if resolved == "ABSENT" else 1)
-    assert [x for x in rig.http.log if x[0] == "ORDER_CREATE"] == [("ORDER_CREATE", fault, "")]  # sent once
+    assert [x for x in rig.http.log if x[0] == "ORDER_CREATE"] == [("ORDER_CREATE", fault)]  # sent once
 
 
 @pytest.mark.parametrize("seed", SEEDS)
@@ -261,7 +263,7 @@ def test_a_seeded_mix_of_http_errors_holds_every_invariant(tmp_path, seed):
     workload = cs.Workload(seed)
     for _ in range(25):
         rig.step(workload, n=2)
-    faults = {f for name, f, _ in rig.http.log if name == "ORDER_CREATE"}
+    faults = {f for name, f in rig.http.log if name == "ORDER_CREATE"}
     assert len(faults) >= 3, faults
     rig.http.write_mix = rig.http.read_mix = (("ok", 1),)
     rig.settle(8)
@@ -374,8 +376,7 @@ def test_a_request_budget_exhausted_mid_send_blocks_the_rest_and_disarms(tmp_pat
     probe = rig.cycle()
     read_cost = probe.requests_used
     rig.clock.advance(60)
-    rig.orch = rig.restart(bounds=o.CycleBounds(20, 6, 10, 3, read_cost + 1, timedelta(seconds=30),
-                                                timedelta(minutes=10)))
+    rig.restart(bounds=o.CycleBounds(20, 6, 10, 3, read_cost + 1, timedelta(seconds=30), timedelta(minutes=10)))
     rig.warm()
     for i, t in enumerate(h.MARKETS):
         rig.orch.submit_signal(h.signal(f"b{i}", t, at=rig.clock(), limit="0.45", qty="1"))
@@ -406,17 +407,31 @@ def test_a_read_that_overruns_the_deadline_disarms_and_sends_nothing(tmp_path):
 # ---------------------------------------------------------------------------------------------- bugs found (xfail)
 
 
-@pytest.mark.xfail(strict=True, raises=cs.InvariantViolation, reason="BUG P-1: a second Orchestrator started on the same journal while another "
-                   "worker holds the egress lease persists `Started` (and GENESIS/BOOT side effects) before "
-                   "`acquire_lease` refuses it. The live worker never applies that event, so the stored control log "
-                   "replays to DISARMED (and the live worker's later ArmAccepted to STALE_DECISION) while it keeps "
-                   "sending: the store no longer explains the live mode. orchestrator.Orchestrator.__init__ writes "
-                   "before it holds the lease.")
+BUG_P1 = ("BUG P-1: a second Orchestrator started on the same journal while another worker holds the egress lease "
+          "persists `Started` before `acquire_lease` refuses it (LeaseHeld). The live worker never applies that event, "
+          "so the stored control log replays to DISARMED (and the live worker's later ArmAccepted to STALE_DECISION) "
+          "while it keeps sending: the store no longer explains the live mode. Orchestrator.__init__ appends a control "
+          "event before it holds the lease.")
+BUG_P2 = ("BUG P-2: a worker whose lease is taken over while it is inside a send (a stall longer than lease_ttl) still "
+          "records its DECISION and raises an incident into the control log after the takeover: `_check_writer` only "
+          "consults a flag that `_lease_held()` sets at phase boundaries, and control events and records are not "
+          "fenced in the journal. The new lease holder's live state then differs from the replay of the store, and "
+          "its next ArmAccepted replays as STALE_DECISION while it sends.")
+BUG_P3 = ("BUG P-3: fills that execute shortly before an account read are counted twice when the venue's user-data "
+          "timestamp lags (here 20 s; account.py accepts up to max_data_lag = 1 min) or our clock trails the venue's "
+          "by more than lifecycle.TIMESTAMP_SKEW (2 s; account.py tolerates CLOCK_SKEW = 5 s). "
+          "Orchestrator._fold_order labels the listing's cumulative fill count with snapshot.observed_at = min(read "
+          "start, user-data as_of), earlier than the moment the listing was read, so the lifecycle adds fills stamped "
+          "after that label on top of a count that already includes them, and record_fill writes more fills than the "
+          "venue has. It fails closed one or two cycles later (an attribution mismatch, then a lifecycle quarantine).")
+
+
+@pytest.mark.xfail(strict=True, raises=cs.InvariantViolation, reason=BUG_P1)
 def test_bug_a_refused_second_start_does_not_rewrite_the_live_workers_control_log(tmp_path):
     rig = cs.Rig(tmp_path)
     rig.warm()
     journal_b = ExecutionJournal.open(rig.jpath)
-    with pytest.raises(Exception, match="holds fence"):
+    with pytest.raises(LeaseHeld):
         o.Orchestrator(journal_b, h.config(worker_id="worker-b"), send=rig.adapter, feed=h.Feed(rig.adapter),
                        strategies=(h.DemoStrategy(),), clock=rig.clock, sleep=rig.clock.sleep)
     journal_b.close()
@@ -424,12 +439,7 @@ def test_bug_a_refused_second_start_does_not_rewrite_the_live_workers_control_lo
     rig.step()  # check_invariants: INV7 (prepared while the replayed mode is DISARMED; live != replay)
 
 
-@pytest.mark.xfail(strict=True, raises=AssertionError, reason="BUG P-2: a worker whose lease is taken over while it is inside a send (a "
-                   "stall longer than lease_ttl) still records its DECISION and raises an incident into the control "
-                   "log after the takeover: `_check_writer` only consults a flag that `_lease_held()` sets at phase "
-                   "boundaries, and `append_control_event` is not fenced. The new lease holder's live state then "
-                   "differs from the replay of the store, and its next ArmAccepted replays as STALE_DECISION while it "
-                   "sends.")
+@pytest.mark.xfail(strict=True, raises=AssertionError, reason=BUG_P2)
 def test_bug_a_worker_fenced_out_mid_send_writes_nothing_after_the_takeover(tmp_path):
     rig = cs.Rig(tmp_path)
     rig.warm()
@@ -456,14 +466,7 @@ def test_bug_a_worker_fenced_out_mid_send_writes_nothing_after_the_takeover(tmp_
         taken["journal"].close()
 
 
-@pytest.mark.xfail(strict=True, raises=cs.InvariantViolation, reason="BUG P-3: fills that execute shortly before an account read are counted twice "
-                   "when the venue's user-data timestamp lags (here 20 s; account.py accepts up to max_data_lag = 1 "
-                   "min) or our clock trails the venue's by more than lifecycle.TIMESTAMP_SKEW (2 s; account.py "
-                   "tolerates CLOCK_SKEW = 5 s). Orchestrator._fold_order labels the listing's cumulative fill count "
-                   "with snapshot.observed_at = min(read start, user-data as_of), earlier than the moment the listing "
-                   "was read, so the lifecycle adds fills stamped after that label on top of a count that already "
-                   "includes them, and record_fill writes more fills than the venue has (it fails closed one or two "
-                   "cycles later with an incident).")
+@pytest.mark.xfail(strict=True, raises=cs.InvariantViolation, reason=BUG_P3)
 @pytest.mark.parametrize("as_of_lag,skew", [(20.0, 0.0), (0.0, 4.0)], ids=["user-data-lags-20s",
                                                                             "our-clock-4s-slow"])
 def test_bug_the_journal_never_records_more_fills_than_the_venue_near_a_read(tmp_path, as_of_lag, skew):

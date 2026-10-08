@@ -45,7 +45,7 @@ import test_orchestrator_harness as h
 from edge_lab.execution import control as ctl
 from edge_lab.execution import model as m
 from edge_lab.execution import orchestrator as o
-from edge_lab.execution.journal import CONTROL_EVENT_KIND, AttemptState, ExecutionJournal
+from edge_lab.execution.journal import CONTROL_EVENT_KIND, ExecutionJournal
 
 SCALE_ENV = "EDGE_LAB_CHAOS_SCALE"
 SENDING = frozenset({ctl.Mode.HUMAN_CONFIRMATION, ctl.Mode.BOUNDED_AUTO, ctl.Mode.DEMO})
@@ -90,10 +90,6 @@ def best_yes_bid(adapter: h.VenueAdapter, t: str) -> Decimal | None:
 # ---------------------------------------------------------------------------------------------- the venue adapter
 
 
-class KilledHere(Exception):
-    """Raised in-process (never in the child) to mark where a kill would have happened."""
-
-
 @dataclass
 class ChaosAdapter(h.VenueAdapter):
     """The harness adapter plus probes and faults (module docstring). Picklable for the kill child."""
@@ -115,7 +111,6 @@ class ChaosAdapter(h.VenueAdapter):
     as_of_lag: float = 1.0
     _last_ack: bytes | None = None
     _last_orders: dict = field(default_factory=dict)
-    _orders_calls: int = 0
     _cache: dict = field(default_factory=dict)
 
     # -- clocks
@@ -222,7 +217,6 @@ class ChaosAdapter(h.VenueAdapter):
         key = "fills" if name == "GET_FILLS" else "orders"
         items = body[key]
         if name == "GET_ORDERS":
-            self._orders_calls += 1
             if self.stale_orders:  # an older version of every row seen before (served consistently while set)
                 items = [self._last_orders.get(x["order_id"], x) for x in items]
             else:
@@ -286,7 +280,7 @@ class HttpVenue:
         self.adapter, self.clock, self.rng = adapter, clock, random.Random(seed)
         self.write_mix, self.read_mix = write_mix, read_mix
         self.script: list[str] = []
-        self.log: list[tuple[str, str, str]] = []  # (endpoint, fault, transport outcome)
+        self.log: list[tuple[str, str]] = []  # (endpoint, fault drawn) per opener call
         self.budget = budget if budget is not None else t.RateBudget(
             monotonic_ns=lambda: int(clock().timestamp() * 1_000_000_000))
         self.transport = t.Transport(m.Environment.FIXTURE, signer, self._open, clock, budget=self.budget,
@@ -311,7 +305,7 @@ class HttpVenue:
         write = request.is_write()
         fault = (self.script.pop(0) if write and self.script else
                  self._pick(self.write_mix if write else self.read_mix))
-        self.log.append((request.endpoint.name, fault, ""))
+        self.log.append((request.endpoint.name, fault))
         if fault in ("429", "503_before", "timeout_before", "503", "timeout") or (not write and fault == "malformed"):
             if fault == "429":
                 return _Response(429, b'{"error":"rate limited"}', url)
@@ -349,13 +343,13 @@ class Workload:
     lifting one contract first; an EXIT of up to 3 held YES contracts with probability 0.35."""
 
     def __init__(self, seed: int, markets: tuple[str, ...] = h.MARKETS, *, per_cycle=(0, 1, 1, 2),
-                 exit_share: float = 0.35):
+                 exit_share: float = 0.35, prefix: str = "w"):
         self.rng, self.markets, self.per_cycle, self.exit_share = random.Random(seed), markets, per_cycle, exit_share
-        self.n = 0
+        self.n, self.prefix = 0, prefix
 
     def signal_id(self, cycle: int) -> str:
         self.n += 1
-        return f"w{cycle:05d}-{self.n:06d}"
+        return f"{self.prefix}{cycle:05d}-{self.n:06d}"
 
     def liquidity(self, adapter: h.VenueAdapter) -> None:
         rng = self.rng
@@ -518,7 +512,8 @@ def check_invariants(journal: ExecutionJournal, adapter: ChaosAdapter, *, live: 
             and before in ctl.RECONCILED_MODES)
         if incident and state.mode is not ctl.Mode.DISARMED:
             problems.append(f"INV7 incident at seq {seq} left the mode {state.mode.value}")
-        if before is ctl.Mode.DISARMED and state.mode is not ctl.Mode.DISARMED and not isinstance(event, ctl.ArmAccepted):
+        left = before is ctl.Mode.DISARMED and state.mode is not ctl.Mode.DISARMED
+        if left and not isinstance(event, ctl.ArmAccepted):
             problems.append(f"INV7 {type(event).__name__} at seq {seq} left DISARMED")
     if live is not None and not live.fenced_out and live.state != state:
         problems.append(f"INV7 the live state ({live.state.mode.value}, {len(live.state.log)} lines) is not the "
@@ -557,6 +552,8 @@ class Rig:
         self.journal = ExecutionJournal.open(self.jpath)
         self.reports: list[o.CycleReport] = []
         self.operator: list[tuple[int, str]] = []
+        grants = config_kw.get("grants")
+        self.grant_digest = None if not grants else grants[0].digest()  # None: the harness's default grant
         self.orch = self.boot()
 
     def boot(self, **kw) -> o.Orchestrator:
@@ -579,7 +576,7 @@ class Rig:
     def operate(self, report: o.CycleReport, mode: ctl.Mode = ctl.Mode.BOUNDED_AUTO) -> bool:
         """The operator: after a COMPLETE cycle in DISARMED, arm naming the open incidents (one action per episode)."""
         if report.reconciliation == "COMPLETE" and not report.fenced_out and self.orch.state.mode is ctl.Mode.DISARMED:
-            outcome = h.arm(self.orch, mode, self.clock)
+            outcome = h.arm(self.orch, mode, self.clock, grant_digest=self.grant_digest)
             self.operator.append((report.cycle, type(outcome).__name__))
             return isinstance(outcome, ctl.ArmAccepted)
         return False
@@ -716,9 +713,9 @@ def kill_child_main(journal_path: str, state_path: str, plan_json: str) -> None:
     rig = Rig.__new__(Rig)  # reuse the rig's operator and step on the loaded state (no new venue)
     rig.tmp_path, rig.markets, rig.config_kw = Path(journal_path).parent, tuple(plan["markets"]), {}
     rig.jpath, rig.clock, rig.adapter, rig.http, rig.send = Path(journal_path), clock, adapter, None, adapter
-    rig.journal, rig.reports, rig.operator = journal, [], []
+    rig.journal, rig.reports, rig.operator, rig.grant_digest = journal, [], [], None
     rig.orch = rig.boot()
-    workload = Workload(plan["seed"], tuple(plan["markets"]))
+    workload = Workload(plan["seed"], tuple(plan["markets"]), prefix="k")  # its own signal ids
     for _ in range(plan["cycles"]):
         rig.step(workload, check=False)
     adapter.save(state_path)
@@ -749,7 +746,3 @@ def hardware() -> dict:
 
 def at_text(clock: h.Clock) -> str:
     return m.utc_text(clock())
-
-
-def later(clock: h.Clock, seconds: float) -> datetime:
-    return clock() + timedelta(seconds=seconds)
