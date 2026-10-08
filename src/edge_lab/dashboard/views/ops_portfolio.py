@@ -142,9 +142,10 @@ def orders_section(doc: dict) -> str:
     if rows is None:
         return c.section("Orders", c.unavailable("Orders unknown", "The export carries no attempt list."),
                          sid="xp-orders")
-    # The unknown and in-flight lists are complete in the export (not cut to the newest rows); resting orders are
-    # every held reservation of the latest account view.
+    # The unknown and in-flight lists are separate from the newest-rows list, each cut to the exporter's bound with
+    # its omitted count shown; resting orders are every held reservation of the latest account view (not cut).
     unknown = (oc.lst(attempts, "unknown") or []) + (oc.lst(attempts, "in_flight") or [])
+    cut = sum(x for x in (attempts.get("unknown_omitted"), attempts.get("in_flight_omitted")) if isinstance(x, int))
     seen = {a.get("attempt_id") for a in unknown}
     by_id = {a.get("attempt_id"): a for a in rows}
     pending = [by_id.get(r.get("reservation_id")) or {**r, "state": None, "reservation_state": r.get("state")}
@@ -156,7 +157,8 @@ def orders_section(doc: dict) -> str:
                           for k, v in sorted(counts.items())]) if counts else "")
     if unknown:
         parts.append('<h3 class="eyebrow">Unknown or in flight · reserved until reconciled, never re-sent</h3>'
-                     '<ul class="rows">' + "".join(_attempt_row(a, env) for a in unknown) + "</ul>")
+                     '<ul class="rows">' + "".join(_attempt_row(a, env) for a in unknown) + "</ul>"
+                     + omitted_note(cut, "unknown or in-flight attempts"))
     if pending:
         parts.append('<h3 class="eyebrow">Resting</h3><ul class="rows">'
                      + "".join(_attempt_row(a, env) for a in pending) + "</ul>")
@@ -173,7 +175,7 @@ def orders_section(doc: dict) -> str:
               oc.qty(a.get("filled_quantity")), oc.price(a.get("limit_price")),
               oc.word(ATTEMPT_WORDS, a.get("state"), "XP_ATTEMPT"),
               oc.word(RESERVATION_WORDS, a.get("reservation_state"), "XP_RES"), oc.when(a.get("created_at_utc"))]
-             for a in rows], right=(3, 4, 5), caption="Recorded order attempts")))
+             for a in rows], right=(3, 4, 5), caption="Recorded order attempts") + omitted_note(omitted, "attempts")))
     return c.section("Orders", "".join(parts), meta=f"{env} · pending, unknown and recorded", sid="xp-orders")
 
 
@@ -193,7 +195,8 @@ def fills_section(doc: dict) -> str:
                                oc.money(r.get("fees_known")),
                                esc("yes" if r.get("fees_complete") else "no: some fees unknown"),
                                oc.when(r.get("recorded_at_utc"))] for r in rows],
-                             right=(3, 4, 5), caption="Attributed fills"))
+                             right=(3, 4, 5), caption="Attributed fills")
+                     + omitted_note(oc.g(doc, "attribution", "rows_omitted"), "attributed fills"))
     parts.append(c.facts([
         ("Partly filled orders", c.num(pr.count(oc.g(doc, "attempts", "partial_orders")), reason=oc.UNKNOWN_REASON)),
         ("Partial exits", c.num(pr.count(oc.g(doc, "attempts", "partial_reductions")), reason=oc.UNKNOWN_REASON)),
@@ -216,6 +219,7 @@ def settlement_section(doc: dict) -> str:
                          oc.money(r.get("fee_cost")), oc.when(r.get("settled_time")),
                          esc(", ".join(r.get("missing") or []) or "none")] for r in rows],
                        right=(2, 3, 4, 5, 6), caption="Recorded settlements")
+        body += omitted_note(oc.g(doc, "settlements", "rows_omitted"), "settlements")
     return c.section("Settlement", body, meta=f"{env} · venue settlement records", sid="xp-settle")
 
 
@@ -237,6 +241,24 @@ def pnl_section(doc: dict) -> str:
     return c.section("P&L", body, meta=f"{env} · venue-reported, signed, never coloured", sid="xp-pnl")
 
 
+def omitted_note(count: Any, what: str) -> str:
+    """The exporter keeps the newest items of a list; how many older ones it left out is said, never hidden."""
+    if isinstance(count, int) and count > 0:
+        return f'<p class="note">{count} older {esc(what)} are not in the export (it keeps the newest).</p>'
+    return ""
+
+
+def chain_text(j: dict) -> str:
+    ok, events = j.get("chain_ok"), j.get("chain_events")
+    if ok is None:
+        return c.na("chain verification not recorded")
+    word = "verified" if ok is True else "NOT verified"
+    count = c.num(pr.count(events), reason="event count not recorded")
+    problems = c.ul(j.get("chain_problems")) if j.get("chain_problems") else ""
+    return (f"{esc(word)} · {count} events" + problems
+            + omitted_note(j.get("chain_problems_omitted"), "chain problems"))
+
+
 def details(doc: dict) -> str:
     j = oc.g(doc, "journal") or {}
     svc = oc.g(doc, "service") or {}
@@ -246,8 +268,7 @@ def details(doc: dict) -> str:
         ("Schema", c.code(doc.get("schema"))),
         ("Scope", c.code(doc.get("scope_key"))),
         ("Generated", esc(f"{pr.datetime_et(doc.get('generated_at_utc'))} ({doc.get('generated_at_utc')})")),
-        ("Journal chain", esc(f"{'verified' if j.get('chain_ok') else 'NOT verified'} · {j.get('chain_events')} "
-                              f"events") + (c.ul(j.get("chain_problems")) if j.get("chain_problems") else "")),
+        ("Journal chain", chain_text(j)),
         ("Service", esc(svc.get("state"))),
         ("Configuration supplied", esc(doc.get("config_supplied"))),
         ("Left out by design", c.ul(doc.get("omitted_by_design") or [])),

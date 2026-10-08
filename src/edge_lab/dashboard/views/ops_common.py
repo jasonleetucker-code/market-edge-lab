@@ -19,6 +19,9 @@ from .. import data as d
 from .. import presentation as pr
 from ..html import esc
 
+# The only execution environments this Terminal renders: today's `AUTHORIZED_ENVIRONMENTS` (FIXTURE), pinned by
+# tests/execution/test_status_export.py. Any other environment is refused, whatever the export claims.
+TERMINAL_ENVIRONMENTS = ("FIXTURE",)
 JOURNEYS = (("/setup", "Setup & readiness"), ("/experiments/wallet", "Wallet research"),
             ("/positions/execution", "Execution portfolio"), ("/risk/automation", "Automation"))
 ENV_LABELS = {"FIXTURE": "FIXTURE · fake venue · not a real account", "DEMO": "DEMO · venue mock funds",
@@ -99,10 +102,17 @@ def export_state(loaded: d.Loaded) -> tuple[str | None, d.ExecutionStatus | None
     es = loaded.value
     env = es.doc.get("environment")
     authorized = g(es.doc, "environments", "authorized")
-    if not isinstance(authorized, list) or env not in authorized:
-        return c.error_state("Export from an environment that is not authorized",
-                             f"The export names the {env} environment, which its own authorized list "
-                             f"({authorized}) does not include. Nothing from it is shown."), None
+    # This Terminal's own allowlist decides, never the export's list: its "no real account" wording is only true of
+    # these environments. A changed authorization needs a reviewed change here too.
+    if env not in TERMINAL_ENVIRONMENTS:
+        return c.blocked_state("Export refused: environment not shown here",
+                               f"The export names the {env} environment. This Terminal shows only "
+                               f"{', '.join(TERMINAL_ENVIRONMENTS)} exports, so nothing from it is shown."), None
+    if not isinstance(authorized, list) or sorted(authorized) != sorted(TERMINAL_ENVIRONMENTS):
+        return c.error_state("Authorized environments do not match",
+                             f"The export says the code authorizes {authorized}; this Terminal expects "
+                             f"{list(TERMINAL_ENVIRONMENTS)}. Nothing from the export is shown until a reviewed "
+                             "change reconciles them."), None
     return None, es
 
 
@@ -114,8 +124,10 @@ def export_status_line(es: d.ExecutionStatus, now: datetime) -> str:
     stamp = f"Generated {at}" + (f" ({age})" if age else "")
     minutes = int(es.max_age.total_seconds() // 60)
     chain = g(doc, "journal", "chain_ok")
-    chain_text = ("" if chain is None else f" Journal chain verified at export ({g(doc, 'journal', 'chain_events')} "
-                  "events)." if chain else " Journal chain problems at export: see Details.")
+    events = g(doc, "journal", "chain_events")
+    chain_text = (" Journal chain verification not recorded." if chain is None else
+                  f" Journal chain verified at export ({events if events is not None else 'unknown number of'} events)."
+                  if chain else " Journal chain problems at export: see Details.")
     env = doc.get("environment")
     if es.export_freshness == "FRESH":
         return c.status_line("info", f"Execution export · {ENV_LABELS.get(env, env)}", stamp + "." + chain_text)

@@ -22,6 +22,16 @@ _PATTERNS = (
     re.compile(r"(?i)\bbearer\s+[A-Za-z0-9._~+/=-]{8,}"),
     re.compile(r"(?i)[?&](apikey|api_key|key|token|access_token|signature|sig)=[^&\s]+"),
     re.compile(r"-----BEGIN [A-Z ]*KEY-----"),
+    # Venue request headers and HTTP authorization, as "Name: value" or "name=value" (the whole value to line end).
+    re.compile(r"(?i)\b(kalshi-access-(?:key|signature|timestamp)|authorization|proxy-authorization|x-api-key)\b"
+               r"\s*[:=]\s*[^\r\n]+"),
+    re.compile(r"(?i)\bbasic\s+(?=[A-Za-z0-9+/]*[0-9+/=])[A-Za-z0-9+/]{8,}={0,2}"),  # credentials, not "basic words"
+    # Key material and signatures assigned to a name.
+    re.compile(r"(?i)\b(private[_-]?key|secret[_-]?key|signing[_-]?key|client[_-]?secret|signature)\b\s*[:=]\s*"
+               r"[^\s&]+"),
+    # A bare base64 run of 40+ characters that is not a plain hex digest (a key body, a signature): hashes such as
+    # SHA-256 hex are identifiers and stay.
+    re.compile(r"(?<![A-Za-z0-9+/=])(?=[A-Za-z0-9+/]*[G-Zg-z+/])[A-Za-z0-9+/]{40,}={0,2}(?![A-Za-z0-9+/=])"),
 )
 
 

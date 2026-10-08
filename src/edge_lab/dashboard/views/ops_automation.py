@@ -38,9 +38,9 @@ REARM_STEPS = (
 )
 
 
-def _test_label(ref: Any) -> str:
-    text = str(ref or "")
-    return " · TEST, not owner-set" if "test" in text.lower() or "fixture" in text.lower() else ""
+def _fixture_label(environment: Any) -> str:
+    """Decided by the environment, never by a name: in FIXTURE every grant and limit is a fixture artifact."""
+    return " · FIXTURE, not owner-set" if environment == "FIXTURE" else ""
 
 
 def state_section(doc: dict) -> str:
@@ -81,7 +81,7 @@ def _grant_facts(s: dict) -> str:
         ("Daily loss", oc.money(lim.get("max_daily_loss"))),
         ("Drawdown", oc.money(lim.get("max_drawdown"))),
         ("Valid", c.txt(f"{pr.datetime_et(s.get('issued_at_utc'))} – {pr.datetime_et(s.get('expires_at_utc'))}")),
-        ("Issuer", c.txt(f"{s.get('issuer_ref')}{_test_label(s.get('issuer_ref'))}")),
+        ("Issuer", c.txt(f"{s.get('issuer_ref')}{_fixture_label(s.get('environment'))}")),
     ], text_cols=(0, 1, 2, 3, 10, 11)) + c.disclosure("Grant identity", c.kv([
         ("Digest", c.code(s.get("digest"))), ("Model hash", c.code(s.get("model_hash"))),
         ("Policy hash", c.code(s.get("policy_hash"))), ("Risk policy", c.code(s.get("risk_policy_version"))),
@@ -102,7 +102,7 @@ def grant_section(doc: dict) -> str:
                                   else "it is not among the configured grants."))
     else:
         s = armed["summary"]
-        body = (f'<p>{c.badge("XP_GRANT_ARMED", label="Armed grant" + _test_label(s.get("issuer_ref")), kind="info")}'
+        body = (f'<p>{c.badge("XP_GRANT_ARMED", label="Armed grant" + _fixture_label(s.get("environment")), kind="info")}'
                 f"</p>" + _grant_facts(s))
     if configured is None:
         body += '<p class="note">Configured grants: unknown (the exporter had no configuration).</p>'
@@ -117,9 +117,12 @@ def grant_section(doc: dict) -> str:
 def next_action(doc: dict) -> str:
     """What the operator would do next, from the export's own verdicts (open incidents, reconciliation, mode)."""
     control = oc.g(doc, "control") or {}
-    incidents = oc.lst(control, "open_incidents") or []
+    incidents = oc.lst(control, "open_incidents")
     mode, recon = control.get("mode"), control.get("reconciliation")
-    if incidents:
+    if incidents is None:
+        title, text = "Stop reasons unknown", ("The export carries no readable incident list, so whether anything "
+                                               "blocks arming is unknown.")
+    elif incidents:
         names = ", ".join(str(i.get("incident_id")) for i in incidents)
         title, text = "Acknowledge the open incidents", (f"Name each open incident ({names}) in the arm request, or "
                                                          "acknowledge it, after its cause is cleared.")
@@ -138,7 +141,8 @@ def next_action(doc: dict) -> str:
                 [[esc(r.get("mode")), oc.word(READINESS_WORDS, r.get("verdict"), "XP_READY"),
                   c.ul(r.get("reasons") or [], empty="none")] for r in readiness],
                 wrap=(2,), caption="Arm readiness per mode")
-    body = (c.status_line("warn" if incidents or recon != "COMPLETE" else "info", title, text) + table
+    body = (c.status_line("warn" if incidents is None or incidents or recon != "COMPLETE" else "info", title, text)
+            + table
             + '<p class="note">Judged by the exporter with control.decide_arm and nothing acknowledged; nothing was '
               "persisted. The risk gate, the grant and the reservation still decide each order.</p>"
             + oc.no_control_note())
@@ -170,7 +174,9 @@ def stops_section(doc: dict) -> str:
         extra.append(("Recent refused arm requests", c.table(
             ["When", "Mode", "By", "Reasons"],
             [[oc.when(r.get("at_utc")), esc(r.get("mode")), esc(r.get("operator_ref")), c.ul(r.get("reasons") or [])]
-             for r in refusals], wrap=(3,), caption="Refused arm requests")))
+             for r in refusals], wrap=(3,), caption="Refused arm requests")
+            + (f'<p class="note">{control.get("refusals_omitted")} older refusals are not in the export.</p>'
+               if isinstance(control.get("refusals_omitted"), int) and control.get("refusals_omitted") > 0 else "")))
     disarm = control.get("last_disarm")
     if disarm:
         extra.append(("Last disarm", c.kv([("When", oc.when(disarm.get("at_utc"))), ("By", esc(disarm.get("operator_ref"))),
@@ -198,8 +204,9 @@ def limits_section(doc: dict) -> str:
     elif ref is None:
         badge = c.badge("XP_LIMITS_NO_OWNER", label="No owner approval recorded · refuses every order", kind="warn")
     else:
-        badge = c.badge("XP_LIMITS_SET", label="TEST limits · not owner-set" if _test_label(ref) else
-                        "Owner approval recorded", kind="warn" if _test_label(ref) else "nd")
+        fixture = doc.get("environment") == "FIXTURE"
+        badge = c.badge("XP_LIMITS_SET", label="FIXTURE limits · not owner-set" if fixture else
+                        "Owner approval recorded", kind="warn" if fixture else "nd")
     body = f"<p>{badge}</p>" + f'<p class="note">Approval reference: {esc(ref or "none")}</p>' + c.facts([
         ("Reserve floor", oc.money(policy.get("reserve_floor"))),
         ("Position risk", oc.money(policy.get("max_position_risk"))),

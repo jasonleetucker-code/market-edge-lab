@@ -78,9 +78,10 @@ def limits_row(loaded: d.Loaded) -> str:
         sub = "The executor runs with placeholder limits: every order is refused until the owner sets values."
     else:
         ref = str(limits.get("owner_approval_ref"))
-        test = "test" in ref.lower() or "fixture" in ref.lower()
-        state = c.state_text("SETUP_TEST_LIMITS" if test else "SETUP_LIMITS_REF",
-                             label="TEST limits · not owner-set" if test else f"Limits reference {ref}", kind="warn")
+        fixture = es.doc.get("environment") == "FIXTURE"  # decided by the environment, never by the name
+        state = c.state_text("SETUP_FIXTURE_LIMITS" if fixture else "SETUP_LIMITS_REF",
+                             label="FIXTURE limits · not owner-set" if fixture else f"Limits reference {ref}",
+                             kind="warn")
         sub = f"The exporter's configuration names {ref}."
     return c.row(esc("Risk limits in force (from the export)"), sub=sub, aside=state,
                  body=c.facts([("Safe next step", c.txt("Owner: set the values (see Risk-limit values above).")),

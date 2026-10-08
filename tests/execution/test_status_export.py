@@ -156,6 +156,48 @@ def test_free_text_is_redacted_and_paths_reduced(tmp_path):
     se.render(doc)
 
 
+KEYISH = "MC4CAQAwBQYDK2VwBCIEIGx0Zm9yZXZlcmFuZGV2ZXJhbmRldmVyYW5k"  # base64-shaped, label-safe, not a real key
+
+
+def test_plain_fields_and_multiline_text_never_bypass_redaction(tmp_path):
+    """Review M1: labels (operator_ref, issuer_ref, worker_id) and record text are redacted like free text, a header on
+    its own line is caught, and a venue order id named in text is redacted."""
+    journal = ExecutionJournal.open(tmp_path / "m1.execution.sqlite3")
+    clock = h.Clock()
+    orch, _ = h.build(journal, h.VenueAdapter(clock), worker_id=KEYISH[:40])
+    orch.set_latch(ctl.LatchScope.MARKET, "KXHIGHNY-26OCT08-B70",
+                   "pasted by mistake\nKALSHI-ACCESS-SIGNATURE: c2lnbmF0dXJlYnl0ZXM= and order_id=8f3a77c1")
+    orch.disarm(KEYISH, "Authorization: Basic dXNlcjpwYXNzd29yZA==")
+    doc = se.build_status(journal, h.SCOPE, now=clock(), config=h.config(worker_id=KEYISH[:40]))
+    journal.close()
+    text = se.render(doc)  # passes: everything was cleaned before the check
+    for leaked in (KEYISH, KEYISH[:40], "c2lnbmF0dXJlYnl0ZXM", "dXNlcjpwYXNzd29yZA", "8f3a77c1"):
+        assert leaked not in text, leaked
+    assert doc["control"]["last_disarm"]["operator_ref"] == "REDACTED"
+    assert doc["service"]["last_boot"]["worker_id"] == "REDACTED"
+    (latch,) = doc["control"]["latches"]
+    assert latch["reason"].startswith("pasted by mistake\nKALSHI-ACCESS-SIGNATURE=REDACTED")
+
+
+@pytest.mark.parametrize("raw", [
+    "line one\nkalshi-access-key: 0b5f0c33",  # hidden behind an escape once JSON-encoded
+    "Authorization: Basic dXNlcjpwYXNzd29yZA==",
+    "private_key=abcdefgh",
+    f"body {KEYISH}",
+    "venue order_id=8f3a77c1",
+])
+def test_render_checks_raw_strings_and_keys_before_encoding(exports, raw):
+    (path, _), _ = exports["idle"]
+    doc = _load(path)
+    doc["control"]["log"].append(raw)
+    with pytest.raises(se.ExportRefused):
+        se.render(doc)
+    doc = _load(path)
+    doc["control"][raw] = "x"
+    with pytest.raises(se.ExportRefused):
+        se.render(doc)
+
+
 @pytest.mark.parametrize("mutate,why", [
     (lambda d: d.update(schema="other/1"), "schema"),
     (lambda d: d.update(cash=1.5), "float"),
@@ -232,3 +274,18 @@ def test_the_module_imports_no_capability_and_the_dashboard_reads_the_same_names
 
     assert d.EXECUTION_STATUS_FILE == se.FILENAME and d.EXECUTION_STATUS_SCHEMA == se.SCHEMA
     assert d.EXECUTION_STATUS_MAX_BYTES >= se.MAX_BYTES
+    from edge_lab.dashboard.views import ops_common
+    from edge_lab.execution.model import AUTHORIZED_ENVIRONMENTS
+
+    # Review M2: the Terminal's own allowlist equals today's code authorization; changing one needs the other.
+    assert set(ops_common.TERMINAL_ENVIRONMENTS) == {e.value for e in AUTHORIZED_ENVIRONMENTS} == {"FIXTURE"}
+
+
+def test_every_export_matches_the_dashboard_shape(exports, tmp_path):
+    """The dashboard's shape check accepts every projection the exporter writes (and nothing malformed)."""
+    from edge_lab.dashboard import data as d
+
+    for scenario, ((path, _), _) in exports.items():
+        assert d.execution_shape_problems(_load(path)) == [], scenario
+    doc = se.status_for_path(tmp_path / "absent.execution.sqlite3", h.SCOPE, now=h.T0)
+    assert d.execution_shape_problems(json.loads(se.render(doc))) == []

@@ -9,8 +9,9 @@ Freshness Fabric's `freshness.json` from the status directory. So the projection
 - **Sanitized.** Fields are copied by allowlist, never by dumping a record: no approval nonce, request digest,
   receipt payload, venue order id, key, signature or credential is ever included. Attempt and reservation ids are
   kept (incidents name them); they embed the client order id, which is derived from the intent and is no
-  credential. Free text (reasons, details, log lines) passes through `redaction.redact_text`, and the finished
-  text is refused (`ExportRefused`) if it still matches `redaction.contains_secret` or a PEM header.
+  credential. Every exported string, plain labels included, passes through `redaction.redact_text` (and a venue
+  order id named in text is redacted); `render` then checks every string as raw text, before JSON encoding, and
+  refuses (`ExportRefused`) anything that still matches `redaction.contains_secret`, a PEM header or an order id.
 - **Exact.** No float anywhere: money, prices and quantities are canonical Decimal text (`model.decimal_text`).
   Integers are counts, sequence numbers or revisions only.
 - **Unknown stays unknown.** A value the journal does not hold is None (or the string "UNKNOWN" for a state), never
@@ -64,6 +65,8 @@ OMITTED = ("approval nonces", "request digests", "receipt payloads", "venue orde
            "credentials (the journal holds none)")
 _PEM = re.compile(r"-----BEGIN [A-Z ]*-----")
 _REDACTED_VALUE = re.compile(r"\s*[:=]\s*" + re.escape(redaction.REDACTED) + r"(?![A-Za-z0-9_])")
+# Venue order ids are left out by design; one named in free text is redacted too.
+_ORDER_REF = re.compile(r"(?i)\b(provider_order_id|order_id|order_ref)\b\s*[:=]\s*[^\s,;&]+")
 _ABS_PATH = re.compile(r"(?<![\w.])(?:[A-Za-z]:[\\/]|/)(?:[^\s\\/:'\"]+[\\/])+[^\s\\/:'\"]*")  # absolute paths only
 
 
@@ -79,13 +82,31 @@ def _text(value: Decimal | None) -> str | None:
     return None if value is None else decimal_text(value)
 
 
+def _clean(text: str) -> str:
+    """Any exported text: secrets redacted (`redaction.redact_text`), named venue order ids redacted, absolute paths
+    reduced to their last name."""
+    text = _ORDER_REF.sub(lambda m: f"{m.group(1)}={redaction.REDACTED}", redaction.redact_text(text))
+    return _ABS_PATH.sub(lambda m: m.group(0).rstrip("\\/").replace("\\", "/").rsplit("/", 1)[-1] or "(path)", text)
+
+
 def _free(value: Any, limit: int = 300) -> str | None:
-    """Free text from the journal: redacted, paths reduced to their last name, bounded."""
+    """Free text from the journal: cleaned (`_clean`) and bounded."""
     if value is None:
         return None
-    text = _ABS_PATH.sub(lambda m: m.group(0).rstrip("\\/").replace("\\", "/").rsplit("/", 1)[-1] or "(path)",
-                         redaction.redact_text(str(value)))
+    text = _clean(str(value))
     return text if len(text) <= limit else text[: limit - 1] + "…"
+
+
+def _sanitized(value: Any) -> Any:
+    """`value` with every string in it cleaned (`_clean`), plain fields included: an operator, issuer or worker label
+    and record text never bypass redaction. Keys are this module's own names and are kept."""
+    if isinstance(value, str):
+        return _clean(value)
+    if isinstance(value, Mapping):
+        return {k: _sanitized(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_sanitized(v) for v in value]
+    return value
 
 
 def _short_error(exc: BaseException) -> str:
@@ -381,7 +402,8 @@ def _attempts(journal: ExecutionJournal, records: dict[str, list]) -> dict[str, 
     in_flight = [row for row in rows if row["state"] in (AttemptState.PENDING_EGRESS.value, AttemptState.SENT.value)]
     shown, omitted = _tail(rows, MAX_ROWS)
     return {"total": len(rows), "by_state": counts, "rows": list(reversed(shown)), "rows_omitted": omitted,
-            "unknown": unknown[-MAX_ROWS:], "in_flight": in_flight[-MAX_ROWS:],
+            "unknown": unknown[-MAX_ROWS:], "unknown_omitted": max(0, len(unknown) - MAX_ROWS),
+            "in_flight": in_flight[-MAX_ROWS:], "in_flight_omitted": max(0, len(in_flight) - MAX_ROWS),
             "partial_orders": sum(1 for row in rows if row["partial"]),
             "partial_reductions": sum(1 for row in rows if row["kind"] == "REDUCTION" and row["partial"])}
 
@@ -511,7 +533,8 @@ def build_status(journal: ExecutionJournal, scope: AccountScope, *, now: datetim
     records = _records(journal, scope)
     out.update({
         "journal": {"state": "OK", "detail": None, "chain_ok": chain.ok, "chain_events": chain.events,
-                    "chain_problems": [_free(p) for p in chain.problems[:MAX_LOG]]},
+                    "chain_problems": [_free(p) for p in chain.problems[:MAX_LOG]],
+                    "chain_problems_omitted": max(0, len(chain.problems) - MAX_LOG)},
         "service": _service(records),
         "control": control_section,
         "grants": {"configured": None if config is None else [_grant_summary(g, scope, now) for g in config.grants],
@@ -527,7 +550,7 @@ def build_status(journal: ExecutionJournal, scope: AccountScope, *, now: datetim
         "settlements": _settlements(records),
         "attribution": _attribution(records),
     })
-    return out
+    return _sanitized(out)
 
 
 def status_for_path(path: str | Path, scope: AccountScope, *, now: datetime,
@@ -540,33 +563,48 @@ def status_for_path(path: str | Path, scope: AccountScope, *, now: datetime,
         exists = p.is_file() and p.stat().st_size > 0
     except OSError as exc:
         out["journal"] = {"state": "ERROR", "detail": _short_error(exc)}
-        return out
+        return _sanitized(out)
     if not exists:
         out["journal"] = {"state": "NO_JOURNAL", "detail": f"no execution journal at {p.name}"}
-        return out
+        return _sanitized(out)
     try:
         with ExecutionJournal.open(p) as journal:
             return build_status(journal, scope, now=now, config=config)
     except (JournalError, ReservationError, CorruptRecord, KeyError, TypeError, ValueError) as exc:
         out["journal"] = {"state": "ERROR", "detail": _short_error(exc)}
-        return out
+        return _sanitized(out)
 
 
 # ------------------------------------------------------------------ validation and writing
 
 
+def _secret_like(text: str) -> bool:
+    """Whether raw (unencoded) text still looks like it holds a secret or a venue order id. A value `redact_text`
+    already replaced is not one."""
+    probe = _REDACTED_VALUE.sub("", text)
+    return bool(redaction.contains_secret(probe) or _PEM.search(text) or _ORDER_REF.search(probe))
+
+
 def _check(value: Any, where: str = "$") -> None:
+    """Every value is JSON-safe and exact, and every string (keys included) is checked as raw text before encoding:
+    once encoded, a newline is an escape that would hide a header on its own line."""
+    if isinstance(value, str):
+        if _secret_like(value):
+            raise ExportRefused(f"text that looks like a secret at {where}")
+        return
     if isinstance(value, float):
         raise ExportRefused(f"a float at {where}: money and quantities are exact text")
     if isinstance(value, Mapping):
         for k, v in value.items():
             if not isinstance(k, str):
                 raise ExportRefused(f"a non-text key at {where}")
+            if _secret_like(k):
+                raise ExportRefused(f"a key that looks like a secret at {where}")
             _check(v, f"{where}.{k}")
     elif isinstance(value, (list, tuple)):
         for i, v in enumerate(value):
             _check(v, f"{where}[{i}]")
-    elif not (value is None or isinstance(value, (str, int, bool))):
+    elif not (value is None or isinstance(value, (int, bool))):
         raise ExportRefused(f"a {type(value).__name__} at {where}")
 
 
@@ -574,11 +612,8 @@ def render(status: Mapping[str, Any]) -> str:
     """Validate and serialize: the schema, no float or other non-JSON value, no secret-looking text, the size bound."""
     if not isinstance(status, Mapping) or status.get("schema") != SCHEMA:
         raise ExportRefused(f"not a {SCHEMA} projection")
-    _check(status)
+    _check(status)  # before encoding (see `_check`)
     text = canonical_json(status)
-    probe = _REDACTED_VALUE.sub("", text)  # a value already replaced by `redact_text` is not a secret
-    if redaction.contains_secret(probe) or _PEM.search(text):
-        raise ExportRefused("the projection contains text that looks like a secret")
     if len(text.encode("utf-8")) > MAX_BYTES:
         raise ExportRefused(f"the projection is larger than {MAX_BYTES} bytes")
     json.loads(text)  # round-trips

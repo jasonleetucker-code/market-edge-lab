@@ -743,8 +743,9 @@ directive), and the screenshots that justify it.
   - §8 gains four pages, `/setup`, `/experiments/wallet`, `/positions/execution` and `/risk/automation`, reached
     from More, with one journey tab strip and no new global navigation item.
   - They are composed from the existing shell, section, facts, row, badge, table, state-text and disclosure
-    components. New state words cover the export and journal states and the controller modes. No new token, CSS
-    or layout.
+    components. Their state words (export and journal states, controller modes, readiness and setup states) are
+    local tables in the `views/ops_*.py` modules, passed to `badge` / `state_text` as plain labels with the code in
+    the title; no word is added to `presentation.STATES`, and none is green. No new token, CSS or layout.
   - Screenshots: five fixture states (`journeys`, `journeys_paused`, `journeys_idle`, `journeys_stale`,
     `journeys_none`) and `demo`, at 360x800 and 1440x900, at normal and 200% root text, plus every disclosure
     open (`tests/browser/capture.py`; 0 overflow, clipping, contrast or foreign-request findings).

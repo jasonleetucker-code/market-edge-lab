@@ -163,9 +163,11 @@ versioned projection of its journal (`execution/status_export.py`: `build_status
 - money, prices and quantities as exact decimal text, never floats; unknown as `null`, never 0;
 - no approval nonce, request digest, receipt payload, venue order id, key, signature or credential; free text is
   redacted and the file is refused if it still looks like it holds a secret;
-- states: no file ("No execution export": nothing is known, never an empty portfolio), unreadable or foreign schema
-  (error), an environment the export itself does not list as authorized (error, nothing shown), no journal, journal
-  error, stale (older than 15 minutes: every figure reads "as of", never current), and the journal's own
+- states: no file ("No execution export": nothing is known, never an empty portfolio), unreadable, foreign schema
+  or malformed shape (error, `data.execution_shape_problems`), an environment outside this Terminal's own allowlist
+  (`views/ops_common.TERMINAL_ENVIRONMENTS`, FIXTURE only, pinned to `AUTHORIZED_ENVIRONMENTS`: refused, nothing
+  shown, whatever the export's own list says) or an authorized list that differs from it (mismatch error), no
+  journal, journal error, stale (older than 15 minutes: every figure reads "as of", never current), and the journal's own
   reconciliation, paused and empty states.
 
 No timer or service writes the export today: the call site is the executor process (package O), which is not

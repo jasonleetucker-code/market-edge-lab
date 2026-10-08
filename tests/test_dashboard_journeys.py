@@ -178,7 +178,7 @@ def test_j5_missing_export_is_not_an_empty_portfolio(tmp_path, built):
 
 @pytest.mark.parametrize("edit,expect", [
     (lambda doc: doc.update(schema="edge-lab-execution-status/0"), "Execution export unavailable"),
-    (lambda doc: doc.update(environment="PRODUCTION"), "Export from an environment that is not authorized"),
+    (lambda doc: doc.update(environment="PRODUCTION"), "Export refused: environment not shown here"),
     (lambda doc: doc.pop("control"), "Execution export unavailable"),
 ])
 def test_j5_error_states(tmp_path, built, edit, expect):
@@ -189,6 +189,112 @@ def test_j5_error_states(tmp_path, built, edit, expect):
         text = page_text(cfg, path)
         assert expect in text
         assert "$97.333612" not in text and "KXHIGHNY" not in text
+
+
+EXPORT_PAGES = ("/positions/execution", "/risk/automation", "/setup")
+
+
+def test_m2_an_export_claiming_production_is_refused_everywhere(tmp_path, built):
+    """Review M2: the Terminal's own allowlist decides, never the export's `authorized` list."""
+    doc = doc_of(built, "populated")
+    doc["environment"] = "PRODUCTION"
+    doc["scope_key"] = "PRODUCTION:real-acct:primary"
+    doc["environments"]["authorized"] = ["FIXTURE", "PRODUCTION"]  # the export vouches for itself
+    for row in doc["environments"]["rows"]:
+        row["authorized"] = True
+    cfg = Config(status_dir=status_dir(tmp_path, doc), clock=lambda: built["populated"][1])
+    for path in EXPORT_PAGES:
+        text = page_text(cfg, path)
+        assert "Export refused: environment not shown here" in text, path
+        assert "$97.333612" not in text and "KXHIGHNY" not in text and "Bounded auto" not in text
+        assert "PRODUCTION · real money" not in text
+    assert "As documented: only FIXTURE is authorized" in page_text(cfg, "/setup")
+
+
+def test_m2_an_authorized_list_that_differs_from_the_terminal_is_a_mismatch(tmp_path, built):
+    doc = doc_of(built, "populated")
+    doc["environments"]["authorized"] = ["DEMO", "FIXTURE"]
+    cfg = Config(status_dir=status_dir(tmp_path, doc), clock=lambda: built["populated"][1])
+    for path in EXPORT_PAGES:
+        text = page_text(cfg, path)
+        assert "Authorized environments do not match" in text and "$97.333612" not in text, path
+
+
+@pytest.mark.parametrize("path,value", [
+    (("control", "open_incidents"), None),
+    (("control", "open_incidents"), "reconciliation-lost:1"),
+    (("control",), "DISARMED"),
+    (("account", "snapshot"), "revision 8"),
+    (("account", "reservations", "held"), [1, 2]),
+    (("attempts", "rows"), {"a": 1}),
+    (("journal", "chain_ok"), "yes"),
+    (("environments", "authorized"), "FIXTURE"),
+    (("journal",), "OK"),
+    (("pnl", "by_market"), None),
+])
+def test_l1_l5_a_malformed_shape_is_an_error_state_not_a_crash(tmp_path, built, path, value):
+    doc = doc_of(built, "paused")
+    target = doc
+    for key in path[:-1]:
+        target = target[key]
+    target[path[-1]] = value
+    loaded = d.execution_status(d.Context(Config(status_dir=status_dir(tmp_path, doc), clock=lambda: built["paused"][1])))
+    assert loaded.status == d.ERROR and "malformed" in loaded.message and ".".join(path) in loaded.message
+    cfg = Config(status_dir=tmp_path, clock=lambda: built["paused"][1])
+    for page in EXPORT_PAGES:
+        status, body = get(cfg, page)
+        assert status == "200 OK", page
+        text = plain(main(body))
+        assert "Execution export unavailable" in text and "No control action is pending" not in text
+
+
+def test_l1_unknown_incidents_never_read_as_nothing_pending(built):
+    from edge_lab.dashboard.views import ops_automation
+
+    doc = doc_of(built, "populated")
+    doc["control"]["open_incidents"] = None
+    text = plain(ops_automation.next_action(doc))
+    assert "Stop reasons unknown" in text and "No control action is pending" not in text
+
+
+def test_l2_unknown_chain_verification_is_the_unknown_marker(tmp_path, built):
+    doc = doc_of(built, "idle")
+    doc["journal"].update(chain_ok=None, chain_events=None)
+    cfg = Config(status_dir=status_dir(tmp_path, doc), clock=lambda: built["idle"][1])
+    _, body = get(cfg, "/positions/execution")
+    text = plain(main(body))
+    assert "NOT verified" not in text and "None events" not in text
+    assert 'aria-label="chain verification not recorded"' in body
+    assert "Journal chain verification not recorded" in text
+
+
+def test_l3_truncated_lists_say_how_much_was_left_out(tmp_path, built):
+    doc = doc_of(built, "populated")
+    assert doc["attempts"]["unknown_omitted"] == 0 and doc["attempts"]["in_flight_omitted"] == 0
+    assert doc["journal"]["chain_problems_omitted"] == 0
+    doc["attempts"].update(unknown_omitted=3, rows_omitted=7)
+    doc["attribution"]["rows_omitted"] = 2
+    doc["settlements"]["rows_omitted"] = 4
+    doc["control"]["refusals_omitted"] = 5
+    cfg = Config(status_dir=status_dir(tmp_path, doc), clock=lambda: built["populated"][1])
+    text = page_text(cfg, "/positions/execution")
+    for note in ("3 older unknown or in-flight attempts are not in the export", "7 older attempts are not in the export",
+                 "2 older attributed fills are not in the export", "4 older settlements are not in the export"):
+        assert note in text, note
+    doc["control"]["last_refusals"] = [{"mode": "SHADOW", "operator_ref": "owner", "at_utc": None, "reasons": ["x"]}]
+    status_dir(tmp_path, doc)
+    assert "5 older refusals are not in the export" in page_text(cfg, "/risk/automation")
+
+
+def test_l4_fixture_labels_follow_the_environment_not_a_name(tmp_path, built):
+    doc = doc_of(built, "populated")
+    doc["control"]["armed_grant"]["summary"]["issuer_ref"] = "EXECUTION_PLAN-2026-10-08-owner-grant"
+    doc["limits"]["owner_approval_ref"] = "EXECUTION_PLAN-2026-10-08-owner-limits"
+    cfg = Config(status_dir=status_dir(tmp_path, doc), clock=lambda: built["populated"][1])
+    text = page_text(cfg, "/risk/automation")
+    assert "Armed grant · FIXTURE, not owner-set" in text and "FIXTURE limits · not owner-set" in text
+    assert "Owner approval recorded" not in text
+    assert "FIXTURE limits · not owner-set" in page_text(cfg, "/setup")
 
 
 def test_j5_journal_states(tmp_path, built):
@@ -263,8 +369,8 @@ def test_j5_unknown_and_resting_orders_survive_row_truncation(tmp_path, built):
 def test_j6_armed_grant_is_labelled_test(built):
     text = page_text(cfg_for(built, "populated"), "/risk/automation")
     assert "Bounded auto · inside a grant" in text and "Reconciled" in text
-    assert "Armed grant · TEST, not owner-set" in text and "TEST-FIXTURE-GRANT-not-an-owner-grant" in text
-    assert "TEST limits · not owner-set" in text and "Approval reference: test-fixture-only-not-owner" in text
+    assert "Armed grant · FIXTURE, not owner-set" in text and "TEST-FIXTURE-GRANT-not-an-owner-grant" in text
+    assert "FIXTURE limits · not owner-set" in text and "Approval reference: test-fixture-only-not-owner" in text
     assert "Armed in BOUNDED_AUTO" in text and "DEMO_MODE_NEEDS_DEMO_SCOPE" in text
     assert "No open incident or latch" in text
     assert "Rearm procedure" in text and "cannot arm, disarm, approve, cancel or send anything" in text
@@ -330,7 +436,7 @@ def test_j1_from_the_export(built):
     assert "from the execution export" in text
     assert "FIXTURE fake transport and a disposable store; no real account Authorized · offline only" in text
     assert "DEMO egress (mock funds)" in text and "PRODUCTION reads and orders (real money)" in text
-    assert "TEST limits · not owner-set" in text
+    assert "FIXTURE limits · not owner-set" in text
     for item in mf.ITEMS:
         assert item.title in text and item.next_step in text
     for name, _, _ in mf.TRACKS:

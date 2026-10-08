@@ -31,7 +31,7 @@ from edge_lab.dashboard import make_app  # noqa: E402
 from fixture_states import BUILDERS  # noqa: E402
 
 PAGES = ["/", "/opportunities", "/positions", "/outcome-board", "/risk", "/experiments", "/experiments?tab=sources",
-         "/alerts", "/more"]
+         "/alerts", "/more", "/setup", "/experiments/wallet", "/positions/execution", "/risk/automation"]
 DETAIL = {"demo": "/market?venue=kalshi&id=DEMO-B67.5&side=YES"}
 VIEWPORTS = ["360x800", "390x844", "430x932", "768x1024", "1440x900", "1920x1080"]
 

@@ -1688,6 +1688,68 @@ EXECUTION_STATUS_MAX_AGE = timedelta(minutes=15)  # older than this, every figur
 JOURNAL_STATES = ("OK", "NO_JOURNAL", "ERROR")
 
 
+# The export's shape, checked before any view reads it: a malformed export is an error state, never a page error and
+# never a silently empty section. (path, allowed types); `None` in the types means the value may be null (unknown).
+# "records" marks a list whose items must be objects; "texts" a list of strings.
+_ALWAYS_SHAPE = (
+    (("environment",), (str,)), (("generated_at_utc",), (str, None)), (("journal",), (dict,)),
+    (("journal", "state"), (str,)), (("environments",), (dict,)), (("environments", "authorized"), ("texts",)),
+    (("environments", "rows"), ("records",)), (("omitted_by_design",), ("texts", None)),
+)
+_JOURNAL_SHAPE = (
+    (("journal", "chain_ok"), (bool, None)), (("journal", "chain_events"), (int, None)),
+    (("journal", "chain_problems"), ("texts", None)),
+    (("control",), (dict,)), (("control", "mode"), (str,)), (("control", "reconciliation"), (str,)),
+    (("control", "open_incidents"), ("records",)), (("control", "latches"), ("records",)),
+    (("control", "closeouts"), ("records",)), (("control", "last_refusals"), ("records",)),
+    (("control", "arm_readiness"), ("records",)), (("control", "log"), ("texts",)),
+    (("control", "armed_grant"), (dict, None)), (("control", "last_reconciliation"), (dict, None)),
+    (("control", "last_disarm"), (dict, None)),
+    (("service",), (dict,)), (("grants",), (dict,)), (("grants", "configured"), ("records", None)),
+    (("limits",), (dict, None)), (("bounds",), (dict, None)),
+    (("account",), (dict,)), (("account", "snapshot"), (dict, None)), (("account", "positions"), ("records", None)),
+    (("account", "external_orders"), ("records", None)), (("account", "reservations"), (dict,)),
+    (("account", "reservations", "held"), ("records",)),
+    (("attempts",), (dict,)), (("attempts", "rows"), ("records",)), (("attempts", "unknown"), ("records",)),
+    (("attempts", "in_flight"), ("records",)), (("attempts", "by_state"), (dict,)),
+    (("decisions",), (dict,)), (("cycles",), (dict,)), (("cycles", "last"), (dict, None)),
+    (("pnl",), (dict,)), (("pnl", "by_market"), ("records",)),
+    (("settlements",), (dict,)), (("settlements", "rows"), ("records",)),
+    (("attribution",), (dict,)), (("attribution", "rows"), ("records",)),
+)
+_MISSING = object()
+
+
+def _shape_ok(value: Any, kinds: tuple) -> bool:
+    for kind in kinds:
+        if kind is None and value is None:
+            return True
+        if kind == "records" and isinstance(value, list) and all(isinstance(x, dict) for x in value):
+            return True
+        if kind == "texts" and isinstance(value, list) and all(isinstance(x, str) for x in value):
+            return True
+        if isinstance(kind, type) and isinstance(value, kind) and not (kind is int and isinstance(value, bool)):
+            return True
+    return False
+
+
+def execution_shape_problems(doc: dict[str, Any]) -> list[str]:
+    """Every place where the export's shape is not the schema's (an empty list when it is)."""
+    problems = []
+    journal = doc.get("journal")
+    state = journal.get("state") if isinstance(journal, dict) else None
+    spec = _ALWAYS_SHAPE + (_JOURNAL_SHAPE if state == "OK" else ())
+    for path, kinds in spec:
+        value: Any = doc
+        for key in path:
+            value = value.get(key, _MISSING) if isinstance(value, dict) else _MISSING
+        if value is _MISSING or not _shape_ok(value, kinds):
+            problems.append(f"{'.'.join(path)} is {'missing' if value is _MISSING else type(value).__name__}")
+    if isinstance(state, str) and state not in JOURNAL_STATES:
+        problems.append(f"journal.state {state[:40]!r} is not a known state")
+    return problems
+
+
 @dataclass(frozen=True)
 class ExecutionStatus:
     """The projection as written, plus its own age: `export_freshness` is `freshness.assess(generated_at_utc,
@@ -1714,13 +1776,10 @@ def execution_status(ctx: Context) -> Loaded:
     if doc.get("schema") != EXECUTION_STATUS_SCHEMA:
         return Loaded(ERROR, message=f"{EXECUTION_STATUS_FILE} has schema {str(doc.get('schema'))[:60]!r}, not "
                                      f"{EXECUTION_STATUS_SCHEMA}")
-    journal = doc.get("journal")
-    if not isinstance(journal, dict) or journal.get("state") not in JOURNAL_STATES \
-            or not isinstance(doc.get("environment"), str) or not isinstance(doc.get("environments"), dict):
-        return Loaded(ERROR, message=f"{EXECUTION_STATUS_FILE} lacks its journal, environment or environments section")
-    if journal["state"] == "OK" and not all(isinstance(doc.get(k), dict) for k in ("control", "account", "attempts")):
-        return Loaded(ERROR, message=f"{EXECUTION_STATUS_FILE} says the journal was read but lacks its control, "
-                                     "account or attempts section")
+    problems = execution_shape_problems(doc)
+    if problems:
+        return Loaded(ERROR, message=f"{EXECUTION_STATUS_FILE} is malformed: " + "; ".join(problems[:3])
+                                     + (f" (+{len(problems) - 3} more)" if len(problems) > 3 else ""))
     generated = doc.get("generated_at_utc") if isinstance(doc.get("generated_at_utc"), str) else None
     fresh = assess_freshness(generated, max_age=EXECUTION_STATUS_MAX_AGE, now=ctx.now).value.upper()
     return Loaded(OK, ExecutionStatus(doc, fresh, EXECUTION_STATUS_MAX_AGE))
