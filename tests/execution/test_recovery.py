@@ -151,7 +151,9 @@ def test_duplicates_conflicting_duplicates_and_late_arrivals(venue):
     state = proven(opened(), adapter, clock).state
     state, steps = run(state, update(1, 1, 1), update(1, 1, 2))
     assert steps[1].applied is rc.Applied.DUPLICATE and not state.quarantines
-    assert rc.epoch(state, B70) == 1  # the duplicate is not a second change
+    first = rc.epoch(state, B70)
+    assert first > 0 and dict(state.counts)["DUPLICATE"] == 1
+    assert rc.epoch(rc.apply(state, update(1, 1, 2.5)).state, B70) == first  # the duplicate is not a second change
     state, steps = run(state, update(1, 1, 3, status="canceled", remaining="0"))
     assert steps[0].applied is rc.Applied.QUARANTINED and reasons(state) == ["CONFLICTING_DUPLICATE"]
     state, steps = run(state, update(1, 2, 4), update(1, 4, 5), update(1, 3, 6))  # 3 arrives after 4
@@ -168,7 +170,7 @@ def test_a_new_sid_starts_a_new_sequence_scope_and_the_old_sid_is_stale(venue):
     before = rc.epoch(state, B72)
     state, steps = run(state, update(1, 3, 5, order_id="o9", market=B72))  # a late message on the retired sid
     assert steps[0].applied is rc.Applied.STALE_SUBSCRIPTION
-    assert "o9" not in {o.order_id for o in state.orders} and rc.epoch(state, B72) == before + 1
+    assert "o9" not in {o.order_id for o in state.orders} and rc.epoch(state, B72) > before
     state, steps = run(state, rc.SubscriptionOpened(1, ORDERS, at(6)))
     assert steps[0].raised == (rc.Reason.SID_REUSED,) and {s.sid for s in state.subscriptions} == {2, 7}
     state, steps = run(state, update(99, 1, 7))
@@ -244,7 +246,7 @@ def test_an_order_update_invalidates_only_when_it_changes_something():
     state, _ = run(state, update(1, 2, 2))  # the same state again under a new seq
     assert rc.epoch(state, B70) == marks.epochs[B70]
     state, _ = run(state, update(1, 3, 3, filled="1", remaining="1"))
-    assert rc.epoch(state, B70) == marks.epochs[B70] + 1
+    assert rc.epoch(state, B70) > marks.epochs[B70]
 
 
 def test_a_book_jump_beyond_the_threshold_invalidates_its_market():
@@ -258,9 +260,10 @@ def test_a_book_jump_beyond_the_threshold_invalidates_its_market():
     assert rc.decision_problems(state, B70, marks) == tuple(
         p for p in rc.decision_problems(state, B70, marks) if p.startswith("STREAM_QUARANTINE"))
     state, steps = run(state, book(3, "0.43", "0.48"))
-    assert "ask 0.45 -> 0.48" in steps[0].detail and rc.epoch(state, B70) == marks.epochs.get(B70, 0) + 1
+    jumped = rc.epoch(state, B70)
+    assert "ask 0.45 -> 0.48" in steps[0].detail and jumped > marks.epochs.get(B70, 0)
     state, steps = run(state, book(4, None, "0.48"))  # a side emptied
-    assert rc.epoch(state, B70) == marks.epochs.get(B70, 0) + 2
+    assert rc.epoch(state, B70) > jumped
     assert rc.epoch(state, B72) == 0
 
 
@@ -339,6 +342,31 @@ def test_the_rate_bound_counts_every_incoming_item_not_retained_rows(venue):
     assert dict(state.counts)["DUPLICATE"] == CFG.max_items_per_window
     (q,) = state.quarantines
     assert q.not_before_utc == m.utc_text(m.parse_utc_text(q.since_utc) + CFG.rate_window)
+
+
+def test_marks_are_pruned_at_a_proof_and_an_older_decision_still_sees_its_market_changed(venue):
+    adapter, clock = venue
+    book = rc.BookObservation  # unsequenced, untracked by proofs: only its epoch moves
+    state = proven(opened(), adapter, clock).state
+    state, _ = run(state, book(B70, Decimal("0.40"), Decimal("0.45"), rc.Clocks(at(1))),
+                   book(B70, Decimal("0.40"), Decimal("0.50"), rc.Clocks(at(2))))
+    old_marks = rc.marks(state)  # taken before the next proof
+    assert old_marks.epochs[B70] > 0
+    clock.advance(5)
+    state = proven(state, adapter, clock).state
+    assert state.marks == () and not state.quarantines  # pruned: bounded between proofs
+    assert rc.decision_problems(state, B70, old_marks)[0].startswith("STREAM_INVALIDATED")  # never "unchanged"
+    state, _ = run(state, book(B70, Decimal("0.40"), Decimal("0.60"), rc.Clocks(at(6))))
+    assert rc.epoch(state, B70) > old_marks.epochs[B70]  # a counter value is never reused
+    assert rc.decision_problems(state, B70, rc.marks(state)) == ()
+
+
+def test_books_are_bounded_by_forgetting_the_oldest_baseline():
+    state = opened()
+    books = [rc.BookObservation(f"M{i}", Decimal("0.40"), Decimal("0.45"), rc.Clocks(at(1 + i / 1000)))
+             for i in range(CFG.max_tracked + 3)]
+    state, _ = run(state, *books)
+    assert len(state.books) == CFG.max_tracked and "M0" not in {b.market_ticker for b in state.books}
 
 
 def test_retained_state_is_bounded_and_overflow_quarantines():

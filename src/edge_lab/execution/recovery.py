@@ -44,8 +44,10 @@ sliding window by receipt time, and opened subscriptions a second one. Overruns 
 (RATE_EXCEEDED, RECONNECT_STORM) until a read that starts after the window has passed. Retained state is bounded
 separately (`dedupe_window`, `max_tracked`); exceeding `max_tracked` quarantines rather than forgets silently.
 
-**Invalidation.** Every relevant change bumps its market's epoch: a fill, an order update that changes status or
-counts, a correction or conflict, and a book move beyond `book_jump`. Account-wide quarantines bump the account epoch.
+**Invalidation.** Every relevant change gives its market a new epoch (the next value of a state-wide counter, never
+reused): a fill, an order update that changes status or counts, a correction or conflict, and a book move beyond
+`book_jump`. Account-wide quarantines bump the account epoch. Market epochs are pruned at each proof (bounded state);
+a decision whose marks predate the proof then sees its market as changed, never as unchanged.
 A caller takes `marks(state)` when it starts deciding and asks `decision_problems(state, market, marks)` before it acts:
 any change since the marks, any covering quarantine, or a missing required subscription drops the decision until it is
 re-evaluated from fresh evidence.
@@ -451,6 +453,7 @@ class RecoveryState:
     incoming: int = 0
     counts: tuple[tuple[str, int], ...] = ()
     proven_at_utc: str | None = None  # the read start of the last proof
+    changes: int = 0  # every market change takes the next value as its market's epoch
 
     @property
     def channels(self) -> frozenset:
@@ -553,8 +556,9 @@ def _bump(st: RecoveryState, market: str, reason: str, at: str) -> RecoveryState
     old = marks.get(market)
     if old is None and len(marks) >= st.config.max_tracked:
         return _quarantine(st, Reason.TOO_MANY_TRACKED, None, at, at, f"more than {st.config.max_tracked} markets")
-    marks[market] = MarketMark(market, (old.epoch if old else 0) + 1, reason[:300], at)
-    return replace(st, marks=tuple(marks[k] for k in sorted(marks)))
+    changes = st.changes + 1  # a state-wide counter: an epoch value is never reused, even after marks are pruned
+    marks[market] = MarketMark(market, changes, reason[:300], at)
+    return replace(st, marks=tuple(marks[k] for k in sorted(marks)), changes=changes)
 
 
 def _incoming(st: RecoveryState, received: str) -> tuple[RecoveryState, list[Reason]]:
@@ -778,9 +782,8 @@ def _book(st: RecoveryState, item: BookObservation) -> Step:
     books = {b.market_ticker: b for b in st.books}
     prev = books.get(market)
     if prev is None and len(books) >= st.config.max_tracked:
-        st = _quarantine(st, Reason.TOO_MANY_TRACKED, None, received, received,
-                         f"more than {st.config.max_tracked} books")
-        return _done(st, Applied.QUARANTINED, raised + [Reason.TOO_MANY_TRACKED])
+        # Bounded: the least recently observed book is forgotten; its next observation is a fresh baseline.
+        del books[min(books.values(), key=lambda b: (parse_utc_text(b.received_at_utc), b.market_ticker)).market_ticker]
     books[market] = Book(market, item.yes_bid, item.yes_ask, received)
     st = replace(st, books=tuple(books[k] for k in sorted(books)))
     if prev is not None:
@@ -846,8 +849,10 @@ def prove(state: RecoveryState, reconciliation: acct.AccountReconciliation, *, s
             findings.append(Finding("REST_AHEAD_OF_STREAM", t.market_ticker, t.order_id,
                                     f"REST lists {o.fill_count} filled, the stream {t.filled} (REST wins)"))
     cleared = tuple(q for q in state.quarantines if parse_utc_text(q.not_before_utc) <= started)
+    # Marks are pruned (bounded state): epochs come from a counter that never repeats, so a decision whose marks
+    # were taken before this proof still sees its market as changed (conservative), never as unchanged.
     st = replace(state, quarantines=tuple(q for q in state.quarantines if q not in cleared),
-                 orders=tuple(kept[k] for k in sorted(kept)), proven_at_utc=started_text)
+                 orders=tuple(kept[k] for k in sorted(kept)), proven_at_utc=started_text, marks=())
     for market in sorted(disagree):
         st = _quarantine(st, Reason.DISAGREEMENT, market, finished_text, finished_text, disagree[market])
     cleared = tuple(q for q in cleared if not (q.reason is Reason.DISAGREEMENT and q.market_ticker in disagree))
@@ -878,8 +883,9 @@ def decision_problems(state: RecoveryState, market_ticker: str, since: Marks) ->
     if state.account_epoch != since.account_epoch:
         out.append(f"STREAM_INVALIDATED: account-wide change ({state.account_reason})"[:300])
     if epoch(state, market_ticker) != since.epochs.get(market_ticker, 0):
-        mark = next(m for m in state.marks if m.market_ticker == market_ticker)
-        out.append(f"STREAM_INVALIDATED: {market_ticker} changed at {mark.at_utc} ({mark.reason})"[:300])
+        mark = next((m for m in state.marks if m.market_ticker == market_ticker), None)
+        why = "its marks were pruned by a later proof" if mark is None else f"changed at {mark.at_utc} ({mark.reason})"
+        out.append(f"STREAM_INVALIDATED: {market_ticker} {why}"[:300])
     return tuple(out)
 
 
