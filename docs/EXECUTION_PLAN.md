@@ -743,6 +743,48 @@ be written here when they are made.
     - any import of the execution package by wallet code. The typed bridge (W8) needs an explicit ADR 0043
       amendment in its own reviewed PR.
 
+- **2026-10-08 (America/New_York), owner directive: master research and experimentation directive — Track B,
+  rapid edge discovery (#184).** Recorded in `docs/owner/2026-10-08-rapid-alpha-discovery-directive.md`, with the
+  authority sections verbatim. Track B runs in parallel with Track A (#160, #181, #168), and neither track
+  pauses the other.
+  - **Authorized (research, offline, existing data only):**
+    - **Reading and synthesis.** Literature, practitioner and documentation research from public sources: a
+      source register, a hypothesis scorecard, ranked shortlists, and experiment protocols.
+    - **DRAFT experiments.** Candidates may be registered as DRAFT in the existing registry (`experiments/`,
+      `protocol.toml`). DRAFT occupies no #96 family slot. Moving any candidate to PREREGISTERED-and-RUNNING as
+      a new ACTIVE family needs an owner slot decision.
+    - **Diagnostics on data already held.** Retrospective, reproducible diagnostics may use data already
+      collected under existing grants. Conditions:
+      - Every use is logged through `research_evidence` (`evidence_use.jsonl`).
+      - No use touches a protocol's `prohibited_inputs` or `prohibited_label_scopes`.
+      - Never read EXP-001 KXHIGHNY outcomes or holdouts, or EXP-002 frozen evaluation windows.
+      - No use may influence a frozen or paused experiment.
+      - Every result is labelled RETROSPECTIVE EXPLORATORY and is never presented as prospective or as an
+        edge.
+    - **Published replication files.** One-off, static files published with a paper or public repository, free
+      and unauthenticated, may be read when their license permits research use. Record the URL, retrieval time,
+      hash and license. This never includes venue or data-vendor API routes.
+    - **An offline evaluation harness.** It reuses `research_economics`, `research_evidence`, `experiments`,
+      `opportunity`, `payoff_constraints`, `best_price`, `sports_evidence`, `sources`/`freshness` and
+      `wallet_intel/`. There is no new engine, registry, database, collector, ledger or trading bot, and no import of
+      `edge_lab.execution`.
+    - **One consolidated owner approval packet.**
+  - **Merge:** research code and docs PRs merge under the same conditions as the 2026-10-07 evening entry.
+    Docs-only PRs merge under the standing rule below.
+  - **Not authorized (each needs its own recorded owner approval):**
+    - new market-data collection, including venue or vendor API pulls of historical trades, books or odds;
+    - paid services or data;
+    - account access or credentials;
+    - a new ACTIVE family, or reusing paused EXP-003's slot;
+    - demo or real-money orders;
+    - unattended execution;
+    - deployment;
+    - new schedules;
+    - changes to source budgets (including the joint 450-credit NFL/NHL Odds API pilot), protected windows, or
+      EXP-001/EXP-002/EXP-003 protocols;
+    - any AI model or provider call;
+    - declaring a profit using an unverified fee (KXNFLGAME fees remain a blocker).
+
 ## Standing merge rule: docs-only and test-only PRs
 
 Owner rule of 2026-09-22 (verbatim source: `docs/owner/2026-09-22-overnight-build-directive.md`).
