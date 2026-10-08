@@ -351,7 +351,14 @@ def _leader_per_unit(signals: Sequence[FollowSignal], resolutions: Mapping[str, 
     the payout for any remainder resolved by the horizon. UNKNOWN if any part is unresolved.
 
     Only leader trades at or before the horizon count: a sale after the horizon is outside the evaluation
-    window, so a position still open at the horizon stays UNKNOWN (unless resolved by then)."""
+    window, so a position still open at the horizon stays UNKNOWN (unless resolved by then).
+
+    The cut-off uses the leader's trade time, not when we could observe the trade. This is the leader's
+    own economics (LEADER_OBSERVED_ECONOMICS): what its account earned inside the window, which our
+    detection channel cannot change. A sale made before the horizon but seen only after it still counts,
+    because the leader really held only until then. Observability governs the follower's timeline, not the
+    leader's outcome. Signals still reach this function only through the log as received, so a trade
+    nobody had received by the time the run was built cannot appear."""
     queues: dict[tuple[str, str], list[list]] = {}
     totals: dict[str, Decimal] = {}
     qtys: dict[str, Decimal] = {}

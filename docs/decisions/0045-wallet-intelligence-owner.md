@@ -158,3 +158,21 @@ An independent review returned REQUEST_CHANGES. Each fix has a regression test i
   - the transitive boundary check applies every rule to each owner reached, and is mutation-probed;
   - rate limits are documented (P24);
   - Benjamini-Hochberg uses m = cumulative trials × candidates.
+
+## Amendment 2026-10-07 (pre-merge re-review): R1–R3
+
+The re-review approved `070eb51` with one fix and two documentation notes.
+- **R1:** `signals_from_log` recomputes a signal's observable time from the version actually chosen. The time
+  is moved later until it is at least that version's trade time plus the detection delay and its receipt. So
+  a correction recorded before we could see a trade, which moves the trade later, re-times the signal instead
+  of making it invalid. A record that still cannot become a valid signal is left out, with its reason in an
+  optional `skipped` list. One bad record never denies the run. Regression test in
+  `tests/wallet/test_wallet_review_fixes.py`.
+- **R2:** the F2 horizon cut-off uses the leader's **trade time**, not observability. Leader economics are what
+  the leader's account earned inside the window; our detection delay cannot change them. A sale before the
+  horizon that we saw only after it still ends the leader's holding. Observability governs only the follower's
+  timeline.
+- **R3:** leaving events with an unknown market out of the trials can flatter a reported win rate, since the
+  unknown events may be losers. The rate is a rate over known events only, and `unknown_markets` reports how
+  much is missing. Eligibility does not rest on the rate: it rejects any account with an unknown market
+  (`UNKNOWN_MARKETS`) and any with incomplete coverage.

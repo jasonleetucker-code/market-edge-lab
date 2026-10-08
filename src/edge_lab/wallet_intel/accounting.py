@@ -407,7 +407,13 @@ def event_outcomes(account: LeaderAccount) -> dict[str, Decimal]:
     """Realized gross P&L per independent event (markets of one event are one cluster).
 
     An event counts only when every one of its markets is closed or settled with a known P&L. One open
-    or UNKNOWN market makes the whole event UNKNOWN, so it is left out: never a partial win."""
+    or UNKNOWN market makes the whole event UNKNOWN, so it is left out: never a partial win.
+
+    Caveat: leaving unknown events out of the trials can flatter a reported win rate, because an
+    account's unknown events may be its losers (a loss hidden behind an untraced transfer, say). The
+    rate is therefore a rate over *known* events only, and `LeaderDimensions.unknown_markets` reports how
+    much is missing. Selection does not rely on the rate alone: `selection._eligibility` rejects any
+    account with an unknown market (`UNKNOWN_MARKETS`) and any account with incomplete coverage."""
     out: dict[str, Decimal] = {}
     unknown: set[str] = set()
     for r in account.markets:
