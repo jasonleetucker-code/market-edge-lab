@@ -1,0 +1,13 @@
+{
+ "data": [
+  {
+   "proxyWallet": "0x00000000000000000000000000000000000a0001",
+   "timestamp": 1767268800,
+   "conditionId": "0xc1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1"
+  }
+ ],
+ "pagination": {
+  "next_cursor": null,
+  "has_more": false
+ }
+}

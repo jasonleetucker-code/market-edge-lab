@@ -1,0 +1,6 @@
+{
+ "error": "busy",
+ "code": "rate_limited",
+ "retryable": true,
+ "trace_id": "trace-synthetic-2"
+}
