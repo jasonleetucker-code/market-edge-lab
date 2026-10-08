@@ -3,7 +3,7 @@
 Received in the laptop Claude Code session of 2026-10-08 (America/New_York) as the owner's own message. The
 message points to issue #181 (new Owner Idea), issue #168 (wallet intelligence), draft PR #182, and the
 implementation specification `docs/strategy/CLAUDE_JEV_CRAWLER_WALLET_V1.md`, which is on PR #182's branch
-`docs/jev-crawler-ideas-20261008` (head `c650946` when received; `aefe535` after review fixes).
+`docs/jev-crawler-ideas-20261008` (head `c650946` when received; `a919d8f` after review fixes).
 
 **Authority.** The scope is recorded in `docs/EXECUTION_PLAN.md`, in the 2026-10-08 entry. The directive authorizes
 the offline engineering implementation covered by the specification, "subject to recording its exact scope through

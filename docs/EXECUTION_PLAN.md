@@ -745,7 +745,7 @@ be written here when they are made.
 
 - **2026-10-08 (America/New_York), owner directive: JEV/GROKBOT, crawler and wallet-intelligence improvements
   (#181, #168).** Recorded in `docs/owner/2026-10-08-jev-crawler-wallet-directive.md` (authority sections
-  verbatim). The bounded specification is `docs/strategy/CLAUDE_JEV_CRAWLER_WALLET_V1.md` (PR #182, at `aefe535`);
+  verbatim). The bounded specification is `docs/strategy/CLAUDE_JEV_CRAWLER_WALLET_V1.md` (PR #182, at `a919d8f`);
   this entry's own A–G list and exclusions govern over any later edit of that file. The
   2026-10-07 entries above stand unchanged, and the Kalshi campaign (#160) continues on its own paths.
   - **Authorized (offline, fixture-only code, tests and internal docs):**
