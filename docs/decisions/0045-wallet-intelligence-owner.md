@@ -176,3 +176,103 @@ The re-review approved `070eb51` with one fix and two documentation notes.
   unknown events may be losers. The rate is a rate over known events only, and `unknown_markets` reports how
   much is missing. Eligibility does not rest on the rate: it rejects any account with an unknown market
   (`UNKNOWN_MARKETS`) and any with incomplete coverage.
+
+## Amendment 2026-10-08 C: price-relative skill
+
+Authority: the 2026-10-08 owner directive (`docs/owner/2026-10-08-jev-crawler-wallet-directive.md`) and its
+scope entry in `docs/EXECUTION_PLAN.md`, item C. Specification: Deliverable C of
+`docs/strategy/CLAUDE_JEV_CRAWLER_WALLET_V1.md`; issues #181 and #168. Offline, SYNTHETIC fixtures only.
+
+**Problem.** A win rate is not skill on binary contracts. 98 wins in 100 one-contract YES entries at $0.99 cost
+$99 and pay $98, a $1 loss. The 50%-null binomial screen (`stats.binomial_tail_p`, used by
+`selection.multiple_testing`) flags that record at p < 1e-26. The screen is kept unchanged, with its label: a
+small-sample screen, not alpha.
+
+**Decision.** Add a new subordinate module, `wallet_intel/skill.py` (`wallet-price-relative-skill-v1`). It is
+opt-in: nothing else calls it. It gets its own module for two reasons:
+- `stats.py` is float-only by rule;
+- `accounting.py` owns leader economics.
+
+The diagnostic needs Decimal position economics, a typed exclusion taxonomy and a dependency closure, and these
+belong in neither. Three float-only helpers are added to `stats.py`: `price_benchmark_null_p`,
+`kish_effective_size` and `shrink_toward_zero`. `accounting.py` is unchanged, and its tests pin its outputs.
+- **Benchmark.** Each position is measured against the market entry price. `reference_payout` is quantity ×
+  entry price, the benchmark's expected payout. `gross_excess` is payout − reference payout. For a
+  held-to-resolution position this equals the realized gross P&L from `accounting.reconstruct`, and a test pins
+  the two together, so there is one P&L concept, not two. `net_excess` exists only when every fee is known. An
+  unknown fee makes it UNKNOWN, never zero. The price is a benchmark, not the true probability. Excess may come
+  from forecasting, maker price improvement or a risk premium. The liquidity role is reported beside it, and is
+  UNKNOWN unless role evidence is supplied.
+- **Eligibility.** Only unambiguous held-to-resolution binary positions count. Every other position is
+  classified with a `PositionStatus` and carries no number:
+  - an unverified identity (`IdentityBasis.HEURISTIC` or missing) or incomplete history;
+  - a token transfer, a split, merge or conversion, or any sale (an early or mixed exit);
+  - both outcomes held (a visible hedge);
+  - an UNKNOWN action or a non-binary outcome;
+  - entry cash that does not equal quantity × price exactly;
+  - an unresolved market, a payout other than 0 or 1, or a redemption that does not match the payout;
+  - in a holdout, a position that overlaps selection or falls outside the window.
+
+  Hedges elsewhere are unobservable, so `hidden_hedges` is always UNOBSERVABLE.
+- **Dependence.** Positions cluster by `event_id`. The report gives the cluster count, Kish's effective size over
+  cluster cost, concentration (the largest cluster's cost share) and a cluster-bootstrap band. The null p-value
+  is a seeded Monte Carlo under the price benchmark. Outcomes inside a cluster are **comonotone**, which is the
+  largest variance those marginals allow. So 20 correlated wins on one event weigh as one coin flip, not 20.
+- **Shrinkage.** The excess return per dollar is shrunk toward zero excess with `pseudo_clusters`
+  (value × n / (n + k)).
+- **Multiple testing and denominators.** Every cohort account is a hypothesis: winners, losers, inactive
+  accounts and accounts with no eligible position (p = 1). Benjamini-Hochberg uses m = max(1, trials) × cohort
+  size.
+- **Verdicts.** The verdicts are NO_ELIGIBLE_POSITIONS, INSUFFICIENT_EVIDENCE (coverage or effective clusters
+  below the rule), NEGATIVE, HINDSIGHT_FLAGGED, NOT_DISTINGUISHABLE_FROM_BENCHMARK and POSITIVE_SCREEN. A positive
+  verdict also needs a positive shrunk estimate and a survivor of Benjamini-Hochberg. It is blocked when net
+  excess is known and not positive. When net is UNKNOWN, `verdict_basis` says GROSS_ONLY_NET_UNKNOWN. A
+  POSITIVE_SCREEN is a screen on one window and never proves persistence.
+- **Point in time.** `SkillRule` carries `frozen_at`. A `HOLDOUT` raises `HindsightError` when the rule was
+  frozen, or the cohort selected, after the window opened. It counts only positions entered after selection
+  inside the window. `check_holdout_sequence` refuses overlapping windows or a changed rule. In `DESCRIPTIVE` mode
+  an account selected after a counted outcome is flagged SELECTED_AFTER_OUTCOMES and cannot receive a positive
+  verdict. Future marks or observations raise.
+- **Dependency closure.** `SkillClosure` is a plain frozen value with canonical text for every input that shaped
+  the report:
+  - the full rule, every threshold included;
+  - mode, as-of time, window and cohort (time, reference and every account);
+  - trials and the data label;
+  - each observation's id, semantic key and receipt time;
+  - every mark;
+  - identity bases, history flags and roles;
+  - per-account coverage.
+
+  Its digest is insensitive to input order. Deliverable A's v2 receipt can bind to `closure.digest`.
+
+**Required fixtures (SYNTHETIC, `tests/wallet/test_wallet_skill.py`).**
+1. 98/100 at $0.99: −$1 gross, NEGATIVE, while the binomial screen flags it.
+2. 16/40 at $0.20: +$8, POSITIVE_SCREEN, and the binomial screen does not flag it.
+3. A market-matched null: NOT_DISTINGUISHABLE_FROM_BENCHMARK.
+4. 20 contracts on one event: effective size 1, INSUFFICIENT_EVIDENCE.
+5. A hindsight-selected winner: refused in a holdout, HINDSIGHT_FLAGGED in a description.
+6. An unknown fee: net UNKNOWN, never zero.
+
+There are 23 deliberate mutations, and each one fails a test. Synthetic successes are unit tests, not observed
+alpha.
+
+**Alternatives considered.**
+- **Replace the binomial screen.** Rejected: the directive keeps it, and side-by-side output shows the
+  difference.
+- **A normal-approximation z-test.** Rejected: it is poor at prices near 0 or 1, and it ignores dependence.
+- **Independent outcomes inside an event.** Rejected: that overstates evidence (mutation M04).
+- **Computing positions through `reconstruct`.** Rejected: its market states mix exits, transfers and opens.
+  The skill needs a stricter, typed exclusion taxonomy, so it reuses only `Mark` and pins agreement by test.
+
+**Tradeoffs.**
+- Strict eligibility makes most real accounts mostly ineligible, because Polymarket v2 rows have no fee, so net
+  is UNKNOWN. That is intended.
+- Comonotone clusters are conservative for mutually exclusive brackets.
+- Kish's size uses cost weights, not risk.
+- The entry fill price is the only reference. A captured quote at entry, to separate maker price improvement
+  from forecasting, needs book-at-entry evidence that is not modelled here.
+
+**What would make us reconsider.**
+- Lane B lands a typed `liquidity_role`. The skill should then read it instead of a caller-supplied mapping.
+- An approved empirical evaluation freezes thresholds in a `protocol.toml`.
+- Real data shows event ids that are missing or too coarse to cluster on.
