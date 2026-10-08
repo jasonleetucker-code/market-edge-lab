@@ -743,6 +743,57 @@ be written here when they are made.
     - any import of the execution package by wallet code. The typed bridge (W8) needs an explicit ADR 0043
       amendment in its own reviewed PR.
 
+- **2026-10-08 (America/New_York), owner directive: JEV/GROKBOT, crawler and wallet-intelligence improvements
+  (#181, #168).** Recorded in `docs/owner/2026-10-08-jev-crawler-wallet-directive.md` (authority sections
+  verbatim). The bounded specification is `docs/strategy/CLAUDE_JEV_CRAWLER_WALLET_V1.md` (PR #182). The
+  2026-10-07 entries above stand unchanged, and the Kalshi campaign (#160) continues on its own paths.
+  - **Authorized (offline, fixture-only code, tests and internal docs):**
+    - **A.** Versioned v2 causal wallet-selection receipts in `wallet_intel/selection.py`. The digest binds the
+      complete dependency closure, and replay verification is deterministic. v1 records stay labelled legacy /
+      incomplete.
+    - **B.** Role-aware quality diagnostics in `wallet_intel/threats.py`. Liquidity role, price consistency,
+      contamination evidence and follower copyability are separate typed concepts. Wash-pattern output is an
+      unverified diagnostic, never an accusation.
+    - **C.** A price-relative trader-skill diagnostic in `wallet_intel/stats.py` / `accounting.py`, alongside
+      the existing 50% binomial screen, which is kept.
+    - **D.** Follower copyability and economic sensitivity in `wallet_intel/replay.py`, using canonical
+      `research_economics`. There is no second P&L engine.
+    - **E.** An offline change/event envelope and deterministic novelty, dedup and change-detection tests,
+      built on the existing `sources`, provenance and freshness owners. The work ends with one
+      source-activation decision packet.
+    - **F.** Provider-neutral typed semantic-triage value types with deterministic validation and abstention,
+      fixture outputs only, plus a prospective comparison protocol.
+    - **G.** Read-only integration into the existing Terminal under `docs/design/UI_CONTRACT.md`. No new
+      dashboard.
+
+    Labels must distinguish SYNTHETIC, FIXTURE, OBSERVED and UNKNOWN. Synthetic results are engineering
+    tests, never evidence of an edge.
+  - **Merge:** these offline PRs merge on the same conditions as the 2026-10-07 evening entry ("Merge only
+    under the repository's existing delegated authority and review requirements", verbatim):
+    - independent review, with re-review of changed heads;
+    - exact-head CI green;
+    - current-main reconciliation;
+    - mergeability;
+    - no open review blocker;
+    - frozen-experiment checks unchanged.
+
+    PR #182 (docs only) merges under the standing docs-only rule below.
+  - **Not authorized (each needs its own recorded owner approval):**
+    - new live market-data collection of any kind, including source polls, streams, wallet watches, X or web
+      scraping and one-off data-route pulls;
+    - paid APIs or data, and any AI model or provider call (Jev, Kev, Grok or other), including SDK
+      installation for one;
+    - credentials or account access;
+    - new scheduled jobs, timers or cron;
+    - demo or real-money orders, grants or unattended trading;
+    - production deployment;
+    - changes to financial risk limits, source budgets, protected windows or EXP-001/EXP-002/EXP-003
+      protocols;
+    - an empirical evaluation needing a #96 family slot;
+    - any import of `edge_lab.execution` by wallet, semantic or source code, or any wallet-to-order path (W8
+      still needs its own ADR 0043 amendment);
+    - every item already listed as not authorized in the 2026-10-07 entries.
+
 ## Standing merge rule: docs-only and test-only PRs
 
 Owner rule of 2026-09-22 (verbatim source: `docs/owner/2026-09-22-overnight-build-directive.md`).
