@@ -149,6 +149,14 @@ def test_98_percent_wins_at_99_cents_is_negative_after_costs():
     assert s.net_band is not None and s.net_band.clusters == 50 and s.net_band.lower < 0
 
 
+def test_a_win_is_counted_after_costs_not_before():
+    # 1 contract @ 0.99: fee 0.000693, the debit floors to the cent: 1.00. Paid out 1: +0.01 gross, 0.00 net.
+    s = run([entry("e1", market(), [("0.99", "1")], 1, 1)])
+    ev = s.evaluations[0]
+    assert (ev.gross_pnl, ev.total_cost, ev.net_pnl) == (D("0.01"), D("1.00"), D("0.00"))
+    assert s.summary.wins == 0 and s.summary.win_rate == D(0)
+
+
 def test_synthetic_profit_is_labelled_a_code_test():
     rep = run([entry("e1", market(), [("0.10", "10")], 10, 1)])
     assert rep.summary.sign_after_costs == "NON_NEGATIVE_POINT_ESTIMATE_NOT_AN_EDGE"
