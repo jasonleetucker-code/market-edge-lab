@@ -57,4 +57,8 @@ Under the 2026-10-07 Kalshi execution campaign directive (#160):
   `risk.assess`, fee schedules). `risk.py` reads accounts through the `RiskAccount` protocol, removing the
   `shadow_ledger` edge. Placeholder limits block every order until the owner sets real ones.
 
-New decisions start at 0045.
+- 0046: the execution orchestrator. One supervised `run_cycle` with reconciliation and safety before new risk, run through
+  the real components. It starts only via `control.boot`, sends at most one attempt per intent key, uses bounded
+  budgets and installs no scheduler. Demonstration B runs on fixtures.
+
+New decisions start at 0045 (wallet intelligence, #174) and 0047.
