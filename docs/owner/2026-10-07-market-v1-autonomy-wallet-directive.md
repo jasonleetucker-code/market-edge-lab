@@ -120,3 +120,12 @@ authority.
 ```text
 Merged offline code does not activate collection or financial access.
 ```
+
+## Later owner ruling in the same session (verbatim)
+
+3. Question: "The wallet writer read Polymarket's published API spec
+   (https://data-api.polymarket.com/v2/openapi.json), which the docs index links to as the specification. It holds no
+   wallet data, but it's served from the data-API host, and the scope entry says "no network read of Polymarket".
+   How should I treat it?" Answer: **"Allow spec/doc pages only (Recommended)"**. The option text read: "Record a
+   ruling that published API specification and documentation files count as documentation, even when served from
+   the API host. Data routes stay forbidden. Facts sourced from the spec stay."
