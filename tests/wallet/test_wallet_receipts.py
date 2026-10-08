@@ -24,8 +24,8 @@ from edge_lab.wallet_intel.events import (Action, ChainFinality, Correction, Cor
 from edge_lab.wallet_intel.exact import Labeled
 from edge_lab.wallet_intel.identity import (IdentityBasis, IdentityRegistry, MappingRevocation, ProxyMapping,
                                             RelationKind)
-from edge_lab.wallet_intel.selection import (LEGACY_V1_STATUS, Candidate, CandidateStatus, EligibilityRule,
-                                             multiple_testing, select_at)
+from edge_lab.wallet_intel.selection import (LEGACY_V1_STATUS, Candidate, EligibilityRule, multiple_testing,
+                                             select_at)
 
 CUTOFF = at(days=10)
 A1, A2, A3, A4, A5 = acct(1), acct(2), acct(3), acct(4), acct(5)
