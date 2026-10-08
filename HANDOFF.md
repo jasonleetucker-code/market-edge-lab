@@ -5,6 +5,19 @@ This is the live state of the repository. Each session overwrites it; it is not 
 
 ## 2026-10-07 production update (supersedes the production SHA below)
 
+- **Later the same evening: DEPLOYED and PRODUCTION_VERIFIED `8dd572c7a605c3021557f024c7564c245d796b24`** (main after
+  #167) at 2026-10-07 ~19:13 America/New_York (VPS clock). Owner instruction: "then deploy it", recorded in the
+  2026-10-07 evening EXECUTION_PLAN entry.
+  - The install waited for the 17:40–18:50 capture window to close.
+  - Runbook steps: §1 staged, preflight PASS; §2 backup `VERIFIED_BACKUP_AND_RESTORE` ×2; §3 `INSTALL OK: 8dd572c…`;
+    §4.1 `FAIL_CLOSED_CHECK: PASS` (`HELD_BY_ORIGIN: 1`); dashboard restarted, `/healthz` 200.
+  - `verify_production.sh`: `DEPLOYED_SHA 8dd572c…`, 10/10 core timers, no failed units, `COLLECTOR_HEALTH: VALID`,
+    freshness CURRENT, Chase Upside 4/4.
+  - The execution package is present in `/opt/market-edge-lab/app/src/edge_lab/execution/` and inert: nothing
+    imports it, and `cryptography` is absent from the stdlib-only venv (`ModuleNotFoundError`), so the signer cannot
+    load.
+  - Previous release files are kept in `~dynasty/edgelab-release/prev-9ed305e/`.
+
 - **DEPLOYED and PRODUCTION_VERIFIED `9ed305e84086f84762e9fba4ebf89533aad0d1f8`** (main after #161) at
   2026-10-07 ~15:00 America/New_York (VPS clock). Owner approval: answers 3 and 4 in
   `docs/owner/2026-10-07-kalshi-execution-campaign-directive.md`.
