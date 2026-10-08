@@ -371,14 +371,17 @@ def test_readers_are_not_blocked_by_a_pending_writer(tmp_path):
 
 
 # "Fast" is measured inside the child, from opening the ledger to the LedgerError, so interpreter startup and
-# imports (about 0.5 s on the owner's laptop, more under load) are not charged to it. The budget is the ledger's
-# own SQLite busy timeout (LOCK_TIMEOUT_S, 5 s) times 2. Measured on Windows (SQLite 3.49.1): a 5000 ms
-# busy_timeout fails after 7.47 s and a 1000 ms one after 1.81 s, because SQLite's busy handler sums its nominal
-# sleeps (1, 2, 5, ... 100 ms) while each Win32 Sleep() rounds up to the ~15.6 ms timer tick (Sleep(1) took
-# 15.4 ms). The child's wait was 7.66 s alone; the old 8 s bound on the whole child process (startup included)
-# sat at that limit and timed out under load. 2x leaves load headroom over the measured 1.5x and still fails a
-# second busy wait or a retry loop on Windows (about 15 s for two). On Linux, where SQLite sleeps precisely, the
-# wait is about 5 s, so the budget there is loose: it proves a bounded failure, not a single wait.
+# imports (about 0.5 s on the owner's laptop, more under load) are not charged to it. The child opens the ledger,
+# then appends; with an EXCLUSIVE lock held, the open (its schema check) already waits and fails, so the error
+# comes from the open, and the append is reached only if the open wrongly succeeds.
+# The budget is the ledger's own SQLite busy timeout (LOCK_TIMEOUT_S, 5 s) times 2. Measured on Windows (SQLite
+# 3.49.1): a 5000 ms busy_timeout fails after 7.47 s and a 1000 ms one after 1.81 s. SQLite's busy handler counts
+# only its nominal sleeps (1, 2, 5, ... then 100 ms; about 59 retries for 5 s), and on Windows each retry costs
+# about 42 ms more than its nominal sleep ((7.47 - 5.0) / 59; the reviewer measured the same). shadow_ledger's
+# message still says "waited 5s" (src, left as is). The child's wait was 7.66 s alone; the old 8 s bound on the
+# whole child process (startup included) sat at that limit and timed out under load. 2x leaves load headroom over
+# the measured 1.5x and still fails a second busy wait or a retry loop on Windows (about 15 s for two). On Linux,
+# where the overhead is small, the wait is about 5 s, so the budget there proves a bounded failure, not one wait.
 LOCK_WAIT_BUDGET_S = 2 * LOCK_TIMEOUT_S
 HANG_GUARD_S = 60  # the child process as a whole: only a hang reaches this, never the speed claim
 
@@ -414,7 +417,7 @@ def test_append_against_held_lock_fails_fast_with_ledger_error(tmp_path):
     assert done.returncode == 3, done.stdout + done.stderr
     assert any(w in done.stdout.lower() for w in ("lock", "busy"))
     waited = float(next(line.split()[1] for line in done.stdout.splitlines() if line.startswith("WAITED")))
-    assert waited <= LOCK_WAIT_BUDGET_S, f"the append failed after {waited:.2f}s, over {LOCK_WAIT_BUDGET_S}s"
+    assert waited <= LOCK_WAIT_BUDGET_S, f"the ledger failed after {waited:.2f}s, over {LOCK_WAIT_BUDGET_S}s"
     assert ShadowLedger(path).state(ACC).decisions == 0
 
 
