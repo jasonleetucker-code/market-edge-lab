@@ -349,33 +349,38 @@ class ObservationLog:
     def all_ids(self) -> tuple[str, ...]:
         return tuple(self._order)
 
+    def version_at(self, observation_id: str, known_at: datetime, *, include_conflicted: bool = False,
+                   _conflicted: frozenset[str] | None = None) -> WalletObservation | None:
+        """One identity as it stood at knowledge time `known_at` (None: not yet received, retracted,
+        reorged out, or conflicted by then)."""
+        require_aware(known_at, "known_at")
+        entry = self._entries.get(observation_id)
+        if entry is None or entry.first_receipt > known_at:
+            return None
+        conflicted = self.conflicted_ids(known_at) if _conflicted is None else _conflicted
+        if not include_conflicted and observation_id in conflicted:
+            return None
+        obs: WalletObservation | None = entry.obs
+        for c in self._corrections:
+            if c.target_id != observation_id or c.recorded_at > known_at or obs is None:
+                continue
+            if c.kind is CorrectionKind.RETRACTED:
+                obs = None
+            elif c.kind is CorrectionKind.SUPERSEDED:
+                obs = c.replacement
+            elif c.kind is CorrectionKind.FINALITY_CHANGED:
+                obs = None if c.new_finality is ChainFinality.REORGED_OUT else replace(obs, finality=c.new_finality)
+        return obs
+
     def as_known_at(self, known_at: datetime, *, include_conflicted: bool = False) -> tuple[WalletObservation, ...]:
         """The log as it stood at knowledge time `known_at`, with corrections recorded by then.
 
         An observation counts only once its first receipt is at or before `known_at`. Conflicted
         identities are left out unless asked for (they are reported, not resolved)."""
         require_aware(known_at, "known_at")
-        out: list[WalletObservation] = []
         conflicted = self.conflicted_ids(known_at)
-        for oid in self._order:
-            entry = self._entries[oid]
-            if entry.first_receipt > known_at:
-                continue
-            if oid in conflicted and not include_conflicted:
-                continue
-            obs: WalletObservation | None = entry.obs
-            for c in self._corrections:
-                if c.target_id != oid or c.recorded_at > known_at or obs is None:
-                    continue
-                if c.kind is CorrectionKind.RETRACTED:
-                    obs = None
-                elif c.kind is CorrectionKind.SUPERSEDED:
-                    obs = c.replacement
-                elif c.kind is CorrectionKind.FINALITY_CHANGED:
-                    obs = None if c.new_finality is ChainFinality.REORGED_OUT else replace(
-                        obs, finality=c.new_finality)
-            if obs is not None:
-                out.append(obs)
+        out = [o for o in (self.version_at(oid, known_at, include_conflicted=include_conflicted,
+                                           _conflicted=conflicted) for oid in self._order) if o is not None]
         return tuple(sorted(out, key=lambda o: (o.source_time, o.observation_id)))
 
 

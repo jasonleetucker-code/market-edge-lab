@@ -193,23 +193,37 @@ def test_multiple_leaders_cannot_reuse_cash_or_inventory():
 
 # 9. reorg/correction cannot erase our fill ---------------------------------------------------------
 def test_reorg_or_correction_cannot_erase_our_fill():
+    from edge_lab.wallet_intel.policy import signals_from_log
+    from edge_lab.wallet_intel.replay import leader_event_status
     a = acct(1)
     leader_buy = obs(a, Action.TRADE_BUY, qty=100, price="0.40", when=at(0))
     log = ObservationLog()
     log.ingest([leader_buy])
-    s = signal_from_observation(log.as_known_at(at(1))[0], observable_at=at(1), cluster_key=a.key, strategy="s",
-                                leader_position_before=D(0))
     pol = FollowerPolicy(limits(), enrollments=enrolled(a.key))
-    r = replay([s], pol, initial_cash=D(100), books=Books(book(captured=at(1))), resolutions={}, config=config(),
-               horizon=at(days=1))
-    held = r.final_book.inventory["m1-yes"]
-    assert held > 0
+
+    def run():  # type: ignore[no-untyped-def]
+        # Signals are rebuilt from the log every time, point in time, then the replay re-runs.
+        sigs = signals_from_log(log, detection_delay=timedelta(minutes=1), cluster_key=lambda k: k, strategy="s")
+        return replay(sigs, pol, initial_cash=D(100), books=Books(book(captured=at(1))), resolutions={},
+                      config=config(), horizon=at(days=1))
+
+    first = run()
+    held = first.final_book.inventory["m1-yes"]
+    assert held > 0 and first.fills[0].status is FillStatus.FILLED
     log.append_correction(Correction("c1", leader_buy.observation_id, CorrectionKind.FINALITY_CHANGED, at(10),
                                      "synthetic reorg", new_finality=ChainFinality.REORGED_OUT))
     assert log.as_known_at(at(11)) == ()  # the leader event is gone from the corrected view...
     assert log.as_known_at(at(5)) == (leader_buy,)  # ...the earlier view is unchanged...
-    assert r.final_book.inventory["m1-yes"] == held  # ...and our fill stands
-    assert r.fills[0].status is FillStatus.FILLED
+    again = run()  # ...and a replay after the correction still has our fill
+    assert again.fills == first.fills and again.final_book.inventory["m1-yes"] == held
+    assert leader_event_status(again.fills, log, known_at=at(11)) == {leader_buy.observation_id:
+                                                                     "RETRACTED_AFTER_OUR_FILL"}
+    # A correction recorded before our channel could see the trade means we never saw it.
+    early = ObservationLog()
+    early.ingest([leader_buy])
+    early.append_correction(Correction("c0", leader_buy.observation_id, CorrectionKind.RETRACTED,
+                                       leader_buy.receipt_time, "retracted at once"))
+    assert signals_from_log(early, detection_delay=timedelta(minutes=1), cluster_key=lambda k: k, strategy="s") == ()
 
 
 # 10. partial exits reconcile to terminal wealth ----------------------------------------------------

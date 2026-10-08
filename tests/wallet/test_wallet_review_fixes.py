@@ -82,3 +82,26 @@ def test_f2_through_replay_an_open_leader_position_at_the_horizon_is_unknown():
     r = replay([buy, late_sell], FollowerPolicy(limits(), enrollments=enrolled("L1")), initial_cash=D(100),
                books=Books(book(captured=at(1))), resolutions={}, config=config(), horizon=at(days=1))
     assert not r.leader.per_unit["b"].known and not r.leader.scaled_to_follower.known
+
+
+# F3: signals are built point in time, so a later retraction cannot erase our fill -----------------
+def test_f3_a_retraction_after_our_observation_keeps_the_signal_but_one_before_removes_it():
+    from edge_lab.wallet_intel.events import Correction, CorrectionKind
+    from edge_lab.wallet_intel.policy import signals_from_log
+
+    o = obs(acct(1), Action.TRADE_BUY, when=at(0), receipt_delay=timedelta(seconds=30))
+    for recorded, expected in ((at(30), 1), (at(0) + timedelta(seconds=40), 0)):
+        log = ObservationLog()
+        log.ingest([o])
+        log.append_correction(Correction("c", o.observation_id, CorrectionKind.RETRACTED, recorded, "synthetic"))
+        sigs = signals_from_log(log, detection_delay=timedelta(minutes=1), cluster_key=lambda k: k, strategy="s")
+        assert len(sigs) == expected, recorded
+        assert log.as_known_at(at(days=1)) == ()  # the horizon view has lost it either way
+
+
+def test_f3_the_demo_builds_signals_point_in_time():
+    import inspect
+
+    from edge_lab.wallet_intel import demo
+    source = inspect.getsource(demo.run_synthetic_demo)
+    assert "signals_from_log(" in source and "signal_from_observation(" not in source

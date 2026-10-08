@@ -38,14 +38,14 @@ no new entries, exits still mirrored, holdings never liquidated for the gap); PA
 from __future__ import annotations
 
 import re
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime, timedelta
 from decimal import Decimal
 from enum import Enum
-from typing import Mapping
+from typing import Callable, Mapping
 
 from ..provenance import canonical_json, sha256_hex
-from .events import DIRECTIONAL, Action, WalletObservation
+from .events import DIRECTIONAL, Action, ObservationLog, WalletObservation
 from .exact import ZERO, Labeled, add, decimal_text, div_floor, exact_decimal, mul, sub
 from .timeutil import require_aware
 
@@ -104,6 +104,38 @@ def signal_from_observation(obs: WalletObservation, *, observable_at: datetime, 
     return FollowSignal(obs.observation_id, obs.account.key, cluster_key, strategy, obs.instrument_id,
                         obs.market_id or "?", obs.event_id or obs.market_id or "?", obs.action,
                         obs.native_quantity, obs.price, obs.source_time, observable_at, leader_position_before)
+
+
+def signals_from_log(log: ObservationLog, *, detection_delay: timedelta, cluster_key: Callable[[str], str],
+                     strategy: str, after: datetime | None = None) -> tuple[FollowSignal, ...]:
+    """Every directional leader trade as our channel would have seen it, point in time.
+
+    For each identity in the log: `observable_at` = max(first receipt, leader time + detection delay).
+    The signal uses the identity's version **as known at observable_at**, and the leader's prior
+    position from the view at that same time. A correction recorded later (a retraction, a reorg)
+    therefore never removes a signal we already acted on, and one recorded earlier means we never saw
+    the trade. Trades at or before `after` (e.g. a selection date) are skipped.
+    """
+    out = []
+    for oid in log.all_ids():
+        original = log.version_at(oid, log.first_receipt(oid), include_conflicted=True)
+        if original is None:
+            continue
+        seen_at = max(log.first_receipt(oid), original.source_time + detection_delay)
+        obs = log.version_at(oid, seen_at)
+        if obs is None or not obs.directional or (after is not None and obs.source_time <= after):
+            continue
+        before = ZERO
+        for p in log.as_known_at(seen_at):
+            if p.account != obs.account or p.instrument_id != obs.instrument_id or                     (p.source_time, p.observation_id) >= (obs.source_time, obs.observation_id):
+                continue
+            q = p.native_quantity or ZERO
+            before = add(before, q) if p.action is Action.TRADE_BUY else (
+                sub(before, q) if p.action is Action.TRADE_SELL else before)
+        sig = signal_from_observation(obs, observable_at=seen_at, cluster_key=cluster_key(obs.account.key),
+                                      strategy=strategy, leader_position_before=before)
+        out.append(replace(sig, signal_id=oid))  # stable: the identity as first logged
+    return tuple(sorted(out, key=lambda x: (x.observable_at, x.signal_id)))
 
 
 class PolicyMode(str, Enum):

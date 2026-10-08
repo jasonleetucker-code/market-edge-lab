@@ -23,10 +23,10 @@ from ..provenance import canonical_json, sha256_hex
 from .accounting import Mark, MarkKind, leader_dimensions, reconstruct
 from .events import Action, AssetAmount, ChainFinality, ObservationLog, WalletObservation, assign_occurrences, \
     classify_effects, token_asset
-from .exact import ZERO, Labeled, add, decimal_text, mul, sub
+from .exact import ZERO, Labeled, add, decimal_text, mul
 from .identity import AccountRef
 from .market_data import Book
-from .policy import Enrollment, FollowerPolicy, PolicyLimits, signal_from_observation
+from .policy import Enrollment, FollowerPolicy, PolicyLimits, signals_from_log
 from .replay import ReplayConfig, Resolution, benchmarks, ladder, replay, unknown_fee
 from .selection import Candidate, EligibilityRule, multiple_testing, select_at
 from .stats import WEAK_PRIOR
@@ -247,26 +247,15 @@ def run_synthetic_demo(seed: int) -> dict:
                           max_signal_age=timedelta(minutes=10), min_price=Decimal("0.05"), max_price=Decimal("0.95"),
                           max_price_above_leader=Decimal("0.05"))
     enrollments = {k: Enrollment(k, SELECTION_DATE) for k in eligible}
+    # Signals as our channel would have seen each trade (point in time): a later correction never
+    # removes a signal we acted on, and the leader's prior position comes from the view at that time.
     signals = []
     for who in leader_obs:
         key = accts[who].key
-        if key not in eligible:
-            continue
-        for o in logs[key].as_known_at(HORIZON):
-            if not (o.directional and o.source_time > SELECTION_DATE):
-                continue
-            seen_at = max(o.receipt_time, o.source_time + config.detection_delay)
-            # The leader's prior position, from only what had been received by the time we see this trade.
-            before = ZERO
-            for p in logs[key].as_known_at(seen_at):
-                if p.instrument_id != o.instrument_id or (p.source_time, p.observation_id) >= (
-                        o.source_time, o.observation_id):
-                    continue
-                q = p.native_quantity or ZERO
-                before = add(before, q) if p.action is Action.TRADE_BUY else (
-                    sub(before, q) if p.action is Action.TRADE_SELL else before)
-            signals.append(signal_from_observation(o, observable_at=seen_at, cluster_key=clusters.get(key, key),
-                                                   strategy="follow-v1", leader_position_before=before))
+        if key in eligible:
+            signals += signals_from_log(logs[key], detection_delay=config.detection_delay,
+                                        cluster_key=lambda k: clusters.get(k, k), strategy="follow-v1",
+                                        after=SELECTION_DATE)
     cash = Decimal(200)
     result = replay(signals, FollowerPolicy(limits, enrollments=enrollments), initial_cash=cash, books=world.book,
                     resolutions=resolutions, config=config, horizon=HORIZON)

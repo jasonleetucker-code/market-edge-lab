@@ -34,7 +34,7 @@ from decimal import Decimal
 from enum import Enum
 from typing import Callable, Mapping, Sequence
 
-from .events import Action
+from .events import Action, ObservationLog
 from .exact import ZERO, Basis, Labeled, add, decimal_text, mul, ratio, sub
 from .market_data import Book, BookProvider, take
 from .policy import Enrollment, FollowerBook, FollowerPolicy, FollowSignal, IntentKind, PolicyLimits, PolicyMode
@@ -545,3 +545,18 @@ def describe_times(signal: FollowSignal, config: ReplayConfig) -> dict[str, str]
     decided = signal.observable_at + config.processing_delay
     return {"leader_time": utc_text(signal.leader_time), "observable_at": utc_text(signal.observable_at),
             "decided_at": utc_text(decided), "arrives_at": utc_text(decided + config.arrival_delay)}
+
+
+def leader_event_status(fills: Sequence[FollowerFill], log: ObservationLog, *, known_at: datetime) -> dict[str, str]:
+    """For each of our fills, what the leader event behind it looks like now: CURRENT, or
+    RETRACTED_AFTER_OUR_FILL or SUPERSEDED_AFTER_OUR_FILL. A flag only: our fill and inventory are our own record and are never removed."""
+    out = {}
+    for f in fills:
+        if f.status not in (FillStatus.FILLED, FillStatus.PARTIAL):
+            continue
+        current = log.version_at(f.signal_id, known_at)
+        if current is None:
+            out[f.signal_id] = "RETRACTED_AFTER_OUR_FILL"
+        else:
+            out[f.signal_id] = "CURRENT" if current.observation_id == f.signal_id else "SUPERSEDED_AFTER_OUR_FILL"
+    return out
