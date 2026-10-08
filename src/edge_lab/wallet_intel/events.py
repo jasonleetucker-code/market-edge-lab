@@ -18,6 +18,11 @@ raw evidence reference, the parser version, confidence/coverage notes and correc
   versions are kept and the conflict is reported; nothing silently wins. So is one transaction
   reported with two block times.
 
+**Optional annotations (amendment 2026-10-08 B).** `liquidity_role` (MAKER / TAKER / MIXED / UNKNOWN)
+and a source-reported `counterparty`, each with the field that states it. They default to UNKNOWN /
+None, are never inferred, and are not part of the v1 semantic identity: re-receiving a fill with an
+annotation the first receipt lacked is a duplicate (the earliest receipt is kept), not a conflict.
+
 **Taxonomy.** Only TRADE_BUY and TRADE_SELL are directional. Transfers, splits, merges, redemptions,
 rewards and conversions are not buys or sells, and an UNKNOWN action is never followed.
 
@@ -81,6 +86,32 @@ class IdentityBasis(str, Enum):
     SEMANTIC_WITH_OCCURRENCE = "SEMANTIC_WITH_OCCURRENCE"
 
 
+class LiquidityRole(str, Enum):
+    """Whether this account's fill provided resting liquidity (MAKER) or took it (TAKER).
+
+    Set only from a source field that states it, or from an explicit fixture (`liquidity_role_source`
+    names which). It is **never inferred from where the price sits in the spread**: a buy at the bid
+    may be a maker fill, a taker fill against a stale book, or something else. MIXED is one
+    observation (or one order's fills) that was partly both. UNKNOWN is the default.
+    """
+
+    MAKER = "MAKER"
+    TAKER = "TAKER"
+    MIXED = "MIXED"
+    UNKNOWN = "UNKNOWN"
+
+
+def combined_role(roles: Iterable[LiquidityRole]) -> LiquidityRole:
+    """The role of several fills of one order: one known role, MIXED when MAKER and TAKER both
+    appear, UNKNOWN when any fill's role is unknown (or there are none)."""
+    seen = set(roles)
+    if not seen or LiquidityRole.UNKNOWN in seen:
+        return LiquidityRole.UNKNOWN
+    if LiquidityRole.MIXED in seen or seen == {LiquidityRole.MAKER, LiquidityRole.TAKER}:
+        return LiquidityRole.MIXED
+    return next(iter(seen))
+
+
 CASH_ASSETS = frozenset({"USDC", "PUSD", "USD"})
 _NEVER = datetime.max.replace(tzinfo=timezone.utc)
 
@@ -137,10 +168,27 @@ class WalletObservation:
     category: str | None = None
     ambiguities: tuple[str, ...] = ()
     synthetic: bool = False
+    # Amendment 2026-10-08 B: optional annotations. They are **outside** the v1 semantic identity
+    # (`semantic_content`), so adding them changes no existing observation id, semantic key or digest.
+    # Each needs the source field (or "fixture:...") that states it; nothing is inferred.
+    liquidity_role: LiquidityRole = LiquidityRole.UNKNOWN
+    liquidity_role_source: str | None = None
+    counterparty: AccountRef | None = None  # the other side of this fill, as the source reports it
+    counterparty_source: str | None = None
 
     def __post_init__(self) -> None:
         require_aware(self.source_time, "source_time")
         require_aware(self.receipt_time, "receipt_time")
+        if not isinstance(self.liquidity_role, LiquidityRole):
+            raise ValueError("liquidity_role must be a LiquidityRole")
+        if (self.liquidity_role is LiquidityRole.UNKNOWN) != (self.liquidity_role_source is None):
+            raise ValueError("a known liquidity role needs the source field that states it (and UNKNOWN has none)")
+        if self.liquidity_role is not LiquidityRole.UNKNOWN and self.action not in DIRECTIONAL:
+            raise ValueError("only a trade has a liquidity role")
+        if (self.counterparty is None) != (self.counterparty_source is None):
+            raise ValueError("a counterparty needs the source field that reports it (and none has no source)")
+        if self.counterparty is not None and not isinstance(self.counterparty, AccountRef):
+            raise ValueError("counterparty must be an AccountRef")
         if not isinstance(self.action, Action):
             raise ValueError("action must be an Action")
         if self.occurrence < 0:

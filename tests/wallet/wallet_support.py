@@ -132,3 +132,32 @@ def signal(sid: str, action: Action = Action.TRADE_BUY, *, leader: str = "L1", t
 
 def enrolled(*leaders: str, when: datetime | None = None) -> dict[str, Enrollment]:
     return {k: Enrollment(k, when or at(-60 * 24)) for k in leaders}
+
+
+# --- Amendment 2026-10-08 B helpers (role-aware quality diagnostics). Every value is SYNTHETIC. ---------
+
+from edge_lab.wallet_intel.events import LiquidityRole  # noqa: E402  (kept with the helpers that use it)
+
+
+def with_role(o: WalletObservation, role: LiquidityRole,
+              source: str = "fixture:explicit-role") -> WalletObservation:
+    """`o` with an explicitly stated liquidity role (a fixture statement, never an inference)."""
+    from dataclasses import replace
+    return replace(o, liquidity_role=role, liquidity_role_source=source)
+
+
+def with_counterparty(o: WalletObservation, other: AccountRef,
+                      source: str = "fixture:explicit-counterparty") -> WalletObservation:
+    """`o` with a counterparty the (synthetic) source reports."""
+    from dataclasses import replace
+    return replace(o, counterparty=other, counterparty_source=source)
+
+
+class InvalidBooks:
+    """A provider whose capture cannot form a valid book (crossed or locked): building it raises."""
+
+    def __init__(self, bid: str, ask: str) -> None:
+        self.bid, self.ask = bid, ask
+
+    def __call__(self, token: str, when: datetime) -> Book | None:
+        return book(token, bid=self.bid, ask=self.ask, captured=when - timedelta(minutes=1))

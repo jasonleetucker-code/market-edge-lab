@@ -3,6 +3,9 @@
 A `Book` is what a fixture or a future approved capture says was resting at `captured_at`. There is
 no midpoint and no last price: replay can only take what the book shows. A truncated side means more
 depth may exist past the last captured level, which is unknown, not available.
+
+A crossed or locked book cannot be constructed (`ValueError`): a provider that captured one has no
+valid book to offer, and a judgement that needed it is INSUFFICIENT_EVIDENCE, never cleared.
 """
 
 from __future__ import annotations
@@ -25,9 +28,17 @@ class Book:
     captured_at: datetime
     bids_truncated: bool = False
     asks_truncated: bool = False
+    # Amendment 2026-10-08 B: optional provenance. None is unknown. `captured_at` is on the book
+    # source's clock; `received_at` is when our side received it (a different clock), so a receipt
+    # before the capture is a clock problem the quality diagnostics report rather than resolve.
+    source: str | None = None
+    raw_ref: str | None = None
+    received_at: datetime | None = None
 
     def __post_init__(self) -> None:
         require_aware(self.captured_at, "captured_at")
+        if self.received_at is not None:
+            require_aware(self.received_at, "received_at")
         for side, levels, ascending in (("ask", self.asks, True), ("bid", self.bids, False)):
             previous = None
             for level in levels:

@@ -92,6 +92,21 @@ def test_cheap_off_market_leader_allocations_are_flagged_and_unreachable():
     assert r.fills[0].levels[0][0] == D("0.41")
 
 
+def test_cheap_allocation_under_the_role_aware_v2_screen():
+    """Amendment 2026-10-08 B: the same cheap print, judged with its stated role. A stated taker at
+    0.10 against a 0.41 ask is INCONSISTENT; with the role UNKNOWN it is INSUFFICIENT_EVIDENCE (a
+    maker fill below the bid needs a sweep the capture cannot show), never silently cleared."""
+    from edge_lab.wallet_intel.events import LiquidityRole
+    from edge_lab.wallet_intel.threats import PriceConsistency, price_consistency
+    from wallet_support import with_role
+    cheap = obs(acct(1), Action.TRADE_BUY, "m1-yes", 100, "0.10", at(0))
+    books = Books(book(captured=at(-1)))
+    kw = dict(tolerance=D("0.02"), max_book_age=timedelta(minutes=5), max_clock_skew=timedelta(seconds=1))
+    taker = price_consistency([with_role(cheap, LiquidityRole.TAKER)], books, **kw)[0]
+    assert taker.verdict is PriceConsistency.INCONSISTENT
+    assert price_consistency([cheap], books, **kw)[0].verdict is PriceConsistency.INSUFFICIENT_EVIDENCE
+
+
 def test_tiny_bait_trades_are_not_followed():
     assert is_bait_size(obs(acct(1), Action.TRADE_BUY, qty=1, price="0.30"), min_notional=D(5))
     pol = FollowerPolicy(limits(min_leader_notional=D(5)), enrollments=enrolled("L1"))
