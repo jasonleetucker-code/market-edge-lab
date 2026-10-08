@@ -320,7 +320,7 @@ def test_a_revert_to_earlier_content_is_a_change_when_ordered():
     assert led.current(KEY)["kalshi_public"] == (c,)
 
 
-def test_a_late_copy_of_older_content_is_a_duplicate_and_keeps_the_newer_current():
+def test_a_late_copy_of_older_content_is_a_late_arrival_and_keeps_the_newer_current():
     a, b = env("open", at=0, seq=1), env("closed", at=5, seq=2)
     a_late = env("open", at=9, seq=1)
     led = ledger(a, b, a_late)
