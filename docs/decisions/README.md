@@ -61,6 +61,11 @@ Under the 2026-10-07 Kalshi execution campaign directive (#160):
   the real components. It starts only via `control.boot`, sends at most one attempt per intent key, uses bounded
   budgets and installs no scheduler. Demonstration B runs on fixtures.
 
+- 0047: the account-aware shadow (package M). The orchestrator's SHADOW mode is the one decision chain up to egress.
+  It adds `prepare_attempt`'s own read-only checks and a hypothetical reservation that lives for one cycle and is
+  never stored. A `READ_ONLY` identity holds only a write-refusing sender and runs on its own shadow store. The
+  shadow path cannot reach the transport or the signer, even through a proxy module.
+
 - 0048: executor operations (package O). A separate `edgelab-exec` identity, code tree and directories; units that
   ship without `[Install]` or timers; private journal backups inside the package (`journal_backup.py`, consistent
   online snapshot, disposable-restore verification, restore only to a new path); a release manifest checked at every

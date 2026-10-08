@@ -433,14 +433,16 @@ def test_authorization_has_one_owner():
 # - no setattr/delattr/vars/globals/locals, no `__dict__`, `__closure__`, `cell_contents`, `__code__`,
 #   `__globals__`, `__defaults__`, no getattr of a private name;
 # - no `inspect`, `gc` or `sys.modules`;
-# - private safety state is named only by its owner: `_HOSTS` (conformance.py), `_sign` (signer.py).
+# - private safety state is named only by its owner: `_HOSTS` (conformance.py), `_sign` (signer.py), and the
+#   read-only sender's inner callable `_inner_send` (shadow.py, package M).
 # Outside the package nothing can import it (above), so these rules cover both directions.
 _INTERNALS = frozenset({"__dict__", "__closure__", "cell_contents", "__code__", "__globals__", "__defaults__",
                         "__kwdefaults__", "__builtins__", "__class__", "__setitem__", "__delitem__"})
 _MUTATING_METHODS = frozenset({"update", "clear", "pop", "popitem", "setdefault", "add", "append", "extend", "insert",
                                "remove", "discard", "sort", "reverse", "__setitem__", "__delitem__", "__ior__"})
 _REFLECTION_CALLS = frozenset({"setattr", "delattr", "vars", "globals", "locals"})
-_PRIVATE_OWNERS = {"_HOSTS": "edge_lab/execution/conformance.py", "_sign": "edge_lab/execution/signer.py"}
+_PRIVATE_OWNERS = {"_HOSTS": "edge_lab/execution/conformance.py", "_sign": "edge_lab/execution/signer.py",
+                   "_inner_send": "edge_lab/execution/shadow.py"}
 _REFLECTION_MODULES = frozenset({"inspect", "gc", "unittest"})
 
 
@@ -613,6 +615,8 @@ def test_no_package_file_tampers_with_another_or_reaches_internals():
     ("edge_lab/execution/lifecycle.py", "from unittest import mock\nmock.patch.object(m, 'X', 1)"),
     ("edge_lab/execution/lifecycle.py", "type(grant).problems = f"),
     ("edge_lab/execution/lifecycle.py", "k = grant.__class__"),
+    ("edge_lab/execution/orchestrator.py", "self._send._inner_send(request)"),
+    ("edge_lab/execution/orchestrator.py", "f = getattr(self._send, '_inner_send')"),
 ])
 def test_tampering_is_caught(rel, line):
     assert _tamper_hits(rel, line + "\n"), line
@@ -635,6 +639,195 @@ def test_ordinary_code_is_not_tampering():
 def test_capability_modules_are_imported_only_by_their_users(rel, line):
     assert _capability_hits(rel, line + "\n"), line
     assert not _capability_hits("edge_lab/execution/transport.py", "from .signer import Signer\n")
+
+
+# ---------------------------------------------------------------- the shadow path (package M, ADR 0047)
+
+# The account-aware shadow is the orchestrator's SHADOW mode under a READ_ONLY identity (`shadow.py`). These files, and
+# every package module they import transitively, never import a capability module or a capability user: no module on
+# the way can act as a proxy that hands the shadow path the transport or the signer. A capability user added later
+# (package O's executor) is covered automatically: the reach is computed from `CAPABILITY_USERS`.
+SHADOW_PATH = frozenset({"edge_lab/execution/shadow.py", "edge_lab/execution/orchestrator.py"})
+# Inside the shadow path: no binding of the package object itself (which would reach any loaded submodule by
+# attribute), and no name of a capability, whatever imported it.
+_CAPABILITY_NAME = re.compile(r"^_?(transport|signer)", re.I)
+# What `shadow.py` must never name: the write builders, the order endpoints and the journal's write path.
+_SHADOW_MODULE_WRITES = re.compile(r"^(build_(create|cancel|amend|decrease)|ORDER_(CREATE|CANCEL|AMEND|DECREASE)|"
+                                   r"prepare_attempt|mark_\w+|record_receipt|record_fill|request_cancel|"
+                                   r"confirm_\w+|append_control_\w+|_reserve|acquire_lease|renew_lease)$")
+
+
+def _package_deps(rel: str, text: str, known: set[str] | frozenset[str]) -> set[str]:
+    """The package files `rel` imports (`from .x import y`, `from . import x`, `from .sub.m import y`, absolute
+    forms), each resolved to a module file or a subpackage's `__init__.py` in `known`, longest name first. A
+    dependency that resolves to nothing comes back as `?<dotted name>`: the walk fails on it, it never skips it."""
+    out = set()
+    for _, mod in _imports(text, rel):
+        parts = mod.split(".")
+        if parts[:2] != ["edge_lab", "execution"] or len(parts) < 3:
+            continue
+        rest, found = parts[2:], None
+        for n in range(len(rest), 0, -1):
+            base = "edge_lab/execution/" + "/".join(rest[:n])
+            found = next((c for c in (base + ".py", base + "/__init__.py") if c in known), None)
+            if found:
+                break
+        out.add(found or "?" + mod)
+    return out
+
+
+def _real_package_files() -> frozenset[str]:
+    return frozenset(_rel(p) for p in PACKAGE.rglob("*.py"))
+
+
+def _shadow_reach_hits(sources: dict[str, str], roots=SHADOW_PATH) -> list[str]:
+    """Walk the package import graph from each shadow-path root; a capability module or user anywhere is a hit,
+    reported with the chain that reaches it, and so is a dependency that resolves to no package file. Names resolve
+    against `sources` plus the real package's files (so a probe graph may leave a real module's text out)."""
+    banned = {cap.replace(".", "/") + ".py" for cap in CAPABILITY_USERS}
+    banned |= {u for users in CAPABILITY_USERS.values() for u in users}
+    known = set(sources) | _real_package_files()
+    hits = []
+    for root in sorted(roots):
+        parent: dict[str, str | None] = {root: None}
+        stack = [root]
+        while stack:
+            cur = stack.pop()
+            for dep in sorted(_package_deps(cur, sources.get(cur, ""), known)):
+                if dep.startswith("?"):
+                    hits.append(f"{root}: {cur} imports {dep[1:]}, which resolves to no package file")
+                elif dep in banned:
+                    chain, node = [dep], cur
+                    while node is not None:
+                        chain.append(node)
+                        node = parent[node]
+                    hits.append(f"{root} reaches {dep}: {' -> '.join(reversed(chain))}")
+                elif dep not in parent:
+                    parent[dep] = cur
+                    stack.append(dep)
+    return hits
+
+
+def _shadow_name_hits(rel: str, text: str) -> list[str]:
+    hits = []
+    for node in ast.walk(ast.parse(text)):
+        line = getattr(node, "lineno", 0)
+        if isinstance(node, ast.Import) and any(a.name in ("edge_lab", "edge_lab.execution") for a in node.names):
+            hits.append(f"{rel}:{line}: binds the package object")
+        if isinstance(node, ast.ImportFrom):
+            names = {a.name for a in node.names}
+            if "*" in names or ("execution" in names and (node.level >= 2 or node.module == "edge_lab")):
+                hits.append(f"{rel}:{line}: binds the package object or star-imports")
+        name = node.id if isinstance(node, ast.Name) else node.attr if isinstance(node, ast.Attribute) else \
+            node.arg if isinstance(node, ast.arg) else None
+        aliases = [x for a in node.names for x in (a.name, a.asname) if x] \
+            if isinstance(node, (ast.Import, ast.ImportFrom)) else []
+        for n in ([name] if name else []) + aliases:
+            if _CAPABILITY_NAME.match(n.split(".")[-1]):
+                hits.append(f"{rel}:{line}: names a capability ({n})")
+    return hits
+
+
+def _shadow_module_write_hits(rel: str, text: str) -> list[str]:
+    hits = []
+    for node in ast.walk(ast.parse(text)):
+        name = node.id if isinstance(node, ast.Name) else node.attr if isinstance(node, ast.Attribute) else None
+        if name and _SHADOW_MODULE_WRITES.match(name):
+            hits.append(f"{rel}:{node.lineno}: names the write path ({name})")
+    return hits
+
+
+def _package_sources() -> dict[str, str]:
+    return {_rel(p): p.read_text(encoding="utf-8") for p in PACKAGE.rglob("*.py")}
+
+
+def test_the_shadow_path_reaches_no_capability_even_through_a_proxy():
+    sources = _package_sources()
+    assert SHADOW_PATH <= set(sources), "the shadow path's files exist (the rule is not vacuous)"
+    closure = {d for root in SHADOW_PATH for d in _package_deps(root, sources[root], set(sources))}
+    assert {"edge_lab/execution/risk_gate.py", "edge_lab/execution/reservations.py",
+            "edge_lab/execution/account.py", "edge_lab/execution/kalshi_wire.py"} <= closure
+    hits = _shadow_reach_hits(sources)
+    assert not hits, "\n".join(hits)
+
+
+def test_the_shadow_path_names_no_capability_and_binds_no_package_object():
+    sources = _package_sources()
+    hits = [h for rel in sorted(SHADOW_PATH) for h in _shadow_name_hits(rel, sources[rel])]
+    assert not hits, "\n".join(hits)
+
+
+def test_the_shadow_module_names_no_write_path():
+    rel = "edge_lab/execution/shadow.py"
+    hits = _shadow_module_write_hits(rel, _package_sources()[rel])
+    assert not hits, "\n".join(hits)
+
+
+@pytest.mark.parametrize("graph", [
+    {"edge_lab/execution/shadow.py": "from . import transport\n"},
+    {"edge_lab/execution/shadow.py": "from .signer import Signer\n"},
+    {"edge_lab/execution/orchestrator.py": "from edge_lab.execution.transport import Transport\n"},
+    # a proxy: an ordinary module that imports a capability
+    {"edge_lab/execution/orchestrator.py": "from . import account\n",
+     "edge_lab/execution/account.py": "from .transport import Transport\n"},
+    # a proxy two hops away, through a module the shadow path already uses
+    {"edge_lab/execution/shadow.py": "from .reservations import ReservationView\n",
+     "edge_lab/execution/reservations.py": "from . import journal\n",
+     "edge_lab/execution/journal.py": "from . import signer\n"},
+    # a future capability user (the transport's own user, e.g. an executor) is a proxy too
+    {"edge_lab/execution/orchestrator.py": "from . import executor\n",
+     "edge_lab/execution/executor.py": "from .transport import Transport\n"},
+    # a capability behind a subpackage (resolved to its __init__.py or module and walked)
+    {"edge_lab/execution/shadow.py": "from .sub.helpers import x\n",
+     "edge_lab/execution/sub/__init__.py": "", "edge_lab/execution/sub/helpers.py": "from ..transport import T\n"},
+])
+def test_a_shadow_path_proxy_to_a_capability_is_caught(graph):
+    hits = _shadow_reach_hits(graph)
+    assert any(" reaches edge_lab/execution/" in h for h in hits), (graph, hits)
+
+
+@pytest.mark.parametrize("line", ["from .future_sub import thing\n", "from . import not_a_module\n",
+                                  "import edge_lab.execution.gone.deeper\n"])
+def test_a_shadow_path_dependency_that_resolves_to_nothing_fails(line):
+    hits = _shadow_reach_hits({"edge_lab/execution/shadow.py": line})
+    assert hits and all("resolves to no package file" in h for h in hits), hits
+
+
+@pytest.mark.parametrize("line", [
+    "import edge_lab.execution",
+    "from .. import execution",
+    "from edge_lab import execution",
+    "from . import *",
+    "from .model import transport_for",
+    "from . import transport as quiet",
+    "from .account import signer_proxy as helper",
+    "t = self.transport",
+    "def run(signer): pass",
+    "x = TransportResult",
+])
+def test_a_shadow_path_capability_name_is_caught(line):
+    assert _shadow_name_hits("edge_lab/execution/shadow.py", line + "\n"), line
+
+
+@pytest.mark.parametrize("line", [
+    "r = w.build_create(intent, profile)",
+    "j.prepare_attempt(intent, grant)",
+    "e = w.Endpoint.ORDER_CREATE",
+    "j.mark_sent(a)",
+    "j.append_control_record(s, 'X', {})",
+    "auth._reserve(conn, intent)",
+])
+def test_a_shadow_module_write_name_is_caught(line):
+    assert _shadow_module_write_hits("edge_lab/execution/shadow.py", line + "\n"), line
+
+
+def test_ordinary_shadow_path_code_passes():
+    ok = ("from . import account as acct\nfrom .reservations import ReservationAuthority\n"
+          "x = ReservationAuthority.new_reservation(i, reservation_id='r', fence_token=0, at_utc='t')\n"
+          "signals = ()\nsignal_id = 'x'\n")
+    assert not _shadow_name_hits("edge_lab/execution/shadow.py", ok)
+    assert not _shadow_module_write_hits("edge_lab/execution/shadow.py", ok)
+    assert not _shadow_reach_hits({"edge_lab/execution/shadow.py": ok})
 
 
 def test_network_attribute_rule_ignores_comments_and_object_attributes():
