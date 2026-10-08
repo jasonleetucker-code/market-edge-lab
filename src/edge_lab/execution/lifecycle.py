@@ -724,7 +724,8 @@ def _clearly_before(fill: FillRecord, at: datetime) -> bool:
 
 def _implied_filled(fills: tuple[FillRecord, ...], observations: tuple[CountObservation, ...]) -> Decimal:
     """The largest of the fills received and, per venue count, the count plus the fills received clearly
-    after it. Untimed fills, untimed counts and fills in the skew window count as covered (a lower bound)."""
+    after its upper bound. Untimed fills, untimed counts and fills between a count's bounds (`_bounds`) count as
+    covered (a lower bound)."""
     best = sum((f.quantity for f in fills), ZERO)
     for o in observations:
         after = sum((f.quantity for f in fills if _relation(f, o) == "after"), ZERO)
