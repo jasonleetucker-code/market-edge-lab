@@ -22,7 +22,26 @@ judged by `control.decide_arm`. A sending mode also needs that environment's own
   schema) before anything else. Any mismatch fails the unit, and the failure alert fires.
 - **Today the start refuses.** No networked runner exists in the execution package yet, so `ops run` exits 78
   (`NO_RUNNER`) after the check, and 78 is never restarted. The runner arrives with the DEMO approval (ADR 0043
-  decision 7).
+  decision 7). Each such start fails the unit, so **the `OnFailure` alert (`edgelab-alert@`) fires on every start
+  while `ops run` exits 78**. Expect one push per start, and record it as expected, not as an incident.
+- **A missing journal is refused.** The check exits 65 (`JOURNAL_MISSING`) if the journal path is empty, so a runner
+  can never create an empty journal over a lost or moved one. The unit never passes `--first-start`.
+  - **The very first start of a new host** is run once by hand with `--first-start` (below).
+  - `--first-start` is refused as soon as any journal backup bundle exists, so it can never paper over a restore in
+    progress.
+  - It is also refused when a journal exists, so it cannot stay in use.
+
+## First start of a new host (owner, once)
+
+Before any journal exists, check that this really is a first start:
+
+```bash
+sudo runuser -u edgelab-exec -- /opt/market-edge-lab-exec/venv/bin/python -m edge_lab.execution.ops run --manifest /etc/market-edge-lab-exec/release.json --revision-file /opt/market-edge-lab-exec/app/REVISION --journal /var/lib/market-edge-lab-exec/journal/kalshi.execution.sqlite3 --first-start --backup-root /var/lib/market-edge-lab-exec-backup/journal
+```
+
+- **Today:** expect exit 78 (`NO_RUNNER`). Nothing is created.
+- **Once a runner exists:** this one command creates the journal, DISARMED. Every later start goes through the unit,
+  which has no `--first-start`.
 
 ## Start (owner)
 

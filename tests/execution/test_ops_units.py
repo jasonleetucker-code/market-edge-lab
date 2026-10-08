@@ -204,3 +204,29 @@ def test_the_ci_workflow_uploads_no_artifacts_and_reads_no_secrets():
         text = path.read_text(encoding="utf-8")
         assert "upload-artifact" not in text and "secrets." not in text and "pull_request_target" not in text
         assert re.search(r"^permissions:\s*\n\s+contents: read\s*$", text, re.M), path.name
+
+
+def test_the_executor_is_never_the_out_of_memory_victim_inside_its_slice():
+    executor = _parse(UNITS / "edgelab-exec.service")
+    assert ("Service", "OOMScoreAdjust") not in executor  # never negative: it must not outrank Chase Upside
+    assert _memory(_one(executor, "MemoryLow")) <= _memory(_one(executor, "MemoryHigh"))
+    for name in ("edgelab-exec-backup.service", "edgelab-exec-health.service"):
+        assert int(_one(_parse(UNITS / name), "OOMScoreAdjust")) >= 500, name
+
+
+def _seconds(value: str) -> int:
+    m = re.fullmatch(r"(\d+)(min|s)?", value)
+    assert m, value
+    return int(m.group(1)) * (60 if m.group(2) == "min" else 1)
+
+
+def test_the_backup_deadline_ends_the_run_before_systemd_kills_it():
+    u = _parse(UNITS / "edgelab-exec-backup.service")
+    parsed = ops._parser().parse_args(_exec_args("edgelab-exec-backup.service"))
+    assert "--timeout-s" in _one(u, "ExecStart")
+    assert 0 < parsed.timeout_s <= _seconds(_one(u, "TimeoutStartSec")) - 30
+
+
+def test_the_executor_unit_never_claims_a_first_start():
+    parsed = ops._parser().parse_args(_exec_args("edgelab-exec.service"))
+    assert parsed.first_start is False and parsed.backup_root is None  # a missing journal is refused at every start

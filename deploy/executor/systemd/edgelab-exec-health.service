@@ -17,6 +17,8 @@ WorkingDirectory=/var/lib/market-edge-lab-exec-status
 ExecStart=/opt/market-edge-lab-exec/venv/bin/python -m edge_lab.execution.ops health --status-file /var/lib/market-edge-lab-exec-status/execution_status.json --backup-root /var/lib/market-edge-lab-exec-backup/journal --journal /var/lib/market-edge-lab-exec/journal/kalshi.execution.sqlite3 --disk-path /var/lib/market-edge-lab-exec
 TimeoutStartSec=5min
 UMask=0077
+# Out-of-memory victim before the executor (see edgelab-exec-backup.service).
+OOMScoreAdjust=500
 MemoryHigh=96M
 MemoryMax=128M
 MemorySwapMax=0
@@ -28,7 +30,7 @@ ProtectHome=yes
 PrivateTmp=yes
 PrivateDevices=yes
 # Read-only everywhere except the journal directory, which a WAL reader needs for its shared-memory index (the
-# chain-anchor check is query-only).
+# chain-anchor check reads the journal read-only, mode=ro).
 ReadWritePaths=/var/lib/market-edge-lab-exec/journal
 InaccessiblePaths=-/var/lib/market-edge-lab -/etc/market-edge-lab -/etc/market-edge-lab-exec/credentials
 RestrictAddressFamilies=AF_UNIX

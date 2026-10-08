@@ -13,7 +13,10 @@ been wrong before.
 ## Preconditions (agent, unprivileged)
 
 1. The approval names the exact commit `<SHA>` (merged `main`).
-2. `python scripts/secret_scan.py --history --rev <SHA>` is clean. Record its output summary ([SECRET_SCAN.md](SECRET_SCAN.md)).
+2. `python scripts/secret_scan.py --history --rev <SHA>` is clean. Record its output summary
+   ([SECRET_SCAN.md](SECRET_SCAN.md)). As of 2026-10-08 it is not clean: one finding is pending a decision.
+   - A clean result rules out credentials of the shapes the scan knows. It does not rule out a bare key id (a UUID) or bare hex key on a line of its own, short values, an all-letter key or topic value, or a secret split across lines or encoded.
+   - No key is part of this install.
 3. `python -m pytest` is green on `<SHA>`, and so is CI on that exact commit.
 4. Copy the git bundle of `<SHA>` to `~dynasty/edgelab-exec-release/market-edge-lab.bundle`.
 
@@ -66,7 +69,8 @@ sudo systemd-analyze verify /etc/systemd/system/edgelab-exec.slice /etc/systemd/
 |---|---|---|
 | nothing runs | `systemctl is-active edgelab-exec.service` | `inactive` |
 | nothing is enabled | `systemctl is-enabled edgelab-exec.service edgelab-exec-backup.service edgelab-exec-health.service` | `static` for each (no [Install] section) |
-| the start check passes | `sudo runuser -u edgelab-exec -- /opt/market-edge-lab-exec/venv/bin/python -m edge_lab.execution.ops release-check --manifest /etc/market-edge-lab-exec/release.json --revision-file /opt/market-edge-lab-exec/app/REVISION` | `"ok":true`, no problems (no journal exists yet) |
+| the start check passes for a first start | `sudo runuser -u edgelab-exec -- /opt/market-edge-lab-exec/venv/bin/python -m edge_lab.execution.ops release-check --manifest /etc/market-edge-lab-exec/release.json --revision-file /opt/market-edge-lab-exec/app/REVISION --journal /var/lib/market-edge-lab-exec/journal/kalshi.execution.sqlite3 --first-start --backup-root /var/lib/market-edge-lab-exec-backup/journal` | `"ok":true`. `--first-start` is accepted only when no journal and no backup bundle exist |
+| a missing journal is refused without it | the same command without `--first-start --backup-root ...` | exit 65, `JOURNAL_MISSING` |
 | research cannot see executor data | `sudo runuser -u edgelab -- ls /var/lib/market-edge-lab-exec` | permission denied |
 | the executor cannot read research secrets | `sudo runuser -u edgelab-exec -- test -r /etc/market-edge-lab/secrets.env` | non-zero exit |
 | nobody but root reads credentials | `sudo runuser -u edgelab-exec -- ls /etc/market-edge-lab-exec/credentials` | permission denied |

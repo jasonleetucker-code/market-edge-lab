@@ -31,6 +31,10 @@ RestartPreventExitStatus=78
 TimeoutStopSec=60
 UMask=0077
 # Resources: inside edgelab-exec.slice, with headroom for reconciliation and cancels under load.
+# MemoryLow protects the executor's working set from reclaim when the slice is under pressure; the backup and
+# health jobs carry OOMScoreAdjust=500 so they, not the executor, are killed first. No negative score: the
+# executor never outranks Chase Upside on the host.
+MemoryLow=256M
 MemoryHigh=384M
 MemoryMax=512M
 MemorySwapMax=0

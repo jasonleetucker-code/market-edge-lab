@@ -8,7 +8,11 @@
 step below that touches a key is the owner's, on the machine that holds it.
 
 Before any key is installed, [SECRET_SCAN.md](SECRET_SCAN.md) must be clean on the exact release commit, with the
-result recorded.
+result recorded. As of 2026-10-08 it is not clean: one finding is pending a decision (see SECRET_SCAN.md).
+
+A clean scan is not proof that no secret is in git. it finds credential shapes and credential-named assignments only. It does not find a bare key id (a UUID) or bare hex key on a line of its own, short values, an all-letter key or topic value, or a secret split across lines or encoded. So the controls that keep a key out of
+the repository are the ones below: the key lives only on the host, root-only, in `/etc`, and never in a file
+anyone commits. The scan is the check after the fact.
 
 ## Where a key lives
 

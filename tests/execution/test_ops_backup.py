@@ -533,3 +533,55 @@ def test_a_bundle_altered_after_verification_fails_the_restore_chain_check(dirs,
     with pytest.raises(jb.BackupFailed, match="CHAIN_INVALID"):
         jb.restore_bundle(record.bundle, drill / "r.execution.sqlite3")
     assert list(drill.iterdir()) == []
+
+
+def test_a_copy_that_is_not_a_prefix_of_the_live_chain_is_refused(dirs, tmp_path, monkeypatch):
+    """The copy is checked against its source, not only against itself: here the online copy is (wrongly) read from
+    another journal of the same schema, and the backup must refuse it."""
+    live, root, _ = dirs
+    journal = _rich(live)
+    journal.close()
+    other = tmp_path / "other.execution.sqlite3"
+    impostor, _ = f.ready(other)
+    for i in range(20):
+        f.receipt(impostor, f"impostor-{i}", K.ORDER_LOOKUP, payload=json.dumps({"i": i}))
+    impostor.close()
+    real_open, calls = jb._open_existing, []
+
+    def second_open_reads_the_impostor(path):  # the live file is opened for the probe, then for the copy
+        if Path(path) == live:
+            calls.append(path)
+            if len(calls) == 2:
+                return real_open(other)
+        return real_open(path)
+
+    monkeypatch.setattr(jb, "_open_existing", second_open_reads_the_impostor)
+    with pytest.raises(jb.BackupFailed, match="SOURCE_MISMATCH"):
+        jb.create_backup(live, root, now=NOW)
+    assert list(root.iterdir()) == []
+
+
+def _corrupt_index_entry(path: Path, index: str, needle: bytes) -> None:
+    """Change one byte of `needle` inside the index's root page only: the table rows (and so the hash chain and every
+    identity digest) are untouched, but the index no longer matches its table."""
+    conn = sqlite3.connect(path)
+    page_size = conn.execute("PRAGMA page_size").fetchone()[0]
+    root = conn.execute("SELECT rootpage FROM sqlite_master WHERE name = ?", (index,)).fetchone()[0]
+    conn.close()
+    data = bytearray(path.read_bytes())
+    start = (root - 1) * page_size
+    at = data.index(needle, start, start + page_size)
+    data[at] ^= 0x01
+    path.write_bytes(bytes(data))
+
+
+def test_a_copy_failing_sqlite_integrity_is_never_published(dirs):
+    live, root, _ = dirs
+    journal = _rich(live)
+    journal.close()
+    _corrupt_index_entry(live, "receipts_by_id", b"rej-2")
+    with ExecutionJournal.open(live) as reopened:
+        assert reopened.verify_chain().ok  # the chain alone cannot see it
+    with pytest.raises(jb.BackupFailed, match="integrity_check"):
+        jb.create_backup(live, root, now=NOW)
+    assert list(root.iterdir()) == []

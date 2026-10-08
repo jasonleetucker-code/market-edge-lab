@@ -77,9 +77,10 @@ class HealthLimits:
     max_reconciliation_age: timedelta = timedelta(minutes=10)
     max_backup_age: timedelta = timedelta(hours=26)
     min_free_bytes: int = 2 * 1024 ** 3
+    clock_tolerance: timedelta = timedelta(seconds=30)  # a time further ahead of this clock is wrong, never fresh
 
     def __post_init__(self) -> None:
-        for name in ("max_status_age", "max_cycle_gap", "max_reconciliation_age", "max_backup_age"):
+        for name in ("max_status_age", "max_cycle_gap", "max_reconciliation_age", "max_backup_age", "clock_tolerance"):
             value = getattr(self, name)
             if not isinstance(value, timedelta) or value <= timedelta(0):
                 raise ValueError(f"{name} must be a positive timedelta")
@@ -127,13 +128,15 @@ def liveness(status: Mapping[str, Any] | None, *, now: datetime, limits: HealthL
     reasons = []
     if generated > limits.max_status_age:
         reasons.append(f"STATUS_STALE: written {int(generated.total_seconds())} s ago")
-    if generated < -limits.max_status_age:
+    if generated < -limits.clock_tolerance:
         reasons.append("STATUS_IN_FUTURE: the export is stamped ahead of this clock")
     cycle_age = _age(cycles.get("last_recorded_at_utc"), now)
     if cycle_age is None:
         reasons.append("NO_CYCLE: started, but no cycle is recorded")
     elif cycle_age > limits.max_cycle_gap:
         reasons.append(f"CYCLE_STALE: last cycle {int(cycle_age.total_seconds())} s ago")
+    elif cycle_age < -limits.clock_tolerance:
+        reasons.append("CYCLE_IN_FUTURE: the last cycle is stamped ahead of this clock")
     return Verdict(Liveness.STALE.value if reasons else Liveness.LIVE.value, tuple(reasons))
 
 
@@ -164,6 +167,8 @@ def reconciliation(status: Mapping[str, Any] | None, *, now: datetime, limits: H
             reasons.append("RECONCILIATION_TIME_UNKNOWN")
         elif age > limits.max_reconciliation_age:
             reasons.append(f"RECONCILIATION_STALE: last observed {int(age.total_seconds())} s ago")
+        elif age < -limits.clock_tolerance:
+            reasons.append("RECONCILIATION_IN_FUTURE: stamped ahead of this clock, so its age is unknown")
     incidents = control.get("open_incidents")
     if not isinstance(incidents, list):
         reasons.append("INCIDENTS_UNKNOWN")
@@ -197,7 +202,7 @@ def backup_verdict(newest_created_at_utc: str | None, *, now: datetime, limits: 
     if anchor_problems:
         return Verdict(BackupHealth.ANCHOR_BROKEN.value, tuple(anchor_problems))
     age = _age(newest_created_at_utc, now)
-    if age is None or age > limits.max_backup_age:
+    if age is None or age > limits.max_backup_age or age < -limits.clock_tolerance:
         shown = "unknown" if age is None else f"{int(age.total_seconds())} s"
         return Verdict(BackupHealth.STALE.value, (f"BACKUP_STALE: newest complete backup is {shown} old",))
     return Verdict(BackupHealth.OK.value)

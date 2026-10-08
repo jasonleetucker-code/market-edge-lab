@@ -6,14 +6,18 @@ reads a key, arms anything or takes the egress lease. Every path is an explicit 
 
 | Command | Does | Exit |
 |---|---|---|
-| `backup` | `journal_backup.create_backup` into the private backup root | 0 published, 1 refused or failed |
-| `verify-backup` | bytes, schema, chain and identity of one bundle (disposable restore) | 0 / 1 |
-| `restore` | restore one bundle to a NEW journal path, never over a `--live` path | 0 / 1 |
-| `restore-drill` | restore into a drill directory, verify, report, remove the drill copy unless `--keep` | 0 / 1 |
-| `health` | liveness, reconciliation, backup and disk verdicts (`health`) | bit per failing verdict |
-| `release-manifest` | write this code's release manifest (never over an existing file) | 0 / 1 |
-| `release-check` | the start check: manifest, installed revision and journal schema agree | 0 / 1 |
-| `run` | the executor's start: the release check, then a refusal, because no networked runner exists in this package yet (it arrives with the DEMO approval, ADR 0043 decision 7) | 78 |
+| `backup` | `journal_backup.create_backup` into the private backup root | 0 published, 65 refused or failed |
+| `verify-backup` | bytes, schema, chain and identity of one bundle (disposable restore) | 0 / 65 |
+| `restore` | restore one bundle to a NEW journal path, never over a `--live` path | 0 / 65 |
+| `restore-drill` | restore into a drill directory, verify, report, remove the drill copy unless `--keep` | 0 / 65 |
+| `health` | liveness, reconciliation, backup and disk verdicts (`health`) | 0, or 1-15: one bit per failing verdict |
+| `release-manifest` | write this code's release manifest (never over an existing file) | 0 / 65 |
+| `release-check` | the start check: journal present (or an explicit, backup-free `--first-start`), manifest, installed revision and journal schema agree | 0 / 65 |
+| `rollback-check` | whether rolling back from the current manifest to a target manifest is a plain code rollback against this journal | 0 / 65 |
+| `run` | the executor's start: the release check, then a refusal, because no networked runner exists in this package yet (it arrives with the DEMO approval, ADR 0043 decision 7) | 65 when the check fails, else 78 |
+
+Exit codes outside the table: 64 a usage error, 70 an internal error. 1-15 belong to `health`'s bitmask only, so an
+alert can never mistake a failed command for a failed verdict.
 
 **Output is sanitized.** Every command prints one JSON object. Every string in it passes `redaction.redact_text`,
 and the whole text is checked with `redaction.contains_unredacted_secret` before it is printed; anything still
@@ -37,7 +41,8 @@ from . import journal_backup as jb
 from . import release as rl
 from .journal import JournalError
 
-EXIT_OK, EXIT_FAILED, EXIT_USAGE, EXIT_INTERNAL, EXIT_NO_RUNNER = 0, 1, 2, 70, 78
+# 1-15 are reserved for `health`'s verdict bitmask, so no other outcome may use them.
+EXIT_OK, EXIT_USAGE, EXIT_FAILED, EXIT_INTERNAL, EXIT_NO_RUNNER = 0, 64, 65, 70, 78
 WITHHELD = "OUTPUT_WITHHELD: the result still looked like it held a secret after redaction"
 
 
@@ -82,10 +87,9 @@ def _read_revision(path: str) -> str | None:
     return p.read_text(encoding="ascii", errors="replace").strip()
 
 
-def _store_or_none(journal: str | None) -> jb.StoreIdentity | None:
-    if journal is None or not Path(journal).exists():
-        return None
-    return jb.store_identity(journal)
+def _store_or_none(journal: str) -> jb.StoreIdentity | None:
+    """The journal's identity, or None when it does not exist (`release.journal_presence_problems` judges that)."""
+    return jb.store_identity(journal) if Path(journal).exists() else None
 
 
 # ------------------------------------------------------------------ commands
@@ -125,8 +129,9 @@ def _health(a: argparse.Namespace) -> tuple[int, dict]:
     status, problem = hl.load_status(a.status_file)
     newest = jb.newest_complete(a.backup_root)
     anchor: tuple[str, ...] = ()
-    if newest is not None and a.journal and Path(a.journal).exists():
-        anchor = tuple(jb.extends_backup(a.journal, newest.path))
+    if newest is not None:  # a missing live journal can never extend the newest backup
+        anchor = tuple(jb.extends_backup(a.journal, newest.path)) if Path(a.journal).is_file() else (
+            "LIVE_JOURNAL_MISSING: a backup exists but the live journal does not",)
     try:
         free = int(shutil.disk_usage(a.disk_path).free)
     except OSError:
@@ -148,11 +153,20 @@ def _manifest(a: argparse.Namespace) -> tuple[int, dict]:
 
 def _check(a: argparse.Namespace) -> tuple[int, dict]:
     manifest = rl.load_manifest(a.manifest)
-    problems = rl.release_problems(manifest, installed_revision=_read_revision(a.revision_file),
-                                   store=_store_or_none(a.journal))
+    problems = rl.journal_presence_problems(a.journal, first_start=a.first_start, backup_root=a.backup_root)
+    problems += rl.release_problems(manifest, installed_revision=_read_revision(a.revision_file),
+                                    store=_store_or_none(a.journal))
     return (EXIT_FAILED if problems else EXIT_OK), {"ok": not problems, "problems": problems,
                                                      "code_revision": manifest.get("code_revision"),
                                                      "digest": manifest.get("digest")}
+
+
+def _rollback(a: argparse.Namespace) -> tuple[int, dict]:
+    current, target = rl.load_manifest(a.current), rl.load_manifest(a.target)
+    problems = rl.rollback_problems(current, target, store=jb.store_identity(a.journal))
+    return (EXIT_FAILED if problems else EXIT_OK), {"ok": not problems, "problems": problems,
+                                                     "from": current.get("code_revision"),
+                                                     "to": target.get("code_revision")}
 
 
 def _run(a: argparse.Namespace) -> tuple[int, dict]:
@@ -189,7 +203,7 @@ def _parser() -> argparse.ArgumentParser:
     h = sub.add_parser("health")
     h.add_argument("--status-file", required=True)
     h.add_argument("--backup-root", required=True)
-    h.add_argument("--journal", default=None, help="the live journal, for the backup chain-anchor check")
+    h.add_argument("--journal", required=True, help="the live journal, for the backup chain-anchor check")
     h.add_argument("--disk-path", required=True)
     h.add_argument("--max-status-age-s", type=int, default=300)
     h.add_argument("--max-cycle-gap-s", type=int, default=300)
@@ -203,11 +217,19 @@ def _parser() -> argparse.ArgumentParser:
     m.add_argument("--rollback-journal-schema", type=int, default=None)
     m.add_argument("--out", required=True)
     m.set_defaults(func=_manifest)
+    rb = sub.add_parser("rollback-check")
+    rb.add_argument("--current", required=True, help="the installed release manifest")
+    rb.add_argument("--target", required=True, help="the manifest of the release to roll back to")
+    rb.add_argument("--journal", required=True)
+    rb.set_defaults(func=_rollback)
     for name, func in (("release-check", _check), ("run", _run)):
         c = sub.add_parser(name)
         c.add_argument("--manifest", required=True)
         c.add_argument("--revision-file", required=True)
-        c.add_argument("--journal", default=None, help="the live journal; absent means none exists yet")
+        c.add_argument("--journal", required=True, help="the live journal; a missing one is refused")
+        c.add_argument("--first-start", action="store_true",
+                       help="the very first start of a new host: accept a missing journal if no backup exists")
+        c.add_argument("--backup-root", default=None, help="the private journal backup root (with --first-start)")
         c.set_defaults(func=func)
     return p
 

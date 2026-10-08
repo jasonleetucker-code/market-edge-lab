@@ -48,13 +48,23 @@ Three facts shape the design:
      part of the DEMO approval;
    - memory, CPU and task caps inside a 768M slice. With the research slice that is 1.15 GB, against the VPS's
      lowest observed 3.9 GB available.
+   - The three unit caps (512M + 256M + 128M) add up to more than the slice on purpose, because the jobs rarely run
+     together. When they do, the slice is the bound. The backup and health jobs carry `OOMScoreAdjust=500`, so
+     they are killed before the executor, and the executor has `MemoryLow=256M`. The executor never gets a negative
+     score, so it never outranks Chase Upside on the host.
 4. **Journal backups live in the package, as `execution/journal_backup.py`.** It is the third file allowed
    `sqlite3` (`SQLITE_FILES` in the boundary invariant).
-   - It reads a journal only through query-only connections that never create a file, and it opens journals for
-     verification only through `ExecutionJournal.open`.
+   - It reads a journal only through read-only connections (`mode=ro`).
+     - They never create the journal and never write it, not even to checkpoint a crashed writer's WAL into the
+       main file.
+     - For a WAL journal with no writer, SQLite may create the empty `-wal`/`-shm` side files, which the next opener
+       uses.
+   - It opens journals for verification only through `ExecutionJournal.open`, and only on its own copies.
    - The copy uses the SQLite online backup API in one step: a consistent snapshot while a writer commits.
-   - Verification is a disposable restore: integrity, every schema object, `verify_chain` and per-table identity
-     digests. Then the bundle is published by rename.
+   - The copy is checked against its source: the live chain must hold the copy's head event (`SOURCE_MISMATCH`
+     otherwise).
+   - Verification is a disposable restore: SQLite integrity and foreign keys, every schema object, `verify_chain`
+     and per-table identity digests. Then the bundle is published by rename, and the directory is fsynced on POSIX.
    - The manifest holds counts and digests only.
    - The disk-pressure, time-budget and fault seams fail before publishing, and remove only the call's own partial
      directory.
@@ -76,6 +86,14 @@ Three facts shape the design:
 
    The executor's start (`ops run`) checks the manifest against the installed `REVISION` and the journal before
    anything else. A store newer or older than the release, or with different objects, is refused.
+
+   **A missing journal is refused** (`JOURNAL_MISSING`). A runner would otherwise create an empty journal and lose
+   every in-flight attempt, reservation, latch and incident. For example, real-restore step 2 moves the journal
+   aside, and a start in that window must fail.
+   - Only an explicit `--first-start` accepts a missing journal, and the unit never passes it.
+   - `--first-start` is refused when any backup bundle exists (complete or partial), since then the journal was
+     lost, not new. It is also refused when a journal or its side files exist.
+   - `rollback-check` applies the rollback rules from a command.
 7. **Forward-only migrations.** One schema version names one schema: `KNOWN_SCHEMA_FINGERPRINTS` in the tests pins
    v1's fingerprint, so an in-place change cannot merge.
    - A migration is one transaction, run as its own approved step after a pre-migration backup taken by the
@@ -91,8 +109,13 @@ Three facts shape the design:
    - liveness reads `generated_at_utc`, `service` and `cycles`;
    - reconciliation reads `journal`, `control`, `attempts` and `account`.
 
-   Backup age with the chain anchor, and free disk, are separate verdicts. The exit code sets one bit per failing
-   verdict, and failures reuse the existing `edgelab-alert@` path (ADR 0028). There is no second alert channel.
+   Backup age with the chain anchor, and free disk, are separate verdicts.
+   - A missing live journal next to an existing backup is ANCHOR_BROKEN, never OK.
+   - A time stamped further ahead than the clock tolerance (30 s) is never fresh.
+   - The exit code sets one bit per failing verdict (1-15).
+   - Every other outcome of the operator commands uses a code outside that mask: 64 usage, 65 refused or failed,
+     70 internal, 78 no runner. An alert can never read a broken command as one failed verdict.
+   - Failures reuse the existing `edgelab-alert@` path (ADR 0028). There is no second alert channel.
 10. **Operator output is sanitized.** `execution/ops.py` prints one JSON line per command. Every string passes
     `redaction.redact_text`, then the whole line passes the new `redaction.contains_unredacted_secret`. That is the
     same patterns with already-redacted values set aside, so the redaction owner is extended, not forked. Errors
@@ -103,7 +126,13 @@ Three facts shape the design:
 12. **Secret scan: `scripts/secret_scan.py`.** It is stdlib-only and covers every blob and commit message on all
     refs, the tracked tree, or artifact paths.
     - Findings carry a fingerprint, never the value.
-    - Reviewed synthetic values are allowlisted by fingerprint with a reason.
+    - Besides credential shapes, it finds credential-named assignments in env, YAML and JSON form (`NAME=value`,
+      `NAME: value`, `"name": "value"`), with placeholders and references filtered out.
+    - Reviewed synthetic values are allowlisted by fingerprint, bound to their exact paths, with a reason. A
+      private-key header finding can never be allowlisted, because the header is the same for every key. Real
+      data that is not synthetic is reported, not allowlisted.
+    - Its gaps are printed with every result (`LIMITATIONS`): bare key ids, short or all-letter values, split or
+      encoded secrets. A clean scan is not proof that no secret exists.
     - Its patterns are a pinned superset of `test_no_secrets.py`.
     - CI publishes no artifact today, and a test pins that.
 

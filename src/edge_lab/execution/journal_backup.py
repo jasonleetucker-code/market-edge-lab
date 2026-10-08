@@ -267,6 +267,18 @@ def _fsync_file(path: Path) -> None:
         os.fsync(stream.fileno())
 
 
+def _fsync_dir(directory: Path) -> None:
+    """Make a rename or link in `directory` durable. POSIX only: Windows cannot open a directory for fsync (NTFS
+    journals the rename itself)."""
+    if os.name != "posix":
+        return
+    fd = os.open(str(directory), os.O_RDONLY)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
 def _live_bytes(path: Path) -> int:
     total = path.stat().st_size
     for suffix in ("-wal", "-shm"):
@@ -374,6 +386,10 @@ def create_backup(live: str | Path, backup_root: str | Path, *, now: datetime, t
         problems = schema_problems(copied, expected_fingerprint=expected_fingerprint)
         if problems:
             raise BackupFailed(f"the copy is not this code's schema: {problems}")
+        # The copy against its source, not only against itself: the live chain must hold the copy's head event.
+        problems = _chain_contains(live_path, copied.event_head_seq, copied.event_head_hash)
+        if problems:
+            raise BackupFailed(f"SOURCE_MISMATCH: the copy is not a prefix of the live journal: {problems}")
         events = _verify_by_restore(db, copied, scratch_parent=partial)
         if fault:
             fault("verified")
@@ -399,6 +415,7 @@ def create_backup(live: str | Path, backup_root: str | Path, *, now: datetime, t
         stamp = parse_utc_text(created_at).strftime("%Y%m%dT%H%M%SZ")
         bundle = root / f"{BUNDLE_PREFIX}{stamp}-{token}"
         partial.rename(bundle)  # publication: a bundle exists only once it is complete
+        _fsync_dir(root)
         return BackupRecord(bundle, manifest)
     except BaseException as exc:
         shutil.rmtree(partial, ignore_errors=True)  # only this call's own partial directory
@@ -467,21 +484,26 @@ def newest_complete(backup_root: str | Path) -> BundleInfo | None:
     return max(complete, key=lambda b: parse_utc_text(b.created_at_utc), default=None)  # type: ignore[arg-type]
 
 
+def _chain_contains(live: Path, seq: int, row_hash: str | None) -> list[str]:
+    """Problems if the live journal's chain does not hold event `seq` with exactly `row_hash`."""
+    if seq == 0:
+        return []
+    try:
+        with closing(_open_existing(live)) as conn:
+            row = conn.execute("SELECT row_hash FROM events WHERE seq = ?", (seq,)).fetchone()
+    except (sqlite3.Error, BackupRefused) as exc:
+        return [f"LIVE_UNREADABLE: {type(exc).__name__}"]
+    if row is None:
+        return [f"LIVE_CHAIN_SHORTER_THAN_BACKUP: no event {seq}"]
+    if row[0] != row_hash:
+        return [f"LIVE_CHAIN_DIVERGES_FROM_BACKUP at event {seq}"]
+    return []
+
+
 def extends_backup(live: str | Path, bundle: str | Path) -> list[str]:
     """Problems if the live journal's chain does not contain the bundle's head event (truncated or replaced)."""
     head = StoreIdentity.from_dict(read_manifest(bundle).get("identity") or {})
-    if head.event_head_seq == 0:
-        return []
-    try:
-        with closing(_open_existing(Path(live))) as conn:
-            row = conn.execute("SELECT row_hash FROM events WHERE seq = ?", (head.event_head_seq,)).fetchone()
-    except sqlite3.Error as exc:
-        return [f"LIVE_UNREADABLE: {type(exc).__name__}"]
-    if row is None:
-        return [f"LIVE_CHAIN_SHORTER_THAN_BACKUP: no event {head.event_head_seq}"]
-    if row[0] != head.event_head_hash:
-        return [f"LIVE_CHAIN_DIVERGES_FROM_BACKUP at event {head.event_head_seq}"]
-    return []
+    return _chain_contains(Path(live), head.event_head_seq, head.event_head_hash)
 
 
 # ------------------------------------------------------------------ restore
@@ -519,6 +541,7 @@ def restore_bundle(bundle: str | Path, target: str | Path, *, live_paths: Iterab
             os.link(tmp, t)  # atomic and never overwrites: fails if the target appeared meanwhile
         except FileExistsError as exc:
             raise BackupRefused("TARGET_EXISTS: the target appeared during the restore") from exc
+        _fsync_dir(t.parent)
         created = True
         with ExecutionJournal.open(t) as journal:
             chain = journal.verify_chain()

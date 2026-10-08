@@ -85,6 +85,7 @@ LIVENESS_PERTURBATIONS = {
     "cycle stale": lambda s: s["cycles"].update(last_recorded_at_utc="2026-10-07T00:00:00+00:00"),
     "no cycle": lambda s: s["cycles"].update(last_recorded_at_utc=None),
     "no cycles section": lambda s: s.pop("cycles"),
+    "cycle in future": lambda s: s["cycles"].update(last_recorded_at_utc="2027-01-01T00:00:00+00:00"),
 }
 RECONCILIATION_PERTURBATIONS = {
     "journal error": lambda s: s["journal"].update(state="ERROR"),
@@ -99,6 +100,7 @@ RECONCILIATION_PERTURBATIONS = {
     "inconsistent snapshot": lambda s: s["account"]["snapshot"].update(consistent=False),
     "no snapshot": lambda s: s["account"].update(snapshot=None),
     "no attempts section": lambda s: s.pop("attempts"),
+    "reconciliation in future": lambda s: s["control"]["last_reconciliation"].update(at_utc="2027-01-01T00:00:00+00:00"),
 }
 
 
@@ -174,3 +176,14 @@ def test_load_status_is_bounded_and_refuses_foreign_files(healthy, tmp_path):
 def test_limits_are_validated(kw):
     with pytest.raises(ValueError):
         hl.HealthLimits(**kw)
+
+
+def test_a_time_a_little_ahead_is_tolerated_but_never_far_ahead(healthy):
+    status, clock = healthy
+    ahead = copy.deepcopy(status)
+    ahead["control"]["last_reconciliation"]["at_utc"] = (clock() + timedelta(seconds=10)).isoformat()
+    assert hl.reconciliation(ahead, now=clock(), limits=LIMITS).state == "HEALTHY"
+    ahead["control"]["last_reconciliation"]["at_utc"] = (clock() + LIMITS.clock_tolerance + timedelta(seconds=1)).isoformat()
+    assert hl.reconciliation(ahead, now=clock(), limits=LIMITS).reasons == (
+        "RECONCILIATION_IN_FUTURE: stamped ahead of this clock, so its age is unknown",)
+    assert hl.backup_verdict((clock() + timedelta(hours=1)).isoformat(), now=clock(), limits=LIMITS).state == "STALE"

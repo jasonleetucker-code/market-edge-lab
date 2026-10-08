@@ -15,10 +15,11 @@ SHA-256 fingerprint of the match, so the owner can locate and revoke it. Rotatio
 steps (`docs/SECURITY.md`, "If a secret is committed"); deleting a file or rewriting history does not un-leak a
 pushed secret.
 
-**Limitations** (reported in every result): it finds credential *shapes*, not every secret. A bare UUID key id, a
-32-hex API key with no `apiKey=` in front of it, or a secret split across lines is not detected. Binary blobs and
-blobs over `MAX_BLOB_BYTES` are counted and skipped. `--history` covers the refs present in this clone
-(`git rev-list --all`); a ref that was never fetched is not scanned.
+**Limitations** (`LIMITATIONS`, reported in every result): it finds credential *shapes* and credential-named
+assignments, not every secret. Not detected: a bare key id (a UUID) or a bare 32-hex key with no credential-like name
+beside it, short values, an all-letter KEY/TOKEN/TOPIC value, an unquoted lower-case identifier-like value (read as a
+reference), a secret split across lines or encoded. Binary blobs and blobs over `MAX_BLOB_BYTES` are counted and
+skipped. `--history` covers the refs present in this clone (`git rev-list --all`); a ref never fetched is not scanned.
 """
 
 from __future__ import annotations
@@ -53,25 +54,87 @@ PATTERNS = {
     "credentials in a URL": re.compile(r"\bhttps?://[A-Za-z0-9._~%-]+:[A-Za-z0-9._~%!$&'()*+,;=-]{6,}@[A-Za-z0-9.-]+"),
     "API key query value": re.compile(r"(?i)[?&]api_?key=[A-Za-z0-9]{24,}\b"),
     "ntfy topic URL": re.compile(r"\bhttps?://ntfy\.sh/[A-Za-z0-9_-]{12,}"),
+    # A credential assigned to a credential-like NAME, in any of the forms config files use: `NAME=value`, `NAME =
+    # "value"`, `NAME: value` (YAML) and `"name": "value"` (JSON). NAME ends in KEY, SECRET, TOKEN, PASSWORD, PASSWD
+    # or TOPIC (case-insensitive, `_`, `-` or `.` allowed before it, so ODDS_API_KEY and ntfy_topic count). Each match
+    # is then judged by `_credential_value` below, which drops placeholders and references.
+    "assigned credential": re.compile(
+        r"""(?ix)(?<![A-Za-z0-9])(?P<q>["']?)(?P<name>[A-Za-z0-9_.-]*?(?:key|secret|token|passw(?:or)?d|topic))(?P=q)
+        \s*(?::|=(?!=))\s*(?P<value>"[^"\n]*"|'[^'\n]*'|[^\s,;#}\])"']+)"""),
 }
 
-# Reviewed false positives, by fingerprint (never by value). Each needs a reason a reviewer can check. Reviewed
-# 2026-10-08 on the full history (827 commits, 334 refs): every one is a synthetic test value.
-ALLOWED_FINGERPRINTS: dict[str, str] = {
-    "cc098da74801bb82": "tests/fixtures/odds_api/nfl_planner_golden_b944a0e.json: the fake key 'FAKEpilotKEY...'",
-    "1a66c2b90e67f285": "tests/test_deploy_units.py: synthetic ntfy topic for the topic-writer tests",
-    "aa9e603bd77239c3": "tests/test_deploy_units.py: synthetic ntfy topic for the topic-writer tests",
-    "2ac30f92c65eb94a": "tests/test_notify_ntfy.py: synthetic topic 'short-secret'",
-    "4e5dd698fa7f4526": "tests/test_notify_ntfy.py: synthetic topic 'another-topic-...'",
-    "bbce05474792c8fa": "tests/test_notify_ntfy.py: synthetic topic 'another-topic-...'",
-    "f72800b4f3256efb": "tests/test_freshness_fabric.py: synthetic topic 'SECRET-TOPIC-abcdef'",
-    "8e09bbb98b518075": "tests/invariants/test_no_execution_paths.py (history): sample topic for parse_topic_url",
-    "786a7680c76b6130": "tests/test_redaction.py: synthetic signature sample the redaction tests redact",
-    "f15f811d2afb97e7": "tests/test_redaction.py: synthetic key-id sample the redaction tests redact",
+_STRONG_NAME = re.compile(r"(?i)(secret|passw(?:or)?d)$")  # a bare SECRET or PASSWORD is already a credential name
+_WEAK_WORD = re.compile(r"(?i)^(key|token|topic)$")  # bare `key`, `token`, `topic` are ordinary program words
+_PLACEHOLDER = re.compile(
+    r"(?i)^(<.*>|\$\{.*\}|\$[A-Za-z_]\w*|\{\{.*\}\}|%\(.*\)s|change[-_]?me|redacted|.*example.*|x{3,}|\*{3,}|"
+    r"none|null|nil|true|false|todo|tbd|placeholder|dummy|fake.*|your[-_].*|\.\.\.|…|-+)$")
+# A dotted name, or a lower-case word made of letters and underscores only (a value with a digit is not a reference).
+_REFERENCE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)+$|^[a-z_]+$")
+_PATH = re.compile(r"^([rbfu]{0,2}[\"'])?(/|\./|\.\./|~/|[A-Za-z]:[\/])|\\")  # a file path, or anything with `\`
+_SECRET_SHAPE = re.compile(r"^[A-Za-z0-9+/=_~.-]{16,}$")
+
+
+def _credential_value(match: re.Match[str]) -> bool:
+    """Whether an `assigned credential` match holds a literal that could be a credential (`LIMITATIONS` says what
+    this misses). Rules, in order:
+    - a bare `key`, `token` or `topic` is a program word, not a credential name;
+    - placeholders (`<...>`, `${...}`, `$VAR`, `{{...}}`, `changeme`, `REDACTED`, `example`, `fake...`, `xxx`, booleans,
+      `None`) are not values, and neither is the name itself (an enum constant such as `REFUSED_SECRET =
+      "REFUSED_SECRET"`);
+    - a reference is not a value: an unquoted dotted name (`os.environ`, `self.key`) or lower-case identifier
+      (`api_key = api_key`, a type annotation such as `token: str`), a file path, or anything holding `(`, `[`, `{`,
+      `%` or a backtick;
+    - SECRET and PASSWORD names: any remaining value of 8+ characters;
+    - KEY, TOKEN and TOPIC names: a secret-shaped value: 16+ characters from `[A-Za-z0-9+/=_~.-]` with a lower-case
+      letter and a digit. So identifiers and market tickers (`intent_key="EXP-TEST:ticket-0001"`,
+      `event_key="KXHIGHNY-26OCT09"`) are not flagged, while hex keys, UUID key ids, base64 tokens and generated
+      topics are."""
+    name, raw = match.group("name"), match.group("value")
+    quoted = raw[:1] in "\"'" and raw[-1:] == raw[:1] and len(raw) >= 2
+    value = raw[1:-1] if quoted else raw
+    if _WEAK_WORD.match(name) or not value or _PLACEHOLDER.match(value) or value.lower() == name.lower():
+        return False
+    if any(c in value for c in "([{%`") or _PATH.search(raw) or (not quoted and _REFERENCE.match(value)):
+        return False
+    if len(value) < 8:
+        return False
+    if _STRONG_NAME.search(name):
+        return True
+    return bool(_SECRET_SHAPE.match(value)) and any(c.isdigit() for c in value) and any(c.islower() for c in value)
+
+
+VALIDATORS = {"assigned credential": _credential_value}
+
+# A pattern whose match is the same for every secret it finds (the PEM header names a key, it does not contain it) can
+# never be allowlisted: one entry would hide every private key in the repository.
+NEVER_ALLOWLISTED = frozenset({"private key block"})
+
+# Reviewed false positives: fingerprint -> (the paths it is allowed at, the reason). An entry covers only those paths,
+# so the same text appearing anywhere else is still a finding. Reviewed 2026-10-08 on the full history: every one is
+# a synthetic test value.
+ALLOWED: dict[str, tuple[tuple[str, ...], str]] = {
+    "cc098da74801bb82": (("tests/fixtures/odds_api/nfl_planner_golden_b944a0e.json",),
+                         "the fake key 'FAKEpilotKEY...' in an Odds API planner fixture"),
+    "1a66c2b90e67f285": (("tests/test_deploy_units.py",), "synthetic ntfy topic for the topic-writer tests"),
+    "aa9e603bd77239c3": (("tests/test_deploy_units.py",), "synthetic ntfy topic for the topic-writer tests"),
+    "2ac30f92c65eb94a": (("tests/test_notify_ntfy.py",), "synthetic topic 'short-secret'"),
+    "4e5dd698fa7f4526": (("tests/test_notify_ntfy.py",), "synthetic topic 'another-topic-...'"),
+    "bbce05474792c8fa": (("tests/test_notify_ntfy.py",), "synthetic topic 'another-topic-...'"),
+    "f72800b4f3256efb": (("tests/test_freshness_fabric.py",), "synthetic topic 'SECRET-TOPIC-abcdef'"),
+    "8e09bbb98b518075": (("tests/invariants/test_no_execution_paths.py",),
+                         "history only: sample topic for parse_topic_url"),
+    "786a7680c76b6130": (("tests/test_redaction.py",), "synthetic signature sample the redaction tests redact"),
+    "f15f811d2afb97e7": (("tests/test_redaction.py",), "synthetic key-id sample the redaction tests redact"),
+    "4e3abb493b8bb9f0": (("tests/test_secret_scan.py",),
+                         "this scanner's own 'assigned secret' sample, assembled from string pieces at run time"),
 }
 
 LIMITATIONS = (
-    "finds credential shapes only: a bare UUID key id or an unprefixed 32-hex key is not detected",
+    "finds credential shapes and credential-named assignments only; not detected: a bare key id (a UUID) or bare "
+    "32-hex key with no credential-like name beside it, a value under 8 characters, a KEY/TOKEN/TOPIC value under 16 "
+    "characters or without both a letter and a digit (for example an all-letter ntfy topic), an unquoted lower-case "
+    "identifier-like value (read as a reference), a secret split across lines, and a secret in an encoded or "
+    "compressed form",
     f"binary blobs and blobs over {MAX_BLOB_BYTES} bytes are counted and skipped",
     "--history covers refs present in this clone (git rev-list --all)",
 )
@@ -90,7 +153,17 @@ def scan_text(text: str, where: dict) -> Iterator[dict]:
     for number, line in enumerate(text.splitlines(), 1):
         for label, pattern in PATTERNS.items():
             for match in pattern.finditer(line):
+                if label in VALIDATORS and not VALIDATORS[label](match):
+                    continue
                 yield {**where, "line": number, "pattern": label, "fingerprint": fingerprint(match.group(0))}
+
+
+def allowlisted(finding: dict) -> bool:
+    """A finding is allowlisted only by an entry for its fingerprint that names its path, never for a pattern in
+    `NEVER_ALLOWLISTED`. A commit-message finding has no path, so it is never allowlisted."""
+    entry = ALLOWED.get(finding["fingerprint"])
+    return (entry is not None and finding["pattern"] not in NEVER_ALLOWLISTED
+            and finding.get("path") in entry[0])
 
 
 def _decode(data: bytes) -> str | None:
@@ -239,8 +312,8 @@ def run(argv: list[str] | None = None) -> tuple[int, dict]:
             name, (found, totals) = "paths", scan_paths(args.paths)
     except ScanError as exc:
         return 2, {"mode": None, "clean": False, "error": str(exc)}
-    allowed = [f for f in found if f["fingerprint"] in ALLOWED_FINGERPRINTS]
-    findings = [f for f in found if f["fingerprint"] not in ALLOWED_FINGERPRINTS]
+    allowed = [f for f in found if allowlisted(f)]
+    findings = [f for f in found if not allowlisted(f)]
     result = {"mode": name, "clean": not findings, "findings": findings, "allowlisted": len(allowed),
               "patterns": sorted(PATTERNS), "limitations": list(LIMITATIONS), **totals}
     return (1 if findings else 0), result

@@ -12,7 +12,9 @@
 ## The health check: liveness is not reconciliation health
 
 `ops health`, run by `edgelab-exec-health.service`, prints four separate verdicts. Its exit code sets one bit for
-each verdict that fails, and any non-zero exit fails the unit. The existing `edgelab-alert@` path then records the
+each verdict that fails (1-15), and any non-zero exit fails the unit. A failure of the command itself never uses
+those codes: 64 is a usage error, 65 a refused or failed command (for example an unreadable backup root) and 70 an
+internal error. Any of the three means the health could not be judged: treat it as every verdict failing. The existing `edgelab-alert@` path then records the
 failure and pushes a fixed headline (ADR 0028). Read the unit's journal for the verdicts:
 
 ```bash

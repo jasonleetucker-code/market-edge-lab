@@ -47,7 +47,14 @@ migration leaves vN intact. It must be followed by `verify_chain` and the releas
 
 ## Compatible rollback (same journal schema)
 
-Use this only when the current manifest's `compatible_rollback.code_revision` is the target:
+Use this only when the current manifest's `compatible_rollback.code_revision` is the target. First ask the tool,
+with the target release's manifest (for example the kept `release.json.prev`). It must print `"ok":true`:
+
+```bash
+sudo runuser -u edgelab-exec -- /opt/market-edge-lab-exec/venv/bin/python -m edge_lab.execution.ops rollback-check --current /etc/market-edge-lab-exec/release.json --target /etc/market-edge-lab-exec/release.json.prev --journal /var/lib/market-edge-lab-exec/journal/kalshi.execution.sqlite3
+```
+
+Then:
 
 ```bash
 sudo systemctl stop edgelab-exec.service

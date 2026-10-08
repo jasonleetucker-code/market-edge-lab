@@ -38,7 +38,7 @@ from . import recovery
 from . import risk_gate
 from . import status_export
 from .journal import SCHEMA_VERSION, STORE_KIND
-from .journal_backup import StoreIdentity, code_schema_fingerprint
+from .journal_backup import BUNDLE_PREFIX, PARTIAL_PREFIX, StoreIdentity, code_schema_fingerprint
 from .model import APPROVAL_SCHEMA, AUTHORIZED_ENVIRONMENTS, INTENT_SCHEMA, canonical_json, sha256_text
 from .orchestrator import CYCLE_SCHEMA, SIGNAL_SCHEMA
 
@@ -146,6 +146,36 @@ def _store_problems(pinned: Mapping[str, Any], store: StoreIdentity, label: str 
     elif store.schema_fingerprint != pinned.get("schema_fingerprint"):
         out.append("STORE_SCHEMA_OBJECTS_DIFFER: same version, different tables, indexes or triggers")
     return out
+
+
+def journal_presence_problems(journal: str | Path, *, first_start: bool,
+                              backup_root: str | Path | None) -> list[str]:
+    """Why the journal's presence or absence forbids a start (empty when it is fine).
+
+    A missing journal is never taken as "new": a runner would create an empty one and lose every in-flight attempt,
+    reservation, latch and incident. It is accepted only on an explicit first start, and a first start is refused once
+    any backup bundle (complete or partial) exists, because then the journal was lost or moved aside (a restore in
+    progress), never new. A journal's side files without the journal are refused too. `--first-start` with a journal
+    present is refused, so the flag cannot stay in place after the first start."""
+    p = Path(journal)
+    side = [s for s in (p.with_name(p.name + "-wal"), p.with_name(p.name + "-shm")) if s.exists()]
+    if p.exists() or p.is_symlink():
+        return ["FIRST_START_BUT_JOURNAL_EXISTS: --first-start is only for a host with no journal"] if first_start else []
+    if side:
+        return ["JOURNAL_SIDE_FILES_WITHOUT_JOURNAL: the journal was moved or deleted; restore it, never start empty"]
+    if not first_start:
+        return ["JOURNAL_MISSING: no journal at the configured path; restore it (BACKUP_AND_RESTORE.md), or pass "
+                "--first-start for the very first start of a new host"]
+    if backup_root is None:
+        return ["FIRST_START_NEEDS_BACKUP_ROOT: a first start must name the private backup root it checks"]
+    root = Path(backup_root)
+    if not root.is_dir() or root.is_symlink():
+        return ["FIRST_START_BACKUP_ROOT_MISSING: the private backup root does not exist"]
+    found = [b for b in root.iterdir() if b.name.startswith((BUNDLE_PREFIX, PARTIAL_PREFIX))]
+    if found:
+        return [f"FIRST_START_REFUSED: {len(found)} journal backup bundle(s) exist, so the journal was lost or moved "
+                f"aside, not new; restore it"]
+    return []
 
 
 def release_problems(manifest: Mapping[str, Any], *, installed_revision: str | None,

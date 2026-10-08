@@ -80,6 +80,10 @@ sudo runuser -u edgelab-exec -- /opt/market-edge-lab-exec/venv/bin/python -m edg
 sudo runuser -u edgelab-exec -- mv -n "$J/restored-$STAMP.execution.sqlite3" "$J/kalshi.execution.sqlite3"   # 4. into the empty live name (-n: never over a file)
 ```
 
+Between step 2 and step 4 the journal path is empty. The start check refuses that (`JOURNAL_MISSING`, exit 65),
+so a start in that window cannot create an empty journal. Never use `--first-start` here. It is refused anyway,
+because backup bundles exist.
+
 Then:
 - Start through [START_DISARMED.md](START_DISARMED.md). Read these notes first.
 - **The lease.** The restored lease belongs to the worker recorded in the backup. A different worker id waits until

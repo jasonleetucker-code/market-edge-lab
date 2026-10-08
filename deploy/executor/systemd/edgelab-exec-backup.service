@@ -15,9 +15,15 @@ Slice=edgelab-exec.slice
 User=edgelab-exec
 Group=edgelab-exec
 WorkingDirectory=/var/lib/market-edge-lab-exec-backup
-ExecStart=/opt/market-edge-lab-exec/venv/bin/python -m edge_lab.execution.ops backup --journal /var/lib/market-edge-lab-exec/journal/kalshi.execution.sqlite3 --out /var/lib/market-edge-lab-exec-backup/journal
-TimeoutStartSec=20min
+ExecStart=/opt/market-edge-lab-exec/venv/bin/python -m edge_lab.execution.ops backup --journal /var/lib/market-edge-lab-exec/journal/kalshi.execution.sqlite3 --out /var/lib/market-edge-lab-exec-backup/journal --timeout-s 300
+# The code's own deadline (--timeout-s 300) ends a slow run cleanly, with its partial directory removed, a minute
+# before systemd would kill it.
+TimeoutStartSec=6min
 UMask=0077
+# Inside the slice, the backup and the health check are the out-of-memory victims, never the executor (whose
+# reconciliation and cancels matter most). The three unit caps add up to more than the slice cap on purpose: they
+# rarely run together, and when they do the slice is bounded and these two go first.
+OOMScoreAdjust=500
 MemoryHigh=192M
 MemoryMax=256M
 MemorySwapMax=0
@@ -29,7 +35,8 @@ ProtectSystem=strict
 ProtectHome=yes
 PrivateTmp=yes
 PrivateDevices=yes
-# The journal directory is writable only for SQLite's shared-memory index of a WAL reader; the copy is query-only.
+# The journal directory is writable only for the -wal/-shm side files a WAL reader may create; the copy reads the
+# journal read-only (mode=ro) and never writes it.
 ReadWritePaths=/var/lib/market-edge-lab-exec/journal /var/lib/market-edge-lab-exec-backup
 InaccessiblePaths=-/var/lib/market-edge-lab -/etc/market-edge-lab -/etc/market-edge-lab-exec/credentials -/var/lib/market-edge-lab-exec-status
 RestrictAddressFamilies=AF_UNIX
