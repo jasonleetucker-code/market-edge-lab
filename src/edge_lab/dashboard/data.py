@@ -1675,3 +1675,86 @@ def rfq_feasibility(ctx: Context) -> Loaded:
                        "docs_stale": ctx.now - fetched > RFQ_DOCS_MAX_AGE,
                        "document": module.FEASIBILITY_DOCUMENT,
                        "participation_authorized": bool(module.KALSHI.execution_authorized)})
+
+
+# --------------------------------------------------------------------------- operator journeys (Market v1 J1, J4-J6)
+
+# The execution package's projection (ADR 0043: the dashboard never imports that package; it reads this file, as it
+# reads freshness.json). The names are pinned to the writer by tests/execution/test_status_export.py.
+EXECUTION_STATUS_FILE = "execution_status.json"
+EXECUTION_STATUS_SCHEMA = "edge-lab-execution-status/1"
+EXECUTION_STATUS_MAX_BYTES = STATUS_FILE_MAX_BYTES
+EXECUTION_STATUS_MAX_AGE = timedelta(minutes=15)  # older than this, every figure reads "as of" and never current
+JOURNAL_STATES = ("OK", "NO_JOURNAL", "ERROR")
+
+
+@dataclass(frozen=True)
+class ExecutionStatus:
+    """The projection as written, plus its own age: `export_freshness` is `freshness.assess(generated_at_utc,
+    EXECUTION_STATUS_MAX_AGE, now)` (FRESH | STALE | UNKNOWN). Nothing in `doc` is re-derived here."""
+
+    doc: dict[str, Any]
+    export_freshness: str
+    max_age: timedelta
+
+
+def execution_status(ctx: Context) -> Loaded:
+    """The execution status export from the status directory. NO_DATA when it is not configured or not written (the
+    executor is not running here, or never wrote one: never an empty portfolio); ERROR when it is unreadable, of
+    another schema or malformed; OK with an `ExecutionStatus` otherwise."""
+    loaded = ctx._status_file(EXECUTION_STATUS_FILE)
+    if loaded.status == NO_DATA:
+        if ctx.config.status_dir is None:
+            return loaded
+        return Loaded(NO_DATA, message=f"no {EXECUTION_STATUS_FILE} in the status directory: no executor has written "
+                                       "an export here")
+    if loaded.status != OK:
+        return loaded
+    doc = loaded.value
+    if doc.get("schema") != EXECUTION_STATUS_SCHEMA:
+        return Loaded(ERROR, message=f"{EXECUTION_STATUS_FILE} has schema {str(doc.get('schema'))[:60]!r}, not "
+                                     f"{EXECUTION_STATUS_SCHEMA}")
+    journal = doc.get("journal")
+    if not isinstance(journal, dict) or journal.get("state") not in JOURNAL_STATES \
+            or not isinstance(doc.get("environment"), str) or not isinstance(doc.get("environments"), dict):
+        return Loaded(ERROR, message=f"{EXECUTION_STATUS_FILE} lacks its journal, environment or environments section")
+    if journal["state"] == "OK" and not all(isinstance(doc.get(k), dict) for k in ("control", "account", "attempts")):
+        return Loaded(ERROR, message=f"{EXECUTION_STATUS_FILE} says the journal was read but lacks its control, "
+                                     "account or attempts section")
+    generated = doc.get("generated_at_utc") if isinstance(doc.get("generated_at_utc"), str) else None
+    fresh = assess_freshness(generated, max_age=EXECUTION_STATUS_MAX_AGE, now=ctx.now).value.upper()
+    return Loaded(OK, ExecutionStatus(doc, fresh, EXECUTION_STATUS_MAX_AGE))
+
+
+WALLET_DEMO_MODULE = "edge_lab.wallet_intel.demo"
+WALLET_DEMO_SEED = 20261007
+
+
+def wallet_research(ctx: Context) -> Loaded:
+    """Wallet intelligence (issue 168) for the Terminal. No wallet source is approved, so production reads NOT_AUTHORIZED;
+    demo mode reads Demonstration A (`wallet_intel.demo.run_synthetic_demo`), SYNTHETIC, network-free and
+    deterministic. A report that does not label itself SYNTHETIC is refused (an error state), never shown."""
+    if not ctx.config.demo:
+        return Loaded(OK, {"state": "NOT_AUTHORIZED"})
+    module, missing = _optional_module(WALLET_DEMO_MODULE, "the wallet research lane (wallet_intel) is not installed "
+                                                           "in this build", ctx)
+    if missing is not None:
+        return missing
+    try:
+        report = _wallet_report(module, WALLET_DEMO_SEED)
+    except Exception as exc:  # noqa: BLE001 - shown as an error state, never a failed page
+        return Loaded(ERROR, message=short_error(exc, ctx.config))
+    if not isinstance(report, dict) or report.get("data_class") != "SYNTHETIC":
+        return Loaded(ERROR, message="the wallet report does not label itself SYNTHETIC; it is not shown")
+    return Loaded(OK, {"state": "SYNTHETIC", "report": report})
+
+
+_WALLET_CACHE: dict[tuple[str, int], dict[str, Any]] = {}
+
+
+def _wallet_report(module: Any, seed: int) -> dict[str, Any]:
+    """`run_synthetic_demo(seed)` is pure (the same seed gives the same bytes), so one run per process is kept."""
+    key = (str(getattr(module, "DEMO_VERSION", "")), seed)
+    if key not in _WALLET_CACHE:
+        _WALLET_CACHE[key] = module.run_synthetic_demo(seed)
+    return _WALLET_CACHE[key]

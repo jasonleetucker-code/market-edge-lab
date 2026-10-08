@@ -63,6 +63,10 @@ def more(ctx: d.Context, p: pr.Params) -> cm.Page:
     links = [("/risk", "shield", "Risk & capital", "Limits, capacity, capital release and the starter rule"),
              ("/experiments", "flask-conical", "Research & Data", "Experiments, sources and fee verification"),
              ("/alerts", "bell", "Alerts", "Failures, conflicts and recorded notifications"),
+             ("/setup", "circle-check", "Setup & readiness", "What is still missing, and the safe next step"),
+             ("/risk/automation", "shield", "Automation", "Execution mode, grant, limits and stop reasons (read-only)"),
+             ("/positions/execution", "briefcase-business", "Execution portfolio", "FIXTURE execution journal: holdings, orders, fills"),
+             ("/experiments/wallet", "flask-conical", "Wallet research", "Leader vs follower research (synthetic until approved)"),
              ("/#system", "database", "System & evidence", "Collector status, pipeline receipt and account records")]
     items = "".join(
         f'<li class="row"><div class="row-main"><p class="row-title"><a href="{esc(h)}">{c.icon(i)} {esc(t)}</a></p>'
