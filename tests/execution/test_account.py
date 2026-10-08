@@ -460,6 +460,77 @@ def test_an_update_stamp_that_goes_backwards_between_samples_is_a_stale_update()
     assert "STALE_UPDATE" in codes(run(venue))
 
 
+# ---------------------------------------------------------------- record stamps (P-3 review LOW-A)
+# The read ends at NOW (the clock is constant). Every record stamp source counts on its own: an order's
+# created_time and last_update_time, a fill's created_time, in the live and the historical tier. The fake venue
+# bumps an order's last_update_time on every fill; Kalshi may not, so a fill stamp is never assumed to be covered.
+
+WITHIN = NOW + timedelta(seconds=3)  # later than every fixture record (14:30), inside CLOCK_SKEW of the read's end
+AHEAD = NOW + a.CLOCK_SKEW + timedelta(seconds=1)  # past the read's end plus CLOCK_SKEW
+
+
+def _iso(t: datetime) -> str:
+    return t.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _empty_live_orders_and_fills(venue) -> None:
+    venue.streams[("GET_ORDERS", 0)] = {None: {"orders": [], "cursor": ""}}
+    venue.streams[("GET_FILLS", 0)] = {None: {"fills": [], "cursor": ""}}
+
+
+def test_a_fill_stamped_later_than_every_order_bounds_the_read():
+    venue = Venue()
+    page_of(venue, "GET_FILLS", cursor="fills-page-2")["fills"][0]["created_time"] = _iso(WITHIN)
+    r = run(venue)
+    assert r.status is a.ReconciliationStatus.COMPLETE, r.problems
+    assert r.manifest.latest_record_at == WITHIN and r.manifest.data_true_by == NOW + a.CLOCK_SKEW
+
+    venue = Venue()
+    page_of(venue, "GET_FILLS", cursor="fills-page-2")["fills"][0]["created_time"] = _iso(AHEAD)
+    r = run(venue)
+    assert r.manifest.latest_record_at == AHEAD and r.manifest.data_true_by == AHEAD
+    assert "RECORD_STAMPED_IN_FUTURE" in codes(r) and r.status is a.ReconciliationStatus.PARTIAL
+    s = r.subaccounts[0]
+    assert s.fills is None and s.orders is None and s.open_orders is None and s.snapshot.cash is None
+
+
+def test_an_order_whose_only_future_stamp_is_its_last_update_time_is_caught():
+    venue = Venue()
+    (manual,) = page_of(venue, "GET_ORDERS", cursor="orders-page-2")["orders"]
+    manual["last_update_time"] = _iso(AHEAD)  # created 14:30, as before; only the update is ahead
+    r = run(venue)
+    assert r.manifest.latest_record_at == AHEAD and r.manifest.data_true_by == AHEAD
+    assert "RECORD_STAMPED_IN_FUTURE" in codes(r) and r.status is a.ReconciliationStatus.PARTIAL
+    assert r.subaccounts[0].open_orders is None
+
+
+def test_historical_records_bound_the_read_when_the_live_tier_is_empty():
+    """A historical record predates the cutoff, and the cutoff trails the venue's clock by the archive lag, so a
+    live record (newer than the cutoff) is normally the latest stamp. With no live orders or fills (an account
+    with only archived history) the historical tier alone sets `latest_record_at`."""
+    venue = Venue()
+    _empty_live_orders_and_fills(venue)
+    r = run(venue, locals_=())
+    assert r.manifest.latest_record_at == datetime(2026, 8, 1, 11, 0, tzinfo=UTC)  # O9's last_update_time
+    assert "RECORD_STAMPED_IN_FUTURE" not in codes(r)
+
+
+def test_a_historical_record_past_the_read_end_is_caught():
+    """A historical stamp can pass the read's end plus CLOCK_SKEW only when the venue's cutoff does too (the venue's
+    clock leads ours by more than the archive lag). With live records present, those are later still and trip the
+    check first; with an empty live tier, only the historical stamp can."""
+    venue = Venue()
+    _empty_live_orders_and_fills(venue)
+    later = _iso(NOW + timedelta(days=1))
+    venue.single["GET_HISTORICAL_CUTOFF"] = {"market_settled_ts": later, "trades_created_ts": later,
+                                             "orders_updated_ts": later}
+    page_of(venue, "GET_HISTORICAL_FILLS")["fills"][0]["created_time"] = _iso(AHEAD)
+    r = run(venue, locals_=())
+    assert "TIER_PARTITION_VIOLATION" not in codes(r)
+    assert r.manifest.latest_record_at == AHEAD and r.manifest.data_true_by == AHEAD
+    assert "RECORD_STAMPED_IN_FUTURE" in codes(r) and r.status is a.ReconciliationStatus.PARTIAL
+
+
 # ---------------------------------------------------------------- subaccounts
 
 
