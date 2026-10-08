@@ -726,7 +726,10 @@ be written here when they are made.
     Any later deploy, and any service activation, needs its own owner approval.
   - **Not authorized (each needs its own recorded owner approval):**
     - every item in the 2026-10-07 Kalshi entry's list;
-    - any network read of Polymarket, chain, Hyperliquid or other wallet sources, including one-off public pulls;
+    - any network read of Polymarket, chain, Hyperliquid or other wallet sources, including one-off public pulls.
+      Owner ruling (same session): published API specification and documentation files, such as
+      `data-api.polymarket.com/v2/openapi.json` linked from the docs index, count as documentation even when served
+      from an API host. Data routes stay forbidden;
     - paid wallet feeds (Nansen, GMGN, Helius and similar);
     - wallet connections, token approvals and on-chain execution;
     - scheduled wallet collection;
