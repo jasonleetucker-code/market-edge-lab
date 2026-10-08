@@ -761,19 +761,27 @@ be written here when they are made.
         before the first look. Every use is recorded through `research_evidence`.
       - Each candidate protocol declares at least EXP-003's full `prohibited_inputs` list (including `exp001:`,
         `shadow_ledger:`, `nws_pfm:`, `nws_cli:` and `kalshi_settlement:`), plus
-        `prohibited_label_scopes = ["kalshi:KXHIGHNY"]` and the settled-field `prohibited_fields`. Settled fields
+        `prohibited_label_scopes` covering at least `kalshi:KXHIGHNY`, `sports:nfl:moneyline`, `kalshi:KXNFLGAME`
+        and `kalshi:KXNHLGAME`, so `record-use` refuses those labels mechanically, and the settled-field
+        `prohibited_fields`. Settled fields
         must be dropped; a reader that does not consume the protocol drops them explicitly.
       - Excluded from Track B diagnostics:
         - family A's mechanism (sportsbook information versus executable event-market pricing) on any sport;
         - family B's mechanism (same-venue payoff consistency) on any series;
+        - NFL moneyline outcomes and markouts (EXP-002's `sports:nfl:moneyline`, protected until EXP-002 freezes
+          its settings). Feature-only inspection of NFL books is logged as FEATURE_INSPECTION in EXP-002's log;
         - NHL outcome analysis. NHL is DEVELOPMENT_ONLY and not a research family, and an NHL model is not
           authorized (2026-09-29 entry).
+
+        What remains testable on held data is feature-only: depth, spreads, $100 fill-cost ladders and capacity,
+        and no-trade-filter attrition counts. Non-outcome family-B scans (complement or partition sums) are
+        excluded while EXP-003 is paused. The approval packet asks whether Track B may run them.
       - An inspected outcome window is consumed (`holdout-status`) and can never support an untouched or
         prospective claim.
       - Per the directive's §11, these diagnostics are exploratory. They are not an ACTIVE family and not tuning
         for family A or B.
       - Every result is labelled RETROSPECTIVE EXPLORATORY and is never presented as prospective or as an edge.
-    - **Offline evaluation harness.** It reuses `research_economics`, `research_evidence`, `experiments`,
+    - **Offline evaluation harness.** Only for uses outside the excluded mechanisms and scopes, it reuses `research_economics`, `research_evidence`, `experiments`,
       `opportunity`, `payoff_constraints`, `best_price`, `sports_evidence`, `sources`/`freshness` and
       `wallet_intel/`. No new engine, registry, database, collector, ledger or trading bot, and no import of
       `edge_lab.execution`.
