@@ -748,42 +748,55 @@ be written here when they are made.
   authority sections verbatim. Track B runs in parallel with Track A (#160, #181, #168), and neither track
   pauses the other.
   - **Authorized (research, offline, existing data only):**
-    - **Reading and synthesis.** Literature, practitioner and documentation research from public sources: a
-      source register, a hypothesis scorecard, ranked shortlists, and experiment protocols.
-    - **DRAFT experiments.** Candidates may be registered as DRAFT in the existing registry (`experiments/`,
-      `protocol.toml`). DRAFT occupies no #96 family slot. Moving any candidate to PREREGISTERED-and-RUNNING as
-      a new ACTIVE family needs an owner slot decision.
-    - **Diagnostics on data already held.** Retrospective, reproducible diagnostics may use data already
-      collected under existing grants. Conditions:
-      - Every use is logged through `research_evidence` (`evidence_use.jsonl`).
-      - No use touches a protocol's `prohibited_inputs` or `prohibited_label_scopes`.
-      - Never read EXP-001 KXHIGHNY outcomes or holdouts, or EXP-002 frozen evaluation windows.
-      - No use may influence a frozen or paused experiment.
-      - Every result is labelled RETROSPECTIVE EXPLORATORY and is never presented as prospective or as an
-        edge.
-    - **Published replication files.** One-off, static files published with a paper or public repository, free
-      and unauthenticated, may be read when their license permits research use. Record the URL, retrieval time,
-      hash and license. This never includes venue or data-vendor API routes.
-    - **An offline evaluation harness.** It reuses `research_economics`, `research_evidence`, `experiments`,
+    - **Research.** Literature, practitioner and documentation research from public sources: a source register,
+      a hypothesis scorecard, ranked shortlists, and experiment protocols.
+    - **Candidate registration.** Candidates may be registered in the existing registry (`experiments/`,
+      `protocol.toml`) with `status = "DRAFT"` and **`slot_status = "QUEUED"`** under new family labels, never
+      family A or B. A slot is held by `slot_status`, not by lifecycle status (`experiments.family_slot_problems`).
+      Setting `slot_status = "ACTIVE"` needs an owner slot decision. The #96 cap of two new ACTIVE families
+      beside EXP-001 stands, and paused EXP-003 frees no slot.
+    - **Retrospective diagnostics on data already held.** Data collected under existing grants may be used only
+      under these conditions:
+      - Diagnostics run only under a registered candidate whose `evidence_use.jsonl` and `covered_scopes` exist
+        before the first look. Every use is recorded through `research_evidence`.
+      - Each candidate protocol declares `prohibited_inputs` (`exp001:`, `shadow_ledger:`),
+        `prohibited_label_scopes = ["kalshi:KXHIGHNY"]` and the settled-field `prohibited_fields`, as EXP-003
+        does. KXHIGHNY labels therefore cannot arrive through settled fields in market snapshots.
+      - NFL moneyline (EXP-002's covered scope `sports:nfl:moneyline`, family A's hypothesis) is excluded from
+        Track B diagnostics.
+      - An inspected outcome window is consumed (`holdout-status`) and can never support an untouched or
+        prospective claim.
+      - Per the directive's §11, these diagnostics are exploratory. They are not an ACTIVE family and not tuning
+        for family A or B.
+      - Every result is labelled RETROSPECTIVE EXPLORATORY and is never presented as prospective or as an edge.
+    - **Offline evaluation harness.** It reuses `research_economics`, `research_evidence`, `experiments`,
       `opportunity`, `payoff_constraints`, `best_price`, `sports_evidence`, `sources`/`freshness` and
-      `wallet_intel/`. There is no new engine, registry, database, collector, ledger or trading bot, and no import of
+      `wallet_intel/`. No new engine, registry, database, collector, ledger or trading bot, and no import of
       `edge_lab.execution`.
     - **One consolidated owner approval packet.**
-  - **Merge:** research code and docs PRs merge under the same conditions as the 2026-10-07 evening entry.
-    Docs-only PRs merge under the standing rule below.
+  - **Merge:** this directive quotes no merge grant.
+    - Track B docs-only PRs merge under the standing docs-only rule below.
+    - Track B code that extends an owner already covered by a recorded delegation (for example `wallet_intel/`
+      under the 2026-10-07 evening entry, or #181 scope under the 2026-10-08 JEV entry) merges under that
+      delegation's conditions.
+    - Any other Track B research code PR needs the owner's merge approval. The approval packet asks for a
+      standing delegation.
   - **Not authorized (each needs its own recorded owner approval):**
-    - new market-data collection, including venue or vendor API pulls of historical trades, books or odds;
-    - paid services or data;
+    - new market-data collection of any kind, including venue or vendor API pulls of historical trades, books or
+      odds, X/web/news scraping, and one-off data-route pulls;
+    - reading or downloading published replication datasets. This item is asked in the approval packet;
+    - paid services or data, and spending of any kind, including paid model tokens or paid cloud compute;
+    - running, installing or vendoring third-party code, including bundled replication code and trading-bot
+      repositories;
     - account access or credentials;
     - a new ACTIVE family, or reusing paused EXP-003's slot;
-    - demo or real-money orders;
-    - unattended execution;
-    - deployment;
+    - demo or real-money orders, unattended execution, or deployment;
     - new schedules;
-    - changes to source budgets (including the joint 450-credit NFL/NHL Odds API pilot), protected windows, or
-      EXP-001/EXP-002/EXP-003 protocols;
+    - changes to source budgets (including the joint 450-credit NFL/NHL Odds API pilot, NFL reservation first),
+      protected windows, or EXP-001/EXP-002/EXP-003 protocols;
     - any AI model or provider call;
-    - declaring a profit using an unverified fee (KXNFLGAME fees remain a blocker).
+    - declaring a profit using an unverified fee (KXNFLGAME fees remain a blocker);
+    - every item already listed as not authorized in the 2026-10-07 and 2026-10-08 JEV entries.
 
 ## Standing merge rule: docs-only and test-only PRs
 
