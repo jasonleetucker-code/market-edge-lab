@@ -185,6 +185,8 @@ def test_plain_fields_and_multiline_text_never_bypass_redaction(tmp_path):
     "private_key=abcdefgh",
     f"body {KEYISH}",
     "venue order_id=8f3a77c1",
+    "operator\npassword\n: hunter2",  # a separator on the line after the name
+    "KALSHI-ACCESS-KEY 0b5f0c33-aaaa-bbbb-cccc-1234567890ab",  # no separator at all
 ])
 def test_render_checks_raw_strings_and_keys_before_encoding(exports, raw):
     (path, _), _ = exports["idle"]

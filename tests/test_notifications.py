@@ -183,6 +183,16 @@ def test_redact_text_and_detection():
     assert contains_secret("token=abc") and not contains_secret("plain words about tokens")
 
 
+def test_hex_ids_and_prose_are_not_refused_as_secrets():
+    """#176 review: a 0x-prefixed hex id (a Polymarket condition id, an EVM address) and prose that names
+    authorization or a signature are not secrets; an event carrying them is delivered."""
+    condition, wallet = "0x" + "dd22c2a0ea8b7c06" * 4, "0x52908400098527886E0F7030069857D2E4169EE7"
+    event = ev(summary=f"market {condition} resolved; participation authorization: none",
+               market_id=condition, values={"wallet": wallet, "note": "the signature: missing"})
+    assert n.check_event(event) is None
+    assert n.dispatch([event], [n.DisabledSmsSink()], now=NOW)[0]["status"] != "REFUSED_SECRET"
+
+
 def test_every_persisted_field_is_scanned_for_secrets():
     for kw in ({"market_id": "api_key=abc123"}, {"event_ref": "token=zzz"}, {"venue_id": "password: x"}):
         assert n.dispatch([ev(**kw)], [n.DisabledSmsSink()], now=NOW)[0]["status"] == "REFUSED_SECRET"

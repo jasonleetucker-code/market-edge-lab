@@ -354,6 +354,30 @@ def test_successful_pull_books_the_charge_and_persists_nothing_secret(tmp_path):
     assert FAKE in opener.calls[0]  # it was sent, as the documented query parameter only
 
 
+def test_snapshot_context_is_redacted_and_stays_valid_json(tmp_path):
+    """#176 review: `save_snapshot` redacts the JSON-encoded request context and parses it back. A header-shaped
+    phrase inside a context string must not redact past the string's closing quote (that was invalid JSON)."""
+    led = reconciled(tmp_path)
+    out = oa.fetch_odds("americanfootball_nfl", ["h2h"], regions=["us"], odds_format="american",
+                        ledger=led, opener=Opener((ODDS, quota(398, 102, 1))), environ=ENV)
+
+    class Store:
+        def save_snapshot(self, **kw):
+            self.kw = kw
+            return 1
+
+    store = Store()
+    context = {"note": "operator authorization: Basic dXNlcjpwYXNzd29yZA==", "markets": ["h2h"],
+               "pasted": 'KALSHI-ACCESS-KEY: 0b5f0c33 "quoted"', "condition": "0x" + "ab" * 32}
+    oa.save_snapshot(store, run_id="run-1", sport="americanfootball_nfl", outcome=out, context=context)
+    request = store.kw["payload"]["request"]
+    assert set(request) == {"note", "markets", "pasted", "condition"} and request["markets"] == ["h2h"]
+    assert request["note"] == "operator authorization=REDACTED"
+    assert request["pasted"] == "KALSHI-ACCESS-KEY=REDACTED"
+    assert request["condition"] == context["condition"]  # a 0x id is not a key body
+    assert "dXNlcjpwYXNzd29yZA" not in json.dumps(store.kw["payload"])
+
+
 @pytest.mark.parametrize("final", [
     "https://evil.example/" + FAKE + "/odds",  # the key moved into the path
     "https://api.the-odds-api.com/v4/sports/americanfootball_nfl/odds/?token2=" + FAKE,  # another parameter
