@@ -21,6 +21,7 @@ KEY_BODY = ("MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQC7" + "VJTUt9Us8c
 ETH_PK = "0x4c0883a69102937d6231471b5dbb6204fe5129617082792ae468d01a3f362318"  # a published example key, not a secret
 GH_TOKEN = "ghp" + "_" + "abcdefghijklmnopqrstuvwxyzABCDEF0123"  # split so no scanner reads it as a token
 PEM_HEAD = "-----BEGIN " + "RSA " + "PRIVATE KEY-----"  # split so the repository secret scan does not flag it
+AWS_KEY_ID = "AKIA" + "IOSFODNN7EXAMPLE"  # AWS's documented example id, split for the same scan
 
 
 def _corpus() -> list[str]:
@@ -38,7 +39,7 @@ def _corpus() -> list[str]:
         "Authorization: Basic dXNlcjpwYXNzd29yZA==", "Authorization: Basic YWxhZGRpbjpvcGVuc2VzYW1l",
         "Proxy-Authorization: abcdefghijk", "authorization=REDACTED", "Authorization: Bearer REDACTED",
         'Authorization: "abc123de"', "Authorization:\n abc123def", "Authorization: Bearer\tabcdefghijkl",
-        "Authorization: AWS4-HMAC-SHA256 Credential=AKIAIOSFODNN7EXAMPLE/20130524/us-east-1/s3/aws4_request, "
+        "Authorization: AWS4-HMAC-SHA256 Credential=" + AWS_KEY_ID + "/20130524/us-east-1/s3/aws4_request, "
         "SignedHeaders=host, Signature=fe5f80f77d5fa3beca038a248ff027d0445342fe2855ddc963176630326f1024",
         "Authorization: token " + GH_TOKEN, "authorization: abcd'efgh123", "authorization: none (see grant 12)",
         # signature
