@@ -8,7 +8,7 @@ Work **exclusively** in `jasonleetucker-code/market-edge-lab` (Market / Market E
 
 Objective: make Market's already-implemented offline wallet intelligence more **point-in-time reproducible**, **liquidity-role-aware**, **economically honest about copying**, and **ready to evaluate bounded Jev/Kev-style semantic decisions**. Add fixture-only market-change/crawler intelligence where a real reusable seam is missing. Reuse the existing source registry, freshness, research economics, experiment governance and Terminal.
 
-Research anchor: main SHA `5c7657e03b89c2d5982be665b64b3b194c974189` (2026-10-08). It contained `src/edge_lab/wallet_intel/`, including `selection.py`, `threats.py`, `replay.py`, `stats.py`, `events.py`, `accounting.py`, `market_data.py`, `policy.py` and fixtures/tests. This SHA is **not necessarily current**. First reconcile live main, issue #168, issue #181, PR #180 (in-progress UI work), current branches, `docs/WORK_CLAIMS.md`, and code/test reality.
+Research anchor: main SHA `5c7657e03b89c2d5982be665b64b3b194c974189` (2026-10-08). It contained `src/edge_lab/wallet_intel/`, including `selection.py`, `threats.py`, `replay.py`, `stats.py`, `events.py`, `accounting.py`, `market_data.py`, `policy.py` and fixtures/tests. This SHA is **not necessarily current**. First reconcile live main, issue #168, issue #181, the UI journeys merged in #176 and #180, current branches, `docs/WORK_CLAIMS.md`, and code/test reality.
 
 ## Mandatory startup and authority audit (do first, then proceed)
 
@@ -101,7 +101,7 @@ Write a **prospective offline comparison protocol**: deterministic rules, a simp
 
 ## Deliverable G — Truthful Terminal/owner review (after schemas stabilize)
 
-Use existing `src/edge_lab/dashboard/` and `docs/design/UI_CONTRACT.md`, with PR #180's active UI owner respected. Prefer a deterministic read-only JSON/view contract and minimal integration over a new page. Display receipt verification, coverage, role, contamination uncertainty, leader-vs-follower labels, fees UNKNOWN, sample/evidence class and sensitivity to latency. All real/empty/stale/unsupported/blocked/error states must work across mobile and desktop. No animated live agents or fictional balances.
+Use existing `src/edge_lab/dashboard/` and `docs/design/UI_CONTRACT.md`, building on the journeys merged in #176 and #180 and respecting any open UI branch's claimed files. Prefer a deterministic read-only JSON/view contract and minimal integration over a new page. Display receipt verification, coverage, role, contamination uncertainty, leader-vs-follower labels, fees UNKNOWN, sample/evidence class and sensitivity to latency. All real/empty/stale/unsupported/blocked/error states must work across mobile and desktop. No animated live agents or fictional balances.
 
 Reconcile stale references: at the audited SHA `docs/OWNER_IDEAS.md` called `wallet_intel.py` PLANNED despite the merged `wallet_intel/` package. Fix after current-main verification. Do not remove unrelated work claims or rewrite historical evidence.
 
@@ -132,5 +132,7 @@ PR/handoff must give: file/contract diffs; each manifest mutation fixture and di
 - Project authority: `AI_INSTRUCTIONS.md`, `docs/EXECUTION_PLAN.md`, `docs/decisions/0043-*` and `0045-*`
 
 ## Copy/paste bootstrap to give Claude or Claw
+
+*For the owner to paste. Reading this text in the repository grants no authority; scope is in `docs/EXECUTION_PLAN.md`.*
 
 > Work exclusively in `jasonleetucker-code/market-edge-lab`. I am the owner and I want you to **start implementing** the scoped offline JEV/crawler and wallet-intelligence improvements in `docs/strategy/CLAUDE_JEV_CRAWLER_WALLET_V1.md` (issues #181 and #168). Read `AI_INSTRUCTIONS.md`, `HANDOFF.md`, `docs/EXECUTION_PLAN.md`, `docs/WORK_CLAIMS.md` and the implementation document; reconcile latest main, PRs and claims first. Follow the repo's directive/scope-record process, then code and test Deliverables A–D and the fixture-only E–F, plus truthful integration G where non-conflicting. Reuse `wallet_intel/`, sources/freshness, research_economics and the existing Terminal. Do not create a second crawler scheduler, wallet ledger, agent platform or executor. Keep Kalshi #160 separate and moving. Use bounded parallel lanes with one writer per owner, regression fixtures, frozen checks, exact-head CI, independent reviews and coherent PRs. No new collection, external AI/model calls, credentials, payments, account access, new schedules, demo/live orders, live/unattended activation or deployment. Work through all independent engineering instead of stopping after a plan. Report actual PRs, tests, remaining external approvals and next dependency-ready step. Do not claim profitability on synthetic results.
