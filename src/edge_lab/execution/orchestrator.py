@@ -11,7 +11,9 @@ module: every network request goes through the caller's `send(WireRequest) -> re
 an older fence's in-flight attempts into OUTCOME_UNKNOWN), recovers the journal and quarantines every queued signal
 whose validity ended while it was down: a backlog is never replayed as fresh.
 
-**One cycle**, in this order, so that reconciliation and safety always come before new risk:
+**One cycle**, in this order, so that reconciliation and safety always come before new risk. Every anomaly a step
+finds is raised as a control incident (which disarms) before the next step runs, so an evidence anomaly found in
+step 3 stops new risk in the same cycle:
 1. renew the lease; mark this process's leftover in-flight attempts OUTCOME_UNKNOWN; read the whole account
    through `send` (`account.reconcile_account`, a READ in every mode), within the cycle's request budget and
    deadline;
@@ -41,7 +43,15 @@ nothing. HUMAN_CONFIRMATION and BOUNDED_AUTO send. DEMO is refused (an incident)
 
 **Bounds** (`CycleBounds`): queued signals, signals drained, proposals and intents per cycle, network requests per
 cycle (account reads and sends share one budget) and a deadline per cycle. Every record a cycle writes is bounded
-by these.
+by these. Grant usage is kept as running aggregates (turnover per day, realized P&L per day, equity and peak),
+rebuilt from the persisted records at start, so a decision never rescans history. The in-memory dedupe sets are
+bounded; the persisted records stay the authority.
+
+**Fencing.** Only the holder of the egress lease writes. If the lease is lost (another worker took it over), this
+instance is FENCED OUT: it still reads the account, but it writes nothing to the journal (no snapshot, no control
+event, no record, no attempt change) and sends nothing, because its live state is no longer the replay of what is
+stored. The lease is re-checked before every writing phase; the journal's fence check inside `prepare_attempt`
+remains the hard stop for a send.
 
 **Shutdown.** `shutdown()` persists a Disarm (no new risk), leaves resting orders alone unless `cancel_owned=True`
 asks to cancel our own resting orders (never anyone else's, and only while this process still holds the egress
@@ -92,6 +102,7 @@ _ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9:._/-]{0,199}")
 _INCIDENT_CHARS = re.compile(r"[^A-Za-z0-9:._/-]")
 _DAY = timedelta(days=1)
 _ZERO = Decimal(0)
+RECENT_MEMORY = 4096  # how many recent dedupe keys each in-memory set keeps (the journal stays the authority)
 
 
 def _exact_context() -> Context:
@@ -105,6 +116,10 @@ class OrchestratorError(Exception):
 
 class OrchestratorStopped(OrchestratorError):
     """`shutdown()` has run: this instance runs no further cycle."""
+
+
+class OrchestratorFencedOut(OrchestratorError):
+    """Another worker holds the egress lease: this instance may read but never write or send."""
 
 
 class Outcome(str, Enum):
@@ -347,6 +362,7 @@ class CycleReport:
     incidents: tuple[str, ...]  # raised this cycle
     records_written: int  # control events and records this cycle (journal rows of every kind are bounded)
     deadline_hit: bool
+    fenced_out: bool = False  # the lease was lost: this cycle read only and wrote nothing
 
 
 @dataclass(frozen=True)
@@ -430,6 +446,28 @@ def _ack_status(ack: w.CreateAck, quantity: Decimal) -> str:
     return lc.VenueStatus.EXECUTED.value if ack.fill_count == quantity else lc.VenueStatus.CANCELED.value
 
 
+class _Recent:
+    """A bounded, insertion-ordered set of recent keys. Forgetting a key only allows a duplicate record or a repeated
+    incident later, never a send: the journal and the control state remain the authority."""
+
+    def __init__(self, cap: int, items: tuple = ()):
+        self._cap, self._items = cap, {}
+        for item in items:
+            self.add(item)
+
+    def __contains__(self, key: object) -> bool:
+        return key in self._items
+
+    def __len__(self) -> int:
+        return len(self._items)
+
+    def add(self, key: object) -> None:
+        self._items.pop(key, None)
+        self._items[key] = None
+        while len(self._items) > self._cap:
+            self._items.pop(next(iter(self._items)))
+
+
 class _Budget:
     """The cycle's network request budget, shared by account reads and sends."""
 
@@ -473,6 +511,8 @@ class _Cycle:
     markets: dict = field(default_factory=dict)
     deadline_hit: bool = False
     control_disarmed_on_recon: bool = False
+    detail: str = ""
+    read_done: bool = False
 
 
 # ---------------------------------------------------------------------------------------------- the service
@@ -502,8 +542,8 @@ class Orchestrator:
         self._stopped = False
         self._approvals: dict[str, ApprovalGrant] = {}
         self._signals_rejected = 0
-        self._recorded: set[tuple[str, str, str]] = set()  # decision records written once per (key, outcome, why)
-        self._flagged: set[str] = set()
+        self._recorded = _Recent(RECENT_MEMORY)  # decision verdicts recorded once per (key, outcome, why)
+        self._fenced_out = False
         now = self._now()
 
         # Start only through control.boot; Started is persisted before anything acts.
@@ -511,7 +551,7 @@ class Orchestrator:
         started, state = ctl.boot(self._scope, events, at_utc=utc_text(now))
         journal.append_control_event(self._scope, started, now=now)
         self._state = state
-        self._raised = {e.incident_id for e in events if isinstance(e, ctl.IncidentRaised)}
+        self._raised = _Recent(RECENT_MEMORY, tuple(e.incident_id for e in events if isinstance(e, ctl.IncidentRaised)))
 
         self._load_records(now)
         self._fence: int | None = journal.reservations.acquire_lease(config.worker_id, config.lease_ttl, now)
@@ -534,7 +574,11 @@ class Orchestrator:
             self._journal.append_control_record(self._scope, "GENESIS", {"account_genesis_utc": genesis}, now=now)
         self._genesis = genesis
         self._planned: dict[str, OrderIntent] = {}
-        self._attempts_known: dict[str, tuple] = {}
+        self._attempts_known: dict[str, tuple] = {}  # intent key -> ((attempt id, created), ...) once definitive
+        self._turnover: dict[str, Decimal] = {}  # UTC day -> turnover of the attempts created that day
+        self._pnl_by_day: dict[str, Decimal] = {}  # UTC day -> realized P&L dated that day
+        self._equity, self._peak = _ZERO, _ZERO  # cumulative realized P&L and its peak
+        self._pnl_as_of: str | None = None  # the last COMPLETE read the P&L ledger reflects (this process)
         accepted: dict[str, Signal] = {}
         done: set[str] = set()
         self._pnl: dict[str, Decimal] = {}
@@ -567,9 +611,13 @@ class Orchestrator:
             elif r.record_type == "CYCLE":
                 self._cycle = max(self._cycle, int(body["cycle"]))
                 self._last_status = body["reconciliation"]
-        self._signal_ids = set(accepted)
+        # Duplicate detection needs only ids still valid: an expired signal is refused at admission anyway.
+        self._signal_ids: dict[str, datetime] = {sid: parse_utc_text(s.expires_at_utc) for sid, s in accepted.items()
+                                                 if parse_utc_text(s.expires_at_utc) > now}
         self._queue: list[Signal] = [s for sid, s in accepted.items() if sid not in done]
         self._backlog = frozenset(s.signal_id for s in self._queue)
+        for key in self._planned:  # once, at start: later decisions use the cache and the aggregates
+            self._learn_attempts(key)
 
     def _apply_pnl_record(self, body: Mapping[str, Any]) -> None:
         self._pnl[body["ticker"]] = exact_decimal(body["realized_pnl"], name="realized_pnl")
@@ -577,6 +625,23 @@ class Orchestrator:
         if delta != 0:
             self._ledger.append(gate.LedgerEntry(body["entry_ref"], body["at_utc"], gate.LedgerKind.REALIZED_PNL,
                                                  delta))
+            day = parse_utc_text(body["at_utc"]).date().isoformat()
+            with localcontext(_exact_context()):
+                self._pnl_by_day[day] = self._pnl_by_day.get(day, _ZERO) + delta
+                self._equity += delta
+                self._peak = max(self._peak, self._equity)
+
+    def _learn_attempts(self, key: str) -> None:
+        """Cache the attempts of a planned key (rows never change id or creation time) and add their turnover."""
+        if key in self._attempts_known:
+            return
+        attempts = tuple((a.attempt_id, a.created_at_utc) for a in self._journal.attempts_for(key))
+        self._attempts_known[key] = attempts
+        intent = self._planned[key]
+        with localcontext(_exact_context()):
+            for _, created in attempts:
+                day = parse_utc_text(created).date().isoformat()
+                self._turnover[day] = self._turnover.get(day, _ZERO) + ctl.turnover_increment(intent)
 
     def _quarantine_backlog(self, now: datetime) -> list[str]:
         out = []
@@ -590,12 +655,14 @@ class Orchestrator:
         return out
 
     def _record(self, record_type: str, body: Mapping[str, Any], now: datetime, cycle: _Cycle | None = None) -> None:
+        self._check_writer()
         self._journal.append_control_record(self._scope, record_type, body, now=now)
         if cycle is not None:
             cycle.records += 1
 
     def _apply(self, event: ctl.Event, now: datetime, cycle: _Cycle | None = None) -> None:
         """Persist a control event, then apply it: the live state is always the replay of what is stored."""
+        self._check_writer()
         self._journal.append_control_event(self._scope, event, now=now)
         self._state = ctl.reduce(self._state, event)
         if isinstance(event, ctl.IncidentRaised):
@@ -622,6 +689,10 @@ class Orchestrator:
     @property
     def queued_signals(self) -> tuple[Signal, ...]:
         return tuple(self._queue)
+
+    @property
+    def fenced_out(self) -> bool:
+        return self._fenced_out
 
     def request_arm(self, request: ctl.ArmRequest) -> ctl.ArmAccepted | ctl.ArmRefused:
         """An operator's arm request, judged once (`control.decide_arm`); the outcome is persisted, then applied."""
@@ -661,13 +732,13 @@ class Orchestrator:
     def submit_signal(self, signal: Signal) -> SignalAdmission:
         """Queue one signal. Refused: a stopped service, another account scope, an unknown strategy or source, a
         duplicate id, a signal from the future, expired or valid for too long, or a full queue."""
-        reason = self._signal_problem(signal)
+        reason = "FENCED_OUT" if self._fenced_out else self._signal_problem(signal)
         if reason is not None:
             self._signals_rejected += 1
             return SignalAdmission(False, reason)
         now = self._now()
         self._record("SIGNAL_ACCEPTED", {"signal": signal.to_dict()}, now)  # persisted before it is queued
-        self._signal_ids.add(signal.signal_id)
+        self._signal_ids[signal.signal_id] = parse_utc_text(signal.expires_at_utc)
         self._queue.append(signal)
         return SignalAdmission(True, None)
 
@@ -677,6 +748,8 @@ class Orchestrator:
         if not isinstance(signal, Signal):
             return "NOT_A_SIGNAL"
         now = self._now()
+        for sid in [k for k, expires in self._signal_ids.items() if expires <= now]:
+            del self._signal_ids[sid]  # bounded: only ids still valid can be duplicates
         if signal.scope_key != self._scope.key():
             return "OUT_OF_IDENTITY: another account scope"
         if signal.strategy_id not in {s.strategy_id for s in self._strategies}:
@@ -701,6 +774,20 @@ class Orchestrator:
         if self._stopped:
             raise OrchestratorStopped("this orchestrator has shut down")
 
+    def _check_writer(self) -> None:
+        if self._fenced_out:
+            raise OrchestratorFencedOut("another worker holds the egress lease: this instance writes nothing")
+
+    def _lease_held(self) -> bool:
+        """Whether this instance still holds the egress lease (re-read from the store). Losing it fences us out."""
+        if self._fenced_out:
+            return False
+        lease = self._journal.reservations.lease()
+        if self._fence is None or lease is None or lease.fence_token != self._fence \
+                or lease.worker_id != self._config.worker_id:
+            self._fenced_out, self._fence = True, None
+        return not self._fenced_out
+
     # ------------------------------------------------------------------ the cycle
 
     def run(self, n: int) -> tuple[CycleReport, ...]:
@@ -722,24 +809,43 @@ class Orchestrator:
         cy = _Cycle(self._cycle, now, now + bounds.cycle_deadline, _Budget(bounds.max_requests_per_cycle, self._send),
                     self._state.mode)
         self._renew_lease(cy)
+        if self._fenced_out:
+            return self._fenced_cycle(cy)
         self._settle_own_in_flight(cy)
         self._reconcile(cy)
+        if not self._lease_held():
+            return self._fenced_cycle(cy)
+        self._apply(ctl.ReconciliationObserved(cy.status, utc_text(self._now()), cy.detail), self._now(), cy)
         self._apply_venue_evidence(cy)
+        self._safety_review(cy)  # every anomaly so far is an incident (a disarm) before any decision
         delivered = self._drain_signals(cy)
         mode = self._state.mode
         if mode is ctl.Mode.DEMO:
             cy.anomalies.append((_incident_id("demo-refused", f"c{cy.n}"),
                                  "DEMO is not an authorized environment for this orchestrator"))
+            self._raise_pending(cy)
         elif mode in (ctl.Mode.SHADOW, ctl.Mode.HUMAN_CONFIRMATION, ctl.Mode.BOUNDED_AUTO):
             selected = self._propose_and_arbitrate(cy, delivered)
+            self._raise_pending(cy)
             for proposal, strategy in selected:
+                if not self._lease_held():
+                    return self._fenced_cycle(cy)
                 self._decide(cy, proposal, strategy)
+                self._raise_pending(cy)  # a decision-phase anomaly disarms before the next decision
+        if not self._lease_held():
+            return self._fenced_cycle(cy)
         self._settlement_and_attribution(cy)
         self._health_review(cy)
         report = self._report(cy)
         self._record("CYCLE", self._cycle_body(report), self._now(), cy)
         self._last_status = report.reconciliation
         return replace(report, records_written=cy.records)
+
+    def _fenced_cycle(self, cy: _Cycle) -> CycleReport:
+        """A fenced-out cycle: the account may have been read; nothing was or is written."""
+        if cy.recon is None and not cy.read_done:
+            self._read_account(cy)
+        return replace(self._report(cy), records_written=cy.records, fenced_out=True)
 
     # step 1 ---------------------------------------------------------
 
@@ -749,26 +855,30 @@ class Orchestrator:
         try:
             self._journal.reservations.renew_lease(self._config.worker_id, self._fence, self._config.lease_ttl,
                                                    cy.start)
-        except StaleFence as exc:
-            self._fence = None
-            cy.anomalies.append((_incident_id("lease-lost", f"c{cy.n}"), f"egress lease lost: {exc}"))
+        except StaleFence:
+            # Another worker took the lease over. This instance is fenced out: it writes nothing (not even an
+            # incident, which would land in the live worker's control log and diverge from its state).
+            self._fence, self._fenced_out = None, True
+        if self._fence is None:
+            self._fenced_out = True
 
     def _settle_own_in_flight(self, cy: _Cycle) -> None:
-        """An attempt of this process still PENDING_EGRESS or SENT at a cycle start lost its handling (an exception
-        between prepare and record): it is unknown, reserved, and reconciled before anything else."""
+        """An attempt of THIS fence still PENDING_EGRESS or SENT at a cycle start lost its handling (an exception
+        between prepare and record): it is unknown, reserved, and reconciled before anything else. Another fence's
+        attempts are never touched here (the journal's lease takeover and `recover` handle superseded fences)."""
         for a in self._journal.non_terminal_attempts():
-            if a.state in (AttemptState.PENDING_EGRESS, AttemptState.SENT):
+            if a.state in (AttemptState.PENDING_EGRESS, AttemptState.SENT) and a.fence_token == self._fence:
                 self._journal.mark_outcome_unknown(a.attempt_id, reason="IN_FLIGHT_AT_CYCLE_START", now=cy.start)
 
-    def _reconcile(self, cy: _Cycle) -> None:
-        now = cy.start
+    def _read_account(self, cy: _Cycle) -> None:
+        """The account read (package G) through `send`, within the cycle's budget and deadline. Writes nothing."""
+        cy.read_done = True
         problems = ctl.action_problems(self._state, ctl.ControlAction.READ, venue=VENUE, strategy_id="-",
-                                       market_ticker="-", now=now, grants=self._config.grants)
-        detail = ""
+                                       market_ticker="-", now=cy.start, grants=self._config.grants)
         if problems:
-            detail = "; ".join(problems)
+            cy.detail = "; ".join(problems)
         elif cy.budget.remaining < 1:
-            detail = "REQUEST_BUDGET_EXHAUSTED before the account read"
+            cy.detail = "REQUEST_BUDGET_EXHAUSTED before the account read"
             cy.budget.exhausted = True
         else:
             cfg = self._config
@@ -783,14 +893,21 @@ class Orchestrator:
                    for r in cy.recon.manifest.streams):
                 cy.anomalies.append((_incident_id("budget", f"c{cy.n}"),
                                      "the account read ran out of its request budget or deadline"))
+
+    def _reconcile(self, cy: _Cycle) -> None:
+        """Read the account, then (as the lease holder) record the snapshot and the P&L. The caller persists the
+        `ReconciliationObserved` once the lease is confirmed still held."""
+        self._read_account(cy)
+        detail = cy.detail
         status = ctl.Reconciliation.FAILED
-        if cy.recon is not None:
+        if cy.recon is not None and self._lease_held():
             status = ctl.Reconciliation(cy.recon.status.value)
             detail = "; ".join(cy.recon.problems[:3])[:400]
             inputs = cy.recon.snapshot_inputs()[0]
             basis = self._config.fixture_cash_basis
-            if basis is not None and cy.recon.status is acct.ReconciliationStatus.COMPLETE and inputs.cash is not None:
-                inputs = replace(inputs, cash_basis=basis)  # the declared FIXTURE assumption
+            if basis is not None and inputs.cash_basis is CashBasis.UNKNOWN \
+                    and cy.recon.status is acct.ReconciliationStatus.COMPLETE and inputs.cash is not None:
+                inputs = replace(inputs, cash_basis=basis)  # the declared FIXTURE assumption fills an UNKNOWN only
             latest = self._journal.reservations.latest_snapshot(self._scope)
             revision = 1 if latest is None else latest.revision + 1
             try:
@@ -801,10 +918,9 @@ class Orchestrator:
                 status, detail = ctl.Reconciliation.PARTIAL, f"SNAPSHOT_INCONSISTENT: {list(cy.snapshot.problems)[:3]}"
             if status is ctl.Reconciliation.COMPLETE:
                 self._observe_pnl(cy)
-        cy.status = status
+        cy.status, cy.detail = status, detail
         cy.control_disarmed_on_recon = status is not ctl.Reconciliation.COMPLETE and \
             self._state.mode in ctl.RECONCILED_MODES
-        self._apply(ctl.ReconciliationObserved(status, utc_text(self._now()), detail), self._now(), cy)
 
     def _observe_pnl(self, cy: _Cycle) -> None:
         """The venue's cumulative realized P&L per market (live and historical positions), as ledger deltas. The
@@ -830,6 +946,7 @@ class Orchestrator:
         if baseline:
             self._record("PNL_BASELINE", {"cycle": cy.n, "tickers": sorted(rows)}, now, cy)
             self._pnl_baseline = True
+        self._pnl_as_of = observed  # the ledger reflects this COMPLETE read
 
     # step 3 ---------------------------------------------------------
 
@@ -1196,13 +1313,15 @@ class Orchestrator:
             attempt = self._journal.prepare_attempt(intent, approval, fence_token=self._fence,
                                                     request_digest=request_digest(request),
                                                     snapshot_max_age=self._config.snapshot_max_age, now=now)
-        except JournalUnavailable as exc:
+        except JournalUnavailable as exc:  # not known whether it committed: the key is re-read when next needed
             cy.anomalies.append((_incident_id("journal-unavailable", f"c{cy.n}"), f"{exc}"[:300]))
             self._decision(cy, intent, Outcome.BLOCKED, (f"PREPARE_FAILED: {exc}"[:300],))
             return
         except (JournalError, ReservationError) as exc:
+            self._learn_attempts(intent.intent_key)  # a refusal committed nothing: the key has no attempt
             self._decision(cy, intent, Outcome.BLOCKED, (f"PREPARE_REFUSED: {exc}"[:300],))
             return
+        self._learn_attempts(intent.intent_key)
         # The attempt is committed: from here the request is sent at most once.
         try:
             reply: Any = cy.budget.send(request)
@@ -1270,13 +1389,10 @@ class Orchestrator:
     def _order_history(self) -> tuple[gate.OrderHistoryEntry, ...]:
         out = []
         for key, intent in self._planned.items():
-            known = self._attempts_known.get(key)
-            if known is None:
-                attempts = self._journal.attempts_for(key)
-                known = tuple((a.attempt_id, a.created_at_utc) for a in attempts)
-                if known:
-                    self._attempts_known[key] = known  # attempt rows never change their id or creation time
-            for attempt_id, created in known:
+            if key not in self._attempts_known:  # only after a prepare that failed unavailable: re-read it
+                self._attempts_known.pop(key, None)
+                self._learn_attempts(key)
+            for attempt_id, created in self._attempts_known[key]:
                 out.append(gate.OrderHistoryEntry(attempt_id, intent.market_ticker, intent.kind, created,
                                                   intent.max_total_cost if intent.kind is IntentKind.ENTRY else _ZERO))
         return tuple(out)
@@ -1304,7 +1420,9 @@ class Orchestrator:
                now: datetime) -> ctl.GrantUsage:
         """Grant usage from persisted records only: the latest snapshot and held reservations (exposure, $1 per held
         contract, an ENTRY's full cost while held), the journal's attempts (turnover today) and the venue P&L
-        ledger (losses). Unknown stays None, which blocks."""
+        ledger (losses). Unknown stays None, which blocks. Its `as_of` is the time of the evidence (the older of the
+        snapshot's observation and the P&L ledger's last COMPLETE read), never the decision time, so stale evidence
+        is stale usage. Turnover, daily P&L and drawdown are running aggregates: nothing here rescans history."""
         day = now.date().isoformat()
         snap = view.snapshot
         event_exposure = total_exposure = None
@@ -1320,23 +1438,17 @@ class Orchestrator:
                 total_exposure = sum((c for _, c in held), _ZERO) + sum((q for _, q in pos), _ZERO)
                 event_exposure = sum((c for t, c in held if in_event(t)), _ZERO) + sum(
                     (q for t, q in pos if in_event(t)), _ZERO)
-            turnover = _ZERO
-            for key, intent in self._planned.items():
-                for a in self._journal.attempts_for(key):
-                    if parse_utc_text(a.created_at_utc).date().isoformat() == day:
-                        turnover += ctl.turnover_increment(intent)
+            turnover = self._turnover.get(day, _ZERO)
             loss = drawdown = None
             if self._pnl_baseline:
-                today = sum((e.amount for e in self._ledger if parse_utc_text(e.at_utc).date().isoformat() == day),
-                            _ZERO)
+                today = self._pnl_by_day.get(day, _ZERO)
                 loss = -today if today < 0 else _ZERO
-                equity, peak = _ZERO, _ZERO
-                for e in sorted(self._ledger, key=lambda x: (parse_utc_text(x.at_utc), x.entry_ref)):
-                    equity += e.amount
-                    peak = max(peak, equity)
-                drawdown = peak - equity
-        return ctl.GrantUsage(grant.digest(), event_key, day, utc_text(now), event_exposure, total_exposure, turnover,
-                              loss, drawdown)
+                drawdown = self._peak - self._equity
+        evidence = [t for t in (None if snap is None else snap.observed_at_utc,
+                                self._pnl_as_of if self._pnl_baseline else None) if t is not None]
+        as_of = min(evidence, key=parse_utc_text) if len(evidence) == 2 else self._genesis  # unknown: stale
+        return ctl.GrantUsage(grant.digest(), event_key, day, as_of, event_exposure, total_exposure, turnover, loss,
+                              drawdown)
 
     # steps 11-12 ----------------------------------------------------
 
@@ -1355,24 +1467,36 @@ class Orchestrator:
                 "missing": list(s.missing), "cycle": cy.n}, self._now(), cy)
             self._settled.add(s.ticker)
 
-    def _health_review(self, cy: _Cycle) -> None:
-        now = self._now()
+    def _quarantine_scan(self, cy: _Cycle) -> None:
         for r in self._journal.reservations.held_reservations(self._scope):
             if r.quarantine_reason is not None:
                 cy.anomalies.append((_incident_id("quarantine", r.reservation_id),
                                      f"reservation quarantined: {r.quarantine_reason}"[:300]))
+
+    def _safety_review(self, cy: _Cycle) -> None:
+        """Before any decision: quarantines, a degraded reconciliation, and every anomaly the read and the evidence
+        produced become incidents now, so their disarm governs this cycle's decisions."""
+        self._quarantine_scan(cy)
         degraded = cy.status is not ctl.Reconciliation.COMPLETE
         if degraded and not cy.control_disarmed_on_recon and self._last_status in (None, "COMPLETE"):
             cy.anomalies.append((_incident_id(f"reconciliation-{cy.status.value.lower()}", f"c{cy.n}"),
                                  f"account reconciliation {cy.status.value}"))
+        self._raise_pending(cy)
+
+    def _health_review(self, cy: _Cycle) -> None:
+        self._quarantine_scan(cy)  # a reply recorded this cycle can quarantine too
         if cy.budget.exhausted:
             cy.anomalies.append((_incident_id("budget", f"c{cy.n}"), "the cycle's request budget is exhausted"))
         if cy.deadline_hit:
             cy.anomalies.append((_incident_id("deadline", f"c{cy.n}"), "the cycle deadline was reached"))
+        self._raise_pending(cy)
+
+    def _raise_pending(self, cy: _Cycle) -> None:
+        """Raise every anomaly not yet raised (an open incident, or one raised recently, is not raised again)."""
+        now = self._now()
         for incident_id, reason in cy.anomalies:
-            if incident_id in self._raised or incident_id in self._flagged:
+            if incident_id in self._raised or incident_id in self._state.open_incidents:
                 continue
-            self._flagged.add(incident_id)
             self._apply(ctl.IncidentRaised(incident_id, reason, utc_text(now)), now, cy)
             cy.incidents.append(incident_id)
 
@@ -1411,6 +1535,9 @@ class Orchestrator:
         venue's answer. No further cycle runs on this instance."""
         self._check_running()
         now = self._now()
+        if self._fenced_out or not self._lease_held():
+            self._stopped = True  # the live worker owns the account: nothing is written or cancelled from here
+            return ShutdownReport(utc_text(now), (), MappingProxyType({}), ())
         self._apply(ctl.Disarm(operator_ref, reason, utc_text(now)), now)
         resting: list[tuple[ReservationView, Any]] = []
         for r in self._journal.reservations.held_reservations(self._scope):
@@ -1438,12 +1565,12 @@ class Orchestrator:
                                        grants=self._config.grants)
         if problems:
             return "REFUSED: " + "; ".join(problems)
-        if self._fence is None:
-            return "REFUSED: NO_EGRESS_LEASE (a fenced-out process does not act on stale state)"
+        if not self._lease_held():
+            return "REFUSED: NO_EGRESS_LEASE (another worker holds the lease)"
         try:
             self._journal.reservations.renew_lease(self._config.worker_id, self._fence, self._config.lease_ttl, now)
         except StaleFence:
-            self._fence = None
+            self._fence, self._fenced_out = None, True
             return "REFUSED: NO_EGRESS_LEASE (another worker holds the lease)"
         market = None
         try:
@@ -1464,6 +1591,14 @@ class Orchestrator:
         try:
             if outcome == "OK" and text is not None:
                 ack = w.parse_cancel_ack(reply.body)
+                if ack.order_id != attempt.provider_order_id or ack.client_order_id not in (None, r.client_order_id):
+                    # An answer for another order proves nothing about ours: kept as evidence, the order is unknown.
+                    self._journal.record_receipt(receipt_id=f"cancel-mismatch:{r.reservation_id}",
+                                                 kind="CANCEL_REPLY_MISMATCH", source="venue-reply",
+                                                 payload_json=text, received_at=self._now(),
+                                                 provider_id=ack.order_id, attempt_id=r.reservation_id)
+                    auth.mark_unknown(r.reservation_id, self._now(), reason="CANCEL_ACK_FOR_ANOTHER_ORDER")
+                    return "CANCEL_OUTCOME_UNKNOWN: the reply names another order"
                 receipt = f"cancel:{r.reservation_id}"
                 self._journal.record_receipt(receipt_id=receipt, kind=ReceiptKind.CANCEL_CONFIRM, source="venue-reply",
                                              payload_json=text, received_at=self._now(), provider_id=ack.order_id,

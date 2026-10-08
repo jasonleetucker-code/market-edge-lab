@@ -404,14 +404,19 @@ def test_a_failed_read_while_armed_disarms_and_rearming_needs_the_incident_named
     assert isinstance(h.arm(orch, ctl.Mode.BOUNDED_AUTO, clock), ctl.ArmAccepted)
 
 
-def test_a_lost_lease_raises_an_incident_and_sends_nothing(env):
+def test_a_lost_lease_fences_the_instance_out_it_reads_and_writes_nothing(env):
     journal, adapter, clock = env
     orch, _ = armed(journal, adapter, clock)
     clock.advance(600)  # past the lease
     journal.reservations.acquire_lease("another-worker", timedelta(minutes=5), clock())
+    events = journal.verify_chain().events
     report = orch.run_cycle()
-    assert orch.fence_token is None and any(i.startswith("lease-lost:") for i in report.incidents)
-    assert orch.state.mode is ctl.Mode.DISARMED
+    assert report.fenced_out and orch.fenced_out and orch.fence_token is None
+    assert report.reconciliation == "NOT_RUN" and report.requests_used > 0  # it read the account
+    assert journal.verify_chain().events == events and writes(adapter) == []  # and wrote nothing at all
+    assert orch.submit_signal(h.signal("s1", B70, at=clock(), limit="0.45")).reason == "FENCED_OUT"
+    with pytest.raises(o.OrchestratorFencedOut):
+        orch.request_arm(ctl.ArmRequest(ctl.Mode.OBSERVE_ONLY, "owner", (), m.utc_text(clock())))
 
 
 # ---------------------------------------------------------------- shutdown
@@ -442,14 +447,17 @@ def test_shutdown_stops_new_risk_and_leaves_resting_orders_alone(env):
     assert journal.control_records(h.SCOPE, "SHUTDOWN")[-1].body["cancel_owned"] is False
 
 
-def test_a_fenced_out_process_does_not_cancel_at_shutdown(env):
+def test_a_fenced_out_process_does_not_cancel_or_write_at_shutdown(env):
     journal, adapter, clock = env
     orch = _resting(journal, adapter, clock)
     clock.advance(600)
     journal.reservations.acquire_lease("another-worker", timedelta(minutes=5), clock())
+    events = journal.verify_chain().events
     report = orch.shutdown("owner", "end of day", cancel_owned=True)
-    assert [v.startswith("REFUSED: NO_EGRESS_LEASE") for v in report.cancel_outcomes.values()] == [True]
-    assert "ORDER_CANCEL" not in writes(adapter)
+    assert report.cancels_requested == () and "ORDER_CANCEL" not in writes(adapter)
+    assert journal.verify_chain().events == events
+    with pytest.raises(o.OrchestratorStopped):
+        orch.run_cycle()
 
 
 def test_shutdown_with_cancel_owned_cancels_only_our_orders(env):
@@ -487,3 +495,120 @@ def test_the_orchestrator_installs_no_timer_thread_or_process_and_imports_no_cap
     banned = {"threading", "time", "sched", "asyncio", "signal", "subprocess", "multiprocessing", "concurrent"}
     assert not modules & banned, modules & banned
     assert not any("transport" in x or "signer" in x or "fake_venue" in x for x in modules), modules
+
+
+# ---------------------------------------------------------------- review findings (regressions)
+
+
+def test_f1_an_evidence_anomaly_disarms_before_any_decision_in_the_same_cycle(env):
+    """An acknowledged GTC order of ours vanishes from a COMPLETE listing: the incident is raised before step 4, so
+    the ENTRY queued for the same cycle is never sent."""
+    journal, adapter, clock = env
+    orch, _ = armed(journal, adapter, clock)
+    orch.submit_signal(h.signal("rest", B72, at=clock(), limit="0.30", qty="2", tif="good_till_canceled"))
+    (d,) = orch.run_cycle().decisions
+    assert d.attempt_state == "ACKNOWLEDGED"
+    adapter.hidden_orders.add(journal.attempt(d.attempt_id).provider_order_id)
+    clock.advance(60)
+    orch.submit_signal(h.signal("new-risk", B70, at=clock(), limit="0.45"))
+    before = len(writes(adapter))
+    report = orch.run_cycle()
+    assert report.reconciliation == "COMPLETE"
+    assert any(i.startswith("order-missing:") for i in report.incidents)
+    assert report.decisions == () and dict(report.signals) == {"NOT_ACTED": 1}
+    assert len(writes(adapter)) == before and report.mode_at_end is ctl.Mode.DISARMED
+    kinds = [type(e).__name__ for e in journal.control_events(h.SCOPE)]
+    assert kinds[-2:] == ["ReconciliationObserved", "IncidentRaised"]  # the disarm precedes the cycle's decisions
+
+
+def test_f2_a_stalled_worker_never_touches_the_live_workers_in_flight_attempt(env, jpath):
+    """A stalls past its lease, B takes over and sends; A wakes up mid-send and runs a cycle. A must not mark B's
+    PENDING_EGRESS attempt unknown (B's ack is then recorded), and A writes nothing at all."""
+    journal_a, adapter, clock = env
+    a, feed = armed(journal_a, adapter, clock)
+    clock.advance(600)
+    journal_b = ExecutionJournal.open(jpath)
+    seen = {}
+
+    def send_b(request):
+        if request.is_write():  # B's attempt is committed PENDING_EGRESS; A wakes up now
+            seen["events_before"] = journal_b.verify_chain().events
+            seen["a"] = a.run_cycle()
+            seen["events_after"] = journal_b.verify_chain().events
+        return adapter(request)
+
+    b = o.Orchestrator(journal_b, h.config(worker_id="worker-b"), send=send_b, feed=feed,
+                       strategies=(h.DemoStrategy(),), clock=clock, sleep=clock.sleep)
+    b.run_cycle()
+    assert isinstance(h.arm(b, ctl.Mode.BOUNDED_AUTO, clock), ctl.ArmAccepted)
+    clock.advance(60)
+    b.submit_signal(h.signal("s1", B70, at=clock(), limit="0.45"))
+    (d,) = b.run_cycle().decisions
+    assert d.attempt_state == "ACKNOWLEDGED", d
+    assert seen["a"].fenced_out and seen["events_after"] == seen["events_before"]
+    assert a.fenced_out and journal_b.attempt(d.attempt_id).state_reason is None
+    journal_b.close()
+
+
+def test_f3_grant_usage_is_as_of_its_evidence_not_the_decision_time(env):
+    journal, adapter, clock = env
+    orch, _ = armed(journal, adapter, clock)
+    orch.run_cycle()
+    snap = journal.reservations.latest_snapshot(h.SCOPE)
+    clock.advance(600)  # ten minutes with no new read
+    now = clock()
+    cy = o._Cycle(99, now, now, o._Budget(1, adapter), orch.state.mode)  # test-only: the usage seam
+    usage = orch._usage(cy, h.grant(), journal.reservations.account_view(h.SCOPE), h.EVENT, now)
+    assert usage.as_of_utc == snap.observed_at_utc
+    intent = h.DemoStrategy().propose(o.StrategyContext(h.SCOPE, now, 99, orch.state.mode,
+                                                        (h.signal("x", B70, at=now, limit="0.45"),), frozenset(),
+                                                        None, {}, (), {}))[0].intent
+    problems = ctl.grant_problems(h.grant(), intent, armed_grant_digest=h.grant().digest(), venue="kalshi",
+                                  event_key=h.EVENT, usage=usage, model_hash=h.MODEL_HASH,
+                                  policy_hash=h.POLICY_HASH, now=now)
+    assert "GRANT_USAGE_STALE_OR_FUTURE" in problems
+
+
+def test_f4_a_cancel_reply_for_another_order_confirms_nothing(env):
+    journal, adapter, clock = env
+    orch = _resting(journal, adapter, clock)
+    adapter.cancel_ack_order_id = "fake-ord-999999"
+    report = orch.shutdown("owner", "end of day", cancel_owned=True)
+    assert [v.startswith("CANCEL_OUTCOME_UNKNOWN") for v in report.cancel_outcomes.values()] == [True]
+    (rid,) = report.cancels_requested
+    r = journal.reservations.reservation(rid)
+    assert r.state.value == "UNKNOWN" and r.filled_quantity == 0  # held in full; reduced_by was never used
+    assert journal.receipts(f"cancel-mismatch:{rid}")[0]["kind"] == "CANCEL_REPLY_MISMATCH"
+
+
+def test_f5_the_fixture_cash_basis_fills_only_an_unknown_basis(env, monkeypatch):
+    journal, adapter, clock = env
+    from edge_lab.execution import account
+    monkeypatch.setattr(account, "CASH_BASIS", CashBasis.AVAILABLE_AFTER_VENUE_HOLDS)  # as if ACC-02 were settled
+    orch, _ = h.build(journal, adapter, fixture_cash_basis=CashBasis.UNKNOWN)
+    orch.run_cycle()
+    assert journal.reservations.latest_snapshot(h.SCOPE).cash_basis is CashBasis.AVAILABLE_AFTER_VENUE_HOLDS
+
+
+def test_f6_decisions_never_rescan_history_and_memory_is_bounded(env, monkeypatch):
+    journal, adapter, clock = env
+    orch, _ = armed(journal, adapter, clock)
+    for i in range(3):
+        orch.submit_signal(h.signal(f"warm{i}", h.MARKETS[i], at=clock(), limit="0.45", qty="1"))
+    orch.run_cycle()
+    clock.advance(60)
+    calls = []
+    original = journal.attempts_for
+    monkeypatch.setattr(journal, "attempts_for", lambda key: calls.append(key) or original(key))
+    orch.submit_signal(h.signal("next", B70, at=clock(), limit="0.45", qty="1"))
+    report = orch.run_cycle()
+    assert report.decisions and calls == [d.intent_key for d in report.decisions if d.attempt_id]  # the new key only
+    recent = o._Recent(3)
+    for i in range(10):
+        recent.add(i)
+    assert len(recent) == 3 and 9 in recent and 0 not in recent
+    for i in range(30):  # signal ids are kept only while they are still valid
+        orch.submit_signal(h.signal(f"burst{i}", B74, at=clock(), valid=timedelta(seconds=30)))
+        clock.advance(20)
+        orch._queue.clear()  # test-only: keep the queue from filling
+    assert len(orch._signal_ids) <= 2

@@ -39,6 +39,12 @@ Composition is where the dangerous paths live:
    7. only then signals, strategies, arbitration, the risk gate, control and sends;
    8. settlement and attribution records;
    9. a health review that raises incidents.
+
+   Every anomaly a step finds is raised as a control incident (a disarm) before the next step: the read and
+   evidence anomalies (an acknowledged order missing from a COMPLETE listing, a duplicate client id at the venue, a
+   lifecycle quarantine, an unknown attempt that cannot be resolved, a journal refusal, a quarantined reservation,
+   a degraded reconciliation) are raised before any decision, and a decision-phase anomaly before the next
+   decision (review finding F1).
 5. **One attempt per intent key, ever.** An `INTENT_PLANNED` record is written before `prepare_attempt`. A
    planned key is never prepared again. An ambiguous send stays OUTCOME_UNKNOWN until the order listing resolves
    it: found means ACKNOWLEDGED; not found in a COMPLETE listing, `NOT_FOUND_MIN_DELAY` after the send, means
@@ -53,7 +59,10 @@ Composition is where the dangerous paths live:
    - turnover: today's attempts;
    - losses: the venue's realized P&L ledger.
 
-   The orchestrator never issues an `AutomationGrant`.
+   The orchestrator never issues an `AutomationGrant`. The usage's `as_of` is the time of its evidence (the older
+   of the snapshot's observation and the P&L ledger's last COMPLETE read), not the decision time, so stale evidence
+   blocks as stale usage (F3). Turnover per day, P&L per day, equity and peak are running aggregates rebuilt from
+   the persisted records at start; no decision rescans history (F6).
 8. **Signals.** The queue is bounded and typed. Signals are refused at admission when they are:
    - out of identity (another scope, an unknown strategy, an unregistered source);
    - duplicates, from the future, expired, or valid for too long.
@@ -65,11 +74,21 @@ Composition is where the dangerous paths live:
    journal rows added per cycle.
 10. **Shutdown.** It persists a Disarm. Resting orders stay unless `cancel_owned=True`. Then each of our own
     acknowledged orders is cancelled: `request_cancel` is journaled before the send, and the cancel is sent
-    only while this process holds the lease. Nothing amends, and a cancel goes only to an order with no unknown
-    outcome, so one operation is in flight per order (the package L requirement).
-11. **FIXTURE cash basis.** Package G reports the cash basis as UNKNOWN (ACC-02), so nothing could ever pass. A
-    FIXTURE caller may declare `fixture_cash_basis`, the basis its fixture venue implements. It is refused for
-    every other environment and recorded in BOOT and every CYCLE record. The placeholder risk limits stay the
+    only while this process holds the lease. A cancel reply naming another order confirms nothing: it is kept as
+    evidence and the reservation becomes UNKNOWN (F4). Nothing amends, and a cancel goes only to an order with no
+    unknown outcome, so one operation is in flight per order (the package L requirement).
+11. **Fencing (F2).** Only the egress lease holder writes. A worker that lost the lease is fenced out: it may
+    read the account, but it writes nothing (no snapshot, control event, record or attempt change) and sends
+    nothing, because the live worker's control log and journal are no longer its own. It does not even raise a
+    lease-lost incident, which would land in the live worker's log and make that worker's replay diverge from its
+    live state. The lease is re-read before every writing phase. Only attempts of this instance's own fence are
+    turned unknown at a cycle start. Residual: between a lease check and a write there is no transaction spanning
+    both, so a takeover in that window can let one evidence write land; the journal's fence check in
+    `prepare_attempt` stays the hard stop for any send.
+12. **FIXTURE cash basis.** Package G reports the cash basis as UNKNOWN (ACC-02), so nothing could ever pass. A
+    FIXTURE caller may declare `fixture_cash_basis`, the basis its fixture venue implements. It only fills a basis
+    package G reports as UNKNOWN, never replaces a known one (F5); it is refused for every other environment and
+    recorded in BOOT and every CYCLE record. The placeholder risk limits stay the
     default: tests pass explicit TEST limits as typed inputs.
 
 ## Alternatives rejected
@@ -100,7 +119,11 @@ Composition is where the dangerous paths live:
   after its end, so exposure is double counted for about one cycle (conservative).
 - **A cycle that raises** (for example JournalBusy) writes no CYCLE record. The next cycle starts by turning any
   leftover in-flight attempt into OUTCOME_UNKNOWN.
-- **In-memory dedupe sets** (signal ids, recorded verdicts) grow with the process lifetime, not per cycle.
+- **In-memory dedupe sets are bounded** (F6): signal ids are kept only while still valid; recorded verdicts and
+  raised incident ids keep the most recent `RECENT_MEMORY`. Forgetting one can only repeat a record or re-raise a
+  recurring anomaly, never send. The planned-intent index and the order history stay complete in memory, because
+  the risk gate requires the order history complete since genesis (ADR 0044); their size grows with attempts, not
+  per decision.
 
 ## Reconsider when
 

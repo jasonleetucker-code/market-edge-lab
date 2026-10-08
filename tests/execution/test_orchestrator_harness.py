@@ -141,6 +141,8 @@ class VenueAdapter:
     fills_seen: int = 0
     writes: list = field(default_factory=list)
     positions_served: dict = field(default_factory=dict)  # the venue positions at the last positions read
+    hidden_orders: set = field(default_factory=set)  # order ids left out of every order listing (a venue fault)
+    cancel_ack_order_id: str | None = None  # a cancel reply naming this order id instead (a venue fault)
 
     def __post_init__(self) -> None:
         if self.venue is None:
@@ -288,7 +290,8 @@ class VenueAdapter:
         if name == "GET_HISTORICAL_POSITIONS":
             return ok({"market_positions": [], "event_positions": [], "cursor": None})
         if name == "GET_ORDERS":
-            return ok(self._page("orders", [self._order_json(x) for x in self.venue.list_orders()], q))
+            return ok(self._page("orders", [self._order_json(x) for x in self.venue.list_orders()
+                                            if x["order_id"] not in self.hidden_orders], q))
         if name in ("GET_HISTORICAL_ORDERS", "GET_HISTORICAL_FILLS"):
             return ok({"orders" if "ORDERS" in name else "fills": [], "cursor": None})
         if name == "GET_FILLS":
@@ -359,7 +362,7 @@ class VenueAdapter:
         if reply.outcome == "error":
             return Reply("REJECTED", 400, json.dumps({"error": reply.error}).encode())
         order = reply.body["order"]
-        return ok({"order_id": order_id, "client_order_id": order["client_order_id"],
+        return ok({"order_id": self.cancel_ack_order_id or order_id, "client_order_id": order["client_order_id"],
                    "reduced_by": count(reply.body["reduced_by"]), "ts_ms": int(self.clock().timestamp() * 1000)})
 
     # ---------------------------------------------------------------- persistence across processes
