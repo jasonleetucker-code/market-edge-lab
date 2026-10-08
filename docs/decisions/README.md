@@ -61,4 +61,9 @@ Under the 2026-10-07 Kalshi execution campaign directive (#160):
   the real components. It starts only via `control.boot`, sends at most one attempt per intent key, uses bounded
   budgets and installs no scheduler. Demonstration B runs on fixtures.
 
-New decisions start at 0045 (wallet intelligence, #174) and 0047.
+- 0047: the account-aware shadow (package M). The orchestrator's SHADOW mode is the one decision chain up to egress.
+  It adds `prepare_attempt`'s own read-only checks and a hypothetical reservation that lives for one cycle and is
+  never stored. A `READ_ONLY` identity holds only a write-refusing sender and runs on its own shadow store. The
+  shadow path cannot reach the transport or the signer, even through a proxy module.
+
+New decisions start at 0045 (wallet intelligence, #174) and 0048.

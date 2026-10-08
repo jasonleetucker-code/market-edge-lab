@@ -60,11 +60,19 @@ Two opposite failures are possible:
    - **Capability modules.** `transport` and `signer` may be imported only by the files on a reviewed
      allowlist (`CAPABILITY_USERS`): today only `transport → signer`, with no user of `transport` yet. The
      executor is added to that list by a reviewed change.
+   - **The shadow path reaches no capability, even through a proxy** (amended 2026-10-08, package M, ADR 0047).
+     `shadow.py` and `orchestrator.py`, and every package module they import transitively, never import a
+     capability module or a capability user. They bind no package object and name no capability, and `shadow.py`
+     names no write builder, order endpoint or journal write. Why here: the direct-import rule above stops
+     `orchestrator → transport`, but not `orchestrator → x → transport` once some `x` is allowed to import the
+     transport (package O's executor). The account-aware shadow's read-only guarantee must not depend on nobody
+     ever adding such an edge.
    - **No file changes another module's state.** That rules out assignment, `del` or mutating calls on an
      imported module's or class's attributes, and `setattr`, `vars` or `globals`.
    - **No reflection.** No `__closure__`, `__dict__`, `__code__`, private `getattr`, `inspect`, `gc` or
      `sys.modules`.
-   - **Private safety state is named only by its owner:** `_HOSTS` in conformance.py, `_sign` in signer.py.
+   - **Private safety state is named only by its owner:** `_HOSTS` in conformance.py, `_sign` in signer.py, and
+     `_inner_send` (the read-only sender's inner callable) in shadow.py (package M).
 
    Outside the package (`src/`, `scripts/`, `deploy/`), no import, attribute path, naming string or
    path-building string may reach it. These static scans catch ordinary and careless paths. They do not catch
