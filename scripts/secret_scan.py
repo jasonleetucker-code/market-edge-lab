@@ -127,6 +127,13 @@ ALLOWED: dict[str, tuple[tuple[str, ...], str]] = {
     "f15f811d2afb97e7": (("tests/test_redaction.py",), "synthetic key-id sample the redaction tests redact"),
     "4e3abb493b8bb9f0": (("tests/test_secret_scan.py",),
                          "this scanner's own 'assigned secret' sample, assembled from string pieces at run time"),
+    # Not synthetic: coordinator ruling 2026-10-08. A third party's CDN issued this short-lived bot-challenge value
+    # in an HTTP 429 response to an unauthenticated public page fetch; it grants no access to any account. The file is
+    # immutable EXP-002 fee evidence and stays unedited.
+    "ef64c49b08cfdd21": (("experiments/EXP-002-nfl-consensus-vs-event-market/fee_evidence/"
+                          "kalshi-fee-schedule_current_2026-09-29T002418Z_HTTP429.headers.txt",),
+                         "coordinator ruling 2026-10-08: third-party, non-credential, ephemeral X-Vercel-Challenge-Token "
+                         "header in captured 429 fee evidence (immutable)"),
 }
 
 LIMITATIONS = (

@@ -14,7 +14,7 @@ been wrong before.
 
 1. The approval names the exact commit `<SHA>` (merged `main`).
 2. `python scripts/secret_scan.py --history --rev <SHA>` is clean. Record its output summary
-   ([SECRET_SCAN.md](SECRET_SCAN.md)). As of 2026-10-08 it is not clean: one finding is pending a decision.
+   ([SECRET_SCAN.md](SECRET_SCAN.md)).
    - A clean result rules out credentials of the shapes the scan knows. It does not rule out a bare key id (a UUID) or bare hex key on a line of its own, short values, an all-letter key or topic value, or a secret split across lines or encoded.
    - No key is part of this install.
 3. `python -m pytest` is green on `<SHA>`, and so is CI on that exact commit.

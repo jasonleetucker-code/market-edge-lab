@@ -214,24 +214,12 @@ def test_a_scan_that_cannot_run_is_never_clean(tmp_path):
     assert code == 2
 
 
-# Findings reported to the coordinator for a decision and deliberately NOT allowlisted, so the scan stays red (exit 1)
-# until someone decides: fingerprint -> path. Not synthetic: a Vercel bot-challenge token in a captured HTTP 429
-# response header, immutable EXP-002 fee evidence (2026-09-29). It is a third party's challenge nonce, not a credential
-# of this project. Reported 2026-10-08 (package O review fix); remove this entry when the decision is recorded.
-PENDING_REVIEW = {
-    "ef64c49b08cfdd21": "experiments/EXP-002-nfl-consensus-vs-event-market/fee_evidence/"
-                        "kalshi-fee-schedule_current_2026-09-29T002418Z_HTTP429.headers.txt",
-}
-
-
 @needs_git
-def test_this_repository_has_no_finding_beyond_those_pending_review():
+def test_this_repository_is_clean_in_its_tree_and_its_head_history():
     for argv in (["--tree"], ["--history", "--rev", "HEAD"]):
         code, result = scan.run([*argv, "--repo", str(ROOT)])
-        assert code in (0, 1), result
-        unexpected = [f for f in result["findings"] if PENDING_REVIEW.get(f["fingerprint"]) != f.get("path")]
-        assert unexpected == [], unexpected[:5]
-        assert result["clean"] is (not result["findings"])  # a pending finding keeps the scan red
+        assert code == 0, [f for f in result.get("findings", [])][:5] or result
+        assert result["clean"] is True
 
 
 def test_the_script_is_standard_library_only():

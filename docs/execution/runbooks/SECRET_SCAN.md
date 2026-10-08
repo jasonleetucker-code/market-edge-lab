@@ -82,17 +82,18 @@ by the rules in `docs/SECURITY.md` and [KEYS.md](KEYS.md), not by this scan.
 |---|---|---|
 | 2026-10-07 | an earlier pattern-based scan of 787 commits (reported by the campaign coordinator) | clean |
 | 2026-10-08 | `--history` with the first version of this script, on branch `exec/o-ops` at `d617faa` (all local refs): 836 commits, 339 refs, 2,578 text blobs | clean. 101 matches across 10 fingerprints were reviewed and allowlisted, all synthetic test values |
-| 2026-10-08 | `--history` and `--tree` with the assigned-credential detector, on branch `exec/o-ops` at `d45120b`. History (all local refs): 852 commits, 341 refs, 2,652 text blobs, 852 commit messages, 55 binary blobs skipped, none over the size bound. Tree: 743 files. 106 history and 38 tree matches across 11 path-bound entries were reviewed as synthetic test values and allowlisted | **NOT CLEAN: 1 finding pending a decision** (below) |
+| 2026-10-08 | `--history` and `--tree` with the assigned-credential detector, on branch `exec/o-ops` at `d45120b`. History (all local refs): 852 commits, 341 refs, 2,652 text blobs, 852 commit messages, 55 binary blobs skipped, none over the size bound. Tree: 743 files. 106 history and 38 tree matches across 11 path-bound entries were reviewed as synthetic test values and allowlisted | not clean at the time: 1 finding (below), allowlisted by the coordinator's ruling the same day |
+| 2026-10-08 | after the ruling, on branch `exec/o-ops` at `3fd8f6d` plus the allowlist change. History (all local refs): 885 commits, 367 refs, 2,708 text blobs, 885 commit messages, 55 binary blobs skipped, none over the size bound. Tree: 743 files | **clean** (`--history` and `--tree` both exit 0). 107 history and 39 tree matches across 12 path-bound entries are allowlisted |
 
-**Pending decision (not allowlisted).**
-- `experiments/EXP-002-nfl-consensus-vs-event-market/fee_evidence/kalshi-fee-schedule_current_2026-09-29T002418Z_HTTP429.headers.txt`,
+**Coordinator ruling, 2026-10-08: allowlisted.** The one finding of the round-2 scan:
+- **Where:** `experiments/EXP-002-nfl-consensus-vs-event-market/fee_evidence/kalshi-fee-schedule_current_2026-09-29T002418Z_HTTP429.headers.txt`,
   line 5, fingerprint `ef64c49b08cfdd21`.
-- It is an `X-Vercel-Challenge-Token` response header, captured with an HTTP 429 response as immutable fee
-  evidence.
-- It is a third party's bot-challenge value, not a credential of this project. It is real data, not synthetic, so
-  it was reported to the coordinator rather than allowlisted.
-- Until a decision is recorded, the scan exits 1 and this gate is not passed. `tests/test_secret_scan.py`
-  (`PENDING_REVIEW`) fails on any other finding.
+- **What:** an `X-Vercel-Challenge-Token` header.
+- **Ruling:** the coordinator ruled it harmless. It is a third-party, non-credential, ephemeral challenge token:
+  - a third party's CDN issued it in an HTTP 429 response to an unauthenticated public page fetch;
+  - it grants no access to any account, this project's or anyone else's.
+- **How it is allowlisted:** a path-bound `ALLOWED` entry that cites the ruling.
+- **The evidence file stays unedited.** It is immutable fee evidence.
 
 Re-run and add a row before each credential decision is used. Re-run after any history rewrite, and whenever
 `.github/workflows/` starts publishing an artifact.

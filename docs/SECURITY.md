@@ -111,8 +111,9 @@ Authority: directive 2026-09-23 section 10 and issue #29, recorded in
 - **What a clean scan does not prove.** it finds credential shapes and credential-named assignments only. It does not find a bare key id (a UUID) or bare hex key on a line of its own, short values, an all-letter key or topic value, or a secret split across lines or encoded (the full list is in `LIMITATIONS` and
   SECRET_SCAN.md). A clean scan means "no credential of these shapes". Keeping keys out of git rests on the rules
   above and on KEYS.md, not on the scan alone.
-- **Current state.** As of 2026-10-08 the scan is **not clean**: one finding (a third party's challenge token in
-  captured fee evidence) is pending a decision. It is listed in SECRET_SCAN.md.
+- **Current state.** The full-history and tree scans are clean as of 2026-10-08. One finding was a third party's
+  ephemeral challenge token in captured fee evidence. It was allowlisted by the coordinator's ruling that day, which
+  is recorded in SECRET_SCAN.md.
 
 ## If a secret is committed
 
