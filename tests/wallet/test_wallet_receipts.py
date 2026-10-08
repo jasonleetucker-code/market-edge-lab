@@ -19,11 +19,11 @@ from wallet_support import D, acct, at, obs
 
 from edge_lab.wallet_intel import receipts as R
 from edge_lab.wallet_intel.accounting import Mark, MarkKind
-from edge_lab.wallet_intel.events import (Action, ChainFinality, Correction, CorrectionKind, ObservationLog,
-                                          WalletObservation)
+from edge_lab.wallet_intel.events import (Action, AssetAmount, ChainFinality, Correction, CorrectionKind,
+                                          ObservationLog, WalletObservation)
 from edge_lab.wallet_intel.exact import Labeled
-from edge_lab.wallet_intel.identity import (IdentityBasis, IdentityRegistry, MappingRevocation, ProxyMapping,
-                                            RelationKind)
+from edge_lab.wallet_intel.identity import (AccountRef, IdentityBasis, IdentityRegistry, MappingRevocation,
+                                            ProxyMapping, RelationKind)
 from edge_lab.wallet_intel.selection import (LEGACY_V1_STATUS, Candidate, EligibilityRule, multiple_testing,
                                              select_at)
 
@@ -79,7 +79,9 @@ def scenario(tweak: Tweak = _same) -> R.SelectionInputsV2:
     mark("a1mx-yes", "1", at(days=4, hours=12))
     late = wobs(A1, Action.TRADE_BUY, "a1late-yes", 999, "0.10", at(days=11), market="a1late", event_id="a1-late")
     log1 = ObservationLog()
+    log1.ingest(t("ingest:a1:before", []))  # backfill hooks: empty in the base scenario
     log1.ingest([*a1, extra, late])
+    log1.ingest(t("ingest:a1:after", []))
     pre = t("correction:a1:pre", Correction(
         "c-pre", oid(A1, "a1-x"), CorrectionKind.SUPERSEDED, at(days=6), "synthetic: price restated",
         replacement=replace(extra, price=D("0.35"), paid=(replace(extra.paid[0], quantity=D("3.5")),))))
@@ -188,35 +190,35 @@ RULE_MUTATORS: dict[str, Callable[[Any], Any]] = {
     "min_trade_notional": lambda v: v + D("0.01"), "require_complete_coverage": lambda v: not v,
 }
 
-# (dataclass, scenario target, {field: mutator})
-MUTATION_TABLE: list[tuple[type, str, dict[str, Callable[[Any], Any]]]] = [
-    (EligibilityRule, "rule", RULE_MUTATORS),
-    (Candidate, "candidate:a1", {"account": lambda v: acct(98), "discovered_at": _earlier,
+# (dataclass, scenario target, nested path or None, {field: mutator})
+MUTATION_TABLE: list[tuple[type, str, str | None, dict[str, Callable[[Any], Any]]]] = [
+    (EligibilityRule, "rule", None, RULE_MUTATORS),
+    (Candidate, "candidate:a1", None, {"account": lambda v: acct(98), "discovered_at": _earlier,
                                  "discovery_source": _txt, "discovery_label_version": _txt}),
-    (WalletObservation, "obs:a1:0", OBS_MUTATORS),
-    (Correction, "correction:a1:pre", {
+    (WalletObservation, "obs:a1:0", None, OBS_MUTATORS),
+    (Correction, "correction:a1:pre", None, {
         "correction_id": _txt, "target_id": lambda v: oid(A1, "a1-0"), "kind": lambda v: CorrectionKind.RETRACTED,
         "recorded_at": _earlier, "reason": _txt, "replacement": lambda v: replace(v, price=D("0.36")),
         "new_finality": lambda v: ChainFinality.FINAL}),
-    (Mark, "mark:a1m0-yes", {"instrument_id": lambda v: "a1m0-yes-b", "kind": lambda v: MarkKind.EXECUTABLE_BID,
+    (Mark, "mark:a1m0-yes", None, {"instrument_id": lambda v: "a1m0-yes-b", "kind": lambda v: MarkKind.EXECUTABLE_BID,
                              "price": lambda v: D("0.99"), "depth": lambda v: D(100), "as_of": _earlier}),
-    (R.MarkEvidence, "markev:a1m0-yes", {"mark": lambda v: replace(v, price=D("0.98")), "source": _txt,
+    (R.MarkEvidence, "markev:a1m0-yes", None, {"mark": lambda v: replace(v, price=D("0.98")), "source": _txt,
                                          "received_at": _later, "quote_basis": _txt, "evidence_ref": _txt}),
-    (R.CoverageAssertion, "coverage:a1", {"account_key": lambda v: acct(97).key,
+    (R.CoverageAssertion, "coverage:a1", None, {"account_key": lambda v: acct(97).key,
                                           "history_complete": lambda v: None, "source": _txt,
                                           "method_version": _txt, "known_at": _earlier, "evidence_ref": _txt}),
-    (R.FlagAssertion, "flag:a1", {"account_key": lambda v: acct(97).key, "kind": lambda v: R.FlagKind.QUALITY,
+    (R.FlagAssertion, "flag:a1", None, {"account_key": lambda v: acct(97).key, "kind": lambda v: R.FlagKind.QUALITY,
                                   "flags": lambda v: ("SYNTHETIC_FLAG",), "source": _txt, "method_version": _txt,
                                   "known_at": _earlier, "evidence_ref": _txt}),
-    (R.TrialBasis, "trials", {"count": lambda v: v + 1, "source": _txt,
+    (R.TrialBasis, "trials", None, {"count": lambda v: v + 1, "source": _txt,
                               "prior_receipt_digests": lambda v: (*v, "cd" * 32)}),
-    (ProxyMapping, "mapping:a1", {"mapping_id": lambda v: "m1b", "controller": lambda v: acct(51),
+    (ProxyMapping, "mapping:a1", None, {"mapping_id": lambda v: "m1b", "controller": lambda v: acct(51),
                                   "account": lambda v: acct(79), "relation": lambda v: RelationKind.DEPOSIT_WALLET,
                                   "valid_from": _earlier, "valid_to": lambda v: at(days=20), "observed_at": _earlier,
                                   "basis": lambda v: IdentityBasis.HEURISTIC, "evidence_ref": _txt}),
-    (MappingRevocation, "revocation:a1", {"mapping_id": lambda v: "m2", "ended_at": _earlier,
+    (MappingRevocation, "revocation:a1", None, {"mapping_id": lambda v: "m2", "ended_at": _earlier,
                                           "observed_at": _earlier, "evidence_ref": _txt}),
-    (R.SelectionInputsV2, "inputs", {
+    (R.SelectionInputsV2, "inputs", None, {
         "cutoff": _later, "label_version": _txt, "rule": lambda v: replace(v, min_history_days=v.min_history_days + 1),
         "mark_max_age": lambda v: v + timedelta(seconds=1),
         "candidates": lambda v: [c for c in v if c.account != A4],
@@ -225,18 +227,34 @@ MUTATION_TABLE: list[tuple[type, str, dict[str, Callable[[Any], Any]]]] = [
         "flags": lambda v: [f for f in v if f.account_key != A1.key],
         "marks": lambda v: [m for m in v if m.mark.instrument_id != "a1m1-yes"],
         "trials": lambda v: replace(v, count=v.count + 1),
-        "identity": lambda v: None}),
+        "identity": lambda v: None, "fdr_q": lambda v: 0.05}),
+    (AccountRef, "mapping:a1", "controller", {"product": _txt, "address": _txt}),
+    (AssetAmount, "obs:a1:0", "paid[0]", {"asset": lambda v: "USD", "quantity": lambda v: v + 1}),
 ]
 
-FIELD_CASES = [pytest.param(cls, target, name, fn, id=f"{cls.__name__}.{name}")
-               for cls, target, table in MUTATION_TABLE for name, fn in table.items()]
+FIELD_CASES = [pytest.param(cls, target, path, name, fn, id=f"{cls.__name__}.{name}")
+               for cls, target, path, table in MUTATION_TABLE for name, fn in table.items()]
 
 
-def _mutated(target: str, name: str, fn: Callable[[Any], Any]) -> Tweak:
+def _apply(value: Any, path: str | None, name: str, fn: Callable[[Any], Any]) -> Any:
+    """`value` with field `name` of the object at `path` ("attr" or "attr[i]") replaced by fn(old)."""
+    if path is None:
+        return replace(value, **{name: fn(getattr(value, name))})
+    attr, _, index = path.partition("[")
+    inner = getattr(value, attr)
+    if index:
+        i = int(index.rstrip("]"))
+        items = list(inner)
+        items[i] = _apply(items[i], None, name, fn)
+        return replace(value, **{attr: tuple(items)})
+    return replace(value, **{attr: _apply(inner, None, name, fn)})
+
+
+def _mutated(target: str, name: str, fn: Callable[[Any], Any], path: str | None = None) -> Tweak:
     def tweak(where: str, value: Any) -> Any:
         if where != target:
             return value
-        return replace(value, **{name: fn(getattr(value, name))})
+        return _apply(value, path, name, fn)
     return tweak
 
 
@@ -252,18 +270,20 @@ def mutation_outcome(tweak: Tweak) -> str:
 
 
 def test_every_bound_field_has_a_mutator():
-    for cls, _, table in MUTATION_TABLE:
+    for cls, _, _, table in MUTATION_TABLE:
         assert set(table) == {f.name for f in fields(cls)}, cls.__name__
     assert set(R._SPECS) == {"EligibilityRule", "Candidate", "WalletObservation", "Correction", "Mark", "MarkEvidence",
-                             "CoverageAssertion", "FlagAssertion", "TrialBasis", "ProxyMapping", "MappingRevocation"}
+                             "CoverageAssertion", "FlagAssertion", "TrialBasis", "ProxyMapping", "MappingRevocation",
+                             "AccountRef", "AssetAmount"}
+    assert {cls.__name__ for cls, _, _, _ in MUTATION_TABLE} >= {cls.__name__ for cls, _ in R._SPECS.values()}
     for name, (cls, spec) in R._SPECS.items():
         assert set(spec) == {f.name for f in fields(cls)}, name
     assert set(R.RULE_UNITS) == {f.name for f in fields(EligibilityRule)}
 
 
-@pytest.mark.parametrize("cls,target,name,fn", FIELD_CASES)
-def test_each_causal_input_changes_the_digest_or_fails_closed(cls, target, name, fn):
-    outcome = mutation_outcome(_mutated(target, name, fn))
+@pytest.mark.parametrize("cls,target,path,name,fn", FIELD_CASES)
+def test_each_causal_input_changes_the_digest_or_fails_closed(cls, target, path, name, fn):
+    outcome = mutation_outcome(_mutated(target, name, fn, path))
     assert outcome != "UNCHANGED", f"{cls.__name__}.{name} does not reach the v2 digest"
 
 
@@ -310,12 +330,13 @@ def _dropping(cls_name: str, field_name: str) -> Callable[..., dict]:
     return encode
 
 
-DROP_CASES = [pytest.param(cls, target, name, fn, id=f"{cls.__name__}.{name}")
-              for cls, target, table in MUTATION_TABLE if cls.__name__ in R._SPECS for name, fn in table.items()]
+DROP_CASES = [pytest.param(cls, target, path, name, fn, id=f"{cls.__name__}.{name}")
+              for cls, target, path, table in MUTATION_TABLE if cls.__name__ in R._SPECS
+              for name, fn in table.items()]
 
 
-@pytest.mark.parametrize("cls,target,name,fn", DROP_CASES)
-def test_dropping_a_field_from_the_digest_is_caught(monkeypatch, cls, target, name, fn):
+@pytest.mark.parametrize("cls,target,path,name,fn", DROP_CASES)
+def test_dropping_a_field_from_the_digest_is_caught(monkeypatch, cls, target, path, name, fn):
     """The mutation check of the mutation tests: with the field removed from the canonical encoding, its
     mutation must leave the digest unchanged (so the test above would fail), unless the field is also
     bound elsewhere or fails closed regardless (listed and explained in STILL_DETECTED_WHEN_DROPPED)."""
@@ -323,7 +344,7 @@ def test_dropping_a_field_from_the_digest_is_caught(monkeypatch, cls, target, na
     global BASE
     saved, BASE = BASE, None
     try:
-        outcome = mutation_outcome(_mutated(target, name, fn))
+        outcome = mutation_outcome(_mutated(target, name, fn, path))
     finally:
         BASE = saved
     key = f"{cls.__name__}.{name}"
@@ -468,7 +489,12 @@ def test_corrections_on_different_targets_are_unordered_but_per_target_order_is_
             return value
         return tweak
     assert build(two("abc")).closure_digest == build(two("bac")).closure_digest
-    assert build(two("abc")).closure_digest != build(two("cba")).closure_digest  # per-target order is semantic
+    assert build(two("abc")).closure_digest != base().closure_digest
+    with pytest.raises(R.BackfillOrderError):  # c (day 8) appended before a (day 7) on the same target
+        build(two("cba"))
+    sequences = [(x["correction"]["target_id"], x["sequence"], x["correction"]["recorded_at"])
+                 for x in build(two("abc")).closure["candidates"][0]["history"]["corrections"]]
+    assert sequences == sorted(sequences)  # knowledge order within each target
 
 
 # --- Unknown and missing ----------------------------------------------------------------------------
@@ -666,17 +692,241 @@ def test_downstream_slots_are_declared_and_bind_one_way():
     assert r.downstream == {"PRICE_RELATIVE_SKILL": {"status": "NOT_BOUND"},
                             "FOLLOWER_REPLAY": {"status": "NOT_BOUND"}}
     b = R.DownstreamBinding(R.DownstreamSlot.FOLLOWER_REPLAY, "synthetic-replay-v1", r.closure_digest,
-                            {"fees": "UNKNOWN", "delay_us": 60_000_000, "books": ["synthetic:book:1"]})
+                            {"selection_ref": r.closure_digest, "fees": "UNKNOWN", "delay_us": 60_000_000,
+                             "books": ["synthetic:book:1"]}, report_digest="ef" * 32)
     bound = R.bind_downstream(r, b)
     assert bound.closure_digest == r.closure_digest and bound.receipt_digest != r.receipt_digest
     record = bound.to_dict()
     assert R.verify(record).ok and R.bind_downstream(bound, b) is bound
-    with pytest.raises(R.DownstreamBindingError):
-        R.bind_downstream(bound, replace(b, closure={"fees": "KNOWN"}))
-    with pytest.raises(R.DownstreamBindingError):
-        R.bind_downstream(r, replace(b, selection_digest="0" * 64))
+    with pytest.raises(R.DownstreamBindingError):  # a bound slot is never replaced
+        R.bind_downstream(bound, replace(b, closure={"selection_ref": r.closure_digest, "fees": "KNOWN"}))
+    with pytest.raises(R.DownstreamBindingError):  # a binding computed on another selection
+        R.bind_downstream(r, replace(b, selection_digest="0" * 64, closure={"selection_ref": "0" * 64}))
     with pytest.raises(R.DownstreamBindingError):
         R.DownstreamBinding(R.DownstreamSlot.PRICE_RELATIVE_SKILL, "s", r.closure_digest, {"x": D(1)})
     edited = json.loads(json.dumps(record))
     edited["downstream"]["FOLLOWER_REPLAY"]["closure"]["fees"] = "KNOWN"
     assert R.verify(_rehash(edited)).status is R.VerifyStatus.TAMPERED
+
+
+# --- Review round (2026-10-08): H2 backfill and receipt-time causality --------------------------------
+
+def _a1_2(price: str = "0.40", receipt_day: float | None = None, raw_ref: str | None = None) -> WalletObservation:
+    o = wobs(A1, Action.TRADE_BUY, "a1m2-yes", 10, price, at(days=2), market="a1m2", event_id="a1-2")
+    if receipt_day is not None:
+        o = replace(o, receipt_time=at(days=receipt_day))
+    return replace(o, raw_ref=raw_ref) if raw_ref else o
+
+
+def _backfill(hook: str, *rows: WalletObservation) -> Tweak:
+    def tweak(where: str, value: Any) -> Any:
+        return list(rows) if where == hook else value
+    return tweak
+
+
+def test_review_repro_conflict_backfilled_out_of_receipt_order_fails_closed():
+    """A conflicting version received after the cutoff (day 12) must not change a day-10 receipt. Ingested
+    after the original it is ignored; ingested before it, the log would hide the identity while the
+    conflict names the post-cutoff version, so the build fails closed."""
+    variant = _a1_2("0.45", receipt_day=12)
+    assert build(_backfill("ingest:a1:after", variant)).closure_digest == base().closure_digest
+    with pytest.raises(R.BackfillOrderError):
+        build(_backfill("ingest:a1:before", variant))
+
+
+def test_review_repro_duplicate_backfilled_out_of_order_fails_closed():
+    """An identical copy received after the cutoff with another raw reference: ingested after, it is a
+    plain duplicate; ingested first, the log would bind its post-cutoff receipt_time and raw_ref."""
+    late_copy = _a1_2(receipt_day=12, raw_ref="synthetic:late-copy")
+    assert build(_backfill("ingest:a1:after", late_copy)).closure_digest == base().closure_digest
+    with pytest.raises(R.BackfillOrderError):
+        build(_backfill("ingest:a1:before", late_copy))
+
+
+def test_review_repro_corrections_appended_out_of_recorded_at_order_fail_closed():
+    def supersede(order: str) -> Tweak:  # type: ignore[no-untyped-def]
+        def tweak(where: str, value: Any) -> Any:
+            if where != "inputs":
+                return value
+            log = value.logs[A1.key]
+            current = next(o for o in log.as_known_at(CUTOFF) if o.observation_id == oid(A1, "a1-x"))
+            cs = {"1": Correction("c-41", oid(A1, "a1-x"), CorrectionKind.SUPERSEDED, at(days=6, hours=12), "0.41",
+                                  replacement=replace(current, price=D("0.41"))),
+                  "2": Correction("c-42", oid(A1, "a1-x"), CorrectionKind.SUPERSEDED, at(days=7), "0.42",
+                                  replacement=replace(current, price=D("0.42")))}
+            for k in order:
+                log.append_correction(cs[k])
+            return value
+        return tweak
+    in_order = build(supersede("12"))
+    eff = {e["observation_id"]: e["content"] for e in in_order.closure["candidates"][0]["history"]["effective"]}
+    assert eff[oid(A1, "a1-x")]["price"] == "0.42"  # the latest knowledge wins
+    with pytest.raises(R.BackfillOrderError):
+        build(supersede("21"))
+
+
+def _effective_entry(record: dict, index: int = 0) -> tuple[dict, dict]:
+    cand = record["closure"]["candidates"][0]
+    entry = cand["history"]["effective"][index]
+    ident = next(i for i in cand["history"]["identities"] if i["effective_content_sha256"] == entry["content_sha256"])
+    return entry, ident
+
+
+def test_a_post_cutoff_receipt_time_in_a_persisted_closure_is_a_causality_violation():
+    record = base().to_dict()
+    entry, ident = _effective_entry(record)
+    entry["content"]["receipt_time"] = "2026-12-31T00:00:00+00:00"
+    entry["content_sha256"] = ident["effective_content_sha256"] = R.content_hash(entry["content"])
+    assert R.verify(_rehash(record)).status is R.VerifyStatus.CAUSALITY_VIOLATION
+
+    record = base().to_dict()
+    corr = record["closure"]["candidates"][0]["history"]["corrections"][0]["correction"]
+    corr["replacement"]["receipt_time"] = "2026-12-31T00:00:00+00:00"
+    assert R.verify(_rehash(record)).status is R.VerifyStatus.CAUSALITY_VIOLATION
+
+
+def test_a_conflict_older_than_its_identity_in_a_persisted_closure_is_a_causality_violation():
+    record = _conflicted_receipt().to_dict()
+    hist = record["closure"]["candidates"][0]["history"]
+    hist["conflicts"][0]["detected_at"] = "2026-03-01T00:00:00+00:00"  # before a1-2 was first received
+    assert R.verify(_rehash(record)).status is R.VerifyStatus.CAUSALITY_VIOLATION
+
+
+# --- Review round: M1 strict decoding ---------------------------------------------------------------
+
+def _conflicted_receipt() -> R.SelectionReceiptV2:
+    return build(_backfill("ingest:a1:after", _a1_2("0.45", receipt_day=9)))
+
+
+def _m1_engine_float(r):  # type: ignore[no-untyped-def]
+    r["closure"]["engine"]["prior"]["min_candidates"] = 5.0
+
+
+def _m1_engine_int_bool(r):  # type: ignore[no-untyped-def]
+    r["closure"]["engine"]["cash_flows_observed"] = 0
+
+
+def _m1_space(r):  # type: ignore[no-untyped-def]
+    i = r["closure"]["candidates"][0]["history"]["identities"][0]
+    i["first_receipt"] = i["first_receipt"].replace("T", " ")
+
+
+def _m1_offset(r):  # type: ignore[no-untyped-def]
+    i = r["closure"]["candidates"][0]["history"]["identities"][0]
+    i["first_receipt"] = "2026-03-01T02:00:30+02:00"  # the same instant, another spelling
+
+
+def _m1_versions(r):  # type: ignore[no-untyped-def]
+    r["closure"]["candidates"][0]["history"]["conflicts"][0]["versions"] = ["anything", "whatever"]
+
+
+def _m1_kind(r):  # type: ignore[no-untyped-def]
+    r["closure"]["candidates"][0]["history"]["conflicts"][0]["kind"] = "WHATEVER"
+
+
+def _m1_emptied(r):  # type: ignore[no-untyped-def]
+    r["closure"]["candidates"][0]["history"]["conflicts"] = []
+
+
+def _m1_withdrawn(r):  # type: ignore[no-untyped-def]
+    i = next(i for i in r["closure"]["candidates"][0]["history"]["identities"] if i["status"] == "CONFLICTED")
+    i["status"] = "WITHDRAWN"
+
+
+def _m1_withdrawn_unkeyed(r):  # type: ignore[no-untyped-def]
+    i = next(i for i in r["closure"]["candidates"][0]["history"]["identities"] if i["status"] == "CONFLICTED")
+    i["status"], i["conflict_keys"] = "WITHDRAWN", []
+
+
+def _m1_bool_count(r):  # type: ignore[no-untyped-def]
+    r["closure"]["trials"]["count"] = True
+
+
+@pytest.mark.parametrize("tamper", [_m1_engine_float, _m1_engine_int_bool, _m1_space, _m1_offset, _m1_versions,
+                                    _m1_kind, _m1_emptied, _m1_withdrawn, _m1_withdrawn_unkeyed, _m1_bool_count],
+                         ids=lambda f: f.__name__.removeprefix("_m1_"))
+def test_review_m1_non_canonical_closures_are_malformed(tamper):
+    record = _conflicted_receipt().to_dict()
+    assert R.verify(record).ok
+    tamper(record)
+    assert R.verify(_rehash(record)).status is R.VerifyStatus.MALFORMED
+
+
+def test_the_conflicted_receipt_marks_its_conflict_on_both_sides():
+    hist = _conflicted_receipt().closure["candidates"][0]["history"]
+    state = next(i for i in hist["identities"] if i["observation_id"] == oid(A1, "a1-2"))
+    assert state["status"] == "CONFLICTED" and state["conflict_keys"] == [oid(A1, "a1-2")]
+    assert [x["key"] for x in hist["conflicts"]] == [oid(A1, "a1-2")]
+
+
+# --- Review round: L2-L7 and NITs -------------------------------------------------------------------
+
+@pytest.mark.parametrize("bad_inputs", [lambda: replace(scenario(), logs=None), lambda: object(),
+                                        lambda: replace(scenario(), coverage=[None])])
+def test_verify_with_unusable_inputs_returns_one_status(bad_inputs):
+    assert R.verify(base().to_dict(), inputs=bad_inputs()).status is R.VerifyStatus.SOURCE_MISMATCH
+
+
+@pytest.mark.parametrize("record", [None, 5, [], {"schema": R.RECEIPT_SCHEMA}, {**{k: None for k in R._RECEIPT_KEYS},
+                                                                              "schema": R.RECEIPT_SCHEMA,
+                                                                              "replayability": R.REPLAYABILITY_V2}])
+def test_verify_never_raises(record):
+    result = R.verify(record)
+    assert isinstance(result.status, R.VerifyStatus) and not result.ok
+
+
+def test_a_code_change_is_an_engine_mismatch_and_rebuild_refuses_it(monkeypatch):
+    record = base().to_dict()
+    digests = R.engine_source_digests()
+    assert set(digests) == {"edge_lab.provenance", *(f"edge_lab.wallet_intel.{m}" for m in (
+        "accounting", "events", "exact", "identity", "market_data", "receipts", "selection", "stats", "threats",
+        "timeutil"))}
+    changed = {**digests, "edge_lab.wallet_intel.stats": "0" * 64}
+    monkeypatch.setattr(R, "engine_source_digests", lambda: changed)
+    assert R.verify(record).status is R.VerifyStatus.ENGINE_MISMATCH
+    with pytest.raises(R.EngineMismatchError):
+        R.rebuild(record)
+
+
+def test_engine_source_digests_are_read_at_call_time_and_line_ending_neutral(monkeypatch, tmp_path):
+    lf, crlf = tmp_path / "lf.py", tmp_path / "crlf.py"
+    lf.write_bytes(b"x = 1\ny = 2\n")
+    crlf.write_bytes(b"x = 1\r\ny = 2\r\n")
+    assert R._source_digest(str(lf), "lf") == R._source_digest(str(crlf), "crlf")
+    before = R.engine_source_digests()["edge_lab.wallet_intel.timeutil"]
+    monkeypatch.setattr(R.timeutil, "__file__", str(lf))
+    assert R.engine_source_digests()["edge_lab.wallet_intel.timeutil"] != before
+
+
+def test_downstream_bindings_must_name_this_selection_under_their_slot_key():
+    r = base()
+    with pytest.raises(R.DownstreamBindingError):  # lane C's SkillClosure names the cohort in cohort_ref
+        R.DownstreamBinding(R.DownstreamSlot.PRICE_RELATIVE_SKILL, "skill-v1", r.closure_digest, {"x": 1})
+    with pytest.raises(R.DownstreamBindingError):
+        R.DownstreamBinding(R.DownstreamSlot.PRICE_RELATIVE_SKILL, "skill-v1", r.closure_digest,
+                            {"cohort_ref": "ab" * 32})
+    with pytest.raises(R.DownstreamBindingError):
+        R.DownstreamBinding(R.DownstreamSlot.PRICE_RELATIVE_SKILL, "skill-v1", r.closure_digest,
+                            {"cohort_ref": r.closure_digest}, report_digest="not-a-digest")
+    closure = {"cohort_ref": r.closure_digest, "rule": [["min_positions", "3"]]}
+    b = R.DownstreamBinding(R.DownstreamSlot.PRICE_RELATIVE_SKILL, "skill-v1", r.closure_digest, closure)
+    assert b.closure_digest == R.content_hash(closure)  # the same scheme as SkillClosure.digest
+    assert R.verify(R.bind_downstream(r, b).to_dict()).ok
+
+
+def test_the_multiple_testing_screen_and_its_q_are_receipted():
+    r = base()
+    assert r.closure["multiple_testing"]["q"] == {"compare_as": "IEEE754_BINARY64", "value": "0.1"}
+    mt = r.outcome["multiple_testing"]
+    assert mt["q"] == "0.1" and mt["trials"] == 3 and mt["hypotheses"] == 9 and set(mt["p_values"]) == {
+        A1.key, A2.key, A3.key}
+    for bad in (0, 1, 1.5, True, "0.1"):
+        with pytest.raises(R.ReceiptInputError):
+            R.build_receipt(replace(scenario(), fdr_q=bad))
+
+
+def test_a_decimal_float_threshold_is_refused():
+    def tweak(where: str, value: Any) -> Any:
+        return replace(value, min_shrunk_lower=D("0.2")) if where == "rule" else value
+    with pytest.raises(R.ReceiptInputError, match="Decimal is refused"):
+        build(tweak)

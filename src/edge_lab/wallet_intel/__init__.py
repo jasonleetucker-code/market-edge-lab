@@ -12,6 +12,7 @@ Modules (one owner, subordinate modules):
 - `observability`: typed source capabilities; research vs execution eligibility.
 - `accounting`: LEADER_OBSERVED_ECONOMICS and leader dimensions with shrinkage.
 - `selection`: the point-in-time selection manifest and walk-forward helpers.
+- `receipts`: v2 causal selection receipts (complete dependency closure, verify/rebuild; v1 is legacy).
 - `market_data`, `replay`: FOLLOWER_SIMULATED_ECONOMICS at attainable prices.
 - `policy`: follower policy, attribution and caps behind a typed signal boundary.
 - `threats`: defensive screens (coordination, churn, off-market fills, bait sizes).

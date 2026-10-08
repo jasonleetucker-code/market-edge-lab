@@ -181,7 +181,7 @@ The re-review approved `070eb51` with one fix and two documentation notes.
 
 Authority: the 2026-10-08 owner directive (`docs/owner/2026-10-08-jev-crawler-wallet-directive.md`), item A of its
 scope entry in `docs/EXECUTION_PLAN.md`, and `docs/strategy/CLAUDE_JEV_CRAWLER_WALLET_V1.md` Deliverable A.
-Offline and fixture-only.
+Offline and fixture-only. Revised after the independent review of `dccc88a` (REQUEST_CHANGES: H2, M1, L1-L7).
 
 **Problem.** A static audit of `select_at()` (reproduced by `test_audit_v1_digest_does_not_bind_these_causal_inputs`)
 found that the v1 `inputs_digest` binds the cutoff, label version, rule id and version, candidates, observation ids
@@ -196,55 +196,89 @@ digest unchanged (so persisted v1 records stay as they were) and now calls the s
 - **Typed inputs** (`SelectionInputsV2`). `CoverageAssertion` (complete / partial / UNKNOWN, with source, method
   version, knowledge time and evidence reference). `FlagAssertion` (THREAT or QUALITY, with codes, or `None` when not
   assessed). `MarkEvidence` (a `Mark` plus quote basis, source, receipt time and evidence reference). `TrialBasis`
-  (count, source and the digests of the earlier receipts it counts). An optional `IdentityRegistry`.
+  (count, source and the digests of the earlier receipts it counts). An optional `IdentityRegistry`. `fdr_q`, the
+  Benjamini-Hochberg q of the receipted multiple-testing screen.
 - **Point in time.** Every input is filtered by its knowledge time: candidates by `discovered_at`, observations
   by `ObservationLog.as_known_at`, corrections by `recorded_at`, conflicts by detection time, assertions by
   `known_at`, marks by `received_at` and identity records by `observed_at`. The latest assertion per account (or
   per account, kind and source) and the latest mark per instrument known by the cutoff is in force. A tie with
-  different content raises `AmbiguousInputError`. Post-cutoff information never reaches the closure.
+  different content raises `AmbiguousInputError`.
+- **Post-cutoff information fails closed rather than leaking.** Filtering alone is not enough when the log was
+  backfilled out of receipt order, so the build refuses (`BackfillOrderError`):
+  - a conflict detected before the first receipt of an identity it names, or naming a version received after the
+    cutoff;
+  - an effective observation or a correction's replacement whose `receipt_time` is after the cutoff (an
+    out-of-order duplicate would otherwise bind a post-cutoff `receipt_time` and `raw_ref`);
+  - corrections to one identity appended out of knowledge order, `(recorded_at, correction_id)`.
+  `verify` applies the same receipt-time and conflict-order checks to a persisted closure (CAUSALITY_VIOLATION).
+  An honest build therefore either binds only what was known by the cutoff or does not build.
 - **Closure** (`wallet-selection-closure-v2`). It holds:
-  - every effective rule field, with canonical Decimal text, exact binary64 text for the float threshold,
-    microsecond durations and a `rule_units` table;
-  - the mark freshness tolerance;
-  - the engine and code versions and their implicit parameters, read from the loaded code;
+  - every effective rule field, with canonical Decimal text, exact binary64 text for the float threshold (a
+    Decimal there is refused), microsecond durations and a `rule_units` table;
+  - the mark freshness tolerance and the multiple-testing `q`;
+  - the engine binding: versions, implicit parameters and the SHA-256 of each engine module's source (`selection`,
+    `stats`, `threats`, `accounting`, `events`, `exact`, `identity`, `market_data`, `timeutil`, `provenance`,
+    `receipts`), read at call time with CRLF normalized to LF;
   - the trial basis;
   - per candidate: every discovery known by the cutoff (the first one leads), the identity snapshot (UNKNOWN
     without a registry), the coverage and flag assertions in force, and the history. The history holds each
-    identity's first receipt and status (EFFECTIVE, WITHDRAWN or CONFLICTED), corrections in per-target append
-    order, conflicts, and the full content and SHA-256 of every effective observation;
+    identity's first receipt, status (EFFECTIVE, WITHDRAWN or CONFLICTED) and the conflict keys behind a
+    CONFLICTED status, corrections numbered per target in knowledge order `(recorded_at, correction_id)`, the
+    conflicts, and the full content and SHA-256 of every effective observation;
   - the mark in force per instrument.
   Unordered collections are stored sorted and unique, so a permutation of inputs gives the same digest.
-- **Digests.** `closure_digest` is the v2 selection digest. `outcome_digest` covers the records, the prior and the
-  denominators (visible candidates and counts by status, so inactive and rejected wallets stay counted).
-  `receipt_digest` covers both plus the downstream slots. Hashing reuses `provenance.canonical_json` and
-  `sha256_hex`; there is no second scheme.
+- **Digests.** `closure_digest` is the v2 selection digest. `outcome_digest` covers the records, the prior, the
+  denominators (visible candidates and counts by status, so inactive and rejected wallets stay counted) and the
+  multiple-testing result. `receipt_digest` covers both plus the downstream slots. Hashing reuses
+  `provenance.canonical_json` and `sha256_hex`; there is no second scheme.
 - **Fail closed.** A visible candidate with no log, no coverage assertion or no THREAT assertion in force raises
   `MissingInputError`. A float money threshold or a bare `Mark` without evidence is refused. An unknown coverage
   or an unassessed screen is recorded as UNKNOWN and makes the candidate ineligible (`COVERAGE_UNKNOWN`,
   `THREAT_UNASSESSED:<source>`). A dataclass field without a canonical encoding stops the build, so a new field
-  cannot silently escape the digest.
+  cannot silently escape the digest. This guard covers `AccountRef` and `AssetAmount` too.
+- **Strict decoding.** Every part of a persisted closure is decoded with exact types and canonical spellings and
+  compared by canonical JSON, never by Python equality (`5 == 5.0`, `0 == False`). Timestamps must be the canonical
+  `utc_text` spelling. Conflict records are typed (kind, key, a sorted pair of semantic keys or canonical times).
+  CONFLICTED statuses and conflict records must name each other exactly. One closure has one serialization and
+  one digest.
 - **`rebuild` / `verify` / `load_receipt`.**
-  - `rebuild(record)` decodes the closure from the record alone. The closure must re-encode to itself in
-    canonical order. `rebuild` re-runs the engine and re-hashes.
-  - `verify(record, inputs=None)` returns VERIFIED or exactly one of LEGACY_INCOMPLETE, MALFORMED, TAMPERED,
-    ENGINE_MISMATCH, CAUSALITY_VIOLATION, REPLAY_MISMATCH or SOURCE_MISMATCH. With `inputs` it also checks that
-    the sources rebuild the same closure.
+  - `rebuild(record)` decodes the closure from the record alone and refuses it (`EngineMismatchError`) when the
+    loaded engine differs from the one it names. It then re-runs the engine and re-hashes.
+  - `verify(record, inputs=None)` never raises. It returns VERIFIED or exactly one of LEGACY_INCOMPLETE, MALFORMED,
+    TAMPERED, ENGINE_MISMATCH, CAUSALITY_VIOLATION, REPLAY_MISMATCH or SOURCE_MISMATCH. A code change in any
+    engine module is ENGINE_MISMATCH, not REPLAY_MISMATCH.
+  - **`verify(record)` without inputs proves internal consistency only.** Someone who rewrites a closure and
+    recomputes every digest also passes it. The `receipt_digest` must therefore be pinned somewhere else (a
+    ledger row, a PR, a report). `verify(record, inputs=...)` rebuilds from the sources and reports such a
+    consistent forgery as SOURCE_MISMATCH; sources that do not build are SOURCE_MISMATCH too.
   - A v1 record verifies as LEGACY_INCOMPLETE, and `load_receipt` / `rebuild` raise `LegacyReceiptError`. v1 is
     never upgraded, and its `to_dict` now carries `replayability: LEGACY_INCOMPLETE`.
 - **Downstream extension point.** `DownstreamSlot.PRICE_RELATIVE_SKILL` (Deliverable C) and
   `DownstreamSlot.FOLLOWER_REPLAY` (Deliverable D) start NOT_BOUND. `bind_downstream` attaches a
-  `DownstreamBinding`, which holds a schema id, the selection's `closure_digest` and a plain-JSON closure with
-  Decimals and times already canonical text. The binding is hashed into `receipt_digest` only, so the dependency
-  stays one-way. A bound slot is never replaced by a different closure.
+  `DownstreamBinding`. A binding holds a schema id, the selection's `closure_digest`, a plain-JSON closure with
+  Decimals and times already canonical text, and optionally the downstream report's digest. The closure must name
+  the same selection under its slot's key (`SLOT_SELECTION_REF`: `cohort_ref` for C's `SkillClosure`,
+  `selection_ref` for D). Its digest uses the same scheme, so it equals the report's own closure digest. The
+  binding is hashed into `receipt_digest` only, so the dependency stays one-way. A bound slot is never replaced by
+  a different closure.
 
 **Tests** (`tests/wallet/test_wallet_receipts.py`, `test_wallet_selection.py`):
 - Every field of every bound type has a mutator, enforced against `dataclasses.fields`. Each mutation changes the
   closure digest or fails closed.
 - A meta-test drops each field from the encoding in turn and proves its mutation test would then fail. The
   exceptions are fields also bound elsewhere, or that fail closed regardless, each listed with its reason.
-- Other tests cover permutation invariance, post-cutoff additions and pre-cutoff versus post-cutoff corrections
-  and conflicts, missing and ambiguous inputs, denominators, the JSON round trip, each verify failure, v1
-  legacy handling, the downstream slots, and v1/v2 engine parity.
+- The reviewer's three reproductions are tests: an out-of-order conflict, an out-of-order duplicate and corrections
+  appended out of `recorded_at` order. Each fails closed when backfilled out of order, and leaves the receipt
+  unchanged otherwise.
+- Other tests cover:
+  - post-cutoff `receipt_time` and conflict-order tampering (CAUSALITY_VIOLATION);
+  - each M1 case (MALFORMED);
+  - unusable `inputs` (SOURCE_MISMATCH), and `verify` never raising;
+  - an engine source change (ENGINE_MISMATCH; `rebuild` refuses it);
+  - per-slot downstream references, the receipted multiple-testing screen, and the Decimal float threshold;
+  - permutation invariance, post-cutoff additions, pre-cutoff versus post-cutoff corrections and conflicts,
+    missing and ambiguous inputs, denominators, the JSON round trip, each verify failure, v1 legacy handling,
+    and v1/v2 engine parity.
 
 **Alternatives considered.**
 - *Widen the v1 digest in place.* Rejected: it would silently change what persisted v1 digests mean.
@@ -253,20 +287,25 @@ digest unchanged (so persisted v1 records stay as they were) and now calls the s
   correction semantics. Instead, the build uses the canonical owner (`ObservationLog.version_at` /
   `as_known_at`), and the record binds both the per-identity statuses and the effective contents.
 - *Treat missing coverage or flags as clean* (the v1 default). Rejected: unknown must stay unknown.
+- *Re-order out-of-order corrections inside receipts.py.* Rejected: it would be a second correction semantics.
+  The receipt refuses the log instead; the `events.py` owner fixes the order at the source (lane B).
 
 **Tradeoffs.**
 - Receipts are large, because they embed effective contents.
-- `ObservationLog` keeps the first-ingested copy of a duplicate. So when re-receipts differ only in provenance
-  (`receipt_time`, `raw_ref`, `parser_version`), the bound content follows ingest order.
-- Conflict detection in `events.py` also depends on ingest order. When two conflicting versions are backfilled out
-  of receipt order, `as_known_at` differs: the first-ingested copy becomes the entry and only variants set the
-  detection time. A receipt replays exactly from its own record. Two logs holding the same rows in a different
-  ingest order can still produce different closures (reported to the `events.py` owner; not changed here).
-- The demo and the Terminal still show the v1 manifest, now labelled LEGACY_INCOMPLETE.
+- The engine source digest makes every edit to an engine module, even a comment, an ENGINE_MISMATCH for older
+  receipts. That is deliberate: a receipt states exactly which code decided it.
+- Until lane B's `events.py` change (point-in-time views as a pure function of copies received by the cutoff,
+  corrections applied in `(recorded_at, correction_id)` order) lands, a log backfilled out of receipt or knowledge
+  order makes the build fail closed instead of producing a receipt. After it lands, the corrections guard can relax
+  to an agreement check (tracked as H1).
+- The demo still shows the v1 manifest, labelled LEGACY_INCOMPLETE in its data. The Terminal
+  (`dashboard/views/ops_wallet.py`) does **not** yet display that label: labelling is planned in Deliverable G,
+  which owns the dashboard.
 - Synthetic fixtures prove engineering only.
 
 **What would make us reconsider.**
-- A canonical `events.py` fix for ingest-order-dependent conflicts.
+- Lane B's order-independent `events.py` (H1: bind the new optional observation fields and relax the corrections
+  guard).
 - Lanes C or D needing a selection-closure input rather than a downstream binding. That would be a v3 closure,
   never an edit of v2.
 - A real dataset where embedded contents make receipts impractically large. We would then consider
