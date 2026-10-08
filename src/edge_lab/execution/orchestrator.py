@@ -732,12 +732,16 @@ class Orchestrator:
     def submit_signal(self, signal: Signal) -> SignalAdmission:
         """Queue one signal. Refused: a stopped service, another account scope, an unknown strategy or source, a
         duplicate id, a signal from the future, expired or valid for too long, or a full queue."""
-        reason = "FENCED_OUT" if self._fenced_out else self._signal_problem(signal)
+        reason = self._signal_problem(signal) or (None if self._lease_held() else "FENCED_OUT")
         if reason is not None:
             self._signals_rejected += 1
             return SignalAdmission(False, reason)
         now = self._now()
-        self._record("SIGNAL_ACCEPTED", {"signal": signal.to_dict()}, now)  # persisted before it is queued
+        try:
+            self._record("SIGNAL_ACCEPTED", {"signal": signal.to_dict()}, now)  # persisted before it is queued
+        except OrchestratorFencedOut:
+            self._signals_rejected += 1
+            return SignalAdmission(False, "FENCED_OUT")
         self._signal_ids[signal.signal_id] = parse_utc_text(signal.expires_at_utc)
         self._queue.append(signal)
         return SignalAdmission(True, None)
@@ -775,7 +779,10 @@ class Orchestrator:
             raise OrchestratorStopped("this orchestrator has shut down")
 
     def _check_writer(self) -> None:
-        if self._fenced_out:
+        """Before every write: re-read the lease from the store. The cached flag alone would miss a takeover this
+        instance has not yet noticed (a supervisor restart under the same worker id takes a new fence while this
+        instance is mid-cycle). Losing the lease fences this instance out for good."""
+        if not self._lease_held():
             raise OrchestratorFencedOut("another worker holds the egress lease: this instance writes nothing")
 
     def _lease_held(self) -> bool:
@@ -791,23 +798,37 @@ class Orchestrator:
     # ------------------------------------------------------------------ the cycle
 
     def run(self, n: int) -> tuple[CycleReport, ...]:
-        """`n` cycles, sleeping `cycle_interval` between them through the injected sleep. No timer is installed."""
+        """`n` cycles, sleeping `cycle_interval` between them through the injected sleep. No timer is installed.
+        It stops after the cycle that finds this instance fenced out (that report is the last one returned)."""
         if isinstance(n, bool) or not isinstance(n, int) or n < 0:
             raise OrchestratorError("n must be a non-negative int")
         out = []
         for i in range(n):
-            out.append(self.run_cycle())
+            report = self.run_cycle()
+            out.append(report)
+            if report.fenced_out:
+                break  # a fenced-out instance never cycles again (run_cycle would raise)
             if i < n - 1:
                 self._sleep(self._config.cycle_interval.total_seconds())
         return tuple(out)
 
     def run_cycle(self) -> CycleReport:
+        """One cycle (module docstring). The cycle that finds the lease lost returns a `fenced_out` report; every
+        later call raises `OrchestratorFencedOut`: a fenced-out instance neither writes nor keeps reading."""
         self._check_running()
+        if self._fenced_out:
+            raise OrchestratorFencedOut("this instance lost the egress lease: it runs no further cycle")
         now = self._now()
         bounds = self._config.bounds
         self._cycle += 1
         cy = _Cycle(self._cycle, now, now + bounds.cycle_deadline, _Budget(bounds.max_requests_per_cycle, self._send),
                     self._state.mode)
+        try:
+            return self._run_cycle(cy)
+        except OrchestratorFencedOut:  # a write found the lease lost mid-cycle: nothing was written from then on
+            return self._fenced_cycle(cy)
+
+    def _run_cycle(self, cy: _Cycle) -> CycleReport:
         self._renew_lease(cy)
         if self._fenced_out:
             return self._fenced_cycle(cy)
@@ -868,6 +889,7 @@ class Orchestrator:
         attempts are never touched here (the journal's lease takeover and `recover` handle superseded fences)."""
         for a in self._journal.non_terminal_attempts():
             if a.state in (AttemptState.PENDING_EGRESS, AttemptState.SENT) and a.fence_token == self._fence:
+                self._check_writer()
                 self._journal.mark_outcome_unknown(a.attempt_id, reason="IN_FLIGHT_AT_CYCLE_START", now=cy.start)
 
     def _read_account(self, cy: _Cycle) -> None:
@@ -911,6 +933,7 @@ class Orchestrator:
             latest = self._journal.reservations.latest_snapshot(self._scope)
             revision = 1 if latest is None else latest.revision + 1
             try:
+                self._check_writer()
                 cy.snapshot = inputs.record(self._journal.reservations, revision, now=self._now())
             except ReservationError as exc:
                 status, detail = ctl.Reconciliation.FAILED, f"SNAPSHOT_REFUSED: {exc}"[:400]
@@ -1009,9 +1032,11 @@ class Orchestrator:
             payload = canonical_json({"lookup": "client_order_id", "found": True, "order": _order_record(o)})
             receipt = f"lookup:{a.attempt_id}:{sha256_text(payload)[:16]}"
             try:
+                self._check_writer()
                 self._journal.record_receipt(receipt_id=receipt, kind=ReceiptKind.ORDER_LOOKUP,
                                              source="account-reconciliation", payload_json=payload,
                                              received_at=self._now(), provider_id=o.order_id, attempt_id=a.attempt_id)
+                self._check_writer()
                 self._journal.reconcile_attempt(a.attempt_id, AttemptState.ACKNOWLEDGED, receipt_id=receipt,
                                                 now=self._now(), provider_order_id=o.order_id)
                 cy.resolved.append(a.attempt_id)
@@ -1030,9 +1055,11 @@ class Orchestrator:
                                   "client_order_id": a.client_order_id})
         receipt = f"lookup:{a.attempt_id}:{sha256_text(payload)[:16]}"
         try:
+            self._check_writer()
             self._journal.record_receipt(receipt_id=receipt, kind=ReceiptKind.ORDER_LOOKUP,
                                          source="account-reconciliation", payload_json=payload,
                                          received_at=self._now(), attempt_id=a.attempt_id)
+            self._check_writer()
             self._journal.reconcile_attempt(a.attempt_id, AttemptState.ABSENT, receipt_id=receipt, now=self._now())
             cy.resolved.append(a.attempt_id)
         except (JournalError, ReservationError) as exc:
@@ -1068,18 +1095,22 @@ class Orchestrator:
                 o.status == lc.VenueStatus.CANCELED.value and r.state is not ObligationState.BOUND) or (
                 o.status == lc.VenueStatus.RESTING.value and r.state is ObligationState.UNKNOWN)
             if needs_receipt:
+                self._check_writer()
                 self._journal.record_receipt(receipt_id=receipt, kind=ReceiptKind.ORDER_LOOKUP,
                                              source="account-reconciliation", payload_json=payload,
                                              received_at=self._now(), provider_id=o.order_id,
                                              attempt_id=r.reservation_id)
             if view.filled_quantity > r.filled_quantity:
+                self._check_writer()
                 r = auth.record_fill(r.reservation_id, view.filled_quantity, self._now(), receipt_id=receipt)
                 cy.fills += 1
             if r.quarantine_reason is not None:
                 return
             if o.status == lc.VenueStatus.CANCELED.value and r.state is not ObligationState.BOUND:
+                self._check_writer()
                 r = auth.confirm_cancel(r.reservation_id, self._now(), receipt_id=receipt, venue_filled=o.fill_count)
             elif o.status == lc.VenueStatus.RESTING.value and r.state is ObligationState.UNKNOWN:
+                self._check_writer()
                 r = auth.mark_open(r.reservation_id, self._now(), receipt_id=receipt)
             if r.state is ObligationState.BOUND and r.quarantine_reason is None:
                 self._maybe_release(cy, r, o, sub, view)
@@ -1098,6 +1129,7 @@ class Orchestrator:
         ended = [t for t in (r.ended_at_utc, r.last_fill_at_utc) if t is not None]
         if not ended or parse_utc_text(snap.observed_at_utc) <= max(parse_utc_text(t) for t in ended):
             return  # a snapshot strictly after the end is needed: the next cycle
+        self._check_writer()
         released = self._journal.reservations.confirm_by_snapshot(r.reservation_id, snap.revision, self._now())
         cy.released.append(released.reservation_id)
         if released.filled_quantity > 0 and released.reservation_id not in self._attributed:
@@ -1340,6 +1372,7 @@ class Orchestrator:
         body = None if reply is None else getattr(reply, "body", None)
         text = _body_text(body)
         event: lc.Event
+        self._check_writer()  # a takeover during the send: the reply is the live worker's to reconcile, not ours
         try:
             if outcome == "OK" and text is not None:
                 try:
@@ -1538,6 +1571,20 @@ class Orchestrator:
         if self._fenced_out or not self._lease_held():
             self._stopped = True  # the live worker owns the account: nothing is written or cancelled from here
             return ShutdownReport(utc_text(now), (), MappingProxyType({}), ())
+        requested: list[str] = []
+        outcomes: dict[str, str] = {}
+        left: list[str] = []
+        try:
+            self._shutdown(operator_ref, reason, cancel_owned, now, requested, outcomes, left)
+        except OrchestratorFencedOut:  # the lease was lost during the shutdown: nothing more is written from here
+            pass
+        self._stopped = True
+        return ShutdownReport(utc_text(now), tuple(requested), MappingProxyType(dict(outcomes)), tuple(sorted(left)))
+
+    def _shutdown(self, operator_ref: str, reason: str, cancel_owned: bool, now: datetime, requested: list[str],
+                  outcomes: dict[str, str], left: list[str]) -> None:
+        """The shutdown's steps; `requested`, `outcomes` and `left` are filled as it goes, so a shutdown cut short
+        by a lost lease still reports what it did."""
         self._apply(ctl.Disarm(operator_ref, reason, utc_text(now)), now)
         resting: list[tuple[ReservationView, Any]] = []
         for r in self._journal.reservations.held_reservations(self._scope):
@@ -1545,7 +1592,6 @@ class Orchestrator:
             if attempt.state is AttemptState.ACKNOWLEDGED and attempt.provider_order_id is not None \
                     and r.state is ObligationState.OUTSTANDING and r.quarantine_reason is None:
                 resting.append((r, attempt))
-        requested, outcomes, left = [], {}, []
         for r, attempt in resting:
             if not cancel_owned:
                 left.append(r.reservation_id)
@@ -1555,8 +1601,6 @@ class Orchestrator:
         self._record("SHUTDOWN", {"operator_ref": operator_ref, "reason": reason, "cancel_owned": cancel_owned,
                                   "cancels": dict(sorted(outcomes.items())), "resting_left": sorted(left)},
                      self._now())
-        self._stopped = True
-        return ShutdownReport(utc_text(now), tuple(requested), MappingProxyType(dict(outcomes)), tuple(sorted(left)))
 
     def _cancel_owned(self, r: ReservationView, attempt: Any) -> str:
         now = self._now()
@@ -1588,6 +1632,8 @@ class Orchestrator:
         except Exception as exc:
             reply, outcome = None, f"SEND_RAISED: {type(exc).__name__}"
         text = None if reply is None else _body_text(getattr(reply, "body", None))
+        if not self._lease_held():  # a takeover during the send: the live worker reconciles this order, not us
+            return "CANCEL_OUTCOME_UNKNOWN: the egress lease was lost during the send (nothing recorded here)"
         try:
             if outcome == "OK" and text is not None:
                 ack = w.parse_cancel_ack(reply.body)
