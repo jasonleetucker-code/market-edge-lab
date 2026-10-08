@@ -332,6 +332,19 @@ def case_block(a: pr.Assessment, exp: dict | None, why_unknown: str = "") -> str
                    wide=True, text_cols=(0, 1, 2))
 
 
+def fee_per_contract(a: pr.Assessment) -> str:
+    """`Opportunity.fee` is the trade fee for the decision's `quantity`, so it is per contract only when that
+    quantity is recorded as 1. Any other or missing quantity fails closed: no per-contract figure is derived."""
+    opp = a.raw.get("opportunity") if isinstance(a.raw.get("opportunity"), dict) else {}
+    quantity = opp.get("quantity")
+    if a.fee is None:
+        return c.na("fee not recorded with the decision")
+    if quantity is None or isinstance(quantity, bool) or str(quantity) != "1":
+        return c.na("the recorded fee covers the decision's quantity "
+                    + (f"({quantity}), not one contract" if quantity is not None else "(not recorded)"))
+    return c.num(pr.cents(a.fee), reason="fee not recorded with the decision")
+
+
 def assessment_section(row: pr.MarketRow, side: str, ctx: d.Context | None = None) -> str:
     a = row.for_side(side)
     earlier = (c.disclosure(f"Decisions for earlier target days ({len(row.history)})", history_table(row.history))
@@ -351,7 +364,7 @@ def assessment_section(row: pr.MarketRow, side: str, ctx: d.Context | None = Non
         ("All-in cost / contract", c.num(pr.cents(a.all_in_cost), reason="not recorded")),
         ("Fee status", c.badge(a.fee_status) if a.fee_status else c.na("not recorded")),
         ("Claim basis", c.badge(a.claim_basis) if a.claim_basis else c.na("not recorded")),
-        ("Fee / contract", c.num(pr.cents(a.fee), reason="fee not recorded with the decision")),
+        ("Fee / contract", fee_per_contract(a)),
         ("Evaluated size", c.num(pr.quantity(a.size), reason="size not evaluated")),
     ], wide=False, text_cols=(6, 7))
     linked = d.experiment_for_policy(ctx, a.raw.get("policy_id")) if ctx is not None else (None, "")

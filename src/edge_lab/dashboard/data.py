@@ -437,7 +437,8 @@ class Context:
                     exp = registry.load(path)
                 except (tomllib.TOMLDecodeError, OSError) as exc:
                     out.append({"key": key, "id": None, "title": None, "status": None,
-                                "problems": [short_error(exc, self.config)], "stage_a": None, "reports": []})
+                                "problems": [short_error(exc, self.config)], "stage_a": None, "reports": [],
+                                "manifest_error": True})
                     continue
                 periods = exp.data.get("periods") if isinstance(exp.data.get("periods"), dict) else {}
                 out.append({"key": key, "id": exp.id, "title": exp.data.get("title"), "status": exp.status,

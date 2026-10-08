@@ -96,7 +96,8 @@ def test_j2_real_every_source_shows_the_eight_fields(fresh_cfg):
     html = _fresh_html(doc, now)
     for src in doc["sources"]:
         text = plain(_row_of(html, src["source_id"]))
-        for label in ("Schedule", "Next due", "Last attempt", "Last successful receipt", "Freshness", "Complete",
+        for label in ("Schedule", "Next due", "Last attempt", "Last successful receipt", "Freshness",
+                      "Health · completeness",
                       "Latest failure", "Provenance", "Cost"):
             assert label in text, (src["source_id"], label)
         if src["last_attempt_utc"]:
@@ -122,7 +123,7 @@ def test_j2_collected_sources_show_provenance_and_unknown_cost():
         assert status == "200 OK"
         part = section(body, "src-h")
         text = plain(part)
-        assert "Provenance Official API · active · no credential" in text and "Records 3" in text
+        assert "Provenance Official API · Active · no credential" in text and "Records 3" in text
         assert research.REGISTRY_NO_COST in na_reasons(part)
         assert "not scheduled in this record: see Source freshness" in na_reasons(part)
     finally:
@@ -183,21 +184,37 @@ def test_j2_incomplete_partial_and_unknown(fresh_cfg):
     unknown.update(health="UNKNOWN", recent_misses=[], last_attempt_utc=None)
     html = _fresh_html(doc, fresh_cfg.clock())
     row = plain(_row_of(html, "exp001.forward.decision"))
-    assert "Complete Partial or degraded" in row and "Latest failure partial capture: 2 of 7 books missing" in row
+    # Completeness is the canonical health word, labelled as such; the schedule text is never a failure reason.
+    assert "Health · completeness Degraded no separate completeness record" in row
+    assert "Latest failure Reason not recorded health degraded; the report records no failure reason" in row
+    assert "Latest failure partial capture" not in row
     raw = _row_of(html, "exp001.forward.recheck")
     reasons = na_reasons(raw)
     assert "no attempt recorded" in reasons and "not recorded in the report" in reasons
-    assert any(r.startswith("completeness unknown") for r in reasons)
+    assert "Health · completeness Health unknown" in plain(raw)
     assert "None recorded at evaluation" not in plain(raw)  # unknown health is never "no failure"
 
 
 def test_j2_failure_texts():
+    # freshness_fabric writes recent_misses oldest first: the latest failure is the last one.
     assert "None recorded" in research.source_failure({"health": "OK", "recent_misses": []})
-    assert "a miss" in research.source_failure({"health": "OK", "recent_misses": ["a miss", "b"]})
-    assert "2 recent misses" in research.source_failure({"health": "OK", "recent_misses": ["a miss", "b"]})
-    assert "timeout" in research.source_failure({"health": "FAILING", "why_due": "timeout"})
+    newest = plain(research.source_failure({"health": "OK", "recent_misses": ["2026-09-20: old", "2026-09-23: new"]}))
+    assert newest.startswith("2026-09-23: new") and "2026-09-20" not in newest
+    assert "newest of 2 recent misses" in newest
+    failing = plain(research.source_failure({"health": "FAILING", "why_due": "next at the 18:00 tick"}))
+    assert failing.startswith("Reason not recorded") and "18:00 tick" not in failing
     assert 'aria-label="not recorded in the report"' in research.source_failure({})
-    assert "k-ok" not in research.source_complete({"health": "OK"})
+    assert "report not current" in plain(research.source_failure({"health": "OK", "recent_misses": []}, False))
+    assert "report not current" in plain(research.source_failure({"health": "OK", "recent_misses": ["m"]}, False))
+
+
+def test_j2_untrusted_report_qualifies_failure_and_health(fresh_cfg):
+    doc = _fresh_doc(fresh_cfg)
+    html = _fresh_html(doc, fresh_cfg.clock(), later=timedelta(hours=2))
+    healthy = [s["source_id"] for s in doc["sources"] if s["health"] == "OK" and not s["recent_misses"]]
+    assert healthy
+    row = plain(_row_of(html, healthy[0]))
+    assert "None recorded at evaluation report not current" in row
 
 
 # ================================================================ J3 opportunities (Markets and market detail)
@@ -218,6 +235,20 @@ def test_j3_real_detail_shows_fee_size_and_case(demo_cfg):
     status, body = get(demo_cfg, "/market", "venue=kalshi&id=DEMO-B71.5&side=YES")
     assert "the decision's policy demo is not linked to a registered experiment" in na_reasons(section(body, "as-h"))
     assert "Retail-heavy weather markets" not in text
+
+
+def test_j3_fee_is_per_contract_only_for_quantity_one(demo_cfg):
+    ctx = d.Context(demo_cfg)
+    row = next(r for r in cm.board_rows(ctx, pr.Params()) if r.native_id == "DEMO-B71.5")
+    a = row.for_side("YES")
+    assert plain(markets.fee_per_contract(a)) == "1.28¢"
+    for quantity, why in ((3, "(3), not one contract"), (None, "(not recorded)"), ("2", "(2), not one contract")):
+        opp = {**a.raw["opportunity"], "quantity": quantity}
+        if quantity is None:
+            opp.pop("quantity")
+        html = markets.fee_per_contract(replace(a, raw={**a.raw, "opportunity": opp}))
+        assert na_reasons(html) == [f"the recorded fee covers the decision's quantity {why}"], quantity
+    assert na_reasons(markets.fee_per_contract(replace(a, fee=None))) == ["fee not recorded with the decision"]
 
 
 def test_j3_mechanism_and_evidence_come_from_the_registry():
@@ -331,7 +362,7 @@ def test_j7_real_stages_from_the_registry():
         shutil.rmtree(root, ignore_errors=True)
     for title in ("Candidate", "Development", "Shadow", "Qualified", "Rejected"):
         assert title in text
-    assert "Shadow · 1" in text and "EXP-001" in text and "Running · shadow" in text
+    assert "Shadow · 1" in text and "EXP-001" in text and "Registry status Running" in text
     assert "Development · 2" in text and "Active family slot" in text
     assert "No strategy is qualified" in text and "STRATEGY_QUALIFIED is NONE" in text
     assert "Rejected · 0" in text
@@ -339,13 +370,29 @@ def test_j7_real_stages_from_the_registry():
 
 
 def test_j7_protected_evidence_stays_protected(monkeypatch):
-    """The stages read protocol configuration only: no outcome source is touched and no result is shown."""
-    def boom(self):
-        raise AssertionError("J7 must not read protected evidence")
-    monkeypatch.setattr(d.Context, "economic_a", property(boom))
-    monkeypatch.setattr(d.Context, "economic_b", property(boom))
+    """The stages read protocol configuration only: no outcome source is touched (the Context properties, the data
+    loaders and the evidence modules' views all record any call, even one a caller would swallow) and no result is
+    shown."""
+    from edge_lab import payoff_constraints, sports_evidence
+
+    reads: list[str] = []
+
+    def recorder(name):
+        def read(*args, **kwargs):
+            reads.append(name)
+            raise AssertionError(f"J7 must not read protected evidence ({name})")
+        return read
+    monkeypatch.setattr(d.Context, "economic_a", property(recorder("Context.economic_a")))
+    monkeypatch.setattr(d.Context, "economic_b", property(recorder("Context.economic_b")))
+    monkeypatch.setattr(d, "economic_evidence_a", recorder("data.economic_evidence_a"))
+    monkeypatch.setattr(d, "economic_evidence_b", recorder("data.economic_evidence_b"))
+    monkeypatch.setattr(sports_evidence, "terminal_view", recorder("sports_evidence.terminal_view"))
+    monkeypatch.setattr(payoff_constraints, "verify_result_provenance", recorder("payoff_constraints.verify"))
     ctx = d.Context(Config(experiments_root=REPO / "experiments"))
-    text = plain(research.stages_body(ctx))
+    try:
+        text = plain(research.stages_body(ctx))
+    finally:
+        assert reads == [], reads
     exp002 = text[text.index("EXP-002"):text.index("EXP-003")]
     assert "Outcome labels hidden on this Terminal (holdout protection" in exp002
     assert "May never view the outcome labels of" in text[text.index("EXP-003"):]
@@ -403,6 +450,8 @@ def test_j7_blocked_paused_rejected_and_incomplete():
         _fake(id="EXP-96", title="broken", problems=["bad field"], protocol="MISSING", slot_status=None),
         _fake(id="EXP-97", title="unreadable", protocol_error="TOMLDecodeError: x", holdout_windows=None),
         _fake(id="EXP-98", title="frozen", status="PREREGISTERED", holdout_windows=[("s", "a", "b")]),
+        {"key": "EXP-99-bad/experiment.toml", "id": None, "title": None, "status": None, "problems": ["TOMLDecodeError"],
+         "stage_a": None, "reports": [], "manifest_error": True},
     ])
     text = plain(html)
     candidate = text[text.index("Candidate ·"):text.index("Development ·")]
@@ -411,9 +460,14 @@ def test_j7_blocked_paused_rejected_and_incomplete():
     rejected = text[text.index("Rejected ·"):]
     assert "Rejected · 2" in text and "Concluded · fail" in rejected and "Abandoned" in rejected
     assert "Concluded · not a qualification · 1" in text and "No strategy is qualified" in text
-    assert "Status unrecognized · 1" in text and "Unrecognized (WEIRD)" in text
+    assert "Status unrecognized · 2" in text and "Registry status Weird" in text  # the unreadable manifest too
+    assert "Registry status Concluded · pass" in text  # the canonical word, shown neutral (never green)
     assert "Protocol unreadable · treated as protected" in text
     assert "1 holdout window(s) declared, never shown" in text
+    bad = text[text.index("Unreadable manifest"):]
+    assert bad.startswith("Unreadable manifest EXP-99-bad/experiment.toml")  # title and subtitle differ
+    assert "Manifest unreadable · treated as protected" in bad[:400]
+    assert "settled in prose" not in bad[:400]
     assert "k-ok" not in html
 
 
@@ -462,7 +516,9 @@ def _board(cfg: Config) -> tuple[str, str]:
 
 def test_j8_real_groups_fixture_positions_by_event(built):
     html, text = _board(cfg_for(built, "populated"))
-    assert "Actual positions: access not connected" in text  # no real position exists to group
+    # The actual-holdings state is the execution portfolio's own, with the code's environments from the export.
+    assert "Actual positions Access not connected" in text
+    assert "Authorized environments in code (from the export): FIXTURE" in text
     assert "FIXTURE · fake venue · not a real account" in text and "Reconciled at export" in text
     assert "KXHIGHNY-26OCT08 FIXTURE venue · not a real position · 3 market(s) Partly settled" in text
     assert "KXHIGHNY-26OCT08-B74 — — yes $2.00 $0.00 +$1.12" in text  # settled: result, revenue, venue P&L
@@ -487,7 +543,8 @@ def test_j8_missing_export(tmp_path, built):
     for cfg in (Config(clock=lambda: now), Config(status_dir=tmp_path, clock=lambda: now)):
         text = _board(cfg)[1]
         assert "No execution export" in text and "This is not an empty portfolio" in text
-        assert "Actual positions: access not connected" in text and "No FIXTURE positions" not in text
+        assert "Actual positions Access not connected" in text and "No FIXTURE positions" not in text
+        assert "EXECUTION_PLAN records FIXTURE only" in text
 
 
 def test_j8_error_and_blocked(tmp_path, built):

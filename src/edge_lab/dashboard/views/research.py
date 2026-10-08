@@ -53,11 +53,6 @@ STAGE_EXTRA = (("CONCLUDED", "Concluded · not a qualification",
                 "strategy."),
                ("UNRECOGNIZED", "Status unrecognized", "The registry status is missing or not one this Terminal knows; "
                                                        "the experiment is shown, never placed in a stage."))
-STATUS_WORDS = {"DRAFT": ("Draft", pr.ND_K), "PREREGISTERED": ("Preregistered", pr.INFO_K),
-                "RUNNING": ("Running · shadow", pr.INFO_K), "CONCLUDED_PASS": ("Concluded · pass", pr.INFO_K),
-                "CONCLUDED_FAIL": ("Concluded · fail", pr.WARN_K),
-                "CONCLUDED_INCONCLUSIVE": ("Concluded · inconclusive", pr.WARN_K),
-                "ABANDONED": ("Abandoned", pr.WARN_K)}
 SLOT_WORDS = {"ACTIVE": ("Active family slot", pr.INFO_K), "QUEUED": ("Queued · waiting for a family slot", pr.WARN_K),
               "ENDED": ("Family slot ended", pr.ND_K)}
 
@@ -73,6 +68,8 @@ def experiment_stage(e: dict) -> str:
 def protected_text(e: dict) -> str:
     """How the experiment's held-out evidence is protected, from its protocol configuration only (scope names and
     window counts). No outcome, label, result or count of results is ever read here."""
+    if e.get("manifest_error"):
+        return c.state_text("MANIFEST_UNREADABLE", label="Manifest unreadable · treated as protected", kind=pr.WARN_K)
     if e.get("protocol_error"):
         return c.state_text("PROTOCOL_UNREADABLE", label="Protocol unreadable · treated as protected", kind=pr.WARN_K)
     scopes, windows = e.get("protected_scopes") or (), e.get("holdout_windows")
@@ -114,15 +111,18 @@ def forward_days(ctx: d.Context) -> tuple[Any, str | None]:
 
 def stage_row(e: dict, ctx: d.Context) -> str:
     status = e.get("status")
-    label, kind = STATUS_WORDS.get(status, (f"Unrecognized ({status})" if status else "Not recorded", pr.ND_K))
+    word = pr.state_word(status) if status else pr.StateWord("Not recorded", pr.ND_K)
+    kind = pr.ND_K if word.kind == pr.OK_K else word.kind  # the registry's word; a stage is never green
     slot = e.get("slot_status")
-    if e.get("protocol") == "LEGACY":
+    if e.get("manifest_error"):
+        slot_html = c.na("manifest unreadable")
+    elif e.get("protocol") == "LEGACY":
         slot_html = c.txt("Legacy · predates family slots")
     elif slot in SLOT_WORDS:
         slot_html = c.state_text(f"SLOT_{slot}", label=SLOT_WORDS[slot][0], kind=SLOT_WORDS[slot][1])
     else:
         slot_html = c.na("protocol missing or unreadable" if e.get("protocol") != "PRESENT" else "slot not recorded")
-    facts = [("Registry status", c.state_text(f"EXP_{status}", label=label, kind=kind)), ("Family slot", slot_html),
+    facts = [("Registry status", c.state_text(status, label=word.label, kind=kind)), ("Family slot", slot_html),
              ("Protected evidence", protected_text(e))]
     if e.get("id") == "EXP-001":
         days, note = forward_days(ctx)
@@ -134,7 +134,8 @@ def stage_row(e: dict, ctx: d.Context) -> str:
             kind=pr.WARN_K)))
     sub = " · ".join(x for x in (e.get("id") or e.get("key"), f"family {e['family']}" if e.get("family") else None)
                      if x)
-    return c.row(esc(e.get("title") or e.get("key") or "untitled experiment"), sub=sub,
+    title = e.get("title") or ("Unreadable manifest" if e.get("manifest_error") else "Untitled experiment")
+    return c.row(esc(title), sub=sub,
                  body=c.facts(facts, text_cols=tuple(i for i, (k, _) in enumerate(facts)
                                                      if k != "Forward valid days")))
 
@@ -709,41 +710,36 @@ def needs_attention(src: Any) -> bool:
 
 # Market v1 journey J2 (docs/strategy/MARKET_V1_ACCEPTANCE.md §2): per source, besides freshness (current), schedule
 # and next due (due) and last successful receipt (succeeded): the last attempt, completeness, the latest failure,
-# provenance and cost. Each is the artifact's own field, only worded; a field it does not record reads unknown.
-# Completeness is the fabric's SourceHealth (OK: no partial or failed result; DEGRADED: partial results), not a
-# second judgement. Cost is the policy's `budget` (words); a policy without one has no recorded cost, never $0.
-COMPLETE_WORDS = {"OK": ("No partial or failed result", pr.INFO_K), "DEGRADED": ("Partial or degraded", pr.WARN_K),
-                  "FAILING": ("Latest attempt failed", pr.ERR_K)}
+# provenance and cost. Each is the artifact's own field, only formatted; a field it does not record reads unknown.
+# The fabric records no completeness of its own: the Health fact (canonical HEALTH_* words) is labelled with it and
+# says so, rather than rewording health into a completeness claim it does not support. Cost is the policy's
+# `budget` (words); a policy without one has no recorded cost, never $0.
+NO_COMPLETENESS = "no separate completeness record"
 NO_COST = "cost not recorded: the source's policy names no budget or quota"
 REGISTRY_NO_COST = "cost not recorded: the source registry has no cost field"
 
 
-def source_complete(src: dict) -> str:
-    code = src.get("health")
-    if code not in COMPLETE_WORDS:
-        return c.na("completeness unknown: no attempt on record, or health not recorded")
-    label, kind = COMPLETE_WORDS[code]
-    return c.state_text(f"HEALTH_{code}", label=label, kind=kind)
-
-
-def source_failure(src: dict) -> str:
-    """The latest recorded failure: a recent miss, else the failing source's own reason. Never "none" unless the
-    source is healthy and records no miss."""
+def source_failure(src: dict, trusted: bool = True) -> str:
+    """The newest recorded miss (the fabric writes `recent_misses` oldest first). Without one, a degraded or failing
+    source says its failure reason is not recorded: the schedule text (`why_due`) is never shown as a failure reason.
+    "None recorded" only for a healthy source with no miss; under a report that is not fresh it says so."""
     misses = _texts(src.get("recent_misses"))
+    stale = None if trusted else "report not current"
     if misses:
-        return esc(misses[0]) + _sub(f"{pr.count(len(misses))} recent misses" if len(misses) > 1 else None)
+        more = f"newest of {pr.count(len(misses))} recent misses" if len(misses) > 1 else None
+        return esc(misses[-1]) + _sub(" · ".join(x for x in (more, stale) if x) or None)
     health = src.get("health")
     if health in ("FAILING", "DEGRADED"):
-        return esc(_scrub(_text(src.get("why_due")) or "reason not stated"))
+        word = pr.prefixed_word("HEALTH", health).label.lower()
+        return c.txt("Reason not recorded") + _sub(f"health {word}; the report records no failure reason")
     if health == "OK":
-        return c.txt("None recorded at evaluation")
+        return c.txt("None recorded at evaluation") + _sub(stale)
     return c.na("not recorded in the report")
 
 
 def source_provenance(src: dict, policy: dict) -> str:
-    """What the data is and which policy version records it (the full description is in the details)."""
+    """What the data is (the policy's description, as written) and which policy version records it."""
     what = _text(policy.get("description"))
-    what = what.split("; objective")[0] if what else None
     version = _text(src.get("policy_version"))
     if not what and not version:
         return c.na("provenance not recorded in the report")
@@ -774,15 +770,15 @@ def fabric_source_row(src: Any, policy: Any, now: Any, *, trusted: bool = True, 
             f"objective {objective}" if objective else "no objective") if x))),
         ("Schedule", _trusted_badge(src.get("schedule_state"), pr.prefixed_word("SCHEDULE", src.get("schedule_state")),
                                     trusted) + _sub(f"as of {pr.datetime_et(carried)}" if carried else None)),
-        ("Health", _trusted_badge(src.get("health"), pr.prefixed_word("HEALTH", src.get("health")), trusted)),
+        ("Health · completeness", _trusted_badge(src.get("health"), pr.prefixed_word("HEALTH", src.get("health")),
+                                                 trusted) + _sub(NO_COMPLETENESS)),
         ("Next due", c.txt(pr.datetime_et(src.get("next_due_utc")), reason="nothing planned or not known")),
         ("Last successful receipt", c.txt(pr.datetime_et(src.get("last_success_receipt_utc")),
                                           reason="no successful receipt recorded")),
         ("Usable for", _usable(src, trusted, report_word) + _sub(at_text if trusted else None)),
         ("Why", esc(_scrub(_text(src.get("why_due")) or "not stated"))),
         ("Last attempt", c.txt(pr.datetime_et(src.get("last_attempt_utc")), reason="no attempt recorded")),
-        ("Complete", source_complete(src)),
-        ("Latest failure", source_failure(src)),
+        ("Latest failure", source_failure(src, trusted)),
         ("Provenance", source_provenance(src, policy)),
         ("Cost", source_cost(policy)),
     ]
@@ -822,7 +818,7 @@ def fabric_source_row(src: Any, policy: Any, now: Any, *, trusted: bool = True, 
         sub += f" · run by {_text(src.get('schedule_owner')) or 'an owner not recorded'}"
     return c.row(esc(_text(src.get("source_id")) or "unnamed source"), sub=sub,
                  aside=_trusted_badge(fresh_code, pr.state_word(fresh_code), trusted),
-                 body=c.facts(facts, wide=True, text_cols=tuple(range(12))) + detail)
+                 body=c.facts(facts, wide=True, text_cols=tuple(range(11))) + detail)
 
 
 def supervisor_state(doc: Any, report: d.FreshnessReport, now: Any) -> str:
@@ -1972,7 +1968,7 @@ def registry_provenance(spec: Any) -> str:
         return c.na("not in the source registry")
     tier = TIER_WORDS.get(spec.access_tier.name, spec.access_tier.name)
     cred = "no credential" if spec.credential_kind == sources.CredentialKind.NONE else "read-only data key"
-    return esc(f"{tier} · {spec.status.value} · {cred}") + _sub(f"parser v{spec.parser_version}")
+    return esc(f"{tier} · {spec.status.value.capitalize()} · {cred}") + _sub(f"parser v{spec.parser_version}")
 
 
 def sources_tab(ctx: d.Context) -> str:

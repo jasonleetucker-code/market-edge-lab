@@ -12,7 +12,7 @@ from .. import presentation as pr
 from ..html import esc
 from . import common as cm
 from . import ops_common as oc
-from .ops_portfolio import omitted_note, snapshot_line
+from .ops_portfolio import actual_body, omitted_note, snapshot_line
 
 HORIZON_LABELS = {"within_1_hour": "Within 1 hour", "within_1_day": "Within 1 day", "within_1_week": "Within 1 week",
                   "later": "Later than 1 week", "unknown": "Unknown", "settled": "Settled",
@@ -133,11 +133,8 @@ def execution_outcomes_body(loaded: d.Loaded, now: datetime) -> str:
     """Every state: actual positions not connected; export missing, unreadable, refused or mismatched; no journal or
     journal error; stale export; paused; reconciliation incomplete or no snapshot (holdings unknown); a known-empty
     account; populated FIXTURE groups."""
-    actual = c.blocked_state("Actual positions: access not connected",
-                             "No real account is connected, so no real-world position exists to group here. DEMO and "
-                             "PRODUCTION reads need activation packet Decisions 1 and 2.",
-                             action=("/setup", "Setup & readiness"))
     missing, es = oc.export_state(loaded)
+    actual = '<h3 class="eyebrow">Actual positions</h3>' + actual_body(es)
     if missing:
         return actual + missing
     doc = es.doc
