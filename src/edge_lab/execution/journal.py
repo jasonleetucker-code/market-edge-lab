@@ -82,6 +82,13 @@ existing key (so `INSERT OR REPLACE`, which deletes without firing delete trigge
 `verify_chain` recomputes the event chain and checks every append-only row (intents, approvals, receipts,
 snapshots) against the row hash its event recorded, every intent and receipt against its own content
 hash, every attempt and reservation state against its last event, and the lease against its last event.
+
+**Control events and records** (#160 package K). The supervised orchestrator persists its `control` events
+(`append_control_event`, read back by `control_events` and folded only through `control.boot`) and its own
+operational records (`append_control_record` / `control_records`: signals, decisions, cycles, P&L observations)
+as ordinary hash-chained rows of `events`, with `subject` = the account scope key. No table, column, index or
+trigger changed, so the schema version is unchanged. A stored control event or record that does not decode
+raises JournalCorrupt.
 """
 
 from __future__ import annotations
@@ -97,7 +104,9 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Any, Callable, Iterable, Iterator, Mapping
 
-from .model import ApprovalGrant, OrderIntent, canonical_json, environment_authorized, sha256_text, utc_text
+from . import control
+from .model import (AccountScope, ApprovalGrant, OrderIntent, canonical_json, environment_authorized, sha256_text,
+                    utc_text)
 from .reservations import (APPEND_ONLY_KEYS as _RESERVATION_APPEND_ONLY, SCHEMA_SQL as _RESERVATION_SCHEMA_SQL,
                            CorruptRecord, InvalidTransition, ReceiptKind, ReleaseReason, ReservationAuthority)
 
@@ -109,6 +118,19 @@ DEFAULT_BUSY_TIMEOUT_MS = 250
 
 _DIGEST = re.compile(r"[0-9a-f]{64}")
 _LABEL = re.compile(r"[A-Za-z0-9][A-Za-z0-9:._/#-]{0,199}")
+
+CONTROL_EVENT_KIND = "CONTROL_EVENT"  # a `control` event (Started, ArmAccepted, IncidentRaised, ...)
+CONTROL_RECORD_KIND = "CONTROL_RECORD"  # an orchestrator record (signal, decision, cycle summary, ...)
+_RECORD_TYPE = re.compile(r"[A-Z][A-Z0-9_]{0,63}")
+# Every persisted control event type, by name. A name not listed here does not decode.
+_CONTROL_EVENT_TYPES = MappingProxyType({cls.__name__: cls for cls in (
+    control.Started, control.ReconciliationObserved, control.IncidentRaised, control.IncidentAcknowledged,
+    control.ArmAccepted, control.ArmRefused, control.Disarm, control.SetLatch, control.ClearLatch,
+    control.CloseoutAuthorized)})
+# Decoders for the fields of those events that are not plain text (JSON keeps enums as values, tuples as lists).
+_CONTROL_FIELD_DECODERS = MappingProxyType({"mode": control.Mode, "status": control.Reconciliation,
+                                            "scope": control.LatchScope, "acknowledged_incidents": tuple,
+                                            "reasons": tuple})
 
 
 class JournalError(Exception):
@@ -208,10 +230,33 @@ class ReceiptResult:
 
 
 @dataclass(frozen=True)
+class ControlRecord:
+    """One persisted orchestrator record: its chain position, time, type and JSON body (Decimals as text)."""
+
+    seq: int
+    at_utc: str
+    record_type: str
+    body: Mapping[str, Any]
+
+
+@dataclass(frozen=True)
 class ChainVerification:
     ok: bool
     events: int
     problems: tuple[str, ...]
+
+
+def _refuse_floats(value: Any) -> None:
+    """A float anywhere in a control body is refused: money and quantities are exact (Decimal as text)."""
+    if isinstance(value, float):
+        raise TypeError("a control body holds no float; use Decimal")
+    if isinstance(value, Mapping):
+        for k, v in value.items():
+            _refuse_floats(k)
+            _refuse_floats(v)
+    elif isinstance(value, (list, tuple)):
+        for v in value:
+            _refuse_floats(v)
 
 
 def _event_hash(seq: int, at: str, kind: str, subject: str, body_json: str, prev_hash: str) -> str:
@@ -859,6 +904,83 @@ class ExecutionJournal:
         if provider_id is None or owned is None or provider_id != owned:
             raise InvalidTransition(f"RECEIPT_NOT_BOUND: {receipt_id!r} names neither {attempt_id} nor its provider "
                                     "order id")
+
+    # ------------------------------------------------------------------ control events and records (package K)
+
+    def append_control_event(self, scope: AccountScope, event: control.Event, *, now: datetime) -> int:
+        """Persist one `control` event for `scope` as a hash-chained row and return its sequence number. The
+        caller applies the event to its live state only after this returns."""
+        if not isinstance(scope, AccountScope):
+            raise ValueError("scope must be an AccountScope")
+        name = type(event).__name__
+        if _CONTROL_EVENT_TYPES.get(name) is not type(event):
+            raise ValueError(f"not a control event: {name}")
+        body = {"type": name, "fields": {f: getattr(event, f) for f in event.__dataclass_fields__}}
+        return self._append(scope, CONTROL_EVENT_KIND, body, now)
+
+    def control_events(self, scope: AccountScope) -> tuple[control.Event, ...]:
+        """Every control event of `scope`, in the order it was persisted. Fold it only through `control.boot`."""
+        out = []
+        for seq, _, body in self._rows(scope, CONTROL_EVENT_KIND):
+            try:
+                cls = _CONTROL_EVENT_TYPES[body["type"]]
+                raw = body["fields"]
+                if not isinstance(raw, dict) or set(raw) != set(cls.__dataclass_fields__):
+                    raise ValueError(f"the fields are not those of {cls.__name__}")
+                kwargs = {k: (_CONTROL_FIELD_DECODERS[k](v) if k in _CONTROL_FIELD_DECODERS and v is not None else v)
+                          for k, v in raw.items()}
+                out.append(cls(**kwargs))
+            except (KeyError, TypeError, ValueError) as exc:
+                raise JournalCorrupt(f"control event at seq {seq} does not decode: {exc}") from exc
+        return tuple(out)
+
+    def append_control_record(self, scope: AccountScope, record_type: str, body: Mapping[str, Any], *,
+                              now: datetime) -> int:
+        """Persist one orchestrator record (`record_type` is an UPPER_CASE label; `body` must serialize as
+        canonical JSON, Decimals as text) as a hash-chained row and return its sequence number."""
+        if not isinstance(scope, AccountScope):
+            raise ValueError("scope must be an AccountScope")
+        if not isinstance(record_type, str) or not _RECORD_TYPE.fullmatch(record_type):
+            raise ValueError(f"record_type must be an UPPER_CASE label, not {record_type!r}")
+        if not isinstance(body, Mapping):
+            raise ValueError("body must be a mapping")
+        return self._append(scope, CONTROL_RECORD_KIND, {"type": record_type, "body": dict(body)}, now)
+
+    def control_records(self, scope: AccountScope, record_type: str | None = None) -> tuple[ControlRecord, ...]:
+        """The orchestrator records of `scope` (only `record_type`, if given), in the order they were persisted."""
+        out = []
+        for seq, at, body in self._rows(scope, CONTROL_RECORD_KIND):
+            try:
+                kind, content = body["type"], body["body"]
+                if not isinstance(kind, str) or not isinstance(content, dict):
+                    raise ValueError("malformed record")
+            except (KeyError, TypeError, ValueError) as exc:
+                raise JournalCorrupt(f"control record at seq {seq} does not decode: {exc}") from exc
+            if record_type is None or kind == record_type:
+                out.append(ControlRecord(seq, at, kind, content))
+        return tuple(out)
+
+    def _append(self, scope: AccountScope, kind: str, body: dict, now: datetime) -> int:
+        at = utc_text(now)
+        _refuse_floats(body)
+        canonical_json(body)  # refuses anything that is not canonical JSON before the transaction starts
+        with self._transaction() as conn:
+            self._audit(conn, at=at, kind=kind, subject=scope.key(), body=body)
+            return int(conn.execute("SELECT MAX(seq) FROM events").fetchone()[0])
+
+    def _rows(self, scope: AccountScope, kind: str) -> list[tuple[int, str, Any]]:
+        if not isinstance(scope, AccountScope):
+            raise ValueError("scope must be an AccountScope")
+        with self._reading() as conn:
+            rows = conn.execute("SELECT seq, at_utc, body_json FROM events WHERE kind = ? AND subject = ?"
+                                " ORDER BY seq", (kind, scope.key())).fetchall()
+        out = []
+        for seq, at, body_json in rows:
+            try:
+                out.append((int(seq), at, json.loads(body_json)))
+            except ValueError as exc:
+                raise JournalCorrupt(f"event {seq} body does not decode: {exc}") from exc
+        return out
 
     # ------------------------------------------------------------------ verification
 
