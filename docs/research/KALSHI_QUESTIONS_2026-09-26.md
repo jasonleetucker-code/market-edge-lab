@@ -1,6 +1,8 @@
 # Questions to Kalshi (venue-fact verification), 2026-09-26
 
-**Status: REVISION 2, DRAFT, NOT SENT (2026-09-29).** On 2026-09-26 the owner approved sending the
+**Status: REVISION 3, DRAFT, NOT SENT (2026-10-08).** Revision 3 adds Q11 (sports-series fees), approved for inclusion by the owner on 2026-10-08 (`docs/owner/2026-10-08-alpha-discovery-decisions.md`, item 3). The owner reads the current fee PDF, confirms the whole final text and sends it from their own account; agents never send it. Revision 2 history follows.
+
+**Revision 2 status (2026-09-29): DRAFT, NOT SENT.** On 2026-09-26 the owner approved sending the
 8 questions drafted in `docs/research/RESEARCH_UNBLOCKING_DECISIONS.md` §B, on condition that the
 owner sees and confirms the exact final message first
 (`docs/owner/2026-09-26-owner-decisions-economics-backup.md`, item 2). Revision 1, the 8-question
@@ -85,6 +87,14 @@ to the result as it stands at suspension. The CFTC self-certification letter of 
 it to the last fair market price as determined by Kalshi. Which text governs KXNFLGAME markets
 listed since 2026-09-11? If the fair-price text governs, is that price confined to [$0, $1] and to
 the price grid, and is it paid identically to YES holders and, as $1 − value, to NO holders?
+
+**11. Sports-series fees (KXNBAGAME, KXMLBGAME, KXNHLGAME).** For each of these series:
+(a) What maker and taker multipliers apply, and since when? The July 7, 2026 schedule's Non-Standard Fees table
+lists KXNFLGAME but, as we read it, not KXNBAGAME. Does a series' absence from that table mean the default maker
+multiplier (0) and taker multiplier (1) apply?
+(b) What is the history of each series' `fee_type` (for example `quadratic` vs `quadratic_with_maker_fees`), and on
+what dates did maker fees start applying to it?
+(c) Do the answers to Q7 (a)–(d) on multipliers, overrides and waivers apply to these series in the same way?
 
 **10. Data use.** Do the Kalshi Data Terms of Use apply to market data retrieved through the public
 API? Is private storage and analysis of that data, including with AI tools, for the member's own
