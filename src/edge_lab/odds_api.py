@@ -53,7 +53,7 @@ from .forward import LockBusy, exclusive_lock
 from .freshness import Freshness, assess, parse_utc
 from .odds_schedule import ScheduledEvent
 from .opportunity import Event, Market, MarketStatus, Payoff
-from .redaction import redact_text, redact_url
+from .redaction import redact_json, redact_text, redact_url
 from .sources import CredentialKind, get_source
 
 SOURCE_ID = "the_odds_api"
@@ -700,7 +700,9 @@ def save_snapshot(store: Any, *, run_id: str, sport: str, outcome: OddsFetch, ki
     spec = get_source(SOURCE_ID)
     payload: dict[str, Any] = {"sport": sport, "events": outcome.payload}
     if context is not None:
-        payload["request"] = json.loads(redact_text(json.dumps(dict(context), sort_keys=True, default=str)))
+        # Each string is redacted on its own, then encoded: never the dumped JSON text (a raw-text rule can run
+        # past a string boundary and break it).
+        payload["request"] = json.loads(json.dumps(redact_json(dict(context)), sort_keys=True))
         payload["quota_headers"] = dict(outcome.fetch.response_headers)
     return store.save_snapshot(run_id=run_id, source=spec.legacy_name, kind=kind, entity_id=sport,
                                url=outcome.redacted_url, payload=payload,

@@ -355,8 +355,9 @@ def test_successful_pull_books_the_charge_and_persists_nothing_secret(tmp_path):
 
 
 def test_snapshot_context_is_redacted_and_stays_valid_json(tmp_path):
-    """#176 review: `save_snapshot` redacts the JSON-encoded request context and parses it back. A header-shaped
-    phrase inside a context string must not redact past the string's closing quote (that was invalid JSON)."""
+    """#176 review: `save_snapshot` redacts the request context string by string (`redaction.redact_json`), never
+    as dumped JSON text, where a header value running to the end of the line ate the closing quote (invalid JSON).
+    A value with quotes in it is still redacted whole, and nested strings and keys are redacted too."""
     led = reconciled(tmp_path)
     out = oa.fetch_odds("americanfootball_nfl", ["h2h"], regions=["us"], odds_format="american",
                         ledger=led, opener=Opener((ODDS, quota(398, 102, 1))), environ=ENV)
@@ -368,10 +369,13 @@ def test_snapshot_context_is_redacted_and_stays_valid_json(tmp_path):
 
     store = Store()
     context = {"note": "operator authorization: Basic dXNlcjpwYXNzd29yZA==", "markets": ["h2h"],
-               "pasted": 'KALSHI-ACCESS-KEY: 0b5f0c33 "quoted"', "condition": "0x" + "ab" * 32}
+               "pasted": 'KALSHI-ACCESS-KEY: 0b5f0c33 "quoted"', "condition": "0x" + "ab" * 32,
+               "targets": [{"id": 'password=Pa"ss1234word'}], "token=zzz": 1, "at": datetime(2026, 9, 23, tzinfo=UTC)}
     oa.save_snapshot(store, run_id="run-1", sport="americanfootball_nfl", outcome=out, context=context)
     request = store.kw["payload"]["request"]
-    assert set(request) == {"note", "markets", "pasted", "condition"} and request["markets"] == ["h2h"]
+    assert set(request) == {"note", "markets", "pasted", "condition", "targets", "token=REDACTED", "at"}
+    assert request["markets"] == ["h2h"] and request["targets"] == [{"id": "password=REDACTED"}]
+    assert request["at"] == "2026-09-23 00:00:00+00:00"  # as json.dumps(default=str) wrote it
     assert request["note"] == "operator authorization=REDACTED"
     assert request["pasted"] == "KALSHI-ACCESS-KEY=REDACTED"
     assert request["condition"] == context["condition"]  # a 0x id is not a key body
