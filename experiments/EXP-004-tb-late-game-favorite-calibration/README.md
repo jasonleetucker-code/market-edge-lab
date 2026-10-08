@@ -21,6 +21,10 @@ known before the game, and scores at the **one-minute candle ask** (next minute'
 prints. It makes **one decision per game**, so the two team markets are never double-counted, and clusters by game.
 NHL and NFL are excluded by the Track B scope.
 
+Kagan & Baiocchi (Kalshi-hosted, August 2026) also find better calibration once the clock is corrected; this
+comes via the owner-supplied external research of 2026-10-08. So the evidence against now dominates. The
+experiment stays queued because the shared A2 read settles it in days.
+
 ## Preregistered-in-draft kill rules (from R6; to be frozen unchanged)
 
 - **KILL:** the validation block's game-clustered 95% upper bound of mean net return per dollar is ≤ 0, or the

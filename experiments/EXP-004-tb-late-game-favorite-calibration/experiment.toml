@@ -25,8 +25,11 @@ per game is small and books are fast. Against it (R6): realized-close bucketing 
 selection plausibly explains most of the MLB effect and part of the NBA effect; sweep prints after
 decisive plays are the footprint of makers being picked off by the fastest takers, not an edge for
 a slow participant; trade-count weighting amplifies both; Le (2026), quantity-weighted and
-event-clustered, finds Kalshi sports close to calibrated at 0-48 h (0-1 h slope 1.10). The prior
-is that the taker version fails at the ask.
+event-clustered, finds Kalshi sports close to calibrated at 0-48 h (0-1 h slope 1.10); Kagan and
+Baiocchi (Kalshi-hosted working paper, August 2026, https://kalshi.com/research/kalshi-research-calibration.pdf,
+cited from owner-supplied external research of 2026-10-08) find better calibration once actual
+game-end timing corrects the clock (exchange-hosted, private timing data, not a clean independent
+refutation). The prior is that the taker version fails at the ask.
 """
 
 market = "Kalshi NBA and MLB full-game winner series (KXNBAGAME, KXMLBGAME as named in fee_schedules.py; confirmed against the approved dataset). Excluded: NFL (EXP-002 scope), NHL (Track B excludes NHL outcomes), combos (KXMVE*), KXHIGHNY"
