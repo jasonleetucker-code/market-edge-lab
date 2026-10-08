@@ -55,8 +55,8 @@ The patterns include every pattern of the tracked-file invariant (`tests/invaria
 | Date | Scope | Result |
 |---|---|---|
 | 2026-10-07 | an earlier pattern-based scan of 787 commits (reported by the campaign coordinator) | clean |
-| 2026-10-08 | `--history` with this script, run locally at `8837311`: 827 commits, 334 refs, 2,518 text blobs, 827 commit messages, 55 binary blobs skipped, none over the size bound | clean. 99 matches across 10 fingerprints were reviewed and allowlisted, all synthetic test values: fixture API key, sample ntfy topics, redaction-test header samples |
-| 2026-10-08 | `--tree` at the same commit (719 files) | clean |
+| 2026-10-08 | `--history` with this script, run locally on branch `exec/o-ops` at `d617faa` (all local refs): 836 commits, 339 refs, 2,578 text blobs, 836 commit messages, 55 binary blobs skipped, none over the size bound | clean. 101 matches across 10 fingerprints were reviewed and allowlisted, all synthetic test values: fixture API key, sample ntfy topics, redaction-test header samples |
+| 2026-10-08 | `--tree` at the same commit (743 files) | clean |
 
 Re-run and add a row before each credential decision is used. Re-run after any history rewrite, and whenever
 `.github/workflows/` starts publishing an artifact.
