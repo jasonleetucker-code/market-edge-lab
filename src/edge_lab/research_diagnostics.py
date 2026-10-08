@@ -1,4 +1,4 @@
-"""Track B offline evaluation harness: calibration, executable entries, bankroll ladder, depth (#184, ADR 0047).
+"""Track B offline evaluation harness: calibration, executable entries, bankroll ladder, depth (#184, ADR 0050).
 
 The canonical owner of the *diagnostic* questions a Track B candidate asks before any economic screen:
 how well do market prices forecast outcomes by bucket, what would an entry really cost against a

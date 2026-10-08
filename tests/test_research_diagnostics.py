@@ -1,4 +1,4 @@
-"""Track B harness: evidence stamps, calibration by bucket, governance guard and CLI (#184, ADR 0047)."""
+"""Track B harness: evidence stamps, calibration by bucket, governance guard and CLI (#184, ADR 0050)."""
 
 import json
 import math

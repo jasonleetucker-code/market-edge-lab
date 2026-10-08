@@ -1,4 +1,4 @@
-# ADR 0047: Track B offline diagnostics harness (calibration, executable entries, bankroll, depth)
+# ADR 0050: Track B offline diagnostics harness (calibration, executable entries, bankroll, depth)
 
 **Status:** Proposed 2026-10-08 (Track B harness writer, branch `research/tb-harness`). Scope: issue #184,
 the 2026-10-08 rapid alpha discovery directive, as narrowed by the scope review of PR #185.
