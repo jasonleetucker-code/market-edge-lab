@@ -77,6 +77,28 @@ def coverage_line(ctx: d.Context, total: int, shown: int) -> str:
     return f'<p class="coverage" role="status">{esc(shown)} of {esc(total)} markets · {esc(cov)}</p>'
 
 
+def halted_line(ctx: d.Context, p: pr.Params) -> str:
+    """Journey J3's paused state: when the selected account's canonical risk report allows no new risk, the board
+    says so before any row (a qualified row is then not something the account could take). An unreadable risk report
+    is said; an account with no registered risk policy (the frozen research record) has no capacity to show."""
+    view = cm.account_view(ctx, p)
+    if view.status != d.OK or view.risk is None or view.risk.status == d.NO_DATA:
+        return ""  # an unavailable account is shown by the decision disclosure; no policy is explained on Risk
+    risk_href = "/risk" + ("?account=research" if p.account == "research" else "")
+    if view.risk.status != d.OK:
+        return c.status_line("warn", "Risk capacity unavailable (read error)",
+                             f"{view.risk.message}. A qualified row is not a position this account could open. ",
+                             detail_html=c.link(risk_href, "Risk"))
+    rep = view.risk.value
+    state = cm.risk_state(rep)
+    if state == "OK":
+        return ""
+    why = ", ".join(rep.breaches) if state == "BREACH" else "no limit breached, but remaining risk capacity is zero"
+    return c.status_line("err", f"{pr.state_word(state).label} · paused",
+                         f"{why}. No new position would be opened from this board. ", detail_html=c.link(risk_href,
+                                                                                                         "Risk"))
+
+
 def view(ctx: d.Context, p: pr.Params) -> cm.Page:
     all_rows = cm.board_rows(ctx, p)
     sports = sorted({r.league for r in all_rows if r.domain == "sports" and r.league})
@@ -97,6 +119,7 @@ def view(ctx: d.Context, p: pr.Params) -> cm.Page:
                      "recorded decisions. Operational figures are unaffected.</p>")
     parts.append(filter_form(p, domain_tabs(p, all_rows) + sport_filter(p, in_domain, sports)))
     parts.append(coverage_line(ctx, len(all_rows), len(filtered)))
+    parts.append(halted_line(ctx, p))
     starter = (f'<p class="note">Starter rule STARTER_MAX_7D_V1: new operational capital only where tradable cash is '
                "expected back on the same venue within 168 hours. Browsing an ineligible market never allocates "
                "to it.</p>")
@@ -214,7 +237,7 @@ def detail(ctx: d.Context, p: pr.Params) -> cm.Page:
             f'<h1 class="page-title detail-q">{esc(pr.market_title(row))}</h1>'
             f'<p class="page-sub">{esc(row.native_id)} · target {esc(pr.date_label(row.target_date) or "unknown")}'
             f' · closes {esc(pr.datetime_et(row.close_time_utc) or "time not captured")}</p></div></div>')
-    main = [quote_section(row, side, p, ctx.now), history_section(ctx, row, side), assessment_section(row, side),
+    main = [quote_section(row, side, p, ctx.now), history_section(ctx, row, side), assessment_section(row, side, ctx),
             venues_section(ctx, row, side), sizing_section(ctx, row)]
     side_col = [capital_section(row, side), ticket_section(row, side, p)]
     # Source order = the contract's phone order; Rules & evidence comes last, after the inspector.
@@ -280,7 +303,36 @@ def history_table(items) -> str:
                    caption="Earlier decisions")
 
 
-def assessment_section(row: pr.MarketRow, side: str) -> str:
+def case_block(a: pr.Assessment, exp: dict | None, why_unknown: str = "") -> str:
+    """Market v1 journey J3: why this could be an opportunity (the mechanism of the experiment behind the decision),
+    what evidence that experiment has, and every recorded rejection reason, in plain words. The mechanism and the
+    research stage are the registry's text; nothing here is an edge claim."""
+    if exp is None:
+        mechanism = c.na(why_unknown or "no experiment linked to this decision")
+        evidence = c.na(why_unknown or "no experiment linked to this decision")
+    else:
+        mechanism = (esc(exp["mechanism"]) + f'<span class="cell-sub">{esc(exp.get("mechanism_basis"))} · '
+                     f'{esc(exp.get("id"))} · unproven</span>') if exp.get("mechanism") else c.na(
+            f"{exp.get('id')} records no mechanism")
+        stage = exp.get("stage_a") or {}
+        # Neutral capsules: beside a decision, a research stage or a historical pass must never read as readiness.
+        evidence = (c.badge(exp.get("status"), kind=pr.ND_K) + " "
+                    + (c.badge(stage.get("verdict"), kind=pr.ND_K) if stage.get("verdict")
+                       else c.txt("no historical result"))
+                    + f'<span class="cell-sub">{esc(exp.get("id"))} · a historical validation is not an edge · '
+                      f'<a class="link" href="/experiments">Research</a></span>')
+    reasons = list(a.reasons) or ([a.reason] if a.reason else [])
+    if a.qualification == "QUALIFY":
+        why = c.txt("None: qualified at decision time")
+    elif reasons:
+        why = c.ul(f"{pr.state_word(r).label} ({r})" for r in reasons)
+    else:
+        why = c.na("no reason recorded with the decision")
+    return c.facts([("Mechanism", mechanism), ("Evidence", evidence), ("Rejection reasons", why)],
+                   wide=True, text_cols=(0, 1, 2))
+
+
+def assessment_section(row: pr.MarketRow, side: str, ctx: d.Context | None = None) -> str:
     a = row.for_side(side)
     earlier = (c.disclosure(f"Decisions for earlier target days ({len(row.history)})", history_table(row.history))
                if row.history else "")
@@ -299,7 +351,11 @@ def assessment_section(row: pr.MarketRow, side: str) -> str:
         ("All-in cost / contract", c.num(pr.cents(a.all_in_cost), reason="not recorded")),
         ("Fee status", c.badge(a.fee_status) if a.fee_status else c.na("not recorded")),
         ("Claim basis", c.badge(a.claim_basis) if a.claim_basis else c.na("not recorded")),
+        ("Fee / contract", c.num(pr.cents(a.fee), reason="fee not recorded with the decision")),
+        ("Evaluated size", c.num(pr.quantity(a.size), reason="size not evaluated")),
     ], wide=False, text_cols=(6, 7))
+    linked = d.experiment_for_policy(ctx, a.raw.get("policy_id")) if ctx is not None else (None, "")
+    body += case_block(a, *linked)
     verdict = c.state_text(a.qualification if a.qualification == "QUALIFY" else (a.reason or "REJECT"))
     exact = c.kv([("decision id", c.code(a.decision_id)), ("decided at (UTC)", esc(a.decided_at_utc)),
                   ("side", esc(a.side)), ("target day", esc(a.target_date)),

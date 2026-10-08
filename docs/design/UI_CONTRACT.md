@@ -173,7 +173,9 @@ evidence. Report refreshed 11 min ago."
 
 **Markets `/opportunities`** — controls in order: search, domain strip (All, Weather, Sports,
 Politics, Economics, Financial, Other), sport/league filter when Sports is selected, then
-Venue, State, Cash release, Sort; results/coverage line; board. Defaults: All observed, cash
+Venue, State, Cash release, Sort; results/coverage line; a paused line when the selected account's canonical risk report allows
+no new risk ("New positions halted · paused" or "Limit breached · paused", with a Risk link; "Risk capacity
+unavailable (read error)" for an unreadable report; nothing for an account with no registered policy); board. Defaults: All observed, cash
 release All, sort = qualified by net edge, then soonest known cash release, then title/ID;
 unknowns last. Board columns (desktop ≥1060px container): Market/outcome | Venue | Quote |
 Model | Net edge | Size | Tradable again | State | details. Narrower containers drop to five
@@ -183,7 +185,8 @@ YES/NO tiles. Empty result: "No matches in captured data" + Clear filters.
 
 **Market detail `/market?venue=&id=&side=&account=`** — identity validated against stored
 records. Order: breadcrumb; labels + full question; quote summary; price history (only with ≥2
-same-side observations); our assessment (never 50% for unknown); across venues (no
+same-side observations); our assessment (never 50% for unknown; journey J3 adds the recorded fee per contract,
+the evaluated size, and a case block: mechanism, evidence and every rejection reason, see below); across venues (no
 equivalence claimed without evidence); research sizing (read-only challenger); capital & timing; decision preview marked **Read-only ·
 Trading disabled**; rules & evidence disclosure. Desktop: main column + 320px inspector.
 
@@ -197,6 +200,14 @@ unavailable), verified total or — (never for a stale book), depth, tradable-ca
 rules status and claim status. Stale routes are named as not ranked. Related markets are
 listed as **RELATED MARKET — NOT ECONOMICALLY EQUIVALENT**, unpriced and unranked. States: populated, single captured route, all stale, refused payoff,
 not evaluated (no decision, no size, or an earlier target day), no captured book, read error.
+
+*Our assessment, case block* (Market v1 J3). Mechanism: the protocol's `mechanism`, or a legacy manifest's
+`economic_rationale` (labelled as such), of the experiment linked to the decision's own `policy_id`
+(`data.POLICY_EXPERIMENTS`: only rules in code; any other policy reads unknown with its reason and never borrows
+another experiment's text), marked unproven. Evidence: the experiment's registry status and Stage A verdict as
+neutral capsules with "a historical validation is not an edge". Rejection reasons: every recorded reason in plain
+words with its code; "None: qualified at decision time" for a qualified decision; unknown when none is recorded.
+A missing fee or size is the unknown marker, never 0.
 
 *Research sizing* (after Across venues, main column) renders Lane A's read-only
 `sizing_counterfactual` panel for the market's latest recorded decision, every side.
@@ -229,14 +240,34 @@ with no new global navigation item.
 
 **Outcomes `/outcome-board`** ("What matters today") — summary strip, rows ranked by
 canonical account impact, exposure bars from canonical exposure, max loss/gain labelled as
-bounds, "Why it matters" disclosure.
+bounds, "Why it matters" disclosure; an overdue group reads "Overdue · still open after its expected settlement".
+Then (Market v1 J8) "Execution positions by outcome", from `execution_status.json` with the journeys' shared
+export states (`views/ops_common`): first the blocked "Actual positions: access not connected"; then the export
+status line, environment capsule, reconciliation and paused lines; one row per Kalshi event (the settlement's own
+event ticker, else `kalshi.event_ticker_of`), held, settled and exited-before-settlement markets together, state
+Open / Partly settled / Settled / Exited before settlement / Holdings unknown (none green); facts: positions held
+(unknown when no snapshot lists positions, never 0), settled markets, max loss and settles-by unknown (the export
+records no cost basis, worst case or settlement time per position); the markets table (side, held, result,
+revenue, fees, venue-reported realized P&L signed and never coloured, unknown before a P&L baseline) in a
+disclosure. States: missing export, error, refused environment, mismatch, no journal, journal error, stale,
+paused, reconciliation incomplete, holdings unknown, known empty, populated. No ranking by impact: none is
+computed.
 
 **Risk `/risk`** ("Risk & capital") — metric band; capacity with the canonical
 new_risk_allowed verdict and exact amount; limit rows (used/limit only with compatible
 definitions); capital release windows (canonical buckets, labelled non-cumulative); starter
 rule; withdrawal **Not enabled**; policy details disclosure.
 
-**Research & Data `/experiments`** — tabs Research | Data sources. Research: title, ID,
+**Research & Data `/experiments`** — tabs Research | Data sources. Research opens with "Research stages"
+(Market v1 J7): Candidate (DRAFT without an active family slot), Development (DRAFT with an active slot, or
+PREREGISTERED), Shadow (RUNNING), Qualified (only the STRATEGY_QUALIFIED readiness track, today NONE, as a known
+empty state; no registry status qualifies a strategy), Rejected (CONCLUDED_FAIL, ABANDONED), plus "Concluded · not a
+qualification" and "Status unrecognized" when non-empty; each experiment row shows its registry status, family slot
+(QUEUED reads "Queued · waiting for a family slot"), protected evidence from protocol configuration only (Family A
+outcome labels hidden, prohibited label scopes, holdout windows counted, never shown; an unreadable protocol is
+treated as protected), EXP-001's forward valid days (with "as of … · stale, not current" when the collector status
+is stale, also on its card and progress line) and "Incomplete" for manifest problems or a missing protocol. No
+outcome, label or result count is read; nothing is green. Then: title, ID,
 research stage, historical result, forward valid days, next preregistered look, progress
 labelled "Observations toward the next scheduled evaluation", limitations, details; then one
 "Economic evidence · A" and one "Economic evidence · B" section (the two research families at most; no
@@ -275,7 +306,10 @@ schema `freshness-fabric-status/1`, read as written: what is fresh, what is due 
 (missed, blocked, failing or degraded, disagreeing) as rows and every source by domain in a disclosure; every
 source's acquisition mode with EXTERNAL_SCHEDULE shown as "supervised only · run by <schedule owner>";
 freshness, schedule state, health, next due, last successful receipt, research/decision usability, why,
-misses and disagreements; the report's own age judged by `generated_at_utc`; a protected-window deferral
+and (Market v1 J2) last attempt, completeness (the fabric's health in words: no partial or failed result, partial or
+degraded, latest attempt failed, else unknown), latest failure (a recent miss, else a failing source's own reason;
+"None recorded" only when healthy), provenance (the policy's description and version) and cost (the policy's budget
+or quota words, else unknown: "cost not recorded", never $0), misses and disagreements; the report's own age judged by `generated_at_utc`; a protected-window deferral
 names the window (the Kalshi close-tick guard included) and the carried evaluation
 (`sources_evaluated_at_utc`, `carried_from_utc`); states: populated, stale report, partial, deferred with
 or without a carried evaluation, not written / not configured, read error or foreign schema), then The
@@ -315,7 +349,9 @@ states; a capture at T-60m or received after EXP-002's T-6h decision cutoff (a p
 "Hidden · EXP-002 label proxy" in place of its prices, sizes and depth, there and in the capture attempts and
 All events table, with its status, receipt and freshness kept and no reveal path; every event in a disclosure; each Odds capture target row names its event's relationship. Never
 ranked, never "cheaper", nothing green; a partial, stale or missing scan never reads as "no market". Venues (Tested ≠ connected), collected sources with freshness,
-fee verification, venue registry and full receipt in disclosures.
+fee verification, venue registry and full receipt in disclosures. Collected sources rows (J2) add records,
+provenance (the source registry's access tier, status and credential kind), due (unknown: "not scheduled in this
+record: see Source freshness") and cost (unknown: the registry has no cost field).
 
 **In-play research `/experiments/inplay`** (#122; nav Research & Data; no global item) — the
 `inplay_view` contract (inplay-view/1) as: label "IN-PLAY RESEARCH · NOT LIVE · NOT AN EDGE CLAIM",
@@ -750,3 +786,27 @@ directive), and the screenshots that justify it.
     `journeys_none`) and `demo`, at 360x800 and 1440x900, at normal and 200% root text, plus every disclosure
     open (`tests/browser/capture.py`; 0 overflow, clipping, contrast or foreign-request findings).
   - Reviewed by the author and the coordinator (sampled), and described in the PR (not attached).
+- **2026-10-08 — operator journeys J2, J3, J7 and J8, read-only.** Approved by the 2026-10-07 evening owner
+  directive (`docs/owner/2026-10-07-market-v1-autonomy-wallet-directive.md`; EXECUTION_PLAN: "operator Terminal
+  journeys rendered from canonical or fixture data, honestly labelled") and `docs/strategy/MARKET_V1_ACCEPTANCE.md`
+  §2. No new route, navigation item, component, token, CSS or `presentation.STATES` word: every section is composed
+  from the existing section, facts, row, badge, state-text, table, disclosure and empty/blocked/error/unavailable
+  components; new state words are local tables (`research.COMPLETE_WORDS`, `STATUS_WORDS`, `SLOT_WORDS`,
+  `outcomes.EXEC_GROUP_WORDS`) passed as plain labels with the code in the title; none is green.
+  - J2 (§8 Data sources): five facts per Freshness Fabric row and four per Collected sources row. A cost or due time
+    the canonical owner does not record reads unknown with its reason, never 0.
+  - J3 (§8 Markets and Market detail): the paused line on Markets; fee per contract, evaluated size and the case
+    block (mechanism, evidence, rejection reasons) in Our assessment. A decision is linked to an experiment only by
+    its own `policy_id`.
+  - J7 (§8 Research & Data): "Research stages" first on the Research tab; EXP-001's forward valid days carry the
+    collector status's staleness (previously a stale `latest.json` showed its count as current).
+  - J8 (§8 Outcomes): "Execution positions by outcome" after Linked outcomes, from the execution export (ADR 0043:
+    no execution import); the "overdue" horizon gains its label (it printed the raw word).
+  - Screenshots (`tests/browser/capture.py`, Chromium emulation, not a physical phone): 360x800 and 1440x900 at
+    normal text for `journeys`, `journeys_paused`, `journeys_idle`, `journeys_stale`, `journeys_none` and `demo`
+    (`/outcome-board`), `freshness`, `freshness_deferred` and `early` (`/experiments?tab=sources`), `demo`, `early`
+    and `broken` (`/experiments`, `/opportunities`, two market details); at 200% root text for `journeys_paused`,
+    `demo`, `freshness` and `early`; every disclosure open (audit only) for `journeys`, `freshness` and `demo`: 92
+    shots, 0 with overflow, clipping, low contrast or foreign requests. Element shots of each new section at 360
+    and 1440 px (normal and 200% text) were reviewed by the author; one review fix followed (an event whose holdings
+    are unknown read "Positions held 0" and "Settled"; it now reads unknown). Described in the PR, not attached.
