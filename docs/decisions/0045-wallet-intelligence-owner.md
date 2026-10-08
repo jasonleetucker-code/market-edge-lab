@@ -135,3 +135,26 @@ rule is mutation-checked with probes.
   use through `research_evidence`.
 - A provider documents Hyperliquid or DEX account history that is public and rights-cleared. The matrix verdicts
   would then change.
+
+## Amendment 2026-10-07: independent review F1–F8
+
+An independent review returned REQUEST_CHANGES. Each fix has a regression test in
+`tests/wallet/test_wallet_review_fixes.py` that fails on the earlier code.
+- **F1:** a conflict excludes an observation only from views at or after its detection, so a past
+  `select_at` is reproducible after newer data arrives.
+- **F2:** the leader's per-unit outcome ignores leader trades after the horizon.
+- **F3:** `policy.signals_from_log` builds each signal from the identity's version as known at our observation
+  time, and the demo uses it. A later retraction or reorg never removes a signal we acted on, and
+  `replay.leader_event_status` flags such fills without removing them. The §20 #9 test re-runs the replay after
+  the correction. `ObservationLog.version_at` is the single-identity view.
+- **F4:** an event with any open or UNKNOWN market is UNKNOWN in event outcomes, wins and the prior.
+- **F5:** the owner ruled on 2026-10-07 that published API specification and documentation files count as
+  documentation even when served from the API host; data routes stay forbidden. Pins cite docs.polymarket.com
+  where a page states the fact, and the OpenAPI spec otherwise, with the ruling noted.
+- **F6:** the leader-exit skip uses exits observable at decision time.
+- **F7:** after an UNKNOWN request outcome a run makes no new entry and no further request on that token, and
+  the ladder's `filled` is None.
+- **F8:**
+  - the transitive boundary check applies every rule to each owner reached, and is mutation-probed;
+  - rate limits are documented (P24);
+  - Benjamini-Hochberg uses m = cumulative trials × candidates.
