@@ -340,11 +340,16 @@ def _execute(s: FollowSignal, kind: IntentKind, qty: Decimal | None, limit: Deci
 def _leader_per_unit(signals: Sequence[FollowSignal], resolutions: Mapping[str, Resolution],
                      horizon: datetime) -> dict[str, Labeled]:
     """The leader's own gross per-unit outcome for each buy signal: FIFO against its later sells, then
-    the payout for any remainder resolved by the horizon. UNKNOWN if any part is unresolved."""
+    the payout for any remainder resolved by the horizon. UNKNOWN if any part is unresolved.
+
+    Only leader trades at or before the horizon count: a sale after the horizon is outside the evaluation
+    window, so a position still open at the horizon stays UNKNOWN (unless resolved by then)."""
     queues: dict[tuple[str, str], list[list]] = {}
     totals: dict[str, Decimal] = {}
     qtys: dict[str, Decimal] = {}
     for s in sorted(signals, key=lambda x: (x.leader_time, x.signal_id)):
+        if s.leader_time > horizon:
+            continue
         key = (s.leader_key, s.instrument_id)
         if s.action is Action.TRADE_BUY:
             queues.setdefault(key, []).append([s.signal_id, s.leader_quantity, s.leader_price])

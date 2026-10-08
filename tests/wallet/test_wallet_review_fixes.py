@@ -56,3 +56,29 @@ def test_f1_select_at_a_past_date_is_reproducible_after_newer_data_arrives():
     log.ingest([obs(a, Action.TRADE_BUY, "m9-yes", 5, "0.5", at(days=19), market="m9")])
     after = run()
     assert after.records == before.records and after.inputs_digest == before.inputs_digest
+
+
+# F2: the leader's outcome is judged only on its trades inside the horizon --------------------------
+def test_f2_leader_sales_after_the_horizon_are_not_matched():
+    from edge_lab.wallet_intel.replay import _leader_per_unit
+    from wallet_support import signal
+
+    buy = signal("b", qty="10", price="0.40", when=at(0))
+    late_sell = signal("s", Action.TRADE_SELL, qty="10", price="0.90", when=at(days=3), before="10")
+    out = _leader_per_unit([buy, late_sell], {}, at(days=1))
+    assert not out["b"].known  # was a known +0.50
+    in_window = _leader_per_unit([buy, replace(late_sell, leader_time=at(hours=5), observable_at=at(hours=5))], {},
+                                 at(days=1))
+    assert in_window["b"].value == D("0.5")
+
+
+def test_f2_through_replay_an_open_leader_position_at_the_horizon_is_unknown():
+    from edge_lab.wallet_intel.policy import FollowerPolicy
+    from edge_lab.wallet_intel.replay import replay
+    from wallet_support import Books, book, config, enrolled, limits, signal
+
+    buy = signal("b", qty="10", price="0.40", when=at(0))
+    late_sell = signal("s", Action.TRADE_SELL, qty="10", price="0.90", when=at(days=3), before="10")
+    r = replay([buy, late_sell], FollowerPolicy(limits(), enrollments=enrolled("L1")), initial_cash=D(100),
+               books=Books(book(captured=at(1))), resolutions={}, config=config(), horizon=at(days=1))
+    assert not r.leader.per_unit["b"].known and not r.leader.scaled_to_follower.known
