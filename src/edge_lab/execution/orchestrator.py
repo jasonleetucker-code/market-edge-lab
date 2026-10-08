@@ -50,15 +50,17 @@ bounded; the persisted records stay the authority.
 **Fencing.** Only the holder of the egress lease writes. If the lease is lost (another worker took it over), this
 instance is FENCED OUT: it still reads the account, but it writes nothing to the journal (no snapshot, no control
 event, no record, no attempt change) and sends nothing, because its live state is no longer the replay of what is
-stored. Every write re-reads the lease first (a cached flag is never trusted alone); the cycle that finds it lost
-returns a `fenced_out` report, and every later `run_cycle` raises `OrchestratorFencedOut` (`run(n)` stops). A
-takeover between a lease read and the write after it can still let that one write land (ADR 0046 §11); the
-journal's fence check inside `prepare_attempt` remains the hard stop for a send.
+stored. Every journal write after boot re-reads the lease immediately before it (`_record`, `_apply` and `_write`;
+a cached flag is never trusted alone); the cycle that finds it lost returns a `fenced_out` report, and every later
+`run_cycle` raises `OrchestratorFencedOut` (`run(n)` stops). The read and the write are separate transactions, so a
+takeover between them can still let that one write land (ADR 0046 §11); the journal's fence check inside
+`prepare_attempt` remains the hard stop for a send.
 
 **Stream recovery** (package J, optional). With a `StreamSource` and `OrchestratorConfig.recovery`, the cycle drains
 the stream (bounded) before the read, before proposing (taking `recovery.marks`), at the start of each decision and
-once more just before it acts; a COMPLETE read proves or contradicts it (`recovery.prove`). A decision whose market changed since
-the marks, is quarantined, or lacks a live subscription is BLOCKED and never sent. A reconnect cancels nothing.
+once more just before it acts; a COMPLETE read proves or contradicts it (`recovery.prove`). A decision whose market
+changed since the marks, is quarantined, or lacks a live subscription is BLOCKED and never sent. A reconnect cancels
+nothing.
 
 **Shutdown.** `shutdown()` persists a Disarm (no new risk), leaves resting orders alone unless `cancel_owned=True`
 asks to cancel our own resting orders (never anyone else's, and only while this process still holds the egress
@@ -465,6 +467,23 @@ def _ack_status(ack: w.CreateAck, quantity: Decimal) -> str:
     return lc.VenueStatus.EXECUTED.value if ack.fill_count == quantity else lc.VenueStatus.CANCELED.value
 
 
+def _frozen(value: Any) -> Any:
+    """A JSON-shaped value made read-only: mappings become MappingProxyType, lists tuples."""
+    if isinstance(value, Mapping):
+        return MappingProxyType({k: _frozen(v) for k, v in value.items()})
+    if isinstance(value, (list, tuple)):
+        return tuple(_frozen(v) for v in value)
+    return value
+
+
+def _thawed(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return {k: _thawed(v) for k, v in value.items()}
+    if isinstance(value, tuple):
+        return [_thawed(v) for v in value]
+    return value
+
+
 class _Recent:
     """A bounded, insertion-ordered set of recent keys. Forgetting a key only allows a duplicate record or a repeated
     incident later, never a send: the journal and the control state remain the authority."""
@@ -532,7 +551,7 @@ class _Cycle:
     control_disarmed_on_recon: bool = False
     detail: str = ""
     read_done: bool = False
-    stream_marks: Any = None  # recovery.Marks taken when the strategies start proposing
+    stream_marks: rc.Marks | None = None  # taken when the strategies start proposing
     stream_items: int = 0
     stream_findings: list = field(default_factory=list)
 
@@ -809,6 +828,11 @@ class Orchestrator:
         if self._stopped:
             raise OrchestratorStopped("this orchestrator has shut down")
 
+    def _write(self, operation: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
+        """Every direct journal write goes through here: the lease is re-read immediately before it (ADR 0046 §11)."""
+        self._check_writer()
+        return operation(*args, **kwargs)
+
     def _check_writer(self) -> None:
         """Before every write: re-read the lease from the store. The cached flag alone would miss a takeover this
         instance has not yet noticed (a supervisor restart under the same worker id takes a new fence while this
@@ -973,8 +997,8 @@ class Orchestrator:
         attempts are never touched here (the journal's lease takeover and `recover` handle superseded fences)."""
         for a in self._journal.non_terminal_attempts():
             if a.state in (AttemptState.PENDING_EGRESS, AttemptState.SENT) and a.fence_token == self._fence:
-                self._check_writer()
-                self._journal.mark_outcome_unknown(a.attempt_id, reason="IN_FLIGHT_AT_CYCLE_START", now=cy.start)
+                self._write(self._journal.mark_outcome_unknown,
+                            a.attempt_id, reason="IN_FLIGHT_AT_CYCLE_START", now=cy.start)
 
     def _read_account(self, cy: _Cycle) -> None:
         """The account read (package G) through `send`, within the cycle's budget and deadline. Writes nothing."""
@@ -1017,8 +1041,7 @@ class Orchestrator:
             latest = self._journal.reservations.latest_snapshot(self._scope)
             revision = 1 if latest is None else latest.revision + 1
             try:
-                self._check_writer()
-                cy.snapshot = inputs.record(self._journal.reservations, revision, now=self._now())
+                cy.snapshot = self._write(inputs.record, self._journal.reservations, revision, now=self._now())
             except ReservationError as exc:
                 status, detail = ctl.Reconciliation.FAILED, f"SNAPSHOT_REFUSED: {exc}"[:400]
             if cy.snapshot is not None and not cy.snapshot.consistent and status is ctl.Reconciliation.COMPLETE:
@@ -1116,13 +1139,12 @@ class Orchestrator:
             payload = canonical_json({"lookup": "client_order_id", "found": True, "order": _order_record(o)})
             receipt = f"lookup:{a.attempt_id}:{sha256_text(payload)[:16]}"
             try:
-                self._check_writer()
-                self._journal.record_receipt(receipt_id=receipt, kind=ReceiptKind.ORDER_LOOKUP,
-                                             source="account-reconciliation", payload_json=payload,
-                                             received_at=self._now(), provider_id=o.order_id, attempt_id=a.attempt_id)
-                self._check_writer()
-                self._journal.reconcile_attempt(a.attempt_id, AttemptState.ACKNOWLEDGED, receipt_id=receipt,
-                                                now=self._now(), provider_order_id=o.order_id)
+                self._write(self._journal.record_receipt, receipt_id=receipt, kind=ReceiptKind.ORDER_LOOKUP,
+                            source="account-reconciliation", payload_json=payload,
+                            received_at=self._now(), provider_id=o.order_id, attempt_id=a.attempt_id)
+                self._write(self._journal.reconcile_attempt,
+                            a.attempt_id, AttemptState.ACKNOWLEDGED, receipt_id=receipt,
+                            now=self._now(), provider_order_id=o.order_id)
                 cy.resolved.append(a.attempt_id)
             except (JournalError, ReservationError) as exc:
                 cy.anomalies.append((_incident_id("unknown-unresolved", a.attempt_id), f"{exc}"[:300]))
@@ -1139,12 +1161,11 @@ class Orchestrator:
                                   "client_order_id": a.client_order_id})
         receipt = f"lookup:{a.attempt_id}:{sha256_text(payload)[:16]}"
         try:
-            self._check_writer()
-            self._journal.record_receipt(receipt_id=receipt, kind=ReceiptKind.ORDER_LOOKUP,
-                                         source="account-reconciliation", payload_json=payload,
-                                         received_at=self._now(), attempt_id=a.attempt_id)
-            self._check_writer()
-            self._journal.reconcile_attempt(a.attempt_id, AttemptState.ABSENT, receipt_id=receipt, now=self._now())
+            self._write(self._journal.record_receipt, receipt_id=receipt, kind=ReceiptKind.ORDER_LOOKUP,
+                        source="account-reconciliation", payload_json=payload,
+                        received_at=self._now(), attempt_id=a.attempt_id)
+            self._write(self._journal.reconcile_attempt,
+                        a.attempt_id, AttemptState.ABSENT, receipt_id=receipt, now=self._now())
             cy.resolved.append(a.attempt_id)
         except (JournalError, ReservationError) as exc:
             cy.anomalies.append((_incident_id("unknown-unresolved", a.attempt_id), f"{exc}"[:300]))
@@ -1179,23 +1200,21 @@ class Orchestrator:
                 o.status == lc.VenueStatus.CANCELED.value and r.state is not ObligationState.BOUND) or (
                 o.status == lc.VenueStatus.RESTING.value and r.state is ObligationState.UNKNOWN)
             if needs_receipt:
-                self._check_writer()
-                self._journal.record_receipt(receipt_id=receipt, kind=ReceiptKind.ORDER_LOOKUP,
-                                             source="account-reconciliation", payload_json=payload,
-                                             received_at=self._now(), provider_id=o.order_id,
-                                             attempt_id=r.reservation_id)
+                self._write(self._journal.record_receipt, receipt_id=receipt, kind=ReceiptKind.ORDER_LOOKUP,
+                            source="account-reconciliation", payload_json=payload,
+                            received_at=self._now(), provider_id=o.order_id,
+                            attempt_id=r.reservation_id)
             if view.filled_quantity > r.filled_quantity:
-                self._check_writer()
-                r = auth.record_fill(r.reservation_id, view.filled_quantity, self._now(), receipt_id=receipt)
+                r = self._write(auth.record_fill,
+                                r.reservation_id, view.filled_quantity, self._now(), receipt_id=receipt)
                 cy.fills += 1
             if r.quarantine_reason is not None:
                 return
             if o.status == lc.VenueStatus.CANCELED.value and r.state is not ObligationState.BOUND:
-                self._check_writer()
-                r = auth.confirm_cancel(r.reservation_id, self._now(), receipt_id=receipt, venue_filled=o.fill_count)
+                r = self._write(auth.confirm_cancel,
+                                r.reservation_id, self._now(), receipt_id=receipt, venue_filled=o.fill_count)
             elif o.status == lc.VenueStatus.RESTING.value and r.state is ObligationState.UNKNOWN:
-                self._check_writer()
-                r = auth.mark_open(r.reservation_id, self._now(), receipt_id=receipt)
+                r = self._write(auth.mark_open, r.reservation_id, self._now(), receipt_id=receipt)
             if r.state is ObligationState.BOUND and r.quarantine_reason is None:
                 self._maybe_release(cy, r, o, sub, view)
         except (JournalError, ReservationError) as exc:
@@ -1213,8 +1232,8 @@ class Orchestrator:
         ended = [t for t in (r.ended_at_utc, r.last_fill_at_utc) if t is not None]
         if not ended or parse_utc_text(snap.observed_at_utc) <= max(parse_utc_text(t) for t in ended):
             return  # a snapshot strictly after the end is needed: the next cycle
-        self._check_writer()
-        released = self._journal.reservations.confirm_by_snapshot(r.reservation_id, snap.revision, self._now())
+        released = self._write(self._journal.reservations.confirm_by_snapshot,
+                               r.reservation_id, snap.revision, self._now())
         cy.released.append(released.reservation_id)
         if released.filled_quantity > 0 and released.reservation_id not in self._attributed:
             intent = self._planned.get(released.intent_key)
@@ -1464,7 +1483,8 @@ class Orchestrator:
         body = None if reply is None else getattr(reply, "body", None)
         text = _body_text(body)
         event: lc.Event
-        self._check_writer()  # a takeover during the send: the reply is the live worker's to reconcile, not ours
+        # Each write below re-reads the lease (`_write`): after a takeover during the send the reply is the live
+        # worker's to reconcile, not ours, and OrchestratorFencedOut ends the cycle before the next write.
         try:
             if outcome == "OK" and text is not None:
                 try:
@@ -1472,16 +1492,18 @@ class Orchestrator:
                 except w.WireFormatError:
                     ack = None
                 if ack is None or ack.client_order_id not in (None, intent.client_order_id()):
-                    j.mark_sent(attempt_id, now=now)
-                    j.mark_outcome_unknown(attempt_id, reason="ACK_UNREADABLE_OR_FOR_ANOTHER_ORDER", now=now)
+                    self._write(j.mark_sent, attempt_id, now=now)
+                    self._write(j.mark_outcome_unknown,
+                                attempt_id, reason="ACK_UNREADABLE_OR_FOR_ANOTHER_ORDER", now=now)
                     event = lc.SendReturnedAmbiguous(lc.Operation.NEW_ORDER, "ack unreadable")
                 else:
                     receipt = f"ack:{attempt_id}"
-                    j.record_receipt(receipt_id=receipt, kind=ReceiptKind.ORDER_ACK, source="venue-reply",
-                                     payload_json=text, received_at=now, provider_id=ack.order_id,
-                                     attempt_id=attempt_id)
-                    j.mark_sent(attempt_id, now=now)
-                    j.mark_acknowledged(attempt_id, provider_order_id=ack.order_id, receipt_id=receipt, now=now)
+                    self._write(j.record_receipt, receipt_id=receipt, kind=ReceiptKind.ORDER_ACK, source="venue-reply",
+                                payload_json=text, received_at=now, provider_id=ack.order_id,
+                                attempt_id=attempt_id)
+                    self._write(j.mark_sent, attempt_id, now=now)
+                    self._write(j.mark_acknowledged,
+                                attempt_id, provider_order_id=ack.order_id, receipt_id=receipt, now=now)
                     event = lc.Acknowledged(provider_order_id=ack.order_id, client_order_id=intent.client_order_id(),
                                             status=_ack_status(ack, intent.quantity), filled_quantity=ack.fill_count,
                                             remaining_quantity=ack.remaining_count)
@@ -1489,15 +1511,15 @@ class Orchestrator:
                 receipt = f"reject:{attempt_id}"
                 payload = text if text is not None else canonical_json(
                     {"outcome": "REJECTED", "status": getattr(reply, "status", None)})
-                j.record_receipt(receipt_id=receipt, kind=ReceiptKind.ORDER_REJECT, source="venue-reply",
-                                 payload_json=payload, received_at=now, attempt_id=attempt_id)
-                j.mark_sent(attempt_id, now=now)
-                j.mark_rejected(attempt_id, receipt_id=receipt, now=now)
+                self._write(j.record_receipt, receipt_id=receipt, kind=ReceiptKind.ORDER_REJECT, source="venue-reply",
+                            payload_json=payload, received_at=now, attempt_id=attempt_id)
+                self._write(j.mark_sent, attempt_id, now=now)
+                self._write(j.mark_rejected, attempt_id, receipt_id=receipt, now=now)
                 event = lc.Rejected(lc.Operation.NEW_ORDER, f"status {getattr(reply, 'status', None)}",
                                     client_order_id=intent.client_order_id())
             else:
-                j.mark_sent(attempt_id, now=now)
-                j.mark_outcome_unknown(attempt_id, reason=f"SEND_{outcome}"[:200], now=now)
+                self._write(j.mark_sent, attempt_id, now=now)
+                self._write(j.mark_outcome_unknown, attempt_id, reason=f"SEND_{outcome}"[:200], now=now)
                 event = lc.SendReturnedAmbiguous(lc.Operation.NEW_ORDER, outcome)
         except (JournalError, ReservationError) as exc:
             cy.anomalies.append((_incident_id("journal-refused", attempt_id), f"{exc}"[:300]))
@@ -1633,9 +1655,11 @@ class Orchestrator:
                            MappingProxyType(dict(sorted(cy.signal_counts.items()))), self._take_rejections(),
                            cy.proposals, cy.ignored, tuple(cy.decisions), tuple(cy.resolved), cy.fills,
                            tuple(cy.released), tuple(cy.incidents), cy.records, cy.deadline_hit,
-                           stream=None if self._stream is None else MappingProxyType(
-                               {**rc.summary(self._stream_state), "items_this_cycle": cy.stream_items,
-                                "findings": [list(f) for f in cy.stream_findings]}))
+                           stream=None if self._stream is None else _frozen(self._stream_summary(cy)))
+
+    def _stream_summary(self, cy: _Cycle) -> dict[str, Any]:
+        return {**rc.summary(self._stream_state), "items_this_cycle": cy.stream_items,
+                "findings": [list(f) for f in cy.stream_findings]}
 
     def _take_rejections(self) -> int:
         n, self._signals_rejected = self._signals_rejected, 0
@@ -1654,7 +1678,7 @@ class Orchestrator:
                 "deadline_hit": report.deadline_hit,
                 "fixture_cash_basis": None if self._config.fixture_cash_basis is None
                 else self._config.fixture_cash_basis.value,
-                **({} if report.stream is None else {"stream": dict(report.stream)})}
+                **({} if report.stream is None else {"stream": json.loads(canonical_json(_thawed(report.stream)))})}
 
     # ------------------------------------------------------------------ shutdown
 
@@ -1721,7 +1745,10 @@ class Orchestrator:
             return "REFUSED: the market's shard is unknown"
         request = w.build_cancel(self._scope, attempt.provider_order_id, exchange_index=market.exchange_index)
         auth = self._journal.reservations
-        auth.request_cancel(r.reservation_id, now)  # requested in the journal before it is sent
+        try:
+            self._write(auth.request_cancel, r.reservation_id, now)  # requested in the journal before it is sent
+        except OrchestratorFencedOut:
+            return "REFUSED: NO_EGRESS_LEASE (another worker holds the lease)"
         try:
             reply = self._send(request)
             outcome = _outcome_text(reply)
@@ -1735,28 +1762,32 @@ class Orchestrator:
                 ack = w.parse_cancel_ack(reply.body)
                 if ack.order_id != attempt.provider_order_id or ack.client_order_id not in (None, r.client_order_id):
                     # An answer for another order proves nothing about ours: kept as evidence, the order is unknown.
-                    self._journal.record_receipt(receipt_id=f"cancel-mismatch:{r.reservation_id}",
-                                                 kind="CANCEL_REPLY_MISMATCH", source="venue-reply",
-                                                 payload_json=text, received_at=self._now(),
-                                                 provider_id=ack.order_id, attempt_id=r.reservation_id)
-                    auth.mark_unknown(r.reservation_id, self._now(), reason="CANCEL_ACK_FOR_ANOTHER_ORDER")
+                    self._write(self._journal.record_receipt, receipt_id=f"cancel-mismatch:{r.reservation_id}",
+                                kind="CANCEL_REPLY_MISMATCH", source="venue-reply",
+                                payload_json=text, received_at=self._now(),
+                                provider_id=ack.order_id, attempt_id=r.reservation_id)
+                    self._write(auth.mark_unknown, r.reservation_id, self._now(), reason="CANCEL_ACK_FOR_ANOTHER_ORDER")
                     return "CANCEL_OUTCOME_UNKNOWN: the reply names another order"
                 receipt = f"cancel:{r.reservation_id}"
-                self._journal.record_receipt(receipt_id=receipt, kind=ReceiptKind.CANCEL_CONFIRM, source="venue-reply",
-                                             payload_json=text, received_at=self._now(), provider_id=ack.order_id,
-                                             attempt_id=r.reservation_id)
+                self._write(self._journal.record_receipt,
+                            receipt_id=receipt, kind=ReceiptKind.CANCEL_CONFIRM, source="venue-reply",
+                            payload_json=text, received_at=self._now(), provider_id=ack.order_id,
+                            attempt_id=r.reservation_id)
                 with localcontext(_exact_context()):
                     filled = r.quantity - ack.reduced_by
-                auth.confirm_cancel(r.reservation_id, self._now(), receipt_id=receipt, venue_filled=filled)
+                self._write(auth.confirm_cancel, r.reservation_id, self._now(), receipt_id=receipt, venue_filled=filled)
                 return "CANCEL_CONFIRMED"
             if outcome == "REJECTED":
                 receipt = f"cancel-reject:{r.reservation_id}"
-                self._journal.record_receipt(receipt_id=receipt, kind=ReceiptKind.CANCEL_REJECT, source="venue-reply",
-                                             payload_json=text or canonical_json({"outcome": "REJECTED"}),
-                                             received_at=self._now(), attempt_id=r.reservation_id)
-                auth.mark_open(r.reservation_id, self._now(), receipt_id=receipt)
+                self._write(self._journal.record_receipt,
+                            receipt_id=receipt, kind=ReceiptKind.CANCEL_REJECT, source="venue-reply",
+                            payload_json=text or canonical_json({"outcome": "REJECTED"}),
+                            received_at=self._now(), attempt_id=r.reservation_id)
+                self._write(auth.mark_open, r.reservation_id, self._now(), receipt_id=receipt)
                 return "CANCEL_REJECTED"
-            auth.mark_unknown(r.reservation_id, self._now(), reason=f"CANCEL_{outcome}"[:200])
+            self._write(auth.mark_unknown, r.reservation_id, self._now(), reason=f"CANCEL_{outcome}"[:200])
             return "CANCEL_OUTCOME_UNKNOWN"
+        except OrchestratorFencedOut:  # lost between two writes: what is not recorded is the live worker's to reconcile
+            return "CANCEL_OUTCOME_UNKNOWN: the egress lease was lost while recording the reply"
         except (JournalError, ReservationError, w.WireFormatError) as exc:
             return f"CANCEL_RECORD_FAILED: {exc}"[:300]

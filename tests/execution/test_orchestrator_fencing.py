@@ -174,3 +174,52 @@ def test_a_takeover_during_a_shutdown_cancel_send_records_nothing_after_it(env):
     assert not journal.control_records(h.SCOPE, "SHUTDOWN")
     with pytest.raises(o.OrchestratorStopped):
         orch.run_cycle()
+
+
+def _takeover_after_first_receipt(monkeypatch, journal, clock):
+    """Take the lease over (same worker id) right after the journal records the first receipt: the next write in
+    the same group must re-read the lease and stop."""
+    real = journal.record_receipt
+    seen = {}
+
+    def record_receipt(*args, **kwargs):
+        out = real(*args, **kwargs)
+        if not seen:
+            journal.reservations.acquire_lease(h.config().worker_id, timedelta(minutes=5), clock())
+            seen["events"] = journal.verify_chain().events
+        return out
+
+    monkeypatch.setattr(journal, "record_receipt", record_receipt)
+    return seen
+
+
+def test_a_takeover_between_two_writes_of_a_reply_stops_before_the_second(env, monkeypatch):
+    """Each write re-reads the lease, not only the first of a group: the ack receipt lands (the one write of the
+    remaining window), then mark_sent finds the lease lost and nothing else is written."""
+    journal, adapter, clock = env
+    orch, _ = armed(journal, adapter, clock)
+    orch.submit_signal(h.signal("s1", B70, at=clock(), limit="0.45"))
+    seen = _takeover_after_first_receipt(monkeypatch, journal, clock)
+    attempted = []
+    real_mark_sent = journal.mark_sent
+    monkeypatch.setattr(journal, "mark_sent", lambda *a, **k: attempted.append(a) or real_mark_sent(*a, **k))
+    report = orch.run_cycle()
+    assert report.fenced_out and journal.verify_chain().events == seen["events"]
+    assert attempted == []  # not even tried: the lease was re-read before it (the journal would refuse it too)
+    (attempt,) = journal.attempts_for(f"{h.STRATEGY_ID}:s1")
+    assert attempt.state is AttemptState.OUTCOME_UNKNOWN  # the takeover's doing; A never marked it SENT
+
+
+def test_a_takeover_between_two_writes_of_a_cancel_reply_stops_before_the_second(env, monkeypatch):
+    journal, adapter, clock = env
+    orch, _ = armed(journal, adapter, clock)
+    orch.submit_signal(h.signal("rest", B72, at=clock(), limit="0.30", qty="2", tif="good_till_canceled"))
+    (d,) = orch.run_cycle().decisions
+    assert d.attempt_state == "ACKNOWLEDGED"
+    clock.advance(60)
+    seen = _takeover_after_first_receipt(monkeypatch, journal, clock)
+    report = orch.shutdown("owner", "end of day", cancel_owned=True)
+    (rid,) = report.cancels_requested
+    assert report.cancel_outcomes[rid] == "CANCEL_OUTCOME_UNKNOWN: the egress lease was lost while recording the reply"
+    assert journal.verify_chain().events == seen["events"] and not journal.control_records(h.SCOPE, "SHUTDOWN")
+    assert journal.reservations.reservation(rid).state.value != "BOUND"  # confirm_cancel never ran here

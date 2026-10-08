@@ -90,6 +90,7 @@ def build(journal, adapter, clock, *, hook=None, mode=ctl.Mode.BOUNDED_AUTO, ope
     stream = FixtureStream(clock)
     if open_stream:
         stream.open()
+        clock.advance(2)  # the first read's venue data (as of its start minus 1 s) then post-dates the subscriptions
     strategy = Hooked(hook)
     orch = o.Orchestrator(journal, h.config(recovery=RCFG), send=adapter, feed=h.Feed(adapter),
                           strategies=(strategy,), clock=clock, sleep=clock.sleep, stream=stream)
@@ -121,7 +122,10 @@ def test_the_first_complete_read_proves_the_baseline_and_a_clean_stream_lets_ord
     orch.submit_signal(h.signal("s1", B70, at=clock(), limit="0.45"))
     report = orch.run_cycle()
     (d,) = report.decisions
-    assert d.outcome is o.Outcome.SUBMITTED and report.stream["quarantines"] == []
+    assert d.outcome is o.Outcome.SUBMITTED and report.stream["quarantines"] == ()
+    with pytest.raises(TypeError):
+        report.stream["incoming"] = 0  # the report's summary is read-only all the way down
+    assert isinstance(report.stream["subscriptions"], tuple)
     cycle = journal.control_records(h.SCOPE, "CYCLE")[-1].body
     assert cycle["stream"]["connected"] is True and cycle["stream"]["incoming"] == 2
 
@@ -160,7 +164,7 @@ def test_a_fill_on_the_market_after_proposing_drops_the_decision_until_it_is_re_
     later = orch.run_cycle()
     (d2,) = later.decisions
     assert d2.outcome is o.Outcome.SUBMITTED, d2.reasons
-    assert later.stream["findings"] == [] and not later.incidents
+    assert later.stream["findings"] == () and not later.incidents
 
 
 def test_rest_stream_disagreement_is_an_incident_and_keeps_the_market_quarantined(env):
@@ -249,7 +253,10 @@ def test_a_reconnect_cancels_nothing_and_blocks_until_resubscribed_and_proven(en
             or x["order_id"] == journal.attempt(rid).provider_order_id] == ["resting"]
     assert "ORDER_CANCEL" not in writes(adapter)
     clock.advance(60)
-    stream.open()  # resubscribed: new sids, a new sequence scope; proven by this cycle's read
+    stream.open()  # resubscribed: new sids, a new sequence scope
+    blocked_again = orch.run_cycle()  # this read's venue data (as of its start minus 1 s) predates the resubscription
+    assert any("BASELINE_REQUIRED" in q[0] for q in blocked_again.stream["quarantines"])
+    clock.advance(2)  # proven by the next read, whose venue data post-dates it
     orch.submit_signal(h.signal("s2", B70, at=clock(), limit="0.45"))
     (d2,) = orch.run_cycle().decisions
     assert d2.outcome is o.Outcome.SUBMITTED, d2.reasons

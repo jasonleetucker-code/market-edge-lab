@@ -23,10 +23,14 @@ is the conservative reading). A new `sid` starts a new sequence scope. Per messa
 **Quarantine.** An anomaly quarantines the state that depends on the stream: the whole account for anything that
 can hide a private message of any market (gaps, conflicts, reconnects, rate overruns, clock anomalies), one market
 for a market-local contradiction (a corrected or conflicting fill, an order count that goes backwards, a REST
-disagreement). Each quarantine has the earliest read start that can prove it (`not_before_utc`). Only `prove` clears
-one, with a COMPLETE `account.reconcile_account` of the same account scope whose read started at or after that time:
-the REST read began after the anomaly, so it reflects everything the stream may have hidden. A quarantine is never
-cleared by later stream messages, by time passing or by a reconnect.
+disagreement). Each quarantine has the earliest proof time that can clear it (`not_before_utc`). Only `prove`
+clears one, with a COMPLETE `account.reconcile_account` of the same account scope covering every subaccount the
+stream reports on (`RecoveryConfig.subaccounts`). Its **proof time** is the earlier of the read's start (our clock)
+and the venue's own user-data time at the start of the read (`manifest.as_of_start`), which a COMPLETE read may let
+trail the start by up to `max_data_lag` (the same rule `account` uses for a snapshot's `observed_at`). A quarantine
+clears only when the proof time is at or after its `not_before_utc`: the venue data itself, not only our request,
+post-dates the anomaly, so it reflects everything the stream may have hidden. A read with no venue data time proves
+nothing. A quarantine is never cleared by later stream messages, by time passing or by a reconnect.
 
 **Reconnects are not cancellations.** `ConnectionLost` and a replacing `SubscriptionOpened` retire subscriptions and
 quarantine the account (messages may have been missed: a REST reconciliation is required). They change no order:
@@ -42,17 +46,21 @@ count and quarantines the market (REGRESSION).
 **Rate bounds count incoming traffic**: every item received (duplicates, stale and refused ones included) enters a
 sliding window by receipt time, and opened subscriptions a second one. Overruns quarantine the account
 (RATE_EXCEEDED, RECONNECT_STORM) until a read that starts after the window has passed. Retained state is bounded
-separately (`dedupe_window`, `max_tracked`); exceeding `max_tracked` quarantines rather than forgets silently.
+separately (`dedupe_window`, `max_tracked`): tracked orders, fill ids per order and quarantined markets past
+`max_tracked` quarantine rather than being forgotten silently; books past it forget the least recently observed one,
+and that market's next observation counts as a change.
 
 **Invalidation.** Every relevant change gives its market a new epoch (the next value of a state-wide counter, never
 reused): a fill, an order update that changes status or counts, a correction or conflict, and a book move beyond
-`book_jump`. Account-wide quarantines bump the account epoch. Market epochs are pruned at each proof (bounded state);
-a decision whose marks predate the proof then sees its market as changed, never as unchanged.
+`book_jump`, or a book seen with no earlier observation to compare (a first sighting, or after eviction).
+Account-wide quarantines bump the account epoch. Market epochs are pruned at each proof (bounded state), and a proof
+that prunes any also bumps the account epoch, so a decision whose marks predate the proof sees every market as
+changed, never as unchanged (a market unmarked then is not presumed unchanged now: missing is not zero).
 A caller takes `marks(state)` when it starts deciding and asks `decision_problems(state, market, marks)` before it acts:
 any change since the marks, any covering quarantine, or a missing required subscription drops the decision until it is
 re-evaluated from fresh evidence.
 
-**REST/stream disagreement.** At a proof, every tracked order the stream reported before the read started must agree
+**REST/stream disagreement.** At a proof, every tracked order the stream reported at or before the proof time must agree
 with the COMPLETE REST listing: the order exists, its fill count is not below the stream's, and every fill id the
 stream delivered is listed. Otherwise the market stays quarantined (DISAGREEMENT) and a finding is returned. REST
 ahead of the stream is reported (REST_AHEAD_OF_STREAM) and REST wins: it is either stream latency or a lost message,
@@ -327,12 +335,15 @@ class ConnectionLost:
 
 @dataclass(frozen=True)
 class BookObservation:
-    """A market's best YES bid and ask (dollars; None: that side is empty or unknown)."""
+    """A market's best YES bid and ask (dollars). None is UNKNOWN; a side known to be empty says so with
+    `bid_empty`/`ask_empty` (its price is then None). Empty and unknown are never the same thing."""
 
     market_ticker: str
     yes_bid: Decimal | None
     yes_ask: Decimal | None
     clocks: Clocks
+    bid_empty: bool = False
+    ask_empty: bool = False
 
     def __post_init__(self) -> None:
         _ident("market_ticker", self.market_ticker)
@@ -340,6 +351,15 @@ class BookObservation:
         object.__setattr__(self, "yes_ask", _price("yes_ask", self.yes_ask))
         if not isinstance(self.clocks, Clocks):
             raise ValueError("clocks must be a Clocks")
+        for empty, price in ((self.bid_empty, self.yes_bid), (self.ask_empty, self.yes_ask)):
+            if not isinstance(empty, bool) or (empty and price is not None):
+                raise ValueError("an empty side has no price")
+
+    def sides(self) -> tuple[tuple[str, object], tuple[str, object]]:
+        """(bid, ask), each ("PRICE", d), ("EMPTY", None) or ("UNKNOWN", None)."""
+        def side(empty: bool, price: Decimal | None) -> tuple[str, object]:
+            return ("EMPTY", None) if empty else ("UNKNOWN", None) if price is None else ("PRICE", price)
+        return side(self.bid_empty, self.yes_bid), side(self.ask_empty, self.yes_ask)
 
 
 StreamItem = Union[StreamMessage, SubscriptionOpened, ConnectionLost, BookObservation]
@@ -363,6 +383,7 @@ class RecoveryConfig:
     max_tracked: int = 1000  # markets, books and orders each
     max_items_per_drain: int = 500  # what the orchestrator drains at once
     required_channels: frozenset = frozenset(Channel)
+    subaccounts: frozenset = frozenset({0})  # what the private stream reports on: a proof must cover all of them
 
     def __post_init__(self) -> None:
         for name in ("max_items_per_window", "max_opens_per_window", "dedupe_window", "max_tracked",
@@ -381,6 +402,9 @@ class RecoveryConfig:
         if not isinstance(self.required_channels, frozenset) or not self.required_channels or not all(
                 isinstance(c, Channel) for c in self.required_channels):
             raise ValueError("required_channels must be a non-empty frozenset of Channel")
+        if not isinstance(self.subaccounts, frozenset) or not self.subaccounts or not all(
+                isinstance(n, int) and not isinstance(n, bool) and n >= 0 for n in self.subaccounts):
+            raise ValueError("subaccounts must be a non-empty frozenset of subaccount numbers")
 
 
 # ---------------------------------------------------------------------------------------------- state
@@ -429,8 +453,8 @@ class TrackedOrder:
 @dataclass(frozen=True)
 class Book:
     market_ticker: str
-    yes_bid: Decimal | None
-    yes_ask: Decimal | None
+    bid: tuple[str, object]  # ("PRICE", d), ("EMPTY", None) or ("UNKNOWN", None)
+    ask: tuple[str, object]
     received_at_utc: str
 
 
@@ -452,7 +476,7 @@ class RecoveryState:
     last_receipt_utc: str | None = None
     incoming: int = 0
     counts: tuple[tuple[str, int], ...] = ()
-    proven_at_utc: str | None = None  # the read start of the last proof
+    proven_at_utc: str | None = None  # the proof time of the last proof
     changes: int = 0  # every market change takes the next value as its market's epoch
 
     @property
@@ -498,7 +522,7 @@ class Proof:
     state: RecoveryState
     proven: bool
     reason: str | None  # why nothing was proven
-    read_started_utc: str | None
+    proof_time_utc: str | None  # min(read start, venue user-data time at the start)
     cleared: tuple[Quarantine, ...]
     findings: tuple[Finding, ...]
 
@@ -716,6 +740,10 @@ def _event(st: RecoveryState, msg: StreamMessage, raised: list[Reason]) -> Step:
             st = _quarantine(st, Reason.TOO_MANY_TRACKED, None, received, received,
                              f"more than {st.config.max_tracked} orders")
             raised.append(Reason.TOO_MANY_TRACKED)
+        elif len(base.fill_ids) >= st.config.max_tracked:
+            st = _quarantine(st, Reason.TOO_MANY_TRACKED, None, received, received,
+                             f"more than {st.config.max_tracked} fills on order {ev.order_id}")
+            raised.append(Reason.TOO_MANY_TRACKED)
         else:
             orders[ev.order_id] = replace(base, fill_ids=base.fill_ids + (ev.fill_id,), last_received_utc=received)
             st = _with_orders(st, orders)
@@ -782,20 +810,23 @@ def _book(st: RecoveryState, item: BookObservation) -> Step:
     books = {b.market_ticker: b for b in st.books}
     prev = books.get(market)
     if prev is None and len(books) >= st.config.max_tracked:
-        # Bounded: the least recently observed book is forgotten; its next observation is a fresh baseline.
+        # Bounded: the least recently observed book is forgotten; its next observation is a change (below).
         del books[min(books.values(), key=lambda b: (parse_utc_text(b.received_at_utc), b.market_ticker)).market_ticker]
-    books[market] = Book(market, item.yes_bid, item.yes_ask, received)
+    bid, ask = item.sides()
+    books[market] = Book(market, bid, ask, received)
     st = replace(st, books=tuple(books[k] for k in sorted(books)))
-    if prev is not None:
-        moves = []
-        for side, old, new in (("bid", prev.yes_bid, item.yes_bid), ("ask", prev.yes_ask, item.yes_ask)):
-            if (old is None) != (new is None):
-                moves.append(f"{side} {old} -> {new}")
-            elif old is not None and abs(new - old) > st.config.book_jump:
-                moves.append(f"{side} {old} -> {new}")
-        if moves:
-            st = _bump(st, market, "book moved: " + ", ".join(moves), received)
-            return _done(st, Applied.BOOK, raised, "; ".join(moves))
+    if prev is None:  # nothing to compare with: what changed before this is unknown, so it counts as a change
+        st = _bump(st, market, "book baseline: no earlier observation to compare", received)
+        return _done(st, Applied.BOOK, raised, "baseline")
+    moves = []
+    for name, old, new in (("bid", prev.bid, bid), ("ask", prev.ask, ask)):
+        if old[0] != new[0]:
+            moves.append(f"{name} {old[0]} -> {new[0]}")
+        elif old[0] == "PRICE" and abs(new[1] - old[1]) > st.config.book_jump:
+            moves.append(f"{name} {old[1]} -> {new[1]}")
+    if moves:
+        st = _bump(st, market, "book moved: " + ", ".join(moves), received)
+        return _done(st, Applied.BOOK, raised, "; ".join(moves))
     return _done(st, Applied.BOOK, raised)
 
 
@@ -803,9 +834,10 @@ def _book(st: RecoveryState, item: BookObservation) -> Step:
 
 
 def prove(state: RecoveryState, reconciliation: acct.AccountReconciliation, *, scope: AccountScope) -> Proof:
-    """Clear what a COMPLETE REST reconciliation of `scope` proves: every quarantine whose `not_before_utc` is at
-    or before the read's start, except on markets where REST contradicts what the stream delivered before the read
-    started (DISAGREEMENT, which stays quarantined until a later read agrees). Anything else proves nothing."""
+    """Clear what a COMPLETE REST reconciliation of `scope` proves (module docstring). Its proof time is
+    min(read start, venue user-data time at the start); every quarantine whose `not_before_utc` is at or before it
+    clears, except on markets where REST contradicts what the stream delivered at or before the proof time
+    (DISAGREEMENT, which stays quarantined until a later read agrees). Anything else proves nothing."""
     if not isinstance(state, RecoveryState):
         raise ValueError("state must be a RecoveryState")
 
@@ -816,20 +848,27 @@ def prove(state: RecoveryState, reconciliation: acct.AccountReconciliation, *, s
         return refused("not an account reconciliation")
     if reconciliation.status is not acct.ReconciliationStatus.COMPLETE:
         return refused(f"the reconciliation is {reconciliation.status.value}: only COMPLETE proves")
-    if reconciliation.manifest.plan.scope != scope:
+    manifest = reconciliation.manifest
+    if manifest.plan.scope != scope:
         return refused("the reconciliation is of another account scope")
+    if manifest.as_of_start is None:
+        return refused("the read carries no venue user-data time: it proves nothing about when its data is from")
+    covered = {sub.subaccount for sub in reconciliation.subaccounts}
+    if not state.config.subaccounts <= covered:
+        return refused(f"the read covers subaccounts {sorted(covered)}, the stream reports on "
+                       f"{sorted(state.config.subaccounts)}")
     rest_orders, rest_fills = {}, set()
     for sub in reconciliation.subaccounts:
         if sub.orders is None or sub.fills is None:
             return refused(f"subaccount {sub.subaccount}: orders or fills unknown")
         rest_orders.update({o.order_id: o for o in sub.orders})
         rest_fills |= {f.fill_id for f in sub.fills}
-    started = reconciliation.manifest.started_at
-    started_text, finished_text = utc_text(started), utc_text(reconciliation.manifest.finished_at)
+    proof_time = min(manifest.started_at, manifest.as_of_start)
+    proof_text, finished_text = utc_text(proof_time), utc_text(manifest.finished_at)
     findings, kept, disagree = [], {}, {}
     for t in state.orders:
-        if parse_utc_text(t.last_received_utc) > started:
-            kept[t.order_id] = t  # newer than the read: it cannot be judged by it
+        if parse_utc_text(t.last_received_utc) > proof_time:
+            kept[t.order_id] = t  # newer than the venue data: it cannot be judged by this read
             continue
         problems = []
         o = rest_orders.get(t.order_id)
@@ -848,15 +887,18 @@ def prove(state: RecoveryState, reconciliation: acct.AccountReconciliation, *, s
         elif o is not None and t.filled is not None and o.fill_count > t.filled:
             findings.append(Finding("REST_AHEAD_OF_STREAM", t.market_ticker, t.order_id,
                                     f"REST lists {o.fill_count} filled, the stream {t.filled} (REST wins)"))
-    cleared = tuple(q for q in state.quarantines if parse_utc_text(q.not_before_utc) <= started)
-    # Marks are pruned (bounded state): epochs come from a counter that never repeats, so a decision whose marks
-    # were taken before this proof still sees its market as changed (conservative), never as unchanged.
+    cleared = tuple(q for q in state.quarantines if parse_utc_text(q.not_before_utc) <= proof_time)
+    # Marks are pruned (bounded state). Epochs come from a counter that never repeats, and pruning any bumps the
+    # account epoch, so a decision whose marks predate this proof sees every market as changed, never unchanged.
     st = replace(state, quarantines=tuple(q for q in state.quarantines if q not in cleared),
-                 orders=tuple(kept[k] for k in sorted(kept)), proven_at_utc=started_text, marks=())
+                 orders=tuple(kept[k] for k in sorted(kept)), proven_at_utc=proof_text, marks=())
+    if state.marks:
+        st = replace(st, account_epoch=st.account_epoch + 1,
+                     account_reason=f"market marks were pruned by the proof as of {proof_text}")
     for market in sorted(disagree):
         st = _quarantine(st, Reason.DISAGREEMENT, market, finished_text, finished_text, disagree[market])
     cleared = tuple(q for q in cleared if not (q.reason is Reason.DISAGREEMENT and q.market_ticker in disagree))
-    return Proof(st, True, None, started_text, cleared, tuple(findings))
+    return Proof(st, True, None, proof_text, cleared, tuple(findings))
 
 
 # ---------------------------------------------------------------------------------------------- decisions

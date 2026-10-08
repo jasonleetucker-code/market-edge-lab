@@ -47,6 +47,8 @@ def run(state, *items):
 
 
 def opened(cfg=CFG, s=0, orders_sid=1, fills_sid=2):
+    """Both subscriptions opened at T0+s. The baseline used by most tests opens them at T0-10s, so the fixture's
+    first read (started at T0, venue data as of T0-1s) post-dates them."""
     state, _ = run(rc.initial(cfg), rc.SubscriptionOpened(orders_sid, ORDERS, at(s)),
                    rc.SubscriptionOpened(fills_sid, FILLS, at(s)))
     return state
@@ -100,7 +102,10 @@ def test_nothing_is_usable_before_a_subscription_and_a_rest_baseline(venue):
     state = opened(s=0)
     assert state.connected and reasons(state) == ["BASELINE_REQUIRED"] and state.reconciliation_required
     assert any(p.startswith("STREAM_QUARANTINE: BASELINE_REQUIRED") for p in rc.decision_problems(state, B70, marks))
-    proof = proven(state, adapter, clock)  # the read starts at T0, when the subscriptions opened
+    early = proven(state, adapter, clock)  # started at T0, when they opened, but the venue data is as of T0-1s
+    assert early.proof_time_utc == at(-1) and early.cleared == () and reasons(early.state) == ["BASELINE_REQUIRED"]
+    clock.advance(2)
+    proof = proven(state, adapter, clock)  # venue data as of T0+1s: after the subscriptions opened
     assert [q.reason for q in proof.cleared] == [rc.Reason.BASELINE_REQUIRED] and not proof.state.quarantines
     assert rc.decision_problems(proof.state, B70, rc.marks(proof.state)) == ()
 
@@ -110,8 +115,63 @@ def test_a_read_that_started_before_the_anomaly_proves_nothing_about_it(venue):
     state = opened(s=30)  # the subscriptions open 30 s after the read below starts
     proof = proven(state, adapter, clock)
     assert proof.cleared == () and reasons(proof.state) == ["BASELINE_REQUIRED"]
-    clock.advance(30)
+    clock.advance(30)  # a read started at T0+30s, but its venue data is as of T0+29s: still before the anomaly
+    assert reasons(proven(proof.state, adapter, clock).state) == ["BASELINE_REQUIRED"]
+    clock.advance(1)
     assert not proven(proof.state, adapter, clock).state.quarantines
+
+
+def shifted(recon, *, started, as_of, finished=None):
+    """The same COMPLETE read with its manifest's clocks set (seconds after T0; as_of None: no venue data time)."""
+    manifest = dataclasses.replace(
+        recon.manifest, started_at=h.T0 + timedelta(seconds=started),
+        finished_at=h.T0 + timedelta(seconds=started if finished is None else finished),
+        as_of_start=None if as_of is None else h.T0 + timedelta(seconds=as_of))
+    return dataclasses.replace(recon, manifest=manifest)
+
+
+def test_a_lagging_venue_data_time_does_not_prove_an_anomaly_after_it(venue):
+    """The review's reproduction: a gap at T0+60s, a COMPLETE read started at T0+61s whose venue data is as of
+    T0+11s (within max_data_lag). The data predates the gap, so the gap stays quarantined."""
+    adapter, clock = venue
+    state = proven(opened(s=-10), adapter, clock).state
+    state, _ = run(state, update(1, 1, 59), update(1, 3, 60))
+    recon = read(adapter, clock)
+    lagging = rc.prove(state, shifted(recon, started=61, as_of=11), scope=h.SCOPE)
+    assert lagging.proven and lagging.proof_time_utc == at(11)
+    assert lagging.cleared == () and reasons(lagging.state) == ["SEQUENCE_GAP"]
+    current = rc.prove(state, shifted(recon, started=61, as_of=61), scope=h.SCOPE)
+    assert [q.reason for q in current.cleared] == [rc.Reason.SEQUENCE_GAP] and current.proof_time_utc == at(61)
+
+
+def test_stream_fills_between_the_venue_data_time_and_the_read_start_are_not_judged(venue):
+    adapter, clock = venue
+    state = proven(opened(s=-10), adapter, clock).state
+    state, _ = run(state, fill(2, 1, 30, fill_id="mid", order_id="o-mid"))  # after as_of, before the start
+    proof = rc.prove(state, shifted(read(adapter, clock), started=61, as_of=11), scope=h.SCOPE)
+    assert proof.findings == () and [o.order_id for o in proof.state.orders] == ["o-mid"]  # no false disagreement
+
+
+def test_an_anomaly_inside_the_read_window_is_not_proven_by_that_read(venue):
+    adapter, clock = venue
+    state = proven(opened(s=-10), adapter, clock).state
+    state, _ = run(state, update(1, 1, 99), update(1, 3, 101))  # a gap after the start, before the finish
+    recon = shifted(read(adapter, clock), started=100, as_of=102, finished=110)
+    proof = rc.prove(state, recon, scope=h.SCOPE)
+    assert proof.proof_time_utc == at(100) and reasons(proof.state) == ["SEQUENCE_GAP"]
+    state, _ = run(proof.state, update(1, 4, 105, order_id="o-in"))
+    assert reasons(rc.prove(state, recon, scope=h.SCOPE).state) == ["SEQUENCE_GAP"]
+
+
+def test_a_read_without_a_venue_data_time_or_without_the_streams_subaccounts_proves_nothing(venue):
+    adapter, clock = venue
+    state = opened(s=-10)
+    recon = read(adapter, clock)
+    refused = rc.prove(state, shifted(recon, started=0, as_of=None), scope=h.SCOPE)
+    assert not refused.proven and "no venue user-data time" in refused.reason and refused.state is state
+    wide = opened(dataclasses.replace(CFG, subaccounts=frozenset({0, 1})), s=-10)
+    partial = rc.prove(wide, recon, scope=h.SCOPE)  # the fixture read covers subaccount 0 only
+    assert not partial.proven and "covers subaccounts [0]" in partial.reason
 
 
 def test_only_a_complete_reconciliation_of_the_same_scope_proves(venue):
@@ -133,7 +193,7 @@ def test_only_a_complete_reconciliation_of_the_same_scope_proves(venue):
 
 def test_a_dropped_delta_quarantines_the_whole_account_until_a_later_read(venue):
     adapter, clock = venue
-    state = proven(opened(), adapter, clock).state
+    state = proven(opened(s=-10), adapter, clock).state
     state, steps = run(state, update(1, 1, 1), update(1, 2, 2, status="resting", filled="1", remaining="1"),
                        update(1, 4, 3, status="executed", filled="2", remaining="0"))  # seq 3 never arrived
     assert steps[-1].raised == (rc.Reason.SEQUENCE_GAP,) and reasons(state) == ["SEQUENCE_GAP"]
@@ -148,7 +208,7 @@ def test_a_dropped_delta_quarantines_the_whole_account_until_a_later_read(venue)
 
 def test_duplicates_conflicting_duplicates_and_late_arrivals(venue):
     adapter, clock = venue
-    state = proven(opened(), adapter, clock).state
+    state = proven(opened(s=-10), adapter, clock).state
     state, steps = run(state, update(1, 1, 1), update(1, 1, 2))
     assert steps[1].applied is rc.Applied.DUPLICATE and not state.quarantines
     first = rc.epoch(state, B70)
@@ -162,7 +222,7 @@ def test_duplicates_conflicting_duplicates_and_late_arrivals(venue):
 
 def test_a_new_sid_starts_a_new_sequence_scope_and_the_old_sid_is_stale(venue):
     adapter, clock = venue
-    state = proven(opened(), adapter, clock).state
+    state = proven(opened(s=-10), adapter, clock).state
     state, _ = run(state, update(1, 1, 1), update(1, 2, 2, filled="1", remaining="1"))
     state, steps = run(state, rc.SubscriptionOpened(7, ORDERS, at(3)), update(7, 1, 4, filled="1", remaining="1"))
     assert steps[0].raised == (rc.Reason.RECONNECTED,) and steps[1].raised == ()  # seq 1 on sid 7: no gap
@@ -193,7 +253,7 @@ def test_a_first_seq_other_than_the_configured_start_is_a_gap_and_none_accepts_a
 
 def test_a_reconnect_is_not_an_order_cancellation(venue):
     adapter, clock = venue
-    state = proven(opened(), adapter, clock).state
+    state = proven(opened(s=-10), adapter, clock).state
     state, _ = run(state, update(1, 1, 1, status="resting", filled="0", remaining="2"))
     state, steps = run(state, rc.ConnectionLost(at(2), "socket closed"))
     assert steps[0].applied is rc.Applied.DISCONNECTED and not state.connected and state.subscriptions == ()
@@ -207,7 +267,7 @@ def test_a_reconnect_is_not_an_order_cancellation(venue):
 
 def test_a_reconnect_storm_stays_quarantined_until_the_storm_has_passed(venue):
     adapter, clock = venue
-    state = proven(opened(), adapter, clock).state
+    state = proven(opened(s=-10), adapter, clock).state
     sid = 10
     for i in range(3):  # three more reconnects of both channels within a minute: 6 + 2 opens
         state, _ = run(state, rc.ConnectionLost(at(10 * i + 1), "flap"),
@@ -227,7 +287,7 @@ def test_a_reconnect_storm_stays_quarantined_until_the_storm_has_passed(venue):
 
 def test_concurrent_markets_on_one_subscription_invalidate_only_the_market_that_changed(venue):
     adapter, clock = venue
-    state = proven(opened(), adapter, clock).state
+    state = proven(opened(s=-10), adapter, clock).state
     marks = rc.marks(state)
     state, _ = run(state, fill(2, 1, 1, fill_id="fa", order_id="oa", market=B70))
     (problem,) = rc.decision_problems(state, B70, marks)
@@ -272,7 +332,7 @@ def test_a_book_jump_beyond_the_threshold_invalidates_its_market():
 
 def test_a_corrected_fill_quarantines_its_market_and_is_kept_as_a_new_observation(venue):
     adapter, clock = venue
-    state = proven(opened(), adapter, clock).state
+    state = proven(opened(s=-10), adapter, clock).state
     state, _ = run(state, fill(2, 1, 1, fill_id="f1", order_id="oa"), fill(2, 2, 2, fill_id="f2", order_id="ob",
                                                                          market=B72))
     state, steps = run(state, fill(2, 3, 3, fill_id="f1", order_id="oa", count="0.5", corrects="f1"))
@@ -332,7 +392,7 @@ def test_receipt_order_anomalies_quarantine_and_nothing_is_redated():
 
 def test_the_rate_bound_counts_every_incoming_item_not_retained_rows(venue):
     adapter, clock = venue
-    state, _ = run(proven(opened(), adapter, clock).state, update(1, 1, 1))
+    state, _ = run(proven(opened(s=-10), adapter, clock).state, update(1, 1, 1))
     retained = (len(state.recent), len(state.orders))
     copies = [update(1, 1, 1 + i / 100) for i in range(CFG.max_items_per_window)]  # duplicates within one second
     state, steps = run(state, *copies)
@@ -347,7 +407,7 @@ def test_the_rate_bound_counts_every_incoming_item_not_retained_rows(venue):
 def test_marks_are_pruned_at_a_proof_and_an_older_decision_still_sees_its_market_changed(venue):
     adapter, clock = venue
     book = rc.BookObservation  # unsequenced, untracked by proofs: only its epoch moves
-    state = proven(opened(), adapter, clock).state
+    state = proven(opened(s=-10), adapter, clock).state
     state, _ = run(state, book(B70, Decimal("0.40"), Decimal("0.45"), rc.Clocks(at(1))),
                    book(B70, Decimal("0.40"), Decimal("0.50"), rc.Clocks(at(2))))
     old_marks = rc.marks(state)  # taken before the next proof
@@ -361,12 +421,60 @@ def test_marks_are_pruned_at_a_proof_and_an_older_decision_still_sees_its_market
     assert rc.decision_problems(state, B70, rc.marks(state)) == ()
 
 
+def test_a_market_unmarked_when_marks_were_taken_is_not_presumed_unchanged_after_a_pruning_proof(venue):
+    """The review's M1 reproduction: marks taken while B70 has no mark; B70 then changes; a proof prunes the marks.
+    B70 must still read as changed against the old marks (missing is not zero)."""
+    adapter, clock = venue
+    state = proven(opened(s=-10), adapter, clock).state
+    old_marks = rc.marks(state)
+    assert B70 not in old_marks.epochs
+    state, _ = run(state, rc.BookObservation(B70, Decimal("0.40"), Decimal("0.45"), rc.Clocks(at(1))))
+    assert rc.decision_problems(state, B70, old_marks)[0].startswith("STREAM_INVALIDATED")
+    clock.advance(5)
+    state = proven(state, adapter, clock).state
+    assert state.marks == ()
+    assert rc.decision_problems(state, B70, old_marks)[0].startswith("STREAM_INVALIDATED: account-wide")
+    assert rc.decision_problems(state, B70, rc.marks(state)) == ()
+    # a proof with no marks to prune changes nothing for marks taken after the previous one
+    fresh = rc.marks(state)
+    clock.advance(5)
+    assert rc.decision_problems(proven(state, adapter, clock).state, B70, fresh) == ()
+
+
+def test_empty_and_unknown_book_sides_are_different_and_either_change_invalidates():
+    def book(s, bid=None, ask=None, *, bid_empty=False, ask_empty=False):
+        return rc.BookObservation(B70, None if bid is None else Decimal(bid), None if ask is None else Decimal(ask),
+                                  rc.Clocks(at(s)), bid_empty=bid_empty, ask_empty=ask_empty)
+
+    state, _ = run(opened(), book(1, "0.40", "0.45"))
+    assert state.books[0].bid == ("PRICE", Decimal("0.40"))
+    epoch = rc.epoch(state, B70)
+    state, steps = run(state, book(2, ask="0.45", bid_empty=True))
+    assert "bid PRICE -> EMPTY" in steps[0].detail and rc.epoch(state, B70) > epoch
+    epoch = rc.epoch(state, B70)
+    state, steps = run(state, book(3, ask="0.45"))  # the bid is now unknown, which is not empty
+    assert "bid EMPTY -> UNKNOWN" in steps[0].detail and rc.epoch(state, B70) > epoch
+    with pytest.raises(ValueError):
+        book(4, bid="0.40", bid_empty=True)
+
+
 def test_books_are_bounded_by_forgetting_the_oldest_baseline():
     state = opened()
     books = [rc.BookObservation(f"M{i}", Decimal("0.40"), Decimal("0.45"), rc.Clocks(at(1 + i / 1000)))
              for i in range(CFG.max_tracked + 3)]
-    state, _ = run(state, *books)
+    state, steps = run(state, *books)
     assert len(state.books) == CFG.max_tracked and "M0" not in {b.market_ticker for b in state.books}
+    assert all(step.detail == "baseline" for step in steps)  # a first sighting counts as a change
+    before = rc.epoch(state, "M0")
+    state, steps = run(state, rc.BookObservation("M0", Decimal("0.40"), Decimal("0.45"), rc.Clocks(at(2))))
+    assert steps[0].detail == "baseline" and rc.epoch(state, "M0") > before  # re-baselined after eviction: a change
+
+
+def test_fill_ids_per_order_are_bounded_and_overflow_quarantines():
+    fills = [fill(2, i + 1, 1 + i / 1000, fill_id=f"f{i}", order_id="busy") for i in range(CFG.max_tracked + 2)]
+    state, _ = run(opened(), *fills)
+    (busy,) = state.orders
+    assert len(busy.fill_ids) == CFG.max_tracked and "TOO_MANY_TRACKED" in reasons(state)
 
 
 def test_retained_state_is_bounded_and_overflow_quarantines():
@@ -389,7 +497,7 @@ def test_retained_state_is_bounded_and_overflow_quarantines():
 
 def test_rest_and_stream_disagreement_keeps_the_market_quarantined(venue):
     adapter, clock = venue
-    state = proven(opened(), adapter, clock).state
+    state = proven(opened(s=-10), adapter, clock).state
     order_id, fill_ids = buy(adapter, "c1")
     clock.advance(1)
     state, _ = run(state, update(1, 1, 1, order_id=order_id, status="executed", filled="2", remaining="0"),
@@ -409,7 +517,7 @@ def test_rest_and_stream_disagreement_keeps_the_market_quarantined(venue):
 
 def test_stream_ahead_of_rest_is_a_disagreement_and_rest_ahead_is_reported_and_rest_wins(venue):
     adapter, clock = venue
-    state = proven(opened(), adapter, clock).state
+    state = proven(opened(s=-10), adapter, clock).state
     order_id, _ = buy(adapter, "c1")
     clock.advance(1)
     state, _ = run(state, update(1, 1, 1, order_id=order_id, status="executed", filled="3", remaining="0"))
@@ -427,7 +535,7 @@ def test_stream_ahead_of_rest_is_a_disagreement_and_rest_ahead_is_reported_and_r
 
 def test_stream_observations_newer_than_the_read_are_not_judged_by_it(venue):
     adapter, clock = venue
-    state = proven(opened(), adapter, clock).state
+    state = proven(opened(s=-10), adapter, clock).state
     state, _ = run(state, fill(2, 1, 30, fill_id="later", order_id="o-later"))  # received after the read starts
     proof = proven(state, adapter, clock)
     assert proof.findings == () and [o.order_id for o in proof.state.orders] == ["o-later"]

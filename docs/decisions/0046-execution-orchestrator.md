@@ -84,13 +84,18 @@ Composition is where the dangerous paths live:
     make that worker's replay diverge from its live state. Only attempts of this instance's own fence are turned
     unknown at a cycle start.
 
-    *What the check is.* Every write re-reads the lease from the store first (`_check_writer` calls
-    `_lease_held`); a cached "fenced out" flag is never trusted on its own. That covers control events and records
-    (through `_apply`/`_record`) and every direct journal write: the in-flight sweep, the snapshot, lookup
-    receipts, attempt resolution, fills, cancels, releases, the recording of a send's reply and the shutdown's
-    cancel. The original text said "re-read before every writing phase"; the package K review showed that was not
-    enough. A supervisor restart under the **same worker id** takes a new fence while the old instance is
-    mid-cycle; the old instance's cached flag stayed false, and its `_raise_pending` appended
+    *What the check is.* Each journal write after boot re-reads the lease from the store immediately before it
+    (`_check_writer` calls `_lease_held`); a cached "fenced out" flag is never trusted on its own. The check is per
+    write, not per group of writes: control events and records go through `_apply`/`_record`, and every direct
+    journal write goes through `_write` (the in-flight sweep, the snapshot, lookup receipts, attempt resolution,
+    fills, cancels, releases, each write recording a send's reply, and each write of a shutdown cancel, from
+    `request_cancel` to the receipt and the reservation move). Three writes are not behind it, each for a reason:
+    the boot rows (`Started`, `GENESIS`, the lease acquisition and `recover`), written by the instance that is
+    taking over; `renew_lease`, which is itself the fence check, in one transaction; and `prepare_attempt`, whose
+    fence check runs inside its own transaction. The original text said "re-read before every writing phase"; the
+    package K review showed that was not enough. A supervisor restart under the **same worker id** takes a new
+    fence while the old instance is mid-cycle; the old instance's cached flag stayed false, and its
+    `_raise_pending` appended
     `IncidentRaised:journal-refused` to the control log after the new instance's `Started`
     (`test_orchestrator_fencing.py` reproduces it and now proves the old instance appends nothing).
 
@@ -98,15 +103,17 @@ Composition is where the dangerous paths live:
     that into a `fenced_out` report and nothing further is written. Every later `run_cycle` raises
     `OrchestratorFencedOut`, and `run(n)` stops after the cycle that found out, so a fenced instance does not keep
     reading the whole account every interval. Operator calls refuse the same way; `submit_signal` answers
-    FENCED_OUT; a shutdown cut short reports what it did. A reply that comes back after a takeover is not recorded
-    by the old instance: the attempt is already OUTCOME_UNKNOWN (the takeover did that) and the live worker
-    resolves it from the venue's order listing, never by a resend.
+    FENCED_OUT; a shutdown cut short reports what it did (a cancel whose reply could not be recorded reports
+    CANCEL_OUTCOME_UNKNOWN). A reply that comes back after a takeover is not recorded by the old instance: the
+    attempt is already OUTCOME_UNKNOWN (the takeover did that) and the live worker resolves it from the venue's
+    order listing, never by a resend.
 
     *The remaining window, stated honestly.* The lease read and the write are separate SQLite transactions; nothing
     spans both, and the journal's control-event and record appends take no fence token. So a takeover that commits
-    between a lease read and the write that follows it still lets **that one write** land (for example a receipt,
-    or the first of the writes that record a reply, such as the receipt before `mark_sent`). The next write
-    re-reads and stops. The boot rows (`Started`, `GENESIS`) are written before the lease is taken, by design: the
+    between a lease read and the write that follows it still lets **that one write** land (for example the ack
+    receipt that comes before `mark_sent`). The next write re-reads and stops; `test_orchestrator_fencing.py`
+    takes the lease over between two writes of a reply and of a cancel reply and proves the second is never
+    attempted. The boot rows (`Started`, `GENESIS`) are written before the lease is taken, by design: the
     booting instance is the one taking over. A request already handed to `send` before a takeover can still reach
     the venue; the journal's transactional fence check in `prepare_attempt` remains the hard stop for starting a
     send, and the new holder reconciles anything in flight. The lease's expiry is not checked by `_lease_held`
@@ -128,21 +135,38 @@ Composition is where the dangerous paths live:
       can be proven by it; before the strategies propose, when the cycle takes its marks (`recovery.marks`); at the
       start of each decision; and once more just before the decision acts (WOULD_SUBMIT or prepare and send).
     - **Proof.** After a COMPLETE reconciliation, `recovery.prove` clears every stream quarantine whose
-      `not_before` is at or before the read's start (gaps, conflicts, reconnects, baselines, rate overruns,
-      backlog). A REST/stream disagreement (the stream delivered a fill or a count before the read began that the
-      COMPLETE listing does not show) keeps that market quarantined and is raised as an incident before any
-      decision, like every other evidence anomaly (rule 4).
+      `not_before` is at or before the read's **proof time**: min(read start, `manifest.as_of_start`), the venue's
+      own user-data time at the start of the read. A COMPLETE read may let that data time trail the start by up to
+      `max_data_lag`, and data from before an anomaly cannot prove anything after it (package J review H1; the
+      same rule `account` uses for a snapshot's `observed_at`). A read without a data time proves nothing, and a
+      read must cover every subaccount the stream reports on (`RecoveryConfig.subaccounts`, default `{0}`, which
+      is what the orchestrator reads). A REST/stream disagreement (the stream delivered a fill or a count at or
+      before the proof time that the COMPLETE listing does not show) keeps that market quarantined and is raised
+      as an incident before any decision, like every other evidence anomaly (rule 4). Stream observations after
+      the proof time are not judged by that read. In practice a stream anomaly received at T is proven by the
+      first cycle whose venue data post-dates T: usually the next cycle, not the current one.
     - **Invalidation drops decisions.** A decision is BLOCKED with `STREAM_INVALIDATED`, `STREAM_QUARANTINE` or
       `STREAM_DOWN` reasons when its market (or the account) changed since the marks, a quarantine covers it, or a
       required subscription is not live. Nothing is prepared or sent. A dropped decision is not retried: its
-      signal was consumed, and the strategy re-evaluates on its next signal from fresh evidence.
+      signal was consumed, and the strategy re-evaluates on its next signal from fresh evidence. An account-wide
+      quarantine blocks reductions too (fail-closed: a reduction sized on unproven positions could oversell).
+      Market epochs come from a never-reused counter and are pruned at each proof; a pruning proof bumps the
+      account epoch, so marks taken before it read every market as changed (a market unmarked then is not
+      presumed unchanged). A book seen for the first time, or again after the bounded book table evicted it,
+      counts as a change. A book side known to be empty and a side that is unknown are kept apart.
     - **A reconnect is not a cancellation.** A lost connection or a new subscription id changes no reservation,
       attempt or order; it only requires a REST proof before stream-dependent decisions proceed.
     - **Restart.** The recovery state is not persisted: a restart starts disconnected (STREAM_DOWN) and needs new
-      subscriptions plus a COMPLETE read, which is the conservative reading of a lost process.
+      subscriptions plus a COMPLETE read, which is the conservative reading of a lost process. A DISAGREEMENT
+      quarantine clears only when a later read agrees; a restart drops it with the rest of the in-memory state,
+      but the incident it raised is persisted and keeps the service DISARMED until an operator acknowledges it.
     - Every private-stream venue fact is UNKNOWN (`recovery.STREAM_FACTS`; the conformance pack excludes
-      WebSockets). Tradeoff: REST may lag the stream, so a fill the stream delivered just before a read began can
-      show up as a disagreement and disarm. That is fail-closed; revisit once DEMO_OBSERVED latency evidence exists.
+      WebSockets). Tradeoff: REST may lag the stream, so a fill the stream delivered just before the venue data
+      time of a read can show up as a disagreement and disarm. That is fail-closed; revisit once DEMO_OBSERVED
+      latency evidence exists.
+    - **Bounded memory.** Dedupe windows, tracked orders, fill ids per order and quarantined markets are bounded
+      by `dedupe_window` and `max_tracked`; past `max_tracked` the state quarantines (account-wide) rather than
+      forgetting silently, except books, which forget the least recently observed one (re-seeing it is a change).
 
 ## Alternatives rejected
 
