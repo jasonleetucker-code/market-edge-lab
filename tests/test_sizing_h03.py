@@ -110,9 +110,11 @@ def test_paired_event_level_evaluation_with_capital_days_and_turnover():
 
 
 def test_every_policy_respects_the_event_budget_and_depth():
-    rep = run([toy_event()], event_budget=D(5))
-    for name in ("FIXED_DOLLAR", "CAPPED_FRACTIONAL_KELLY", "CAUTIOUS_BRIER"):
-        assert by(rep, name).total_cost <= D(5)
+    for budget in (D(5), D(2)):  # $2 binds the cautious Brier policy, which wants $2.24
+        rep = run([toy_event()], event_budget=budget)
+        for name in ("FIXED_DOLLAR", "CAPPED_FRACTIONAL_KELLY", "CAUTIOUS_BRIER"):
+            assert by(rep, name).total_cost <= budget
+    assert 0 < by(rep, "CAUTIOUS_BRIER").contracts[1] < 21
     thin = se.PolicyEvent("T", "c", "synthetic:toy", AS_OF, P,
                           tuple(leg("T", s, str(q), size=3) for s, q in zip("ABC", Q)), "C", TRUTH, D(1))
     assert all(n <= 3 for n in by(run([thin]), "FIXED_DOLLAR", "T").contracts)
