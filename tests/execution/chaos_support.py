@@ -407,8 +407,10 @@ def check_invariants(journal: ExecutionJournal, adapter: ChaosAdapter, *, live: 
                      report: o.CycleReport | None = None, chain: bool = True) -> dict:
     """The global invariants of package P, from the durable store and the venue. Raises InvariantViolation.
 
-    1. No venue order without a prepared attempt: every create reached the venue only after its PENDING_EGRESS
-       attempt was committed (probe at send time), and every venue order's client id has an attempt.
+    1. No venue order without a prepared attempt: every create reached the venue only after its attempt was committed
+       (a probe reads the journal file at send time; the attempt is PENDING_EGRESS, or OUTCOME_UNKNOWN when a lease
+       takeover superseded its fence mid-send), and every venue order's client id has an attempt (orders placed
+       directly at the venue by someone else excepted).
     2. At most one attempt per intent key, and no client order id reached the venue twice.
     3. The journal never shows more fills than the venue (every reservation, released ones included).
     4. Positions reconcile: venue positions equal the fills' net (zero once settled), never negative; after a COMPLETE
