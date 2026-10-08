@@ -159,6 +159,8 @@ def test_a_journal_locked_before_the_cycle_fails_it_loud_with_nothing_read_or_se
     holder.close()
     report = rig.cycle()  # the same instance carries on once the lock is gone
     assert report.reconciliation == "COMPLETE" and [d.attempt_state for d in submitted(report)] == ["ACKNOWLEDGED"]
+    rig.clock.advance(60)
+    rig.settle(6)
 
 
 @pytest.mark.parametrize("seed", SEEDS)
@@ -222,6 +224,7 @@ def test_a_jumping_clock_fails_closed_and_recovers_after_it_is_fixed(tmp_path, j
     for _ in range(6):
         rig.step(workload)
     assert rig.orch.state.mode is ctl.Mode.BOUNDED_AUTO and len(rig.adapter.creates) > sent
+    rig.settle(8)
 
 
 @pytest.mark.parametrize("seed", SEEDS)
@@ -235,6 +238,7 @@ def test_clock_jitter_within_tolerance_keeps_every_invariant(tmp_path, seed):
         rig.adapter.skew = rng.uniform(-3, 3)
         rig.step(workload)
     assert len(rig.adapter.creates) > 0
+    rig.settle(8)  # still jittering: the quiet account must agree with the venue under the same clocks
 
 
 # ---------------------------------------------------------------------------------------------- HTTP errors
@@ -299,15 +303,20 @@ def test_a_send_that_raises_is_unknown_never_retried_and_reconciled(tmp_path, fa
 
 @pytest.mark.parametrize("seed", SEEDS)
 def test_a_seeded_mix_of_raising_sends_holds_every_invariant(tmp_path, seed):
-    """30% of writes (creates and, at the end, cancels) raise, half of them after the venue acted, for 20 workload
-    cycles; then sends stop failing and everything is reconciled."""
+    """Each write draws independently whether it raises (35%); raising writes alternate between before anything left
+    and after the venue acted, for 30 workload cycles; then sends stop failing and everything is reconciled. The mix
+    is asserted, so it cannot silently degenerate: both kinds of raise happen and orders still reach the venue."""
     rig = cs.Rig(tmp_path, venue_lag=cs.SHORT_LAG)
     rig.warm()
-    rig.adapter.raise_rate, rig.adapter.raise_seed = 0.3, seed
+    rig.adapter.raise_rate, rig.adapter.raise_seed = 0.35, seed
     workload = cs.Workload(seed)
-    for _ in range(20):
+    for _ in range(30):
         rig.step(workload, n=2)
-    assert rig.adapter.raised, "the seed never raised: the scenario exercised nothing"
+    kinds = Counter(f for _, f in rig.adapter.raised)
+    mix = {"draws": rig.adapter.raise_draws, **kinds, "creates_at_venue": len(rig.adapter.creates)}
+    print(seed, mix)  # the per-seed distribution (-s)
+    assert kinds["raise_before"] and kinds["raise_after"], mix
+    assert len(rig.adapter.creates) >= kinds["raise_after"] + 3, mix  # orders kept flowing past the faults
     rig.adapter.raise_rate = 0.0
     rig.settle(8)
 
@@ -370,6 +379,7 @@ def test_many_markets_at_once_stay_inside_every_bound(tmp_path):
     assert rejected >= 8 * (60 - h.BOUNDS.max_queued_signals)
     orders = rig.adapter.creates
     assert 0 < len(orders) <= h.TICKET.max_orders_per_window * 2  # 8 per 10 minutes over 8 minutes
+    rig.settle(8)
 
 
 # ---------------------------------------------------------------------------------------------- lease races
@@ -448,6 +458,7 @@ def test_a_request_budget_exhausted_mid_send_blocks_the_rest_and_disarms(tmp_pat
     assert any("REQUEST_BUDGET_EXHAUSTED" in r for d in report.decisions for r in d.reasons)
     assert report.mode_at_end is ctl.Mode.DISARMED and any(i.startswith("budget:") for i in report.incidents)
     assert report.requests_used <= read_cost + 1 and len(rig.adapter.creates) == 1
+    rig.settle(6)  # the next reads fit the same tight budget: the operator re-arms and the order is reconciled
 
 
 def test_a_read_that_overruns_the_deadline_disarms_and_sends_nothing(tmp_path):
@@ -498,6 +509,7 @@ def test_p1_a_refused_second_start_writes_nothing_and_the_live_worker_carries_on
     rig.orch.submit_signal(h.signal("s1", B70, at=rig.clock(), limit="0.45"))
     (d,) = submitted(rig.step())  # check_invariants: INV7 (live state == replay; prepared only while sending)
     assert d.attempt_state == "ACKNOWLEDGED" and rig.orch.state.mode is ctl.Mode.BOUNDED_AUTO
+    rig.settle(6)
 
 
 def test_p2_a_worker_fenced_out_mid_send_writes_nothing_after_the_takeover(tmp_path):
@@ -522,12 +534,14 @@ def test_p2_a_worker_fenced_out_mid_send_writes_nothing_after_the_takeover(tmp_p
     rig.orch.submit_signal(h.signal("s1", B70, at=rig.clock(), limit="0.45"))
     report = rig.orch.run_cycle()
     assert report.fenced_out
-    a, rig.orch, rig.journal = rig.orch, taken["b"], taken["journal"]
+    a, journal_a = rig.orch, rig.journal
+    rig.orch, rig.journal = taken["b"], taken["journal"]
     rig.send = rig.adapter
     assert cs.max_seq(rig.journal) == taken["seq"], "the fenced-out worker wrote after the takeover"
     cs.check_invariants(rig.journal, rig.adapter, live=rig.orch)
     with pytest.raises(o.OrchestratorFencedOut):
         a.run_cycle()
+    journal_a.close()  # worker A is done; B owns the store from here
     rig.clock.advance(60)
     rig.settle(6)  # B reconciles A's unknown attempt from the listing; the operator arms B
     rig.orch.submit_signal(h.signal("s2", B72, at=rig.clock(), limit="0.45"))
@@ -551,3 +565,25 @@ def test_bug_the_journal_never_records_more_fills_than_the_venue_near_a_read(tmp
     rig.step()
     cross(rig)  # 3 of our 6 fill a few seconds before the next read
     rig.step()  # check_invariants: INV3 (the journal records 6 filled, the venue 3)
+
+
+# Workload seeds whose 25 cycles put a fill inside the window (measured on 1065c25: 15 of seeds 1-25 do; the other
+# ten never fill within 2 s before a read, so they cannot show the bug and would XPASS). The default runs three.
+P3_SEEDS = [2, 3, 6, 9, 11, 13, 15, 16, 17, 19, 20, 21, 22, 23, 24][:cs.knob("CHAOS_SEEDS", 3, 15)]
+
+
+@pytest.mark.xfail(strict=True, raises=cs.InvariantViolation, reason=BUG_P3)
+@pytest.mark.parametrize("seed", P3_SEEDS)
+def test_bug_a_seeded_workload_with_a_slow_clock_never_records_more_fills_than_the_venue(tmp_path, seed):
+    """The seeded workload with our clock 4 s behind the venue's (inside account.py's 5 s CLOCK_SKEW) and the venue's
+    stamps only 0.5 s behind its true time, so fills from liquidity that arrives just before a read are stamped after
+    our read start (lag below skew - 2 s). The P-3 fix must make this pass for every seed."""
+    rig = cs.Rig(tmp_path, venue_lag=0.5)
+    rig.adapter.skew, rig.adapter.as_of_lag = 4.0, 0.0
+    rig.warm()
+    workload = cs.Workload(seed)
+    for _ in range(25):
+        rig.adapter.sync()  # the venue's clock is current when the cycle's liquidity arrives
+        rig.step(workload, n=2)
+    rig.settle(8)
+

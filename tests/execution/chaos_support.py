@@ -108,11 +108,13 @@ class ChaosAdapter(h.VenueAdapter):
     kill_point: Any = None  # child only: called with a label at each kill point; never pickled
     # Writes whose `send` raises: each entry of `raise_script` ("raise_before": nothing reaches the venue;
     # "raise_after": the venue acts, then the call raises; "ok") is used by the next write in order; once it is empty,
-    # `raise_rate` (with `raise_seed`) draws raise_before / raise_after / ok for each write.
+    # `raise_rate` (with `raise_seed`) decides for each write whether it raises; raising writes alternate between
+    # raise_before and raise_after (the first kind is seeded).
     raise_script: list = field(default_factory=list)
     raise_rate: float = 0.0
     raise_seed: int = 0
     raised: list = field(default_factory=list)  # (endpoint, fault) per write that raised
+    raise_draws: int = 0  # every draw advances this, so consecutive writes never repeat one draw
     # Clocks. The harness ties the venue to our clock; these separate them. `skew`: the venue's true time minus our
     # clock (a wrong clock on our side). `venue_lag`: how far the venue's stamps trail the true time (the harness's
     # VENUE_LAG). `as_of_lag`: how far the venue's user-data timestamp trails the true time (ACC-16: approximate).
@@ -211,10 +213,14 @@ class ChaosAdapter(h.VenueAdapter):
             return self.raise_script.pop(0)
         if self.raise_rate <= 0:
             return "ok"
-        rng = random.Random(self.raise_seed * 1_000_003 + len(self.creates) + len(self.writes))
+        self.raise_draws += 1  # advances on every draw, whatever the previous draw did (picklable state)
+        rng = random.Random(self.raise_seed * 1_000_003 + self.raise_draws)
         if rng.random() >= self.raise_rate:
             return "ok"
-        return rng.choice(["raise_before", "raise_after"])
+        # The kind alternates, starting from a seeded side, so any two raises cover both kinds.
+        first = random.Random(self.raise_seed).choice(["raise_before", "raise_after"])
+        other = "raise_after" if first == "raise_before" else "raise_before"
+        return first if len(self.raised) % 2 == 0 else other
 
     def __call__(self, request):
         name = request.endpoint.name

@@ -14,7 +14,7 @@ gate, account reads, and the real transport with a fixture signer and rate budge
 |---|---|---|
 | `python -m pytest tests/execution/test_chaos.py tests/execution/test_chaos_kill.py tests/execution/test_load.py` | the default (small) suite, part of normal CI | about 50 s (`tests/execution` + `tests/invariants` on 1065c25: 85 s in all) |
 | `EDGE_LAB_CHAOS_SCALE=full python -m pytest tests/execution/test_load.py -s` | 2,000-cycle latency pass, 500-cycle memory pass, full read-ceiling sweep | about 25 min (latency pass about 13 min, the rest 12 min) |
-| `EDGE_LAB_CHAOS_SCALE=full python -m pytest tests/execution/test_chaos.py tests/execution/test_chaos_kill.py` | 25 seeds per seeded chaos test, every commit point of the disk-full sweep, 60 + 30 + 30 kill seeds | about 6 min (338 s: 274 passed, 2 xfailed) |
+| `EDGE_LAB_CHAOS_SCALE=full python -m pytest tests/execution/test_chaos.py tests/execution/test_chaos_kill.py` | 25 seeds per seeded chaos test, every commit point of the disk-full sweep, 60 + 30 + 30 kill seeds | about 7 min (407 s: 274 passed, 17 xfailed) |
 
 Knobs (each an integer environment variable; `EDGE_LAB_CHAOS_SCALE=full` sets them all to the full value):
 
@@ -162,8 +162,10 @@ Every scenario asserts the global invariants after every step (`chaos_support.ch
    equals the replay;
 8. no REJECTED or ABSENT attempt has a venue order with its client id (the venue is asked, not the journal).
 
-And whenever a scenario lets the account go quiet (`Rig.settle`, which every scenario ends with), read from the venue
-independently of what the journal concluded:
+And when a scenario lets the account go quiet (`Rig.settle`), read from the venue independently of what the journal
+concluded. Every chaos and kill scenario ends with `settle`, except the P-3 reproductions (which stop at the first
+violation) and the read-ceiling, burst and latency tests in `test_load.py`; the rate-budget test settles after its
+restart:
 
 9. every reservation's filled quantity equals the venue's fill count for its order (0 when there is none);
 10. no reservation is still held once its venue order is over or never existed (a quarantine, which is held and needs
@@ -172,8 +174,9 @@ independently of what the journal concluded:
 Invariant 4's snapshot half compares what the orchestrator read with what the venue served on that read; 8 to 10 are
 the checks that do not rely on the journal's own conclusions. The seeded scenarios (locked journal, clock jitter, HTTP
 mix, raising sends, receipts, lease races, disk full, process kills) run with a venue clock only 3 s behind the true
-time (`chaos_support.SHORT_LAG`), not the harness's 10 minutes, so the lifecycle's 2 s skew window and the release
-rule (a snapshot strictly after the order's end) are exercised for real. None of them tripped P-3, at 3 or 25 seeds.
+time (`chaos_support.SHORT_LAG`), not the harness's 10 minutes, so stamps and reads are seconds apart rather than
+minutes. They cannot trip P-3 by construction: with a 3 s lag and jitter of at most 3 s, no venue stamp lands after our
+read start. P-3 needs the lag below our clock's deficit minus 2 s; the seeded P-3 scenario below uses exactly that.
 
 | Fault | Test | Expected and observed |
 |---|---|---|
@@ -186,7 +189,7 @@ rule (a snapshot strictly after the order's end) are exercised for real. None of
 | Clock jitter of up to 3 s each way every cycle | `test_clock_jitter_within_tolerance_keeps_every_invariant` | normal operation (but see P-3) |
 | HTTP 429, 5xx before/after the venue acted, timeouts before/after, malformed 2xx, 409, through the real transport | `test_every_http_write_failure_is_unknown_never_retried_and_reconciled` | each create is OUTCOME_UNKNOWN, sent once, and resolved ABSENT when the venue never acted, ACKNOWLEDGED when it did |
 | Seeded mixes of every write fault and read faults (429, 503, timeouts, malformed pages) | `test_a_seeded_mix_of_http_errors_holds_every_invariant` | invariants hold; every attempt reconciled once the network heals |
-| `send` itself raises, before anything left or after the venue acted (the real transport never raises, so this is the orchestrator's own SEND_RAISED path) | `test_a_send_that_raises_is_unknown_never_retried_and_reconciled`, `test_a_seeded_mix_of_raising_sends_holds_every_invariant` | OUTCOME_UNKNOWN, sent once, resolved ABSENT (before) or ACKNOWLEDGED (after); 30% raising writes over 20 cycles keep every invariant |
+| `send` itself raises, before anything left or after the venue acted (the real transport never raises, so this is the orchestrator's own SEND_RAISED path) | `test_a_send_that_raises_is_unknown_never_retried_and_reconciled`, `test_a_seeded_mix_of_raising_sends_holds_every_invariant` | OUTCOME_UNKNOWN, sent once, resolved ABSENT (before) or ACKNOWLEDGED (after). In the mix each write draws whether it raises (35%) and raising writes alternate before / after; over 30 cycles, seeds 1-25 drew 17-24 writes each, with 2-7 raises before and 2-6 after, and 14-22 creates still reached the venue; the test asserts both kinds and continued flow, then settles |
 | Duplicated fills, reversed pages, stale order rows, crossed create replies (with or without client id) | `test_duplicate_and_out_of_order_receipts_keep_every_invariant` | duplicates collapse and order does not matter (COMPLETE, no incident); stale rows are detected from the second stale read on; a crossed ack with the other order's client id is OUTCOME_UNKNOWN (ACK_UNREADABLE_OR_FOR_ANOTHER_ORDER) and reconciled; without a client id it names an order another attempt owns, so `mark_sent` succeeds, `mark_acknowledged` is refused (PROVIDER_ORDER_OWNED), the decision ends SENT with a journal-refused incident (DISARMED), and the next cycle marks it OUTCOME_UNKNOWN and reconciles it to its own order. The wrong ORDER_ACK receipt stays as evidence bound to the attempt. An ack naming an order no attempt owns cannot come from our own lost reply: while any attempt is unknown the risk gate blocks new orders (RECONCILIATION_UNHEALTHY), traced separately |
 | 60 markets, a signal on each every cycle | `test_many_markets_at_once_stay_inside_every_bound` | one intent per market, at most 3 per cycle, the queue and request bounds and the order-rate limit hold |
 | Lease takeovers at seeded points; stalled workers wake up; a second start while the lease is live | `test_lease_takeovers_at_random_points_never_double_send` | the stale worker's first cycle is a `fenced_out` report and later ones raise `OrchestratorFencedOut` (#177); neither writes a journal row or sends; a start against a live lease is refused (`LeaseHeld`) with nothing written; the live worker reconciles everything |
@@ -206,9 +209,13 @@ raising-send scenarios and the short venue lag were added, each mutation was re-
 | Mutation | Tests failing | Caught by |
 |---|---|---|
 | a crossed or unreadable ack is recorded as REJECTED | 1 (`receipts[crossed_with_id]`) | invariant 8: a REJECTED attempt whose order the venue holds |
-| reservations are never released | 34 (every scenario that settles: disk full, locked journal, HTTP, raising sends, receipts, lease races, P-2, all 8 kill cases, rate budget) | invariant 10: BOUND reservations whose venue orders are executed or canceled |
-| the create is retried once when `send` raises | 3 (both raising-send tests, the raising mix with seed 2) | invariant 2 (one client id created twice) and invariant 8, plus the scripted OUTCOME_UNKNOWN assert |
-| an unknown create outcome is recorded as REJECTED with a made-up receipt | 14 (7 HTTP write failures, 3 HTTP mixes, 2 raising sends, the raising mix with seed 2, rate budget) | invariant 8 (the venue holds the "rejected" order) and the scripted asserts |
+| reservations are never released | 47 (every scenario that settles) | invariant 10: BOUND reservations whose venue orders are executed or canceled |
+| the create is retried once when `send` raises | 5 (both raising-send tests, all 3 seeds of the raising mix) | invariant 2 (one client id created twice) and invariant 8, plus the scripted OUTCOME_UNKNOWN assert |
+| an unknown create outcome is recorded as REJECTED with a made-up receipt | 16 (7 HTTP write failures, 3 HTTP mixes, 2 raising sends, 3 raising mixes, rate budget) | invariant 8 (the venue holds the "rejected" order) and the scripted asserts |
+
+Counts are from the head that fixed the raising mix's draw (each write now draws afresh; before, every write after a
+raise_before repeated the same draw, so a seed could raise before the venue on every write). The release-guard
+mutations (removing the "snapshot strictly after" rule in `reservations` or `orchestrator`) are not caught; see Limits.
 
 All four now fail the suite; the tree was restored (no src change on the branch).
 
@@ -244,8 +251,11 @@ has. It triggers when the venue's user-data timestamp lags by more than 2 s (`ac
 Observed: the journal records 6 filled for a venue fill of 3; the reservation goes BOUND while the order still rests;
 the next read is not COMPLETE (attribution mismatch) and a lifecycle quarantine follows, so it fails closed within one
 or two cycles, but invariant 3 is broken in between. Test:
-`test_bug_the_journal_never_records_more_fills_than_the_venue_near_a_read` (both triggers). The harness hides it
-because its venue stamps trail our clock by 10 minutes.
+`test_bug_the_journal_never_records_more_fills_than_the_venue_near_a_read` (both triggers), and the seeded workload
+`test_bug_a_seeded_workload_with_a_slow_clock_never_records_more_fills_than_the_venue` (our clock 4 s slow, venue lag
+0.5 s): 15 of workload seeds 1-25 put a fill inside the window within 25 cycles and trip it; those 15 are its
+parametrization (3 by default), so the P-3 fix flips all of them. The harness hides it because its venue stamps trail
+our clock by 10 minutes.
 
 ## Other findings (not bugs; for the owner and later packages)
 
@@ -290,6 +300,10 @@ because its venue stamps trail our clock by 10 minutes.
 
 ## Limits of this evidence
 
+- **Release guards are not exercised.** The fake venue's positions always reflect fills at once, so the rule that a
+  BOUND reservation is released only by a consistent snapshot observed strictly after its end and last fill (in
+  `reservations.confirm_by_snapshot` and `Orchestrator._maybe_release`) never meets a snapshot that lags. Removing
+  either guard alone survives this suite. A fault mode with positions lagging fills would cover it; it is not built.
 - The fake venue is not Kalshi. It has no settlement of its own, no historical tier movement, no rate limiting and no
   network. Its order and fill listings always return the full history.
 - The chaos rig runs the orchestrator without package J's optional stream recovery (`StreamSource`,
