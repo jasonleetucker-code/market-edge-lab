@@ -32,17 +32,22 @@ RESERVATION_WORDS = {"OUTSTANDING": ("Resting · reserved", "info"), "CANCEL_REQ
 
 
 def actual_section(es: d.ExecutionStatus | None) -> str:
+    return c.section("Actual holdings", actual_body(es), meta="real accounts", sid="xp-actual")
+
+
+def actual_body(es: d.ExecutionStatus | None) -> str:
+    """The "Access not connected" state, with the code's authorized environments from the export when readable.
+    Shared by the execution portfolio and the outcome board (J8)."""
     authorized = oc.lst(es.doc, "environments", "authorized") if es is not None else None
     if authorized is None:
         basis = ("The code's authorized environments are not readable here (no usable export); EXECUTION_PLAN records "
                  "FIXTURE only.")
     else:
         basis = f"Authorized environments in code (from the export): {', '.join(authorized) or 'none'}."
-    body = c.blocked_state("Access not connected",
+    return c.blocked_state("Access not connected",
                            f"No real account is connected. {basis} DEMO and PRODUCTION reads need activation packet "
                            "Decisions 1 and 2. No real holding, cash or order appears anywhere on this page.",
                            action=("/setup", "Setup & readiness"))
-    return c.section("Actual holdings", body, meta="real accounts", sid="xp-actual")
 
 
 def account_strip(doc: dict) -> str:

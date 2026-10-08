@@ -437,14 +437,16 @@ class Context:
                     exp = registry.load(path)
                 except (tomllib.TOMLDecodeError, OSError) as exc:
                     out.append({"key": key, "id": None, "title": None, "status": None,
-                                "problems": [short_error(exc, self.config)], "stage_a": None, "reports": []})
+                                "problems": [short_error(exc, self.config)], "stage_a": None, "reports": [],
+                                "manifest_error": True})
                     continue
                 periods = exp.data.get("periods") if isinstance(exp.data.get("periods"), dict) else {}
                 out.append({"key": key, "id": exp.id, "title": exp.data.get("title"), "status": exp.status,
                             "problems": problems.get(key, []), "stage_a": _stage_a(path.parent),
                             "reports": _reports(path.parent), "stage_b_plan": periods.get("stage_b"),
                             "limitations": exp.data.get("limitations") if isinstance(exp.data.get("limitations"),
-                                                                                    list) else []})
+                                                                                    list) else [],
+                            **_protocol_facts(exp)})
         except Exception as exc:  # noqa: BLE001
             return Loaded(ERROR, message=short_error(exc, self.config))
         return Loaded(OK, out)
@@ -518,6 +520,54 @@ def _stage_a(exp_dir: Path) -> dict[str, Any] | None:
             "selected_variant": data.get("selected_variant"), "conditions": conditions,
             "test_first": window.get("first"), "test_last": window.get("last"),
             "dataset_sha256": data.get("dataset_sha256")}
+
+
+def _protocol_facts(exp: Any) -> dict[str, Any]:
+    """The research-governance facts the Terminal shows (journeys J3 and J7), read only through the registry's own
+    readers. A LEGACY experiment (no sidecar) has no protocol fields: its mechanism is the manifest's
+    `economic_rationale`, labelled as such. Label scopes and holdout windows are protocol configuration (names and
+    counts), never outcomes. A sidecar that cannot be read leaves every field unknown with `protocol_error`."""
+    out: dict[str, Any] = {"protocol": None, "slot_status": None, "family": None, "mechanism": None,
+                           "mechanism_basis": None, "protected_scopes": (), "holdout_windows": [],
+                           "protocol_error": None}
+    try:
+        out["protocol"] = registry.protocol_state(exp)
+        proto = registry.load_protocol(exp)
+    except (tomllib.TOMLDecodeError, OSError) as exc:
+        out["protocol_error"] = short_error(exc)
+        out["holdout_windows"] = None
+        return out
+    if isinstance(proto, dict):
+        mechanism = proto.get("mechanism")
+        out.update(slot_status=proto.get("slot_status") if isinstance(proto.get("slot_status"), str) else None,
+                   family=proto.get("family") if isinstance(proto.get("family"), str) else None,
+                   mechanism=mechanism if isinstance(mechanism, str) and mechanism.strip() else None,
+                   mechanism_basis="protocol mechanism")
+    else:
+        rationale = exp.data.get("economic_rationale")
+        if isinstance(rationale, str) and rationale.strip():
+            out.update(mechanism=" ".join(rationale.split()), mechanism_basis="economic rationale (legacy manifest)")
+    out["protected_scopes"] = registry.prohibited_label_scopes(exp)
+    out["holdout_windows"] = registry.holdout_windows(exp)
+    return out
+
+
+# The experiment behind a recorded decision, by the decision's own `policy_id` (the frozen rule that decided it). Only
+# rules that exist in code are listed; any other policy (a demo's, a future strategy's) has no linked experiment and
+# its mechanism reads unknown, never another experiment's text.
+POLICY_EXPERIMENTS = {exp001_shadow.stageb.STAGE_B_POLICY.policy_id: "EXP-001"}
+
+
+def experiment_for_policy(ctx: "Context", policy_id: Any) -> tuple[dict[str, Any] | None, str]:
+    """(the registry entry of the experiment behind a decision's policy, why not when None)."""
+    exp_id = POLICY_EXPERIMENTS.get(policy_id) if isinstance(policy_id, str) else None
+    if exp_id is None:
+        return None, (f"the decision's policy {policy_id} is not linked to a registered experiment" if policy_id
+                      else "the decision records no policy")
+    if ctx.experiments.status != OK:
+        return None, f"experiment registry not readable ({ctx.experiments.message})"
+    entry = next((e for e in ctx.experiments.value if e.get("id") == exp_id), None)
+    return entry, ("" if entry else f"{exp_id} is not in the experiment registry")
 
 
 def _reports(exp_dir: Path) -> list[str]:
