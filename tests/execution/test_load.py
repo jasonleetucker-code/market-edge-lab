@@ -361,12 +361,23 @@ def test_reserved_cancel_and_reconcile_headroom_survive_an_exhausted_rate_budget
                                    "second_read": second.reconciliation})
 
 
-def test_the_account_read_ceiling_fails_closed(tmp_path):
+# What a read that ran out of requests reports: the requests that did not fit (a stream, the closing user-data
+# timestamp or the closing cutoff). Anything else (a clock, freshness or data problem) is another failure.
+BUDGET_CODES = {"REQUEST_BUDGET_EXHAUSTED", "STREAM_INCOMPLETE", "CUTOFF_UNAVAILABLE", "USER_DATA_AS_OF_UNAVAILABLE"}
+
+
+def test_the_account_read_ceiling_fails_closed(tmp_path, monkeypatch):
     """Every cycle reads the whole account history (orders and fills, twice for stability). With history placed at the
     venue by someone else (filled manual orders: external, no cash held), requests per cycle grow with history; past
-    the request budget the read is not COMPLETE, the controller disarms and a queued signal is not sent."""
-    sizes = [0, 600, 1200] + ([1500, 1600, 1700, 1800, 2000] if cs.full_scale() else [1700])
+    the request budget the read is not COMPLETE, the controller disarms and a queued signal is not sent.
+
+    Each manual order ticks the fake venue's clock, so our clock keeps pace with the placements (`Rig.keep_pace`):
+    otherwise the venue's stamps would run minutes ahead and the read would be refused as stamped in the future
+    (RECORD_STAMPED_IN_FUTURE, #178) long before the budget is reached. Every row below the ceiling must be COMPLETE,
+    and the row at the ceiling must fail on the request budget, nothing else."""
+    sizes = [0, 600, 1200] + ([1500, 1600, 1700, 1800, 2000] if cs.full_scale() else [1500, 1600])
     rows = []
+    probe = cs.ReadProbe(monkeypatch)
     rig = cs.Rig(tmp_path)
     rig.warm()
     rig.adapter.venue.cash += Decimal(max(sizes))  # someone else's purchases are paid from the same account
@@ -377,18 +388,29 @@ def test_the_account_read_ceiling_fails_closed(tmp_path):
         while placed < size:
             placed += 1
             rig.adapter.place_manual(t, m.Side.YES, "0.45", "1", n=placed)
+        rig.keep_pace()  # those placements took that long: the venue does not lead our clock
         sent = len(rig.adapter.creates)
         rig.orch.submit_signal(h.signal(f"probe{size}", h.MARKETS[0], at=rig.clock(), limit="0.46", qty="1"))
         start = time.perf_counter()
         report = rig.step()
+        read = probe.reads[-1]
         rows.append({"history_orders": size + len(rig.adapter.creates), "requests": report.requests_used,
-                     "reconciliation": report.reconciliation, "sent": len(rig.adapter.creates) - sent,
-                     "decisions": [d.outcome.value for d in report.decisions],
+                     "reconciliation": report.reconciliation, "codes": read["codes"], "venue_lead_s": read["lead"],
+                     "incidents": [i.split(":")[0] for i in report.incidents],
+                     "sent": len(rig.adapter.creates) - sent, "decisions": [d.outcome.value for d in report.decisions],
                      "cycle_ms": round((time.perf_counter() - start) * 1000)})
+        assert "RECORD_STAMPED_IN_FUTURE" not in read["codes"], rows
         if report.reconciliation != "COMPLETE":  # disarmed before step 4: no decision was even made
             assert report.mode_at_end is ctl.Mode.DISARMED and report.decisions == () and rows[-1]["sent"] == 0, rows
-            assert report.requests_used <= h.BOUNDS.max_requests_per_cycle
+            # It ran out of budget, and for that reason only: every request was used, the orchestrator raised its
+            # budget incident (a stream ended REQUEST_BUDGET_EXHAUSTED), and every problem of the read is a request
+            # that no longer fit (which ones depends on where the budget ran out), never a clock or data problem.
+            assert report.requests_used == h.BOUNDS.max_requests_per_cycle, rows
+            assert any(i.startswith("budget:") for i in report.incidents), rows
+            assert read["codes"] and set(read["codes"]) <= BUDGET_CODES, rows
             break
+        assert read["codes"] == [], rows
     assert rows[-1]["reconciliation"] != "COMPLETE", rows  # the ceiling was reached and failed closed
+    assert all(r["reconciliation"] == "COMPLETE" for r in rows[:-1]), rows
     _emit("read_ceiling", {"page_limit": 100, "max_pages": 20,
                            "max_requests_per_cycle": h.BOUNDS.max_requests_per_cycle, "rows": rows})

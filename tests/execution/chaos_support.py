@@ -673,6 +673,22 @@ class Rig:
         self.clock.advance(advance)
         return report
 
+    def venue_ahead(self) -> float:
+        """Seconds the fake venue's clock runs ahead of where it should be (its true time minus `venue_lag`). The fake
+        ticks one second per action and `sync` never moves it back, so a burst of venue actions within one instant
+        of our clock (liquidity, manual orders) pushes its stamps ahead of the clocks the scenario declares."""
+        target = self.adapter.true_now() - timedelta(seconds=self.adapter.venue_lag)
+        return (self.adapter.venue_now() - target).total_seconds()
+
+    def keep_pace(self) -> float:
+        """Let our clock (and the venue's true time with it) catch up with the venue's ticks: those actions took that
+        long. Afterwards the venue stamps lead our clock by exactly the declared skew minus lag. Returns the seconds
+        advanced."""
+        ahead = self.venue_ahead()
+        if ahead > 0:
+            self.clock.advance(ahead)
+        return max(ahead, 0.0)
+
     def jump(self, seconds: float) -> None:
         """Our clock jumps; the venue's true time does not."""
         self.clock.advance(seconds)
@@ -762,6 +778,34 @@ class Timings:
 
 def journal_bytes(path: Path) -> int:
     return sum(p.stat().st_size for p in (path, Path(str(path) + "-wal")) if p.exists())
+
+
+class ReadProbe:
+    """Records every account read the orchestrator makes (it calls `account.reconcile_account` through the module, so
+    the test patches that attribute): status, requests, problem codes, and the venue lead, the latest order or fill
+    stamp the read returned minus the read's end on our clock (positive: the venue's stamps ran ahead of us)."""
+
+    def __init__(self, monkeypatch):
+        from edge_lab.execution import account as acct
+        self.reads: list[dict] = []
+        real = acct.reconcile_account
+
+        def probed(*args, **kwargs):
+            recon = real(*args, **kwargs)
+            man = recon.manifest
+            lead = None if man.latest_record_at is None else (man.latest_record_at - man.finished_at).total_seconds()
+            self.reads.append({"status": recon.status.value, "requests": man.requests, "lead": lead,
+                               "codes": sorted({p.split(":")[0] for p in recon.problems})})
+            return recon
+
+        monkeypatch.setattr(acct, "reconcile_account", probed)
+
+    def max_lead(self) -> float | None:
+        leads = [r["lead"] for r in self.reads if r["lead"] is not None]
+        return max(leads) if leads else None
+
+    def flagged(self, code: str) -> list[dict]:
+        return [r for r in self.reads if code in r["codes"]]
 
 
 def max_seq(journal: ExecutionJournal) -> int:

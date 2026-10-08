@@ -16,6 +16,7 @@ file and are regression tests there now.
 
 from __future__ import annotations
 
+import os
 import random
 import sqlite3
 from collections import Counter
@@ -565,25 +566,51 @@ def test_p3_fills_just_before_a_read_are_counted_once(tmp_path, as_of_lag, skew)
     assert rig.journal.reservations.reservation(d.attempt_id).filled_quantity == 6
 
 
-# Workload seeds whose 25 cycles put a fill inside the window (measured on 1065c25: 15 of seeds 1-25 do; the other ten
-# never fill within 2 s before a read). The default runs three of them, and one seed that never reaches the window.
-P3_SEEDS = [2, 3, 6, 9, 11, 13, 15, 16, 17, 19, 20, 21, 22, 23, 24][:cs.knob("CHAOS_SEEDS", 3, 15)] + [1]
+# The slow-clock regression. Our clock trails the venue's true time by SLOW_SKEW and the venue stamps trail that by
+# SLOW_LAG, so its stamps lead our clock by 3 s: past lifecycle.TIMESTAMP_SKEW (2 s), inside account.CLOCK_SKEW
+# (5 s). Fills from liquidity crossing our resting orders just before a read are then stamped more than 2 s after the
+# read start, the window where the one-sided label of P-3 counted them twice. Our clock keeps pace with each piece of
+# liquidity (`Rig.keep_pace` after every add), so every crossing fill lands in that window, the lead stays at 3 s (4 s
+# with one fake-venue tick inside a read) and no read is refused as stamped in the future.
+SLOW_SKEW, SLOW_LAG, SLOW_LEAD = 4.0, 1.0, 3.0
+TICK = 1.0  # one fake-venue tick (an expiry during the read) may land inside a read: the bound is SLOW_LEAD + TICK
+# Measured on 8837311 with only the two-sided label reverted (#178's future-stamp check kept): seeds 2, 11, 13 and 24
+# of 1-25 put a partial fill of a resting order inside the window before a read and fail; the other 21 never do, so
+# they check the clock-lead bounds and the invariants only. The default runs three of the four that catch a revert.
+SLOW_LABEL_SEEDS = [2, 11, 13, 24]
+SLOW_SEEDS = SLOW_LABEL_SEEDS[:3] if not cs.full_scale() and not os.environ.get("EDGE_LAB_CHAOS_SEEDS") else list(
+    range(1, cs.knob("CHAOS_SEEDS", 3, 25) + 1))
 
 
-@pytest.mark.parametrize("seed", P3_SEEDS)
-def test_p3_a_seeded_workload_with_a_slow_clock_never_records_more_fills_than_the_venue(tmp_path, seed):
-    """P-3 (fixed by #178): the seeded workload with our clock 4 s behind the venue's (inside account.py's 5 s
-    CLOCK_SKEW) and the venue's stamps only 0.5 s behind its true time, so fills from liquidity that arrives just before
-    a read are stamped after our read start (lag below skew - 2 s). The venue then leads our clock by about 3.5 s plus
-    its 1 s ticks, under the 5 s past the read end at which #178 refuses a record as stamped in the future."""
-    rig = cs.Rig(tmp_path, venue_lag=0.5)
-    rig.adapter.skew, rig.adapter.as_of_lag = 4.0, 0.0
+def slow_clock_run(tmp_path, seed: int, cycles: int = 25) -> cs.Rig:
+    rig = cs.Rig(tmp_path, venue_lag=SLOW_LAG)
+    rig.adapter.skew, rig.adapter.as_of_lag = SLOW_SKEW, 0.0
     rig.warm()
+    real = rig.adapter.venue.add_liquidity
+
+    def paced(*args, **kwargs):  # each piece of liquidity takes its tick of time: our clock keeps pace with it
+        out = real(*args, **kwargs)
+        rig.keep_pace()
+        return out
+
+    rig.adapter.venue.add_liquidity = paced
     workload = cs.Workload(seed)
-    sent = 0
-    for _ in range(25):
+    for _ in range(cycles):
         rig.adapter.sync()  # the venue's clock is current when the cycle's liquidity arrives
-        report = rig.step(workload, n=2)
-        sent += len(submitted(report))
-    assert sent > 0
+        workload.stimulate(len(rig.reports) + 1, rig.orch, rig.adapter, rig.clock, 2)
+        rig.step()
+    return rig
+
+
+@pytest.mark.parametrize("seed", SLOW_SEEDS)
+def test_p3_a_seeded_workload_with_a_slow_clock_never_records_more_fills_than_the_venue(tmp_path, monkeypatch, seed):
+    """P-3 (fixed by #178), under the seeded workload with our clock 3 s behind the venue's stamps. Every read is
+    COMPLETE, none is refused as stamped in the future, the venue lead never passes 4 s, the journal never records
+    more fills than the venue (invariant 3, every step), and the account settles with fills equal to the venue's."""
+    probe = cs.ReadProbe(monkeypatch)
+    rig = slow_clock_run(tmp_path, seed)
     rig.settle(8)
+    assert probe.reads and all(r["status"] == "COMPLETE" for r in probe.reads), probe.reads
+    assert not probe.flagged("RECORD_STAMPED_IN_FUTURE")
+    assert probe.max_lead() <= SLOW_LEAD + TICK + 1e-9, probe.max_lead()  # 1 s under CLOCK_SKEW
+    print(seed, {"reads": len(probe.reads), "max_lead_s": probe.max_lead(), "orders": len(rig.adapter.creates)})

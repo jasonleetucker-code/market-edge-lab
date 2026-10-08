@@ -14,7 +14,7 @@ gate, account reads, and the real transport with a fixture signer and rate budge
 |---|---|---|
 | `python -m pytest tests/execution/test_chaos.py tests/execution/test_chaos_kill.py tests/execution/test_load.py` | the default (small) suite, part of normal CI | about 50 s (`tests/execution` + `tests/invariants` on 1065c25: 85 s in all) |
 | `EDGE_LAB_CHAOS_SCALE=full python -m pytest tests/execution/test_load.py -s` | 2,000-cycle latency pass, 500-cycle memory pass, full read-ceiling sweep | about 25 min (latency pass about 13 min, the rest 12 min) |
-| `EDGE_LAB_CHAOS_SCALE=full python -m pytest tests/execution/test_chaos.py tests/execution/test_chaos_kill.py` | 25 seeds per seeded chaos test, every commit point of the disk-full sweep, 60 + 30 + 30 kill seeds | about 6 min (346 s: 292 passed, on 8837311) |
+| `EDGE_LAB_CHAOS_SCALE=full python -m pytest tests/execution/test_chaos.py tests/execution/test_chaos_kill.py` | 25 seeds per seeded chaos test, every commit point of the disk-full sweep, 60 + 30 + 30 kill seeds | about 10 min (579 s: 301 passed, on 8837311) |
 
 Knobs (each an integer environment variable; `EDGE_LAB_CHAOS_SCALE=full` sets them all to the full value):
 
@@ -135,15 +135,20 @@ write reserve. After refill, the unsent order is resolved ABSENT.
 ### Read ceiling
 
 Every cycle reads the whole account history (orders and fills, twice for stability). History placed at the venue as
-filled manual orders (one fill each), plus our probe order:
+filled manual orders (one fill each), plus our probe order. Re-measured on 8837311 (#178), with our clock keeping pace
+with the placements: each manual order ticks the fake venue's clock, and without that the venue's stamps run minutes
+ahead and #178 refuses the read as stamped in the future long before the budget is reached (at 601 orders, which is
+how the test passed vacuously on f5f6aec). The test now asserts every row below the ceiling COMPLETE with no problem,
+and the ceiling row failing on the request budget only (all 80 requests used, the budget incident raised, and only
+requests that did not fit among the read's problems).
 
 | History (orders, each with one fill) | Requests | Reconciliation | Cycle |
 |---|---|---|---|
-| 1 | 18 | COMPLETE | 27 ms |
-| 601 | 41 | COMPLETE | 111 ms |
-| 1,201 | 65 | COMPLETE | 237 ms |
-| 1,501 | 77 | COMPLETE | 317 ms |
-| 1,601 | 80 (budget) | PARTIAL: DISARMED before any decision, nothing sent | 382 ms |
+| 1 | 18 | COMPLETE | 50 ms |
+| 601 | 41 | COMPLETE | 174 ms |
+| 1,201 | 65 | COMPLETE | 413 ms |
+| 1,501 | 77 | COMPLETE | 521 ms |
+| 1,601 | 80 (budget) | PARTIAL (CUTOFF_UNAVAILABLE: the closing cutoff read no longer fit; budget incident): DISARMED before any decision, nothing sent | 691 ms |
 
 ## Chaos coverage
 
@@ -208,15 +213,16 @@ raising-send scenarios and the short venue lag were added, each mutation was re-
 | Mutation | Tests failing | Caught by |
 |---|---|---|
 | a crossed or unreadable ack is recorded as REJECTED | 1 (`receipts[crossed_with_id]`) | invariant 8: a REJECTED attempt whose order the venue holds |
-| reservations are never released | 47 (every scenario that settles) | invariant 10: BOUND reservations whose venue orders are executed or canceled |
+| reservations are never released | 51 (every scenario that settles) | invariant 10: BOUND reservations whose venue orders are executed or canceled |
 | the create is retried once when `send` raises | 5 (both raising-send tests, all 3 seeds of the raising mix) | invariant 2 (one client id created twice) and invariant 8, plus the scripted OUTCOME_UNKNOWN assert |
 | an unknown create outcome is recorded as REJECTED with a made-up receipt | 16 (7 HTTP write failures, 3 HTTP mixes, 2 raising sends, 3 raising mixes, rate budget) | invariant 8 (the venue holds the "rejected" order) and the scripted asserts |
+| #178's two-sided label reverted (`as_of_upper = None`), future-stamp check kept | 5 (both near-read P-3 tests, slow-clock seeds 2, 11, 13) | invariant 3 (the journal records more fills than the venue) |
+| #178's future-stamp check turned off (`RECORD_STAMPED_IN_FUTURE` never raised) | 0 | not caught by the P suite: no P scenario lets the venue lead our clock by more than 5 s while its user-data timestamp lags. #178's own tests (`tests/execution/test_fill_label.py`) cover it |
 
-Counts are from the head that fixed the raising mix's draw (each write now draws afresh; before, every write after a
-raise_before repeated the same draw, so a seed could raise before the venue on every write). The release-guard
-mutations (removing the "snapshot strictly after" rule in `reservations` or `orchestrator`) are not caught; see Limits.
-
-All four now fail the suite; the tree was restored (no src change on the branch).
+Re-run on the head after the slow-clock and read-ceiling fixes, default suite, each mutation in a scratch copy of the
+tree (never in the branch). The first five fail the suite; the sixth is a recorded coverage gap. The release-guard
+mutations (removing the "snapshot strictly after" rule in `reservations` or `orchestrator`) are not caught either; see
+Limits.
 
 ## Bugs found
 
@@ -253,14 +259,36 @@ or two cycles, but invariant 3 is broken in between. The harness hid it because 
 minutes. #178 labels the count with both ends of the read. Regressions: `test_p3_fills_just_before_a_read_are_counted_once`
 (both triggers; the rest of the order then fills and the account settles with fills equal to the venue's) and the seeded
 `test_p3_a_seeded_workload_with_a_slow_clock_never_records_more_fills_than_the_venue` (our clock 4 s slow, venue lag
-0.5 s, 25 cycles, then settle). 15 of workload seeds 1-25 put a fill inside the window and tripped it before #178;
-those 15 (3 by default) plus seed 1, which never reaches the window, are its parametrization.
+1 s, so the venue's stamps lead ours by 3 s; 25 cycles, then settle). Our clock keeps pace with every piece of
+liquidity, so the lead stays at 3 s (4 s when one fake-venue tick lands inside a read); the test asserts every read
+COMPLETE, none flagged RECORD_STAMPED_IN_FUTURE and the lead at most 4 s. With only the two-sided label reverted
+(#178's future-stamp check kept), seeds 2, 11, 13 and 24 of 1-25 fail: they put a partial fill of a resting order in
+the window. The other 21 never do and check the clock bounds and invariants only. The default runs seeds 2, 11 and 13;
+full scale runs 1-25. The two near-read tests catch a label revert deterministically.
+
+| Seed | Max venue lead (s) | Seed | Max venue lead (s) | Seed | Max venue lead (s) |
+|---|---|---|---|---|---|
+| 1 | 2.0 | 10 | 3.0 | 19 | 1.0 |
+| 2 | 3.0 | 11 | 3.0 | 20 | 1.0 |
+| 3 | 1.0 | 12 | 2.0 | 21 | 2.0 |
+| 4 | 2.0 | 13 | 3.0 | 22 | 3.0 |
+| 5 | 1.0 | 14 | 0.0 | 23 | 2.0 |
+| 6 | 4.0 | 15 | 2.0 | 24 | 3.0 |
+| 7 | 1.0 | 16 | 1.0 | 25 | 3.0 |
+| 8 | 2.0 | 17 | 4.0 | | |
+| 9 | 4.0 | 18 | -55.0 (no recent record) | | |
+
+The lead is the latest order or fill stamp a read returned minus the read's end on our clock (`chaos_support.ReadProbe`),
+the quantity #178 compares with `CLOCK_SKEW`. It never reaches 5 s, so no read of this test is refused.
 
 #178 also refuses a record stamped more than `CLOCK_SKEW` (5 s) past the read's end (`RECORD_STAMPED_IN_FUTURE`: the
-read is PARTIAL and the controller disarms). The fake venue ticks 1 s per action, so a scenario whose venue clock leads
-ours by about 5 s or more now disarms by design. None of the chaos scenarios does: the slow-clock regression leads by
-about 3.5 s plus ticks, every other scenario keeps the venue behind our clock, and the full-scale chaos run on 8837311
-needed no change besides the xfail conversion.
+read is PARTIAL and the controller disarms). The fake venue ticks 1 s per action and `sync` never moves it back, so
+ticks accumulate within one instant of our clock. A correction to f5f6aec's claim that no chaos scenario reaches that:
+the slow-clock regression as first converted (venue lag 0.5 s, no pacing) led by up to 9 s, and 20 of seeds 1-25 had
+reads refused (32 reads, measured by the f5f6aec review); ten of its fifteen seeds were testing the future-stamp check,
+not the label. It now paces our clock (above). The read-ceiling test hit the same check through its manual
+placements and also paces. Every other scenario keeps the venue's stamps behind our clock (a 3 s or 10 min lag with
+at most 3 s of skew), or is a clock jump the test expects to fail closed.
 
 ## Other findings (not bugs; for the owner and later packages)
 
