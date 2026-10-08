@@ -10,8 +10,8 @@ DISARMED after any incident until it is rearmed, and nothing is prepared unless 
 Seeds are recorded in the parametrization. No statistical claim is made from these fixtures. Scale with
 EDGE_LAB_CHAOS_SCALE=full (or EDGE_LAB_CHAOS_SEEDS / EDGE_LAB_DISK_POINTS); see docs/execution/PERFORMANCE.md.
 
-Bugs found are `xfail(strict=True)` tests at the end of this file, each with its reason; P-1 and P-2, fixed by
-#177, are regressions there now.
+The three bugs this suite found (P-1 and P-2, fixed by #177; P-3, fixed by #178) were strict xfails at the end of this
+file and are regression tests there now.
 """
 
 from __future__ import annotations
@@ -481,17 +481,9 @@ def test_a_read_that_overruns_the_deadline_disarms_and_sends_nothing(tmp_path):
 # ---------------------------------------------------------------------------------------------- regressions and bugs
 
 
-BUG_P3 = ("BUG P-3: fills that execute shortly before an account read are counted twice when the venue's user-data "
-          "timestamp lags (here 20 s; account.py accepts up to max_data_lag = 1 min) or our clock trails the venue's "
-          "by more than lifecycle.TIMESTAMP_SKEW (2 s; account.py tolerates CLOCK_SKEW = 5 s). "
-          "Orchestrator._fold_order labels the listing's cumulative fill count with snapshot.observed_at = min(read "
-          "start, user-data as_of), earlier than the moment the listing was read, so the lifecycle adds fills stamped "
-          "after that label on top of a count that already includes them, and record_fill writes more fills than the "
-          "venue has. It fails closed one or two cycles later (an attribution mismatch, then a lifecycle quarantine).")
-
-
-# P-1 and P-2 were found here as strict xfails and fixed by #177 (lease-first boot, per-write lease fencing). They now
-# run as regressions; docs/execution/PERFORMANCE.md keeps their history.
+# P-1, P-2 and P-3 were found here as strict xfails. P-1 and P-2 were fixed by #177 (lease-first boot, per-write lease
+# fencing) and P-3 by #178 (a two-sided time label on the venue's fill counts). They now run as regressions;
+# docs/execution/PERFORMANCE.md keeps their history.
 
 
 def test_p1_a_refused_second_start_writes_nothing_and_the_live_worker_carries_on(tmp_path):
@@ -551,39 +543,47 @@ def test_p2_a_worker_fenced_out_mid_send_writes_nothing_after_the_takeover(tmp_p
     rig.close()
 
 
-@pytest.mark.xfail(strict=True, raises=cs.InvariantViolation, reason=BUG_P3)
 @pytest.mark.parametrize("as_of_lag,skew", [(20.0, 0.0), (0.0, 4.0)], ids=["user-data-lags-20s",
                                                                             "our-clock-4s-slow"])
-def test_bug_the_journal_never_records_more_fills_than_the_venue_near_a_read(tmp_path, as_of_lag, skew):
+def test_p3_fills_just_before_a_read_are_counted_once(tmp_path, as_of_lag, skew):
+    """P-3 (fixed by #178): 3 of our 6 fill a few seconds before a read while the venue's user-data timestamp lags 20 s,
+    or while our clock is 4 s slow. The journal records exactly the venue's fills (invariant 3 on every step), and once
+    the rest fill and the account settles, fills and releases agree with the venue (invariants 9 and 10)."""
     clock = h.Clock()
     adapter = cs.ChaosAdapter(clock, journal_path=str(tmp_path / "p.execution.sqlite3"), venue_lag=5.0 - skew,
                               as_of_lag=as_of_lag, skew=skew)
     cs.seed_books(adapter, h.MARKETS)
     rig = cs.Rig(tmp_path, adapter=adapter, clock=clock)
     rig.warm()
-    rest_order(rig)
+    d = rest_order(rig)
     rig.step()
     cross(rig)  # 3 of our 6 fill a few seconds before the next read
-    rig.step()  # check_invariants: INV3 (the journal records 6 filled, the venue 3)
+    rig.step()
+    assert rig.journal.reservations.reservation(d.attempt_id).filled_quantity == 3
+    cross(rig)  # the other 3, again just before a read
+    rig.settle(6)
+    assert rig.journal.reservations.reservation(d.attempt_id).filled_quantity == 6
 
 
-# Workload seeds whose 25 cycles put a fill inside the window (measured on 1065c25: 15 of seeds 1-25 do; the other
-# ten never fill within 2 s before a read, so they cannot show the bug and would XPASS). The default runs three.
-P3_SEEDS = [2, 3, 6, 9, 11, 13, 15, 16, 17, 19, 20, 21, 22, 23, 24][:cs.knob("CHAOS_SEEDS", 3, 15)]
+# Workload seeds whose 25 cycles put a fill inside the window (measured on 1065c25: 15 of seeds 1-25 do; the other ten
+# never fill within 2 s before a read). The default runs three of them, and one seed that never reaches the window.
+P3_SEEDS = [2, 3, 6, 9, 11, 13, 15, 16, 17, 19, 20, 21, 22, 23, 24][:cs.knob("CHAOS_SEEDS", 3, 15)] + [1]
 
 
-@pytest.mark.xfail(strict=True, raises=cs.InvariantViolation, reason=BUG_P3)
 @pytest.mark.parametrize("seed", P3_SEEDS)
-def test_bug_a_seeded_workload_with_a_slow_clock_never_records_more_fills_than_the_venue(tmp_path, seed):
-    """The seeded workload with our clock 4 s behind the venue's (inside account.py's 5 s CLOCK_SKEW) and the venue's
-    stamps only 0.5 s behind its true time, so fills from liquidity that arrives just before a read are stamped after
-    our read start (lag below skew - 2 s). The P-3 fix must make this pass for every seed."""
+def test_p3_a_seeded_workload_with_a_slow_clock_never_records_more_fills_than_the_venue(tmp_path, seed):
+    """P-3 (fixed by #178): the seeded workload with our clock 4 s behind the venue's (inside account.py's 5 s
+    CLOCK_SKEW) and the venue's stamps only 0.5 s behind its true time, so fills from liquidity that arrives just before
+    a read are stamped after our read start (lag below skew - 2 s). The venue then leads our clock by about 3.5 s plus
+    its 1 s ticks, under the 5 s past the read end at which #178 refuses a record as stamped in the future."""
     rig = cs.Rig(tmp_path, venue_lag=0.5)
     rig.adapter.skew, rig.adapter.as_of_lag = 4.0, 0.0
     rig.warm()
     workload = cs.Workload(seed)
+    sent = 0
     for _ in range(25):
         rig.adapter.sync()  # the venue's clock is current when the cycle's liquidity arrives
-        rig.step(workload, n=2)
+        report = rig.step(workload, n=2)
+        sent += len(submitted(report))
+    assert sent > 0
     rig.settle(8)
-

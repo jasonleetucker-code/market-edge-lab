@@ -14,7 +14,7 @@ gate, account reads, and the real transport with a fixture signer and rate budge
 |---|---|---|
 | `python -m pytest tests/execution/test_chaos.py tests/execution/test_chaos_kill.py tests/execution/test_load.py` | the default (small) suite, part of normal CI | about 50 s (`tests/execution` + `tests/invariants` on 1065c25: 85 s in all) |
 | `EDGE_LAB_CHAOS_SCALE=full python -m pytest tests/execution/test_load.py -s` | 2,000-cycle latency pass, 500-cycle memory pass, full read-ceiling sweep | about 25 min (latency pass about 13 min, the rest 12 min) |
-| `EDGE_LAB_CHAOS_SCALE=full python -m pytest tests/execution/test_chaos.py tests/execution/test_chaos_kill.py` | 25 seeds per seeded chaos test, every commit point of the disk-full sweep, 60 + 30 + 30 kill seeds | about 7 min (407 s: 274 passed, 17 xfailed) |
+| `EDGE_LAB_CHAOS_SCALE=full python -m pytest tests/execution/test_chaos.py tests/execution/test_chaos_kill.py` | 25 seeds per seeded chaos test, every commit point of the disk-full sweep, 60 + 30 + 30 kill seeds | about 6 min (346 s: 292 passed, on 8837311) |
 
 Knobs (each an integer environment variable; `EDGE_LAB_CHAOS_SCALE=full` sets them all to the full value):
 
@@ -163,9 +163,8 @@ Every scenario asserts the global invariants after every step (`chaos_support.ch
 8. no REJECTED or ABSENT attempt has a venue order with its client id (the venue is asked, not the journal).
 
 And when a scenario lets the account go quiet (`Rig.settle`), read from the venue independently of what the journal
-concluded. Every chaos and kill scenario ends with `settle`, except the P-3 reproductions (which stop at the first
-violation) and the read-ceiling, burst and latency tests in `test_load.py`; the rate-budget test settles after its
-restart:
+concluded. Every chaos and kill scenario ends with `settle`, except the read-ceiling, burst and latency tests in
+`test_load.py`; the rate-budget test settles after its restart:
 
 9. every reservation's filled quantity equals the venue's fill count for its order (0 when there is none);
 10. no reservation is still held once its venue order is over or never existed (a quarantine, which is held and needs
@@ -176,7 +175,7 @@ the checks that do not rely on the journal's own conclusions. The seeded scenari
 mix, raising sends, receipts, lease races, disk full, process kills) run with a venue clock only 3 s behind the true
 time (`chaos_support.SHORT_LAG`), not the harness's 10 minutes, so stamps and reads are seconds apart rather than
 minutes. They cannot trip P-3 by construction: with a 3 s lag and jitter of at most 3 s, no venue stamp lands after our
-read start. P-3 needs the lag below our clock's deficit minus 2 s; the seeded P-3 scenario below uses exactly that.
+read start. P-3 needed the lag below our clock's deficit minus 2 s; the seeded P-3 regression below uses exactly that.
 
 | Fault | Test | Expected and observed |
 |---|---|---|
@@ -186,7 +185,7 @@ read start. P-3 needs the lag below our clock's deficit minus 2 s; the seeded P-
 | Journal locked at a seeded request mid-cycle | `test_a_journal_locked_mid_cycle_loses_nothing` | `JournalBusy`; an order already sent becomes unknown and is reconciled, never re-sent |
 | Process kill (`os._exit`) at a uniformly drawn commit or send point; restart | `test_chaos_kill.py` | restart is DISARMED; the store satisfies every invariant before the first cycle; every attempt is reconciled; 60 + 30 + 30 seeds at full scale |
 | Our clock jumps back 1 h / 30 s, forward 10 min / 2 days | `test_a_jumping_clock_fails_closed_and_recovers_after_it_is_fixed` | the venue's user-data timestamp disagrees, reconciliation is not COMPLETE, the controller disarms and nothing is sent; re-armed once the clock is right |
-| Clock jitter of up to 3 s each way every cycle | `test_clock_jitter_within_tolerance_keeps_every_invariant` | normal operation (but see P-3) |
+| Clock jitter of up to 3 s each way every cycle | `test_clock_jitter_within_tolerance_keeps_every_invariant` | normal operation |
 | HTTP 429, 5xx before/after the venue acted, timeouts before/after, malformed 2xx, 409, through the real transport | `test_every_http_write_failure_is_unknown_never_retried_and_reconciled` | each create is OUTCOME_UNKNOWN, sent once, and resolved ABSENT when the venue never acted, ACKNOWLEDGED when it did |
 | Seeded mixes of every write fault and read faults (429, 503, timeouts, malformed pages) | `test_a_seeded_mix_of_http_errors_holds_every_invariant` | invariants hold; every attempt reconciled once the network heals |
 | `send` itself raises, before anything left or after the venue acted (the real transport never raises, so this is the orchestrator's own SEND_RAISED path) | `test_a_send_that_raises_is_unknown_never_retried_and_reconciled`, `test_a_seeded_mix_of_raising_sends_holds_every_invariant` | OUTCOME_UNKNOWN, sent once, resolved ABSENT (before) or ACKNOWLEDGED (after). In the mix each write draws whether it raises (35%) and raising writes alternate before / after; over 30 cycles, seeds 1-25 drew 17-24 writes each, with 2-7 raises before and 2-6 after, and 14-22 creates still reached the venue; the test asserts both kinds and continued flow, then settles |
@@ -222,9 +221,9 @@ All four now fail the suite; the tree was restored (no src change on the branch)
 ## Bugs found
 
 All three were found as `xfail(strict=True)` tests in `tests/execution/test_chaos.py`. No source file was changed by
-package P. **P-1 and P-2 are fixed by #177** (package J, merged as 1065c25: lease-first boot and per-write lease
-fencing). Both XPASSed there and are now ordinary regression tests. **P-3 is open** and stays a strict xfail (reason in
-`BUG_P3`).
+package P. **All three are fixed:** P-1 and P-2 by #177 (package J, merged as 1065c25: lease-first boot and per-write
+lease fencing), P-3 by #178 (merged as 8837311: a two-sided time label on the venue's fill counts, and venue clock-lead
+detection). Every one XPASSed on its fix and is now an ordinary regression test.
 
 **P-1 (fixed by #177). A refused second start rewrote the live worker's control log.** `Orchestrator.__init__` persists `Started`
 (`control.boot`) before `acquire_lease`, which then raises `LeaseHeld` because another worker holds the lease. The
@@ -242,7 +241,7 @@ every write. Regression: `test_p2_a_worker_fenced_out_mid_send_writes_nothing_af
 takeover, later cycles raise `OrchestratorFencedOut`, the new holder reconciles the in-flight order without re-sending
 it, arms and sends).
 
-**P-3 (open). Fills just before a read can be counted twice.** `Orchestrator._fold_order` labels the listing's cumulative
+**P-3 (fixed by #178). Fills just before a read were counted twice.** `Orchestrator._fold_order` labels the listing's cumulative
 fill count with `snapshot.observed_at_utc` = min(read start, the venue's user-data `as_of`). That time is earlier
 than the moment the listing was read. The lifecycle adds fills stamped more than `TIMESTAMP_SKEW` (2 s) after the
 label on top of the count, but the count already includes them, so `record_fill` writes more fills than the venue
@@ -250,12 +249,18 @@ has. It triggers when the venue's user-data timestamp lags by more than 2 s (`ac
 `max_data_lag` = 1 min) or our clock trails the venue's by 2 to 5 s (`account.py` tolerates `CLOCK_SKEW` = 5 s).
 Observed: the journal records 6 filled for a venue fill of 3; the reservation goes BOUND while the order still rests;
 the next read is not COMPLETE (attribution mismatch) and a lifecycle quarantine follows, so it fails closed within one
-or two cycles, but invariant 3 is broken in between. Test:
-`test_bug_the_journal_never_records_more_fills_than_the_venue_near_a_read` (both triggers), and the seeded workload
-`test_bug_a_seeded_workload_with_a_slow_clock_never_records_more_fills_than_the_venue` (our clock 4 s slow, venue lag
-0.5 s): 15 of workload seeds 1-25 put a fill inside the window within 25 cycles and trip it; those 15 are its
-parametrization (3 by default), so the P-3 fix flips all of them. The harness hides it because its venue stamps trail
-our clock by 10 minutes.
+or two cycles, but invariant 3 is broken in between. The harness hid it because its venue stamps trail our clock by 10
+minutes. #178 labels the count with both ends of the read. Regressions: `test_p3_fills_just_before_a_read_are_counted_once`
+(both triggers; the rest of the order then fills and the account settles with fills equal to the venue's) and the seeded
+`test_p3_a_seeded_workload_with_a_slow_clock_never_records_more_fills_than_the_venue` (our clock 4 s slow, venue lag
+0.5 s, 25 cycles, then settle). 15 of workload seeds 1-25 put a fill inside the window and tripped it before #178;
+those 15 (3 by default) plus seed 1, which never reaches the window, are its parametrization.
+
+#178 also refuses a record stamped more than `CLOCK_SKEW` (5 s) past the read's end (`RECORD_STAMPED_IN_FUTURE`: the
+read is PARTIAL and the controller disarms). The fake venue ticks 1 s per action, so a scenario whose venue clock leads
+ours by about 5 s or more now disarms by design. None of the chaos scenarios does: the slow-clock regression leads by
+about 3.5 s plus ticks, every other scenario keeps the venue behind our clock, and the full-scale chaos run on 8837311
+needed no change besides the xfail conversion.
 
 ## Other findings (not bugs; for the owner and later packages)
 
