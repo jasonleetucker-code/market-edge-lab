@@ -11,6 +11,12 @@ money value or an order quantity.
   directive asks for. None with fewer than two clusters.
 - `benjamini_hochberg`: which of m hypotheses survive at false-discovery rate q. Use it whenever
   several leaders are tested on the same data.
+- `binomial_tail_p`: the 50%-null win-count screen. A small-sample screen, not an alpha test: prices
+  make 0.5 the wrong null for most binary contracts.
+- `price_benchmark_null_p`, `kish_effective_size`, `shrink_toward_zero`: the statistics of the
+  price-relative skill diagnostic (`skill.py`, ADR 0045 amendment C). The null treats each entry
+  price as the benchmark probability, with outcomes inside one event cluster comonotone (maximal
+  positive dependence for the given marginals: the conservative choice for variance).
 """
 
 from __future__ import annotations
@@ -174,3 +180,63 @@ def binomial_tail_p(wins: int, trials: int, p0: float = 0.5) -> float:
     if trials == 0:
         return 1.0
     return math.fsum(math.comb(trials, k) * p0 ** k * (1 - p0) ** (trials - k) for k in range(wins, trials + 1))
+
+
+def price_benchmark_null_p(clusters: Sequence[Sequence[tuple[float, float]]], observed: float, *,
+                           seed: int = BOOTSTRAP_SEED, resamples: int = BOOTSTRAP_RESAMPLES) -> float:
+    """One-sided Monte Carlo p-value of an observed price-relative excess against the entry-price benchmark.
+
+    `clusters` holds, per dependence cluster (an event), the (entry price p, quantity q) of each held-to-
+    resolution binary position. Under the null a contract bought at p pays 1 with probability p, so the
+    excess sum(q * (payout - p)) has mean zero. Within one cluster every position shares one uniform
+    draw (payout = 1 when U < p): comonotone outcomes, the largest variance these marginals allow, so
+    correlated contracts on one event never count as independent evidence. Clusters are independent.
+
+    The result is (1 + #{simulated >= observed}) / (1 + resamples): never 0, deterministic for a seed.
+    It is a screen on one window against a benchmark. It does not prove persistence, and the market
+    price is a benchmark, not the true probability."""
+    if resamples < 1:
+        raise ValueError("resamples must be positive")
+    prepared = []
+    for cluster in clusters:
+        legs = [(float(p), float(q)) for p, q in cluster]
+        for p, q in legs:
+            if not (0.0 < p < 1.0) or not q > 0:
+                raise ValueError("benchmark legs need 0 < price < 1 and a positive quantity")
+        if legs:
+            prepared.append(legs)
+    if not prepared:
+        raise ValueError("no cluster to test")
+    rng = random.Random(seed)
+    tolerance = 1e-9 * max(1.0, abs(observed))
+    hits = 0
+    for _ in range(resamples):
+        total = 0.0
+        for legs in prepared:
+            u = rng.random()
+            total += math.fsum(q * ((1.0 if u < p else 0.0) - p) for p, q in legs)
+        if total >= observed - tolerance:
+            hits += 1
+    return (1 + hits) / (1 + resamples)
+
+
+def kish_effective_size(weights: Sequence[float]) -> float | None:
+    """Kish's effective sample size (sum w)^2 / sum w^2 of cluster weights: n for equal weights, 1 when
+    one cluster carries everything. None with no positive weight."""
+    ws = [float(w) for w in weights]
+    if any(w < 0 for w in ws):
+        raise ValueError("weights must be non-negative")
+    square = math.fsum(w * w for w in ws)
+    if square == 0:
+        return None
+    return math.fsum(ws) ** 2 / square
+
+
+def shrink_toward_zero(value: float, effective_size: float, pseudo_clusters: float) -> float:
+    """`value` x n / (n + k): a precision-weighted pull toward the benchmark (zero excess). With k pseudo
+    clusters of zero excess, a few lucky clusters cannot dominate and a large sample keeps its estimate."""
+    if effective_size < 0 or pseudo_clusters < 0:
+        raise ValueError("effective size and pseudo clusters must be non-negative")
+    if effective_size + pseudo_clusters == 0:
+        return 0.0
+    return value * effective_size / (effective_size + pseudo_clusters)
