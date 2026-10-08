@@ -641,7 +641,8 @@ def test_a_request_subclass_that_lies_about_being_a_read_is_refused(env):
     real = _create(clock)
     liar = LyingRequest(real.endpoint, real.scope, real.path, real.query, real.body, real.exchange_index)
     assert liar.is_write() is False and liar.method is w.HttpMethod.GET  # what a method-trusting guard would see
-    assert w.check_allowlisted(liar) is liar  # the allowlist alone accepts it (an isinstance check)
+    with pytest.raises(ValueError):  # the allowlist refuses it too, since #160 BF2 (exact type, ADR 0043 item 9)
+        w.check_allowlisted(liar)
     inner = Recorder(adapter)
     with pytest.raises(sh.ShadowWriteRefused, match="LyingRequest"):
         sh.ReadOnlySender(inner)(liar)
@@ -657,13 +658,15 @@ def test_a_request_subclass_that_lies_about_being_a_read_is_refused(env):
 
 
 def test_the_sender_s_decision_comes_from_the_endpoint_spec_not_the_request(env, monkeypatch):
-    """With the exact-type check bypassed, the endpoint's own spec (bucket and method) still refuses a write."""
+    """With both exact-type checks bypassed (the sender's and the allowlist's), the endpoint's own spec (bucket and
+    method) still refuses a write."""
     _, adapter, clock = env
     real = _create(clock)
     liar = LyingRequest(real.endpoint, real.scope, real.path, real.query, real.body, real.exchange_index)
     inner = Recorder(adapter)
     sender = sh.ReadOnlySender(inner)
     monkeypatch.setattr(sh, "type", lambda _: w.WireRequest, raising=False)  # the probe: the type check passes
+    monkeypatch.setattr(w, "type", lambda _: w.WireRequest, raising=False)  # and so does check_allowlisted's
     with pytest.raises(sh.ShadowWriteRefused, match="ORDER_CREATE is not a read"):
         sender(liar)
     assert inner.seen == []

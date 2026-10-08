@@ -393,3 +393,18 @@ def test_the_spec_helpers_agree_with_the_genuine_methods():
         assert w.request_is_write(request) is request.is_write()
         assert w.request_full_path(request) == request.full_path
         assert w.request_query_string(request) == request.query_string()
+
+def test_the_read_only_sender_passes_exactly_the_spec_reads():
+    """Package M's `ReadOnlySender` decides through the same spec functions: for every allowlisted endpoint it
+    passes the genuine request iff the spec says READ bucket and GET (the predicate it used before BF2's merge)."""
+    from edge_lab.execution import shadow as sh
+
+    for endpoint, request in every_endpoint().items():
+        seen = []
+        sender = sh.ReadOnlySender(lambda r: seen.append(r) or "sent")
+        if endpoint.value.bucket is w.Bucket.READ and endpoint.value.method is w.HttpMethod.GET:
+            assert sender(request) == "sent" and seen == [request]
+        else:
+            with pytest.raises(sh.ShadowWriteRefused, match=f"{endpoint.name} is not a read"):
+                sender(request)
+            assert seen == []
