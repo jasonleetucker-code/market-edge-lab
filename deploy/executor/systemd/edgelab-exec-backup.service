@@ -3,7 +3,7 @@ Description=Market Edge Lab: verified private backup of the execution journal (n
 Documentation=file:///opt/market-edge-lab-exec/app/docs/execution/runbooks/BACKUP_AND_RESTORE.md
 OnFailure=edgelab-alert@%n.service
 
-# Package O (ADR 0047). Shipped DISABLED and without a timer: a schedule is its own owner approval (the proposed
+# Package O (ADR 0048). Shipped DISABLED and without a timer: a schedule is its own owner approval (the proposed
 # timer is in BACKUP_AND_RESTORE.md). Run by hand only after the install approval.
 #
 # A consistent snapshot through the SQLite online backup API while the executor may be writing, verified by a

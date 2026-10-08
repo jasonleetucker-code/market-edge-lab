@@ -1,4 +1,4 @@
-"""The execution release manifest, the start check and rollback compatibility (#160 package O, ADR 0047). Offline."""
+"""The execution release manifest, the start check and rollback compatibility (#160 package O, ADR 0048). Offline."""
 
 from __future__ import annotations
 
@@ -19,7 +19,7 @@ from edge_lab.execution.model import AUTHORIZED_ENVIRONMENTS
 
 REV, OLD_REV = "a" * 40, "b" * 40
 # The journal schema each version means, pinned. Changing a table, index or trigger without bumping
-# `journal.SCHEMA_VERSION` fails here: a version number never names two schemas (the ledger's package D note; ADR 0047).
+# `journal.SCHEMA_VERSION` fails here: a version number never names two schemas (the ledger's package D note; ADR 0048).
 KNOWN_SCHEMA_FINGERPRINTS = {1: "1c61fcfcbd51fd163db00d9067fcc5caf37bb1906676e3f9d9a23ee1339a69e6"}
 
 

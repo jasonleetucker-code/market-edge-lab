@@ -1,4 +1,4 @@
-"""Operator commands for the executor host: backups, restore drills, health, release checks (#160 package O, ADR 0047).
+"""Operator commands for the executor host: backups, restore drills, health, release checks (#160 package O, ADR 0048).
 
 `python -m edge_lab.execution.ops <command>`. Offline: no command opens a network connection, reads the environment,
 reads a key, arms anything or takes the egress lease. Every path is an explicit argument; the unit files in

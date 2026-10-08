@@ -23,7 +23,7 @@ Unlocks `DEMO_LIFECYCLE_VERIFIED`. Mock funds only.
      account can read it at rest;
    - never in git, `.env`, a chat or any backup bundle. Executor journal backups cannot see that directory.
 
-   Package O (ADR 0047) defined the path and user; the steps are in `docs/execution/runbooks/KEYS.md`. This
+   Package O (ADR 0048) defined the path and user; the steps are in `docs/execution/runbooks/KEYS.md`. This
    supersedes an earlier draft of this step, which had the key file owned by the service user. Before any key is
    installed, the full-history secret scan (`docs/execution/runbooks/SECRET_SCAN.md`) must be clean on the release
    commit. Until then the key is not installed anywhere.

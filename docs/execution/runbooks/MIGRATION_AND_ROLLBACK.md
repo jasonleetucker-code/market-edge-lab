@@ -3,7 +3,7 @@
 **Approval gate:** owner approval of **every executor deploy and every journal migration**, recorded in
 `docs/EXECUTION_PLAN.md`. A migration is its own step, never a side effect of starting new code.
 
-## Rules (ADR 0047)
+## Rules (ADR 0048)
 
 1. **Forward-only.** A journal schema only moves forward. No code ever converts a store back to an older version.
 2. **One version, one schema.** `journal.SCHEMA_VERSION` names exactly one set of tables, indexes and triggers. Its

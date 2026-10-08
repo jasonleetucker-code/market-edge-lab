@@ -1,4 +1,4 @@
-"""Executor health (#160 package O, ADR 0047): liveness and reconciliation health are separate verdicts from disjoint
+"""Executor health (#160 package O, ADR 0048): liveness and reconciliation health are separate verdicts from disjoint
 parts of the real status export. FIXTURE only: the exports come from the real orchestrator against the test
 FakeVenue."""
 

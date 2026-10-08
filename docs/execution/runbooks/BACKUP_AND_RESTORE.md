@@ -10,7 +10,7 @@
 
 ## What a journal backup is
 
-`ops backup` (`edge_lab.execution.journal_backup`, ADR 0047) works like this:
+`ops backup` (`edge_lab.execution.journal_backup`, ADR 0048) works like this:
 1. It refuses before writing anything when:
    - the live journal is missing or is not this code's schema;
    - the backup root is missing or sits beside the journal;

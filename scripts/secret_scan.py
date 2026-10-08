@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Repeatable secret scan: tracked files, the full git history, or artifact files (#160 package O, ADR 0047).
+"""Repeatable secret scan: tracked files, the full git history, or artifact files (#160 package O, ADR 0048).
 
 Run it before any credential is introduced, before publishing a CI artifact, and after any history rewrite:
 

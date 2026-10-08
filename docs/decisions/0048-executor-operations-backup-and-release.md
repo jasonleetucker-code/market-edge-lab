@@ -1,4 +1,4 @@
-# ADR 0047: Executor operations: service identity, private journal backups, release manifest, health and secret scan
+# ADR 0048: Executor operations: service identity, private journal backups, release manifest, health and secret scan
 
 **Status:** Proposed 2026-10-08 (#160, campaign package O). Authority: the 2026-10-07 entries of
 `docs/EXECUTION_PLAN.md`. They authorize the offline execution package (FIXTURE only) and its documentation. Any

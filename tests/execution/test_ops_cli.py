@@ -1,4 +1,4 @@
-"""The operator commands (`python -m edge_lab.execution.ops`, #160 package O, ADR 0047): results, exit codes and
+"""The operator commands (`python -m edge_lab.execution.ops`, #160 package O, ADR 0048): results, exit codes and
 sanitized output. FIXTURE only, offline; every path is under pytest's tmp_path."""
 
 from __future__ import annotations

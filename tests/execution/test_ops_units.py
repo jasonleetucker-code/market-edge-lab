@@ -1,5 +1,5 @@
 """Static checks of the executor's unit files, installer separation, runbook gates and CI artifacts
-(#160 package O, ADR 0047). Nothing here installs, enables or runs anything."""
+(#160 package O, ADR 0048). Nothing here installs, enables or runs anything."""
 
 from __future__ import annotations
 

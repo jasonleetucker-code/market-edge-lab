@@ -1,7 +1,7 @@
 # Executor operations runbooks (#160 package O)
 
-These runbooks cover the isolated Kalshi executor's host operations. The design is in ADR 0047
-(`docs/decisions/0047-executor-operations-backup-and-release.md`). The units are in `deploy/executor/systemd/`.
+These runbooks cover the isolated Kalshi executor's host operations. The design is in ADR 0048
+(`docs/decisions/0048-executor-operations-backup-and-release.md`). The units are in `deploy/executor/systemd/`.
 
 **Nothing here is approved.** Today the repository ships units, scripts and runbooks only.
 - No executor host exists. The service user does not exist, and nothing is installed, enabled or scheduled.

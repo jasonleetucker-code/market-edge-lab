@@ -5,7 +5,7 @@ OnFailure=edgelab-alert@%n.service
 StartLimitIntervalSec=600
 StartLimitBurst=3
 
-# Package O (ADR 0047). Shipped DISABLED: this file lives in the repository only. Nothing installs it: install.sh
+# Package O (ADR 0048). Shipped DISABLED: this file lives in the repository only. Nothing installs it: install.sh
 # copies deploy/vps/systemd/ only, and this unit has no [Install] section, so `systemctl enable` cannot enable it
 # even after a copy. Installing it and starting it are separate owner approvals (docs/execution/runbooks/INSTALL.md,
 # START_DISARMED.md).

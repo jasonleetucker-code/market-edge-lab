@@ -41,7 +41,7 @@ credential, and the registry cannot hold one.
 | `EDGE_LAB_NTFY_TOPIC_URL` | ntfy push topic URL (`https://ntfy.sh/<topic>`); the topic name is effectively a secret (ADR 0022) | owner-approved 2026-09-24; lives only in `/etc/market-edge-lab/secrets.env`, read only by `edgelab-notify` (ADR 0028) |
 | `EDGE_LAB_NTFY_TOKEN` | optional ntfy access token, read only by `notify_ntfy.py` | not created |
 | `EDGE_LAB_RESEARCH_<PROVIDER>_KEY` | read-only research data API keys | not created |
-| `EDGE_LAB_TRADING_<VENUE>_KEY_ID` / `_PRIVATE_KEY_PATH` | execution credentials, execution component only. Superseded by package O (ADR 0047): no environment variable. A key is a root-only file loaded by systemd `LoadCredential=` (`docs/execution/runbooks/KEYS.md`) | not created, not authorized |
+| `EDGE_LAB_TRADING_<VENUE>_KEY_ID` / `_PRIVATE_KEY_PATH` | execution credentials, execution component only. Superseded by package O (ADR 0048): no environment variable. A key is a root-only file loaded by systemd `LoadCredential=` (`docs/execution/runbooks/KEYS.md`) | not created, not authorized |
 
 Private keys are referenced by **file path** outside the repository. Their contents never
 go in environment variables.
@@ -100,7 +100,7 @@ Authority: directive 2026-09-23 section 10 and issue #29, recorded in
 - **If it leaks,** follow "If a secret is committed" below. Rotating the free key at the
   provider is the owner's step.
 
-## Executor keys and the secret scan (package O, ADR 0047)
+## Executor keys and the secret scan (package O, ADR 0048)
 
 - **Keys.** No executor key exists. When one is approved, it lives in `/etc/market-edge-lab-exec/credentials/`
   (`root:root 0600`, in a `0700` directory). It is loaded only into the executor service by systemd

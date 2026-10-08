@@ -1,5 +1,5 @@
 """The execution release manifest: what one installed release pins, and when a store or rollback fits it
-(#160 package O, ADR 0047). Offline; it sends nothing and changes no store.
+(#160 package O, ADR 0048). Offline; it sends nothing and changes no store.
 
 A release manifest is generated from the code at release time (`build_manifest`) and installed beside the code. It
 pins:

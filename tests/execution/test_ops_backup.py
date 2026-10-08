@@ -1,4 +1,4 @@
-"""Private journal backups, restore drills and their failure modes (#160 package O, ADR 0047). FIXTURE only, offline;
+"""Private journal backups, restore drills and their failure modes (#160 package O, ADR 0048). FIXTURE only, offline;
 every journal and backup root lives under pytest's tmp_path.
 
 Covers: identity-preserving backup and restore, a consistent snapshot while a writer is live, restore only to a NEW

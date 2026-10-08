@@ -1,4 +1,4 @@
-"""The repeatable secret scan (`scripts/secret_scan.py`, #160 package O, ADR 0047).
+"""The repeatable secret scan (`scripts/secret_scan.py`, #160 package O, ADR 0048).
 
 Every credential-shaped sample here is assembled at run time, so this file holds no literal credential and the scan of
 this repository's own history stays clean. Temporary repositories live under pytest's tmp_path; nothing is pushed."""

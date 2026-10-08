@@ -1,4 +1,4 @@
-"""Private execution-journal backups, verification and offline restore (#160 package O, ADR 0047). Offline.
+"""Private execution-journal backups, verification and offline restore (#160 package O, ADR 0048). Offline.
 
 This is not the research backup (`edge_lab.backup`). The execution journal has its own store, its own service user,
 its own private backup directory and its own retention, and the execution package may not import research code

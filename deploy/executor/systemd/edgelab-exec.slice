@@ -2,7 +2,7 @@
 Description=Market Edge Lab: resource budget for the isolated executor and its backup and health jobs (NOT INSTALLED)
 Documentation=file:///opt/market-edge-lab-exec/app/docs/execution/runbooks/INSTALL.md
 
-# Package O (ADR 0047). Shipped in the repository only; installing it is an owner-approved step
+# Package O (ADR 0048). Shipped in the repository only; installing it is an owner-approved step
 # (docs/execution/runbooks/INSTALL.md). Separate from edgelab.slice, so research collectors can never starve the
 # executor's reconciliation and cancels, and the executor can never take the collectors' budget. Both slices together
 # (384M + 768M) stay far below the VPS's lowest observed available memory (3.9 GB of 7.9 GB, no swap), so Chase

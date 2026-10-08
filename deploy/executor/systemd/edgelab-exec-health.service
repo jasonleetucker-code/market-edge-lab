@@ -3,7 +3,7 @@ Description=Market Edge Lab: executor health check, liveness and reconciliation 
 Documentation=file:///opt/market-edge-lab-exec/app/docs/execution/runbooks/INCIDENT_RESPONSE.md
 OnFailure=edgelab-alert@%n.service
 
-# Package O (ADR 0047). Shipped DISABLED and without a timer (a schedule is its own owner approval; the proposed
+# Package O (ADR 0048). Shipped DISABLED and without a timer (a schedule is its own owner approval; the proposed
 # timer is in INCIDENT_RESPONSE.md). It reads the executor's sanitized status export, the private backup root and the
 # free space, prints liveness, reconciliation, backup and disk verdicts separately, and exits with one bit per failing
 # verdict (1 liveness, 2 reconciliation, 4 backup, 8 disk). A non-zero exit fails the unit, and the existing

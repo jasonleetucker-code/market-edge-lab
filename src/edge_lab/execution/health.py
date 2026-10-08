@@ -1,4 +1,4 @@
-"""Executor health for the alert path: liveness and reconciliation health, kept apart (#160 package O, ADR 0047).
+"""Executor health for the alert path: liveness and reconciliation health, kept apart (#160 package O, ADR 0048).
 
 Pure: it judges the sanitized status export (`status_export`, `execution_status.json`) and a few facts the caller
 reads (the newest backup's time, the chain anchor check, free disk space). It sends nothing and changes nothing.
