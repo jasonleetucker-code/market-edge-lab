@@ -1,0 +1,57 @@
+[Unit]
+Description=Market Edge Lab: executor health check, liveness and reconciliation judged apart (NOT INSTALLED)
+Documentation=file:///opt/market-edge-lab-exec/app/docs/execution/runbooks/INCIDENT_RESPONSE.md
+OnFailure=edgelab-alert@%n.service
+
+# Package O (ADR 0048). Shipped DISABLED and without a timer (a schedule is its own owner approval; the proposed
+# timer is in INCIDENT_RESPONSE.md). It reads the executor's sanitized status export, the private backup root and the
+# free space, prints liveness, reconciliation, backup and disk verdicts separately, and exits with one bit per failing
+# verdict (1 liveness, 2 reconciliation, 4 backup, 8 disk). A non-zero exit fails the unit, and the existing
+# edgelab-alert@ path records it and pushes its fixed headline (ADR 0028). It reads no key and sends nothing itself.
+[Service]
+Type=oneshot
+Slice=edgelab-exec.slice
+User=edgelab-exec
+Group=edgelab-exec
+WorkingDirectory=/var/lib/market-edge-lab-exec-status
+ExecStart=/opt/market-edge-lab-exec/venv/bin/python -m edge_lab.execution.ops health --status-file /var/lib/market-edge-lab-exec-status/execution_status.json --backup-root /var/lib/market-edge-lab-exec-backup/journal --journal /var/lib/market-edge-lab-exec/journal/kalshi.execution.sqlite3 --disk-path /var/lib/market-edge-lab-exec
+TimeoutStartSec=5min
+UMask=0077
+# Out-of-memory victim before the executor (see edgelab-exec-backup.service).
+OOMScoreAdjust=500
+MemoryHigh=96M
+MemoryMax=128M
+MemorySwapMax=0
+CPUQuota=10%
+TasksMax=8
+Nice=10
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+# Read-only everywhere except the journal directory, which a WAL reader needs for its shared-memory index (the
+# chain-anchor check reads the journal read-only, mode=ro).
+ReadWritePaths=/var/lib/market-edge-lab-exec/journal
+InaccessiblePaths=-/var/lib/market-edge-lab -/etc/market-edge-lab -/etc/market-edge-lab-exec/credentials
+RestrictAddressFamilies=AF_UNIX
+IPAddressDeny=any
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictSUIDSGID=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+LockPersonality=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+ProcSubset=pid
+RemoveIPC=yes
+KeyringMode=private
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged
