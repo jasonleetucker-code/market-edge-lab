@@ -141,3 +141,9 @@ def test_contains_unredacted_secret_sets_aside_only_what_redaction_replaced():
     assert redaction.contains_unredacted_secret(HEADER_LINE)
     assert redaction.contains_unredacted_secret("a=REDACTED; " + HEADER_LINE)  # one redacted value hides no other
     assert redaction.contains_unredacted_secret("Authorization=REDACTED" + SIGNATURE)  # not a whole redacted value
+
+
+def test_an_error_line_is_redacted_on_its_own():
+    for message in (HEADER_LINE, BEARER_LINE):
+        line = ops.safe_error(jb.BackupFailed(message + "\nsecond line"))
+        assert "REDACTED" in line and SIGNATURE not in line and "tok" * 10 not in line and "second" not in line

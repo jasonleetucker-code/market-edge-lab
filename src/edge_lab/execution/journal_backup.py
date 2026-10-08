@@ -8,8 +8,9 @@ its own private backup directory and its own retention, and the execution packag
 1. Refuse before writing anything when the live file is missing, is not an execution journal of this code's schema,
    when the backup root does not exist or sits beside the live journal, or when free space is short
    (`DISK_PRESSURE`: the copy plus a disposable verification copy plus headroom).
-2. Copy with the SQLite online backup API in one step. In WAL mode that step reads one consistent snapshot while the
-   writer keeps committing; nothing is copied file by file.
+2. Copy with the SQLite online backup API in one step, from a read-only connection. In WAL mode that step reads one
+   consistent snapshot while the writer keeps committing; nothing is copied file by file, and the live file is never
+   written (not even a checkpoint).
 3. Make the copy one self-contained file (rollback journal), then check it: `integrity_check`, `foreign_key_check`,
    store kind, schema version and the schema fingerprint of this code.
 4. Restore it into a disposable directory, open it with `ExecutionJournal.open` (every table, index and trigger must
@@ -164,11 +165,13 @@ def _normalized(sql: str) -> str:
 
 
 def _open_existing(path: Path) -> sqlite3.Connection:
-    """A query-only connection to an existing regular file. `mode=rw` never creates a file (a WAL reader may need
-    to write the `-shm` index, so `mode=ro` is not used); `query_only` refuses every write."""
+    """A read-only connection (`mode=ro`) to an existing regular file: SQLite never creates the file and never
+    writes it. In particular it never checkpoints a crashed writer's WAL into the main file on close, which a
+    read-write connection would do. For a WAL journal SQLite may create the empty `-wal`/`-shm` side files when no
+    writer holds them (the directory must be writable); the journal's next opener uses them."""
     if path.is_symlink() or not path.is_file() or path.stat().st_size == 0:
         raise BackupRefused(f"not an existing, non-empty journal file: {path.name}")
-    conn = sqlite3.connect(f"{path.resolve().as_uri()}?mode=rw", uri=True, timeout=5, isolation_level=None)
+    conn = sqlite3.connect(f"{path.resolve().as_uri()}?mode=ro", uri=True, timeout=5, isolation_level=None)
     conn.execute("PRAGMA query_only = ON")
     return conn
 
@@ -217,7 +220,7 @@ def store_identity(path: str | Path) -> StoreIdentity:
     """The identity of the journal at `path`, read-only. Refuses a missing or foreign file (never creates one)."""
     p = Path(path)
     try:
-        with closing(_open_existing(p)) as conn:  # rw: a WAL reader may need the -shm file
+        with closing(_open_existing(p)) as conn:
             return _identity(conn)
     except sqlite3.Error as exc:
         raise BackupRefused(f"the journal could not be read: {type(exc).__name__}: {exc}") from exc
@@ -309,11 +312,11 @@ def _verify_by_restore(db: Path, expected: StoreIdentity, scratch_parent: Path |
         try:
             with ExecutionJournal.open(check) as journal:
                 chain = journal.verify_chain()
+                restored = store_identity(check)
         except JournalError as exc:
             raise BackupFailed(f"the copy does not open as this code's journal: {type(exc).__name__}: {exc}") from exc
         if not chain.ok:
             raise BackupFailed(f"CHAIN_INVALID: {list(chain.problems[:5])}")
-        restored = store_identity(check)
     if restored != expected:
         raise BackupFailed("IDENTITY_MISMATCH: the restored copy differs from the backup")
     return chain.events
@@ -337,8 +340,9 @@ def create_backup(live: str | Path, backup_root: str | Path, *, now: datetime, t
         raise BackupRefused("the backup root must be an existing directory (created by the install runbook)")
     if not live_path.is_file():
         raise BackupRefused(f"no live journal at {live_path.name}")
-    if root.resolve() == live_path.resolve().parent or live_path.resolve().parent in root.resolve().parents:
-        raise BackupRefused("the backup root may not be the live journal's directory or inside it")
+    live_dir, root_dir = live_path.resolve().parent, root.resolve()
+    if root_dir == live_dir or live_dir in root_dir.parents or root_dir in live_dir.parents:
+        raise BackupRefused("the backup root may not be the live journal's directory, inside it or above it")
     expected_fingerprint = code_schema_fingerprint()
     try:
         with closing(_open_existing(live_path)) as probe:
@@ -518,9 +522,9 @@ def restore_bundle(bundle: str | Path, target: str | Path, *, live_paths: Iterab
         created = True
         with ExecutionJournal.open(t) as journal:
             chain = journal.verify_chain()
+            restored = store_identity(t)  # while the journal is open, so its close tidies the side files
         if not chain.ok:
             raise BackupFailed(f"CHAIN_INVALID after restore: {list(chain.problems[:5])}")
-        restored = store_identity(t)
         if restored != record.identity:
             raise BackupFailed("IDENTITY_MISMATCH: the restored journal differs from its backup")
         return RestoreReport(t, b, restored, chain.events)

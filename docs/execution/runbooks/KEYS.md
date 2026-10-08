@@ -36,6 +36,11 @@ LoadCredential=kalshi-key:/etc/market-edge-lab-exec/credentials/kalshi-demo-2026
 LoadCredential=kalshi-key-id:/etc/market-edge-lab-exec/credentials/kalshi-demo-20261101.id
 ```
 
+That PR must also show, on the host, that the credential loads with the unit's `InaccessiblePaths`. systemd reads
+`LoadCredential=` sources itself, outside the service's namespace, but this is checked on the real host, not
+assumed. Use `systemd-analyze verify`, then one DISARMED start whose journal shows the credential directory
+populated, without printing the key.
+
 The same approval changes the unit's egress from `RestrictAddressFamilies=AF_UNIX` and `IPAddressDeny=any` to the
 reviewed DEMO egress. The code's host allowlist (`conformance`) stays the exact-host control. systemd cannot
 allowlist by host name.

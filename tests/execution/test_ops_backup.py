@@ -11,7 +11,10 @@ from __future__ import annotations
 import errno
 import hashlib
 import json
+import os
 import sqlite3
+import subprocess
+import sys
 import threading
 from collections import namedtuple
 from datetime import timedelta
@@ -224,8 +227,11 @@ def test_backup_refusals_write_nothing(dirs, tmp_path):
     journal, _ = f.ready(live)
     with pytest.raises(jb.BackupRefused, match="existing directory"):
         jb.create_backup(live, tmp_path / "missing-root", now=NOW)
-    with pytest.raises(jb.BackupRefused, match="live journal's directory"):
-        jb.create_backup(live, live.parent, now=NOW)
+    for beside in (live.parent, live.parent / "sub", live.parent.parent):
+        beside.mkdir(exist_ok=True)
+        with pytest.raises(jb.BackupRefused, match="live journal's directory"):
+            jb.create_backup(live, beside, now=NOW)
+    (live.parent / "sub").rmdir()
     assert list(root.iterdir()) == [] and not (tmp_path / "missing-root").exists()
     journal.close()
 
@@ -298,7 +304,7 @@ def test_the_free_space_bound_covers_the_copy_its_check_and_headroom(dirs):
     live, root, _ = dirs
     journal = _rich(live)
     size = live.stat().st_size + sum(p.stat().st_size for p in live.parent.iterdir() if p.name != live.name)
-    need = size * jb.FREE_SPACE_FACTOR + jb.MIN_FREE_BYTES
+    need = size * 3 + 64 * 1024 * 1024  # the copy, its verification copy, as much again, and 64 MiB
     with pytest.raises(jb.BackupRefused, match="DISK_PRESSURE"):
         jb.create_backup(live, root, now=NOW, disk_usage=lambda _p: Usage(0, 0, need - 1))
     assert jb.create_backup(live, root, now=NOW, disk_usage=lambda _p: Usage(0, 0, need)).bundle.is_dir()
@@ -419,3 +425,111 @@ def test_the_live_chain_must_extend_the_newest_backup(dirs, tmp_path):
         f.receipt(other, f"pad-{i}", K.ORDER_LOOKUP, payload=json.dumps({"pad": i}))
     other.close()
     assert jb.extends_backup(replaced, record.bundle)[0].startswith("LIVE_CHAIN_DIVERGES_FROM_BACKUP")
+
+
+def test_a_live_journal_with_a_broken_chain_is_never_published_as_a_backup(dirs):
+    live, root, _ = dirs
+    journal = _rich(live)
+    journal.close()
+    conn = sqlite3.connect(live)
+    conn.execute("DROP TRIGGER receipts_no_update")
+    conn.execute("UPDATE receipts SET payload_json = '{\"forged\":true}' WHERE receipt_id = 'rej-2'")
+    conn.execute("CREATE TRIGGER receipts_no_update BEFORE UPDATE ON receipts BEGIN SELECT RAISE(ABORT, "
+                 "'receipts is append-only'); END;")
+    conn.commit()
+    conn.close()
+    with pytest.raises(jb.BackupFailed, match="CHAIN_INVALID"):
+        jb.create_backup(live, root, now=NOW)
+    assert list(root.iterdir()) == []
+
+
+IDENTITY_TABLES = ("intents", "approvals", "attempts", "receipts", "reservations", "account_snapshots")
+
+
+def test_identity_covers_every_identifying_table():
+    assert tuple(t for t, _ in jb._IDENTITY) == IDENTITY_TABLES
+
+
+@pytest.mark.parametrize("table", IDENTITY_TABLES)
+def test_each_identifying_table_has_its_own_digest(dirs, table):
+    live, _, _ = dirs
+    journal = _rich(live)
+    journal.close()
+    before = jb.store_identity(live)
+    conn = sqlite3.connect(live)
+    cols = dict(jb._IDENTITY)[table]
+    conn.executescript(f"DROP TRIGGER IF EXISTS {table}_no_update;")
+    conn.execute(f"UPDATE {table} SET {cols[-1]} = ? WHERE rowid = (SELECT MIN(rowid) FROM {table})", ("f" * 64,))
+    conn.commit()
+    conn.close()
+    after = jb.store_identity(live)
+    assert after.identity[table] != before.identity[table]
+    assert {k: v for k, v in after.identity.items() if k != table} == \
+        {k: v for k, v in before.identity.items() if k != table}
+
+
+def test_a_bundle_swapped_after_verification_is_never_restored(dirs, tmp_path, monkeypatch):
+    live, root, drill = dirs
+    journal = _rich(live)
+    first = jb.create_backup(live, root, now=NOW)
+    f.receipt(journal, "later", K.ORDER_LOOKUP)
+    second = jb.create_backup(live, root, now=NOW + timedelta(hours=1))
+    journal.close()
+    real_verify = jb.verify_bundle
+
+    def verify_then_swap(bundle):
+        record = real_verify(bundle)
+        (first.bundle / jb.DB_NAME).write_bytes((second.bundle / jb.DB_NAME).read_bytes())  # after the check
+        return record
+
+    monkeypatch.setattr(jb, "verify_bundle", verify_then_swap)
+    with pytest.raises(jb.BackupFailed, match="IDENTITY_MISMATCH"):
+        jb.restore_bundle(first.bundle, drill / "r.execution.sqlite3")
+    assert list(drill.iterdir()) == []
+
+
+def test_backup_and_identity_never_write_the_live_file_even_after_a_crash(dirs):
+    """A writer killed mid-run leaves its WAL uncheckpointed and no connection open. Reading it read-only must not
+    checkpoint that WAL into the main file, which the last read-write connection would do on close."""
+    live, root, _ = dirs
+    journal, token = f.ready(live)
+    journal.close()
+    helper = Path(f.__file__)
+    env = {**os.environ, "PYTHONPATH": os.pathsep.join([str(Path(jb.__file__).resolve().parents[2]), str(helper.parent)])}
+    done = subprocess.run([sys.executable, str(helper), str(live), "after_sent", str(token)], env=env,
+                          capture_output=True, text=True, timeout=120)
+    assert done.returncode == 19, done.stderr
+    wal = live.with_name(live.name + "-wal")
+    assert wal.is_file() and wal.stat().st_size > 0  # the crash left committed rows only in the WAL
+    main_before = _sha(live)
+    assert jb.store_identity(live).in_flight_attempts == 1  # the WAL's rows are read
+    record = jb.create_backup(live, root, now=NOW)
+    assert record.identity.in_flight_attempts == 1
+    assert jb.extends_backup(live, record.bundle) == []
+    assert _sha(live) == main_before and wal.stat().st_size > 0
+
+
+def test_a_bundle_altered_after_verification_fails_the_restore_chain_check(dirs, monkeypatch):
+    """An event changed inside the bundle after it was verified keeps every identity digest (the head hash is
+    stored, not recomputed) but breaks the chain: the restore's own chain check refuses it."""
+    live, root, drill = dirs
+    journal = _rich(live)
+    record = jb.create_backup(live, root, now=NOW)
+    journal.close()
+    real_verify = jb.verify_bundle
+
+    def verify_then_alter(bundle):
+        verified = real_verify(bundle)
+        conn = sqlite3.connect(Path(bundle) / jb.DB_NAME)
+        conn.execute("DROP TRIGGER events_no_update")
+        conn.execute("UPDATE events SET at_utc = '2020-01-01T00:00:00+00:00' WHERE seq = 2")
+        conn.execute("CREATE TRIGGER events_no_update BEFORE UPDATE ON events BEGIN SELECT RAISE(ABORT, "
+                     "'events is append-only'); END;")
+        conn.commit()
+        conn.close()
+        return verified
+
+    monkeypatch.setattr(jb, "verify_bundle", verify_then_alter)
+    with pytest.raises(jb.BackupFailed, match="CHAIN_INVALID"):
+        jb.restore_bundle(record.bundle, drill / "r.execution.sqlite3")
+    assert list(drill.iterdir()) == []
