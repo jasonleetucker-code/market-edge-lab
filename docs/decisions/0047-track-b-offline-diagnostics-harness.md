@@ -33,6 +33,21 @@ Extend the canonical owners where the seam exists, and add one sibling module fo
 | `kalshi_quotes.py` | `market_activity`, `MarketActivity` | It is the Kalshi market-record adapter. The record is never an `ExecutableQuote` or ladder, so the module's rule ("no last price in any quote") holds. Settled fields (`payoff_constraints.PROHIBITED_MARKET_FIELDS`) are never read, and the last trade is withheld at or after close |
 | `research_diagnostics.py` (new) | `Stamp`/`EvidenceClass`; `calibration_report`; `evaluate_entries`; `bankroll_ladder`; `depth_report`; `protocol_guard_problems`; a `calibration` CLI | None of these has an owner. `research_economics` owns episode and fill economics and is already 1,600 lines; this module composes it (`cluster_bootstrap_mean`, `EXECUTABLE_PERFORMANCE`, `ILLUSTRATIVE`) with `opportunity` (depth walk, taker fees), `fee_schedules` and `research_evidence.attrition_report`, and re-implements none of them |
 
+### H03: forecast-to-position decision policies (added 2026-10-08, coordinator request)
+
+A better forecast does not by itself give profitable allocation (Gu et al., arXiv 2607.06166v3, Example 1;
+owner packet 2026-10-08). The comparison extends the sizing owners rather than adding a sizing engine:
+
+| Owner | Added | Why it belongs there |
+|---|---|---|
+| `sizing_v2.py` | rule `BRIER` (`brier_scale`): floor(scale x 2(P(pays) - all-in cost)) contracts, long only, `min_edge`, then the candidate caps and the shared budget | It is the research sizing engine; FLAT_UNIT and KELLY already live in `solve`. `to_dict` omits `brier_scale` when unset, so every earlier policy dict and counterfactual run id is unchanged |
+| `sizing_eval.py` (H03 section) | `ideal_comparison` (exact toy arithmetic and the identity E[Brier profit] = (L(q) - L(p)) + sum (p - q)^2); `compare_policies`: fixed-dollar, capped 1/4 Kelly, cautious Brier and ABSTAIN on identical forecasts, $100 illustrative bankroll, fees, ladders and depth; paired per event, capital-days and turnover | It owns the evaluation of sizing policies. Costs come from `sizing_v2.ExactCostCurve` (walk_ladder + price_depth_fill), counts from `sizing_v2.solve`, stamps from `research_diagnostics` |
+
+The ideal guarantee needs free shorting at the market price, fractional contracts and no costs. The tests show
+that long-only positions alone remove it, and that with real taker fees every trading policy's expected net is
+negative on the paper's example while ABSTAIN is a known zero. An unknown fee gives every trading policy an
+unknown net. The optimizer's search is in floats, as everywhere in `sizing_v2`; every money figure is Decimal.
+
 ### Rules
 
 - **Evidence class on every output.** SYNTHETIC / FIXTURE / RETROSPECTIVE_EXPLORATORY / PROSPECTIVE, with the

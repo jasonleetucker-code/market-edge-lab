@@ -50,7 +50,9 @@ from pathlib import Path
 from typing import Any, Iterable, Sequence
 
 from . import sizing_v2 as sv2
-from .opportunity import DepthLadder, DepthLevel
+from .fee_schedules import FeeScheduleStatus
+from .freshness import Freshness, parse_utc
+from .opportunity import DepthLadder, DepthLevel, Market
 from .sizing_v2 import CoreCandidate, CoreProblem, IntegerLadderCostCurve, SizingPolicyV2
 
 SIM_VERSION = "2"  # v2: fractions applied before caps/budgets (engine), provenance recorded
@@ -691,6 +693,355 @@ def _write(report: dict[str, Any], out_dir: Path) -> tuple[Path, Path]:
     js.write_text(json.dumps(report, indent=1, sort_keys=True, default=str) + "\n", encoding="utf-8", newline="\n")
     md.write_text(render_report(report), encoding="utf-8", newline="\n")
     return js, md
+
+
+# =========================================================================== H03 decision-policy comparison
+#
+# H03 (#184, Track B; owner packet 2026-10-08): a better forecast does not by itself give profitable
+# allocation (Gu et al., arXiv 2607.06166v3, Example 1). Two layers, both Decimal money:
+#
+# - the IDEAL toy (`ideal_comparison`): frictionless, shorting at the market price, fractional contracts,
+#   expectation under a declared truth. It reproduces the paper's arithmetic: the forecast's expected Brier
+#   loss beats the market's, naive Kelly shares p/q lose, and unscaled Brier positions 2(p - q) gain. The
+#   gain has an exact identity: E[profit] = (L(q) - L(p)) + sum (p - q)^2, so a lower expected Brier loss
+#   guarantees a positive expected profit -- in the ideal world only.
+# - the EXECUTABLE comparison (`compare_policies`): the same forecasts, information, illustrative bankroll,
+#   fees, executable ask ladders and depth for every policy, sized by the canonical engine
+#   (`sizing_v2.solve`: FLAT_UNIT, KELLY, BRIER) or ABSTAIN, priced exactly (`sizing_v2.ExactCostCurve`:
+#   walk_ladder + price_depth_fill), and evaluated per event, paired across policies. Long only, whole
+#   contracts, real taker fees and a budget: the ideal guarantee does not carry over, and the tests show it.
+#
+# Every output carries a `research_diagnostics.Stamp` (SYNTHETIC / FIXTURE for every run so far) and is never an
+# edge claim. Unknown fees give an unknown net for every trading policy; ABSTAIN's net is a known 0. The
+# optimizer works in floats (as everywhere in sizing_v2); every money figure is exact Decimal from the cost curve.
+
+H03_VERSION = "h03-policy-comparison-v1"
+H03_LABEL = ("H03 DECISION-POLICY COMPARISON: identical inputs for every policy; paired per event; zero-latency "
+             "replay of captured books, never executable performance; not an edge claim.")
+ABSTAIN = "ABSTAIN"
+_HQ = Decimal("1e-12")
+H03_FIXED_DOLLAR = SizingPolicyV2("H03-fixed-dollar", "1", "FLAT_UNIT",
+                                  "H03: up to $10 per outcome when the nominal net edge per contract >= 0.02",
+                                  unit_amount=Decimal("10.00"), min_edge=Decimal("0.02"))
+H03_CAPPED_KELLY = SizingPolicyV2("H03-capped-quarter-kelly", "1", "KELLY",
+                                  "H03: 1/4 nominal Kelly over the event's outcomes, capped by the event budget",
+                                  kelly_fraction=Decimal("0.25"))
+H03_CAUTIOUS_BRIER = SizingPolicyV2("H03-cautious-brier", "1", "BRIER",
+                                    "H03: floor(50 x 2(p - all-in cost)) contracts, long only, edge >= 0.02",
+                                    brier_scale=Decimal(50), min_edge=Decimal("0.02"))
+H03_POLICIES: tuple[tuple[str, SizingPolicyV2 | None], ...] = (
+    ("FIXED_DOLLAR", H03_FIXED_DOLLAR), ("CAPPED_FRACTIONAL_KELLY", H03_CAPPED_KELLY),
+    ("CAUTIOUS_BRIER", H03_CAUTIOUS_BRIER), (ABSTAIN, None))
+
+
+def _vector(values: Sequence[Decimal], what: str, *, simplex: bool) -> tuple[Decimal, ...]:
+    out = tuple(values)
+    if not out or any(isinstance(v, bool) or not isinstance(v, Decimal) or not v.is_finite() for v in out):
+        raise ValueError(f"{what} must be a non-empty vector of finite Decimals")
+    if simplex and (any(v < 0 for v in out) or sum(out) != 1):
+        raise ValueError(f"{what} must be a probability vector summing to exactly 1")
+    return out
+
+
+def expected_brier_loss(forecast: Sequence[Decimal], truth: Sequence[Decimal]) -> Decimal:
+    """E_truth[sum_i (f_i - 1{i})^2] = 1 - 2 sum f_i t_i + sum f_i^2 (exact)."""
+    f, t = _vector(forecast, "forecast", simplex=True), _vector(truth, "truth", simplex=True)
+    if len(f) != len(t):
+        raise ValueError("forecast and truth have different lengths")
+    return 1 - 2 * sum(x * y for x, y in zip(f, t)) + sum(x * x for x in f)
+
+
+def kelly_shares(p: Sequence[Decimal], q: Sequence[Decimal]) -> tuple[Decimal, ...]:
+    """Naive Kelly on mutually exclusive outcomes, forecast taken as truth: wealth share p_i on outcome i,
+    i.e. p_i / q_i contracts per unit of wealth at price q_i."""
+    return tuple(x / y for x, y in zip(_vector(p, "p", simplex=True), _vector(q, "q", simplex=True)))
+
+
+def brier_positions(p: Sequence[Decimal], q: Sequence[Decimal], *, scale: Decimal = Decimal(1)) -> tuple[Decimal, ...]:
+    """The unscaled Brier position 2(p_i - q_i) contracts (negative = short), times `scale`."""
+    return tuple(scale * 2 * (x - y) for x, y in zip(_vector(p, "p", simplex=True), _vector(q, "q", simplex=True)))
+
+
+def expected_position_profit(positions: Sequence[Decimal], prices: Sequence[Decimal],
+                             truth: Sequence[Decimal]) -> Decimal:
+    """sum_i s_i (t_i - q_i): frictionless, positions settle at 1 on outcome i, bought (or sold) at q_i."""
+    s, q, t = _vector(positions, "positions", simplex=False), _vector(prices, "prices", simplex=False), \
+        _vector(truth, "truth", simplex=True)
+    if not len(s) == len(q) == len(t):
+        raise ValueError("positions, prices and truth have different lengths")
+    return sum(a * (b - c) for a, b, c in zip(s, t, q))
+
+
+@dataclass(frozen=True)
+class IdealComparison:
+    label: str
+    forecast_expected_brier_loss: Decimal
+    market_expected_brier_loss: Decimal
+    loss_improvement: Decimal  # L(q) - L(p): positive = the forecast is better
+    kelly_positions: tuple[Decimal, ...]
+    kelly_expected_profit: Decimal
+    brier_positions: tuple[Decimal, ...]
+    brier_expected_profit: Decimal
+    squared_distance: Decimal  # sum (p - q)^2
+    identity_holds: bool  # brier profit == loss improvement + squared distance, exactly
+    assumptions: tuple[str, ...]
+
+
+def ideal_comparison(p: Sequence[Decimal], q: Sequence[Decimal], truth: Sequence[Decimal]) -> IdealComparison:
+    lp, lq = expected_brier_loss(p, truth), expected_brier_loss(q, truth)
+    kelly = kelly_shares(p, q)
+    brier = brier_positions(p, q)
+    k_ev, b_ev = expected_position_profit(kelly, q, truth), expected_position_profit(brier, q, truth)
+    dist = sum((x - y) ** 2 for x, y in zip(p, q))
+    return IdealComparison(
+        "IDEAL TOY (Gu et al. Example 1 arithmetic): frictionless, shorting at the market price, fractional "
+        "contracts, expectation under a declared truth. Not executable and not an edge.",
+        lp, lq, lq - lp, kelly, k_ev, brier, b_ev, dist, b_ev == (lq - lp) + dist,
+        ("no fees", "no spread: buy and sell at q", "shorting allowed", "fractional contracts", "no budget or depth",
+         "the truth vector is known for the expectation"))
+
+
+@dataclass(frozen=True)
+class OutcomeLeg:
+    """One mutually exclusive outcome of an event: its YES market, captured YES ask ladder and fee schedule."""
+
+    state: str
+    market: Market
+    ladder: DepthLadder
+    fee_schedule: Any
+
+
+@dataclass(frozen=True)
+class PolicyEvent:
+    """One event every policy sees identically. `outcome_state` is the realized state (None = UNKNOWN);
+    `truth` is a declared truth vector for SYNTHETIC expectations only; `lockup_days` is the days the cash is
+    committed (entry to settlement release; None = UNKNOWN)."""
+
+    event_id: str
+    cluster_id: str
+    scope: str
+    as_of_utc: str
+    forecast: tuple[Decimal, ...]
+    legs: tuple[OutcomeLeg, ...]
+    outcome_state: str | None
+    truth: tuple[Decimal, ...] | None = None
+    lockup_days: Decimal | None = None
+
+
+@dataclass(frozen=True)
+class PolicyEventResult:
+    event_id: str
+    cluster_id: str
+    policy: str
+    state: str  # EVALUATED / FEE_UNKNOWN / STALE_BOOK / INVALID_BOOK
+    contracts: tuple[int, ...]
+    abstained: bool | None  # no contract bought; None when the policy could not be sized
+    gross_cost: Decimal | None
+    fees: Decimal | None
+    total_cost: Decimal | None
+    realized_net: Decimal | None  # payout - total cost; None when the outcome or the fee is unknown
+    expected_net: Decimal | None  # under the declared truth (SYNTHETIC only)
+    capital_days: Decimal | None
+    reasons: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class PolicySummary:
+    policy: str
+    policy_definition: dict[str, Any] | None
+    events: int
+    evaluated: int
+    traded: int
+    abstained: int
+    unknown: int  # events the policy could not be sized or valued on
+    total_cost: Decimal | None
+    fees: Decimal | None
+    realized_net: Decimal | None  # None when any event's net is unknown
+    expected_net: Decimal | None
+    capital_days: Decimal | None
+    turnover: Decimal | None  # notional (gross cost) / bankroll over the run
+    net_per_capital_day: Decimal | None
+
+
+@dataclass(frozen=True)
+class PairedDifference:
+    policy: str
+    baseline: str
+    pairs: int  # events where both nets are known
+    unknown_pairs: int
+    clusters: int
+    total_difference: Decimal | None
+    band: tuple[Decimal, Decimal, Decimal] | None  # cluster bootstrap of the per-cluster difference
+
+
+@dataclass(frozen=True)
+class PolicyComparison:
+    stamp: Any
+    version: str
+    label: str
+    bankroll: Decimal
+    status: str
+    event_budget: Decimal
+    max_book_age_seconds: Decimal
+    events: int
+    clusters: int
+    results: tuple[PolicyEventResult, ...]
+    summaries: tuple[PolicySummary, ...]
+    paired: tuple[PairedDifference, ...]
+    report_sha256: str = ""
+
+
+def _event_state(event: PolicyEvent, max_book_age: Any) -> tuple[str, list[str]]:
+    from .fee_schedules import verification_at
+    from .opportunity import _freshness
+
+    at = parse_utc(event.as_of_utc)
+    if at is None:
+        raise ValueError(f"{event.event_id}: as_of_utc must be timezone-aware")
+    for leg in event.legs:
+        received = parse_utc(leg.ladder.received_at_utc)
+        fresh, why = _freshness(leg.ladder.received_at_utc, max_age=max_book_age, as_of=at)
+        if (received is not None and received > at) or fresh is not Freshness.FRESH:
+            return "STALE_BOOK", [f"{leg.state}: book {fresh.value}: {why}"]
+        if (leg.ladder.market_id, leg.ladder.side) != (leg.market.market_id, "YES"):
+            return "INVALID_BOOK", [f"{leg.state}: the ladder is not the YES asks of {leg.market.market_id}"]
+    for leg in event.legs:
+        if verification_at(leg.fee_schedule, at, leg.market.native_id).status is FeeScheduleStatus.UNSUPPORTED:
+            return "FEE_UNKNOWN", [f"{leg.state}: FEE_UNSUPPORTED ({leg.fee_schedule.schedule_id}): net is UNKNOWN"]
+    return "EVALUATED", []
+
+
+def _size_event(event: PolicyEvent, name: str, policy: SizingPolicyV2 | None, *, bankroll: Decimal,
+                event_budget: Decimal, state: str, why: list[str]) -> PolicyEventResult:
+    k = len(event.legs)
+    if policy is None:  # abstain: no trade, so a known zero whatever the outcome, fee or book
+        zero = Decimal(0)
+        return PolicyEventResult(event.event_id, event.cluster_id, name, state, (0,) * k, True, zero, zero, zero, zero,
+                                 zero, zero, ())
+    if state != "EVALUATED":
+        return PolicyEventResult(event.event_id, event.cluster_id, name, state, (), None, None, None, None, None, None,
+                                 None, tuple(why))
+    curves = [sv2.ExactCostCurve(leg.ladder, leg.fee_schedule, price_grid=leg.market.price_grid) for leg in event.legs]
+    bad = [f"{leg.state}: {c.problem}" for leg, c in zip(event.legs, curves) if c.problem]
+    if bad:
+        return PolicyEventResult(event.event_id, event.cluster_id, name, "INVALID_BOOK", (), None, None, None, None,
+                                 None, None, None, tuple(bad))
+    cands = tuple(sv2.CoreCandidate(leg.state, tuple(1 if j == i else 0 for j in range(k)), curve, curve.max_contracts)
+                  for i, (leg, curve) in enumerate(zip(event.legs, curves)))
+    problem = sv2.CoreProblem(float(bankroll), (float(bankroll),) * k, tuple(float(x) for x in event.forecast), None,
+                              cands, float(event_budget))
+    counts = sv2.solve(policy, problem, reference=False).counts
+    gross = fees = total = Decimal(0)
+    for n, curve in zip(counts, curves):
+        if n:
+            priced = curve.depth_cost(n)
+            gross += priced.fill.gross_cost
+            fees += priced.fee
+            total += curve.total(n)
+    if total > event_budget:
+        raise AssertionError(f"{name} spent {total} > the event budget {event_budget}")
+    states = [leg.state for leg in event.legs]
+    realized = None
+    if event.outcome_state is not None:
+        realized = Decimal(counts[states.index(event.outcome_state)]) - total
+    expected = None
+    if event.truth is not None:
+        expected = sum((t * n for t, n in zip(event.truth, counts)), Decimal(0)) - total
+    cap_days = None if event.lockup_days is None else (total * event.lockup_days).quantize(_HQ)
+    return PolicyEventResult(event.event_id, event.cluster_id, name, state, tuple(counts), not any(counts), gross, fees,
+                             total, realized, expected, cap_days,
+                             () if event.outcome_state is not None else ("OUTCOME_UNKNOWN",))
+
+
+def _sum_known(values: Sequence[Decimal | None]) -> Decimal | None:
+    return None if any(v is None for v in values) else sum(values, Decimal(0))
+
+
+def compare_policies(events: Sequence[PolicyEvent], *, bankroll: Decimal = Decimal(100),
+                     event_budget: Decimal = Decimal(25), max_book_age: Any = None,
+                     policies: Sequence[tuple[str, SizingPolicyV2 | None]] = H03_POLICIES, evidence_class: Any,
+                     code_version: str, experiment_id: str | None = None,
+                     evidence_use_event_id: str | None = None) -> PolicyComparison:
+    """Paired, event-level comparison of decision policies on identical inputs (H03). Each event is sized from the
+    same bankroll (no compounding, so the comparison is not path dependent) under the same per-event budget."""
+    from datetime import timedelta
+
+    from .research_diagnostics import _guard_labels, input_sha256, make_stamp
+    from .research_economics import ILLUSTRATIVE, cluster_bootstrap_mean
+
+    max_book_age = timedelta(minutes=5) if max_book_age is None else max_book_age
+    if not (isinstance(bankroll, Decimal) and bankroll > 0 and isinstance(event_budget, Decimal)
+            and 0 < event_budget <= bankroll):
+        raise ValueError("bankroll must be positive and the event budget in (0, bankroll]")
+    names = [n for n, _ in policies]
+    if len(names) != len(set(names)) or ABSTAIN not in names:
+        raise ValueError("policy names must be unique and include ABSTAIN (the paired baseline)")
+    ids = [e.event_id for e in events]
+    if len(ids) != len(set(ids)):
+        raise ValueError("event ids must be unique")
+    for e in events:
+        _vector(e.forecast, f"{e.event_id} forecast", simplex=True)
+        if len(e.forecast) != len(e.legs) or (e.truth is not None and len(e.truth) != len(e.legs)):
+            raise ValueError(f"{e.event_id}: forecast, truth and legs must align")
+        if e.truth is not None:
+            _vector(e.truth, f"{e.event_id} truth", simplex=True)
+        if e.outcome_state is not None:
+            if e.outcome_state not in [leg.state for leg in e.legs]:
+                raise ValueError(f"{e.event_id}: outcome {e.outcome_state!r} is not one of the legs")
+            for leg in e.legs:
+                _guard_labels(evidence_class, e.scope, leg.market.venue, leg.market.native_id)
+    stamp = make_stamp(evidence_class, code_version=code_version, inputs={
+        "events": [{"id": e.event_id, "cluster": e.cluster_id, "scope": e.scope, "as_of": e.as_of_utc,
+                    "forecast": e.forecast, "outcome": e.outcome_state, "truth": e.truth, "lockup": e.lockup_days,
+                    "legs": [{"state": leg.state, "market": leg.market, "ladder": leg.ladder,
+                              "fee": leg.fee_schedule.schedule_id} for leg in e.legs]} for e in events],
+        "bankroll": bankroll, "event_budget": event_budget, "max_book_age": max_book_age,
+        "policies": [[n, None if p is None else p.to_dict()] for n, p in policies]},
+        experiment_id=experiment_id, evidence_use_event_id=evidence_use_event_id)
+    results: list[PolicyEventResult] = []
+    for e in events:
+        state, why = _event_state(e, max_book_age)
+        for name, policy in policies:
+            results.append(_size_event(e, name, policy, bankroll=bankroll, event_budget=event_budget, state=state,
+                                       why=why))
+    summaries = []
+    for name, policy in policies:
+        rs = [r for r in results if r.policy == name]
+        evaluated = [r for r in rs if r.state == "EVALUATED"]
+        unknown = [r for r in rs if r.total_cost is None]
+        notional = _sum_known([r.gross_cost for r in rs])
+        cap_days = _sum_known([r.capital_days for r in rs])
+        net = _sum_known([r.realized_net for r in rs])
+        summaries.append(PolicySummary(
+            name, None if policy is None else policy.to_dict(), len(rs), len(evaluated),
+            sum(1 for r in rs if r.abstained is False), sum(1 for r in rs if r.abstained is True), len(unknown),
+            _sum_known([r.total_cost for r in rs]), _sum_known([r.fees for r in rs]), net,
+            _sum_known([r.expected_net for r in rs]), cap_days,
+            None if notional is None else (notional / bankroll).quantize(_HQ),
+            None if net is None or not cap_days else (net / cap_days).quantize(_HQ)))
+    paired = []
+    by_key = {(r.event_id, r.policy): r for r in results}
+    for baseline in (ABSTAIN, names[0]):
+        for name in names:
+            if name == baseline:
+                continue
+            diffs: dict[str, Decimal] = {}
+            pairs = unknown_pairs = 0
+            for e in events:
+                a, b = by_key[(e.event_id, name)].realized_net, by_key[(e.event_id, baseline)].realized_net
+                if a is None or b is None:
+                    unknown_pairs += 1
+                    continue
+                pairs += 1
+                diffs[e.cluster_id] = diffs.get(e.cluster_id, Decimal(0)) + (a - b)
+            paired.append(PairedDifference(name, baseline, pairs, unknown_pairs, len(diffs),
+                                           None if unknown_pairs or not pairs else sum(diffs.values(), Decimal(0)),
+                                           cluster_bootstrap_mean(diffs) if not unknown_pairs else None))
+    report = PolicyComparison(stamp, H03_VERSION, H03_LABEL, bankroll, ILLUSTRATIVE, event_budget,
+                              Decimal(str(max_book_age.total_seconds())), len(events),
+                              len({e.cluster_id for e in events}), tuple(results), tuple(summaries), tuple(paired))
+    body = input_sha256(report)
+    return replace(report, report_sha256=body)
 
 
 def main(argv: list[str] | None = None) -> int:

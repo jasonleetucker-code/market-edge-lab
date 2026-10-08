@@ -530,7 +530,7 @@ class IntegerLadderCostCurve:
 
 # =========================================================================== policies
 
-RULES = ("FLAT_UNIT", "FIXED_FRACTION", "KELLY")
+RULES = ("FLAT_UNIT", "FIXED_FRACTION", "KELLY", "BRIER")
 
 
 @dataclass(frozen=True)
@@ -548,6 +548,12 @@ class SizingPolicyV2:
       of the bankroll. `joint` (policy H) optimizes every candidate of one cluster together
       under the shared cluster budget; otherwise candidates are sized one at a time, each
       conditional on what is already held in the cluster.
+    - BRIER (H03, #184; Gu et al., arXiv 2607.06166v3): a cautious Brier-derived position. Per
+      candidate, floor(`brier_scale` x 2 x (P(pays) - all-in cost of one contract)) contracts when
+      that edge is at least `min_edge`, else 0: long only, priced at the executable cost (never
+      the market mid), then the candidate caps and the shared budget scale it down. The ideal
+      unscaled 2(p - q) position assumes free shorting at the market price and no costs; this
+      rule keeps neither assumption, so the ideal guarantee does not carry over.
     """
 
     policy_id: str
@@ -565,6 +571,7 @@ class SizingPolicyV2:
     cvar_level: Decimal | None = None
     cvar_max_loss: Decimal | None = None
     joint: bool = False
+    brier_scale: Decimal | None = None  # BRIER: contracts per unit of the 2(p - c) position
 
     def __post_init__(self) -> None:
         if self.rule not in RULES:
@@ -573,6 +580,8 @@ class SizingPolicyV2:
             raise ValueError("FLAT_UNIT needs a positive unit_amount")
         if self.rule == "FIXED_FRACTION" and not (self.bankroll_fraction and 0 < self.bankroll_fraction <= 1):
             raise ValueError("FIXED_FRACTION needs bankroll_fraction in (0, 1]")
+        if self.rule == "BRIER" and not (self.brier_scale and self.brier_scale > 0):
+            raise ValueError("BRIER needs a positive brier_scale")
         if not (ZERO < self.kelly_fraction <= 1):
             raise ValueError("kelly_fraction must be in (0, 1]")
         if (self.drawdown_alpha is None) != (self.drawdown_beta is None):
@@ -591,7 +600,11 @@ class SizingPolicyV2:
         return math.log(float(self.drawdown_beta)) / math.log(float(self.drawdown_alpha))
 
     def to_dict(self) -> dict[str, Any]:
-        return _plain(self)
+        out = _plain(self)
+        if self.brier_scale is None:
+            # Added for H03 (#184): absent from every earlier policy, so their dicts and run ids are unchanged.
+            out.pop("brier_scale", None)
+        return out
 
 
 _V = "1"
@@ -912,6 +925,20 @@ def solve(policy: SizingPolicyV2, problem: CoreProblem, *, reference: bool = Tru
                 left -= cand.curve.cost(n)
         out = wanted = tuple(counts)
         limited = tuple(None for _ in counts)
+        binding = policy.rule
+    elif policy.rule == "BRIER":
+        scale = float(policy.brier_scale)
+        wanted_list = []
+        for j, cand in enumerate(problem.candidates):
+            edge = nominal_edge(problem, j)
+            ok = edge is not None and edge > 0 and edge >= float(policy.min_edge)
+            wanted_list.append(math.floor(scale * 2 * edge + 1e-9) if ok else 0)
+        wanted = tuple(wanted_list)
+        out = tuple(min(c.cap, c.curve.max_contracts, n) for c, n in zip(problem.candidates, wanted))
+        if problem.budget is not None:
+            budget = problem.budget
+            out, _ = _scale_down(out, lambda c: _spent(problem, c) <= budget + 1e-9)
+        limited = tuple("CAP" if n > o else None for n, o in zip(wanted, out))
         binding = policy.rule
     else:
         search = _relaxed(problem, frac)
