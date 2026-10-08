@@ -1202,8 +1202,13 @@ class Orchestrator:
         if r.quarantine_reason is not None:
             return  # a quarantined reservation waits for an explicit resolution (health review raises it)
         auth = self._journal.reservations
+        # Everything the view was derived from (with versioned code, `filled_quantity` re-derives from this payload
+        # alone): both times of the listing's counts, and the uncertainty the view concluded (ADR 0046 rule 14).
         payload = canonical_json({"order": _order_record(o), "fills": [_fill_record(f) for f in fills or ()],
-                                  "filled_quantity": view.filled_quantity, "as_of_utc": as_of})
+                                  "filled_quantity": view.filled_quantity, "as_of_utc": as_of,
+                                  "as_of_upper_utc": as_of_upper, "authoritative_complete": complete,
+                                  "fill_timing_uncertain": view.fill_timing_uncertain,
+                                  "fees_complete": view.fees_complete})
         receipt = f"lookup:{r.reservation_id}:{sha256_text(payload)[:16]}"
         try:
             needs_receipt = view.filled_quantity > r.filled_quantity or (

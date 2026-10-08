@@ -56,10 +56,13 @@ to be confirmed against the venue (DEMO_OBSERVED or PRODUCTION_READ_VERIFIED) be
   further apart than this, normal flows quarantine falsely. With it, `account.CLOCK_SKEW` (provisionally 5 s) and
   the venue's user-data lag (`max_data_lag`, 1 min) bound when a count is true: an order
   listing's fill count is taken as true somewhere between the snapshot's `observed_at` and
-  `ReadManifest.data_true_by` (read end + `CLOCK_SKEW`, or the closing as_of if later); fills stamped in between
-  are never added on top of it and leave fees incomplete (ADR 0046 rule 14, P-3). If the venue's clock leads ours
-  by more than `CLOCK_SKEW`, a fill just before a read could again be counted twice; if the band is routinely
-  wide, fees stay incomplete more often.
+  `ReadManifest.data_true_by` (the latest of read end + `CLOCK_SKEW`, the closing as_of and the read's latest order
+  or fill stamp); fills stamped in between are never added on top of it and leave fees incomplete (ADR 0046 rule 14,
+  P-3). No fill of a read is ever added on top of that read's own count. A venue clock leading ours by more than
+  `CLOCK_SKEW` makes the read not COMPLETE (orders and fills unknown, so it disarms) when the opening as_of or any
+  order or fill stamp shows it (USER_DATA_AS_OF_IN_FUTURE, RECORD_STAMPED_IN_FUTURE); a lead hidden by a lagging
+  as_of with no recent record goes undetected. If the venue's real lead or lag is routinely near these values,
+  reads disarm or fees stay incomplete more often.
 - **`lifecycle.NOT_FOUND_MIN_DELAY` (provisionally 30 s).** It compares our clock with the venue's.
 - **Whether the available balance already excludes cash held by resting orders.** This drives
   `reservations`' venue-held credit.
