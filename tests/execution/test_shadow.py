@@ -318,8 +318,8 @@ def test_the_shadow_checks_what_prepare_attempt_would_check(env):
                         snapshot_max_age=timedelta(seconds=5))
     orch.submit_signal(sig("slow", B70, clock, limit="0.45", qty="2"))
     (v,) = orch.run_cycle().shadow_verdicts
-    assert v.outcome == "BLOCKED" and v.reasons and all(r.startswith("RESERVATION_REFUSED: SNAPSHOT_STALE")
-                                                        for r in v.reasons)
+    assert v.outcome == "BLOCKED" and len(v.reasons) == 1
+    assert v.reasons[0].startswith("PREPARE_REFUSED: SNAPSHOT_STALE")  # live's words (`PREPARE_REFUSED: <exc>`)
 
 
 def test_would_be_sends_share_the_request_budget(env, tmp_path):
@@ -464,6 +464,141 @@ def test_the_shadow_verdict_is_the_live_decision_up_to_egress(tmp_path):
         journal.close()
 
 
+def _side_by_side(tmp_path: Path, name: str, identity: sh.ProcessIdentity, *, delay: float = 0, bounds=None,
+                  **config_kw):
+    """One fresh account and store, booted, reconciled, armed (SHADOW or BOUNDED_AUTO), then one cycle on one
+    signal for B70 through `Unclamped(delay)`. Returns (report, journal); the caller closes the journal."""
+    clock = h.Clock()
+    adapter = h.VenueAdapter(clock)
+    h.seed_books(adapter)
+    journal = ExecutionJournal.open(tmp_path / f"{name}.execution.sqlite3")
+    kw = dict(config_kw)
+    if bounds is not None:
+        kw["bounds"] = bounds
+    if identity is READ_ONLY:
+        kw.update(worker_id="shadow-m", grants=(), identity=identity)
+    orch = o.Orchestrator(journal, h.config(**kw), send=adapter, feed=h.Feed(adapter),
+                          strategies=(Unclamped(clock, delay=delay),), clock=clock, sleep=clock.sleep)
+    assert orch.run_cycle().reconciliation == "COMPLETE"
+    assert isinstance(h.arm(orch, ctl.Mode.SHADOW if identity is READ_ONLY else ctl.Mode.BOUNDED_AUTO, clock),
+                      ctl.ArmAccepted)
+    clock.advance(60)
+    orch.submit_signal(sig("one", B70, clock, limit="0.45", qty="2"))
+    report = orch.run_cycle()
+    assert adapter.writes == [] or identity is not READ_ONLY
+    return report, journal
+
+
+@pytest.mark.parametrize("case,kw,first", [
+    # the gate passes; prepare_attempt's reservation refuses a snapshot older than snapshot_max_age
+    ("stale-snapshot", dict(delay=10, snapshot_max_age=timedelta(seconds=5)), "PREPARE_REFUSED: SNAPSHOT_STALE"),
+    # a slow strategy outlives the egress lease: blocked before anything is planned, in both
+    ("expired-lease", dict(delay=25, lease_ttl=timedelta(seconds=20)), "NO_EGRESS_LEASE: fence 1 expired at"),
+])
+def test_post_gate_refusals_are_live_s_own_words(tmp_path, case, kw, first):
+    shadow_report, shadow_journal = _side_by_side(tmp_path, f"{case}-shadow", READ_ONLY, **kw)
+    live_report, live_journal = _side_by_side(tmp_path, f"{case}-live", sh.ProcessIdentity.EXECUTOR, **kw)
+    try:
+        (verdict,) = shadow_report.shadow_verdicts
+        (decision,) = live_report.decisions
+        assert decision.outcome is o.Outcome.BLOCKED and verdict.outcome == "BLOCKED"
+        assert decision.reasons[0].startswith(first), decision.reasons
+        assert verdict.reasons == decision.reasons  # the same words, the same order
+        assert live_journal.attempts_for(verdict.intent.intent_key) == []
+        if case == "expired-lease":  # refused at egress: nothing was planned
+            assert live_journal.control_records(h.SCOPE, "INTENT_PLANNED") == ()
+    finally:
+        shadow_journal.close()
+        live_journal.close()
+
+
+# ---------------------------------------------------------------- the shared pre-egress order (live and shadow)
+
+
+def _reads_per_cycle(tmp_path: Path) -> int:
+    clock = h.Clock()
+    adapter = h.VenueAdapter(clock)
+    h.seed_books(adapter)
+    with ExecutionJournal.open(tmp_path / "reads-probe.execution.sqlite3") as journal:
+        orch, _ = h.build(journal, adapter)
+        orch.run_cycle()
+        assert isinstance(h.arm(orch, ctl.Mode.BOUNDED_AUTO, clock), ctl.ArmAccepted)
+        clock.advance(60)
+        return orch.run_cycle().requests_used
+
+
+@pytest.mark.parametrize("identity", [sh.ProcessIdentity.EXECUTOR, READ_ONLY])
+def test_an_exhausted_budget_blocks_before_anything_is_planned(tmp_path, identity):
+    bounds = replace(h.BOUNDS, max_requests_per_cycle=_reads_per_cycle(tmp_path))
+    report, journal = _side_by_side(tmp_path, identity.value, identity, bounds=bounds)
+    try:
+        (decision,) = report.decisions
+        assert decision.outcome is o.Outcome.BLOCKED and decision.reasons == ("REQUEST_BUDGET_EXHAUSTED",)
+        assert journal.control_records(h.SCOPE, "INTENT_PLANNED") == ()  # the plan record follows the egress steps
+        assert journal.non_terminal_attempts() == []
+    finally:
+        journal.close()
+
+
+@pytest.mark.parametrize("identity", [sh.ProcessIdentity.EXECUTOR, READ_ONLY])
+def test_the_lease_is_judged_before_the_budget(tmp_path, identity):
+    bounds = replace(h.BOUNDS, max_requests_per_cycle=_reads_per_cycle(tmp_path))
+    report, journal = _side_by_side(tmp_path, identity.value, identity, bounds=bounds, delay=25,
+                                    lease_ttl=timedelta(seconds=20))
+    try:
+        (decision,) = report.decisions
+        assert decision.outcome is o.Outcome.BLOCKED and len(decision.reasons) == 1
+        assert decision.reasons[0].startswith("NO_EGRESS_LEASE: fence 1 expired at"), decision.reasons
+    finally:
+        journal.close()
+
+
+def test_a_shadow_verdict_rejudged_from_new_inputs_is_recorded_again(env):
+    """The same intent, outcome and reasons on a later snapshot is a new judgement: it is recorded (before, the
+    dedupe on key, outcome and reasons alone dropped it)."""
+    journal, adapter, clock = env
+
+    class Fixed(Unclamped):
+        def propose(self, ctx):  # one identical intent every cycle, blocked for the same reason (its size)
+            ev = g.DecisionEvidence(evidence_id="fixed-ev", strategy_id=self.strategy_id,
+                                    strategy_version=self.strategy_version, model_version="m1",
+                                    decided_at_utc=m.utc_text(ctx.now),
+                                    sources=(g.SourceStamp("fixture-signals", m.utc_text(ctx.now)),))
+            intent = m.OrderIntent(
+                intent_key=f"{self.strategy_id}:fixed", strategy_id=self.strategy_id,
+                strategy_version=self.strategy_version, scope=ctx.scope, market_ticker=B70,
+                kind=m.IntentKind.ENTRY, side=m.Side.YES, action=m.Action.BUY, quantity=Decimal(20),
+                limit_price=Decimal("0.45"), time_in_force=m.TimeInForce.GOOD_TILL_CANCELED,
+                max_total_cost=Decimal("9.8"), expires_at_utc=m.utc_text(h.T0 + timedelta(hours=1)),
+                price_grid=h.CENT, quantity_grid=h.WHOLE, profile_version="kalshi-ordinary-v0",
+                risk_policy_version=h.POLICY.policy_id, fee_schedule_version="kalshi-quadratic-taker-v1",
+                reduce_only=False, evidence=(ev.evidence_id,))
+            return (o.Proposal(intent, ev),)
+
+    orch = armed_shadow(journal, adapter, clock, strategies=(Fixed(clock),))
+    first = orch.run_cycle()
+    clock.advance(60)
+    second = orch.run_cycle()
+    (a,), (b,) = first.shadow_verdicts, second.shadow_verdicts
+    assert a.intent.digest() == b.intent.digest() and (a.outcome, a.reasons) == (b.outcome, b.reasons)
+    assert dict(a.inputs)["shadow.snapshot_revision"] != dict(b.inputs)["shadow.snapshot_revision"]
+    assert len(verdicts(journal)) == 2
+    assert dict(a.inputs)["shadow.strategy_model_hash"] == h.MODEL_HASH
+
+
+def test_a_missing_strategy_hash_stays_unknown_in_the_verdict_inputs(env):
+    journal, adapter, clock = env
+
+    class NoHash(h.DemoStrategy):
+        model_hash = None
+
+    orch = armed_shadow(journal, adapter, clock, strategies=(NoHash(),))
+    orch.submit_signal(h.signal("s1", B70, at=clock(), limit="0.45"))
+    (v,) = orch.run_cycle().shadow_verdicts
+    inputs = dict(v.inputs)
+    assert inputs["shadow.strategy_model_hash"] is None and inputs["shadow.strategy_policy_hash"] == h.POLICY_HASH
+
+
 # ---------------------------------------------------------------- the read-only identity
 
 
@@ -488,6 +623,59 @@ def test_the_read_only_sender_refuses_every_write_before_the_caller_s_send(env):
     assert send(w.build_get_balance(h.SCOPE)).outcome == "OK" and len(inner.seen) == 1
     with pytest.raises(ValueError):
         sh.ReadOnlySender(send)  # wrapped once, never re-wrapped into something that could unwrap it
+
+
+class LyingRequest(w.WireRequest):
+    """A WireRequest subclass that claims to be a read (review M1's probe): it is a create underneath."""
+
+    def is_write(self) -> bool:
+        return False
+
+    @property
+    def method(self) -> w.HttpMethod:
+        return w.HttpMethod.GET
+
+
+def test_a_request_subclass_that_lies_about_being_a_read_is_refused(env):
+    _, adapter, clock = env
+    real = _create(clock)
+    liar = LyingRequest(real.endpoint, real.scope, real.path, real.query, real.body, real.exchange_index)
+    assert liar.is_write() is False and liar.method is w.HttpMethod.GET  # what a method-trusting guard would see
+    assert w.check_allowlisted(liar) is liar  # the allowlist alone accepts it (an isinstance check)
+    inner = Recorder(adapter)
+    with pytest.raises(sh.ShadowWriteRefused, match="LyingRequest"):
+        sh.ReadOnlySender(inner)(liar)
+    assert inner.seen == [] and adapter.writes == []
+
+    class HonestSubclass(w.WireRequest):  # even a subclass of a genuine read is refused: only the type itself
+        pass
+
+    balance = w.build_get_balance(h.SCOPE)
+    with pytest.raises(sh.ShadowWriteRefused):
+        sh.ReadOnlySender(inner)(HonestSubclass(balance.endpoint, balance.scope, balance.path, balance.query))
+    assert inner.seen == []
+
+
+def test_the_sender_s_decision_comes_from_the_endpoint_spec_not_the_request(env, monkeypatch):
+    """With the exact-type check bypassed, the endpoint's own spec (bucket and method) still refuses a write."""
+    _, adapter, clock = env
+    real = _create(clock)
+    liar = LyingRequest(real.endpoint, real.scope, real.path, real.query, real.body, real.exchange_index)
+    inner = Recorder(adapter)
+    sender = sh.ReadOnlySender(inner)
+    monkeypatch.setattr(sh, "type", lambda _: w.WireRequest, raising=False)  # the probe: the type check passes
+    with pytest.raises(sh.ShadowWriteRefused, match="ORDER_CREATE is not a read"):
+        sender(liar)
+    assert inner.seen == []
+
+
+def test_an_existing_read_only_sender_is_not_accepted_as_send(env):
+    journal, adapter, clock = env
+    for kw in (dict(worker_id="shadow-m", grants=(), identity=READ_ONLY), {}):
+        with pytest.raises(o.OrchestratorError, match="ReadOnlySender"):
+            o.Orchestrator(journal, h.config(**kw), send=sh.ReadOnlySender(adapter), feed=h.Feed(adapter),
+                           strategies=(h.DemoStrategy(),), clock=clock, sleep=clock.sleep)
+    assert journal.reservations.lease() is None  # refused before anything was written
 
 
 def test_a_proxy_reaching_for_the_network_from_the_shadow_path_gets_only_the_read_only_sender(env):
@@ -545,6 +733,56 @@ def test_a_shadow_never_runs_on_an_executor_store_and_an_executor_never_on_a_sha
             h.build(store, adapter)
         boot = store.control_records(h.SCOPE, "BOOT")[-1].body
         assert boot["identity"] == "READ_ONLY" and boot["worker_id"].startswith(sh.SHADOW_WORKER_PREFIX)
+
+
+# Each store-identity guard alone (review LOW): every store below passes the other two guards.
+
+
+def test_store_guard_lease_an_executor_of_another_scope_on_a_shadow_store(tmp_path):
+    clock = h.Clock()
+    adapter = h.VenueAdapter(clock)
+    h.seed_books(adapter)
+    other = m.AccountScope(m.Environment.FIXTURE, "other-acct")
+    with ExecutionJournal.open(tmp_path / "s.execution.sqlite3") as store:
+        shadow_orch(store, adapter, clock)  # the lease row is a shadow worker's; the BOOT is in h.SCOPE
+        assert store.control_records(other, "BOOT") == ()  # nothing in the other scope: only the lease can tell
+        lease = store.reservations.lease()
+        with pytest.raises(o.OrchestratorError, match="STORE_IDENTITY_MISMATCH: an? EXECUTOR"):
+            o.Orchestrator(store, h.config(scope=other, grants=()), send=adapter, feed=h.Feed(adapter),
+                           strategies=(h.DemoStrategy(),), clock=clock, sleep=clock.sleep)
+        assert store.reservations.lease() == lease
+
+
+@pytest.mark.parametrize("booted,runs", [("EXECUTOR", READ_ONLY), ("READ_ONLY", sh.ProcessIdentity.EXECUTOR)])
+def test_store_guard_boot_a_boot_record_without_a_lease_row(tmp_path, booted, runs):
+    clock = h.Clock()
+    adapter = h.VenueAdapter(clock)
+    with ExecutionJournal.open(tmp_path / "b.execution.sqlite3") as store:
+        store.append_control_record(h.SCOPE, "BOOT", {"identity": booted, "worker_id": "x"}, now=clock())
+        assert store.reservations.lease() is None and store.non_terminal_attempts() == []
+        kw = dict(worker_id="shadow-m", grants=(), identity=runs) if runs is READ_ONLY else {}
+        with pytest.raises(o.OrchestratorError, match="booted by another identity"):
+            o.Orchestrator(store, h.config(**kw), send=adapter, feed=h.Feed(adapter),
+                           strategies=(h.DemoStrategy(),), clock=clock, sleep=clock.sleep)
+        assert store.reservations.lease() is None
+
+
+def test_store_guard_attempts_a_store_with_an_attempt_in_flight(tmp_path):
+    import test_journal_fixtures as f
+
+    journal, token = f.ready(tmp_path / "a.execution.sqlite3")
+    try:
+        f.prepare(journal, f.entry(), token)  # an executor's attempt, PENDING_EGRESS
+        # The lease then passes to a shadow worker id (after it expired): the lease guard sees a shadow store, no BOOT
+        # record exists, and the takeover leaves the attempt OUTCOME_UNKNOWN, still in flight.
+        journal.reservations.acquire_lease("shadow-m", f.TTL, f.NOW + f.TTL + timedelta(seconds=1))
+        assert journal.non_terminal_attempts() and journal.control_records(h.SCOPE, "BOOT") == ()
+        clock = h.Clock(f.NOW + f.TTL + timedelta(seconds=2))
+        adapter = h.VenueAdapter(clock)
+        with pytest.raises(o.OrchestratorError, match="attempts in flight"):
+            shadow_orch(journal, adapter, clock)
+    finally:
+        journal.close()
 
 
 def test_a_verdict_is_well_formed_or_refused(env):

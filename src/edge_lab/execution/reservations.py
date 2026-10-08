@@ -519,15 +519,25 @@ class ReservationAuthority:
         return None if row is None else Lease(row[0], int(row[1]), row[2], row[3])
 
     def _check_fence(self, conn: sqlite3.Connection, fence_token: int, now: datetime) -> Lease:
-        if isinstance(fence_token, bool) or not isinstance(fence_token, int):
-            raise StaleFence(f"fence token must be an int, not {fence_token!r}")
         current = self._lease(conn)
+        problem = self.fence_problem(current, fence_token, now)
+        if problem is not None:
+            raise StaleFence(problem)
+        return current  # type: ignore[return-value]
+
+    @staticmethod
+    def fence_problem(current: Lease | None, fence_token: object, now: datetime) -> str | None:
+        """Why `fence_token` may not egress at `now` against the lease `current` (None: it may). The rule
+        `_check_fence` enforces inside a transaction; the orchestrator asks it before any send, and the account-aware
+        shadow (ADR 0047) before any WOULD_SUBMIT, so an expired lease blocks both the same way."""
+        if isinstance(fence_token, bool) or not isinstance(fence_token, int):
+            return f"fence token must be an int, not {fence_token!r}"
         if current is None or current.fence_token != fence_token:
-            raise StaleFence(f"fence {fence_token} is not the current egress lease "
-                             f"({current.fence_token if current else 'none'})")
+            return (f"fence {fence_token} is not the current egress lease "
+                    f"({current.fence_token if current else 'none'})")
         if not current.live_at(now):
-            raise StaleFence(f"fence {fence_token} expired at {current.expires_at_utc}")
-        return current
+            return f"fence {fence_token} expired at {current.expires_at_utc}"
+        return None
 
     # ------------------------------------------------------------------ account snapshots
 

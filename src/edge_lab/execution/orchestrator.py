@@ -90,7 +90,7 @@ from __future__ import annotations
 
 import json
 import re
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field, fields, replace
 from datetime import datetime, timedelta, timezone
 from decimal import Context, Decimal, Inexact, InvalidOperation, Rounded, localcontext
 from enum import Enum
@@ -107,12 +107,13 @@ from . import lifecycle as lc
 from . import recovery as rc
 from . import risk_gate as gate
 from . import shadow as sh
-from .journal import NO_ORDER_STATES, AttemptState, ExecutionJournal, JournalError, JournalUnavailable
+from .journal import (AttemptRefused, AttemptState, ExecutionJournal, JournalError, JournalUnavailable,
+                      live_attempt_problem)
 from .model import (MAX_DIGITS, AccountScope, Action, ApprovalGrant, ApprovalMethod, Environment, Grid, IntentKind,
                     OrderIntent, Side, TimeInForce, canonical_json, decimal_text, environment_authorized,
                     exact_decimal, parse_utc_text, sha256_text, utc_text)
 from .reservations import (AccountSnapshot, AccountView, CashBasis, ReceiptKind, ReservationAuthority,
-                           ReservationDecision, ReservationError, ReservationView, StaleFence)
+                           ReservationDecision, ReservationError, ReservationRefused, ReservationView, StaleFence)
 
 VENUE = "kalshi"
 SIGNAL_SCHEMA = "edge-lab-orchestrator-signal/1"
@@ -122,6 +123,7 @@ SIGNAL_CLOCK_SKEW = timedelta(seconds=5)  # how far a signal's issue time may be
 _ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9:._/-]{0,199}")
 _INCIDENT_CHARS = re.compile(r"[^A-Za-z0-9:._/-]")
 _DAY = timedelta(days=1)
+_MICROSECOND = timedelta(microseconds=1)
 _ZERO = Decimal(0)
 RECENT_MEMORY = 4096  # how many recent dedupe keys each in-memory set keeps (the journal stays the authority)
 
@@ -418,6 +420,10 @@ class ShutdownReport:
 # ---------------------------------------------------------------------------------------------- helpers
 
 
+def _text_or_none(value: object) -> str | None:
+    return value if isinstance(value, str) else None
+
+
 def _incident_id(prefix: str, key: str) -> str:
     text = _INCIDENT_CHARS.sub(".", f"{prefix}:{key}")
     return text[:200]
@@ -605,6 +611,8 @@ class Orchestrator:
         ids = [s.strategy_id for s in strategies]
         if len(set(ids)) != len(ids) or not all(isinstance(i, str) and _ID.fullmatch(i) for i in ids):
             raise OrchestratorError("strategy ids must be unique short identifiers")
+        if isinstance(send, sh.ReadOnlySender):
+            raise OrchestratorError("pass the caller's send: a READ_ONLY identity wraps it in its own ReadOnlySender")
         self._read_only = config.identity is sh.ProcessIdentity.READ_ONLY
         if self._read_only:  # the only network capability a read-only process holds refuses every write
             send = sh.ReadOnlySender(send)
@@ -1434,7 +1442,8 @@ class Orchestrator:
                                        capacity, request_digest_, inputs + (("verdict_schema", sh.VERDICT_SCHEMA),))
             cy.verdicts.append(verdict)
         once = outcome in (Outcome.AWAITING_APPROVAL, Outcome.WOULD_SUBMIT, Outcome.BLOCKED)
-        mark = (intent.intent_key, outcome.value, sha256_text(canonical_json(list(reasons))))
+        mark = (intent.intent_key, outcome.value, sha256_text(canonical_json(list(reasons))),
+                None if verdict is None else sha256_text(canonical_json([list(x) for x in verdict.inputs])))
         if once and mark in self._recorded:
             return  # the same verdict on the same intent is recorded once, not every cycle
         self._recorded.add(mark)
@@ -1530,21 +1539,34 @@ class Orchestrator:
         own = {"snapshot_revision": None if snap is None else str(snap.revision),
                "snapshot_observed_at": None if snap is None else snap.observed_at_utc,
                "control_basis": ctl.state_basis(self._state),
-               "ticket_limits": sha256_text(repr(self._config.risk.ticket_limits)),
-               "strategy_model_hash": str(getattr(strategy, "model_hash", None)),
-               "strategy_policy_hash": str(getattr(strategy, "policy_hash", None)),
-               "snapshot_max_age_s": str(self._config.snapshot_max_age.total_seconds())}
+               "ticket_limits": self._ticket_limits_digest(),
+               "strategy_model_hash": _text_or_none(getattr(strategy, "model_hash", None)),
+               "strategy_policy_hash": _text_or_none(getattr(strategy, "policy_hash", None)),
+               "snapshot_max_age_us": str(self._config.snapshot_max_age // _MICROSECOND)}
         merged = dict(decision.inputs)
         merged.update({f"shadow.{k}": v for k, v in own.items()})
         return tuple(sorted(merged.items()))
+
+    def _ticket_limits_digest(self) -> str:
+        """A canonical digest of the ticket limits (they carry no id): each field as exact text."""
+        tl = self._config.risk.ticket_limits
+        body = {f.name: str(getattr(tl, f.name) // _MICROSECOND) if isinstance(getattr(tl, f.name), timedelta)
+                else str(getattr(tl, f.name)) for f in fields(tl)}
+        return sha256_text(canonical_json(body))
 
     def _egress_request(self, cy: _Cycle, intent: OrderIntent,
                         market: gate.MarketState) -> tuple[w.WireRequest | None, str | None]:
         """The steps between an allowed decision and `prepare_attempt`, shared by a real send and a SHADOW verdict:
         the egress lease, the cycle's request budget (a SHADOW verdict counts the request it would have sent) and
-        the exact create request. (request, None), or (None, why)."""
+        the exact create request. (request, None), or (None, why). The lease is judged by the journal's own fence
+        rule (`ReservationAuthority.fence_problem`, expiry included), so an expired lease blocks a SHADOW verdict
+        exactly where it blocks a send, before anything is planned; `prepare_attempt` re-checks it in its
+        transaction."""
         if self._fence is None:
             return None, "NO_EGRESS_LEASE"
+        fence = ReservationAuthority.fence_problem(self._journal.reservations.lease(), self._fence, self._now())
+        if fence is not None:
+            return None, f"NO_EGRESS_LEASE: {fence}"[:300]
         if cy.budget.remaining - cy.shadow_sends < 1:
             cy.budget.exhausted = True
             return None, "REQUEST_BUDGET_EXHAUSTED"
@@ -1562,11 +1584,15 @@ class Orchestrator:
         request, why = self._egress_request(cy, intent, market)
         reasons = [] if why is None else [why]
         attempts = self._journal.attempts_for(intent.intent_key)
-        live = [a for a in attempts if a.state not in NO_ORDER_STATES]
-        if live:
-            reasons.append(f"ATTEMPT_BLOCKED: {live[-1].attempt_id} is {live[-1].state.value}")
+        # Then `prepare_attempt`'s refusals, in its order and in its words (`PREPARE_REFUSED: <the exception>`), so
+        # reasons[0] is exactly what a real decision reports; the rest of the list is every other refusal. The live
+        # attempt check is a backstop: arbitration already drops a key this service planned (ADR 0047).
+        blocked = live_attempt_problem(attempts)
+        if blocked is not None:
+            reasons.append(f"PREPARE_REFUSED: {AttemptRefused(blocked)}"[:300])
         if capacity is None or not capacity.allowed:
-            reasons += [f"RESERVATION_REFUSED: {r}"[:300] for r in (capacity.reasons if capacity else ("unknown",))]
+            refused = ReservationRefused(capacity.reasons if capacity is not None else ("CAPACITY_UNKNOWN",))
+            reasons.append(f"PREPARE_REFUSED: {refused}"[:300])
         if reasons:
             self._decision(cy, intent, Outcome.BLOCKED, tuple(reasons), capacity=capacity, inputs=inputs)
             return

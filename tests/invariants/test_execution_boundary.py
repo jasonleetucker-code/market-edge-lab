@@ -654,29 +654,46 @@ _SHADOW_MODULE_WRITES = re.compile(r"^(build_(create|cancel|amend|decrease)|ORDE
                                    r"confirm_\w+|append_control_\w+|_reserve|acquire_lease|renew_lease)$")
 
 
-def _package_deps(rel: str, text: str) -> set[str]:
-    """The package files `rel` imports (`from .x import y`, `from . import x`, absolute forms)."""
+def _package_deps(rel: str, text: str, known: set[str] | frozenset[str]) -> set[str]:
+    """The package files `rel` imports (`from .x import y`, `from . import x`, `from .sub.m import y`, absolute
+    forms), each resolved to a module file or a subpackage's `__init__.py` in `known`, longest name first. A
+    dependency that resolves to nothing comes back as `?<dotted name>`: the walk fails on it, it never skips it."""
     out = set()
     for _, mod in _imports(text, rel):
         parts = mod.split(".")
-        if parts[:2] == ["edge_lab", "execution"] and len(parts) >= 3:
-            out.add(f"edge_lab/execution/{parts[2]}.py")
+        if parts[:2] != ["edge_lab", "execution"] or len(parts) < 3:
+            continue
+        rest, found = parts[2:], None
+        for n in range(len(rest), 0, -1):
+            base = "edge_lab/execution/" + "/".join(rest[:n])
+            found = next((c for c in (base + ".py", base + "/__init__.py") if c in known), None)
+            if found:
+                break
+        out.add(found or "?" + mod)
     return out
+
+
+def _real_package_files() -> frozenset[str]:
+    return frozenset(_rel(p) for p in PACKAGE.rglob("*.py"))
 
 
 def _shadow_reach_hits(sources: dict[str, str], roots=SHADOW_PATH) -> list[str]:
     """Walk the package import graph from each shadow-path root; a capability module or user anywhere is a hit,
-    reported with the chain that reaches it."""
+    reported with the chain that reaches it, and so is a dependency that resolves to no package file. Names resolve
+    against `sources` plus the real package's files (so a probe graph may leave a real module's text out)."""
     banned = {cap.replace(".", "/") + ".py" for cap in CAPABILITY_USERS}
     banned |= {u for users in CAPABILITY_USERS.values() for u in users}
+    known = set(sources) | _real_package_files()
     hits = []
     for root in sorted(roots):
         parent: dict[str, str | None] = {root: None}
         stack = [root]
         while stack:
             cur = stack.pop()
-            for dep in sorted(_package_deps(cur, sources.get(cur, ""))):
-                if dep in banned:
+            for dep in sorted(_package_deps(cur, sources.get(cur, ""), known)):
+                if dep.startswith("?"):
+                    hits.append(f"{root}: {cur} imports {dep[1:]}, which resolves to no package file")
+                elif dep in banned:
                     chain, node = [dep], cur
                     while node is not None:
                         chain.append(node)
@@ -724,7 +741,7 @@ def _package_sources() -> dict[str, str]:
 def test_the_shadow_path_reaches_no_capability_even_through_a_proxy():
     sources = _package_sources()
     assert SHADOW_PATH <= set(sources), "the shadow path's files exist (the rule is not vacuous)"
-    closure = {d for root in SHADOW_PATH for d in _package_deps(root, sources[root])}
+    closure = {d for root in SHADOW_PATH for d in _package_deps(root, sources[root], set(sources))}
     assert {"edge_lab/execution/risk_gate.py", "edge_lab/execution/reservations.py",
             "edge_lab/execution/account.py", "edge_lab/execution/kalshi_wire.py"} <= closure
     hits = _shadow_reach_hits(sources)
@@ -757,9 +774,20 @@ def test_the_shadow_module_names_no_write_path():
     # a future capability user (the transport's own user, e.g. an executor) is a proxy too
     {"edge_lab/execution/orchestrator.py": "from . import executor\n",
      "edge_lab/execution/executor.py": "from .transport import Transport\n"},
+    # a capability behind a subpackage (resolved to its __init__.py or module and walked)
+    {"edge_lab/execution/shadow.py": "from .sub.helpers import x\n",
+     "edge_lab/execution/sub/__init__.py": "", "edge_lab/execution/sub/helpers.py": "from ..transport import T\n"},
 ])
 def test_a_shadow_path_proxy_to_a_capability_is_caught(graph):
-    assert _shadow_reach_hits(graph), graph
+    hits = _shadow_reach_hits(graph)
+    assert any(" reaches edge_lab/execution/" in h for h in hits), (graph, hits)
+
+
+@pytest.mark.parametrize("line", ["from .future_sub import thing\n", "from . import not_a_module\n",
+                                  "import edge_lab.execution.gone.deeper\n"])
+def test_a_shadow_path_dependency_that_resolves_to_nothing_fails(line):
+    hits = _shadow_reach_hits({"edge_lab/execution/shadow.py": line})
+    assert hits and all("resolves to no package file" in h for h in hits), hits
 
 
 @pytest.mark.parametrize("line", [

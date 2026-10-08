@@ -27,13 +27,34 @@ The orchestrator already had a SHADOW mode (package K). It ran the gate and reco
 
 1. **One chain: M is the orchestrator's SHADOW mode, not a second module that re-derives decisions.** `_decide` is
    shared by every mode up to egress. After the gate, SHADOW runs:
-   - `_egress_request`: the egress lease, the cycle's request budget and the exact create request. A real send runs
-     the same function; it was extracted from `_prepare_and_send` unchanged.
-   - What `prepare_attempt` checks, read-only:
-     - no earlier attempt of the intent may still be live (`NO_ORDER_STATES`);
+   - `_egress_request`: the egress lease, the cycle's request budget and the exact create request, in that order.
+     A real send runs the same function, extracted from `_prepare_and_send`. The lease is judged by the journal's own
+     fence rule (`ReservationAuthority.fence_problem`, which `_check_fence` now calls), **expiry included**.
+   - What `prepare_attempt` checks, read-only, in its order:
+     - no earlier attempt of the intent may still be live (`journal.live_attempt_problem`, which `prepare_attempt`
+       now calls). This is a **backstop**: arbitration already drops any key this service planned, and an attempt
+       the gate could see unresolved blocks it (RECONCILIATION_UNHEALTHY) before this point. No test reaches it
+       through a cycle;
      - the reservation must fit. This uses `ReservationAuthority.decide`, the capacity rule extracted from
        `_evaluate`, so `_reserve` and the shadow call the same function.
    - The approval is not consumed, because there is none: SHADOW judges with `gate.evaluate`, as before.
+
+   **Reasons after the gate are live's own words.** A BLOCKED verdict lists every refusal, in the order a real
+   decision meets them, and `reasons[0]` is exactly the single reason the real decision records:
+   - an egress refusal as `_egress_request` words it (`NO_EGRESS_LEASE[: <fence problem>]`,
+     `REQUEST_BUDGET_EXHAUSTED`, `WIRE_REFUSED: ...`);
+   - then `PREPARE_REFUSED: <the exception prepare_attempt would raise>`: `AttemptRefused(live_attempt_problem)`,
+     then `ReservationRefused(capacity reasons)`, whose text joins the capacity rule's reasons with `"; "`.
+
+   A real decision stops at the first, so the rest of the list is shadow-only information. `test_shadow.py` runs
+   the same account through SHADOW and BOUNDED_AUTO and compares the tuples (a stale snapshot, an expired lease).
+   Not replicated: `prepare_attempt`'s IntentConflict (the same key with another digest), which cannot arise for a
+   key that was never recorded.
+
+   **One live-path change (review round 2).** An expired lease used to pass `_egress_request` (it checked only
+   that a fence existed), get an `INTENT_PLANNED` record, and be refused inside `prepare_attempt`. It is now
+   refused at egress, before anything is planned; `prepare_attempt` still re-checks the fence in its transaction
+   and remains the hard stop. Demonstration B's hash is unchanged (no decision there meets an expired lease).
 
    What SHADOW does not share is what follows an allowed decision in a sending mode: the approval (human or
    policy) and the grant checks, the `INTENT_PLANNED` record, `prepare_attempt`, `send` and the reply handling.
@@ -62,12 +83,17 @@ The orchestrator already had a SHADOW mode (package K). It ran the gate and reco
    - the version of every input: the gate's own list, the snapshot revision and time, the control state basis, the
      ticket limits, the strategy hashes and the verdict schema.
 
-   No loader reads `SHADOW_VERDICT` as a planned intent: `_load_records` reads only `INTENT_PLANNED`. Verdicts are
-   deduplicated with the `DECISION` row they accompany. The cycle report carries them all (`shadow_verdicts`).
+   No loader reads `SHADOW_VERDICT` as a planned intent: `_load_records` reads only `INTENT_PLANNED`. A verdict is
+   recorded once per (intent key, outcome, reasons, **input versions**), together with its `DECISION` row: the
+   same verdict reached from a new snapshot, market state or control state is a new judgement and is recorded
+   again. In practice that is once per proposal per cycle, bounded by `max_proposals_per_cycle`. The cycle report
+   carries them all (`shadow_verdicts`).
 4. **The read-only process identity** (`OrchestratorConfig.identity = ProcessIdentity.READ_ONLY`):
-   - The caller's `send` is wrapped in `shadow.ReadOnlySender`. It re-validates each request against the
-     allowlist. A write, a non-GET or a non-`WireRequest` raises `ShadowWriteRefused` before the caller's callable
-     is reached.
+   - The caller's `send` is wrapped in `shadow.ReadOnlySender`. It accepts only an object whose type is exactly
+     `WireRequest` (a subclass could override `is_write`, `method` or `full_path` and lie). It re-validates the
+     request against the allowlist, then decides from the endpoint's own spec (`request.endpoint.value`: bucket READ
+     and method GET), an Enum member no subclass can replace. Anything else raises `ShadowWriteRefused` before the
+     caller's callable is reached. An existing `ReadOnlySender` passed as `send` is refused (`OrchestratorError`).
    - `request_arm` to anything but OBSERVE_ONLY or SHADOW is persisted as `ArmRefused`
      (`READ_ONLY_IDENTITY`). `decide_arm` is not consulted.
    - The process holds no automation grant (config refusal), and `shutdown(cancel_owned=True)` is refused.
@@ -85,7 +111,9 @@ The orchestrator already had a SHADOW mode (package K). It ran the gate and reco
 5. **Structural guarantee** (amends ADR 0043 §3; enforced by `tests/invariants/test_execution_boundary.py`):
    - The shadow path (`shadow.py`, `orchestrator.py`) and every package module it imports, transitively, reach no
      capability module and no capability user. A proxy module in between is caught, and so is a capability user
-     added later (package O's executor), because the reach is computed from `CAPABILITY_USERS`.
+     added later (package O's executor), because the reach is computed from `CAPABILITY_USERS`. Each dependency
+     must resolve to a package module or a subpackage's `__init__.py`; one that resolves to nothing fails the
+     invariant instead of being skipped.
    - The shadow path binds no package object and names no capability.
    - `shadow.py` names no write builder, order endpoint or journal write.
    - The read-only sender's inner callable (`_inner_send`) is private safety state named only by `shadow.py`.
@@ -115,7 +143,15 @@ The orchestrator already had a SHADOW mode (package K). It ran the gate and reco
   control latch, incident, reconciliation, stream and capacity check is.
 - **Re-proposals repeat.** A key that got WOULD_SUBMIT is not planned, so the same intent proposed again next cycle
   is judged again. The real chain would refuse a second attempt. The verdict is recorded once per (key, outcome,
-  reasons).
+  reasons, input versions).
+- **Other runtime guards trust `isinstance` too** (found in review round 2, not changed here: they belong to
+  packages B/F). `kalshi_wire.check_allowlisted` accepts any `WireRequest` subclass. `transport.send` and
+  `_http_request` then decide from the request's own `is_write()`, `method`, `full_path` and `query_string()`, and
+  `signer` signs `method` and `full_path`. A FIXTURE probe showed a create whose subclass reports
+  `is_write() == False` sent as POST three times and reported UNAVAILABLE, where a genuine create is sent once and
+  reported AMBIGUOUS. Only package code can build such a subclass, since nothing outside the package imports it.
+  The one-owner fix is an exact-type check in `check_allowlisted`, plus deciding write/read from
+  `request.endpoint.value` in the transport.
 - **The store identity check is reads before the lease, not one transaction with it.** A takeover in between is
   possible in principle. The hard separation (a distinct service user, file and credentials) is package O, and the
   real read-only credential is package S.

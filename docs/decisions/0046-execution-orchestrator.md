@@ -235,7 +235,9 @@ Composition is where the dangerous paths live:
 
 15. **SHADOW is the account-aware shadow (package M; added 2026-10-08; ADR 0047).** SHADOW runs `_decide` up to
     egress and then stops. The steps between an allowed decision and `prepare_attempt` are one function,
-    `_egress_request`, shared with a real send: the lease, the request budget and the exact create request. SHADOW
+    `_egress_request`, shared with a real send: the lease (the journal's fence rule, expiry included: an expired
+    lease is refused there, before INTENT_PLANNED, and `prepare_attempt` re-checks it), the request budget and the
+    exact create request. SHADOW
     then makes `prepare_attempt`'s own checks read-only: no live earlier attempt, and the reservation authority's
     `decide`. A WOULD_SUBMIT holds a hypothetical reservation for the rest of its cycle only, and every SHADOW
     verdict is a `SHADOW_VERDICT` record. A `READ_ONLY` identity (its own `shadow-` store; a `ReadOnlySender`;

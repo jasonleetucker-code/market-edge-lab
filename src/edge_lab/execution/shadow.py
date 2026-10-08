@@ -68,12 +68,21 @@ class ReadOnlySender:
         self._inner_send = send
 
     def __call__(self, request: w.WireRequest) -> Any:
+        # Exactly a WireRequest: a subclass could override `is_write`, `method` or `full_path` and lie. The decision
+        # is then read from the endpoint's own spec (an Enum member, which no subclass can replace), never from a
+        # method of the request.
+        if type(request) is not w.WireRequest:
+            raise ShadowWriteRefused(f"READ_ONLY_IDENTITY: only a kalshi_wire.WireRequest itself is sent, not "
+                                     f"{type(request).__name__}")
         try:
-            request = w.check_allowlisted(request)
+            w.check_allowlisted(request)
         except ValueError as exc:
             raise ShadowWriteRefused(f"READ_ONLY_IDENTITY: not an allowlisted request ({exc})") from exc
-        if request.is_write() or request.method is not w.HttpMethod.GET:
-            raise ShadowWriteRefused(f"READ_ONLY_IDENTITY: {request.endpoint.name} is not a read")
+        endpoint = request.endpoint
+        spec = endpoint.value if isinstance(endpoint, w.Endpoint) else None
+        if not isinstance(spec, w.EndpointSpec) or spec.bucket is not w.Bucket.READ \
+                or spec.method is not w.HttpMethod.GET:
+            raise ShadowWriteRefused(f"READ_ONLY_IDENTITY: {getattr(endpoint, 'name', endpoint)} is not a read")
         return self._inner_send(request)
 
 
