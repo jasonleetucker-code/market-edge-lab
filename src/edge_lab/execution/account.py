@@ -236,19 +236,18 @@ def check_read_request(request: object) -> WireRequest:
     """`request` if this module may hand it to `send`: an allowlisted GET with an explicit subaccount wherever the
     endpoint takes one, and positions always with an explicit settlement status. Anything else raises."""
     try:
-        w.check_allowlisted(request)
+        req = w.check_allowlisted(request)  # exactly a WireRequest: a subclass could override is_write()
     except ValueError as exc:
         raise AccountReadError(f"not an allowlisted request: {exc}") from None
-    assert isinstance(request, WireRequest)
-    if request.is_write() or request.endpoint not in READ_ENDPOINTS:
-        raise AccountReadError(f"{request.endpoint.name} is not a read: account reconciliation never writes")
-    keys = {k for k, _ in request.query}
-    if "subaccount" in request.endpoint.value.query_keys and "subaccount" not in keys:
-        raise AccountReadError(f"{request.endpoint.name} must name its subaccount (an omitted one means all or 0, "
+    if w.request_is_write(req) or req.endpoint not in READ_ENDPOINTS:  # the spec, never req.is_write()
+        raise AccountReadError(f"{req.endpoint.name} is not a read: account reconciliation never writes")
+    keys = {k for k, _ in req.query}
+    if "subaccount" in req.endpoint.value.query_keys and "subaccount" not in keys:
+        raise AccountReadError(f"{req.endpoint.name} must name its subaccount (an omitted one means all or 0, "
                                "depending on the endpoint: SUB-03)")
-    if request.endpoint is Endpoint.GET_POSITIONS and "settlement_status" not in keys:
+    if req.endpoint is Endpoint.GET_POSITIONS and "settlement_status" not in keys:
         raise AccountReadError("a positions read must name settlement_status (the default omits settled rows)")
-    return request
+    return req
 
 
 # ---------------------------------------------------------------------------------------------- records

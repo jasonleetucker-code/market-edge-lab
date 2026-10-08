@@ -117,6 +117,16 @@ Two opposite failures are possible:
    - only `execution/signer.py` may import it;
    - CI installs it;
    - every other runtime module stays stdlib-only.
+9. **Runtime guards trust the exact type and the spec, not the request's methods** (amended 2026-10-08, #160
+   BF2). `kalshi_wire.check_allowlisted` accepts only an object whose type is exactly `WireRequest`; a subclass is
+   refused, because it can override `is_write`, `method`, `full_path` or `query_string` and disagree with the
+   endpoint it names. In a FIXTURE probe an ORDER_CREATE that claimed to be a read was sent three times under the
+   read-retry policy. Behind that check, the signer, the transport and the account read guard take the method,
+   write-ness, retry policy, signed path and query from the endpoint specification and the validated fields
+   (`kalshi_wire.request_method`, `request_is_write`, `request_full_path`, `request_query_string`), so one layer
+   failing does not reopen the hole. The `WireRequest` methods remain as conveniences and delegate to the same
+   functions. `tests/execution/test_wire_exact_request.py` tests both layers and pins the wire bytes of every
+   allowlisted endpoint.
 
 ## Alternatives rejected
 
