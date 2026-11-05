@@ -268,3 +268,46 @@ The agent asked three questions. The owner chose these options:
 - **Kalshi data rights in general.** The `DATA_RIGHTS` blocker (`docs/research/CURRENT_BLOCKERS.md`) stays open.
   Answer 1 authorizes only the bounded reads described there, for private deterministic use in this lane. Sending
   Kalshi data or metadata to any AI model remains prohibited.
+
+## Owner plan approval and refinements (same session, verbatim)
+
+```text
+I approve the overall plan, including the four bounded PRs, the Kalshi restrictions, the private transcript inbox,
+and the existing deployment safeguards.
+
+Before implementation, make these refinements:
+
+1. Prioritize the complete owner experience. I want to be able to open Market Edge, see collected news, upload a
+podcast transcript, generate a research packet, copy it into Claude or ChatGPT, import the analysis, associate it
+with a confirmed Kalshi market, refresh the price, and see the resulting evaluation. This complete workflow is more
+important than implementing all 50 sources immediately.
+
+2. Make manual AI analysis extremely easy. Since we're not authorizing API-based AI calls, give me a one-click
+research-packet copy function containing a ready-to-use analysis prompt. Provide an import format that minimizes
+manual editing. The system should validate the analysis automatically when I submit it. No Kalshi data may be
+included in the AI packet.
+
+3. Make the limitations transparent. Clearly distinguish automatically collected information, deterministic event
+classification, manually imported AI analysis, provisional forecasts, and verified trading economics. Never present
+an uncalibrated prediction or an unverified fee-adjusted calculation as a proven profitable opportunity. If fees,
+rules, prices, or probability estimates are unsupported, say so.
+
+4. Don't let infrastructure work displace usefulness. Activate the highest-value verified free feeds first. Keep the
+full 50-source registry, but prioritize genuinely useful research, primary-source corroboration, and one complete
+end-to-end workflow. Don't sacrifice transcript import, research packet exchange, market linking, or the
+opportunity evaluation to finish optional dashboard features.
+
+5. Demonstrate the complete workflow before declaring success. Use actual collected news and a clearly identified
+test transcript to produce an event record, research packet, imported provisional forecast, confirmed market link,
+refreshed quote, and saved evaluation. Show the actual states and explain any unsupported economics. Also
+distinguish merged code from deployed functionality.
+
+Preserve existing repository authority, tests, reviews, merge requirements, and production safeguards.
+
+With those adjustments, proceed with implementation. I want working code and a usable initial feature, not another
+planning exercise.
+```
+
+Effect on scope: none of this widens authority. Refinement 2's "one-click copy" means a small, reviewed clipboard
+script on the packet page, added through the UI_CONTRACT §14 amendment. The packet stays readable and selectable
+with JavaScript off. Refinement 5's demonstration runs on a private local copy, never on production.
