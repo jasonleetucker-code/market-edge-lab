@@ -341,3 +341,25 @@ def test_kalshi_steps_take_the_hosts_single_pacer_lock(store):
     with service._kalshi_lock(store):
         out = service.refresh_quotes(store, now=NOW, reader=object())
     assert out["status"] == "REFUSED" and out["code"] == "LOCK_BUSY"
+
+
+def test_a_live_book_received_after_the_run_started_is_not_future_stamped(store):
+    """Regression (live demo 2026-11-05): the decision was dated at the run's start, before the book
+    arrived, so every live book read as BOOK_TIMESTAMP_IN_FUTURE and was skipped."""
+    ticker = "KXPOLFIXTURE-26DEC31-Y"
+    service.record_link(store, outcome_id="ev-x:impeached", ticker=ticker, status="CONFIRMED", rules_read=True,
+                        yes_matches_outcome=True, now=NOW)
+    market = json.loads((FIX / "kalshi" / f"market_{ticker}.json").read_text())
+    book = json.loads((FIX / "kalshi" / f"orderbook_{ticker}.json").read_text())
+    later = (NOW + timedelta(seconds=2)).isoformat()
+
+    def getter(url):
+        res = _res(url, b"{}")
+        res = FetchResult(**{**res.__dict__, "received_at_utc": later})
+        return (book if url.split("?")[0].endswith("/orderbook") else market), res
+
+    reader = kalshi_link.Reader(store, run_id="unused", now=NOW, getter=getter)
+    service.refresh_quotes(store, now=NOW, reader=reader)
+    rec = json.loads(store.latest_intel_record("decision", "ev-x:impeached")["payload_json"])
+    assert "BOOK_TIMESTAMP_IN_FUTURE" not in rec["sheet"]["action_reasons"]
+    assert rec["sheet"]["quote_fresh"] is True

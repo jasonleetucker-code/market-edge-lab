@@ -663,9 +663,13 @@ def refresh_quotes(store: SnapshotStore, *, now: datetime | None = None, reader=
                                                "orderbook_snapshot_id": ob.snapshot_id,
                                                "received_at_utc": ob.received_at_utc})
             _maybe_resolve(store, link, m.payload, now=now)
+            # The decision is made after its quote arrived: never date it before the receipt (a live
+            # book received moments after the run started would otherwise read as future-stamped).
+            received = _parse_time(ob.received_at_utc)
+            decided_at = max(now, received) if received is not None else now
             decisions.append(decide(store, link=link, market=m.payload, orderbook=ob.payload,
                                     received_at_utc=ob.received_at_utc,
-                                    evidence_id=f"snapshot:{ob.snapshot_id}", now=now, policy=policy))
+                                    evidence_id=f"snapshot:{ob.snapshot_id}", now=decided_at, policy=policy))
         store.finish_run(run_id, status="succeeded" if not errors else "partial")
     except KalshiRefused as exc:
         store.finish_run(run_id, status="failed", error=exc.code)
@@ -682,6 +686,14 @@ def KalshiRefusedBusy():
     from .kalshi_link import KalshiRefused
 
     return KalshiRefused("LOCK_BUSY", "another Kalshi capture holds the host lock; try again shortly")
+
+
+def _parse_time(text: str | None) -> datetime | None:
+    try:
+        dt = datetime.fromisoformat(str(text).replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return None
+    return dt if dt.tzinfo is not None else None
 
 
 def _maybe_resolve(store: SnapshotStore, link: dict[str, Any], market_payload: dict[str, Any], *, now: datetime) -> None:
