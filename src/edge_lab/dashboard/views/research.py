@@ -1843,7 +1843,10 @@ def economics_section(ctx: d.Context) -> str:
             + c.section("Economic evidence · B", family_b_body(ctx.economic_b, ctx.now),
                         meta="Same-venue payoff consistency · research only", sid="ev-b-h")
             + c.section("In-play research", '<p class="note">Owner Idea 122 · hold versus exit · offline foundation, '
-                        "fixtures only · not live</p>", sid="ip-h", action='<a href="/experiments/inplay">Open</a>'))
+                        "fixtures only · not live</p>", sid="ip-h", action='<a href="/experiments/inplay">Open</a>')
+            + c.section("News & political intelligence", '<p class="note">Collected news, podcast transcripts, '
+                        "research packets and provisional forecasts linked to confirmed Kalshi markets · research "
+                        "only · no orders</p>", sid="in-h", action='<a href="/experiments/intel">Open</a>'))
 
 
 # --------------------------------------------------------------------------- Kalshi NHL coverage (ADR 0040)

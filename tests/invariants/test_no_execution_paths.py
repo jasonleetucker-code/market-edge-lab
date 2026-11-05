@@ -60,6 +60,19 @@ PLANNED_EXECUTION_EXCEPTIONS = {
     "edge_lab/execution/kalshi_wire.py": {"order endpoint": None},
 }
 EXECUTION_NEVER_EXEMPT = frozenset({"client write call"})
+
+# The dashboard's intel inbox form (UI_CONTRACT §14 2026-11-05, ADR 0049): one HTML form, drawn by one component,
+# whose action is the fixed inbox route. Path-exact and narrowed to that one literal: any other POST, a form to
+# another action, PUT/PATCH/DELETE, or the same line in another file is still a violation.
+DASHBOARD_FORM_REL = "edge_lab/dashboard/components.py"
+DASHBOARD_FORM_LINE = 'method="post" action="{INBOX_ACTION}"'
+DASHBOARD_FORM_EXCEPTION = {
+    DASHBOARD_FORM_REL: {
+        "non-GET HTTP method": re.compile(
+            r"""method\s*=\s*["'](POST|PUT|PATCH|DELETE)["'](?!\s+action="\{INBOX_ACTION\}")|"""
+            r"""method\s*=\s*["'](PUT|PATCH|DELETE)["']""", re.I),
+    },
+}
 # Active exceptions: each entry is copied unchanged from the plan, in the PR that creates its file.
 # Activated by #160 B/F, which creates signer.py, transport.py and kalshi_wire.py.
 EXECUTION_EXCEPTIONS: dict = {rel: PLANNED_EXECUTION_EXCEPTIONS[rel] for rel in (
@@ -76,7 +89,8 @@ def _rel(path: Path) -> str:
 
 def _violations(label: str, rel: str, text: str) -> list[str]:
     """Lines of `text` (the file at `rel`, relative to src/) that break rule `label`."""
-    relaxed = NOTIFICATION_DELIVERY_EXCEPTION.get(rel) or EXECUTION_EXCEPTIONS.get(rel) or {}
+    relaxed = (NOTIFICATION_DELIVERY_EXCEPTION.get(rel) or EXECUTION_EXCEPTIONS.get(rel)
+               or DASHBOARD_FORM_EXCEPTION.get(rel) or {})
     pattern = relaxed[label] if label in relaxed else FORBIDDEN[label]
     if pattern is None:
         return []
@@ -149,6 +163,34 @@ def test_the_notification_file_may_post_but_never_put_patch_delete_or_send_venue
     text = (SRC / NTFY_REL).read_text()
     assert not _violations(label, NTFY_REL, text)
     assert _violations(label, NTFY_REL, text + "\n" + line + "\n"), line
+
+
+# ---------------------------------------------------------------- the intel inbox form exception (ADR 0049)
+
+
+def test_the_form_exception_is_in_use_and_names_the_inbox_route():
+    from edge_lab.dashboard import app, components
+
+    text = (SRC / DASHBOARD_FORM_REL).read_text()
+    assert DASHBOARD_FORM_LINE in text and FORBIDDEN["non-GET HTTP method"].search(text)
+    assert components.INBOX_ACTION == app.INBOX_PATH == "/experiments/intel/inbox"
+    assert not _violations("non-GET HTTP method", DASHBOARD_FORM_REL, text)
+
+
+@pytest.mark.parametrize("rel", ["edge_lab/dashboard/views/intel.py", "edge_lab/dashboard/app.py",
+                                 "edge_lab/dashboard/components_extra.py", "edge_lab/components.py",
+                                 "edge_lab/dashboard/sub/components.py"])
+def test_the_form_exception_is_bound_to_the_exact_path(rel):
+    line = f"x = f'<form {DASHBOARD_FORM_LINE}>'\n"
+    assert _violations("non-GET HTTP method", rel, line), rel
+
+
+@pytest.mark.parametrize("line", ['<form method="post" action="/orders">', 'Request(url, method="POST")',
+                                  'method="post" action="/elsewhere"', 'method="PUT" action="{INBOX_ACTION}"',
+                                  "method='delete'", 'Request(url, method="PATCH")'])
+def test_the_form_file_still_refuses_any_other_post_or_method(line):
+    text = (SRC / DASHBOARD_FORM_REL).read_text() + "\n" + line + "\n"
+    assert _violations("non-GET HTTP method", DASHBOARD_FORM_REL, text), line
 
 
 # Only the notification module may set its host allowlist or replace a sink's opener.

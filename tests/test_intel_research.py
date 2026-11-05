@@ -370,3 +370,13 @@ def test_effective_status_needs_fresh_verification_and_falls_on_refusal():
     # A blocked source never rises, whatever the evidence says.
     assert registry.effective_status(registry.BY_ID["bls"], last_verified_ok_utc="2026-11-05T12:00:00Z",
                                      now=now) is AccessStatus.BLOCKED
+
+
+
+def test_a_prediction_is_never_corroborated_by_news_on_the_same_subject():
+    """Regression (live demo 2026-11-05): a host's "the House will not impeach X" was marked CORROBORATED
+    because the news mentions the same subject."""
+    pred = claim("p", "The House will not impeach Jane Doe before the end of the year.", ClaimType.PREDICTION)
+    news_items = [news("n1", "bbc", "House Democrats push to impeach Jane Doe before year end"),
+                  news("n2", "npr", "Impeach Jane Doe push grows in the House before year end")]
+    assert claim_verification(pred, news_items) is Verification.UNVERIFIED

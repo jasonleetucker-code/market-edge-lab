@@ -36,6 +36,11 @@ After: the same deep links (relabelled Terminal, Markets, Portfolio, Outcomes, R
 (`presentation.ROUTE_PARAMS`). `/experiments/inplay` (In-play research, nav Research & Data, no query
 parameters) and `/gallery/inplay` (its fixture states, demo only), registered by `views/inplay.py`
 (`INPLAY_PAGES`, `INPLAY_DEMO_PAGES`) and merged in `app.make_app`.
+`/experiments/intel` (News & political intelligence, #192, nav Research & Data; parameters `tab` ∈ {today,
+opportunities, events, transcripts, history, sources}, `event`, `submitted`), `/experiments/intel/packet` (`event`,
+`submitted`) and `/gallery/intel` (demo only), registered by `views/intel.py` (`INTEL_PAGES`, `INTEL_DEMO_PAGES`). The
+one POST route, `/experiments/intel/inbox`, is handled by `dashboard/intel_post.py` and exists only when the dashboard
+was started with `--intel-inbox` (UI_CONTRACT §14, 2026-11-05).
 
 ## Data-to-view map (every visible number has a canonical origin)
 
@@ -66,86 +71,4 @@ parameters) and `/gallery/inplay` (its fixture states, demo only), registered by
 | Source freshness: every source's freshness, schedule state, health, why, times, data and upstream age, usability, misses, disagreements, notes, details and policy; the summary and "due next"; the supervisor's state, deferral window and carried evaluation | `<status-dir>/freshness.json` (`freshness_fabric` supervisor, schema `freshness-fabric-status/1`) via `data.freshness_report`, read as written; the report's own age by `freshness.assess(generated_at_utc, max_age=freshness_fabric.SUPERVISOR_MAX_AGE)`; ages formatted from the artifact's seconds (`duration_text`), never recomputed from now |
 | Polymarket US related markets: access gate, catalog state and coverage note, per Odds API event relationship, reasons, checks, flags, market fields, latest research book capture (YES bid / ask, sizes, receipt, freshness at capture), capture target states and attempts, attribution | `polymarket_sports.terminal_view(db, now=...)` via `data.pm_sports_view`; `polymarket_sports.market_history(store, slug)` via `data.pm_market_history` for the markets shown; prices formatted by `cents`, sizes by `quantity`; nothing is compared with a sportsbook price |
 | In-play research (#122): mode, state, contract, book status and age at the replay clock, coverage, gaps, resyncs, failures, simulated inventory and reservations, policy proposal (action, quantity, limit, execution assumption, reasons), exit proceeds estimate at displayed depth, hold-versus-exit arms (replay P&L gross and net, change vs hold, worst and best entry), oracle diagnostics, after-cost claim, assumptions, authority, pilot status, blocker | `inplay_view.not_authorized_view()` in production (no in-play source is authorized) and `inplay_view.fixture_view(...)` in demo mode, via `data.inplay_view` / `data.inplay_fixture_views` (schema `inplay-view/1`; a LIVE mode or another schema is an error). Inside the contract: `inplay_evidence` (reconstruction, coverage), `position_policy.evaluate`, `inplay_replay.replay`. Formatted only (`money` unsigned-colour, `cents`, `count`, `percent`, `datetime_et`) |
-| Experiments, Stage A result, report names, Stage B plan looks, limitations | experiment registry + `gate4/stage_a_result.json` |
-| Venues and capabilities | `venues.VENUES` / `coverage_rows` |
-| Source health | `SnapshotStore.latest_source_health` + `sources` registry descriptions |
-| Fee verification | `fee_schedules` via `data.fee_rows` |
-| Across venues: the four claims, per-route quote, gross cost, fee, fee status, verified (claim) total, depth, tradable-cash ETA, exclusions, related markets, summary | `best_price.compare` via `data.venue_comparison`, inputs built as `exp001_stageb.evaluate_day` builds them: the decision capture's listing (`kalshi_quotes.market_from_kalshi` plus the `settlement_equivalence` downgrade) and book (`kalshi_quotes.ladders_from_orderbook`; depth limit from the stored request URL, unknown = truncated), `fee_schedules.schedule_for` on the market's own series, the Stage B book-age limit; size, time and quote evidence ids from the recorded decision (`sizing.final_size`, `as_of_utc`, `quote_evidence_ids`: a different book is refused) |
-| Research sizing: challenger (H) size, verdict, binding constraint, probabilities, expected net edge, entry price, fee, Kelly / pre-cap amounts, caps, bankroll basis, capital horizon, A–H comparison, unavailable reasons | `sizing_counterfactual.build_panel_bundle(store, ledger)` once per request (memoized by the contract on ledger heads, evidence snapshot id, config and code) and `panel_for_market_from_bundle(bundle, market_id)` (Lane A, #64) via `data.research_sizing`; every number is the contract's string |
-| Economic evidence, Family A: state, protocol state and unsettled fields, as-of and evidence window, join denominators and stages, paired horizons / games / weeks, outcome labels (hidden: EXP-002 labels never reach the Terminal), relation tier and reasons, edge-at-size state and reasons, protocol attrition denominators and opportunity waterfall, screen verdict and reasons, episodes, size ladder of the latest paired book, lockup, fill modes, costs and inputs with evidence class, gaps, next action and blocker, provenance and report hash | `sports_evidence.terminal_view(db, now=..., experiments_root=...)` via `data.economic_evidence_a` (memoized by the contract on the max ids of NFL odds snapshots, KXNFLGAME rows, odds transitions and Polymarket observations, the due count and the protocol files' times); inside it `research_evidence.attrition_report`, `research_economics.size_ladder_from_depth` / `build_episodes` / `economic_screen` and `experiments.load_protocol`; formatted only (`count`, `quantity`, `cents`, `datetime_et`) |
-| Economic evidence, Family B: source store, generated time, store identity, code version, event window, evidence-use event, proof completeness and reasons, quote validity, claims per size and reasons, all-in acquisition cost, settlement-cost state, conditional surplus (that claim only), orphan-leg exposure, skipped sets, scan parameters, hashes | the newest `experiments/EXP-003-*/results/payoff_scan_*.json` (by evaluation as-of; at most 64 plain files of 8 MB, 32 MB together, each read once per size and mtime; none read while the slot is not ACTIVE; an as-of later than now or than its generation time is an error) via `data.economic_evidence_b`, accepted only when `payoff_constraints.verify_result_provenance(obj, <EXP-003>/evidence_use.jsonl)` passes; stale after 8 days; every figure is the file's own, only formatted (`money`, `quantity`, `count`, `datetime_et`) |
-
-| J2 per source: last attempt, completeness, latest failure, provenance, cost | `freshness.json` fields `last_attempt_utc`, `health` (canonical HEALTH_* words; no separate completeness field), the newest of `recent_misses` (written oldest first), policy `description` / `policy_version`, policy `budget`; Collected sources: `sources.REGISTRY` access tier, status, credential kind, parser version; `records` from source health |
-| J3 mechanism, evidence, rejection reasons, fee per contract, evaluated size, paused line | experiment registry via `data.experiment_for_policy` (protocol `mechanism`, else legacy `economic_rationale`; status; Stage A verdict), linked only by the decision's `policy_id` (`data.POLICY_EXPERIMENTS`); the recorded decision payload (`reasons`, `opportunity.fee` shown per contract only when `opportunity.quantity` is 1, `sizing.final_size`); `risk.assess` new_risk_allowed / breaches |
-| J7 research stages, family slot, protected evidence | experiment registry status; `experiments.load_protocol` (`slot_status`, `family`), `prohibited_label_scopes`, `holdout_windows`, `protocol_state`; `sports_evidence.FAMILY_ID`; `ops_manifest.TRACKS` STRATEGY_QUALIFIED; forward valid days and their staleness from `latest.json` `generated_at_utc` |
-| J8 execution positions by outcome | `execution_status.json`: `account.positions`, `settlements.rows`, `pnl.by_market` (only after `pnl.baseline_recorded`); event by the settlement's `event_ticker`, else `kalshi.event_ticker_of` |
-
-**Dependencies recorded (shown as unavailable, never derived in the UI):**
-1. *Realized today* (calendar day): the engine reports trailing-24 h realized **loss**, not a
-   calendar-day result. Shown as "not computed"; Risk shows the trailing figure.
-2. *Binding risk constraint*: `risk.assess` returns the capacity, not which headroom binds.
-   Shown as the exact capacity plus the verdict.
-3. *Cross-venue comparison*: the comparator runs on every captured route, but only Kalshi books
-   are captured into the evidence store, so a real comparison has one route and says "Only
-   Kalshi is captured for this market". Other venues appear once a collector stores their
-   books and discovery proves rules equivalence. Rejected (unsized) decisions have no
-   evaluated size, so they show "Not evaluated yet"; a counterfactual size needs Lane A's
-   sizing contract.
-3a. *Research sizing*: the contract (#64) is on main. A replay made without a readable or configured
-   evidence database is flagged on the panel (captured settlements and confirmation quotes are
-   missing from it). Free-text details from the contract are scrubbed of filesystem paths.
-3b. *Odds capture targets*: a paid call's credits are recorded once per member target (`credits_last`); the
-   table shows them per call with the number of targets that shared it and never sums them. Whether the
-   runner's timer runs is not observable, so an open target past its deadline reads "Overdue" (stale
-   record), never "Missed" until the runner records it (Missed, or Failed for a capture left in progress).
-   "Paused" leaves out SETUP_NEEDED: a key removed after activation and a pilot not yet activated share
-   that state; a canonical "paid captures paused" flag in `odds_pilot.dashboard_status` would let the
-   view show it without re-deriving runner policy (backend follow-up).
-4. *Sport/league identity*: no sports market is captured; the Sports tab says so.
-5. *Delivery status beyond the outbox*: phone delivery is not recorded; Alerts says so.
-6. *Price history*: only the decision and re-check captures of the latest target day are read
-   (two points at most per side).
-7. *Source cost (J2)*: no canonical cost field exists. Fabric policies record a `budget` in words for the Odds API sources and Kalshi NHL only; every other source and every Collected sources row reads "cost not recorded".
-7a. *Source completeness (J2)*: the fabric records no completeness field; health is shown under the label "Health · completeness" with "no separate completeness record", and a failure reason it does not record reads "Reason not recorded".
-8. *Due for Collected sources (J2)*: source-health rows carry no schedule; due times live in Source freshness.
-9. *Execution outcome bounds (J8)*: the export records no cost basis, worst case, best case or expected settlement time per position, so max loss, settles-by and impact ranking read unknown. Adding them belongs in `execution/status_export.py` (a separate, execution-owned change).
-10. *Experiment pause (J7)*: EXP-003's pause is recorded in EXECUTION_PLAN prose only; its protocol `slot_status` is ACTIVE, so Research stages shows it in Development. A pause needs a registry field.
-11. *Mechanism for other policies (J3)*: only the EXP-001 Stage B rule is linked to an experiment; demo decisions (policy `demo`) and any future policy read unknown until `data.POLICY_EXPERIMENTS` links them.
-
-## Owned paths
-
-`src/edge_lab/dashboard/**` (presentation.py, components.py, html.py, app.py, data.py
-additions, demo.py additions, fixtures.py, views/, static/), `tests/test_dashboard.py`
-(updated), `tests/test_dashboard_terminal.py` (new), `tests/browser/**` (dev-only evidence),
-`docs/design/**`, `docs/DASHBOARD.md`, ADR 0025, the directive record, `AI_INSTRUCTIONS.md`
-(UI rule + routing row), `.github/pull_request_template.md`, `pyproject.toml` (package data);
-appended sections in `docs/EXECUTION_PLAN.md`, `docs/OWNER_IDEAS.md`, `THIRD_PARTY_NOTICES.md`.
-
-## Ordered checklist
-
-1. [x] Baseline, claims, data/route inventory.
-2. [x] Canonical design contract, tokens, fonts, asset serving.
-3. [x] App shell and fixed navigation, then market tape.
-4. [x] Component gallery and presentation contracts.
-5. [x] Terminal, Markets and Market detail (first vertical slice, real early state).
-6. [x] Portfolio, Outcomes and Risk.
-7. [x] Research & Data, Alerts and More.
-8. [x] Semantic parity, security, accessibility and browser-layout testing (see PR evidence).
-9. [x] Independent design/data/security review; findings corrected. Round 1: 1 blocker (decisions for
-   earlier target days shown as currently qualified), 6 should-fix, nits. Round 2 (da4dba2): all fixed, 2
-   new should-fix from the fixes. Round 3 (e90669f): those fixed and verified, no blocker; one
-   should-fix remained (a missed capture could leave the older captured day current), fixed with a
-   regression test in the final commit.
-10. [ ] Reviewed merge, private dashboard deployment, final browser verification.
-
-## Conflicts identified (safer behaviour kept)
-
-- **Query parameters.** The directive lists q, domain, sport, venue, state, horizon, sort,
-  account and page; it also specifies `/market?venue=&id=&account=` and a Research/Data-sources
-  tab. Implemented as per-route allowlists that add `id`, `side` (detail) and `tab` (Research &
-  Data) only.
-- **Mode notice at 360px.** The 12px notice, the 20px wordmark and a 44px bell need ~400px
-  with a capsule border. Below 400px the notice keeps its text, size and weight but drops the
-  capsule border/padding, so it never wraps or turns into a dot.
-- **Tape "open-position markets first".** Only markets in the latest captured target day have
-  quotes; an open position from an earlier day has no current quote and is not invented.
+| News & political intelligence (#192): collected items (source, time, evidence type, storage rights), last news run, feed status counts, events (status and reason, verification, origins, primary sources, evidence, contradictions, unconfirmed podcast claims, outcomes and resolution conditions), recorded packets (id, horizon and who set it), forecasts (point, range, basis, price awareness, horizon, superseded chain), candidates with captured rules, confirmed links, decisions (action, best side, ask, fee and fee status, all-in cost, break-even, probabilities, EV point and conservative, maximum acceptable price, top size, reasons, explanation, horizon check, market close, quote receipt), resolutions, performance (Brier by basis, hypothetical P&L per contract), inbox (queued files, processed results), processor availability | `intel.view.build_view` over `SnapshotStore.open_readonly` via `data.Context.intel_view` (schema `intel-view/1`): `service.feed_states`, `service.current_events`, `service.all_evidence`, `service.latest_packet_for_event` (packet page, via `data.Context.intel_packet`), `service.performance`, `store.intel_items`, `store.intel_records` (kinds run, transcript, packet, analysis, forecast, link, candidates, decision, resolution, inbox), `store.latest_snapshot` (captured rules and market title, `kalshi_link.rules_text`), `events.derive_status`; `inbox.pending` (never creates the inbox); heartbeat `intel.json` (intel-heartbeat/1) in the status directory. Decision sheets (`pricing.PricingSheet` as stored by `service.decide`) are passed through verbatim and only formatted (`cents`, `percent`, `edge_cents`, `hours_text`, `duration_text`, `datetime_et`, `date_label`); the economics label is VERIFIED only when the shown side records `fee_claimable` true |

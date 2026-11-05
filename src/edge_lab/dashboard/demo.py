@@ -240,5 +240,8 @@ def build_demo(now: datetime | None = None, *, experiments_root: Path | None = N
         "accounts": {}, "problems": [], "missing_capture_days": [], "valid_days": 2, "closed_capture_days": 3,
         "latest_day": {"target_date": last_day, "result": "HEALTHY_TRADED", "capture_status": "VALID"}}),
         encoding="utf-8")
-    config = d.Config(db=store.path, ledger=ledger.path, status_dir=status, experiments_root=experiments_root, demo=True)
+    from .intel_fixtures import demo_intel
+    inbox = demo_intel(store, root, now)  # SYNTHETIC news-intelligence workflow (issue 192) and an empty inbox
+    config = d.Config(db=store.path, ledger=ledger.path, status_dir=status, experiments_root=experiments_root, demo=True,
+                      intel_inbox=inbox)
     return config, root

@@ -8,6 +8,7 @@ explicit unavailable marker with accessible text, never as zero.
 from __future__ import annotations
 
 import json
+import re
 from typing import Any, Iterable, Mapping, Sequence
 from urllib.parse import urlencode
 
@@ -838,3 +839,92 @@ def odds_status_card(status: Mapping[str, Any]) -> str:
 
 def _json_text(value: Any) -> str | None:
     return None if value is None else json.dumps(value, sort_keys=True, default=str)
+
+
+# --------------------------------------------------------------------------- intel inbox forms (UI_CONTRACT §14, 2026-11-05)
+
+# The one route that accepts a form submission. It writes a file to the private intel inbox and
+# nothing else: no order, money, approval or account control can be built from these components,
+# because their action is fixed to this path and the server accepts POST nowhere else.
+INBOX_ACTION = "/experiments/intel/inbox"
+_FORM_ID = re.compile(r"[^A-Za-z0-9_-]")
+
+
+def form_id(*parts: Any) -> str:
+    """A safe element id from arbitrary parts (event ids, tickers)."""
+    return "f-" + "-".join(_FORM_ID.sub("_", str(p))[:60] for p in parts if p is not None)
+
+
+def form_field(label: str, control_html: str, *, for_id: str, hint: str | None = None) -> str:
+    """A labelled control (input, textarea or select) with an optional hint under it."""
+    return (f'<div class="field"><label for="{esc(for_id)}">{esc(label)}</label>{control_html}'
+            + (f'<p class="note">{esc(hint)}</p>' if hint else "") + "</div>")
+
+
+def text_input(name: str, fid: str, *, value: str = "", kind: str = "text", maxlength: int = 200,
+               required: bool = False, accept: str | None = None, placeholder: str | None = None) -> str:
+    attrs = [f'class="input" id="{esc(fid)}" name="{esc(name)}" type="{esc(kind)}"']
+    if kind != "file":
+        attrs.append(f'maxlength="{int(maxlength)}" value="{esc(value)}"')
+    if accept:
+        attrs.append(f'accept="{esc(accept)}"')
+    if placeholder:
+        attrs.append(f'placeholder="{esc(placeholder)}"')
+    if required:
+        attrs.append("required")
+    return f"<input {' '.join(attrs)}>"
+
+
+def textarea(name: str | None, fid: str, *, value: str = "", rows: int = 8, maxlength: int | None = None,
+             required: bool = False, readonly: bool = False, mono: bool = False) -> str:
+    attrs = [f'class="input{" mono" if mono else ""}" id="{esc(fid)}" rows="{int(rows)}"']
+    if name:
+        attrs.append(f'name="{esc(name)}"')
+    if maxlength:
+        attrs.append(f'maxlength="{int(maxlength)}"')
+    attrs += [a for a, on in (("required", required), ("readonly", readonly)) if on]
+    return f"<textarea {' '.join(attrs)} spellcheck=\"false\">{esc(value)}</textarea>"
+
+
+def checkbox(name: str, fid: str, label: str, *, value: str = "yes") -> str:
+    """A checkbox whose whole label (≥44 px tall) is the touch target."""
+    return (f'<label class="check" for="{esc(fid)}"><input type="checkbox" id="{esc(fid)}" name="{esc(name)}" '
+            f'value="{esc(value)}"><span>{esc(label)}</span></label>')
+
+
+def select(name: str, fid: str, options: Sequence[tuple[str, str]], *, current: str = "") -> str:
+    opts = "".join(f'<option value="{esc(k)}"{" selected" if k == current else ""}>{esc(v)}</option>'
+                   for k, v in options)
+    return (f'<div class="select-wrap"><select class="select" id="{esc(fid)}" name="{esc(name)}">{opts}</select>'
+            f'{icon("chevron-down")}</div>')
+
+
+def inbox_form(token: str, kind: str, body: str, *, submit: str = "Submit", label: str,
+               hidden: Mapping[str, Any] | None = None, buttons: Sequence[tuple[str, str, str, bool]] = (),
+               multipart: bool = False, inline: bool = False) -> str:
+    """InboxForm: a same-origin form to the intel inbox route only, with the per-process token.
+
+    `buttons` are (name, value, text, primary) submit buttons; without them one primary `submit`
+    button is drawn. The server validates every field again; nothing here is trusted."""
+    fields = {"token": token, "kind": kind, **{k: v for k, v in (hidden or {}).items() if v not in (None, "")}}
+    hidden_html = "".join(f'<input type="hidden" name="{esc(k)}" value="{esc(v)}">' for k, v in fields.items())
+    if buttons:
+        btns = "".join(f'<button class="btn{" btn-primary" if primary else ""}" type="submit" name="{esc(n)}" '
+                       f'value="{esc(v)}">{esc(t)}</button>' for n, v, t, primary in buttons)
+    else:
+        btns = f'<button class="btn btn-primary" type="submit">{esc(submit)}</button>'
+    enctype = ' enctype="multipart/form-data"' if multipart else ""
+    cls = "form-inline" if inline else "form"
+    return (f'<form class="{cls}" method="post" action="{INBOX_ACTION}"{enctype} aria-label="{esc(label)}">'
+            f'{hidden_html}{body}<div class="btn-row">{btns}</div></form>')
+
+
+def copy_text(fid: str, text: str, *, label: str, button: str, rows: int = 18) -> str:
+    """CopyText: read-only text in a selectable textarea plus a copy button that `terminal.js`
+    reveals and wires by `data-copy-target` (hidden without JavaScript, so never a dead button)."""
+    status_id = f"{fid}-status"
+    return (form_field(label, textarea(None, fid, value=text, rows=rows, readonly=True, mono=True), for_id=fid,
+                       hint="Select all and copy if the button does not work (Ctrl+A, Ctrl+C; long-press on a phone).")
+            + f'<div class="btn-row"><button class="btn btn-primary" type="button" data-copy-target="{esc(fid)}" '
+              f'data-copy-status="{esc(status_id)}" hidden>{icon("layers")}<span>{esc(button)}</span></button>'
+              f'<span class="copy-status" id="{esc(status_id)}" role="status" aria-live="polite"></span></div>')

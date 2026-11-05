@@ -381,10 +381,11 @@ def claim_verification(claim: Evidence, news: list[Evidence] | tuple[Evidence, .
 
     A claim is CORROBORATED only by >= 2 independent non-commentary origins, CONFIRMED_PRIMARY
     by a primary source, SINGLE_SOURCE by one; podcasts never count. Opinion and speculation
-    stay UNVERIFIED whatever matches, because they are not factual claims.
+    stay UNVERIFIED whatever matches, because they are not factual claims; so do predictions, which only
+    their resolution can settle (news on the same subject does not corroborate a forecast).
     """
-    if claim.claim_type in (ClaimType.OPINION, ClaimType.SPECULATION):
-        return Verification.UNVERIFIED
+    if claim.claim_type in (ClaimType.OPINION, ClaimType.SPECULATION, ClaimType.PREDICTION):
+        return Verification.UNVERIFIED  # only reports of what happened can be corroborated; a forecast resolves
     kc = keywords(claim.text)
     if not kc:
         return Verification.UNVERIFIED

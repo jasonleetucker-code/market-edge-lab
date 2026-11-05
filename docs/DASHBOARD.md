@@ -32,6 +32,7 @@ never writes to any store, and never recommends a withdrawal.
 | `--ledger` | shadow ledger SQLite file | `ShadowLedger.open_readonly`; `accounts`, `entries`, `state` (hash-chain replay) |
 | `--status-dir` | `latest.json` (collector), `shadow_daily.json` (pipeline receipt), `freshness.json` (Freshness Fabric supervisor), `last_failure.json` (production unit failures), `last_verification.json` (deployment verification records), `execution_status.json` (the execution package's status export, schema `edge-lab-execution-status/1`) | JSON, fixed names only, 2 MB cap, every field optional |
 | `--odds-ledger` | The Odds API quota ledger (default `odds_quota_ledger.json` beside `--db`) and its `<ledger>.pilot.json` runner state | `odds_pilot.dashboard_status`: read without locking or writing, no key, no network |
+| `--intel-inbox` (default `$EDGE_LAB_INTEL_INBOX`) | the private intel inbox directory (must exist; otherwise a warning and read-only) and, in `--status-dir`, the collector's `intel.json` heartbeat (schema intel-heartbeat/1) | `inbox.pending` lists `new/` (never creates anything); the only writes are the POST route's queued files |
 | `--experiments-root` | `experiments/` (defaults to this checkout's) | `experiments.validate_all` / `load`; Stage A result JSON; report **file names** only |
 
 Figures come from the canonical modules only: `shadow_ledger.replay` (balances, P&L),
@@ -146,6 +147,9 @@ disclosures.
 | `/experiments/wallet` | none (under Research & Data) | Journey J4, wallet research: production shows "No wallet source is approved" and the copying status (research only, no execution); demo mode shows Demonstration A (`wallet_intel.demo.run_synthetic_demo`), SYNTHETIC on every section. |
 | `/positions/execution` | none (under Portfolio) | Journey J5, execution portfolio from `execution_status.json`: actual holdings ("Access not connected"), the FIXTURE account's cash with its basis, reserves, positions, pending and unknown orders, fills and partial exits, settlement and venue-reported P&L. |
 | `/risk/automation` | none (under Risk) | Journey J6, automation from `execution_status.json`: mode, reconciliation, armed grant and scope (TEST grants labelled), next action with the exporter's arm readiness per mode, stop reasons, limits and bounds, the rearm procedure and the control log. No control of any kind. |
+| `/experiments/intel` | none (under Research & Data) | News & political intelligence (#192, ADR 0049): tabs Today (collected items by category, recent podcast intelligence, events with changing evidence), Opportunities (one card per confirmed market from its latest stored decision: action, side, ask, independent probability, maximum price, estimated edge with its fee label, horizon vs close, why and main risk, the stored explanation; then unconfirmed candidates with their captured rules and a confirm/reject form), Events (status, verification, evidence, contradictions, unconfirmed claims; packet, market discovery and analysis forms), Transcripts (paste or upload, list), History (forecasts, decisions including SKIP, resolutions, provisional performance, submissions) and Sources (the 50 candidates). Forms appear only with `--intel-inbox`. |
+| `/experiments/intel/packet?event=` | none | The event's latest recorded research packet (no market data) with a copy button, and the analysis form. |
+| `/gallery/intel` | none | Every state of the intelligence workspace from SYNTHETIC stores, demo mode only. |
 | `/gallery` | none | Component gallery, demo mode only. |
 | `/healthz` | none | Plain `ok`. No data. |
 
@@ -177,7 +181,12 @@ against the test fake venue (`tests/browser/journey_fixtures.py`).
 
 ## Security properties (tested)
 
-- GET and HEAD only; any other method answers 405. Unknown paths answer 404.
+- GET and HEAD only; any other method answers 405. Unknown paths answer 404. One exception (2026-11-05, ADR 0049,
+  UI_CONTRACT §14): with `--intel-inbox PATH`, `POST /experiments/intel/inbox` queues one size-capped file in that
+  private inbox (same-origin Origin or Referer, per-process CSRF token compared with `secrets.compare_digest`,
+  Content-Length ≤ 1.6 MB, form data only, strict UTF-8 uploads, fixed kinds and fields, 20 s socket timeout). It never
+  writes the evidence DB, has no network, and has no order, money or approval meaning. Without the flag it answers
+  405 like every other POST. The workspace pages send `Referrer-Policy: same-origin` so a browser includes the Origin.
 - No endpoint takes SQL, a file path, a command or a URL. Each route reads only its allowlisted query parameters (`presentation.ROUTE_PARAMS`); every value is checked against a fixed set, the venue registry or a bounded pattern. An unsupported value answers 400 with a safe message; unknown parameter names are ignored.
 - Static files: exact allowlist (`html.STATIC_FILES`), versioned path, immutable cache; traversal and unknown names answer 404.
 - Every dynamic value is escaped with `html.escape`, and ledger or receipt content is treated

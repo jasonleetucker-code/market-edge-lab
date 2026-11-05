@@ -69,6 +69,18 @@ systemctl is-enabled edgelab-news.timer edgelab-news-inbox.timer
 systemctl list-timers edgelab-news.timer edgelab-news-inbox.timer
 ```
 
+**Turning on dashboard submissions (owner step).** The shipped dashboard unit accepts no submission: its ExecStart
+passes no inbox. To let the Terminal queue transcripts, analyses, links and refresh requests, run:
+
+```bash
+echo 'EDGE_LAB_INTEL_INBOX=/var/lib/market-edge-lab/intel-inbox' | sudo tee -a /etc/market-edge-lab/dashboard.env
+sudo systemctl restart edgelab-dashboard.service
+```
+
+The dashboard reads that variable as its `--intel-inbox` default. To turn submissions off again, remove the line and
+restart. With submissions on but no inbox timer, items queue (20 at most) until a collector run drains them, and the
+page says so.
+
 You may enable `edgelab-news-inbox.timer` alone (the dashboard handoff only, with no scheduled
 collection) or `edgelab-news.timer` alone (in which case the 2-hour run drains the inbox).
 

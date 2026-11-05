@@ -17,6 +17,7 @@ import ipaddress
 import re
 import shutil
 import signal
+import os
 import socket
 import sys
 import threading
@@ -79,7 +80,8 @@ def default_experiments_root() -> Path | None:
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="python -m edge_lab.dashboard",
-        description="Local read-only shadow dashboard (SHADOW - NO REAL MONEY). Never sends orders or writes data.")
+        description="Local read-only shadow dashboard (SHADOW - NO REAL MONEY). Never sends orders; writes nothing "
+                    "except, with --intel-inbox, queued submission files in that private inbox.")
     p.add_argument("--db", type=Path, help="evidence SQLite database (opened read-only)")
     p.add_argument("--ledger", type=Path, help="shadow ledger SQLite file (opened read-only)")
     p.add_argument("--status-dir", type=Path, help="directory holding latest.json / shadow_daily.json")
@@ -93,6 +95,12 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--tailscale-serve-host", metavar="NAME",
                    help="also accept Host: NAME, this node's exact <machine>.<tailnet>.ts.net name, when "
                         "Tailscale Serve proxies the tailnet to this loopback server (loopback bind only)")
+    p.add_argument("--intel-inbox", type=Path, metavar="PATH",
+                   default=Path(os.environ["EDGE_LAB_INTEL_INBOX"]) if os.environ.get("EDGE_LAB_INTEL_INBOX") else None,
+                   help="enable the one write route: queue news-intelligence submissions (transcripts, analyses, "
+                        "market links, refresh requests) as files in this private inbox directory (ADR 0049). "
+                        "Default: $EDGE_LAB_INTEL_INBOX (on the VPS, set by the owner in dashboard.env at "
+                        "activation). Without it the intelligence workspace is read-only")
     p.add_argument("--demo", action="store_true",
                    help="serve SYNTHETIC data built in a fresh temp directory; configured paths are ignored")
     return p
@@ -115,6 +123,10 @@ def _sigterm_to_interrupt(signum, frame) -> None:  # noqa: ARG001 - signal handl
 
 
 class _QuietHandler(WSGIRequestHandler):
+    # The server is single-threaded: a socket timeout stops a slow or stalled request (e.g. an
+    # inbox upload that never finishes) from holding it (StreamRequestHandler.setup applies it).
+    timeout = 20
+
     def log_message(self, format: str, *args) -> None:  # noqa: A002 - stdlib signature
         sys.stderr.write("dashboard: %s %s\n" % (self.command, self.path.split("?", 1)[0]))
 
@@ -127,7 +139,17 @@ def config_from_args(args: argparse.Namespace) -> tuple[d.Config, Path | None]:
         config, root = build_demo(experiments_root=experiments_root)
         return config, root
     return d.Config(db=args.db, ledger=args.ledger, status_dir=args.status_dir,
-                    experiments_root=experiments_root, odds_ledger=args.odds_ledger), None
+                    experiments_root=experiments_root, odds_ledger=args.odds_ledger,
+                    intel_inbox=args.intel_inbox), None
+
+
+def check_intel_inbox(path: Path | None) -> str | None:
+    """None when the inbox is usable (or not requested), else the reason it is refused."""
+    if path is None:
+        return None
+    if path.is_symlink() or not path.is_dir():
+        return f"--intel-inbox {path.name}: not an existing directory (create it first, owner-only permissions)"
+    return None
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -139,6 +161,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 2
     if warning:
         print(f"dashboard: {warning}", file=sys.stderr)
+    inbox_problem = None if args.demo else check_intel_inbox(args.intel_inbox)
+    if inbox_problem:
+        # An optional feature never takes the dashboard down: warn and serve read-only.
+        print(f"dashboard: {inbox_problem}; serving without submissions (read-only)", file=sys.stderr)
+        args.intel_inbox = None
     allowed: list[str] = []
     if warning:  # an explicitly approved non-loopback bind: accept its own name in Host
         allowed.append(args.host)

@@ -37,6 +37,7 @@ NOTIFICATIONS_SHOWN = 50
 FAILURE_FILE = "last_failure.json"  # production unit failures only (alert.sh; verification.FAILURE_NAME)
 VERIFICATION_FILE = "last_verification.json"  # install-time checks (runbook §4.1; verification.VERIFICATION_NAME)
 ODDS_LEDGER_FILE = "odds_quota_ledger.json"  # the Odds API quota ledger, beside the evidence database
+INTEL_HEARTBEAT_FILE = "intel.json"  # the news collector's inbox heartbeat (schema intel-heartbeat/1)
 FRESHNESS_FILE = "freshness.json"  # the Freshness Fabric supervisor's artifact (freshness_fabric.ARTIFACT_NAME)
 RECEIPT_SCHEMA = "edge-lab-shadow-daily-receipt/1"
 
@@ -75,11 +76,12 @@ class Config:
     odds_ledger: Path | None = None  # The Odds API quota ledger; default: ODDS_LEDGER_FILE beside `db`
     demo: bool = False
     allowed_hosts: tuple[str, ...] = ()  # extra Host names accepted besides loopback (the bound host)
+    intel_inbox: Path | None = None  # the private intel inbox root (--intel-inbox); None: submissions disabled
     clock: Callable[[], datetime] = field(default=lambda: datetime.now(timezone.utc))
 
     def paths(self) -> list[Path]:
-        return [p for p in (self.db, self.ledger, self.status_dir, self.experiments_root, self.odds_ledger)
-                if p is not None]
+        return [p for p in (self.db, self.ledger, self.status_dir, self.experiments_root, self.odds_ledger,
+                            self.intel_inbox) if p is not None]
 
 
 @dataclass
@@ -139,6 +141,8 @@ class AccountView:
 
 class Context:
     """Everything one request may read, loaded lazily and at most once."""
+
+    form_token: str | None = None  # the per-process intel inbox CSRF token (set by the app, never stored)
 
     def __init__(self, config: Config) -> None:
         self.config = config
@@ -203,6 +207,39 @@ class Context:
         if not isinstance(data, dict):
             return Loaded(ERROR, message=f"{name} is not a JSON object")
         return Loaded(OK, data)
+
+    @cached_property
+    def intel_heartbeat(self) -> Loaded:
+        return self._status_file(INTEL_HEARTBEAT_FILE)
+
+    @cached_property
+    def intel_view(self) -> Loaded:
+        """The news intelligence workspace (`intel.view.build_view`) over the read-only store. Writes nothing."""
+        if self.store.status != OK:
+            return self.store
+        hb = self.intel_heartbeat
+        try:
+            from ..intel.view import build_view
+            return Loaded(OK, build_view(self.store.value, now=self.now, inbox_root=self.config.intel_inbox,
+                                         heartbeat=hb.value if hb.status == OK else None,
+                                         heartbeat_error=hb.message if hb.status == ERROR else None))
+        except Exception as exc:  # noqa: BLE001 - shown as an error state, never a failed page
+            return Loaded(ERROR, message=short_error(exc, self.config))
+
+    def intel_packet(self, event_id: str) -> Loaded:
+        """The latest recorded research packet for one event (`service.latest_packet_for_event`), never created here."""
+        if self.store.status != OK:
+            return self.store
+        try:
+            from ..intel import service
+            packet = service.latest_packet_for_event(self.store.value, event_id)
+            if packet is None:
+                return Loaded(NO_DATA, message="no research packet has been recorded for this event yet")
+            row = self.store.value.latest_intel_record("packet", packet.packet_id)
+            record = json.loads(row["payload_json"]) if row is not None else {}
+            return Loaded(OK, {"packet": packet, "record": record})
+        except Exception as exc:  # noqa: BLE001
+            return Loaded(ERROR, message=short_error(exc, self.config))
 
     @cached_property
     def collector_status(self) -> Loaded:

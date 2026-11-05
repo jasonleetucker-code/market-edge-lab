@@ -47,7 +47,7 @@ curves, slogans, oversized welcome copy, a second theme, copied third-party bran
 | Routing, CSP, static serving, parameter validation | `dashboard/app.py` |
 | Tokens (the only colour/font/spacing definitions) | `dashboard/static/tokens.css` |
 | Shell and component styling | `dashboard/static/terminal.css` |
-| Progressive enhancement (tape arrows only) | `dashboard/static/terminal.js` |
+| Progressive enhancement (tape arrows; the intel packet copy button, §14 2026-11-05) | `dashboard/static/terminal.js` |
 | Fonts, icons, licences, provenance | `dashboard/static/fonts/`, `static/icons.svg`, `static/ASSETS_PROVENANCE.md` |
 | Synthetic view-model fixtures, gallery | `dashboard/fixtures.py`, `views/gallery.py` (demo only) |
 
@@ -427,7 +427,8 @@ worker, sound or gamified urgency. Refresh reloads stored data only.
 
 CSP: `default-src 'none'; script-src 'self'; style-src 'self'; font-src 'self'; img-src 'self';
 connect-src 'self'; base-uri 'none'; object-src 'none'; frame-ancestors 'none';
-form-action 'self'`. No inline styles, scripts or handlers (tested). GET/HEAD only. Host
+form-action 'self'`. No inline styles, scripts or handlers (tested). GET/HEAD only, except the one intel
+inbox POST route (§14, 2026-11-05). Host
 allowlist unchanged (loopback, approved bind host, exact Tailscale Serve name). Query values
 validated per route (`presentation.ROUTE_PARAMS`); unknown values → safe 400; unknown names
 ignored. Static files from an exact allowlist under a content-hash version path, immutable
@@ -829,3 +830,65 @@ directive), and the screenshots that justify it.
     shots, 0 with overflow, clipping, low contrast or foreign requests. Element shots of each new section at 360
     and 1440 px (normal and 200% text) were reviewed by the author; one review fix followed (an event whose holdings
     are unknown read "Positions held 0" and "Settled"; it now reads unknown). Described in the PR, not attached.
+- **2026-11-05 — News & political intelligence workspace; the one inbox POST route; the packet copy button.**
+  Approved by the owner directive of 2026-11-05 (#192; `docs/owner/2026-11-05-news-political-intelligence-directive.md`:
+  owner answer 2 "Inbox handoff", and plan refinements 1–3: the complete workflow first, a one-click packet copy, and
+  labels that keep collected news, deterministic classification, imported AI analysis, provisional forecasts and
+  verified economics apart) and ADR 0049. Scope: `docs/EXECUTION_PLAN.md` 2026-11-05.
+  - **Routes.** §8 gains `/experiments/intel` under Research & Data (nav "research", a crumb back, and an "Open" link
+    from a section after In-play research on the Research tab; no global navigation item). Tabs (`tab`): Today,
+    Opportunities, Events (`event` opens one event), Transcripts, History, Sources; `submitted` echoes a queued
+    submission. `/experiments/intel/packet?event=` shows the latest recorded packet (`service.latest_packet_for_event`,
+    never created by a page view) in a read-only textarea with a copy button, then the analysis form. `/gallery/intel`
+    renders every state (demo only). Parameters are validated in `presentation.ROUTE_PARAMS` (event ids
+    `ev-<topic>-<12 hex>`, submission ids by their generated pattern).
+  - **The one write route (exception to §1 "read-only" and §11 "GET/HEAD only").** `POST /experiments/intel/inbox`
+    exists only when the dashboard is started with `--intel-inbox PATH` (or `EDGE_LAB_INTEL_INBOX`, which the owner
+    sets in `dashboard.env` at activation; the shipped unit passes neither); otherwise it answers 405 "not enabled", and
+    every other path still answers POST with 405. It writes exactly one size-capped file into the private inbox
+    through `intel.inbox.write_submission` and nothing else: no order, money, approval, account or "mark read"
+    control; the dashboard keeps no network access and opens the evidence DB read-only (only to validate an analysis
+    against its recorded packet). Checks: the Host allowlist; an Origin (or Referer) naming exactly this Host
+    (`Origin: null` is refused); Content-Length required and at most 1.6 MB (413), read with a 20 s socket timeout
+    (408); urlencoded or multipart form data only (415; stdlib `email.parser`, no `cgi`); a per-process
+    `secrets.token_urlsafe(32)` token compared with `secrets.compare_digest` (403); kinds transcript, analysis,
+    refresh, link and packet with fixed fields and bounded patterns (400); uploads `.txt/.md/.srt/.vtt` in strict
+    UTF-8 (415); a full inbox 429. Success is a 303 back to the workspace; a refusal is a page with the reason and a
+    link back, and nothing is written. The pages holding these forms send `Referrer-Policy: same-origin` (with
+    `no-referrer`, browsers send `Origin: null` on a form POST); the referrer still never leaves this origin and
+    external evidence links carry `rel="noopener noreferrer"`.
+  - **Submissions are honest about processing.** The collector's heartbeat (`intel.json`, schema
+    intel-heartbeat/1, in the status directory) younger than 15 minutes reads "processed by the collector". Missing,
+    stale or unreadable, the page shows the blocked state "The news collector is not running on this host (timers not
+    activated, or last heartbeat …). Your submission would wait until it runs." and still offers the forms: a
+    submission is queued privately and processed when the collector runs, so no button is dead and nothing is lost
+    silently. Without `--intel-inbox` no form is drawn at all.
+  - **Provenance vocabulary** (labels, not colours): COLLECTED (automatic); CLASSIFIED (deterministic rules,
+    intel-extract-v1); IMPORTED AI ANALYSIS (unvalidated); OWNER JUDGMENT (unvalidated); PROVISIONAL FORECAST (no
+    calibration history); ECONOMICS: ESTIMATE — fees unverified / FEE UNSUPPORTED / NOT COMPUTED / VERIFIED (only when
+    the shown side's stored `fee_claimable` is true: none is today); HYPOTHETICAL RESEARCH DECISION — no order, no
+    fill. Actions are Investigate · not a trade (info), Watch, Skip (neutral) and Insufficient evidence (warning,
+    with "INSUFFICIENT EVIDENCE — NO RELIABLE EDGE ESTIMATE"); there is no buy and nothing is green. Decision sheets
+    are the stored `service.decide` payloads, only formatted (§2: no money is computed in a page). A decision older
+    than 15 minutes reads "Price evidence is not current" with a refresh; a forecast horizon that does not match the
+    market's close is flagged (`horizon_check` MISMATCH).
+  - **Components and styles.** New reusable components `inbox_form` (with `form_field`, `text_input`, `textarea`,
+    `checkbox`, `select`, `form_id`) and `copy_text` (COMPONENTS.md, gallery). `terminal.css` gains `.form`,
+    `.form-inline`, `textarea.input`, `.input.mono`, `.check` (a ≥44 px label as a checkbox's touch target),
+    `.btn[hidden]` and `.copy-status`, using existing tokens only; no new token, colour or font. `terminal.js` gains
+    the copy handler: a button with `data-copy-target` is revealed and copies its textarea with the Clipboard API, or
+    selects the text when copying is not allowed; no inline script or handler, no network, no storage.
+    `tests/browser/capture.py` measures a checkbox by its label and lists the workspace tabs.
+  - **States.** Populated, today-only (news, no decision), stale decision with an old heartbeat, fee unsupported
+    (KXCPI-series), insufficient evidence, blocked (no heartbeat), not enabled (no inbox), empty and error (an
+    unreadable or non-v8 store): tests in `tests/test_dashboard_intel.py`, every one in `/gallery/intel`.
+  - **Screenshots and audit (2026-11-05, coordinator).**
+    - `tests/browser/capture.py --states demo early`, Chromium:
+      - all six workspace tabs plus `/gallery/intel`, at 360x800, 390x844 and 1440x900: 42 renders;
+      - the same pages at 390x844 and 1440x900 with 200% text and every disclosure open: 14 renders.
+      - Result for both: "0 with overflow, clipping, low contrast or foreign requests".
+    - WebKit is not installed in the cloud container, so WebKit is not covered.
+    - Real-data screens (a private scratch store holding that day's collected news) were reviewed by the
+      coordinator at 390 and 1440. That review found and fixed the row-body squeeze (the `.row-body` rule)
+      and the probability column overlap.
+    - The owner's own phone review is still pending.

@@ -1,5 +1,10 @@
 """The WSGI application: fixed routes, GET/HEAD only, restrictive headers.
 
+One exception (UI_CONTRACT §14, 2026-11-05; ADR 0049): `POST /experiments/intel/inbox` queues one
+file in the private intel inbox when the dashboard was started with `--intel-inbox`
+(`intel_post.handle`: same-origin, CSRF token, size, type and field checks). Every other path
+answers POST with 405, and no request writes the evidence database.
+
 There is no endpoint that takes SQL, a file path, a command or a URL. Query strings are read
 only for each route's explicit parameter allowlist (`presentation.ROUTE_PARAMS`), and every
 value is validated against a fixed set, a registry or a bounded pattern; anything else is
@@ -18,14 +23,20 @@ from typing import Any, Callable, Iterable
 
 from .. import venues
 from . import data as d
+from . import intel_post
 from . import presentation as pr
 from .html import STATIC_FILES, Shell, asset_version, esc, page, static_bytes
 from .views import DEMO_PAGES, NAV_KEYS, PAGES, Page
 from .views import common as cm
 from .views.inplay import INPLAY_DEMO_PAGES, INPLAY_PAGES
+from .views.intel import INTEL_DEMO_PAGES, INTEL_NAV_KEYS, INTEL_PAGES, error_page
 from .views.ops_pages import OPS_NAV_KEYS, OPS_PAGES
 
-NAV_KEYS = {**NAV_KEYS, **OPS_NAV_KEYS}
+NAV_KEYS = {**NAV_KEYS, **OPS_NAV_KEYS, **INTEL_NAV_KEYS}
+INBOX_PATH = "/experiments/intel/inbox"
+# Pages holding inbox forms send their Origin on a same-origin submission (no-referrer would make
+# browsers send "Origin: null"); the referrer still never leaves this origin.
+SAME_ORIGIN_REFERRER = frozenset(INTEL_PAGES) | frozenset(INTEL_DEMO_PAGES)  # pages with forms send Origin
 
 CSP = ("default-src 'none'; script-src 'self'; style-src 'self'; font-src 'self'; img-src 'self'; "
        "connect-src 'self'; base-uri 'none'; object-src 'none'; frame-ancestors 'none'; form-action 'self'")
@@ -74,13 +85,17 @@ def host_allowed(header: Any, extra: Iterable[str] = ()) -> bool:
 
 
 def _status_line(code: int) -> str:
-    return {200: "200 OK", 400: "400 Bad Request", 404: "404 Not Found", 405: "405 Method Not Allowed",
+    return {200: "200 OK", 303: "303 See Other", 400: "400 Bad Request", 403: "403 Forbidden", 404: "404 Not Found",
+            405: "405 Method Not Allowed", 408: "408 Request Timeout", 411: "411 Length Required",
+            413: "413 Content Too Large", 415: "415 Unsupported Media Type", 429: "429 Too Many Requests",
             500: "500 Internal Server Error"}[code]
 
 
 def make_app(config: d.Config) -> Callable[[dict[str, Any], Callable], Iterable[bytes]]:
     """A WSGI callable over `config`. Every request opens the sources read-only afresh."""
-    pages = {**PAGES, **INPLAY_PAGES, **OPS_PAGES, **({**DEMO_PAGES, **INPLAY_DEMO_PAGES} if config.demo else {})}
+    pages = {**PAGES, **INPLAY_PAGES, **OPS_PAGES, **INTEL_PAGES,
+             **({**DEMO_PAGES, **INPLAY_DEMO_PAGES, **INTEL_DEMO_PAGES} if config.demo else {})}
+    form_token = intel_post.new_token()  # per process; compared with secrets.compare_digest, never stored
 
     def shell_for(ctx: d.Context | None, title: str, nav: str, body: str, *, account: str | None = None,
                   params: pr.Params | None = None) -> str:
@@ -118,6 +133,19 @@ def make_app(config: d.Config) -> Callable[[dict[str, Any], Callable], Iterable[
         payload: bytes | None = None
         if not host_allowed(environ.get("HTTP_HOST"), config.allowed_hosts):
             code, ctype, text = 400, TEXT, "refused: Host header is not a local address\n"
+        elif method == "POST" and path == INBOX_PATH:
+            result = intel_post.handle(environ, inbox_root=config.intel_inbox, token=form_token, db=config.db,
+                                       now=config.clock())
+            ctype = HTML
+            if result.code == 303 and result.location:
+                code = 303
+                extra.append(("Location", result.location))
+                text = f'<p>Queued. <a href="{esc(result.location)}">Continue</a>.</p>'
+            else:
+                code = result.code
+                if code == 405:
+                    extra.append(("Allow", ", ".join(ALLOWED)))
+                text = shell_for(None, "Submission refused", "research", error_page(code, result.reason, result.back))
         elif method not in ALLOWED:
             code, ctype = 405, HTML
             extra.append(("Allow", ", ".join(ALLOWED)))
@@ -131,6 +159,7 @@ def make_app(config: d.Config) -> Callable[[dict[str, Any], Callable], Iterable[
         elif path in pages:
             title, view = pages[path]
             ctx = d.Context(config)
+            ctx.form_token = form_token if config.intel_inbox is not None else None
             params: pr.Params | None = None
             try:
                 params = pr.parse_params(path, str(environ.get("QUERY_STRING") or ""), venues=venues.VENUES,
@@ -161,7 +190,11 @@ def make_app(config: d.Config) -> Callable[[dict[str, Any], Callable], Iterable[
                                                     f'</div><p>No page at {esc(path)}.</p>')
         if payload is None:
             payload = text.encode("utf-8")
-        headers = [("Content-Type", ctype), ("Content-Length", str(len(payload))), *SECURITY_HEADERS, cache, *extra]
+        security = SECURITY_HEADERS
+        if path in SAME_ORIGIN_REFERRER:
+            security = tuple(("Referrer-Policy", "same-origin") if k == "Referrer-Policy" else (k, v)
+                             for k, v in SECURITY_HEADERS)
+        headers = [("Content-Type", ctype), ("Content-Length", str(len(payload))), *security, cache, *extra]
         start_response(_status_line(code), headers)
         return [b""] if method == "HEAD" else [payload]
 

@@ -883,12 +883,13 @@ def performance(store: SnapshotStore) -> dict[str, Any]:
 
 def _first_not_open_quotes(store: SnapshotStore) -> dict[str, datetime]:
     """Per outcome: the first decision whose captured market was no longer open."""
+    from ..kalshi_quotes import OPEN_STATUSES
     out: dict[str, datetime] = {}
     for row in store.intel_records(kind="decision"):
         p = _payload(row)
         status_word = str((p.get("sheet") or {}).get("market_status") or "").lower()
         made = _t(p.get("decided_utc"))
-        if status_word and status_word not in ("active", "open") and made and p["outcome_id"] not in out:
+        if status_word and status_word not in OPEN_STATUSES and made and p["outcome_id"] not in out:
             out[p["outcome_id"]] = made
     return out
 

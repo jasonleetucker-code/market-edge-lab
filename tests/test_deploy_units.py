@@ -89,6 +89,8 @@ def test_the_dashboards_only_new_write_path_is_the_intel_inbox_and_its_network_s
     u = _parse("edgelab-dashboard.service")
     writable = [p for line in u[("Service", "ReadWritePaths")] for p in line.split()]
     assert writable == ["/var/lib/market-edge-lab/db", "-/var/lib/market-edge-lab/intel-inbox"]
+    # Submissions stay off until the owner activates them (EDGE_LAB_INTEL_INBOX in dashboard.env, runbook).
+    assert "--intel-inbox" not in u[("Service", "ExecStart")][0]
     assert not [p for p in writable if p.lstrip("-") in ("/var/lib/market-edge-lab", "/var/lib/market-edge-lab-status",
                                                          "/var/lib/market-edge-lab/ledger")]
     assert u[("Service", "ReadOnlyPaths")] == ["-/var/lib/market-edge-lab/db/edge_lab.sqlite3"]
