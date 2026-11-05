@@ -1,0 +1,19 @@
+[Unit]
+Description=Market Edge Lab: news intelligence run every 2 hours (ADR 0049)
+
+[Timer]
+# Installed with the other units but separately activated (install.sh SEPARATELY_ACTIVATED): the
+# installer never enables it. docs/deploy/NEWS_INTEL_ACTIVATION.md enables it on the owner's decision.
+# 01:32, 03:32, ..., 23:32 America/New_York (the owner's 2-hour cadence; the minute is chosen so that a
+# run, at most TimeoutStartSec=6min long, never overlaps a protected window (11:13-11:30, 16:13-16:30,
+# 17:40-18:50 ET), the 04:40 UTC backup, or the 10 minutes around the 04:57:45 UTC close tick, in EST
+# and EDT alike). Clear of the odds (:00/:15/:30/:45), observe (:05/:20/:35/:50), freshness
+# (:01/:06/.../:56), pm-sports (:10/:25/:40/:55), discovery (:47) and inbox (:03/:08/.../:58) ticks.
+OnCalendar=*-*-* 01/2:32:00 America/New_York
+AccuracySec=1min
+# A missed run is not replayed late; the next run is at most 2 h away.
+Persistent=false
+Unit=edgelab-news.service
+
+[Install]
+WantedBy=timers.target

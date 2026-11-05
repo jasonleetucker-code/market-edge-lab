@@ -1,0 +1,41 @@
+[Unit]
+Description=Market Edge Lab: news intelligence inbox drain every 5 minutes (dashboard handoff, ADR 0049)
+Documentation=file:///opt/market-edge-lab/app/docs/decisions/0049-news-intel-slice.md
+After=network-online.target
+Wants=network-online.target
+OnFailure=edgelab-alert@%n.service
+
+[Service]
+Type=oneshot
+Slice=edgelab.slice
+User=edgelab
+Group=edgelab
+EnvironmentFile=/etc/market-edge-lab/env
+WorkingDirectory=/var/lib/market-edge-lab
+# No secrets. Handles the files the dashboard queued in /var/lib/market-edge-lab/intel-inbox (new/ ->
+# work/ -> done/ or rejected/, each with a journal record) and writes the intel.json heartbeat. Local
+# only, with no network call, unless the owner queued a refresh: then one bounded news collection (at
+# most one per 15 minutes, the same bounds as edgelab-news) or one bounded Kalshi read (refused by the
+# code inside protected windows and around the close tick).
+ExecStart=/opt/market-edge-lab/venv/bin/python -m edge_lab.cli intel --db /var/lib/market-edge-lab/db/edge_lab.sqlite3 process-inbox --inbox /var/lib/market-edge-lab/intel-inbox --status-dir /var/lib/market-edge-lab-status
+TimeoutStartSec=6min
+UMask=0077
+MemoryHigh=192M
+MemoryMax=256M
+CPUQuota=15%
+TasksMax=16
+Nice=10
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+ReadWritePaths=/var/lib/market-edge-lab /var/lib/market-edge-lab-status

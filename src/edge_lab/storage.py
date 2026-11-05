@@ -11,7 +11,7 @@ from typing import Any, Iterable, Sequence
 from .http import FetchResult
 from .provenance import bytes_sha256, canonical_json, sha256_hex, shape_fingerprint
 
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 SOURCE_HEALTH_STATUSES = ("ok", "partial", "failed")
 
 
@@ -740,6 +740,153 @@ END;
 """
 
 
+# v8: news and transcript intelligence (#192, ADR 0049). Three append-only tables:
+# - intel_fetches: every feed attempt, including 304s and failures, with its conditional-GET
+#   validators. Raw bytes are retained (document_retrievals) only for public-domain sources.
+# - intel_items: one row per (source, item, content version): headline, link, timestamps and a
+#   short snippet, never article text.
+# - intel_records: a typed, per-subject hash-chained journal (transcripts, events, packets,
+#   analyses, forecasts, links, quotes, decisions, resolutions, inbox results). A correction is
+#   a new record that supersedes an older one; nothing is ever updated or deleted.
+_SCHEMA_V8 = """
+CREATE TABLE IF NOT EXISTS intel_fetches (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id TEXT NOT NULL,
+    source_id TEXT NOT NULL,
+    feed_id TEXT NOT NULL,
+    requested_url TEXT NOT NULL,
+    final_url TEXT,
+    attempted_at_utc TEXT NOT NULL,
+    http_status INTEGER,
+    outcome TEXT NOT NULL CHECK (outcome IN ('OK', 'NOT_MODIFIED', 'FAILED', 'REFUSED', 'SKIPPED')),
+    access_signal TEXT,
+    etag TEXT,
+    last_modified TEXT,
+    raw_sha256 TEXT,
+    raw_bytes INTEGER,
+    retained TEXT NOT NULL CHECK (retained IN ('RAW', 'NONE')),
+    document_retrieval_id INTEGER,
+    item_count INTEGER,
+    error TEXT,
+    parser_version TEXT NOT NULL,
+    duration_ms INTEGER,
+    FOREIGN KEY (run_id) REFERENCES collection_runs(run_id),
+    FOREIGN KEY (document_retrieval_id) REFERENCES document_retrievals(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_intel_fetches_feed ON intel_fetches(feed_id, id);
+
+CREATE TABLE IF NOT EXISTS intel_items (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    fetch_id INTEGER NOT NULL,
+    source_id TEXT NOT NULL,
+    feed_id TEXT NOT NULL,
+    item_key TEXT NOT NULL,
+    content_sha256 TEXT NOT NULL,
+    first_seen_utc TEXT NOT NULL,
+    published_utc TEXT,
+    updated_utc TEXT,
+    published_raw TEXT,
+    title TEXT NOT NULL,
+    link TEXT,
+    canonical_url TEXT,
+    snippet TEXT,
+    cluster_key TEXT NOT NULL,
+    origin TEXT NOT NULL,
+    via_aggregator INTEGER NOT NULL CHECK (via_aggregator IN (0, 1)),
+    rights TEXT NOT NULL,
+    parser_version TEXT NOT NULL,
+    UNIQUE (source_id, item_key, content_sha256),
+    FOREIGN KEY (fetch_id) REFERENCES intel_fetches(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_intel_items_time ON intel_items(first_seen_utc);
+CREATE INDEX IF NOT EXISTS idx_intel_items_cluster ON intel_items(cluster_key);
+
+CREATE TABLE IF NOT EXISTS intel_records (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind TEXT NOT NULL,
+    subject_id TEXT NOT NULL,
+    recorded_at_utc TEXT NOT NULL,
+    schema TEXT NOT NULL,
+    payload_json TEXT NOT NULL,
+    payload_sha256 TEXT NOT NULL,
+    prev_sha256 TEXT,
+    supersedes_id INTEGER,
+    FOREIGN KEY (supersedes_id) REFERENCES intel_records(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_intel_records_subject ON intel_records(kind, subject_id, id);
+
+CREATE TRIGGER IF NOT EXISTS intel_fetches_no_update
+BEFORE UPDATE ON intel_fetches
+BEGIN
+    SELECT RAISE(ABORT, 'intel fetches are immutable evidence');
+END;
+
+CREATE TRIGGER IF NOT EXISTS intel_fetches_no_delete
+BEFORE DELETE ON intel_fetches
+BEGIN
+    SELECT RAISE(ABORT, 'intel fetches are immutable evidence');
+END;
+
+CREATE TRIGGER IF NOT EXISTS intel_fetches_no_replace
+BEFORE INSERT ON intel_fetches
+WHEN NEW.id IS NOT NULL AND EXISTS (SELECT 1 FROM intel_fetches WHERE id = NEW.id)
+BEGIN
+    SELECT RAISE(ABORT, 'intel fetches are immutable evidence');
+END;
+
+CREATE TRIGGER IF NOT EXISTS intel_items_no_update
+BEFORE UPDATE ON intel_items
+BEGIN
+    SELECT RAISE(ABORT, 'intel items are immutable evidence');
+END;
+
+CREATE TRIGGER IF NOT EXISTS intel_items_no_delete
+BEFORE DELETE ON intel_items
+BEGIN
+    SELECT RAISE(ABORT, 'intel items are immutable evidence');
+END;
+
+CREATE TRIGGER IF NOT EXISTS intel_items_no_replace
+BEFORE INSERT ON intel_items
+WHEN NEW.id IS NOT NULL AND EXISTS (SELECT 1 FROM intel_items WHERE id = NEW.id)
+BEGIN
+    SELECT RAISE(ABORT, 'intel items are immutable evidence');
+END;
+
+CREATE TRIGGER IF NOT EXISTS intel_records_no_update
+BEFORE UPDATE ON intel_records
+BEGIN
+    SELECT RAISE(ABORT, 'intel records are an append-only journal');
+END;
+
+CREATE TRIGGER IF NOT EXISTS intel_records_no_delete
+BEFORE DELETE ON intel_records
+BEGIN
+    SELECT RAISE(ABORT, 'intel records are an append-only journal');
+END;
+
+CREATE TRIGGER IF NOT EXISTS intel_records_no_replace
+BEFORE INSERT ON intel_records
+WHEN NEW.id IS NOT NULL AND EXISTS (SELECT 1 FROM intel_records WHERE id = NEW.id)
+BEGIN
+    SELECT RAISE(ABORT, 'intel records are an append-only journal');
+END;
+
+-- The per-subject chain: a record must name the latest record of its subject as its parent.
+CREATE TRIGGER IF NOT EXISTS intel_records_chain
+BEFORE INSERT ON intel_records
+WHEN NEW.prev_sha256 IS NOT (
+    SELECT payload_sha256 FROM intel_records
+    WHERE kind = NEW.kind AND subject_id = NEW.subject_id ORDER BY id DESC LIMIT 1)
+BEGIN
+    SELECT RAISE(ABORT, 'intel record chain mismatch: prev_sha256 must name the latest record of its subject');
+END;
+"""
+
+
 def _objects(script: str) -> frozenset[str]:
     return frozenset(re.findall(r"CREATE (?:UNIQUE )?(?:TABLE|INDEX|TRIGGER) IF NOT EXISTS (\w+)", script))
 
@@ -747,19 +894,21 @@ def _objects(script: str) -> frozenset[str]:
 V5_OBJECTS = _objects(_SCHEMA_V5)
 V6_OBJECTS = _objects(_SCHEMA_V6)
 V7_OBJECTS = _objects(_SCHEMA_V7)
+V8_OBJECTS = _objects(_SCHEMA_V8)
 V4_REQUIRED_TABLES = ("collection_runs", "snapshots", "source_health", "document_blobs", "document_retrievals",
                       "forward_captures")
 
 
 def _additive_steps() -> tuple[tuple[int, str], ...]:
     """The additive migrations after v4, read at call time (so a test can stand in for older code)."""
-    return ((5, _SCHEMA_V5), (6, _SCHEMA_V6), (7, _SCHEMA_V7))
+    return ((5, _SCHEMA_V5), (6, _SCHEMA_V6), (7, _SCHEMA_V7), (8, _SCHEMA_V8))
 
 
 # What each forward-only step added, for the rollback helper: {from_version: objects that version added}.
 _ROLLBACK_KEPT = {5: ("odds_targets_kept", "odds_capture_targets"),
                   6: ("price_observation_targets_kept", "price_observation_targets"),
-                  7: ("pm_sports_targets_kept", "pm_sports_targets")}
+                  7: ("pm_sports_targets_kept", "pm_sports_targets"),
+                  8: ("intel_records_kept", "intel_records")}
 
 
 def mark_schema_for_rollback(db_path: str | Path, *, from_version: int) -> dict[str, Any]:
@@ -768,12 +917,12 @@ def mark_schema_for_rollback(db_path: str | Path, *, from_version: int) -> dict[
 
     Nothing is deleted or rewritten. v5 only added the odds capture tables, v6 only the price
     observation tables and v7 only the Polymarket US NFL pilot tables (ADR 0032), each with
-    triggers on those tables only; the previous code never reads them. Before stamping it checks: user_version is `from_version`; every v4 table and
+    triggers on those tables only, and v8 only the news intelligence tables (ADR 0049); the previous code never reads them. Before stamping it checks: user_version is `from_version`; every v4 table and
     snapshots column exists; every table, index and trigger of every additive step up to
     `from_version` exists (a complete store); and SQLite integrity_check passes.
     Re-installing the newer code later stamps it again (its migration is idempotent), and the
     rows written meanwhile are kept. Refuses anything else. Run it with the timers stopped.
-    To go back several versions, run it once per step (v7 -> v6, v6 -> v5, v5 -> v4)."""
+    To go back several versions, run it once per step (v8 -> v7, v7 -> v6, v6 -> v5, v5 -> v4)."""
     if from_version not in _ROLLBACK_KEPT:
         raise ValueError(f"no rollback step from v{from_version}")
     path = Path(db_path)
@@ -805,6 +954,9 @@ def mark_schema_for_rollback(db_path: str | Path, *, from_version: int) -> dict[
         if from_version == 7:
             for extra in ("pm_sports_scans", "pm_sports_observations"):
                 out[f"{extra}_kept"] = int(conn.execute(f"SELECT COUNT(*) FROM {extra}").fetchone()[0])
+        if from_version == 8:
+            for extra in ("intel_fetches", "intel_items"):
+                out[f"{extra}_kept"] = int(conn.execute(f"SELECT COUNT(*) FROM {extra}").fetchone()[0])
         return out
 
 
@@ -823,18 +975,25 @@ def mark_schema_v6_for_rollback(db_path: str | Path) -> dict[str, Any]:
     return mark_schema_for_rollback(db_path, from_version=7)
 
 
+def mark_schema_v7_for_rollback(db_path: str | Path) -> dict[str, Any]:
+    """Stamp a complete v8 store as v7 (ADR 0049 rollback)."""
+    return mark_schema_for_rollback(db_path, from_version=8)
+
+
 def main(argv: list[str] | None = None) -> int:
-    """`python -m edge_lab.storage mark-v6-for-rollback --db PATH` (v7 -> v6),
+    """`python -m edge_lab.storage mark-v7-for-rollback --db PATH` (v8 -> v7), `mark-v6-for-rollback` (v7 -> v6),
     `mark-v5-for-rollback` (v6 -> v5) or `mark-v4-for-rollback` (v5 -> v4); see the rollback runbook."""
     import argparse
 
     parser = argparse.ArgumentParser(prog="python -m edge_lab.storage")
     sub = parser.add_subparsers(dest="command", required=True)
     helpers = {"mark-v4-for-rollback": mark_schema_v4_for_rollback, "mark-v5-for-rollback": mark_schema_v5_for_rollback,
-               "mark-v6-for-rollback": mark_schema_v6_for_rollback}
+               "mark-v6-for-rollback": mark_schema_v6_for_rollback,
+               "mark-v7-for-rollback": mark_schema_v7_for_rollback}
     for name, text in (("mark-v4-for-rollback", "stamp a v5 evidence store as v4 before a code rollback"),
                        ("mark-v5-for-rollback", "stamp a v6 evidence store as v5 before a code rollback"),
-                       ("mark-v6-for-rollback", "stamp a v7 evidence store as v6 before a code rollback")):
+                       ("mark-v6-for-rollback", "stamp a v7 evidence store as v6 before a code rollback"),
+                       ("mark-v7-for-rollback", "stamp a v8 evidence store as v7 before a code rollback")):
         rb = sub.add_parser(name, help=text)
         rb.add_argument("--db", required=True)
     args = parser.parse_args(argv)
@@ -930,7 +1089,7 @@ class SnapshotStore:
             conn.executescript(_SCHEMA_V2)
             conn.executescript(_SCHEMA_V3)
             conn.executescript(_SCHEMA_V4)
-            # The additive steps (v5 odds targets, v6 price observations, v7 Polymarket US NFL pilot) land in one
+            # The additive steps (v5 odds targets, v6 price observations, v7 Polymarket US NFL pilot, v8 intel) land in one
             # transaction, and the version is stamped only after every object exists: a crash
             # leaves either the old version or a complete new one. An already complete store
             # takes no write lock here.
@@ -1521,6 +1680,113 @@ class SnapshotStore:
                 (doc_type,),
             ).fetchall()
         return [row["sha256"] for row in rows]
+
+    # ------------------------------------------------------------------ news intelligence (v8, ADR 0049)
+
+    def save_blob(self, body: bytes) -> str:
+        """Store bytes content-addressed in document_blobs (no retrieval row); returns the sha256.
+        Used for owner-supplied documents such as transcripts, which have no URL or fetch."""
+        digest = bytes_sha256(body)
+        with closing(self._connect()) as conn, conn:
+            conn.execute("INSERT OR IGNORE INTO document_blobs(sha256, byte_length, body) VALUES (?, ?, ?)",
+                         (digest, len(body), body))
+        return digest
+
+    def record_intel_fetch(self, row: dict[str, Any]) -> int:
+        cols = list(row)
+        with closing(self._connect()) as conn, conn:
+            cur = conn.execute(f"INSERT INTO intel_fetches({', '.join(cols)}) VALUES ({', '.join('?' * len(cols))})",
+                               [row[c] for c in cols])
+            return int(cur.lastrowid)
+
+    def latest_intel_fetch(self, feed_id: str, *, ok_only: bool = False) -> sqlite3.Row | None:
+        where = " AND outcome IN ('OK', 'NOT_MODIFIED')" if ok_only else ""
+        with closing(self._connect()) as conn, conn:
+            return conn.execute(f"SELECT * FROM intel_fetches WHERE feed_id = ?{where} ORDER BY id DESC LIMIT 1",
+                                (feed_id,)).fetchone()
+
+    def latest_validators(self, feed_id: str) -> tuple[str | None, str | None]:
+        """(etag, last_modified) of the latest successful 200 for a feed, for a conditional GET."""
+        with closing(self._connect()) as conn, conn:
+            row = conn.execute("SELECT etag, last_modified FROM intel_fetches WHERE feed_id = ? AND outcome = 'OK' "
+                               "ORDER BY id DESC LIMIT 1", (feed_id,)).fetchone()
+        return (row["etag"], row["last_modified"]) if row else (None, None)
+
+    def insert_intel_items(self, rows: list[dict[str, Any]]) -> int:
+        """Insert item versions; an identical (source, item, content) is skipped. Returns rows added."""
+        added = 0
+        with closing(self._connect()) as conn, conn:
+            for row in rows:
+                cols = list(row)
+                cur = conn.execute(
+                    f"INSERT INTO intel_items({', '.join(cols)}) VALUES ({', '.join('?' * len(cols))}) "
+                    "ON CONFLICT(source_id, item_key, content_sha256) DO NOTHING",
+                    [row[c] for c in cols])
+                added += cur.rowcount
+        return added
+
+    def intel_items(self, *, since_utc: str | None = None, limit: int = 2000) -> list[sqlite3.Row]:
+        """Latest version of each item, newest first."""
+        where, args = "", []
+        if since_utc:
+            where, args = "WHERE first_seen_utc >= ?", [since_utc]
+        with closing(self._connect()) as conn, conn:
+            return conn.execute(
+                f"SELECT * FROM intel_items WHERE id IN (SELECT MAX(id) FROM intel_items {where} "
+                "GROUP BY source_id, item_key) ORDER BY COALESCE(published_utc, first_seen_utc) DESC, id DESC LIMIT ?",
+                [*args, limit]).fetchall()
+
+    def intel_latest_signals(self) -> dict[str, sqlite3.Row]:
+        """The latest attempt per feed that carried an access signal (refusal, robots, redirect)."""
+        with closing(self._connect()) as conn, conn:
+            rows = conn.execute(
+                "SELECT feed_id, access_signal, attempted_at_utc FROM intel_fetches WHERE id IN "
+                "(SELECT MAX(id) FROM intel_fetches WHERE access_signal IS NOT NULL GROUP BY feed_id)").fetchall()
+        return {r["feed_id"]: r for r in rows}
+
+    def intel_fetch_summary(self) -> list[sqlite3.Row]:
+        """The latest attempt and latest success per feed."""
+        with closing(self._connect()) as conn, conn:
+            return conn.execute(
+                "SELECT f.*, (SELECT MAX(attempted_at_utc) FROM intel_fetches g WHERE g.feed_id = f.feed_id "
+                "AND g.outcome IN ('OK', 'NOT_MODIFIED')) AS last_success_utc "
+                "FROM intel_fetches f WHERE f.id IN (SELECT MAX(id) FROM intel_fetches GROUP BY feed_id) "
+                "ORDER BY f.source_id, f.feed_id").fetchall()
+
+    def append_intel_record(self, *, kind: str, subject_id: str, schema: str, payload: dict[str, Any],
+                            recorded_at_utc: str | None = None, supersedes_id: int | None = None) -> tuple[int, str]:
+        """Append one journal record, chained to the latest record of (kind, subject). Returns (id, sha)."""
+        body = canonical_json(payload)
+        digest = sha256_hex(body)
+        with closing(self._connect()) as conn, conn:
+            conn.execute("BEGIN IMMEDIATE")
+            prev = conn.execute("SELECT payload_sha256 FROM intel_records WHERE kind = ? AND subject_id = ? "
+                                "ORDER BY id DESC LIMIT 1", (kind, subject_id)).fetchone()
+            cur = conn.execute(
+                "INSERT INTO intel_records(kind, subject_id, recorded_at_utc, schema, payload_json, payload_sha256, "
+                "prev_sha256, supersedes_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (kind, subject_id, recorded_at_utc or utc_now_iso(), schema, body, digest,
+                 prev["payload_sha256"] if prev else None, supersedes_id))
+            return int(cur.lastrowid), digest
+
+    def intel_records(self, *, kind: str | None = None, subject_id: str | None = None,
+                      limit: int | None = None) -> list[sqlite3.Row]:
+        clauses, args = [], []
+        if kind:
+            clauses.append("kind = ?")
+            args.append(kind)
+        if subject_id:
+            clauses.append("subject_id = ?")
+            args.append(subject_id)
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        tail = f" LIMIT {int(limit)}" if limit else ""
+        with closing(self._connect()) as conn, conn:
+            return conn.execute(f"SELECT * FROM intel_records {where} ORDER BY id{tail}", args).fetchall()
+
+    def latest_intel_record(self, kind: str, subject_id: str) -> sqlite3.Row | None:
+        with closing(self._connect()) as conn, conn:
+            return conn.execute("SELECT * FROM intel_records WHERE kind = ? AND subject_id = ? ORDER BY id DESC LIMIT 1",
+                                (kind, subject_id)).fetchone()
 
     def document_bytes(self, sha256: str) -> bytes | None:
         with closing(self._connect()) as conn, conn:

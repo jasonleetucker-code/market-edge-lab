@@ -1,7 +1,7 @@
 """Evidence schema v7 (ADR 0032): additive Polymarket US NFL pilot tables and the v7 -> v6 rollback stamp.
 
 The v6 -> v5 -> v4 chain is pinned in tests/test_storage_rollback.py (with "the current code" held
-at v6 there); this file covers the step this lane added."""
+at v6 there); this file covers the step this lane added, with "the current code" held at v7."""
 
 from __future__ import annotations
 
@@ -13,6 +13,17 @@ import pytest
 
 from edge_lab import storage
 from edge_lab.storage import SnapshotStore
+
+
+@pytest.fixture(autouse=True)
+def _v7_code(monkeypatch):
+    """These tests pin the v7 -> v6 step, so "the current code" here is the v7 code (no v8 step).
+    The v8 -> v7 step (ADR 0049) is tested in tests/test_intel_storage.py."""
+    from edge_lab import backup
+
+    monkeypatch.setattr(storage, "SCHEMA_VERSION", 7)
+    monkeypatch.setattr(backup, "CURRENT_SCHEMA_VERSION", 7)
+    monkeypatch.setattr(backup, "_reference_triggers_cache", None)
 
 
 def _v7_store_with_rows(tmp_path: Path) -> Path:

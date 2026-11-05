@@ -64,8 +64,9 @@ def test_dashboard_is_read_only_loopback_only_and_tailnet_host_pinned():
     assert u[("Service", "User")] == ["edgelab"] and u[("Service", "Slice")] == ["edgelab.slice"]
     assert u[("Service", "ProtectSystem")] == ["strict"] and u[("Service", "NoNewPrivileges")] == ["yes"]
     # The db directory is writable only for SQLite's WAL side files (ADR 0016); the database file is
-    # re-pinned read-only by the kernel; never the data root or the ledger dir.
-    assert u[("Service", "ReadWritePaths")] == ["/var/lib/market-edge-lab/db"]
+    # re-pinned read-only by the kernel; never the data root or the ledger dir. The one exception is the
+    # private intel inbox (ADR 0049, EXECUTION_PLAN 2026-11-05), optional ('-') until install.sh creates it.
+    assert u[("Service", "ReadWritePaths")] == ["/var/lib/market-edge-lab/db -/var/lib/market-edge-lab/intel-inbox"]
     # Only the DB file is pinned: the odds quota ledger is replaced by atomic rename (a pin would not hold).
     assert u[("Service", "ReadOnlyPaths")] == ["-/var/lib/market-edge-lab/db/edge_lab.sqlite3"]
     assert u[("Service", "IPAddressDeny")] == ["any"] and u[("Service", "IPAddressAllow")] == ["localhost"]
@@ -80,6 +81,33 @@ def test_dashboard_is_read_only_loopback_only_and_tailnet_host_pinned():
     # The name comes from a required file: a missing file fails the unit rather than serving without it.
     assert u[("Service", "EnvironmentFile")] == ["/etc/market-edge-lab/dashboard.env"]
     assert "edgelab-dashboard" in INSTALL
+
+
+def test_the_dashboards_only_new_write_path_is_the_intel_inbox_and_its_network_stays_denied():
+    """ADR 0049: the inbox handoff adds exactly one ReadWritePaths entry; every other hardening line is the
+    pre-#192 dashboard's, so the dashboard still has no network and cannot write the evidence DB."""
+    u = _parse("edgelab-dashboard.service")
+    writable = [p for line in u[("Service", "ReadWritePaths")] for p in line.split()]
+    assert writable == ["/var/lib/market-edge-lab/db", "-/var/lib/market-edge-lab/intel-inbox"]
+    assert not [p for p in writable if p.lstrip("-") in ("/var/lib/market-edge-lab", "/var/lib/market-edge-lab-status",
+                                                         "/var/lib/market-edge-lab/ledger")]
+    assert u[("Service", "ReadOnlyPaths")] == ["-/var/lib/market-edge-lab/db/edge_lab.sqlite3"]
+    assert u[("Service", "IPAddressDeny")] == ["any"] and u[("Service", "IPAddressAllow")] == ["localhost"]
+    assert u[("Service", "RestrictAddressFamilies")] == ["AF_INET AF_UNIX"]
+    assert ("Service", "InaccessiblePaths") not in u and ("Service", "BindPaths") not in u
+    # The hardening keys, each set exactly once, unchanged by #192.
+    for key, value in (("ProtectSystem", "strict"), ("NoNewPrivileges", "yes"), ("PrivateTmp", "yes"),
+                       ("PrivateDevices", "yes"), ("ProtectHome", "yes"), ("ProtectKernelTunables", "yes"),
+                       ("ProtectKernelModules", "yes"), ("ProtectKernelLogs", "yes"), ("ProtectControlGroups", "yes"),
+                       ("RestrictSUIDSGID", "yes"), ("RestrictNamespaces", "yes"), ("LockPersonality", "yes"),
+                       ("UMask", "0077"), ("MemoryMax", "128M"), ("CPUQuota", "10%"), ("TasksMax", "8")):
+        assert u[("Service", key)] == [value], key
+    # The inbox the dashboard writes is the one the news units drain, and install.sh creates it private.
+    for name in ("edgelab-news.service", "edgelab-news-inbox.service"):
+        assert "--inbox /var/lib/market-edge-lab/intel-inbox " in _parse(name)[("Service", "ExecStart")][0]
+    assert 'install -d -o edgelab -g edgelab -m 0700 "$DATA/intel-inbox"' in INSTALL
+    for sub in ("tmp", "new", "work", "done", "rejected"):
+        assert f'"$DATA/intel-inbox/{sub}"' in INSTALL
 
 
 def test_new_timers_avoid_the_capture_windows_and_use_new_york_time():
@@ -170,7 +198,7 @@ def test_readme_install_window_matches_the_capture_window():
 VERIFY = ROOT / "deploy" / "vps" / "verify_production.sh"
 VERIFY_STATES = (
     "NY_TIME", "IN_CAPTURE_WINDOW", "RUNNING_UNITS", "DEPLOYED_SHA", "TIMERS", "UNIT_RESULTS", "SHADOW_TIMER",
-    "SETTLEMENT_TIMER", "OBSERVE_TIMER", "OBSERVE_CLOSE_TIMER", "PM_SPORTS_TIMER", "PM_SPORTS_DISCOVER_TIMER", "FRESHNESS_STATUS", "LATEST_JSON", "LATEST_JSON_AGE", "COLLECTOR_HEALTH", "VALID_DAY_OBSERVED", "SHADOW_DAILY",
+    "SETTLEMENT_TIMER", "OBSERVE_TIMER", "OBSERVE_CLOSE_TIMER", "PM_SPORTS_TIMER", "PM_SPORTS_DISCOVER_TIMER", "NEWS_TIMER", "NEWS_INBOX_TIMER", "FRESHNESS_STATUS", "LATEST_JSON", "LATEST_JSON_AGE", "COLLECTOR_HEALTH", "VALID_DAY_OBSERVED", "SHADOW_DAILY",
     "LAST_FAILURE", "COLLECTOR_INSTALLED", "TIMERS_ENABLED", "PFM_CAPTURE_OBSERVED", "DECISION_CAPTURE_OBSERVED",
     "RECHECK_CAPTURE_OBSERVED", "DB_SIZES", "BACKUPS", "BACKUP_REPORTS_8D", "BACKUP_EVIDENCE_DB",
     "BACKUP_SHADOW_LEDGER", "RESTORE_EVIDENCE_DB", "RESTORE_SHADOW_LEDGER", "JOURNAL_WARNINGS_24H", "OOM_30D",

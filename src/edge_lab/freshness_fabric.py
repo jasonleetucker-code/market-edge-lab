@@ -36,6 +36,7 @@ from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping, Sequence
 
 from . import forward, odds_api, odds_pilot, odds_schedule, polymarket_sports
+from .intel import fabric as intel_fabric
 from . import price_observations as po
 from .freshness import (
     AcquisitionMode,
@@ -1052,6 +1053,7 @@ REGISTRY: tuple[FabricProvider, ...] = (
     FabricProvider("settlement_and_shadow", SETTLEMENT_POLICIES, settlement_and_shadow),
     FabricProvider("backups", BACKUP_POLICIES, backups),
     FabricProvider("freshness_supervisor", SUPERVISOR_POLICIES, supervisor_self),
+    FabricProvider(intel_fabric.FABRIC_PROVIDER_NAME, intel_fabric.fabric_policies(), intel_fabric.fabric_provider),
     FabricProvider(polymarket_sports.FABRIC_PROVIDER_NAME, polymarket_sports.fabric_policies(), polymarket_sports.fabric_provider),
 )
 

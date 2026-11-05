@@ -364,6 +364,10 @@ timer_state OBSERVE_CLOSE_TIMER edgelab-observe-close
 # Separately activated (runbook 5e, ADR 0032): shown as systemd reports them; "disabled" is expected before 5e.
 timer_state PM_SPORTS_TIMER edgelab-pm-sports
 timer_state PM_SPORTS_DISCOVER_TIMER edgelab-pm-sports-discover
+# Separately activated (docs/deploy/NEWS_INTEL_ACTIVATION.md, ADR 0049): "disabled" is expected until the owner
+# activates them. Not in NAMES: TIMERS counts the core schedule only.
+timer_state NEWS_TIMER edgelab-news
+timer_state NEWS_INBOX_TIMER edgelab-news-inbox
 
 # --------------------------------------------------------------------------- status files
 if [ -r "$STATUS/latest.json" ]; then

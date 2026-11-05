@@ -54,8 +54,20 @@ def _line(**fields: str | None) -> str:
 
 
 def build_packet(event: EventRecord, evidence: list[Evidence] | tuple[Evidence, ...], *, created_utc: str,
-                 source_names: dict[str, str] | None = None) -> Packet:
-    """A deterministic packet for one event. Same inputs give the same packet and hash."""
+                 source_names: dict[str, str] | None = None, horizon_date: str | None = None) -> Packet:
+    """A deterministic packet for one event. Same inputs give the same packet and hash.
+
+    `horizon_date` (YYYY-MM-DD) is the owner's own forecast horizon: every outcome is forecast as
+    "happens before this date". It is the owner's input, never read from a market. Without it the
+    packet uses the end of the creation year and says so.
+    """
+    import datetime as _dt
+    if horizon_date is None:
+        horizon_date = f"{created_utc[:4]}-12-31" if created_utc[:4].isdigit() else None
+        horizon_note = "default: the end of the current calendar year"
+    else:
+        _dt.date.fromisoformat(horizon_date)  # raises on a malformed date
+        horizon_note = "set by the owner"
     names = source_names or {}
     by_id = {e.evidence_id: e for e in evidence}
     chosen = [by_id[i] for i in event.evidence_ids if i in by_id]
@@ -138,6 +150,9 @@ def build_packet(event: EventRecord, evidence: list[Evidence] | tuple[Evidence, 
         "<...> placeholders and the null probability/low/high values. Keep every id unchanged.",
         "Probabilities are decimals strictly between 0 and 1 with low <= probability <= high.",
         "Text before or after the block is fine.",
+        "",
+        f"FORECAST HORIZON: each outcome counts as YES only if it happens on or before {horizon_date} "
+        f"({horizon_note}).",
         "",
         "OUTCOMES",
         outcomes or "(no outcome template for this topic)",

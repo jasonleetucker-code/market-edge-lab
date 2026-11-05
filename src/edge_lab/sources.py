@@ -332,6 +332,47 @@ REGISTRY: dict[str, SourceSpec] = {
                           "redistribution before a terms review.",
         ),
         SourceSpec(
+            # The news intelligence feeds (#192, ADR 0049). One aggregate identity; each feed's own
+            # status, verification and access signals live in edge_lab.intel.registry and the
+            # intel_fetches table. Still PLANNED: edgelab-news.timer ships disabled.
+            source_id="news_feeds_public",
+            legacy_name="news_feeds_public",
+            description=(
+                "Curated publisher RSS/Atom feeds and official public feeds/APIs (no key) for news, politics, "
+                "finance and primary government sources: headline, link, timestamps and a <=300-char snippet "
+                "(raw bytes only for public-domain sources). edge_lab.intel.collect; registry of 50 candidates "
+                "in edge_lab.intel.registry. Still PLANNED: the timer is not enabled."
+            ),
+            access_tier=AccessTier.FEED,
+            base_url="https://feeds.bbci.co.uk",  # representative; each feed URL is in edge_lab.intel.registry
+            status=SourceStatus.PLANNED,
+            max_age={"feed": timedelta(hours=3)},
+            parser_version="intel-feeds-v1",
+            license_notes="Per-source terms and robots verdicts in edge_lab.intel.registry and "
+                          "docs/research/NEWS_SOURCE_VERIFICATION_2026-11-05.md. Private research use; never "
+                          "redistributed; no paywall, login, robots or rate-limit circumvention.",
+        ),
+        SourceSpec(
+            # Kalshi reads for the news lane only (#192, owner answer "On-demand + 2-hour job"). Its own
+            # legacy name keeps these snapshots out of routine kalshi_public health and out of every EXP-001,
+            # NFL and NHL query that filters on source='kalshi'. Protected series are refused before any GET.
+            source_id="kalshi_public_intel",
+            legacy_name="kalshi_public_intel",
+            description=(
+                "Kalshi public market data for politics/economics markets linked to tracked news events: series "
+                "catalog by category, open markets and order books, on demand and in the 2-hour news run "
+                "(edge_lab.intel.kalshi_link). Never KXHIGHNY, KXNFLGAME, KXNHLGAME or KXMVE*. Deterministic, "
+                "private use only; never sent to any AI model. Still PLANNED: the timer is not enabled."
+            ),
+            access_tier=AccessTier.OFFICIAL_API,
+            base_url="https://external-api.kalshi.com/trade-api/v2",
+            status=SourceStatus.PLANNED,
+            max_age={"orderbook": timedelta(minutes=15), "market": timedelta(hours=3),
+                     "series_catalog": timedelta(days=7)},
+            license_notes="Same source as kalshi_public. DATA_RIGHTS stays UNRESOLVED for every use beyond private "
+                          "deterministic research (EXECUTION_PLAN 2026-11-05); no AI use, no redistribution.",
+        ),
+        SourceSpec(
             source_id="the_odds_api",
             legacy_name="the_odds_api",
             description=(

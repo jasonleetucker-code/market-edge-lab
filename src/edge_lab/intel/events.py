@@ -112,7 +112,14 @@ GENERIC_ENTITIES = frozenset({
     "democrat", "gop", "court", "supreme court", "fed", "federal reserve", "news", "reuters", "ap",
     "associated press", "bbc", "cnn", "fox", "nbc", "cbs", "abc", "npr", "pbs", "politico", "the hill",
     "breaking", "live", "update", "updates", "watch", "video", "opinion", "analysis", "report",
+    # Collective nouns, markets and calendar words that make poor event subjects.
+    "voters", "americans", "election day", "election", "elections", "midterms", "midterm", "polls", "big tech",
+    "circuit", "wall street", "nasdaq", "dow", "s&p", "markets", "investors", "economy", "today", "tonight",
+    "brazilian", "israeli", "iranian", "russian", "ukrainian", "chinese", "european", "british", "french",
+    "palestinian", "mexican", "canadian", "german", "japanese", "indian",
 })
+BYLINE_WORDS = frozenset({"correspondent", "anchor", "reporter", "editor", "columnist", "host", "cam", "podcast",
+                          "newsletter", "photos", "photo", "contributor", "staff", "writer", "producer"})
 
 # A topic whose events are about the institution itself (one event, no entity needed).
 INSTITUTIONAL = {Topic.FED: "Federal Reserve", Topic.SHUTDOWN_BUDGET: "Federal funding"}
@@ -208,6 +215,8 @@ def key_entity_of(ev: Evidence, topic: Topic) -> str | None:
         if n in GENERIC_ENTITIES or len(n) < 4 or (name.isupper() and len(name) <= 4):
             continue
         words = set(n.replace(".", " ").split())
+        if words & BYLINE_WORDS:
+            continue
         if words & INSTITUTION_WORDS:
             if fallback is None and topic in (Topic.LEGISLATION, Topic.EARNINGS, Topic.GEOPOLITICS, Topic.TRADE,
                                               Topic.COURTS):
@@ -309,6 +318,7 @@ def build_events(evidence: list[Evidence] | tuple[Evidence, ...], *, max_events:
             g = groups.setdefault(eid, {"topic": topic, "entity": entity, "items": []})
             g["items"].append(ev)
 
+    _merge_surnames(groups)
     records: list[EventRecord] = []
     for eid, g in groups.items():
         items: list[Evidence] = g["items"]
@@ -344,6 +354,25 @@ def build_events(evidence: list[Evidence] | tuple[Evidence, ...], *, max_events:
         ))
     records.sort(key=lambda r: (-len(r.origins), -len(r.evidence_ids), r.last_evidence_utc or "", r.event_id))
     return tuple(records[:max_events])
+
+
+def _merge_surnames(groups: dict[str, dict]) -> None:
+    """Fold a one-word key ("Trump") into the single multi-word key of the same topic ending
+    with it ("Donald Trump"). With two or more candidate full names, nothing is merged."""
+    by_topic: dict[Topic, list[str]] = {}
+    for eid, g in groups.items():
+        by_topic.setdefault(g["topic"], []).append(eid)
+    for topic, ids in by_topic.items():
+        for eid in list(ids):
+            g = groups.get(eid)
+            if g is None or " " in g["entity"].strip():
+                continue
+            last = _norm(g["entity"])
+            fulls = [o for o in ids if o != eid and o in groups and " " in groups[o]["entity"].strip()
+                     and _norm(groups[o]["entity"]).split()[-1] == last]
+            if len(fulls) == 1:
+                groups[fulls[0]]["items"].extend(g["items"])
+                del groups[eid]
 
 
 def claim_verification(claim: Evidence, news: list[Evidence] | tuple[Evidence, ...], *, min_overlap: float = 0.4

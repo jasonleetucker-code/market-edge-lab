@@ -1,0 +1,18 @@
+[Unit]
+Description=Market Edge Lab: news intelligence inbox drain every 5 minutes (ADR 0049)
+
+[Timer]
+# Installed with the other units but separately activated (install.sh SEPARATELY_ACTIVATED): the
+# installer never enables it. docs/deploy/NEWS_INTEL_ACTIVATION.md enables it on the owner's decision.
+# :03, :08, ..., :58 every hour: clear of the odds (:00/:15/:30/:45), observe (:05/:20/:35/:50),
+# freshness (:01/:06/.../:56), pm-sports (:10/:25/:40/:55), discovery (:47) and news (:32) ticks.
+# An empty inbox means no network and no database write. A queued news refresh is not refused inside
+# protected windows (feeds are not Kalshi); a queued Kalshi read is, by the code.
+OnCalendar=*-*-* *:03/5:00 America/New_York
+AccuracySec=15s
+# Missed ticks are not replayed late: the next tick is at most 5 minutes away.
+Persistent=false
+Unit=edgelab-news-inbox.service
+
+[Install]
+WantedBy=timers.target

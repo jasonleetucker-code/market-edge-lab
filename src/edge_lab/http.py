@@ -27,6 +27,8 @@ _FORBIDDEN_HEADER_PARTS = ("authoriz", "cookie", "api-key", "apikey", "access-ke
 # Response headers kept on a FetchResult. Only this allowlist, lowercased: quota counters
 # (The Odds API) carry no secret. Everything else, cookies included, is dropped.
 RESPONSE_HEADER_ALLOWLIST = ("x-requests-remaining", "x-requests-used", "x-requests-last")
+# Conditional-GET validators a caller may opt in to keeping (feeds, ADR 0049). They carry no secret.
+CONDITIONAL_VALIDATORS = ("etag", "last-modified")
 
 
 class HttpFetchError(RuntimeError):
@@ -83,8 +85,10 @@ class FetchResult:
     response_headers: tuple[tuple[str, str], ...] = ()
 
 
-def allowlisted_headers(headers: Any) -> tuple[tuple[str, str], ...]:
-    """The allowlisted headers of a response, lowercased, in allowlist order; first value wins."""
+def allowlisted_headers(headers: Any, *, extra: tuple[str, ...] = ()) -> tuple[tuple[str, str], ...]:
+    """The allowlisted headers of a response (plus opted-in `extra` validators), lowercased, in
+    allowlist order; first value wins."""
+    allow = RESPONSE_HEADER_ALLOWLIST + tuple(h for h in extra if h in CONDITIONAL_VALIDATORS)
     if not headers:
         return ()
     try:
@@ -94,9 +98,9 @@ def allowlisted_headers(headers: Any) -> tuple[tuple[str, str], ...]:
     found: dict[str, str] = {}
     for name, value in items:
         key = str(name).lower()
-        if key in RESPONSE_HEADER_ALLOWLIST and key not in found:
+        if key in allow and key not in found:
             found[key] = str(value)
-    return tuple((name, found[name]) for name in RESPONSE_HEADER_ALLOWLIST if name in found)
+    return tuple((name, found[name]) for name in allow if name in found)
 
 
 Opener = Callable[[Request, float], Any]
@@ -127,12 +131,27 @@ def fetch(
     sleep: Callable[[float], None] = time.sleep,
     pacer: Pacer | None = None,
     jitter: Callable[[], float] = random.random,
+    max_bytes: int | None = None,
+    accept_not_modified: bool = False,
+    extra_response_headers: tuple[str, ...] = (),
 ) -> FetchResult:
     """GET `url`, retrying only transient failures (network errors, 429, 5xx).
 
     Other 4xx responses fail immediately: retrying a bad request wastes the
     source's capacity and hides our bug.
+
+    Opt-ins (all off by default, so existing callers are unchanged):
+    - `max_bytes`: refuse a body larger than this (reads at most max_bytes + 1 bytes).
+    - `accept_not_modified`: a 304 answer to a conditional GET returns a FetchResult with
+      `http_status=304` and an empty body instead of raising.
+    - `extra_response_headers`: further response headers to keep, limited to the
+      conditional-GET validators `etag` and `last-modified`.
     """
+    extra = tuple(h.lower() for h in extra_response_headers)
+    if any(h not in CONDITIONAL_VALIDATORS for h in extra):
+        raise ValueError(f"only {CONDITIONAL_VALIDATORS} may be kept in addition to the allowlist")
+    if max_bytes is not None and max_bytes <= 0:
+        raise ValueError("max_bytes must be positive")
     request_headers = {"Accept": "application/json", "User-Agent": DEFAULT_USER_AGENT}
     if headers:
         for name in headers:
@@ -156,11 +175,14 @@ def fetch(
             pacer.wait()
         try:
             with open_fn(request, timeout) as response:
-                body = response.read()
+                body = response.read() if max_bytes is None else response.read(max_bytes + 1)
+                if max_bytes is not None and len(body) > max_bytes:
+                    raise HttpFetchError(f"Response from {url} exceeds {max_bytes} bytes", status=None,
+                                         attempts=attempt)
                 status = int(getattr(response, "status", 200))
                 final_url = response.geturl() if hasattr(response, "geturl") else url
                 content_type = response.headers.get("Content-Type") if response.headers else None
-                kept_headers = allowlisted_headers(response.headers)
+                kept_headers = allowlisted_headers(response.headers, extra=extra)
             return FetchResult(
                 requested_url=url,
                 final_url=final_url,
@@ -174,6 +196,15 @@ def fetch(
                 response_headers=kept_headers,
             )
         except HTTPError as exc:
+            if exc.code == 304 and accept_not_modified:
+                kept = allowlisted_headers(exc.headers, extra=extra)
+                exc.close()
+                return FetchResult(
+                    requested_url=url, final_url=url, http_status=304, content_type=None, body=b"",
+                    received_at_utc=datetime.now(timezone.utc).isoformat(),
+                    duration_ms=int((time.monotonic() - started) * 1000), attempts=attempt,
+                    retry_reasons=tuple(reasons), response_headers=kept,
+                )
             exc.close()
             if exc.code not in RETRYABLE_STATUS or attempt > retries:
                 raise HttpFetchError(
