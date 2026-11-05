@@ -119,7 +119,9 @@ def _read(environ: dict[str, Any], n: int, *, clock=None) -> bytes:
         while left > 0:
             if clock() > deadline:
                 raise Refused(408, "The upload was too slow and timed out. Try again.")
-            chunk = stream.read(min(left, 65536))
+            # read1 returns after one socket receive, so the deadline is checked between drips; a plain
+            # buffered read() would wait for the whole chunk and never reach the check.
+            chunk = (stream.read1 if hasattr(stream, "read1") else stream.read)(min(left, 65536))
             if not chunk:
                 break
             chunks.append(chunk)

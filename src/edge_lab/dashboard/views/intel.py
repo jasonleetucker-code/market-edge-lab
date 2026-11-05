@@ -636,7 +636,7 @@ def history_tab(view: Any) -> str:
         c.section("Performance", perf_body, sid="in-perf", meta="provisional · hypothetical"),
         c.section("Forecasts", _label(view.labels["provisional"]) + c.table(
             ["Recorded", "Outcome", "Probability", "Basis", "Price awareness", "Horizon", "State"], fc_rows,
-            caption="Every forecast, newest first", empty="No forecast recorded yet"), sid="in-fc"),
+            caption=f"Every forecast, newest first (newest {min(HISTORY_ROWS, len(h.forecasts))} of {len(h.forecasts)})", empty="No forecast recorded yet"), sid="in-fc"),
         c.section("Decisions", _label(HYPOTHETICAL_LINE) + c.table(
             ["Decided", "Market", "Action", "Explanation"], dec_rows, wrap=(3,), caption=f"Every decision, SKIP included (newest {min(HISTORY_ROWS, len(h.decisions))} of {len(h.decisions)})",
             empty="No decision recorded yet"), sid="in-dec"),

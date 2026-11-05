@@ -545,3 +545,40 @@ def test_gallery_pages_send_an_origin_for_their_forms():
     from edge_lab.dashboard import app
     from edge_lab.dashboard.views.intel import INTEL_DEMO_PAGES
     assert set(INTEL_DEMO_PAGES) <= app.SAME_ORIGIN_REFERRER
+
+
+def test_a_real_socket_drip_is_cut_off_at_the_total_deadline(monkeypatch):
+    """Regression (re-review of 732fdfb): a buffered read() waits for its whole chunk, so a 1-byte drip never
+    reached the deadline check. With read1 the drip is refused soon after the deadline."""
+    import socket
+    import threading
+    import time
+    from edge_lab.dashboard import intel_post
+    monkeypatch.setattr(intel_post, "READ_DEADLINE_S", 1.0)
+    a, b = socket.socketpair()
+    b.settimeout(6.0)  # like the server's per-read socket timeout: the old code fails slowly instead of hanging
+    stop = threading.Event()
+
+    def drip():
+        for _ in range(12):
+            if stop.is_set():
+                break
+            try:
+                a.sendall(b"x")
+            except OSError:
+                break
+            time.sleep(0.4)
+
+    t = threading.Thread(target=drip, daemon=True)
+    t.start()
+    rfile = b.makefile("rb")
+    started = time.monotonic()
+    try:
+        with pytest.raises(intel_post.Refused) as err:
+            intel_post._read({"wsgi.input": rfile}, 1000)
+    finally:
+        stop.set()
+        rfile.close()
+        a.close()
+        b.close()
+    assert err.value.code == 408 and time.monotonic() - started < 2.5
