@@ -28,7 +28,7 @@ The repository constrains how this can be built:
    - `http` (opt-in `max_bytes`, a 304 result, ETag/Last-Modified);
    - `storage` (schema v8);
    - `opportunity` (pure `break_even_probability` and `max_acceptable_price`);
-   - `stats` (`brier_score`);
+   - `scoring` (`brier_score`, a new owner: `stats.py` is SHA-pinned by the EXP-001 preregistration);
    - `kalshi`/`kalshi_quotes`, `fee_schedules`, `starter_policy` and `freshness_fabric`.
 
    There is no second store, scheduler, pricing engine or ledger.

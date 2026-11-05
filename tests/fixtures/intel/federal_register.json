@@ -1,0 +1,36 @@
+{
+  "count": 3,
+  "description": "Documents published in the Federal Register (fixture)",
+  "total_pages": 1,
+  "results": [
+    {
+      "title": "Adjustments to Section 301 Tariff Actions on Certain Imports",
+      "type": "Notice",
+      "abstract": "The Office of the United States Trade Representative is modifying tariff actions. <b>Comments are due</b> by December 1, 2026.",
+      "document_number": "2026-24101",
+      "html_url": "https://www.federalregister.gov/documents/2026/11/04/2026-24101/adjustments-to-section-301-tariff-actions",
+      "pdf_url": "https://www.govinfo.gov/content/pkg/FR-2026-11-04/pdf/2026-24101.pdf",
+      "publication_date": "2026-11-04",
+      "agencies": [{"name": "Office of the United States Trade Representative", "id": 491}]
+    },
+    {
+      "title": "Sanctions Designations Update",
+      "type": "Rule",
+      "abstract": null,
+      "document_number": "2026-24102",
+      "html_url": "https://www.federalregister.gov/documents/2026/11/03/2026-24102/sanctions-designations-update",
+      "publication_date": "2026-11-03",
+      "agencies": [{"name": "Treasury Department"}, {"name": "Foreign Assets Control Office"}]
+    },
+    {
+      "title": "Document With A Bad Date",
+      "type": "Proposed Rule",
+      "abstract": "Text.",
+      "document_number": "2026-24103",
+      "html_url": "https://www.federalregister.gov/documents/x/2026-24103",
+      "publication_date": "2026-13-45",
+      "agencies": []
+    },
+    "not an object"
+  ]
+}

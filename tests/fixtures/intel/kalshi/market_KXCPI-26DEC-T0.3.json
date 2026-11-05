@@ -1,0 +1,22 @@
+{
+  "data_kind": "FIXTURE",
+  "note": "FIXTURE, hand-written in the shape of the Kalshi v2 public GET /markets/{ticker} response. KXCPI is on the captured non-standard fee list, so it has no supported fee schedule. Ticker suffix, rules and prices are invented. Not a recommendation.",
+  "market": {
+    "close_time": "2026-12-10T13:25:00Z",
+    "event_ticker": "KXCPI-26DEC",
+    "expected_expiration_time": "2026-12-10T14:00:00Z",
+    "latest_expiration_time": "2026-12-17T14:00:00Z",
+    "market_type": "binary",
+    "price_level_structure": "linear_cent",
+    "price_ranges": [{"end": "1.0000", "start": "0.0000", "step": "0.0100"}],
+    "rules_primary": "FIXTURE: If CPI month-over-month for November 2026 is above 0.3%, then the market resolves to Yes.",
+    "rules_secondary": "FIXTURE: invented rules text for tests only.",
+    "settlement_timer_seconds": 3600,
+    "status": "active",
+    "strike_type": "greater",
+    "floor_strike": 0.3,
+    "ticker": "KXCPI-26DEC-T0.3",
+    "title": "FIXTURE: CPI above 0.3% in November 2026?",
+    "yes_sub_title": "Above 0.3%"
+  }
+}

@@ -1,0 +1,16 @@
+1
+00:00:01,000 --> 00:00:03,500
+Welcome to the
+<i>politics hour</i>.
+
+2
+00:00:03,600 --> 00:00:06,000
+JANE DOE: Sources say the Fed
+
+3
+00:00:06,000 --> 00:00:09,250
+JANE DOE: could cut rates in December.
+
+4
+00:01:10,000 --> 00:01:12,000
+{\an8}The committee announced subpoenas.
