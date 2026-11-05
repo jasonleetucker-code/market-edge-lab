@@ -79,8 +79,8 @@ The repository constrains how this can be built:
    5 minutes and makes no network call unless a refresh was requested. Both are SEPARATELY_ACTIVATED and are watched
    by the Freshness Fabric.
 
-**Robots and access.** A robots.txt that disallows a feed path, or refuses our honest User-Agent, makes the source
-BLOCKED. For example, on 2026-11-05 Google News disallowed `/rss/search`, which blocks AP, Reuters and CNN
+**Robots and access.** A robots.txt that disallows the feed path, or an HTTP 401/403 response to our honest
+User-Agent, makes the source BLOCKED. For example, on 2026-11-05 Google News disallowed `/rss/search`, which blocks AP, Reuters and CNN
 discovery through it. No other User-Agent is ever tried.
 
 ## Alternatives considered
