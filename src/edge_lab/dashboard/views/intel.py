@@ -82,6 +82,9 @@ def _when(ts: Any, reason: str = "time not recorded") -> str:
 
 def _ext(url: str | None, text: str) -> str:
     """An external link, only for an http(s) URL (checked by `intel.view.safe_link`); text otherwise."""
+    from ...intel.view import safe_link
+
+    url = safe_link(url) if url else None
     if not url:
         return esc(text)
     return (f'<a class="link" href="{esc(url)}" rel="noopener noreferrer" target="_blank">{esc(text)}'
@@ -287,7 +290,7 @@ def _sides_table(sheet: Mapping[str, Any]) -> str:
                      esc(", ".join(s.get("reasons") or []) or "none"),
                      esc(", ".join(s.get("canonical_reasons") or []) or "none")])
     return c.table(["Side", "Ask", "Bid", "Fee", "Fee status", "Claimable", "All-in cost", "Break-even",
-                    "P (point)", "P (conservative)", "EV point", "EV conservative", "Max price", "Top size",
+                    "P(this side wins) point", "P(this side wins) conservative", "EV point", "EV conservative", "Max price", "Top size",
                     "Reasons", "Canonical reasons"], rows, wrap=(14, 15), caption="Both sides at decision time")
 
 
@@ -440,8 +443,7 @@ def _transcript_row(t: Any) -> str:
                        esc(cl.get("speaker"))] for cl in t.sample_claims], wrap=(0,), caption="First claims")
     details = c.disclosure("Claims and details", claims + c.kv([
         ("Label", esc(t.label)), ("Source of the text", esc(meta.get("transcript_source"))),
-        ("Episode page", _ext(meta.get("episode_url") if str(meta.get("episode_url") or "").startswith(("http://", "https://")) else None,
-                              meta.get("episode_url") or "not given")),
+        ("Episode page", _ext(meta.get("episode_url"), meta.get("episode_url") or "not given")),
         ("Notes", esc(meta.get("notes"))), ("Format", c.code(t.format)), ("Characters", c.num(pr.count(t.chars))),
         ("Transcript id", c.code(t.transcript_id))]))
     return _row(esc(meta.get("episode") or "(episode not named)"), sub=sub,
@@ -590,15 +592,22 @@ EVENTS_SHOWN = 40
 # --------------------------------------------------------------------------- E · history
 
 
+HISTORY_ROWS = 100  # newest rows per table; the journal keeps everything
+
+
+def _newest(rows: Any, key: str) -> list:
+    return sorted(rows, key=lambda r: str(r.get(key) or ""), reverse=True)[:HISTORY_ROWS]
+
+
 def history_tab(view: Any) -> str:
     h = view.history
     fc_rows = [[_when(f.get("recorded_at_utc")), c.code(f.get("outcome_id")), c.num(_range(f), reason="abstained"),
                 esc("OWNER JUDGMENT" if f.get("basis") == "OWNER_JUDGMENT" else "IMPORTED AI"),
                 c.code(f.get("price_awareness")), c.txt(pr.date_label(f.get("horizon_date")), reason="not recorded"),
-                esc("superseded" if f.get("superseded") else "active")] for f in h.forecasts]
+                esc("superseded" if f.get("superseded") else "active")] for f in _newest(h.forecasts, "recorded_at_utc")]
     dec_rows = [[_when(x.get("decided_utc")), c.code(x.get("ticker")),
                  esc(ACTION_WORDS.get((x.get("sheet") or {}).get("action"), ("Unknown", ""))[0]),
-                 esc((x.get("sheet") or {}).get("explanation"))] for x in h.decisions]
+                 esc((x.get("sheet") or {}).get("explanation"))] for x in _newest(h.decisions, "decided_utc")]
     res_rows = [[c.code(r.get("outcome_id")), esc(r.get("result")), esc(r.get("source")), _when(r.get("recorded_utc"))]
                 for r in h.resolutions]
     perf = h.performance
@@ -616,7 +625,7 @@ def history_tab(view: Any) -> str:
                                                        reason="no resolved INVESTIGATE decision"))], wide=True))
     rej = [[c.code(r.get("outcome_id")), c.code(r.get("ticker")), _when(r.get("decided_utc"))] for r in h.rejected_links]
     an_rows = [[_when(a.get("recorded_at_utc")), esc(a.get("label")), esc(a.get("assistant")), esc(a.get("summary"))]
-               for a in h.analyses]
+               for a in _newest(h.analyses, "recorded_at_utc")]
     inbox_rows = ([[c.code(x.get("id")), esc(KIND_WORDS.get(x.get("kind"), x.get("kind"))),
                     _word(INBOX_WORDS, "QUEUED", "INTEL_INBOX", capsule=False), _when(x.get("queued_utc")), esc("")]
                    for x in view.inbox.pending]
@@ -629,7 +638,7 @@ def history_tab(view: Any) -> str:
             ["Recorded", "Outcome", "Probability", "Basis", "Price awareness", "Horizon", "State"], fc_rows,
             caption="Every forecast, newest first", empty="No forecast recorded yet"), sid="in-fc"),
         c.section("Decisions", _label(HYPOTHETICAL_LINE) + c.table(
-            ["Decided", "Market", "Action", "Explanation"], dec_rows, wrap=(3,), caption="Every decision, SKIP included",
+            ["Decided", "Market", "Action", "Explanation"], dec_rows, wrap=(3,), caption=f"Every decision, SKIP included (newest {min(HISTORY_ROWS, len(h.decisions))} of {len(h.decisions)})",
             empty="No decision recorded yet"), sid="in-dec"),
         c.section("Resolutions", c.table(["Outcome", "Result", "Source", "Recorded"], res_rows, wrap=(2,),
                                          caption="Resolutions", empty="No outcome resolved yet"), sid="in-res"),

@@ -479,3 +479,69 @@ def test_intel_rows_keep_their_body_full_width(tmp_path):
     assert ".row-body { grid-column: 1 / -1; min-width: 0; }" in css
     src = (Path(__file__).resolve().parents[1] / "src/edge_lab/dashboard/views/intel.py").read_text()
     assert src.count("c.row(") == 1  # only inside _row
+
+
+# ------------------------------------------------------------------ review round 1 (UI PR) regressions
+
+
+def _post_env(body: bytes, *, length: str, origin="http://127.0.0.1:8765"):
+    return {"REQUEST_METHOD": "POST", "PATH_INFO": "/experiments/intel/inbox", "HTTP_HOST": "127.0.0.1:8765",
+            "HTTP_ORIGIN": origin, "CONTENT_TYPE": "application/x-www-form-urlencoded", "CONTENT_LENGTH": length,
+            "wsgi.input": io.BytesIO(body)}
+
+
+@pytest.mark.parametrize("length", ["²", "1" * 5000, "-1", "12abc", " 3e2"])
+def test_a_malformed_content_length_is_a_refusal_never_a_crash(tmp_path, length):
+    from datetime import datetime, timezone
+    from edge_lab.dashboard import intel_post
+    out = intel_post.handle(_post_env(b"kind=refresh", length=length), inbox_root=tmp_path, token="t", db=None,
+                            now=datetime(2026, 11, 5, tzinfo=timezone.utc))
+    assert out.code in (400, 411, 413) and not list(tmp_path.rglob("*.json"))
+
+
+def test_a_truncated_body_and_a_foreign_port_are_refused(tmp_path):
+    from datetime import datetime, timezone
+    from edge_lab.dashboard import intel_post
+    now = datetime(2026, 11, 5, tzinfo=timezone.utc)
+    assert intel_post.handle(_post_env(b"kind=", length="100"), inbox_root=tmp_path, token="t", db=None,
+                             now=now).code == 400
+    assert intel_post.handle(_post_env(b"kind=refresh", length="12", origin="http://127.0.0.1:9999"),
+                             inbox_root=tmp_path, token="t", db=None, now=now).code == 403
+
+
+def test_an_unexpected_error_is_a_500_page_not_a_traceback(tmp_path, monkeypatch):
+    from datetime import datetime, timezone
+    from edge_lab.dashboard import intel_post
+    monkeypatch.setattr(intel_post, "parse_body", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom")))
+    out = intel_post.handle(_post_env(b"kind=refresh", length="12"), inbox_root=tmp_path, token="t", db=None,
+                            now=datetime(2026, 11, 5, tzinfo=timezone.utc))
+    assert out.code == 500 and "nothing was written" in out.reason
+
+
+def test_a_drip_fed_body_hits_the_total_deadline():
+    from edge_lab.dashboard import intel_post
+    ticks = iter([0.0] + [intel_post.READ_DEADLINE_S + 1.0] * 10)
+
+    class Drip:
+        def read(self, n):
+            return b"x"
+
+    with pytest.raises(intel_post.Refused) as err:
+        intel_post._read({"wsgi.input": Drip()}, 10, clock=lambda: next(ticks))
+    assert err.value.code == 408
+
+
+def test_a_missing_inbox_warns_and_serves_read_only(tmp_path, monkeypatch, capsys):
+    from edge_lab.dashboard import server
+    served = {}
+    monkeypatch.setattr(server, "make_server", lambda *a, **k: (_ for _ in ()).throw(SystemExit(0)), raising=False)
+    args = server.build_parser().parse_args(["--intel-inbox", str(tmp_path / "missing")])
+    assert server.check_intel_inbox(args.intel_inbox) is not None
+    monkeypatch.setenv("EDGE_LAB_INTEL_INBOX", str(tmp_path))
+    assert server.build_parser().parse_args([]).intel_inbox == tmp_path  # owner activation via dashboard.env
+
+
+def test_gallery_pages_send_an_origin_for_their_forms():
+    from edge_lab.dashboard import app
+    from edge_lab.dashboard.views.intel import INTEL_DEMO_PAGES
+    assert set(INTEL_DEMO_PAGES) <= app.SAME_ORIGIN_REFERRER

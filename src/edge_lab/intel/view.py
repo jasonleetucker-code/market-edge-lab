@@ -30,7 +30,7 @@ from ..freshness import parse_utc
 from . import inbox as inbox_mod
 from . import registry, service
 from .contracts import INSUFFICIENT_EVIDENCE_TEXT, LinkStatus
-from .events import StatusFacts, derive_status
+from .events import build_events, StatusFacts, derive_status
 from .extract import EXTRACTOR_VERSION
 
 VIEW_SCHEMA = "intel-view/1"
@@ -339,18 +339,21 @@ def build_view(store, *, now: datetime, inbox_root: Path | None, heartbeat: Mapp
     for row in store.intel_records(kind="forecast"):
         forecast_chain[row["subject_id"]] = forecast_chain.get(row["subject_id"], 0) + 1
 
+    # One pass: the latest decision per (outcome, ticker) and per outcome (journal order is oldest first).
+    decision_index: dict[tuple[str, str | None], dict[str, Any]] = {}
+    for _, p, _at in decisions_all:
+        decision_index[(p.get("outcome_id"), p.get("ticker"))] = p
+        decision_index[(p.get("outcome_id"), None)] = p
+
     def latest_decision(outcome_id: str, ticker: str | None) -> dict[str, Any] | None:
-        best = None
-        for _, p, _at in decisions_all:
-            if p.get("outcome_id") == outcome_id and (ticker is None or p.get("ticker") == ticker):
-                best = p
-        return best
+        return decision_index.get((outcome_id, ticker))
 
     # Events with their evidence.
-    evidence = {e.evidence_id: e for e in service.all_evidence(store, now=now)}
+    evidence_list = service.all_evidence(store, now=now)  # classified once per request
+    evidence = {e.evidence_id: e for e in evidence_list}
     events = []
     recent = _iso(now - timedelta(hours=24))
-    for ev in service.current_events(store, now=now):
+    for ev in build_events(evidence_list):
         outcomes = []
         linked_tickers = set()
         for o in ev.outcomes:

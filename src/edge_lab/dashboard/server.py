@@ -17,6 +17,7 @@ import ipaddress
 import re
 import shutil
 import signal
+import os
 import socket
 import sys
 import threading
@@ -95,9 +96,11 @@ def build_parser() -> argparse.ArgumentParser:
                    help="also accept Host: NAME, this node's exact <machine>.<tailnet>.ts.net name, when "
                         "Tailscale Serve proxies the tailnet to this loopback server (loopback bind only)")
     p.add_argument("--intel-inbox", type=Path, metavar="PATH",
+                   default=Path(os.environ["EDGE_LAB_INTEL_INBOX"]) if os.environ.get("EDGE_LAB_INTEL_INBOX") else None,
                    help="enable the one write route: queue news-intelligence submissions (transcripts, analyses, "
-                        "market links, refresh requests) as files in this private inbox directory, which must "
-                        "exist (ADR 0049). Without it the intelligence workspace is read-only")
+                        "market links, refresh requests) as files in this private inbox directory (ADR 0049). "
+                        "Default: $EDGE_LAB_INTEL_INBOX (on the VPS, set by the owner in dashboard.env at "
+                        "activation). Without it the intelligence workspace is read-only")
     p.add_argument("--demo", action="store_true",
                    help="serve SYNTHETIC data built in a fresh temp directory; configured paths are ignored")
     return p
@@ -160,8 +163,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"dashboard: {warning}", file=sys.stderr)
     inbox_problem = None if args.demo else check_intel_inbox(args.intel_inbox)
     if inbox_problem:
-        print(f"dashboard: {inbox_problem}", file=sys.stderr)
-        return 2
+        # An optional feature never takes the dashboard down: warn and serve read-only.
+        print(f"dashboard: {inbox_problem}; serving without submissions (read-only)", file=sys.stderr)
+        args.intel_inbox = None
     allowed: list[str] = []
     if warning:  # an explicitly approved non-loopback bind: accept its own name in Host
         allowed.append(args.host)

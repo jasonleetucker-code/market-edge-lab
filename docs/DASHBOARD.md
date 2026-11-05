@@ -32,7 +32,7 @@ never writes to any store, and never recommends a withdrawal.
 | `--ledger` | shadow ledger SQLite file | `ShadowLedger.open_readonly`; `accounts`, `entries`, `state` (hash-chain replay) |
 | `--status-dir` | `latest.json` (collector), `shadow_daily.json` (pipeline receipt), `freshness.json` (Freshness Fabric supervisor), `last_failure.json` (production unit failures), `last_verification.json` (deployment verification records), `execution_status.json` (the execution package's status export, schema `edge-lab-execution-status/1`) | JSON, fixed names only, 2 MB cap, every field optional |
 | `--odds-ledger` | The Odds API quota ledger (default `odds_quota_ledger.json` beside `--db`) and its `<ledger>.pilot.json` runner state | `odds_pilot.dashboard_status`: read without locking or writing, no key, no network |
-| `--intel-inbox` | the private intel inbox directory (must exist) and, in `--status-dir`, the collector's `intel.json` heartbeat (schema intel-heartbeat/1) | `inbox.pending` lists `new/` (never creates anything); the only writes are the POST route's queued files |
+| `--intel-inbox` (default `$EDGE_LAB_INTEL_INBOX`) | the private intel inbox directory (must exist; otherwise a warning and read-only) and, in `--status-dir`, the collector's `intel.json` heartbeat (schema intel-heartbeat/1) | `inbox.pending` lists `new/` (never creates anything); the only writes are the POST route's queued files |
 | `--experiments-root` | `experiments/` (defaults to this checkout's) | `experiments.validate_all` / `load`; Stage A result JSON; report **file names** only |
 
 Figures come from the canonical modules only: `shadow_ledger.replay` (balances, P&L),

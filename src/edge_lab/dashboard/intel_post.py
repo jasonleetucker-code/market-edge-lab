@@ -94,21 +94,31 @@ def _content_length(environ: dict[str, Any]) -> int:
     raw = str(environ.get("CONTENT_LENGTH") or "").strip()
     if not raw:
         raise Refused(411, "The request did not say how long it is (Content-Length is required).")
-    if not raw.isdigit():
-        raise Refused(400, "The request's Content-Length is not a number.")
+    # ASCII digits only and short: '²'.isdigit() is True, and a 5000-digit value would make int() raise.
+    if not (raw.isascii() and raw.isdigit() and len(raw) <= 9):
+        raise Refused(400, "The request's Content-Length is not a valid number.")
     n = int(raw)
     if n > MAX_BODY_BYTES:
         raise Refused(413, f"The submission is larger than {MAX_BODY_BYTES // 1000} kB.")
     return n
 
 
-def _read(environ: dict[str, Any], n: int) -> bytes:
+READ_DEADLINE_S = 30.0  # the whole body, not each read: a 1-byte-per-19-s drip cannot hold the server
+
+
+def _read(environ: dict[str, Any], n: int, *, clock=None) -> bytes:
+    import time
+
+    clock = clock or time.monotonic
     stream = environ.get("wsgi.input")
     if stream is None:
         raise Refused(400, "The request has no body.")
     chunks, left = [], n
+    deadline = clock() + READ_DEADLINE_S
     try:
         while left > 0:
+            if clock() > deadline:
+                raise Refused(408, "The upload was too slow and timed out. Try again.")
             chunk = stream.read(min(left, 65536))
             if not chunk:
                 break
@@ -334,6 +344,8 @@ def handle(environ: dict[str, Any], *, inbox_root: Path | None, token: str, db: 
         return Outcome(303, location=_back(tab, event, submitted=sid), back=back)
     except Refused as exc:
         return Outcome(exc.code, exc.reason, back=back)
+    except Exception:  # never a traceback or a generic 500 page: a refusal page, and nothing written
+        return Outcome(500, "The submission could not be processed; nothing was written. Try again.", back=back)
 
 
 def _packet_lookup(db: Path) -> Callable[[str], Any] | None:

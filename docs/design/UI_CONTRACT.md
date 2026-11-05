@@ -843,7 +843,8 @@ directive), and the screenshots that justify it.
     renders every state (demo only). Parameters are validated in `presentation.ROUTE_PARAMS` (event ids
     `ev-<topic>-<12 hex>`, submission ids by their generated pattern).
   - **The one write route (exception to §1 "read-only" and §11 "GET/HEAD only").** `POST /experiments/intel/inbox`
-    exists only when the dashboard is started with `--intel-inbox PATH`; otherwise it answers 405 "not enabled", and
+    exists only when the dashboard is started with `--intel-inbox PATH` (or `EDGE_LAB_INTEL_INBOX`, which the owner
+    sets in `dashboard.env` at activation; the shipped unit passes neither); otherwise it answers 405 "not enabled", and
     every other path still answers POST with 405. It writes exactly one size-capped file into the private inbox
     through `intel.inbox.write_submission` and nothing else: no order, money, approval, account or "mark read"
     control; the dashboard keeps no network access and opens the evidence DB read-only (only to validate an analysis
@@ -881,6 +882,13 @@ directive), and the screenshots that justify it.
   - **States.** Populated, today-only (news, no decision), stale decision with an old heartbeat, fee unsupported
     (KXCPI-series), insufficient evidence, blocked (no heartbeat), not enabled (no inbox), empty and error (an
     unreadable or non-v8 store): tests in `tests/test_dashboard_intel.py`, every one in `/gallery/intel`.
-  - **Screenshots.** Pending: to be captured by the coordinator with `tests/browser/capture.py --states demo early
-    --pages /experiments/intel "/experiments/intel?tab=opportunities" … /gallery/intel` at 360x800, 390x844 and
-    1440x900 (normal and 200% text, every disclosure open), and recorded here and in the PR before merge.
+  - **Screenshots and audit (2026-11-05, coordinator).**
+    - `tests/browser/capture.py --states demo early`, Chromium:
+      - all six workspace tabs plus `/gallery/intel`, at 360x800, 390x844 and 1440x900: 42 renders;
+      - the same pages at 390x844 and 1440x900 with 200% text and every disclosure open: 14 renders.
+      - Result for both: "0 with overflow, clipping, low contrast or foreign requests".
+    - WebKit is not installed in the cloud container, so WebKit is not covered.
+    - Real-data screens (a private scratch store holding that day's collected news) were reviewed by the
+      coordinator at 390 and 1440. That review found and fixed the row-body squeeze (the `.row-body` rule)
+      and the probability column overlap.
+    - The owner's own phone review is still pending.

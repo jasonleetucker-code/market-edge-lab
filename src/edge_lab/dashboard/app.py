@@ -36,7 +36,7 @@ NAV_KEYS = {**NAV_KEYS, **OPS_NAV_KEYS, **INTEL_NAV_KEYS}
 INBOX_PATH = "/experiments/intel/inbox"
 # Pages holding inbox forms send their Origin on a same-origin submission (no-referrer would make
 # browsers send "Origin: null"); the referrer still never leaves this origin.
-SAME_ORIGIN_REFERRER = frozenset(INTEL_PAGES)
+SAME_ORIGIN_REFERRER = frozenset(INTEL_PAGES) | frozenset(INTEL_DEMO_PAGES)  # pages with forms send Origin
 
 CSP = ("default-src 'none'; script-src 'self'; style-src 'self'; font-src 'self'; img-src 'self'; "
        "connect-src 'self'; base-uri 'none'; object-src 'none'; frame-ancestors 'none'; form-action 'self'")
