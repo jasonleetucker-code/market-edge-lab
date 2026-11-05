@@ -54,6 +54,7 @@ The previous complete index, shared-owner table, roadmap reruns, domain-readines
 | #168 | Wallet intelligence and copyability research (owner directive 2026-10-07 evening) | BUILT offline as `src/edge_lab/wallet_intel/` (PR #174, `015d4b9`); NOW: v2 causal manifest, role-aware wash/price/attainability separation, price-relative skill and delay/size/fee copyability fixtures per #181. Evidence stays synthetic and documentation fixtures only. BLOCKED (owner): any live source read, paid feed, empirical slot/budget or venue trade access; reviewed typed bridge (W8) only after #160 gates and an explicit ADR 0043 amendment in its own reviewed PR |
 | #181 | JEV-inspired crawler intelligence, market quality and typed semantic triage (owner follow-up 2026-10-08) | NOW (P0): offline wallet-causal-integrity and copyability correctness. NOW (P1, after IE1–IE3 or on disjoint paths): fixture-only source-change receipts and typed Jev/Kev-style judgments in existing owners. NEXT: source-rights packet, prospective skill/semantic pilot with specific budget and #96 slot. LATER: multi-agent orchestration/bought feeds, after incremental-value evidence. **No** new network/source/model/grant/schedule/execution permission. See `strategy/CLAUDE_JEV_CRAWLER_WALLET_V1.md` |
 | #152 | Architecture reconciliation and bounded evidence-path hardening (owner directive, 2026-09-30) | Existing architecture kept. External ideas classified by access and usefulness in [the reconciliation note](engineering/ARCHITECTURE_RECONCILIATION_2026-09-30.md); only the controlled defect loop is adopted (AGENT_OPERATING_SYSTEM §1). The in-play file → consumer path is verified, and two provenance gaps are fixed in `inplay_evidence.py` (PR pending owner merge). NEXT: R3 as recorded (scope entry, then the pilot-proposal refresh); R3a, in-play journal identity and point-in-time slicing, is *proposed* for that scope entry. Rejected without a measured need: memory DB, second scheduler, graph framework, agent platform, Steward transplant, behavioural-eval harness (ADR 0006). Not runtime authority |
+| #192 | News, politics & financial prediction intelligence slice (owner directive 2026-11-05; parent #7) | NOW under the 2026-11-05 EXECUTION_PLAN entry. It covers: a 50-candidate source registry with verified status; bounded 2-hour feed collection and manual refresh; owner transcripts; deterministic event research; a manual AI bridge whose packets never contain Kalshi data; bounded Kalshi reads for linked politics/econ markets; deterministic pricing in `opportunity`; and an append-only research journal. All of it lands in `src/edge_lab/intel/`, ADR 0049. Timers ship DISABLED. BLOCKED (owner): deploy and activation, credentials (Congress.gov, FRED, GovInfo keys; SEC contact UA), Kalshi fee verification for politics series, and Kalshi DATA_RIGHTS beyond private deterministic use. LATER: alerts via the existing outbox, the shared event calendar, other venues (P2) |
 
 ## Shared primitives (one canonical owner each)
 
@@ -97,6 +98,7 @@ Extend the owner named here; never fork it into a feature-specific copy. `PLANNE
 | Simultaneous obligation reservation | `src/edge_lab/execution_ticket.py` | BUILT (#149, ADR 0041; reserve_simultaneous_obligations, pure; no netting, no partial acceptance, unknown stays reserved); the one reservation primitive, which `rfq_research` (#148) calls | #145 #30 #93 |
 | Current research-blocker register | `src/edge_lab/current_blockers.py` | BUILT (PR C; generates the register block of `docs/research/CURRENT_BLOCKERS.md`; the Terminal shows it; grants nothing) | #145 #134 #122 #9 |
 | Backup and restore | `src/edge_lab/backup.py` | BUILT (proposed-v1 manual reviewed retention; O1 weekly laptop pull keeps 4; no paid cloud) | #10 #50 |
+| News / transcript intelligence and research journal | `src/edge_lab/intel/` | PLANNED (#192, ADR 0049): it extends `sources`, `http`, `storage` (schema v8), `opportunity` (break-even and max acceptable price), `fee_schedules`, `kalshi`/`kalshi_quotes`, `stats` (Brier), `starter_policy` and `freshness_fabric`. There is no second evidence store, ledger, scheduler or pricing engine. The analysis-import schema lives here until #181's `semantic_judgments.py` exists, and moves there when it does | #192 #7 #3 #82 #50 |
 | Operator views | `src/edge_lab/dashboard/` | BUILT (read-only; tailnet-only, ADR 0024) | #3 #6 #10 #122 #134 |
 | Design system (Market Edge Terminal v1) | `docs/design/UI_CONTRACT.md` | BUILT (ADR 0025, issue #47) | #47 #3 #6 #9 #10 #29 #30 #32 #33 |
 | Longitudinal learning history | `docs/DATA_PROVENANCE.md` | FOUNDATION BUILT (immutable snapshots, captures, experiment records, rejections, shadow ledger); no duplicate evidence store | #50 #5 #7 #9 #27 #29 #30 |
@@ -187,3 +189,30 @@ Entries before 2026-09-29 (evening), with their classifications and supersession
 - **Shared build leverage:** extend `wallet_intel/` and existing provenance/freshness, `research_evidence` and `research_economics` contracts. Independent writer on typed semantic fixtures; UI contract integration only after backend stabilizes, building on the journeys merged in #176 and #180; Kalshi #160 proceeds separately. Avoid concurrent file writers per `WORK_CLAIMS`.
 - **Roadmap/October 22:** advance software integrity and explicit decision packets without displacing protected EXP-001, current EXP-002 windows, the #96 two-ACTIVE-family cap or the parallel #160 readiness campaign. October 22 stays an evidence/readiness checkpoint, not a launch or positive-edge deadline.
 - **Authority:** #181 and this index are durable idea records, not permits. The owner’s implementation instruction must be scoped in `docs/EXECUTION_PLAN.md` before code edits; never infer approval for accounts, collection, credentials, spend, timers, trades, deployment or gate advance. See the [implementation handoff](strategy/CLAUDE_JEV_CRAWLER_WALLET_V1.md).
+
+### 2026-11-05: News, politics & financial prediction intelligence (#192, parent #7)
+
+- **Owner intent:** a narrow working slice inside the existing Terminal: news → events → evidence → Kalshi pricing → audit trail. It is not a second platform. The verbatim record is `docs/owner/2026-11-05-news-political-intelligence-directive.md`.
+- **Priority:** NOW (owner: "Immediate Working MVP"). It runs in parallel with #160, #181 and #184 on disjoint paths. It displaces no protected window, EXP-001/002/003 protocol or #96 slot.
+- **Dependencies:** existing `sources`/`http`/`storage` (raw `document_blobs`), `opportunity`/`fee_schedules`/`kalshi_quotes`/`starter_policy`, the Freshness Fabric, and the Terminal shell. The owner's answers settle the Kalshi read scope, the inbox write path and merge. Deploy and activation stay owner-only.
+- **Overlap/supersession:**
+  - #7 is the durable parent; this is its first news slice, and #7's source-value ledger remains LATER.
+  - #181 E/F (change envelope, typed semantic judgments) overlaps. The intel package keeps its own fixture-proven dedup and an analysis-import schema, and moves the schema into `semantic_judgments.py` once #181 builds it. No second copy is kept.
+  - #3 Outcome Board: "what matters today" stays there; the intel workspace links to it rather than duplicating it.
+  - #30: Kalshi only. Other venues stay P2.
+- **Shared infrastructure:**
+  - pricing extends `opportunity.py` (break-even, max acceptable price);
+  - calibration extends `stats.py` (Brier);
+  - storage extends `storage.py` (v8);
+  - schedules are two systemd timers watched by the Freshness Fabric.
+- **Can this ride an already-needed shared primitive?** Yes:
+  - the release/event calendar (`event_calendar.py`, PLANNED) would serve both "Events to Watch" and #86/#88; this slice derives catalysts from event deadlines and official feeds, and leaves the calendar owner unbuilt;
+  - the source-value ledger (#7, #82) can later read the journal's Brier and decision records.
+- **Safe parallel lanes:** the pure core (feeds, transcripts, extraction, events, pricing) → the backend (storage, http, collector, Kalshi, inbox, units) → the UI. Disjoint files, one writer each.
+- **Roadmap effect (the 2026-10-22 checkpoint has passed and is unaffected):** no gate change and no edge claim. Every probability is PROVISIONAL with no calibration history. Politics fees are UNVERIFIED and econ fees UNSUPPORTED, so no claimable EV exists until fee verification.
+- **Classification:**
+  - NOW: the slice above.
+  - NEXT: owner activation of the two timers after deploy; fee verification for the linked series; a DRAFT/QUEUED protocol if the journal shows a candidate hypothesis.
+  - LATER: alerts, the shared event calendar, source-value measurement.
+  - BLOCKED (owner): credentials, paid sources or AI, Kalshi AI use, deploy.
+- **Authority:** the 2026-11-05 EXECUTION_PLAN entry. Re-prioritizing never authorizes anything.

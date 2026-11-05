@@ -869,6 +869,97 @@ be written here when they are made.
     - any AI model or provider call;
     - declaring a profit using an unverified fee (KXNFLGAME fees remain a blocker);
     - every item already listed as not authorized in the 2026-10-07 and 2026-10-08 JEV entries.
+- **2026-11-05 (America/New_York), owner directive: News, Politics & Financial Prediction Intelligence — working
+  vertical slice (#192, parent idea #7).** Recorded in `docs/owner/2026-11-05-news-political-intelligence-directive.md`,
+  with the authority sections and the owner's three same-session answers verbatim. Design: ADR 0049. Every earlier
+  entry stands. This entry is the "own recorded owner approval" those entries require for exactly the items below.
+  - **Authorized (read-only, private, bounded):**
+    - **Source registry.** A curated registry of the directive's 50 candidate sources. Each carries its verified
+      access status (ACTIVE, LIMITED, UNAVAILABLE, BLOCKED or UNVERIFIED). A source is collected only when it is
+      ACTIVE or LIMITED and verified within the last 14 days.
+    - **News collection** from free, unauthenticated publisher RSS/Atom feeds, official public APIs and feeds, and
+      where its robots.txt permits, Google News RSS as discovery only (headline, link and outlet). On 2026-11-05,
+      Google News's robots.txt disallowed `/rss/search`, so those discovery feeds are BLOCKED.
+      - Bounds: at most 1 GET per collected feed per run, and at most 60 feed GETs per run. Conditional GETs. The
+        honest User-Agent; never a spoofed one.
+      - No login, paywall, CAPTCHA, robots or rate-limit circumvention. A source whose robots.txt disallows the
+        feed path, or refuses our honest User-Agent (401/403), is BLOCKED.
+      - What is stored: headline, link, timestamps and a snippet of at most 300 characters. Raw feed bytes are kept
+        only for US-government public-domain sources; for every other feed only the hash and size are kept.
+    - **Owner-supplied podcast transcripts** (paste or upload; .txt/.md/.srt/.vtt). Stored privately in the evidence
+      DB and never published.
+    - **Deterministic extraction, event records, corroboration and pricing**, plus a manual AI bridge.
+      - The bridge works by exported research packets and the import of validated analysis JSON.
+      - No model or provider API is called, nothing is paid, and no SDK is installed.
+      - **Packets never contain Kalshi data or metadata.**
+    - **Kalshi public, unauthenticated reads**, under owner answer 1 ("On-demand + 2-hour job").
+      - Scope: series catalog by category, open markets, and order books, for politics/economics markets linked to
+        tracked events.
+      - Triggers: on demand (CLI, or a dashboard inbox request), plus a refresh of quotes for already-linked markets
+        in each 2-hour run.
+      - Bounds: at most 120 GETs per run, paced by the existing Kalshi pacer under the shared `<db>.forward.lock`.
+      - Refused inside the protected windows (`price_observations.protected_window_at`) and within 10 minutes of the
+        KXHIGHNY close tick.
+      - Refused for KXHIGHNY, KXNFLGAME, KXNHLGAME and every KXMVE* series.
+      - Stored under a separate source identity (`kalshi_public_intel`), never under routine `kalshi`.
+      - Use is private and deterministic only. The `DATA_RIGHTS` blocker stays open for every other use.
+    - **Evidence-DB schema v8** (additive and append-only), with a v7 rollback marker.
+    - **An append-only research journal** in that store. It holds:
+      - forecasts, with evidence hashes taken at decision time;
+      - every decision, including SKIP and INSUFFICIENT_EVIDENCE;
+      - hypothetical entries at the decision-time executable ask plus fee;
+      - resolutions, Brier scores and calibration.
+
+      It is **not** a shadow-ledger account. It holds no fills and is not an experiment family, so no #96 slot is
+      used.
+    - **Two systemd timers, shipped DISABLED and SEPARATELY_ACTIVATED.** Neither is enabled by this entry. The
+      2-hour cadence is the owner's. The 5-minute inbox timer and its 15-minute collection limit are this agent's
+      design choices for answer 2; activating them is a separate owner decision.
+      - `edgelab-news.timer`: every 2 hours, with a run cap of about 4 minutes.
+      - `edgelab-news-inbox.timer`: every 5 minutes. It makes no network call unless the owner queued a refresh, and
+        then runs at most one bounded collection per 15 minutes.
+    - **A Terminal workspace** at `/experiments/intel`, plus one POST route that only writes a size-capped file to a
+      private inbox (owner answer 2, "Inbox handoff").
+      - The dashboard keeps `IPAddressDeny=any`, and its evidence DB stays read-only.
+      - The only unit change allowed is one extra `ReadWritePaths=` entry for the inbox directory. Every other
+        hardening line stays unchanged.
+      - This is the "dashboard gains a write path" case that ADR 0024 lists as a reason to reconsider. ADR 0049
+        records the reconsideration, and ADR 0024 and `docs/DASHBOARD.md` get dated notes naming the one-route
+        exception in the UI PR.
+      - UI_CONTRACT §14 gets a dated amendment.
+  - **Merge** (owner answer 3, "Merge after review + CI"). This directive's bounded PRs squash-merge when **all** of
+    these hold:
+    - an independent review with no open blocker, and re-review of changed heads;
+    - exact-head CI green;
+    - `edge-lab experiments check-frozen --base <base>` passes;
+    - reconciled with current main;
+    - mergeable.
+
+    Docs-only PRs also qualify under the standing rule below.
+  - **Not authorized (each needs its own recorded owner approval):**
+    - Deploying to the VPS, or enabling any new unit or timer. The owner runs the runbook. Deploying migrates the
+      evidence DB to v8 even while the timers stay disabled.
+    - Paid data, subscriptions or AI services; any AI model or provider call; SDK installation.
+    - Creating, requesting or storing credentials or API keys. This includes Congress.gov, api.data.gov, FRED and
+      GovInfo keys. SEC EDGAR waits for an owner-supplied contact User-Agent; agents never use the owner's email.
+    - Sending Kalshi data or metadata to any AI model or third party.
+    - Orders, order simulation against live endpoints, grants, unattended trading or real money.
+    - Kalshi reads of protected scopes, or reads beyond the bounds above.
+    - Full-text article storage for publishers without clear rights; publishing or redistributing collected content
+      or transcripts.
+    - Public exposure, and changes to Brisket, Calculator or Chase Upside.
+    - A new experiment family or slot.
+    - A shadow-ledger account for news signals.
+    - Changes to protected windows, the EXP-001/002/003 protocols or existing source budgets.
+    - Items the directive excluded:
+      - podcast discovery, audio download or transcription services;
+      - proprietary model training;
+      - new broker connections;
+      - multi-agent architectures or new infrastructure platforms;
+      - unbounded background processing;
+      - disabling any existing operational control.
+    - Other venues (P2).
+
 ## Standing merge rule: docs-only and test-only PRs
 
 Owner rule of 2026-09-22 (verbatim source: `docs/owner/2026-09-22-overnight-build-directive.md`).
@@ -973,7 +1064,7 @@ A PR that fails any of these needs the usual authority: a directive grant or the
   for a model that did not pass Stage A.
 - Scheduled or unattended jobs **outside** the 2026-09-22 read-only VPS authorization, the
   2026-09-23 daily-shadow authorization, and the narrowly approved 2026-09-24 ADR 0030 observation
-  timers, the 2026-09-24 evening Freshness supervisor and Polymarket US NFL pilot timers, including GitHub Actions cron, any paid host, and any authenticated source, without new
+  timers, the 2026-09-24 evening Freshness supervisor and Polymarket US NFL pilot timers, and the 2026-11-05 news timers once the owner records their activation (they ship disabled), including GitHub Actions cron, any paid host, and any authenticated source, without new
   owner approval.
 - Browser automation against any source whose terms have not been reviewed and recorded.
 

@@ -72,4 +72,13 @@ Under the 2026-10-07 Kalshi execution campaign directive (#160):
   start; forward-only migrations with the v1 schema fingerprint pinned; liveness and reconciliation health as
   separate verdicts; keys as root-only `LoadCredential` files outside every backup; a stdlib full-history secret scan.
 
-New decisions start at 0045 (wallet intelligence, #174) and 0049.
+- 0049: the news and transcript intelligence slice (#192). It covers:
+  - the dashboard inbox handoff (one POST route that writes a file, with no network and the evidence DB kept
+    read-only);
+  - evidence-DB schema v8 with an append-only research journal (no shadow-ledger account);
+  - raw feed bytes kept only for public-domain sources;
+  - Kalshi data kept out of AI packets;
+  - CANDIDATE matches that are never priced;
+  - two timers shipped disabled.
+
+New decisions start at 0045 (wallet intelligence, #174) and 0050.
