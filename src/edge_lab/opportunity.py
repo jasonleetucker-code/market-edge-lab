@@ -897,3 +897,96 @@ def semantics_for(market: Market) -> ContractSemantics:
         rights=None,
         legacy=True,
     )
+
+
+# --------------------------------------------------------------------------- price limits (ADR 0049)
+#
+# Pure helpers for a pricing sheet: the probability a fee-inclusive buy needs to break even, and
+# the highest price a conservative probability can pay. Neither changes `evaluate`.
+
+
+def break_even_probability(schedule: FeeSchedule, price: Decimal, quantity: int = 1) -> Decimal | None:
+    """The probability at which buying `quantity` contracts at `price` has zero expected value.
+
+    A binary contract pays 1, so this is the schedule's all-in cost per contract (fee and
+    balance cent-alignment included). It is above `price` whenever the schedule charges a fee.
+    None when the schedule cannot price the buy (an `UnsupportedFeeSchedule`, or any schedule
+    that refuses it) or the price is not a valid contract price. Missing is never zero.
+    """
+    if not isinstance(quantity, int) or isinstance(quantity, bool) or quantity <= 0:
+        raise ValueError("quantity must be a positive integer")
+    if not valid_price(price):
+        return None
+    try:
+        return schedule.taker_buy(quantity, price).cost_per_contract
+    except ValueError:
+        return None
+
+
+def _grid_prices(grid: PriceGrid | None, step: Decimal) -> list[Decimal]:
+    if grid is None:
+        if not isinstance(step, Decimal) or not step.is_finite() or not (Decimal("0.0001") <= step < Decimal(1)):
+            raise ValueError("step must be a Decimal in [0.0001, 1): prices are on the 1/100-cent grid at finest")
+        ranges = (PriceRange(step, Decimal(1) - step, step),) if step < Decimal(1) - step else ()
+        if not ranges:
+            return [step] if valid_price(step) else []
+    else:
+        ranges = grid.ranges
+    prices: set[Decimal] = set()
+    for r in ranges:
+        if r.step < Decimal("0.0001"):
+            raise ValueError("a price grid finer than 1/100 cent is not searched")
+        k = 0
+        while (p := r.start + k * r.step) <= r.end:
+            if valid_price(p):
+                prices.add(p)
+            k += 1
+    return sorted(prices)
+
+
+def max_acceptable_price(
+    conservative_probability: Decimal,
+    schedule: FeeSchedule,
+    *,
+    quantity: int = 1,
+    margin: Decimal = Decimal("0"),
+    grid: PriceGrid | None = None,
+    step: Decimal = Decimal("0.01"),
+) -> Decimal | None:
+    """The highest price p with all-in cost per contract <= `conservative_probability - margin`.
+
+    Candidates are the market's `grid` when it is known, else the `step` grid from `step` to
+    1 - `step`. The search is ascending, because fee rounding (ceil to $0.000001, then the
+    balance's floor to the cent) makes a closed-form inversion unsafe. The cost is monotone
+    non-decreasing in price, so the search stops at the first price that costs too much.
+
+    The result depends on `quantity`: rounding is applied per order, so the per-contract cost
+    of one contract differs from that of many at the same price.
+
+    None when the schedule cannot price a buy (unsupported), no candidate price qualifies, or an
+    input is invalid (probability not a finite Decimal in [0, 1], margin negative or non-finite).
+    """
+    if not isinstance(quantity, int) or isinstance(quantity, bool) or quantity <= 0:
+        raise ValueError("quantity must be a positive integer")
+    p = conservative_probability
+    if not isinstance(p, Decimal) or not p.is_finite() or not (Decimal(0) <= p <= Decimal(1)):
+        return None
+    if not isinstance(margin, Decimal) or not margin.is_finite() or margin < 0:
+        return None
+    if getattr(schedule, "status", None) is FeeScheduleStatus.UNSUPPORTED:
+        return None
+    limit = p - margin
+    best = None
+    try:
+        prices = _grid_prices(grid, step)
+    except ValueError:
+        return None  # a grid too fine to search (untrusted venue metadata) bounds nothing: fail closed
+    for price in prices:
+        try:
+            cost = schedule.taker_buy(quantity, price).cost_per_contract
+        except ValueError:
+            return None  # a schedule that refuses a valid price cannot bound anything: fail closed
+        if cost > limit:
+            break
+        best = price
+    return best

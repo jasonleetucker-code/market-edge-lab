@@ -1,0 +1,1 @@
+{"data_kind": "FIXTURE", "note": "FIXTURE, hand-written Kalshi v2 orderbook_fp shape. Invented levels: YES ask 0.45 (size 30), NO ask 0.57 (size 25).", "orderbook_fp": {"no_dollars": [["0.5500", "30.00"]], "yes_dollars": [["0.4300", "25.00"]]}}
