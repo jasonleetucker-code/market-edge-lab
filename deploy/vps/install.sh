@@ -11,6 +11,8 @@
 #   /opt/market-edge-lab/app            code at the pinned commit (root-owned, read-only)
 #   /opt/market-edge-lab/venv           stdlib-only venv (no pip), .pth -> app/src
 #   /var/lib/market-edge-lab            private data: db/, backups/   (edgelab, 0700)
+#   /var/lib/market-edge-lab/intel-inbox  dashboard -> collector handoff (edgelab, 0700;
+#                                       tmp/ new/ work/ done/ rejected/, ADR 0049)
 #   /var/lib/market-edge-lab-status     non-sensitive status JSON     (edgelab, 0755)
 #                                       incl. last_failure.json (production only) and
 #                                       last_verification.json (the section 4.1 fail-closed check)
@@ -44,12 +46,13 @@ STATUS=/var/lib/market-edge-lab-status
 ETC=/etc/market-edge-lab
 ENV_FILE=$ETC/env
 SECRETS_FILE=$ETC/secrets.env
-UNITS=(edgelab-pfm edgelab-decision edgelab-recheck edgelab-status edgelab-backup edgelab-shadow edgelab-settlement edgelab-observe edgelab-observe-close edgelab-freshness edgelab-odds edgelab-pm-sports edgelab-pm-sports-discover)
+UNITS=(edgelab-pfm edgelab-decision edgelab-recheck edgelab-status edgelab-backup edgelab-shadow edgelab-settlement edgelab-observe edgelab-observe-close edgelab-freshness edgelab-odds edgelab-pm-sports edgelab-pm-sports-discover edgelab-news edgelab-news-inbox)
 # Installed and verified with the rest, but activated separately, each by its own runbook step:
 # the Odds API timer (ADR 0029) after the owner installs the key and `odds plan` / `odds smoke`
 # pass (section 5b); the Polymarket US NFL pilot timers (ADR 0032) under the owner's recorded
-# risk decision (section 5e). The installer never enables any of them.
-SEPARATELY_ACTIVATED=(edgelab-odds edgelab-pm-sports edgelab-pm-sports-discover)
+# risk decision (section 5e); the news intelligence timers (ADR 0049) on the owner's decision in
+# docs/deploy/NEWS_INTEL_ACTIVATION.md. The installer never enables any of them.
+SEPARATELY_ACTIVATED=(edgelab-odds edgelab-pm-sports edgelab-pm-sports-discover edgelab-news edgelab-news-inbox)
 CORE_TIMERS=()
 for u in "${UNITS[@]}"; do
   case " ${SEPARATELY_ACTIVATED[*]} " in *" $u "*) ;; *) CORE_TIMERS+=("$u") ;; esac
@@ -65,6 +68,10 @@ id -u edgelab >/dev/null 2>&1 || useradd --system --gid edgelab --home-dir "$DAT
 echo "== 2/7 directories"
 install -d -o root -g root -m 0755 "$APP_ROOT"
 install -d -o edgelab -g edgelab -m 0700 "$DATA" "$DATA/db" "$DATA/ledger" "$DATA/backups" "$DATA/backups/ledger"
+# The intel inbox (ADR 0049): the dashboard's only writable path besides the WAL side files, and the
+# news units' work queue. Private like the rest of the data root.
+install -d -o edgelab -g edgelab -m 0700 "$DATA/intel-inbox" "$DATA/intel-inbox/tmp" "$DATA/intel-inbox/new" \
+  "$DATA/intel-inbox/work" "$DATA/intel-inbox/done" "$DATA/intel-inbox/rejected"
 install -d -o edgelab -g edgelab -m 0755 "$STATUS"
 install -d -o root -g edgelab -m 0750 "$ETC"
 
@@ -160,6 +167,7 @@ expect "data dir is edgelab:edgelab 700" test "$(mode "$DATA")" = "edgelab:edgel
 expect "db dir is edgelab:edgelab 700" test "$(mode "$DATA/db")" = "edgelab:edgelab 700"
 expect "ledger dir is edgelab:edgelab 700" test "$(mode "$DATA/ledger")" = "edgelab:edgelab 700"
 expect "backups dir is edgelab:edgelab 700" test "$(mode "$DATA/backups")" = "edgelab:edgelab 700"
+expect "intel inbox is edgelab:edgelab 700" test "$(mode "$DATA/intel-inbox")" = "edgelab:edgelab 700"
 expect "status dir is edgelab:edgelab 755" test "$(mode "$STATUS")" = "edgelab:edgelab 755"
 expect "database created" test -f "$DATA/db/edge_lab.sqlite3"
 expect "edgelab can read the env file" runuser -u edgelab -- test -r "$ENV_FILE"
@@ -172,6 +180,7 @@ if id -u "$OTHER_USER" >/dev/null 2>&1; then
   expect_not "$OTHER_USER cannot read the database" runuser -u "$OTHER_USER" -- test -r "$DATA/db/edge_lab.sqlite3"
   expect_not "$OTHER_USER cannot list backups" runuser -u "$OTHER_USER" -- ls "$DATA/backups"
   expect_not "$OTHER_USER cannot list the shadow ledger" runuser -u "$OTHER_USER" -- ls "$DATA/ledger"
+  expect_not "$OTHER_USER cannot list the intel inbox" runuser -u "$OTHER_USER" -- ls "$DATA/intel-inbox"
   expect "$OTHER_USER can read the status file" runuser -u "$OTHER_USER" -- cat "$STATUS/latest.json"
 fi
 [ "$fails" -eq 0 ] || die "permission/runtime checks failed (see above)"
@@ -193,7 +202,8 @@ Next (owner):
        systemctl list-timers 'edgelab-*'
      ${SEPARATELY_ACTIVATED[*]/%/.timer} are installed but stay disabled until their own
      activation in docs/deploy/DAILY_SHADOW_ACTIVATION.md: section 5b for edgelab-odds (key,
-     odds plan, one odds smoke); section 5e for the Polymarket US NFL pilot (owner risk decision).
+     odds plan, one odds smoke); section 5e for the Polymarket US NFL pilot (owner risk decision);
+     docs/deploy/NEWS_INTEL_ACTIVATION.md for edgelab-news and edgelab-news-inbox (owner decision).
   Stop everything at any time (named timers; disable does not reliably expand a glob):
        sudo systemctl disable --now ${CORE_TIMERS[*]/%/.timer} ${SEPARATELY_ACTIVATED[*]/%/.timer}
 EOF

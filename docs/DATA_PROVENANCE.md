@@ -325,6 +325,31 @@ review. Their stored rows are not rewritten, and missing fields stay UNKNOWN.
 - **As-of research use.** Evidence that was valid at a decision time may support research with an
   explicit as-of cutoff even when it is stale now. It is never used as current (§4).
 
+## 6e. News and transcript intelligence (#192, ADR 0049; schema v8)
+
+- **Where it lives.** Feed attempts go in `intel_fetches`, item versions in `intel_items`, and the typed append-only
+  journal in `intel_records`, which is hash-chained per subject. Owner transcripts are stored in `document_blobs`
+  (content-addressed). Kalshi reads for this lane are ordinary `snapshots` under source `kalshi_public_intel`.
+- **Rights exception to "raw evidence is immutable and derived is reproducible".**
+  - For publisher feeds without clear full-text rights we keep only the raw feed's sha256 and size, plus the
+    headline, link, timestamps and a snippet of at most 300 characters. `content:encoded` is never stored.
+  - The derived items therefore cannot be re-parsed from stored bytes. The hash proves which bytes were seen.
+  - Only US-government public-domain sources keep their raw bytes (`retained = 'RAW'`, through
+    `document_retrievals`).
+- **Time.**
+  - `published_utc` is the feed's own time, normalized to UTC. A naive or date-only time stays None, with the raw
+    text in `published_raw`, and `first_seen_utc` is our receipt time.
+  - Ordering and point-in-time checks use the published time when known, else first-seen.
+- **Labels.**
+  - Collected items are COLLECTED.
+  - Topics, entities, claim types, events and corroboration are CLASSIFIED (deterministic, `intel-extract-v1`,
+    `intel-events-v1`).
+  - Imported assistant output is MODEL_INTERPRETATION (UNVALIDATED), tied to the packet sha256 it answered.
+    Owner judgments are labelled separately.
+  - Every forecast is PROVISIONAL until a calibration history exists.
+  - Decisions are HYPOTHETICAL research records: no order, no fill.
+- **AI boundary.** Research packets carry no Kalshi data or metadata. That is enforced in code and in tests.
+
 ## 7. Adding a source
 
 1. Choose the highest access tier available. Read the terms and write them in `license_notes`.

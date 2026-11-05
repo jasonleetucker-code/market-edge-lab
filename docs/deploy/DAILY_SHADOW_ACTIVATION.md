@@ -443,11 +443,18 @@ settlement job runs (about 11:15 and 16:15 ET).
 This is read-only research collection. It authorizes no Polymarket account, no order, no
 credential and no redistribution.
 
+## 5f. News intelligence timers (ADR 0049; SEPARATELY_ACTIVATED, not authorized by the 2026-11-05 entry)
+
+`edgelab-news.timer` (every 2 h at :32 past odd hours ET) and `edgelab-news-inbox.timer` (every 5 min
+at :03, :08, ...) are installed by install.sh and never enabled by it. Installing this code still
+migrates the evidence DB to **v8** (see Rollback). Their activation, pause, watch list and rollback are
+in `docs/deploy/NEWS_INTEL_ACTIVATION.md`; enabling them is a separate owner decision.
+
 ## 6. Verify over the next days: each state separately
 
 | State | Evidence |
 |---|---|
-| Installed, timers enabled | `list-timers` shows the core/observation timers, plus each separately activated timer once its own step ran: the Odds timer (§5b) and the two Polymarket US pilot timers (§5e) |
+| Installed, timers enabled | `list-timers` shows the core/observation timers, plus each separately activated timer once its own step ran: the Odds timer (§5b), the two Polymarket US pilot timers (§5e) and the two news timers (§5f) |
 | Fail-closed dry run | step 4.1 journal |
 | Real decision/recheck captured | `latest.json` has `last_closed_target_date` = D with VALID or an explicit INVALID reason |
 | Complete forecast evidence | no `pfm` reason in `last_closed_reasons` |
@@ -480,23 +487,31 @@ read is UNKNOWN.
 ## Rollback
 
 **The evidence schema is forward-only.** The ADR 0029 install made the evidence store v5, the
-ADR 0030 install made it v6, and the ADR 0032 install makes it **v7**. The shadow ledger stays v1.
+ADR 0030 install made it v6, the ADR 0032 install made it v7, and the ADR 0049 (#192 news intelligence)
+install makes it **v8**, even while the news timers stay disabled. The shadow ledger stays v1.
 - **Why it matters.** install.sh step 7 migrates the live evidence DB. Older code refuses a newer
   store ("Database schema v6 is newer than this code"), which would stop the collectors,
   VERIFIED backups and the dashboard.
 - **Why a stamp is enough.** v5 only **added** the odds capture tables, v6 only the price
-  observation tables, and v7 only the Polymarket US NFL pilot tables. Older code ignores both. Rolling back therefore means stamping the store
+  observation tables, v7 only the Polymarket US NFL pilot tables, and v8 only the intel tables
+  (`intel_fetches`, `intel_items`, `intel_records`). Older code ignores them. Rolling back therefore means stamping the store
   down first, with the new code still installed, and then putting code and units back together.
-- **Rolling back one step, to the v6 code (just before ADR 0032).**
-  - Step 3 is `mark-v6-for-rollback` only.
+- **Rolling back one step, to the v7 code (just before ADR 0049).**
+  - Step 3 is `mark-v7-for-rollback` only.
+  - Remove the four ADR 0049 news unit files (`edgelab-news*`) after restoring the v7 code; v7 does
+    not know them. Keep every other unit. The inbox directory may stay: nothing older reads it.
+    `docs/deploy/NEWS_INTEL_ACTIVATION.md` has the same steps for the news lane alone.
+- Every older target starts step 3 with `mark-v7-for-rollback` and removes the `edgelab-news*` units too.
+- **Rolling back to the v6 code (just before ADR 0032).**
+  - Step 3 is `mark-v7-for-rollback`, then `mark-v6-for-rollback`.
   - Remove the four ADR 0032 pilot unit files (`edgelab-pm-sports*`) after restoring the v6
     code; v6 does not know them. Keep every other unit.
 - **Rolling back to the v5 code (just before ADR 0030).**
-  - Step 3 is `mark-v6-for-rollback`, then `mark-v5-for-rollback`.
+  - Step 3 is `mark-v7-for-rollback`, `mark-v6-for-rollback`, then `mark-v5-for-rollback`.
   - Remove the four ADR 0030 observation unit files after restoring the v5 code; v5 does not know them.
   - Keep the Odds API units; v5 includes ADR 0029. Re-enable whichever pre-ADR0030 timers were enabled.
-- **Rolling back to the v4 code (before ADR 0029).** Run all three stamps in order, remove the
-  ADR 0032 pilot units, the ADR 0030 observation units **and** the ADR 0029 odds units.
+- **Rolling back to the v4 code (before ADR 0029).** Run all four stamps in order, remove the
+  ADR 0049 news units, the ADR 0032 pilot units, the ADR 0030 observation units **and** the ADR 0029 odds units.
 - The old `backup.py` from before ADR 0016 also rejects the new backup unit's flags.
 
 Nothing is deleted. Run the steps as root, in order, outside 17:40-18:50 ET and not during a
@@ -506,8 +521,8 @@ settlement run (about 11:15 and 16:15 ET):
    timers: `disable` does not reliably expand a glob for unit files, and step 5 deletes unit files, so
    every timer must really be disabled first.
    ```bash
-   sudo systemctl disable --now edgelab-pfm.timer edgelab-decision.timer edgelab-recheck.timer edgelab-status.timer edgelab-backup.timer edgelab-shadow.timer edgelab-settlement.timer edgelab-observe.timer edgelab-observe-close.timer edgelab-freshness.timer edgelab-odds.timer edgelab-pm-sports.timer edgelab-pm-sports-discover.timer
-   systemctl is-enabled edgelab-pfm.timer edgelab-decision.timer edgelab-recheck.timer edgelab-status.timer edgelab-backup.timer edgelab-shadow.timer edgelab-settlement.timer edgelab-observe.timer edgelab-observe-close.timer edgelab-freshness.timer edgelab-odds.timer edgelab-pm-sports.timer edgelab-pm-sports-discover.timer   # expect disabled (or not-found) for every one
+   sudo systemctl disable --now edgelab-pfm.timer edgelab-decision.timer edgelab-recheck.timer edgelab-status.timer edgelab-backup.timer edgelab-shadow.timer edgelab-settlement.timer edgelab-observe.timer edgelab-observe-close.timer edgelab-freshness.timer edgelab-odds.timer edgelab-pm-sports.timer edgelab-pm-sports-discover.timer edgelab-news.timer edgelab-news-inbox.timer
+   systemctl is-enabled edgelab-pfm.timer edgelab-decision.timer edgelab-recheck.timer edgelab-status.timer edgelab-backup.timer edgelab-shadow.timer edgelab-settlement.timer edgelab-observe.timer edgelab-observe-close.timer edgelab-freshness.timer edgelab-odds.timer edgelab-pm-sports.timer edgelab-pm-sports-discover.timer edgelab-news.timer edgelab-news-inbox.timer   # expect disabled (or not-found) for every one
    systemctl list-units 'edgelab-*' --state=running --no-legend   # expect no capture job
    ```
 2. **Make a verified backup (still the new code):**
@@ -517,11 +532,12 @@ settlement run (about 11:15 and 16:15 ET):
    Expect `VERIFIED_BACKUP_AND_RESTORE` for both stores. Stop here if either is missing.
 3. **Stamp the evidence store down (still the new code):**
    ```bash
+   sudo runuser -u edgelab -- /opt/market-edge-lab/venv/bin/python -m edge_lab.storage mark-v7-for-rollback --db /var/lib/market-edge-lab/db/edge_lab.sqlite3   # v8 -> v7: every rollback target before ADR 0049
    sudo runuser -u edgelab -- /opt/market-edge-lab/venv/bin/python -m edge_lab.storage mark-v6-for-rollback --db /var/lib/market-edge-lab/db/edge_lab.sqlite3   # v7 -> v6: every rollback target before ADR 0032
    sudo runuser -u edgelab -- /opt/market-edge-lab/venv/bin/python -m edge_lab.storage mark-v5-for-rollback --db /var/lib/market-edge-lab/db/edge_lab.sqlite3   # v6 -> v5: only when going back before ADR 0030
    sudo runuser -u edgelab -- /opt/market-edge-lab/venv/bin/python -m edge_lab.storage mark-v4-for-rollback --db /var/lib/market-edge-lab/db/edge_lab.sqlite3   # v5 -> v4: only when going back before ADR 0029
    ```
-   Expect `{"from": 7, "to": 6, ...}`, then `{"from": 6, "to": 5, ...}`, then `{"from": 5, "to": 4, ...}`. Each refuses (exit 1,
+   Expect `{"from": 8, "to": 7, ...}`, then `{"from": 7, "to": 6, ...}`, then `{"from": 6, "to": 5, ...}`, then `{"from": 5, "to": 4, ...}`. Each refuses (exit 1,
    nothing changed) anything that is not a complete, intact store of its version.
 4. **Restore the previous code:**
    ```bash
@@ -533,7 +549,12 @@ settlement run (about 11:15 and 16:15 ET):
    ```bash
    sudo install -o root -g root -m 0644 /opt/market-edge-lab/app/deploy/vps/systemd/edgelab-* /opt/market-edge-lab/app/deploy/vps/systemd/edgelab.slice /etc/systemd/system/
    ```
-   For every rollback target before ADR 0032 (v6 or older), remove the pilot units:
+   For every rollback target before ADR 0049 (v7 or older), remove the news units:
+   ```bash
+   sudo rm -f /etc/systemd/system/edgelab-news.service /etc/systemd/system/edgelab-news.timer /etc/systemd/system/edgelab-news-inbox.service /etc/systemd/system/edgelab-news-inbox.timer
+   sudo systemctl daemon-reload
+   ```
+   A v7 rollback stops there. For every rollback target before ADR 0032 (v6 or older), also remove the pilot units:
    ```bash
    sudo rm -f /etc/systemd/system/edgelab-pm-sports.service /etc/systemd/system/edgelab-pm-sports.timer /etc/systemd/system/edgelab-pm-sports-discover.service /etc/systemd/system/edgelab-pm-sports-discover.timer
    sudo systemctl daemon-reload
@@ -579,7 +600,7 @@ settlement run (about 11:15 and 16:15 ET):
 Re-installing the newer code later stamps it again: the migration is idempotent, and every row
 written meanwhile is kept. The shadow
 ledger's schema did not change (v1), so the rolled-back code reads it. To stop all collection
-and keep the data: `sudo systemctl disable --now edgelab-pfm.timer edgelab-decision.timer edgelab-recheck.timer edgelab-status.timer edgelab-backup.timer edgelab-shadow.timer edgelab-settlement.timer edgelab-observe.timer edgelab-observe-close.timer edgelab-freshness.timer edgelab-odds.timer edgelab-pm-sports.timer edgelab-pm-sports-discover.timer` (named, not a glob).
+and keep the data: `sudo systemctl disable --now edgelab-pfm.timer edgelab-decision.timer edgelab-recheck.timer edgelab-status.timer edgelab-backup.timer edgelab-shadow.timer edgelab-settlement.timer edgelab-observe.timer edgelab-observe-close.timer edgelab-freshness.timer edgelab-odds.timer edgelab-pm-sports.timer edgelab-pm-sports-discover.timer edgelab-news.timer edgelab-news-inbox.timer` (named, not a glob).
 
 ## 7. Backup retention: the manual, reviewed apply (owner-approved 2026-09-26)
 
@@ -740,7 +761,7 @@ PY=/opt/market-edge-lab/venv/bin/python; DB=/var/lib/market-edge-lab/db; STAMP=$
 BUNDLE=/var/lib/market-edge-lab/backups/<the chosen VERIFIED bundle>   # or an O1 copy scp'd back
 
 # 1. Stop every timer (named, as in Rollback step 1) and the dashboard; nothing may be running.
-systemctl disable --now edgelab-pfm.timer edgelab-decision.timer edgelab-recheck.timer edgelab-status.timer edgelab-backup.timer edgelab-shadow.timer edgelab-settlement.timer edgelab-observe.timer edgelab-observe-close.timer edgelab-freshness.timer edgelab-odds.timer edgelab-pm-sports.timer edgelab-pm-sports-discover.timer
+systemctl disable --now edgelab-pfm.timer edgelab-decision.timer edgelab-recheck.timer edgelab-status.timer edgelab-backup.timer edgelab-shadow.timer edgelab-settlement.timer edgelab-observe.timer edgelab-observe-close.timer edgelab-freshness.timer edgelab-odds.timer edgelab-pm-sports.timer edgelab-pm-sports-discover.timer edgelab-news.timer edgelab-news-inbox.timer
 systemctl stop edgelab-dashboard.service
 systemctl list-units 'edgelab-*' --state=running --no-legend    # expect nothing
 

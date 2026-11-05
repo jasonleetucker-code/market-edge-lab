@@ -130,6 +130,8 @@ class InboxKind(str, Enum):
     TRANSCRIPT = "transcript"
     ANALYSIS = "analysis"  # assistant analysis or owner judgment (market-edge-intel-analysis/1)
     REFRESH = "refresh"  # refresh request: news, quotes or market discovery
+    LINK = "link"  # the owner's decision on a candidate market (confirm/reject, with attestations)
+    PACKET = "packet"  # prepare (record) the research packet for one event
 
 
 class RefreshScope(str, Enum):

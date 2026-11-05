@@ -1160,6 +1160,10 @@ def main(argv: list[str] | None = None) -> int:
 
         return sizing_main(argv[1:])
     # --- freshness: Freshness Fabric v1 supervisor (ADR 0031). Self-contained block; it owns its parser.
+    if argv[:1] == ["intel"]:
+        from .intel.cli import main as intel_main
+
+        return intel_main(argv[1:])
     if argv[:1] == ["freshness"]:
         from .freshness_fabric import main as freshness_main
 

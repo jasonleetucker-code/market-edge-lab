@@ -254,7 +254,9 @@ def test_a_future_evaluation_as_of_is_an_error_never_populated_forever(tmp_path)
     assert load(root, NOW).status == d.OK
     # an as-of after the file's own generation time: re-hashed so only this check can fail
     from edge_lab import payoff_constraints as pc
-    path = next(root.glob("EXP-003-*/results/payoff_scan_production_*.json"))
+    # Exclude the .source.json sidecar: glob order is filesystem-dependent and the sidecar has no provenance.
+    path = next(p for p in sorted(root.glob("EXP-003-*/results/payoff_scan_production_*.json"))
+                if not p.name.endswith(".source.json"))
     obj = json.loads(path.read_text(encoding="utf-8"))
     prov = obj["provenance"]
     envelope = pc.result_envelope(obj["report"], generated_at_utc="2026-09-25T01:00:00+00:00",
