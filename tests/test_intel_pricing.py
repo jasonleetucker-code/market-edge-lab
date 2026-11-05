@@ -478,3 +478,9 @@ def test_stale_book_prices_are_not_described_as_current():
     assert "offered at" not in s.explanation and "No current market price" in s.explanation
     closed = sheet(m=market(status="closed"), f=None)
     assert "offered at" not in closed.explanation
+
+
+def test_a_too_fine_venue_grid_fails_closed_instead_of_crashing():
+    fine = market(price_ranges=[{"start": "0.0001", "end": "0.9999", "step": "0.00001"}])
+    s = sheet(m=fine)
+    assert s.yes.max_acceptable_price is None and s.action is not Action.INVESTIGATE

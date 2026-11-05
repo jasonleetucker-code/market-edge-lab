@@ -977,7 +977,11 @@ def max_acceptable_price(
         return None
     limit = p - margin
     best = None
-    for price in _grid_prices(grid, step):
+    try:
+        prices = _grid_prices(grid, step)
+    except ValueError:
+        return None  # a grid too fine to search (untrusted venue metadata) bounds nothing: fail closed
+    for price in prices:
         try:
             cost = schedule.taker_buy(quantity, price).cost_per_contract
         except ValueError:

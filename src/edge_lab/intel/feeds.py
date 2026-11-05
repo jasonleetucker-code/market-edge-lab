@@ -27,7 +27,7 @@ import json
 import re
 import unicodedata
 import xml.etree.ElementTree as ET
-from datetime import date, datetime, timezone
+from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
