@@ -3,6 +3,63 @@
 This is the live state of the repository. Each session overwrites it; it is not a history
 (git log is the history). Format: `AI_INSTRUCTIONS.md` → Handoff format.
 
+## 2026-11-05: News, politics & financial prediction intelligence (#192)
+
+_Cloud Claude Code session. Directive and answers: `docs/owner/2026-11-05-news-political-intelligence-directive.md`.
+Scope: the EXECUTION_PLAN 2026-11-05 entry. Design: ADR 0049._
+
+```
+STATUS: DONE for code, review and merge. NOT DEPLOYED and NOT ACTIVATED; both are the owner's decision
+  (docs/deploy/NEWS_INTEL_ACTIVATION.md).
+ACCEPTANCE: the directive's definition of done and the owner's five refinements:
+  - the complete workflow inside the Terminal;
+  - a one-click packet with a ready prompt, and import of the whole pasted reply;
+  - transparent provenance labels;
+  - nothing unverified shown as an edge;
+  - a live demonstration on real data.
+EVIDENCE:
+  - #193 docs (e267b0c).
+  - #194 pure core (1b88231): 2 review rounds; 11 regressions.
+  - #195 backend (b935709): 3 rounds; 3 blockers fixed with regressions.
+  - #196 Terminal UI (0bba20b): 3 rounds; drip-feed and Content-Length fixes with regressions.
+  - Each PR: exact-head CI green on 3.11 and 3.12; check-frozen clean.
+  - Browser audit: 42 renders at 360/390/1440 and 14 at 200% text, 0 issues (Chromium; WebKit not installed in the
+    container).
+  - Live demonstration on a private scratch store:
+    - real feeds: 27/28 verified, 1,126 items, conditional 304s;
+    - a labelled test transcript;
+    - packet, import, discovery and a live Kalshi book for KXHEGSETHIMPEACH-27JUL01-27JAN01;
+    - a saved decision: INVESTIGATE, labelled ESTIMATE_ONLY_FEES_UNVERIFIED and PROVISIONAL_FORECAST.
+    The record is docs/research/NEWS_INTEL_WORKFLOW_DEMO_2026-11-05.md. The demonstration found 3 real bugs, all
+    fixed before merge.
+UNRESOLVED:
+  - Production is still on the earlier deployed SHA.
+  - Deploying migrates the evidence DB to schema v8, even with the timers disabled. Rollback:
+    mark-v7-for-rollback.
+  - Activation is owner-only:
+    - the two timers;
+    - EDGE_LAB_INTEL_INBOX in dashboard.env, to turn on Terminal submissions.
+  - Fees: politics series are UNVERIFIED, so no EV figure is claimable; econ series (KXCPI, KXFED…) are
+    FEE_UNSUPPORTED.
+  - No forecast has calibration history: everything is PROVISIONAL.
+  - Kalshi DATA_RIGHTS stays UNRESOLVED beyond private deterministic use. No Kalshi data goes to AI.
+  - Sources needing owner action:
+    - SEC EDGAR needs a contact UA;
+    - Congress.gov, FRED and GovInfo need keys.
+  - Robots or UA refusals block NPR, Axios, CNBC, WSJ/MarketWatch, BLS, BEA and the Google News discovery path.
+  - The owner has not yet reviewed the workspace on the phone.
+  - WebKit is not audited.
+  - Event extraction is a deterministic keyword taxonomy, so it is noisy by design. Single-source events are kept
+    but ranked last.
+BLOCKERS (owner):
+  1. Deploy through the runbook.
+  2. Activate the timers and the inbox (NEWS_INTEL_ACTIVATION.md).
+  3. Optionally: a contact UA for SEC; keys for Congress.gov or FRED.
+NEXT ACTION: the owner decides on deploy and activation. After activation, use the workflow on real events. A first
+  useful research step is to verify the fee schedule for the series of any market you confirm, since without it no
+  EV figure is claimable.
+```
+
 ## 2026-10-07 production update (supersedes the production SHA below)
 
 - **Later the same evening: DEPLOYED and PRODUCTION_VERIFIED `8dd572c7a605c3021557f024c7564c245d796b24`** (main after
