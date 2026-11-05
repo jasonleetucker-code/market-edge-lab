@@ -15,8 +15,8 @@ Refusals return `ParseResult(ok=False, error=<code>)` and never raise:
 
 Timestamps are normalized to ``YYYY-MM-DDTHH:MM:SSZ``. A timestamp without a zone is unknown
 (``None``), not assumed UTC; the feed's own text is kept in ``published_raw`` for audit. The one
-exception is the Federal Register's date-only ``publication_date``, which is a calendar date by
-definition and is stored as that date at ``T00:00:00Z``.
+exception is the Federal Register's date-only ``publication_date``: it has no time of day, so its
+UTC time stays None (the date is kept in ``published_raw``) rather than being stamped 00:00Z.
 """
 
 from __future__ import annotations
@@ -272,11 +272,10 @@ def _parse_any_date(raw: str) -> str | None:
 def _parse_fr_date(raw: str) -> str | None:
     if not _FR_DATE.match(raw):
         return _parse_iso(raw) if raw else None
-    try:
-        day = date.fromisoformat(raw)
-    except ValueError:
-        return None
-    return f"{day.isoformat()}T00:00:00Z"
+    # A date-only publication_date has no time of day. Stamping it 00:00Z would place the item up
+    # to a day before it existed (point-in-time rule), so the UTC time stays unknown (None); the
+    # date itself is kept in published_raw and ordering uses the first-seen time.
+    return None
 
 
 def _raw_date(raw: str | None) -> str | None:

@@ -257,11 +257,58 @@ def test_import_refuses_prices_tickers_and_fees():
 def test_abstention_and_owner_judgment_are_accepted():
     ev, items = _event_and_evidence()
     p = build_packet(ev, items, created_utc="t")
-    obj = _filled(p, basis="OWNER_JUDGMENT", assistant="owner")
+    obj = _filled(p, assistant="owner")
     obj["outcomes"][0] = {"outcome_id": obj["outcomes"][0]["outcome_id"], "abstain": True, "probability": None,
                           "low": None, "high": None}
-    a = validate(obj, p)
+    a = validate(obj, p, owner_judgment=True)  # only the owner's explicit option sets this basis
     assert a.basis is ForecastBasis.OWNER_JUDGMENT and a.outcomes[0].abstain and a.outcomes[0].probability is None
+
+
+def test_pasted_text_cannot_relabel_itself_as_owner_judgment():
+    ev, items = _event_and_evidence()
+    p = build_packet(ev, items, created_utc="t")
+    reply = json.dumps(_filled(p, basis="OWNER_JUDGMENT"))
+    with pytest.raises(AnalysisError, match="owner-judgment option"):
+        import_pasted(reply, lambda pid: p)
+    a = import_pasted(json.dumps(_filled(p)), lambda pid: p)
+    assert a.basis is ForecastBasis.AI_ASSISTED_UNVALIDATED
+
+
+def test_a_probability_without_a_range_is_refused_on_import():
+    ev, items = _event_and_evidence()
+    p = build_packet(ev, items, created_utc="t")
+    obj = _filled(p)
+    obj["outcomes"][0].update(low=None, high=None)
+    with pytest.raises(AnalysisError, match="honest range"):
+        validate(obj, p)
+
+
+def test_unknown_origin_never_corroborates():
+    items = [news("a", "bbc", IMPEACH), news("b", "unknown", "Articles of impeachment target Jane Doe")]
+    assert build_events(items)[0].verification is Verification.SINGLE_SOURCE
+
+
+def test_different_stories_about_one_person_do_not_corroborate():
+    items = [news("a", "bbc", IMPEACH),
+             news("b", "guardian", "Jane Doe impeachment talk grows as Jane Doe attends charity gala dinner in Ohio")]
+    items[1] = news("b", "guardian", "Jane Doe impeachment push: Doe attends charity gala dinner in Ohio")
+    ev = build_events(items)[0]
+    assert ev.verification is Verification.SINGLE_SOURCE
+
+
+def test_a_primary_item_that_only_mentions_the_subject_does_not_confirm():
+    items = [news("a", "bbc", IMPEACH),
+             news("p", "congress", "Most viewed bills this week: impeachment Jane Doe pharmacy pricing transparency",
+                  source="congress", etype=EvidenceType.PRIMARY)]
+    assert build_events(items)[0].verification is not Verification.CONFIRMED_PRIMARY
+
+
+def test_deadlines_are_never_rendered_into_packets():
+    from dataclasses import replace
+    ev, items = _event_and_evidence()
+    dated = replace(ev, outcomes=tuple(replace(o, deadline_utc="2026-12-31T23:59:00Z") for o in ev.outcomes))
+    text = build_packet(dated, items, created_utc="t").text
+    assert "2026-12-31" not in text and "Deadline" not in text
 
 
 def test_import_rejects_placeholders_unknown_keys_and_ambiguity():

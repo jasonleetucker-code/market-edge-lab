@@ -245,6 +245,40 @@ def _contradicts(a: Evidence, b: Evidence) -> bool:
     return bool(_NEGATION.search(a.title + " " + a.text)) != bool(_NEGATION.search(b.title + " " + b.text))
 
 
+UNKNOWN_ORIGINS = frozenset({"", "unknown"})
+MATCH_OVERLAP = 0.4
+
+
+def _match(a: frozenset[str], b: frozenset[str]) -> bool:
+    common = a & b
+    return len(common) >= 2 and len(common) / max(1, min(len(a), len(b))) >= MATCH_OVERLAP
+
+
+def _corroboration(news: list[Evidence], entity: str) -> tuple[set[str], set[str]]:
+    """(independent origins, primary source ids) of the best-supported report in a group.
+
+    Items count toward each other only when they report the same development: they share at
+    least two content words beyond the subject's name and overlap by MATCH_OVERLAP. Two outlets
+    writing different stories about one person do not corroborate each other. A primary item
+    counts only when it matches a reporting item, or when the whole group is primary. Unknown
+    origins (an aggregator item with no named outlet) never count.
+    """
+    name = set(keywords(entity))
+    kws = [frozenset(keywords(e.title + " " + e.text)) - name for e in news]
+    all_primary = all(e.evidence_type is EvidenceType.PRIMARY for e in news)
+    best: tuple[set[str], set[str]] = (set(), set())
+    for i, e in enumerate(news):
+        support = [j for j in range(len(news)) if j == i or _match(kws[i], kws[j])]
+        origins = {news[j].origin for j in support
+                   if news[j].evidence_type is not EvidenceType.COMMENTARY and news[j].origin not in UNKNOWN_ORIGINS}
+        has_reporting = any(news[j].evidence_type is not EvidenceType.PRIMARY for j in support)
+        primary = {news[j].source_id for j in support if news[j].evidence_type is EvidenceType.PRIMARY
+                   and (has_reporting or all_primary)}
+        if (len(primary), len(origins)) > (len(best[1]), len(best[0])):
+            best = (origins, primary)
+    return best
+
+
 def _verification(origins: set[str], primary: set[str], contradictions: list) -> Verification:
     if contradictions:
         return Verification.CONTRADICTED
@@ -281,8 +315,7 @@ def build_events(evidence: list[Evidence] | tuple[Evidence, ...], *, max_events:
         news = [e for e in items if e.kind == "news"]
         if not news:
             continue  # a transcript alone never creates an event: it is an input, not a signal
-        origins = {e.origin for e in news if e.evidence_type is not EvidenceType.COMMENTARY}
-        primary = {e.source_id for e in news if e.evidence_type is EvidenceType.PRIMARY}
+        origins, primary = _corroboration(news, g["entity"])
         contradictions: list[tuple[str, str]] = []
         for i, a in enumerate(news):
             for b in news[i + 1:]:
@@ -329,7 +362,7 @@ def claim_verification(claim: Evidence, news: list[Evidence] | tuple[Evidence, .
     origins: set[str] = set()
     primary = False
     for n in news:
-        if n.evidence_type is EvidenceType.COMMENTARY:
+        if n.evidence_type is EvidenceType.COMMENTARY or n.origin in UNKNOWN_ORIGINS:
             continue
         kn = keywords(n.title + " " + n.text)
         if not kn:

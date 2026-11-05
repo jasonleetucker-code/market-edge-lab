@@ -83,9 +83,10 @@ def build_packet(event: EventRecord, evidence: list[Evidence] | tuple[Evidence, 
         ))
     evidence_block = "\n".join(lines) if lines else "(no evidence collected)"
 
+    # Deadlines are deliberately not rendered: a deadline may later come from a market's rules,
+    # and no market data or metadata may enter a packet.
     outcomes = "\n".join(
-        f"- {o.outcome_id}\n  Outcome: {o.text}\n  Resolves on: {o.resolution_condition}\n"
-        f"  Deadline: {o.deadline_utc or 'not set (a confirmed market rule will set it)'}"
+        f"- {o.outcome_id}\n  Outcome: {_clean(o.text, 300)}\n  Resolves on: {_clean(o.resolution_condition, 300)}"
         for o in event.outcomes
     )
     body_seed = json.dumps({"e": event.event_id, "o": [o.outcome_id for o in event.outcomes],
@@ -104,7 +105,7 @@ def build_packet(event: EventRecord, evidence: list[Evidence] | tuple[Evidence, 
         "summary": "<2-4 sentences: what is established, what is not>",
         "outcomes": [
             {"outcome_id": o.outcome_id, "abstain": False, "probability": None, "low": None, "high": None,
-             "reasoning": "<why, citing evidence ids>", "key_evidence_ids": ["E1"],
+             "reasoning": "<why, citing evidence ids>", "key_evidence_ids": [],
              "main_risk": "<the most important competing scenario>"}
             for o in event.outcomes
         ],
@@ -112,7 +113,7 @@ def build_packet(event: EventRecord, evidence: list[Evidence] | tuple[Evidence, 
     }
 
     body = "\n".join([
-        f"Event: {event.title}",
+        f"Event: {_clean(event.title, 200)}",
         f"Event id: {event.event_id}",
         f"Created: {created_utc}",
         "",

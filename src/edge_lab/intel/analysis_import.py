@@ -160,7 +160,13 @@ def _text(v, name: str, limit: int, problems: list[str], *, required: bool = Fal
     return v
 
 
-def validate(obj: dict, packet: Packet, *, allow_owner_basis: bool = True) -> Analysis:
+def validate(obj: dict, packet: Packet, *, owner_judgment: bool = False) -> Analysis:
+    """Validate one analysis object against its packet.
+
+    `owner_judgment` is set only by the owner's own explicit action (a separate checkbox or CLI
+    flag), never by the pasted text. Pasted text that calls itself OWNER_JUDGMENT is refused, so an
+    assistant's reply can never be relabelled as the owner's judgment.
+    """
     problems: list[str] = []
     if not isinstance(obj, dict):
         raise AnalysisError(["the analysis must be a JSON object"])
@@ -181,14 +187,10 @@ def validate(obj: dict, packet: Packet, *, allow_owner_basis: bool = True) -> An
         problems.append("event_id does not match the packet's event")
 
     basis_raw = obj.get("basis", "AI_ASSISTED_UNVALIDATED")
-    try:
-        basis = ForecastBasis(basis_raw)
-    except ValueError:
-        problems.append(f"basis must be AI_ASSISTED_UNVALIDATED or OWNER_JUDGMENT (got {basis_raw!r})")
-        basis = ForecastBasis.AI_ASSISTED_UNVALIDATED
-    if basis not in (ForecastBasis.AI_ASSISTED_UNVALIDATED, ForecastBasis.OWNER_JUDGMENT) or \
-            (basis is ForecastBasis.OWNER_JUDGMENT and not allow_owner_basis):
-        problems.append(f"basis {basis.value} cannot be imported through the bridge")
+    if basis_raw != "AI_ASSISTED_UNVALIDATED":
+        problems.append("basis must stay \"AI_ASSISTED_UNVALIDATED\"; mark your own judgment with the separate "
+                        "owner-judgment option instead")
+    basis = ForecastBasis.OWNER_JUDGMENT if owner_judgment else ForecastBasis.AI_ASSISTED_UNVALIDATED
     seen = obj.get("market_price_seen", None)
     if seen is not None and not isinstance(seen, bool):
         problems.append("market_price_seen must be true or false")
@@ -203,7 +205,10 @@ def validate(obj: dict, packet: Packet, *, allow_owner_basis: bool = True) -> An
         outcomes_raw = []
     seen_ids: set[str] = set()
     valid_e = set(packet.evidence_ids)
-    for i, o in enumerate(outcomes_raw[:50]):
+    if len(outcomes_raw) > 50:
+        problems.append("more than 50 outcomes")
+        outcomes_raw = []
+    for i, o in enumerate(outcomes_raw):
         where = f"outcomes[{i}]"
         if not isinstance(o, dict):
             problems.append(f"{where} must be an object")
@@ -231,8 +236,8 @@ def validate(obj: dict, packet: Packet, *, allow_owner_basis: bool = True) -> An
         else:
             if p is None:
                 problems.append(f"{where}: give a probability, or set abstain to true")
-            if (lo is None) != (hi is None):
-                problems.append(f"{where}: give both low and high, or neither")
+            if lo is None or hi is None:
+                problems.append(f"{where}: give both low and high (an honest range), or set abstain to true")
             if p is not None and lo is not None and hi is not None and not (lo <= p <= hi):
                 problems.append(f"{where}: need low <= probability <= high (got {lo}, {p}, {hi})")
         ev_ids = o.get("key_evidence_ids", [])
@@ -254,7 +259,10 @@ def validate(obj: dict, packet: Packet, *, allow_owner_basis: bool = True) -> An
     if not isinstance(claims_raw, list):
         problems.append("claims must be a list")
         claims_raw = []
-    for i, c in enumerate(claims_raw[:200]):
+    if len(claims_raw) > 200:
+        problems.append("more than 200 claims")
+        claims_raw = []
+    for i, c in enumerate(claims_raw):
         where = f"claims[{i}]"
         if not isinstance(c, dict) or set(c) - CLAIM_KEYS:
             problems.append(f"{where} must be an object with claim_id, assessment, evidence_ids")
@@ -281,11 +289,11 @@ def validate(obj: dict, packet: Packet, *, allow_owner_basis: bool = True) -> An
     )
 
 
-def import_pasted(pasted: str, packet_lookup) -> Analysis:
+def import_pasted(pasted: str, packet_lookup, *, owner_judgment: bool = False) -> Analysis:
     """Find, match and validate the analysis in a pasted reply. `packet_lookup(packet_id)` returns
-    the stored Packet or None."""
+    the stored Packet or None. `owner_judgment` comes from the owner's explicit choice only."""
     obj = extract_object(pasted)
     packet = packet_lookup(obj.get("packet_id"))
     if packet is None:
         raise AnalysisError([f"packet {obj.get('packet_id')!r} was not generated here (or its record is missing)"])
-    return validate(obj, packet)
+    return validate(obj, packet, owner_judgment=owner_judgment)

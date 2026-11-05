@@ -84,3 +84,43 @@ Counts: {'ACTIVE': 22, 'LIMITED': 3, 'UNAVAILABLE': 7, 'BLOCKED': 18, 'UNVERIFIE
 - `apps.bea.gov` has `Disallow: /`, with Allow lines only for unrelated paths.
 
 Re-run with `edge-lab intel verify-sources` (records each result as a verification record in the evidence store).
+
+## Per-feed verification (`edge-lab intel verify-sources`, 2026-11-05 ~19:24 UTC)
+
+This was run with the PR's own code: robots.txt plus one GET and a parse, for every feed URL the registry collects
+(including guardian_us, abc_politics, fox_politics, and the Federal Register query with `per_page=40`). A feed whose
+verification fails is not collected until a later verification passes.
+
+| Feed | URL | robots | HTTP | Items | Newest item | Verified |
+|---|---|---|---|---|---|---|
+| bbc_top | `https://feeds.bbci.co.uk/news/rss.xml` | ROBOTS_ALLOW | 200 | 34 | 2026-11-05T19:08:08Z | yes |
+| pbs_headlines | `https://www.pbs.org/newshour/feeds/rss/headlines` | ROBOTS_ALLOW | 200 | 20 | 2026-11-05T19:04:43Z | yes |
+| abc_top | `https://abcnews.com/abcnews/topstories` | ROBOTS_ALLOW | 200 | 25 | 2026-11-05T19:16:56Z | yes |
+| abc_politics | `https://abcnews.com/abcnews/politicsheadlines` | ROBOTS_ALLOW | 200 | 25 | 2026-11-04T23:59:57Z | yes |
+| cbs_latest | `https://www.cbsnews.com/latest/rss/main` | ROBOTS_ALLOW | 200 | 30 | 2026-11-05T19:19:26Z | yes |
+| nbc_news | `https://feeds.nbcnews.com/nbcnews/public/news` | ROBOTS_ALLOW | 200 | 22 | 2026-11-05T18:56:37Z | yes |
+| guardian_world | `https://www.theguardian.com/world/rss` | ROBOTS_ALLOW | 200 | 45 | 2026-11-05T19:06:09Z | yes |
+| guardian_us | `https://www.theguardian.com/us-news/rss` | ROBOTS_ALLOW | 200 | 33 | 2026-11-05T19:04:05Z | yes |
+| aljazeera_all | `https://www.aljazeera.com/xml/rss/all.xml` | ROBOTS_ALLOW | 200 | 25 | 2026-11-05T18:53:04Z | yes |
+| propublica_main | `https://www.propublica.org/feeds/propublica/main` | ROBOTS_ALLOW | 200 | 20 | 2026-11-05T11:00:00Z | yes |
+| time_feed | `https://time.com/feed/` | ROBOTS_ALLOW | 200 | 25 | 2026-11-05T17:14:06Z | yes |
+| fox_latest | `https://moxie.foxnews.com/google-publisher/latest.xml` | ROBOTS_ALLOW | 200 | 25 | 2026-11-05T18:09:57Z | yes |
+| fox_politics | `https://moxie.foxnews.com/google-publisher/politics.xml` | ROBOTS_ALLOW | 200 | 25 | 2026-11-05T18:04:38Z | yes |
+| latimes_politics | `https://www.latimes.com/politics/rss2.0.xml` | ROBOTS_ALLOW | 200 | 95 | 2026-11-05T11:00:00Z | yes |
+| france24_en | `https://www.france24.com/en/rss` | ROBOTS_ALLOW | 200 | 24 | 2026-11-05T18:16:53Z | yes |
+| politico_politics | `https://rss.politico.com/politics-news.xml` | NO_ROBOTS | 200 | 30 | 2026-11-05T11:05:05Z | yes |
+| thehill_news | `https://thehill.com/news/feed/` | ROBOTS_ALLOW | 200 | 15 | 2026-11-05T18:48:10Z | yes |
+| semafor_all | `https://www.semafor.com/rss.xml` | ROBOTS_ALLOW | 200 | 271 | 2026-11-05T18:27:40Z | yes |
+| ballotpedia_news | `https://news.ballotpedia.org/feed/` | ROBOTS_ALLOW | 200 | 20 | 2026-11-05T10:30:00Z | yes |
+| factcheck_feed | `https://www.factcheck.org/feed/` | ROBOTS_ALLOW | 200 | 10 | 2026-11-03T16:58:12Z | yes |
+| bloomberg_markets | `https://feeds.bloomberg.com/markets/news.rss` | NO_ROBOTS | 200 | 20 | 2026-11-05T19:00:49Z | no: redirected to another host |
+| ft_home | `https://www.ft.com/rss/home` | ROBOTS_ALLOW | 200 | 11 | 2026-11-05T17:41:41Z | yes |
+| thestreet_full | `https://www.thestreet.com/.rss/full/` | ROBOTS_ALLOW | 200 | 50 | 2026-11-05T19:17:00Z | yes |
+| quartz_rss | `https://qz.com/rss` | ROBOTS_ALLOW | 200 | 21 | 2026-11-05T19:19:16Z | yes |
+| congress_most_viewed | `https://www.congress.gov/rss/most-viewed-bills.xml` | ROBOTS_ALLOW | 200 | 1 | — | yes |
+| federal_register_newest | `https://www.federalregister.gov/api/v1/documents.json?order=newest&per_page=40` | ROBOTS_ALLOW | 200 | 40 | 2026-11-05T00:00:00Z | yes |
+| govinfo_bills | `https://www.govinfo.gov/rss/bills.xml` | ROBOTS_ALLOW | 200 | 100 | 2026-11-05T04:55:00Z | yes |
+| fed_press_all | `https://www.federalreserve.gov/feeds/press_all.xml` | NO_ROBOTS | 200 | 20 | 2026-11-05T16:00:00Z | yes |
+
+Bloomberg (`feeds.bloomberg.com`) was declared LIMITED, but today its feed redirects to another host, so its
+effective status is UNVERIFIED and it is not collected.

@@ -925,8 +925,8 @@ def break_even_probability(schedule: FeeSchedule, price: Decimal, quantity: int 
 
 def _grid_prices(grid: PriceGrid | None, step: Decimal) -> list[Decimal]:
     if grid is None:
-        if not isinstance(step, Decimal) or not step.is_finite() or not (Decimal(0) < step < Decimal(1)):
-            raise ValueError("step must be a Decimal strictly between 0 and 1")
+        if not isinstance(step, Decimal) or not step.is_finite() or not (Decimal("0.0001") <= step < Decimal(1)):
+            raise ValueError("step must be a Decimal in [0.0001, 1): prices are on the 1/100-cent grid at finest")
         ranges = (PriceRange(step, Decimal(1) - step, step),) if step < Decimal(1) - step else ()
         if not ranges:
             return [step] if valid_price(step) else []
@@ -934,6 +934,8 @@ def _grid_prices(grid: PriceGrid | None, step: Decimal) -> list[Decimal]:
         ranges = grid.ranges
     prices: set[Decimal] = set()
     for r in ranges:
+        if r.step < Decimal("0.0001"):
+            raise ValueError("a price grid finer than 1/100 cent is not searched")
         k = 0
         while (p := r.start + k * r.step) <= r.end:
             if valid_price(p):

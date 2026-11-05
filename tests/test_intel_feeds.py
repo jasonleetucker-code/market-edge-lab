@@ -96,7 +96,8 @@ def test_federal_register_json_fixture():
     tariff, sanctions, bad_date = result.items  # the non-object result is skipped
     assert tariff.guid == "2026-24101"
     assert tariff.link.startswith("https://www.federalregister.gov/documents/2026/11/04/2026-24101/")
-    assert tariff.published_utc == "2026-11-04T00:00:00Z"  # date-only FR dates are calendar dates
+    # A date-only FR date has no time: never stamped 00:00Z (a day early in ET); the date is kept raw.
+    assert tariff.published_utc is None and tariff.published_raw == "2026-11-04"
     assert tariff.snippet.startswith("The Office of the United States Trade Representative")
     assert "<b>" not in tariff.snippet
     assert sanctions.snippet == "Rule · Treasury Department · Foreign Assets Control Office"

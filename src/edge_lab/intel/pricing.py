@@ -369,7 +369,8 @@ def _price_side(*, side: str, quote: ExecutableQuote | None, ladder: Any, anomal
 
 
 def _side_action(s: SidePricing, margin: Decimal) -> Action:
-    blocked = {"INSUFFICIENT_SIZE", "INVALID_PRICE", "BOOK_ANOMALY", "FEE_UNSUPPORTED"} & set(s.reasons)
+    blocked = {"INSUFFICIENT_SIZE", "INVALID_PRICE", "BOOK_ANOMALY", "FEE_UNSUPPORTED",
+               "NO_UNCERTAINTY_RANGE"} & set(s.reasons)
     if (s.ev_conservative is not None and s.ev_conservative > 0 and s.ev_conservative >= margin
             and s.qualifies_on_price is True and not blocked):
         return Action.INVESTIGATE
@@ -392,7 +393,12 @@ def _explain(action: Action, reasons: tuple[str, ...], best: SidePricing | None,
     if action is Action.INSUFFICIENT_EVIDENCE:
         text = f"No independent probability: {INSUFFICIENT_EVIDENCE_TEXT}."
         shown = [s for s in facts if s is not None and s.ask is not None]
-        if shown:
+        current = not ({"MARKET_NOT_OPEN", "MARKET_CLOSED_BY_TIME", "CLOSE_TIME_UNKNOWN", "BOOK_STALE",
+                        "BOOK_ANOMALY", "BOOK_MISSING"} & set(reasons))
+        if shown and not current:
+            text += (" No current market price is shown: the market is closed or its book is stale, missing or "
+                     "malformed" + (f" ({int(age // 60)} minutes old)" if age is not None else "") + ".")
+        elif shown:
             parts = [f"{s.side} is offered at {cents(s.ask)}"
                      + (f" ({cents(s.all_in_cost)} after fees)" if s.all_in_cost is not None else "")
                      for s in shown]
@@ -400,6 +406,10 @@ def _explain(action: Action, reasons: tuple[str, ...], best: SidePricing | None,
         return text
     if primary == "MARKET_NOT_OPEN":
         return f"Skipped: the market is not open (status {market_status or 'unknown'}), so no EV is computed."
+    if primary == "MARKET_CLOSED_BY_TIME":
+        return "Skipped: the market's close time has passed, so no EV is computed."
+    if primary == "CLOSE_TIME_UNKNOWN":
+        return "Skipped: the market's close time is unknown, so its tradability cannot be confirmed."
     if primary == "BOOK_MISSING":
         return "Skipped: no order book was captured for this market, so there is no executable price."
     if primary == "BOOK_STALE":
@@ -417,25 +427,32 @@ def _explain(action: Action, reasons: tuple[str, ...], best: SidePricing | None,
     if best is None or best.ev_conservative is None or best.ask is None or best.all_in_cost is None:
         return "Skipped: neither side has an executable, fee-priced offer, so no EV can be computed."
 
-    who = "Your" if owner else "The"
+    who = "Your" if owner else "The imported"
+    no_range = "NO_UNCERTAINTY_RANGE" in best.reasons
+    est = "point estimate (no range given)" if no_range else "conservative estimate"
+    after = "after costs" if best.fee_claimable else "after estimated (unverified) fees"
     fee = best.fee_per_contract
     first = (f"{best.side} costs {cents(best.ask)} plus a {cents(fee)} fee." if fee else
              f"{best.side} costs {cents(best.ask)} with no fee.")
     pc, be, ev = best.p_conservative, best.break_even, best.ev_conservative
     if ev > 0:
-        second = (f"{who} conservative estimate ({percent(pc)}) is above the {cents(be)} break-even, "
-                  f"leaving about {cents(ev)} per contract after costs.")
+        second = (f"{who} {est} ({percent(pc)}) is above the {cents(be)} break-even, "
+                  f"leaving about {cents(ev)} per contract {after}.")
     elif ev == 0:
-        second = f"{who} conservative estimate ({percent(pc)}) only equals the {cents(be)} break-even."
+        second = f"{who} {est} ({percent(pc)}) only equals the {cents(be)} break-even."
     elif best.ev_point is not None and best.ev_point > 0:
         second = (f"Only the point estimate ({percent(best.p_point)}) is above the {cents(be)} break-even; "
                   f"the conservative estimate ({percent(pc)}) would lose about {cents(-ev)} per contract.")
     else:
-        second = (f"{who} conservative estimate ({percent(pc)}) is below the {cents(be)} break-even, "
-                  f"so it would lose about {cents(-ev)} per contract after costs.")
+        second = (f"{who} {est} ({percent(pc)}) is below the {cents(be)} break-even, "
+                  f"so it would lose about {cents(-ev)} per contract {after}.")
     caveats = []
     if "ASK_ABOVE_MAX_PRICE" in best.reasons and best.max_acceptable_price is not None:
         caveats.append(f"the ask is above the {cents(best.max_acceptable_price)} maximum acceptable price")
+    if best.max_acceptable_price is None and ev > 0:
+        caveats.append("no price clears the safety margin, so there is no maximum acceptable price")
+    if no_range:
+        caveats.append("no uncertainty range was given, so nothing conservative can be computed")
     if "INSUFFICIENT_SIZE" in best.reasons:
         caveats.append(f"fewer than {policy.quantity} contracts are offered at the ask")
     if not best.fee_claimable:
@@ -536,6 +553,10 @@ def price_link(
     gate: list[str] = []
     if (market_status or "").lower() not in OPEN_STATUSES:
         gate.append("MARKET_NOT_OPEN")
+    if close is None:
+        gate.append("CLOSE_TIME_UNKNOWN")
+    elif close <= as_of:
+        gate.append("MARKET_CLOSED_BY_TIME")  # the captured status can lag the venue's own close time
     quotes = quotes_from_orderbook(ticker, orderbook_raw if isinstance(orderbook_raw, Mapping) else None,
                                    received_at_utc=quote_received_at_utc, evidence_id=quote_evidence_id)
     ladders = ladders_from_orderbook(ticker, orderbook_raw if isinstance(orderbook_raw, Mapping) else None,
@@ -601,4 +622,6 @@ def price_link(
                                       SIDES.index(s.side)))
     action = _side_action(best, margin)
     head = {Action.INVESTIGATE: "CONSERVATIVE_EDGE", Action.WATCH: "POINT_EDGE_ONLY", Action.SKIP: "NO_EDGE"}[action]
+    if action is Action.INVESTIGATE and not best.fee_claimable:
+        head = "ESTIMATE_ONLY_FEES_UNVERIFIED"  # never shown as an edge while the fee schedule is unverified
     return done(action, [head] + list(best.reasons), best)

@@ -91,7 +91,8 @@ def test_directive_example_fixture_yes_ev_is_hand_checked():
     assert yes.max_acceptable_price == D("0.42") and yes.qualifies_on_price is True
     assert yes.depth_status == "FILLABLE"
     assert s.action is Action.INVESTIGATE and s.best_side == "YES"
-    assert s.action_reasons[0] == "CONSERVATIVE_EDGE"
+    # Unverified fees: the head reason never calls it an edge (review finding 8).
+    assert s.action_reasons[0] == "ESTIMATE_ONLY_FEES_UNVERIFIED"
     assert "FEE_UNVERIFIED" in s.action_reasons and "PROVISIONAL_FORECAST" in s.action_reasons
     assert s.provisional is True and s.policy_id == ACTION_POLICY_ID == "intel-action-v1"
     assert s.quote_fresh is True and s.quote_age_seconds == 300.0
@@ -112,7 +113,7 @@ def test_directive_example_no_side_hand_checked():
 def test_explanation_is_plain_and_never_claims_profit():
     text = sheet().explanation
     assert text == ("YES costs 38¢ plus a 2¢ fee. Your conservative estimate (47%) is above the 40¢ break-even, "
-                    "leaving about 7¢ per contract after costs. Fees for this series are unverified and the "
+                    "leaving about 7¢ per contract after estimated (unverified) fees. Fees for this series are unverified and the "
                     "forecast is provisional, so this is not a claimable edge.")
     for s in (sheet(), sheet(f=forecast(point=0.30, low=0.25, high=0.35)), sheet(f=None)):
         assert "profit" not in s.explanation.lower() and "buy" not in s.explanation.lower()
@@ -446,3 +447,34 @@ def test_pricing_module_imports_no_execution_or_network():
             mods.update(a.name for a in node.names)
     assert not any("execution" in m or m.split(".")[-1] in {"http", "urllib", "socket", "requests", "kalshi"}
                    for m in mods), mods
+
+
+# ---------------------------------------------------------------- review regressions (PR #194)
+
+
+def test_market_past_its_close_time_is_skipped_even_if_status_says_active():
+    s = sheet(m=market(close_time="2026-11-01T00:00:00Z"))
+    assert s.action is Action.SKIP and "MARKET_CLOSED_BY_TIME" in s.action_reasons
+    assert s.yes.ev_conservative is None and "close time has passed" in s.explanation
+
+
+def test_unknown_close_time_is_skipped():
+    s = sheet(m=market(close_time=None))
+    assert s.action is Action.SKIP and "CLOSE_TIME_UNKNOWN" in s.action_reasons
+
+
+def test_no_range_can_never_investigate_and_is_not_called_conservative():
+    s = sheet(f=forecast(low=None, high=None))
+    assert s.action is not Action.INVESTIGATE
+    assert "NO_UNCERTAINTY_RANGE" in s.action_reasons
+    assert "conservative estimate" not in s.explanation.split(".")[1]
+    assert "point estimate (no range given)" in s.explanation
+
+
+def test_stale_book_prices_are_not_described_as_current():
+    old = "2026-11-01T12:00:00Z"
+    s = sheet(received=old, f=None)
+    assert s.action is Action.INSUFFICIENT_EVIDENCE
+    assert "offered at" not in s.explanation and "No current market price" in s.explanation
+    closed = sheet(m=market(status="closed"), f=None)
+    assert "offered at" not in closed.explanation
