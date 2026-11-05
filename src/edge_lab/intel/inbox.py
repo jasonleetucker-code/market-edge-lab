@@ -45,6 +45,37 @@ def pending(root: Path) -> list[Path]:
     return sorted(p for p in new.glob("*.json")) if new.is_dir() else []
 
 
+def in_flight(root: Path) -> list[Path]:
+    work = root / "work"
+    return sorted(p for p in work.glob("*.json")) if work.is_dir() else []
+
+
+STALE_WORK_SECONDS = 15 * 60  # longer than any unit's run cap: a file still in work/ was interrupted
+KALSHI_MIN_INTERVAL_SECONDS = 5 * 60  # queued price/market requests are coalesced to one per 5 minutes
+
+
+class _RootLock:
+    """An exclusive lock on the inbox root, so concurrent writers respect the pending cap."""
+
+    def __init__(self, root: Path) -> None:
+        self.path = root / ".lock"
+
+    def __enter__(self):
+        self.handle = open(self.path, "a+b")
+        if os.name != "nt":
+            import fcntl
+
+            fcntl.flock(self.handle.fileno(), fcntl.LOCK_EX)
+        return self
+
+    def __exit__(self, *exc):
+        if os.name != "nt":
+            import fcntl
+
+            fcntl.flock(self.handle.fileno(), fcntl.LOCK_UN)
+        self.handle.close()
+
+
 def _validate(kind: InboxKind, payload: dict[str, Any]) -> None:
     if kind is InboxKind.TRANSCRIPT:
         if not isinstance(payload.get("text"), str) or not payload["text"].strip():
@@ -80,7 +111,12 @@ def write_submission(root: Path, kind: str, payload: dict[str, Any], *, now: dat
         raise InboxError("BAD_KIND", "unknown submission kind") from None
     _validate(k, payload)
     ensure_layout(root)
-    if len(pending(root)) >= MAX_INBOX_PENDING:
+    with _RootLock(root):
+        return _write_locked(root, k, payload, now=now)
+
+
+def _write_locked(root: Path, k: InboxKind, payload: dict[str, Any], *, now: datetime | None) -> str:
+    if len(pending(root)) + len(in_flight(root)) >= MAX_INBOX_PENDING:
         raise InboxError("INBOX_FULL", f"{MAX_INBOX_PENDING} submissions are already waiting; try again after the "
                                        "collector has processed them")
     now = now or datetime.now(timezone.utc)
@@ -108,6 +144,19 @@ def process_inbox(store, root: Path, *, now: datetime | None = None, limit: int 
 
     ensure_layout(root)
     results = []
+    # A file left in work/ by an interrupted run (timeout, SIGTERM) is recorded and set aside.
+    for stale in in_flight(root):
+        try:
+            age = datetime.now(timezone.utc).timestamp() - stale.stat().st_mtime
+        except FileNotFoundError:
+            continue
+        if age >= STALE_WORK_SECONDS:
+            result = {"file": stale.name, "status": "REJECTED", "code": "INTERRUPTED",
+                      "message": "processing was interrupted (the collector stopped mid-run); please resubmit"}
+            store.append_intel_record(kind="inbox", subject_id=stale.name, schema=INBOX_SCHEMA, payload=result)
+            os.replace(stale, root / "rejected" / stale.name)
+            results.append(result)
+    kalshi_done: set[str] = set()
     for path in pending(root)[:limit]:
         work = root / "work" / path.name
         try:
@@ -146,11 +195,16 @@ def process_inbox(store, root: Path, *, now: datetime | None = None, limit: int 
                 if scope is RefreshScope.NEWS:
                     kwargs = {"fetcher": fetcher} if fetcher else {}
                     out = service.collect_news(store, now=when, **kwargs)
+                elif _kalshi_too_soon(store, scope, payload, kalshi_done, when):
+                    raise InboxError("COALESCED", "an identical price/market request ran in the last 5 minutes; "
+                                                  "its result is already on the page")
                 elif scope is RefreshScope.QUOTES:
+                    kalshi_done.add(_kalshi_key(scope, payload))
                     reader = kalshi_reader_factory(store, when) if kalshi_reader_factory else None
                     out = service.refresh_quotes(store, now=when, reader=reader,
                                                  only_outcome=payload.get("outcome_id"))
                 else:
+                    kalshi_done.add(_kalshi_key(scope, payload))
                     reader = kalshi_reader_factory(store, when) if kalshi_reader_factory else None
                     out = service.discover_markets(store, payload["event_id"], now=when, reader=reader)
             result.update(status="DONE", outcome=_brief(out))
@@ -163,11 +217,39 @@ def process_inbox(store, root: Path, *, now: datetime | None = None, limit: int 
             code = getattr(exc, "code", type(exc).__name__)
             msg = getattr(exc, "message", None) or "; ".join(getattr(exc, "problems", []) or [str(exc)])
             result.update(status="REJECTED", code=str(code), message=str(msg)[:2000])
+        # Journal first, then move: a crash between the two leaves a recorded file in work/, which the
+        # next run sets aside as interrupted (never an unrecorded "done").
+        if isinstance(result.get("kind"), str) and result.get("kind") == InboxKind.REFRESH.value \
+                and result.get("status") == "DONE":
+            result["kalshi_key"] = _kalshi_key(RefreshScope(json.loads(work.read_text("utf-8"))["payload"]["scope"]),
+                                               json.loads(work.read_text("utf-8"))["payload"])
+        store.append_intel_record(kind="inbox", subject_id=path.name, schema=INBOX_SCHEMA, payload=result)
         dest = root / ("done" if result.get("status") == "DONE" else "rejected") / path.name
         os.replace(work, dest)
-        store.append_intel_record(kind="inbox", subject_id=path.name, schema=INBOX_SCHEMA, payload=result)
         results.append(result)
     return results
+
+
+def _kalshi_key(scope: RefreshScope, payload: dict[str, Any]) -> str:
+    return f"{scope.value}:{payload.get('event_id') or payload.get('outcome_id') or '*'}"
+
+
+def _kalshi_too_soon(store, scope: RefreshScope, payload: dict[str, Any], done: set[str], when: datetime) -> bool:
+    """True when an identical Kalshi request already ran in this drain or within the last 5 minutes."""
+    if scope is RefreshScope.NEWS:
+        return False
+    key = _kalshi_key(scope, payload)
+    if key in done:
+        return True
+    for row in reversed(store.intel_records(kind="inbox")):
+        p = json.loads(row["payload_json"])
+        if p.get("kalshi_key") == key and p.get("status") == "DONE":
+            try:
+                at = datetime.fromisoformat(row["recorded_at_utc"].replace("Z", "+00:00"))
+            except ValueError:
+                return False
+            return (when - at).total_seconds() < KALSHI_MIN_INTERVAL_SECONDS
+    return False
 
 
 def _brief(out: Any) -> Any:

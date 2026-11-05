@@ -16,6 +16,7 @@ from __future__ import annotations
 import hashlib
 import json
 import time
+import urllib.request
 import urllib.robotparser
 import uuid
 from dataclasses import asdict
@@ -78,6 +79,37 @@ EVENT_WINDOW = timedelta(days=14)
 Fetcher = Callable[..., Any]
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Feeds are fetched without following redirects: a 3xx is recorded and the feed re-verified,
+    so no host whose robots.txt we never read is ever fetched."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: D401 - urllib hook
+        return None
+
+
+_FEED_OPENER = urllib.request.build_opener(_NoRedirect)
+
+
+def _feed_opener(request, timeout):
+    return _FEED_OPENER.open(request, timeout=timeout)
+
+
+def _signal_for_status(status: int | None) -> str | None:
+    if status in (401, 403):
+        return f"HTTP_{status}"
+    if status is not None and 300 <= status < 400 and status != 304:
+        return "REDIRECT"
+    return None
+
+
+def _t(text: str | None) -> datetime | None:
+    try:
+        dt = datetime.fromisoformat(str(text).replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return None
+    return dt if dt.tzinfo is not None else None
+
+
 def utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -106,10 +138,12 @@ def _robots_allows(url: str, fetcher: Fetcher) -> tuple[bool, str]:
     robots_url = f"{parts.scheme}://{parts.netloc}/robots.txt"
     try:
         res = fetcher(robots_url, headers={"User-Agent": USER_AGENT, "Accept": "text/plain, */*;q=0.1"},
-                      retries=0, timeout=15.0, max_bytes=512 * 1024)
+                      retries=0, timeout=15.0, max_bytes=512 * 1024, opener=_feed_opener)
     except HttpFetchError as exc:
         if exc.status in (401, 403):
             return False, "ROBOTS_REFUSED"
+        if exc.status is not None and 300 <= exc.status < 400:
+            return False, "ROBOTS_REDIRECT"
         if exc.status in (404, 410):
             return True, "NO_ROBOTS"
         return False, f"ROBOTS_UNREADABLE_{exc.status or 'NETWORK'}"
@@ -136,8 +170,8 @@ def verify_sources(store: SnapshotStore, *, now: datetime | None = None, fetcher
                                "checked_at_utc": iso(now), "robots": robots, "ok": False}
         if allowed:
             try:
-                res = fetcher(feed.url, headers={"User-Agent": USER_AGENT, "Accept": FEED_ACCEPT}, retries=1,
-                              timeout=20.0, max_bytes=MAX_FEED_BYTES)
+                res = fetcher(feed.url, headers={"User-Agent": USER_AGENT, "Accept": FEED_ACCEPT}, retries=0,
+                              timeout=20.0, max_bytes=MAX_FEED_BYTES, opener=_feed_opener)
                 parsed = parse_feed(res.body, source_id=cand.source_id, rights=cand.rights, origin=cand.origin,
                                     aggregator=cand.aggregator, content_type=res.content_type)
                 newest = max((i.published_utc for i in parsed.items if i.published_utc), default=None)
@@ -146,7 +180,9 @@ def verify_sources(store: SnapshotStore, *, now: datetime | None = None, fetcher
                            cross_host_redirect=urlsplit(res.final_url).netloc != urlsplit(feed.url).netloc)
                 rec["ok"] = bool(parsed.ok and parsed.items and not rec["cross_host_redirect"])
             except HttpFetchError as exc:
-                rec.update(http_status=exc.status, error=str(exc)[:200])
+                rec.update(http_status=exc.status, error=str(exc)[:200], access_signal=_signal_for_status(exc.status))
+        else:
+            rec["access_signal"] = "ROBOTS_DISALLOW" if robots in ("ROBOTS_DISALLOW", "ROBOTS_REFUSED") else None
         store.append_intel_record(kind="verification", subject_id=feed.feed_id, schema=SCHEMA, payload=rec,
                                   recorded_at_utc=iso(now))
         results.append(rec)
@@ -164,15 +200,21 @@ def feed_states(store: SnapshotStore, *, now: datetime | None = None) -> list[di
         if p.get("ok"):
             ok_verifications[row["subject_id"]] = p["checked_at_utc"]
     fetch_rows = {r["feed_id"]: r for r in store.intel_fetch_summary()}
+    signal_rows = store.intel_latest_signals()
     out = []
     for cand in registry.CANDIDATES:
         for feed in cand.feeds or (None,):
             fid = feed.feed_id if feed else None
             last = fetch_rows.get(fid) if fid else None
-            signal = last["access_signal"] if last is not None else None
+            ok_at = _t(ok_verifications.get(fid)) if fid else None
+            # Sticky: a refusal/redirect blocks until a NEWER passing verification clears it.
+            sig = signal_rows.get(fid) if fid else None
+            signal = None
+            if sig is not None and not (ok_at and _t(sig["attempted_at_utc"]) and ok_at > _t(sig["attempted_at_utc"])):
+                signal = sig["access_signal"]
             v = verifications.get(fid, (None, None))[1] if fid else None
-            if v and not v.get("ok") and v.get("robots") in ("ROBOTS_DISALLOW", "ROBOTS_REFUSED"):
-                signal = signal or "ROBOTS_DISALLOW"
+            if v and not v.get("ok") and v.get("access_signal"):
+                signal = signal or v["access_signal"]
             status = registry.effective_status(cand, last_verified_ok_utc=ok_verifications.get(fid) if fid else None,
                                                now=now, last_access_signal=signal)
             out.append({
@@ -221,81 +263,86 @@ def _collect_news(store: SnapshotStore, *, now: datetime | None, fetcher: Fetche
                     "last_run_utc": _payload(last_run)["started_at_utc"]}
     run_id = f"intel-news-{now.strftime('%Y%m%dT%H%M%SZ')}-{uuid.uuid4().hex[:6]}"
     store.start_run(run_id)
-    states = {s["feed_id"]: s for s in feed_states(store, now=now) if s["feed_id"]}
-    gets = 0
-    summary = {"run_id": run_id, "started_at_utc": iso(now), "feeds": 0, "ok": 0, "not_modified": 0, "failed": 0,
-               "skipped": 0, "new_items": 0}
-    for cand, feed in registry.collectable_feeds():
-        summary["feeds"] += 1
-        st = states.get(feed.feed_id, {})
-        base = {"run_id": run_id, "source_id": cand.source_id, "feed_id": feed.feed_id, "requested_url": feed.url,
-                "attempted_at_utc": iso(utcnow() if fetcher is fetch else now), "parser_version": FEEDS_PARSER_VERSION,
-                "retained": "NONE"}
-        if AccessStatus(st.get("status", "UNVERIFIED")) not in COLLECTABLE:
-            store.record_intel_fetch({**base, "outcome": "SKIPPED", "error": f"status {st.get('status')}: verify first"})
-            summary["skipped"] += 1
-            continue
-        if gets >= max_gets or time.monotonic() - started_clock > deadline_s:
-            why = "per-run GET cap reached" if gets >= max_gets else "run deadline reached"
-            store.record_intel_fetch({**base, "outcome": "SKIPPED", "error": why})
-            summary["skipped"] += 1
-            continue
-        etag, last_mod = store.latest_validators(feed.feed_id)
-        headers = {"User-Agent": USER_AGENT, "Accept": FEED_ACCEPT}
-        if etag:
-            headers["If-None-Match"] = etag
-        if last_mod:
-            headers["If-Modified-Since"] = last_mod
-        gets += 1
-        started = time.monotonic()
-        try:
-            res = fetcher(feed.url, headers=headers, retries=1, timeout=FEED_TIMEOUT_S, max_bytes=MAX_FEED_BYTES,
-                          accept_not_modified=True, extra_response_headers=("etag", "last-modified"))
-        except HttpFetchError as exc:
-            signal = f"HTTP_{exc.status}" if exc.status in (401, 403) else None
-            store.record_intel_fetch({**base, "outcome": "REFUSED" if signal else "FAILED", "http_status": exc.status,
-                                      "access_signal": signal, "error": str(exc)[:300],
-                                      "duration_ms": int((time.monotonic() - started) * 1000)})
-            summary["failed"] += 1
-            continue
-        hdrs = dict(res.response_headers or ())
-        if res.http_status == 304:
-            store.record_intel_fetch({**base, "outcome": "NOT_MODIFIED", "http_status": 304, "etag": etag,
-                                      "last_modified": last_mod, "duration_ms": res.duration_ms})
-            summary["not_modified"] += 1
-            continue
-        if urlsplit(res.final_url).netloc != urlsplit(feed.url).netloc:
-            store.record_intel_fetch({**base, "outcome": "REFUSED", "http_status": res.http_status,
-                                      "access_signal": "CROSS_HOST_REDIRECT", "final_url": res.final_url,
-                                      "error": "redirected to another host; not followed as content"})
-            summary["failed"] += 1
-            continue
-        parsed = parse_feed(res.body, source_id=cand.source_id, rights=cand.rights, origin=cand.origin,
-                            aggregator=cand.aggregator, content_type=res.content_type)
-        retained, retrieval_id = "NONE", None
-        if cand.rights is Rights.PUBLIC_DOMAIN:
-            retrieval_id, _, _ = store.save_document(run_id=run_id, source_id="news_feeds_public",
-                                                     doc_type=f"intel_feed:{feed.feed_id}", fetch=res)
-            retained = "RAW"
-        fetch_id = store.record_intel_fetch({
-            **base, "final_url": res.final_url, "outcome": "OK" if parsed.ok else "FAILED",
-            "http_status": res.http_status, "etag": hdrs.get("etag"), "last_modified": hdrs.get("last-modified"),
-            "raw_sha256": hashlib.sha256(res.body).hexdigest(), "raw_bytes": len(res.body), "retained": retained,
-            "document_retrieval_id": retrieval_id, "item_count": len(parsed.items), "error": parsed.error,
-            "duration_ms": res.duration_ms})
-        if not parsed.ok:
-            summary["failed"] += 1
-            continue
-        rows = [{
-            "fetch_id": fetch_id, "source_id": cand.source_id, "feed_id": feed.feed_id, "item_key": i.item_key,
-            "content_sha256": i.content_sha256, "first_seen_utc": iso(now), "published_utc": i.published_utc,
-            "updated_utc": i.updated_utc, "published_raw": i.published_raw, "title": i.title, "link": i.link,
-            "canonical_url": i.canonical_url, "snippet": i.snippet, "cluster_key": i.cluster_key, "origin": i.origin,
-            "via_aggregator": int(i.via_aggregator), "rights": cand.rights.value, "parser_version": FEEDS_PARSER_VERSION,
-        } for i in parsed.items]
-        added = store.insert_intel_items(rows)
-        summary["new_items"] += added
-        summary["ok"] += 1
+    try:
+        states = {s["feed_id"]: s for s in feed_states(store, now=now) if s["feed_id"]}
+        gets = 0
+        summary = {"run_id": run_id, "started_at_utc": iso(now), "feeds": 0, "ok": 0, "not_modified": 0, "failed": 0,
+                   "skipped": 0, "new_items": 0}
+        for cand, feed in registry.collectable_feeds():
+            summary["feeds"] += 1
+            st = states.get(feed.feed_id, {})
+            base = {"run_id": run_id, "source_id": cand.source_id, "feed_id": feed.feed_id, "requested_url": feed.url,
+                    "attempted_at_utc": iso(utcnow() if fetcher is fetch else now), "parser_version": FEEDS_PARSER_VERSION,
+                    "retained": "NONE"}
+            if AccessStatus(st.get("status", "UNVERIFIED")) not in COLLECTABLE:
+                store.record_intel_fetch({**base, "outcome": "SKIPPED", "error": f"status {st.get('status')}: verify first"})
+                summary["skipped"] += 1
+                continue
+            if gets >= max_gets or time.monotonic() - started_clock > deadline_s:
+                why = "per-run GET cap reached" if gets >= max_gets else "run deadline reached"
+                store.record_intel_fetch({**base, "outcome": "SKIPPED", "error": why})
+                summary["skipped"] += 1
+                continue
+            etag, last_mod = store.latest_validators(feed.feed_id)
+            headers = {"User-Agent": USER_AGENT, "Accept": FEED_ACCEPT}
+            if etag:
+                headers["If-None-Match"] = etag
+            if last_mod:
+                headers["If-Modified-Since"] = last_mod
+            gets += 1
+            started = time.monotonic()
+            try:
+                res = fetcher(feed.url, headers=headers, retries=0, timeout=FEED_TIMEOUT_S, max_bytes=MAX_FEED_BYTES,
+                              accept_not_modified=True, extra_response_headers=("etag", "last-modified"),
+                              opener=_feed_opener)
+            except HttpFetchError as exc:
+                signal = _signal_for_status(exc.status)
+                store.record_intel_fetch({**base, "outcome": "REFUSED" if signal else "FAILED", "http_status": exc.status,
+                                          "access_signal": signal, "error": str(exc)[:300],
+                                          "duration_ms": int((time.monotonic() - started) * 1000)})
+                summary["failed"] += 1
+                continue
+            hdrs = dict(res.response_headers or ())
+            if res.http_status == 304:
+                store.record_intel_fetch({**base, "outcome": "NOT_MODIFIED", "http_status": 304, "etag": etag,
+                                          "last_modified": last_mod, "duration_ms": res.duration_ms})
+                summary["not_modified"] += 1
+                continue
+            if urlsplit(res.final_url).netloc != urlsplit(feed.url).netloc:
+                store.record_intel_fetch({**base, "outcome": "REFUSED", "http_status": res.http_status,
+                                          "access_signal": "CROSS_HOST_REDIRECT", "final_url": res.final_url,
+                                          "error": "redirected to another host; not followed as content"})
+                summary["failed"] += 1
+                continue
+            parsed = parse_feed(res.body, source_id=cand.source_id, rights=cand.rights, origin=cand.origin,
+                                aggregator=cand.aggregator, content_type=res.content_type)
+            retained, retrieval_id = "NONE", None
+            if cand.rights is Rights.PUBLIC_DOMAIN:
+                retrieval_id, _, _ = store.save_document(run_id=run_id, source_id="news_feeds_public",
+                                                         doc_type=f"intel_feed:{feed.feed_id}", fetch=res)
+                retained = "RAW"
+            fetch_id = store.record_intel_fetch({
+                **base, "final_url": res.final_url, "outcome": "OK" if parsed.ok else "FAILED",
+                "http_status": res.http_status, "etag": hdrs.get("etag"), "last_modified": hdrs.get("last-modified"),
+                "raw_sha256": hashlib.sha256(res.body).hexdigest(), "raw_bytes": len(res.body), "retained": retained,
+                "document_retrieval_id": retrieval_id, "item_count": len(parsed.items), "error": parsed.error,
+                "duration_ms": res.duration_ms})
+            if not parsed.ok:
+                summary["failed"] += 1
+                continue
+            rows = [{
+                "fetch_id": fetch_id, "source_id": cand.source_id, "feed_id": feed.feed_id, "item_key": i.item_key,
+                "content_sha256": i.content_sha256, "first_seen_utc": iso(now), "published_utc": i.published_utc,
+                "updated_utc": i.updated_utc, "published_raw": i.published_raw, "title": i.title, "link": i.link,
+                "canonical_url": i.canonical_url, "snippet": i.snippet, "cluster_key": i.cluster_key, "origin": i.origin,
+                "via_aggregator": int(i.via_aggregator), "rights": cand.rights.value, "parser_version": FEEDS_PARSER_VERSION,
+            } for i in parsed.items]
+            added = store.insert_intel_items(rows)
+            summary["new_items"] += added
+            summary["ok"] += 1
+    except BaseException:
+        store.finish_run(run_id, status="failed", error="unexpected error; see the journal")
+        raise
     summary["gets"] = gets
     store.finish_run(run_id, status="succeeded" if summary["failed"] == 0 else "partial")
     store.append_intel_record(kind="run", subject_id="news", schema=SCHEMA, payload=summary, recorded_at_utc=iso(now))
@@ -335,6 +382,7 @@ def import_transcript(store: SnapshotStore, *, data: bytes, meta: dict[str, Any]
     payload = {"meta": asdict(tmeta), "format": transcript.format, "text_sha256": transcript.text_sha256,
                "blob_sha256": blob, "chars": len(transcript.text), "extractor_version": EXTRACTOR_VERSION,
                "topics": [t.value for t in ex.topics], "entities": list(ex.entities)[:30], "claims": claims[:400],
+               "claims_total": len(claims), "claims_truncated": max(0, len(claims) - 400),
                "imported_at_utc": iso(now), "label": "OWNER-SUPPLIED TRANSCRIPT (private; commentary, not evidence)"}
     rid, _ = store.append_intel_record(kind="transcript", subject_id=key, schema=SCHEMA, payload=payload,
                                        recorded_at_utc=iso(now))
@@ -490,7 +538,8 @@ def stored_packet(store: SnapshotStore, packet_id: str | None) -> Packet | None:
 def _first_quote_at(store: SnapshotStore, outcome_id: str) -> str | None:
     tickers = {p["ticker"] for _, p in [(None, _payload(r)) for r in store.intel_records(kind="link", subject_id=outcome_id)]}
     times = [_payload(r)["received_at_utc"] for t in tickers for r in store.intel_records(kind="quote", subject_id=t)]
-    return min(times) if times else None
+    parsed = [t for t in times if _t(t) is not None]
+    return min(parsed, key=_t) if parsed else None
 
 
 def import_analysis(store: SnapshotStore, pasted: str, *, now: datetime | None = None,
@@ -512,7 +561,7 @@ def import_analysis(store: SnapshotStore, pasted: str, *, now: datetime | None =
         first_quote = _first_quote_at(store, o.outcome_id)
         if analysis.market_price_seen:
             awareness = PriceAwareness.PRICE_AWARE
-        elif first_quote is None or first_quote > iso(now):
+        elif first_quote is None or (_t(first_quote) is not None and _t(first_quote) > now):
             awareness = PriceAwareness.PRICE_BLIND
         else:
             awareness = PriceAwareness.PRICE_AWARE
@@ -567,8 +616,8 @@ def discover_markets(store: SnapshotStore, event_id: str, *, now: datetime | Non
         lock.__enter__()
     except LockBusy:
         raise KalshiRefusedBusy() from None
-    store.start_run(run_id)
     try:
+        store.start_run(run_id)
         rd = reader or Reader(store, run_id=run_id, now=now)
         if reader is not None:
             rd.run_id = run_id
@@ -639,9 +688,9 @@ def refresh_quotes(store: SnapshotStore, *, now: datetime | None = None, reader=
     except LockBusy:
         return {"status": "REFUSED", "code": "LOCK_BUSY", "detail": "another Kalshi capture holds the host lock",
                 "decisions": []}
-    store.start_run(run_id)
     decisions, errors = [], []
     try:
+        store.start_run(run_id)
         rd = reader or Reader(store, run_id=run_id, now=now)
         if reader is not None:
             rd.run_id = run_id
@@ -666,7 +715,10 @@ def refresh_quotes(store: SnapshotStore, *, now: datetime | None = None, reader=
             # The decision is made after its quote arrived: never date it before the receipt (a live
             # book received moments after the run started would otherwise read as future-stamped).
             received = _parse_time(ob.received_at_utc)
-            decided_at = max(now, received) if received is not None else now
+            # Adopt the receipt time only within the run's own span; a far-future receipt stays
+            # future-stamped and is refused by pricing.
+            ahead = (received - now).total_seconds() if received is not None else None
+            decided_at = received if ahead is not None and 0 < ahead <= 600 else now
             decisions.append(decide(store, link=link, market=m.payload, orderbook=ob.payload,
                                     received_at_utc=ob.received_at_utc,
                                     evidence_id=f"snapshot:{ob.snapshot_id}", now=decided_at, policy=policy))
@@ -697,12 +749,19 @@ def _parse_time(text: str | None) -> datetime | None:
 
 
 def _maybe_resolve(store: SnapshotStore, link: dict[str, Any], market_payload: dict[str, Any], *, now: datetime) -> None:
+    """Resolve an outcome from a confirmed market only when the market is final (never merely
+    determined, which can still be disputed) and the forecast horizon matches the market's close.
+    Anything else is left for the owner's `resolve`."""
     m = market_payload.get("market", market_payload)
     result = str(m.get("result") or "").lower()
-    if result in ("yes", "no") and str(m.get("status") or "").lower() in ("settled", "finalized", "determined"):
-        if store.latest_intel_record("resolution", link["outcome_id"]) is None:
-            record_resolution(store, outcome_id=link["outcome_id"], result=result.upper(),
-                              source=f"kalshi market {link['ticker']} result (status {m.get('status')})", now=now)
+    if result not in ("yes", "no") or str(m.get("status") or "").lower() not in ("settled", "finalized"):
+        return
+    if _horizon_check(active_forecast(store, link["outcome_id"]), m) != "ALIGNED":
+        return
+    if store.latest_intel_record("resolution", link["outcome_id"]) is None:
+        record_resolution(store, outcome_id=link["outcome_id"], result=result.upper(),
+                          source=f"kalshi market {link['ticker']} result (status {m.get('status')})", now=now,
+                          event_time_utc=m.get("close_time"))
 
 
 def _sheet_payload(sheet: PricingSheet) -> dict[str, Any]:
@@ -726,7 +785,8 @@ def decide(store: SnapshotStore, *, link: dict[str, Any], market: dict[str, Any]
     now = now or utcnow()
     fc = active_forecast(store, link["outcome_id"])
     sheet = price_link(market_raw=market, orderbook_raw=orderbook, quote_received_at_utc=received_at_utc,
-                       quote_evidence_id=evidence_id, forecast=_forecast_obj(fc), as_of_utc=iso(now),
+                       quote_evidence_id=evidence_id, forecast=_forecast_obj(fc),
+                       as_of_utc=now.astimezone(timezone.utc).isoformat(),
                        policy=policy or PricingPolicy())
     m = market.get("market", market) if isinstance(market, dict) else {}
     payload = {"outcome_id": link["outcome_id"], "ticker": link["ticker"], "forecast_id": fc and fc["forecast_id"],
@@ -752,11 +812,16 @@ def _horizon_check(fc: dict[str, Any] | None, market: dict[str, Any]) -> str:
 
 
 def record_resolution(store: SnapshotStore, *, outcome_id: str, result: str, source: str,
-                      now: datetime | None = None) -> dict[str, Any]:
+                      now: datetime | None = None, event_time_utc: str | None = None) -> dict[str, Any]:
+    """Record how an outcome resolved. `event_time_utc` is when it became knowable (the event or the
+    market close); scoring only counts forecasts and decisions made before it."""
     now = now or utcnow()
     if result not in ("YES", "NO"):
         raise ValueError("result must be YES or NO")
-    payload = {"outcome_id": outcome_id, "result": result, "source": source, "recorded_utc": iso(now)}
+    if event_time_utc is not None and _t(event_time_utc) is None:
+        raise ValueError("event_time_utc must be an ISO time with a zone")
+    payload = {"outcome_id": outcome_id, "result": result, "source": source, "recorded_utc": iso(now),
+               "event_time_utc": event_time_utc}
     rid, _ = store.append_intel_record(kind="resolution", subject_id=outcome_id, schema=SCHEMA, payload=payload,
                                        recorded_at_utc=iso(now))
     return {**payload, "record_id": rid}
@@ -774,20 +839,32 @@ def performance(store: SnapshotStore) -> dict[str, Any]:
     from ..scoring import brier_score
 
     resolutions = {s: p for s, (_, p) in _latest_by_subject(store, "resolution").items()}
+
+    def cutoff(res: dict[str, Any]) -> datetime | None:
+        # The earliest of: when it became knowable (event/market close) and when we recorded it.
+        times = [t for t in (_t(res.get("event_time_utc")), _t(res.get("recorded_utc"))) if t]
+        return min(times) if times else None
+
     pairs_by_basis: dict[str, list[tuple[float, int]]] = {}
     pnl = []
     for row in store.intel_records(kind="forecast"):
         p = _payload(row)
         res = resolutions.get(p["outcome_id"])
-        if not res or p.get("abstained") or p.get("point") is None or p["recorded_at_utc"] >= res["recorded_utc"]:
+        made = _t(p.get("recorded_at_utc"))
+        if not res or p.get("abstained") or p.get("point") is None or made is None or cutoff(res) is None \
+                or made >= cutoff(res):
             continue
         pairs_by_basis.setdefault(p["basis"], []).append((float(p["point"]), 1 if res["result"] == "YES" else 0))
-    for row in store.intel_records(kind="decision"):
+    entered: set[str] = set()
+    for row in store.intel_records(kind="decision"):  # oldest first: the first INVESTIGATE is the one entry
         p = _payload(row)
         res = resolutions.get(p["outcome_id"])
         sheet = p["sheet"]
-        if not res or sheet.get("action") != Action.INVESTIGATE.value or not sheet.get("best_side"):
+        made = _t(p.get("decided_utc"))
+        if not res or p["outcome_id"] in entered or sheet.get("action") != Action.INVESTIGATE.value \
+                or not sheet.get("best_side") or made is None or cutoff(res) is None or made >= cutoff(res):
             continue
+        entered.add(p["outcome_id"])
         side = sheet["yes"] if sheet["best_side"] == "YES" else sheet["no"]
         if not side or side.get("all_in_cost") is None:
             continue

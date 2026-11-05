@@ -249,6 +249,11 @@ def _check() -> None:
 _check()
 
 
+# A refusal, robots disallow or redirect blocks a feed until a newer passing verification clears it.
+BLOCKING_SIGNALS = frozenset({"HTTP_401", "HTTP_403", "ROBOTS_DISALLOW", "ROBOTS_REFUSED", "LOGIN_REDIRECT", "REDIRECT",
+                              "CROSS_HOST_REDIRECT"})
+
+
 def effective_status(candidate: Candidate, *, last_verified_ok_utc: str | None, now: datetime,
                      last_access_signal: str | None = None) -> AccessStatus:
     """The status collection may use now: the declared status, capped by fresh evidence.
@@ -260,7 +265,7 @@ def effective_status(candidate: Candidate, *, last_verified_ok_utc: str | None, 
     """
     if candidate.status not in COLLECTABLE:
         return candidate.status
-    if last_access_signal in ("HTTP_401", "HTTP_403", "ROBOTS_DISALLOW", "LOGIN_REDIRECT"):
+    if last_access_signal in BLOCKING_SIGNALS:
         return AccessStatus.BLOCKED
     if not last_verified_ok_utc:
         return AccessStatus.UNVERIFIED

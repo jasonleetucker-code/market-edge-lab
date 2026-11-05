@@ -66,7 +66,8 @@ def _default_getter() -> Getter:
     from ..kalshi import PACER  # one pacer per process, shared with every Kalshi reader
 
     def get(url: str) -> tuple[dict[str, Any], Any]:
-        return fetch_json_result(url, pacer=PACER)
+        # retries=0: the per-run budget counts real HTTP requests, so a retry must spend budget too.
+        return fetch_json_result(url, pacer=PACER, retries=0)
 
     return get
 

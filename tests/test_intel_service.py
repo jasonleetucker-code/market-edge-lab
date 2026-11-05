@@ -351,7 +351,7 @@ def test_a_live_book_received_after_the_run_started_is_not_future_stamped(store)
                         yes_matches_outcome=True, now=NOW)
     market = json.loads((FIX / "kalshi" / f"market_{ticker}.json").read_text())
     book = json.loads((FIX / "kalshi" / f"orderbook_{ticker}.json").read_text())
-    later = (NOW + timedelta(seconds=2)).isoformat()
+    later = (NOW + timedelta(seconds=2, microseconds=400000)).isoformat()  # live receipts carry microseconds
 
     def getter(url):
         res = _res(url, b"{}")
@@ -363,3 +363,125 @@ def test_a_live_book_received_after_the_run_started_is_not_future_stamped(store)
     rec = json.loads(store.latest_intel_record("decision", "ev-x:impeached")["payload_json"])
     assert "BOOK_TIMESTAMP_IN_FUTURE" not in rec["sheet"]["action_reasons"]
     assert rec["sheet"]["quote_fresh"] is True
+
+
+
+def test_a_far_future_receipt_is_still_refused(store):
+    ticker = "KXPOLFIXTURE-26DEC31-Y"
+    service.record_link(store, outcome_id="ev-x:impeached", ticker=ticker, status="CONFIRMED", rules_read=True,
+                        yes_matches_outcome=True, now=NOW)
+    market = json.loads((FIX / "kalshi" / f"market_{ticker}.json").read_text())
+    book = json.loads((FIX / "kalshi" / f"orderbook_{ticker}.json").read_text())
+
+    def getter(url):
+        res = FetchResult(**{**_res(url, b"{}").__dict__, "received_at_utc": (NOW + timedelta(hours=3)).isoformat()})
+        return (book if url.split("?")[0].endswith("/orderbook") else market), res
+
+    service.refresh_quotes(store, now=NOW, reader=kalshi_link.Reader(store, run_id="u", now=NOW, getter=getter))
+    rec = json.loads(store.latest_intel_record("decision", "ev-x:impeached")["payload_json"])
+    assert "BOOK_TIMESTAMP_IN_FUTURE" in rec["sheet"]["action_reasons"]
+
+
+def test_a_refusing_feed_stays_blocked_until_reverified(store):
+    web = _ready(store)
+    web.refuse = {"www.theguardian.com"}
+    gets = []
+    for i in range(3):
+        before = len([u for u, _ in web.calls if "theguardian" in u])
+        service.collect_news(store, now=NOW + timedelta(hours=2 * i), fetcher=web, force=True)
+        gets.append(len([u for u, _ in web.calls if "theguardian" in u]) - before)
+    assert gets == [2, 0, 0]  # refused once, then never fetched again without a new verification
+    web.refuse = set()
+    service.verify_sources(store, now=NOW + timedelta(hours=7), fetcher=web, only=["guardian"])
+    out = service.collect_news(store, now=NOW + timedelta(hours=8), fetcher=web, force=True)
+    states = {s["feed_id"]: s["status"] for s in service.feed_states(store, now=NOW + timedelta(hours=8)) if s["feed_id"]}
+    assert states["guardian_world"] == "ACTIVE" and out["failed"] == 0
+
+
+def test_feed_gets_are_real_requests_without_retries_or_redirects(store):
+    _ready(store)
+    seen = []
+
+    def fetcher(url, headers=None, **kw):
+        seen.append((url, kw.get("retries"), kw.get("opener") is not None))
+        return FakeWeb()(url, headers, **kw)
+
+    service.collect_news(store, now=NOW, fetcher=fetcher, force=True)
+    assert seen and all(r == 0 and has_opener for _, r, has_opener in seen)
+    assert len({u for u, _, _ in seen}) == len(seen)  # at most one GET per feed per run
+
+
+def test_redirects_are_not_followed_and_block_the_feed(store):
+    import io
+    from urllib.error import HTTPError
+
+    from edge_lab.intel import service as svc
+    req = __import__("urllib.request").request.Request("https://feeds.bbci.co.uk/news/rss.xml")
+    handler = svc._NoRedirect()
+    assert handler.redirect_request(req, io.BytesIO(b""), 302, "Found", {}, "https://other.example/") is None
+    _ready(store)
+    web = FakeWeb()
+
+    def fetcher(url, headers=None, **kw):
+        if "bbci" in url and not url.endswith("robots.txt"):
+            raise HttpFetchError("HTTP 302", status=302)
+        return web(url, headers, **kw)
+
+    service.collect_news(store, now=NOW, fetcher=fetcher, force=True)
+    states = {s["feed_id"]: s for s in service.feed_states(store, now=NOW) if s["feed_id"]}
+    assert states["bbc_top"]["status"] == "BLOCKED" and states["bbc_top"]["access_signal"] == "REDIRECT"
+
+
+def test_auto_resolution_needs_a_final_market_and_an_aligned_horizon(store):
+    link = {"outcome_id": "ev-x:impeached", "ticker": "KXPOLFIXTURE-26DEC31-Y"}
+    base = {"ticker": link["ticker"], "result": "no", "close_time": "2026-12-31T23:59:00Z"}
+    service._maybe_resolve(store, link, {"market": {**base, "status": "determined"}}, now=NOW)
+    assert store.latest_intel_record("resolution", link["outcome_id"]) is None  # not final yet
+    service._maybe_resolve(store, link, {"market": {**base, "status": "finalized"}}, now=NOW)
+    assert store.latest_intel_record("resolution", link["outcome_id"]) is None  # no aligned forecast horizon
+    store.append_intel_record(kind="forecast", subject_id=link["outcome_id"], schema="t",
+                              payload={"forecast_id": "f", "horizon_date": "2026-12-31"})
+    service._maybe_resolve(store, link, {"market": {**base, "status": "finalized"}}, now=NOW)
+    res = json.loads(store.latest_intel_record("resolution", link["outcome_id"])["payload_json"])
+    assert res["result"] == "NO" and res["event_time_utc"] == "2026-12-31T23:59:00Z"
+
+
+def test_performance_counts_one_entry_per_outcome_and_nothing_after_the_cutoff(store):
+    oid = "ev-x:impeached"
+    sheet = {"action": "INVESTIGATE", "best_side": "YES", "yes": {"all_in_cost": "0.40"}, "no": None}
+    for h in (1, 3, 5):  # three refreshes of the same lead
+        store.append_intel_record(kind="decision", subject_id=oid, schema="t",
+                                  payload={"outcome_id": oid, "decided_utc": f"2026-11-05T1{h}:00:00Z", "sheet": sheet})
+    store.append_intel_record(kind="forecast", subject_id=oid, schema="t",
+                              payload={"outcome_id": oid, "basis": "OWNER_JUDGMENT", "point": 0.6, "abstained": False,
+                                       "recorded_at_utc": "2026-11-05T12:00:00Z"})
+    store.append_intel_record(kind="forecast", subject_id=oid, schema="t",
+                              payload={"outcome_id": oid, "basis": "OWNER_JUDGMENT", "point": 0.9, "abstained": False,
+                                       "recorded_at_utc": "2026-11-05T16:00:00Z"})  # after the event: excluded
+    service.record_resolution(store, outcome_id=oid, result="YES", source="t", now=NOW + timedelta(days=1),
+                              event_time_utc="2026-11-05T14:00:00Z")
+    perf = service.performance(store)
+    assert perf["hypothetical_entries"] == 1 and perf["hypothetical_pnl_per_contract"] == "0.60"
+    assert perf["brier_by_basis"]["OWNER_JUDGMENT"]["n"] == 1
+
+
+def test_an_interrupted_inbox_file_is_recorded_and_set_aside(store, tmp_path):
+    import os
+    root = tmp_path / "inbox"
+    inbox.ensure_layout(root)
+    stale = root / "work" / "x.json"
+    stale.write_text("{}")
+    old = NOW.timestamp() - 3600
+    os.utime(stale, (old, old))
+    results = inbox.process_inbox(store, root, now=NOW)
+    assert results[0]["code"] == "INTERRUPTED" and (root / "rejected" / "x.json").exists()
+    assert json.loads(store.intel_records(kind="inbox")[0]["payload_json"])["code"] == "INTERRUPTED"
+
+
+def test_repeated_kalshi_requests_are_coalesced(store, tmp_path):
+    root = tmp_path / "inbox"
+    for _ in range(3):
+        inbox.write_submission(root, "refresh", {"scope": "quotes"}, now=NOW)
+    results = inbox.process_inbox(store, root, now=NOW)
+    codes = [r.get("code") or r.get("status") for r in results]
+    assert codes.count("COALESCED") == 2

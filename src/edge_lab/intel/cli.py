@@ -64,6 +64,7 @@ def build_parser() -> argparse.ArgumentParser:
     r.add_argument("outcome_id")
     r.add_argument("result", choices=("YES", "NO"))
     r.add_argument("--source", required=True)
+    r.add_argument("--event-time", help="when the outcome became knowable (ISO, with zone); scoring cuts off there")
     sub.add_parser("performance")
     i = sub.add_parser("process-inbox", help="handle dashboard submissions (collector side)")
     i.add_argument("--inbox", default=DEFAULT_INBOX)
@@ -127,7 +128,8 @@ def main(argv: list[str] | None = None) -> int:
         elif args.cmd == "refresh-quotes":
             _print(service.refresh_quotes(store, only_outcome=args.outcome))
         elif args.cmd == "resolve":
-            _print(service.record_resolution(store, outcome_id=args.outcome_id, result=args.result, source=args.source))
+            _print(service.record_resolution(store, outcome_id=args.outcome_id, result=args.result, source=args.source,
+                                             event_time_utc=args.event_time))
         elif args.cmd == "performance":
             _print(service.performance(store))
         elif args.cmd == "process-inbox":

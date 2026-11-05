@@ -767,7 +767,6 @@ CREATE TABLE IF NOT EXISTS intel_fetches (
     retained TEXT NOT NULL CHECK (retained IN ('RAW', 'NONE')),
     document_retrieval_id INTEGER,
     item_count INTEGER,
-    new_items INTEGER,
     error TEXT,
     parser_version TEXT NOT NULL,
     duration_ms INTEGER,
@@ -1720,7 +1719,8 @@ class SnapshotStore:
             for row in rows:
                 cols = list(row)
                 cur = conn.execute(
-                    f"INSERT OR IGNORE INTO intel_items({', '.join(cols)}) VALUES ({', '.join('?' * len(cols))})",
+                    f"INSERT INTO intel_items({', '.join(cols)}) VALUES ({', '.join('?' * len(cols))}) "
+                    "ON CONFLICT(source_id, item_key, content_sha256) DO NOTHING",
                     [row[c] for c in cols])
                 added += cur.rowcount
         return added
@@ -1735,6 +1735,14 @@ class SnapshotStore:
                 f"SELECT * FROM intel_items WHERE id IN (SELECT MAX(id) FROM intel_items {where} "
                 "GROUP BY source_id, item_key) ORDER BY COALESCE(published_utc, first_seen_utc) DESC, id DESC LIMIT ?",
                 [*args, limit]).fetchall()
+
+    def intel_latest_signals(self) -> dict[str, sqlite3.Row]:
+        """The latest attempt per feed that carried an access signal (refusal, robots, redirect)."""
+        with closing(self._connect()) as conn, conn:
+            rows = conn.execute(
+                "SELECT feed_id, access_signal, attempted_at_utc FROM intel_fetches WHERE id IN "
+                "(SELECT MAX(id) FROM intel_fetches WHERE access_signal IS NOT NULL GROUP BY feed_id)").fetchall()
+        return {r["feed_id"]: r for r in rows}
 
     def intel_fetch_summary(self) -> list[sqlite3.Row]:
         """The latest attempt and latest success per feed."""
