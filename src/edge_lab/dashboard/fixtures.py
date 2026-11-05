@@ -640,3 +640,10 @@ def synthetic_failure_record(unit: str, origin: str | None = None) -> dict:
     if origin is not None:
         record["origin"] = origin
     return record
+
+
+def synthetic_intel_views(now: Any) -> dict[str, Any]:
+    """Every state of the news-intelligence workspace (issue 192) from SYNTHETIC stores (`intel_fixtures`)."""
+    from .intel_fixtures import synthetic_intel_views as views
+
+    return views(now)

@@ -31,8 +31,13 @@ from edge_lab.dashboard import make_app  # noqa: E402
 from fixture_states import BUILDERS  # noqa: E402
 
 PAGES = ["/", "/opportunities", "/positions", "/outcome-board", "/risk", "/experiments", "/experiments?tab=sources",
-         "/alerts", "/more", "/setup", "/experiments/wallet", "/positions/execution", "/risk/automation"]
+         "/alerts", "/more", "/setup", "/experiments/wallet", "/positions/execution", "/risk/automation",
+         # News & political intelligence workspace (UI_CONTRACT §14, 2026-11-05); its packet page needs an event id
+         # (open it from an event, or pass it with --pages "/experiments/intel/packet?event=<id>").
+         "/experiments/intel", "/experiments/intel?tab=opportunities", "/experiments/intel?tab=events",
+         "/experiments/intel?tab=transcripts", "/experiments/intel?tab=history", "/experiments/intel?tab=sources"]
 DETAIL = {"demo": "/market?venue=kalshi&id=DEMO-B67.5&side=YES"}
+# Demo-only pages (404 outside demo mode); add them with --pages, e.g. --pages /gallery/intel /gallery/inplay
 VIEWPORTS = ["360x800", "390x844", "430x932", "768x1024", "1440x900", "1920x1080"]
 
 AUDIT_JS = r"""
@@ -43,7 +48,9 @@ AUDIT_JS = r"""
   const small = [];
   const clipped = [];
   for (const el of document.querySelectorAll('a[href], button, summary, input, select')) {
-    const r = el.getBoundingClientRect();
+    // A checkbox's touch target is its whole label (label.check, at least 44 px tall), not the box itself.
+    const r = (el.type === 'checkbox' && el.closest('label.check') ? el.closest('label.check') : el)
+      .getBoundingClientRect();
     const style = getComputedStyle(el);
     if (r.width === 0 || r.height === 0 || style.visibility === 'hidden') continue;
     if (el.closest('.sr, .sprite, .skip')) continue;

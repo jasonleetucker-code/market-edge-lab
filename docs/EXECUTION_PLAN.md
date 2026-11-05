@@ -921,8 +921,10 @@ be written here when they are made.
     - **A Terminal workspace** at `/experiments/intel`, plus one POST route that only writes a size-capped file to a
       private inbox (owner answer 2, "Inbox handoff").
       - The dashboard keeps `IPAddressDeny=any`, and its evidence DB stays read-only.
-      - The only unit change allowed is one extra `ReadWritePaths=` entry for the inbox directory. Every other
-        hardening line stays unchanged.
+      - The only unit changes allowed are one extra `ReadWritePaths=` entry for the inbox directory and the
+        `--intel-inbox` argument naming it (without that argument the dashboard accepts no submission). Every
+        hardening line stays unchanged. (Wording corrected 2026-11-05 in the UI PR: the argument is needed to
+        implement owner answer 2.)
       - This is the "dashboard gains a write path" case that ADR 0024 lists as a reason to reconsider. ADR 0049
         records the reconsideration, and ADR 0024 and `docs/DASHBOARD.md` get dated notes naming the one-route
         exception in the UI PR.

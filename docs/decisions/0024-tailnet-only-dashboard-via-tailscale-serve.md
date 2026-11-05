@@ -71,3 +71,19 @@ Reconsidered, the tailnet-only exposure is unchanged (loopback bind, Tailscale S
 and the added capability is bounded to files in `db/` other than the pinned database file. The decision
 stands. The full diagnosis, capability statement, restore note and rejected alternatives are in
 ADR 0031's amendment of the same date.
+
+## Amendment 2026-11-05: the intel inbox write path (second reconsider)
+
+ADR 0049 (#192, owner answer "Inbox handoff") gives the dashboard a second write path: with `--intel-inbox`, the one
+route `POST /experiments/intel/inbox` writes one size-capped JSON file into a private inbox directory (the only new
+`ReadWritePaths=` entry). Reconsidered against this ADR's trigger:
+- the exposure is unchanged: loopback bind, Tailscale Serve to the tailnet only, no Funnel, no public route;
+- tailnet membership stays the access boundary; on top of it the route requires a same-origin Origin (or Referer),
+  a per-process form token (`secrets.compare_digest`), a Content-Length of at most 1.6 MB, form data only and fixed
+  kinds and fields, and a socket timeout bounds a slow sender on the single-threaded server;
+- the capability is bounded to files in that inbox: the evidence DB stays pinned read-only, the dashboard keeps no
+  network (`IPAddressDeny=any`), and nothing it writes is an order, a payment or an approval. The collector, which
+  has the network, processes the files later and records each result.
+
+The decision stands. If the dashboard ever needs per-user identity for these submissions, or a write beyond the inbox,
+reconsider again (an authenticating proxy, not app-made auth).

@@ -89,6 +89,8 @@ def test_the_dashboards_only_new_write_path_is_the_intel_inbox_and_its_network_s
     u = _parse("edgelab-dashboard.service")
     writable = [p for line in u[("Service", "ReadWritePaths")] for p in line.split()]
     assert writable == ["/var/lib/market-edge-lab/db", "-/var/lib/market-edge-lab/intel-inbox"]
+    # The inbox is handed to the dashboard explicitly; without the argument it accepts no submission.
+    assert u[("Service", "ExecStart")][0].endswith("--intel-inbox /var/lib/market-edge-lab/intel-inbox")
     assert not [p for p in writable if p.lstrip("-") in ("/var/lib/market-edge-lab", "/var/lib/market-edge-lab-status",
                                                          "/var/lib/market-edge-lab/ledger")]
     assert u[("Service", "ReadOnlyPaths")] == ["-/var/lib/market-edge-lab/db/edge_lab.sqlite3"]

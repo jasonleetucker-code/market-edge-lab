@@ -243,6 +243,16 @@ code, .mono { font-family: var(--me-font-mono); }
 .btn-primary { background: var(--me-accent); color: var(--me-accent-ink); border-color: var(--me-accent); }
 .btn-primary:hover { background: var(--me-accent); filter: brightness(1.06); }
 .btn-row { display: flex; flex-wrap: wrap; gap: var(--me-space-2); align-items: center; }
+/* Intel inbox forms and the packet copy (UI_CONTRACT §14, 2026-11-05) */
+.form { display: grid; gap: var(--me-space-3); min-width: 0; margin: 0; }
+.form-inline { display: inline-block; margin: 0; }
+textarea.input { min-height: 132px; resize: vertical; display: block; }
+.input.mono { font-family: var(--me-font-mono); font-size: 13px; line-height: 19px; }
+.check { display: flex; align-items: center; gap: var(--me-space-2); min-height: 44px; font-size: 14px; line-height: 20px;
+  color: var(--me-text); cursor: pointer; }
+.check input { width: 24px; height: 24px; margin: 0; flex: none; accent-color: var(--me-accent); }
+.btn[hidden] { display: none; }
+.copy-status { font-size: 13px; line-height: 19px; color: var(--me-text-secondary); }
 .coverage { font-size: 13px; line-height: 19px; color: var(--me-text-secondary); margin: var(--me-space-2) 0 var(--me-space-3); }
 .validation { border: 1px solid var(--me-warning); color: var(--me-text); border-radius: var(--me-radius-panel);
   padding: var(--me-space-3) var(--me-space-4); margin-bottom: var(--me-space-4); background: var(--me-surface); }
@@ -379,6 +389,7 @@ code, .mono { font-family: var(--me-font-mono); }
 .row-facts dd .cell-sub { font-size: 12px; line-height: 16px; }
 .detail-side .row-facts, .detail-side .row-facts.wide { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .row > .disclosure { grid-column: 1 / -1; }
+.row-body { grid-column: 1 / -1; min-width: 0; }
 @media (min-width: 768px) {
   .row-facts { grid-template-columns: repeat(4, minmax(0, 1fr)); }
   .row-facts.wide { grid-template-columns: repeat(6, minmax(0, 1fr)); }

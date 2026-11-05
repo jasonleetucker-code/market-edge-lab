@@ -607,6 +607,13 @@ SORTS = (("default", "Edge, then release"), ("edge", "Net edge"), ("release", "C
          ("title", "Market name"))
 POSITION_STATES = (("open", "Open"), ("settling", "Settling"), ("closed", "Closed"), ("all", "All"))
 RESEARCH_TABS = (("research", "Research"), ("sources", "Data sources"))
+# News & political intelligence workspace (issue 192): its own tab set under Research & Data.
+INTEL_PATH = "/experiments/intel"
+INTEL_PACKET_PATH = "/experiments/intel/packet"
+INTEL_TABS = (("today", "Today"), ("opportunities", "Opportunities"), ("events", "Events"),
+              ("transcripts", "Transcripts"), ("history", "History"), ("sources", "Sources"))
+_EVENT_ID = re.compile(r"ev-[a-z_]{1,40}-[0-9a-f]{12}")
+_SUBMISSION_ID = re.compile(r"\d{8}T\d{6}Z-[a-z]{1,20}-[0-9a-f]{10}")
 ACCOUNT_KEYS = ("operational", "research")
 PAGE_SIZE = 25
 MAX_PAGE = 1000
@@ -629,6 +636,8 @@ ROUTE_PARAMS: dict[str, frozenset[str]] = {
     "/market": frozenset({"venue", "id", "side", "account", "q", "domain", "sport", "state", "horizon", "sort",
                           "page"}),
     "/gallery": frozenset(),
+    INTEL_PATH: frozenset({"tab", "event", "submitted"}),
+    INTEL_PACKET_PATH: frozenset({"event", "submitted"}),
 }
 
 
@@ -653,6 +662,8 @@ class Params:
     tab: str = "research"
     market_id: str = ""  # /market: the native id
     side: str = ""
+    event: str = ""  # intel workspace: one event id (ev-<topic>-<12 hex>)
+    submitted: str = ""  # intel workspace: the inbox submission id just queued (303 redirect)
 
     def board_state(self) -> str:
         return self.state or "all"
@@ -740,7 +751,20 @@ def parse_params(route: str, query_string: str, *, venues: Iterable[str] = (), s
             raise ParamError("unsupported value for page")
         changes["page"] = int(raw)
     if "tab" in allowed:
-        changes["tab"] = _choice(get("tab"), [k for k, _ in RESEARCH_TABS], "tab", "research")
+        if route == INTEL_PATH:
+            changes["tab"] = _choice(get("tab"), [k for k, _ in INTEL_TABS], "tab", "today")
+        else:
+            changes["tab"] = _choice(get("tab"), [k for k, _ in RESEARCH_TABS], "tab", "research")
+    if "event" in allowed:
+        ev = get("event") or ""
+        if ev and not _EVENT_ID.fullmatch(ev):
+            raise ParamError("unsupported event id")
+        changes["event"] = ev
+    if "submitted" in allowed:
+        sub = get("submitted") or ""
+        if sub and not _SUBMISSION_ID.fullmatch(sub):
+            raise ParamError("unsupported submission id")
+        changes["submitted"] = sub
     if "id" in allowed:
         mid = get("id") or ""
         if mid and not _ID.fullmatch(mid):

@@ -135,7 +135,8 @@ def main(argv: list[str] | None = None) -> int:
         elif args.cmd == "process-inbox":
             res = process_inbox(store, Path(args.inbox))
             write_heartbeat(args.status_dir, {"schema": "intel-heartbeat/1", "processor": "inbox",
-                                              "at_utc": service.iso(service.utcnow()), "processed": len(res)})
+                                              "at_utc": service.iso(service.utcnow()),
+                                              "processed": sum(1 for r in res if r.get("code") != "PROCESSOR_BUSY")})
             _print(res)
         elif args.cmd == "run":
             out = {"news": service.collect_news(store)}
