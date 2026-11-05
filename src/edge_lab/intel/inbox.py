@@ -54,6 +54,35 @@ STALE_WORK_SECONDS = 15 * 60  # longer than any unit's run cap: a file still in 
 KALSHI_MIN_INTERVAL_SECONDS = 5 * 60  # queued price/market requests are coalesced to one per 5 minutes
 
 
+class _ProcessorLock:
+    """A non-blocking exclusive lock held for a whole drain."""
+
+    def __init__(self, root: Path) -> None:
+        self.path = root / ".processor.lock"
+        self.acquired = False
+
+    def __enter__(self):
+        self.handle = open(self.path, "a+b")
+        if os.name == "nt":
+            self.acquired = True
+            return self
+        import fcntl
+
+        try:
+            fcntl.flock(self.handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            self.acquired = True
+        except OSError:
+            self.acquired = False
+        return self
+
+    def __exit__(self, *exc):
+        if self.acquired and os.name != "nt":
+            import fcntl
+
+            fcntl.flock(self.handle.fileno(), fcntl.LOCK_UN)
+        self.handle.close()
+
+
 class _RootLock:
     """An exclusive lock on the inbox root, so concurrent writers respect the pending cap."""
 
@@ -143,6 +172,16 @@ def process_inbox(store, root: Path, *, now: datetime | None = None, limit: int 
     from . import service
 
     ensure_layout(root)
+    # One processor at a time: the 2-hour run and the inbox timer may overlap, and the stale-file
+    # sweep must never take a file another processor is still working on.
+    with _ProcessorLock(root) as held:
+        if not held.acquired:
+            return [{"status": "DEFERRED", "code": "PROCESSOR_BUSY", "message": "another processor is draining the inbox"}]
+        return _process(store, root, now=now, limit=limit, kalshi_reader_factory=kalshi_reader_factory,
+                        fetcher=fetcher, service=service)
+
+
+def _process(store, root: Path, *, now, limit, kalshi_reader_factory, fetcher, service) -> list[dict[str, Any]]:
     results = []
     # A file left in work/ by an interrupted run (timeout, SIGTERM) is recorded and set aside.
     for stale in in_flight(root):
@@ -161,6 +200,7 @@ def process_inbox(store, root: Path, *, now: datetime | None = None, limit: int 
         work = root / "work" / path.name
         try:
             os.replace(path, work)
+            os.utime(work)  # the work/ age is the processing age, not the submission age
         except FileNotFoundError:
             continue  # another processor took it
         result: dict[str, Any] = {"file": path.name}
@@ -199,15 +239,15 @@ def process_inbox(store, root: Path, *, now: datetime | None = None, limit: int 
                     raise InboxError("COALESCED", "an identical price/market request ran in the last 5 minutes; "
                                                   "its result is already on the page")
                 elif scope is RefreshScope.QUOTES:
-                    kalshi_done.add(_kalshi_key(scope, payload))
                     reader = kalshi_reader_factory(store, when) if kalshi_reader_factory else None
                     out = service.refresh_quotes(store, now=when, reader=reader,
                                                  only_outcome=payload.get("outcome_id"))
                 else:
-                    kalshi_done.add(_kalshi_key(scope, payload))
                     reader = kalshi_reader_factory(store, when) if kalshi_reader_factory else None
                     out = service.discover_markets(store, payload["event_id"], now=when, reader=reader)
             result.update(status="DONE", outcome=_brief(out))
+            if kind is InboxKind.REFRESH and payload.get("scope") != RefreshScope.NEWS.value:
+                kalshi_done.add(_kalshi_key(RefreshScope(payload["scope"]), payload))
             ok = out.get("status") not in ("REFUSED",) if isinstance(out, dict) else True
             if not ok:
                 result["status"] = "REFUSED"

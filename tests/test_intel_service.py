@@ -485,3 +485,37 @@ def test_repeated_kalshi_requests_are_coalesced(store, tmp_path):
     results = inbox.process_inbox(store, root, now=NOW)
     codes = [r.get("code") or r.get("status") for r in results]
     assert codes.count("COALESCED") == 2
+
+
+def test_a_running_processor_owns_the_inbox(store, tmp_path):
+    root = tmp_path / "inbox"
+    inbox.write_submission(root, "refresh", {"scope": "news"}, now=NOW)
+    with inbox._ProcessorLock(root) as held:
+        assert held.acquired
+        out = inbox.process_inbox(store, root, now=NOW)
+    assert out[0]["code"] == "PROCESSOR_BUSY" and inbox.pending(root)  # nothing taken, nothing swept
+
+
+def test_a_long_queued_file_is_not_swept_once_picked_up(store, tmp_path):
+    import os
+    root = tmp_path / "inbox"
+    sid = inbox.write_submission(root, "analysis", {"text": "x"}, now=NOW)
+    f = root / "new" / f"{sid}.json"
+    old = NOW.timestamp() - 3600
+    os.utime(f, (old, old))  # queued an hour ago (timers paused)
+    out = inbox.process_inbox(store, root, now=NOW)
+    assert [r.get("code") for r in out] == ["AnalysisError"] or out[0]["status"] == "REJECTED"
+    assert all(r.get("code") != "INTERRUPTED" for r in out)
+
+
+def test_scoring_cuts_off_at_the_first_quote_showing_the_market_closed(store):
+    oid = "ev-x:impeached"
+    store.append_intel_record(kind="decision", subject_id=oid, schema="t", payload={
+        "outcome_id": oid, "decided_utc": "2026-11-06T10:00:00Z",
+        "sheet": {"action": "SKIP", "market_status": "closed"}})
+    store.append_intel_record(kind="forecast", subject_id=oid, schema="t", payload={
+        "outcome_id": oid, "basis": "OWNER_JUDGMENT", "point": 0.95, "abstained": False,
+        "recorded_at_utc": "2026-11-06T12:00:00Z"})  # after the market was seen closed: excluded
+    service.record_resolution(store, outcome_id=oid, result="YES", source="t", now=NOW + timedelta(days=5),
+                              event_time_utc="2026-12-31T23:59:00Z")
+    assert service.performance(store)["brier_by_basis"] == {}

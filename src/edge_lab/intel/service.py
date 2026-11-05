@@ -840,9 +840,13 @@ def performance(store: SnapshotStore) -> dict[str, Any]:
 
     resolutions = {s: p for s, (_, p) in _latest_by_subject(store, "resolution").items()}
 
+    closed_seen = _first_not_open_quotes(store)
+
     def cutoff(res: dict[str, Any]) -> datetime | None:
-        # The earliest of: when it became knowable (event/market close) and when we recorded it.
-        times = [t for t in (_t(res.get("event_time_utc")), _t(res.get("recorded_utc"))) if t]
+        # The earliest of: when it became knowable (event/market close), when we recorded it, and the
+        # first captured quote whose market was no longer open (a market can settle before its close).
+        times = [t for t in (_t(res.get("event_time_utc")), _t(res.get("recorded_utc")),
+                             closed_seen.get(res.get("outcome_id"))) if t]
         return min(times) if times else None
 
     pairs_by_basis: dict[str, list[tuple[float, int]]] = {}
@@ -875,6 +879,18 @@ def performance(store: SnapshotStore) -> dict[str, Any]:
             "resolved_outcomes": len(resolutions), "hypothetical_entries": len(pnl),
             "hypothetical_pnl_per_contract": str(total) if total is not None else None,
             "label": "PROVISIONAL / HYPOTHETICAL — far too few resolutions to say anything about an edge"}
+
+
+def _first_not_open_quotes(store: SnapshotStore) -> dict[str, datetime]:
+    """Per outcome: the first decision whose captured market was no longer open."""
+    out: dict[str, datetime] = {}
+    for row in store.intel_records(kind="decision"):
+        p = _payload(row)
+        status_word = str((p.get("sheet") or {}).get("market_status") or "").lower()
+        made = _t(p.get("decided_utc"))
+        if status_word and status_word not in ("active", "open") and made and p["outcome_id"] not in out:
+            out[p["outcome_id"]] = made
+    return out
 
 
 def status(store: SnapshotStore, *, now: datetime | None = None) -> dict[str, Any]:

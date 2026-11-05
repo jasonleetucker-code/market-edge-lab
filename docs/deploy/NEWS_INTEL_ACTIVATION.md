@@ -159,3 +159,9 @@ every row.
 - Storage: the store keeps the headline, link, timestamps and a snippet of at most 300 characters per
   item. Raw feed bytes are kept only for US-government public-domain feeds; for every other feed, only
   the hash and size.
+
+## Note: redirects block a feed
+
+Feeds are fetched without following redirects. Any 3xx, even a same-host http→https move, is recorded as
+`REDIRECT`, and the feed stays BLOCKED until `edge-lab intel verify-sources` passes again. If a publisher moved a
+feed permanently, the fix is a reviewed change to its URL in `src/edge_lab/intel/registry.py`, not a retry.
