@@ -32,7 +32,9 @@ The repository constrains how this can be built:
    - `kalshi`/`kalshi_quotes`, `fee_schedules`, `starter_policy` and `freshness_fabric`.
 
    There is no second store, scheduler, pricing engine or ledger.
-2. **Inbox handoff (owner answer 2).** One dashboard POST route, `/experiments/intel/inbox`, validates and writes one
+2. **Inbox handoff (owner answer 2).** This is the "dashboard gains a write path" case that ADR 0024 lists as a
+   reason to reconsider, and this decision is that reconsideration. The only unit change is one extra
+   `ReadWritePaths=` entry for the inbox directory; network denial and the read-only evidence-DB pin stay. One dashboard POST route, `/experiments/intel/inbox`, validates and writes one
    size-capped file atomically into a private inbox (`tmp/` → `new/`). It accepts:
    - a transcript;
    - an analysis or owner-judgment import;
@@ -53,8 +55,8 @@ The repository constrains how this can be built:
 
    Transcript text goes into the existing content-addressed `document_blobs`. Raw feed bytes are kept only for
    US-government public-domain sources. Publisher feeds keep the hash and size, plus the headline, link, timestamps
-   and a snippet of at most 300 characters. Rights take precedence over full byte-reproducibility here, and
-   `DATA_PROVENANCE.md` records this exception.
+   and a snippet of at most 300 characters. Rights take precedence over full byte-reproducibility here.
+   `DATA_PROVENANCE.md` gets this exception in the storage PR.
 4. **The research journal is not a shadow-ledger account.** Each decision is appended with its inputs at decision
    time: forecast id, quote snapshot id, ask, fee schedule and status, and the action policy version. SKIP and
    INSUFFICIENT_EVIDENCE are recorded too. Hypothetical entries use the ask and fee at decision time, never a mid.
@@ -71,9 +73,15 @@ The repository constrains how this can be built:
    reason is shown rather than hidden.
 7. **The action policy (`intel-action-v1`) is deterministic.** The possible actions are INVESTIGATE, WATCH, SKIP and
    INSUFFICIENT_EVIDENCE. There is never a "buy". A provisional forecast can reach INVESTIGATE at most.
-8. **Schedules ship disabled.** `edgelab-news.timer` runs every 2 hours. `edgelab-news-inbox.timer` runs every
+8. **Bounds.** The numeric bounds (feed and Kalshi GET caps, protected windows and close-tick refusal, the 14-day
+   verification rule) are those of the EXECUTION_PLAN 2026-11-05 entry, which governs.
+9. **Schedules ship disabled.** `edgelab-news.timer` runs every 2 hours. `edgelab-news-inbox.timer` runs every
    5 minutes and makes no network call unless a refresh was requested. Both are SEPARATELY_ACTIVATED and are watched
    by the Freshness Fabric.
+
+**Robots and access.** A robots.txt that disallows a feed path, or refuses our honest User-Agent, makes the source
+BLOCKED. For example, on 2026-11-05 Google News disallowed `/rss/search`, which blocks AP, Reuters and CNN
+discovery through it. No other User-Agent is ever tried.
 
 ## Alternatives considered
 

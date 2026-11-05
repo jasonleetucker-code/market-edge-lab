@@ -98,7 +98,7 @@ Extend the owner named here; never fork it into a feature-specific copy. `PLANNE
 | Simultaneous obligation reservation | `src/edge_lab/execution_ticket.py` | BUILT (#149, ADR 0041; reserve_simultaneous_obligations, pure; no netting, no partial acceptance, unknown stays reserved); the one reservation primitive, which `rfq_research` (#148) calls | #145 #30 #93 |
 | Current research-blocker register | `src/edge_lab/current_blockers.py` | BUILT (PR C; generates the register block of `docs/research/CURRENT_BLOCKERS.md`; the Terminal shows it; grants nothing) | #145 #134 #122 #9 |
 | Backup and restore | `src/edge_lab/backup.py` | BUILT (proposed-v1 manual reviewed retention; O1 weekly laptop pull keeps 4; no paid cloud) | #10 #50 |
-| News / transcript intelligence and research journal | `src/edge_lab/intel/` | PLANNED (#192, ADR 0049): it extends `sources`, `http`, `storage` (schema v8), `opportunity` (break-even and max acceptable price), `fee_schedules`, `kalshi_quotes`, `starter_policy` and `freshness_fabric`. There is no second evidence store, ledger, scheduler or pricing engine. The analysis-import schema lives here until #181's `semantic_judgments.py` exists, and moves there when it does | #192 #7 #3 #82 #50 |
+| News / transcript intelligence and research journal | `src/edge_lab/intel/` | PLANNED (#192, ADR 0049): it extends `sources`, `http`, `storage` (schema v8), `opportunity` (break-even and max acceptable price), `fee_schedules`, `kalshi`/`kalshi_quotes`, `stats` (Brier), `starter_policy` and `freshness_fabric`. There is no second evidence store, ledger, scheduler or pricing engine. The analysis-import schema lives here until #181's `semantic_judgments.py` exists, and moves there when it does | #192 #7 #3 #82 #50 |
 | Operator views | `src/edge_lab/dashboard/` | BUILT (read-only; tailnet-only, ADR 0024) | #3 #6 #10 #122 #134 |
 | Design system (Market Edge Terminal v1) | `docs/design/UI_CONTRACT.md` | BUILT (ADR 0025, issue #47) | #47 #3 #6 #9 #10 #29 #30 #32 #33 |
 | Longitudinal learning history | `docs/DATA_PROVENANCE.md` | FOUNDATION BUILT (immutable snapshots, captures, experiment records, rejections, shadow ledger); no duplicate evidence store | #50 #5 #7 #9 #27 #29 #30 |
@@ -209,7 +209,7 @@ Entries before 2026-09-29 (evening), with their classifications and supersession
   - the release/event calendar (`event_calendar.py`, PLANNED) would serve both "Events to Watch" and #86/#88; this slice derives catalysts from event deadlines and official feeds, and leaves the calendar owner unbuilt;
   - the source-value ledger (#7, #82) can later read the journal's Brier and decision records.
 - **Safe parallel lanes:** the pure core (feeds, transcripts, extraction, events, pricing) → the backend (storage, http, collector, Kalshi, inbox, units) → the UI. Disjoint files, one writer each.
-- **Roadmap effect:** no gate change and no edge claim. Every probability is PROVISIONAL with no calibration history. Politics fees are UNVERIFIED and econ fees UNSUPPORTED, so no claimable EV exists until fee verification.
+- **Roadmap effect (the 2026-10-22 checkpoint has passed and is unaffected):** no gate change and no edge claim. Every probability is PROVISIONAL with no calibration history. Politics fees are UNVERIFIED and econ fees UNSUPPORTED, so no claimable EV exists until fee verification.
 - **Classification:**
   - NOW: the slice above.
   - NEXT: owner activation of the two timers after deploy; fee verification for the linked series; a DRAFT/QUEUED protocol if the journal shows a candidate hypothesis.

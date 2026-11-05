@@ -878,10 +878,12 @@ be written here when they are made.
       access status (ACTIVE, LIMITED, UNAVAILABLE, BLOCKED or UNVERIFIED). A source is collected only when it is
       ACTIVE or LIMITED and verified within the last 14 days.
     - **News collection** from free, unauthenticated publisher RSS/Atom feeds, official public APIs and feeds, and
-      Google News RSS. Google News RSS is used only as discovery: headline, link and source.
+      where its robots.txt permits, Google News RSS as discovery only (headline, link and outlet). On 2026-11-05,
+      Google News's robots.txt disallowed `/rss/search`, so those discovery feeds are BLOCKED.
       - Bounds: at most 1 GET per collected feed per run, and at most 60 feed GETs per run. Conditional GETs. The
         honest User-Agent; never a spoofed one.
-      - No login, paywall, CAPTCHA, robots or rate-limit circumvention.
+      - No login, paywall, CAPTCHA, robots or rate-limit circumvention. A source whose robots.txt disallows the
+        feed path, or refuses our honest User-Agent (401/403), is BLOCKED.
       - What is stored: headline, link, timestamps and a snippet of at most 300 characters. Raw feed bytes are kept
         only for US-government public-domain sources; for every other feed only the hash and size are kept.
     - **Owner-supplied podcast transcripts** (paste or upload; .txt/.md/.srt/.vtt). Stored privately in the evidence
@@ -910,13 +912,20 @@ be written here when they are made.
 
       It is **not** a shadow-ledger account. It holds no fills and is not an experiment family, so no #96 slot is
       used.
-    - **Two systemd timers, shipped DISABLED and SEPARATELY_ACTIVATED.** Neither is enabled by this entry.
+    - **Two systemd timers, shipped DISABLED and SEPARATELY_ACTIVATED.** Neither is enabled by this entry. The
+      2-hour cadence is the owner's. The 5-minute inbox timer and its 15-minute collection limit are this agent's
+      design choices for answer 2; activating them is a separate owner decision.
       - `edgelab-news.timer`: every 2 hours, with a run cap of about 4 minutes.
       - `edgelab-news-inbox.timer`: every 5 minutes. It makes no network call unless the owner queued a refresh, and
         then runs at most one bounded collection per 15 minutes.
     - **A Terminal workspace** at `/experiments/intel`, plus one POST route that only writes a size-capped file to a
       private inbox (owner answer 2, "Inbox handoff").
       - The dashboard keeps `IPAddressDeny=any`, and its evidence DB stays read-only.
+      - The only unit change allowed is one extra `ReadWritePaths=` entry for the inbox directory. Every other
+        hardening line stays unchanged.
+      - This is the "dashboard gains a write path" case that ADR 0024 lists as a reason to reconsider. ADR 0049
+        records the reconsideration, and ADR 0024 and `docs/DASHBOARD.md` get dated notes naming the one-route
+        exception in the UI PR.
       - UI_CONTRACT §14 gets a dated amendment.
   - **Merge** (owner answer 3, "Merge after review + CI"). This directive's bounded PRs squash-merge when **all** of
     these hold:
@@ -941,7 +950,14 @@ be written here when they are made.
     - Public exposure, and changes to Brisket, Calculator or Chase Upside.
     - A new experiment family or slot.
     - A shadow-ledger account for news signals.
-    - Changes to protected windows, the EXP-001/002/003 protocols or source budgets.
+    - Changes to protected windows, the EXP-001/002/003 protocols or existing source budgets.
+    - Items the directive excluded:
+      - podcast discovery, audio download or transcription services;
+      - proprietary model training;
+      - new broker connections;
+      - multi-agent architectures or new infrastructure platforms;
+      - unbounded background processing;
+      - disabling any existing operational control.
     - Other venues (P2).
 
 ## Standing merge rule: docs-only and test-only PRs
@@ -1048,7 +1064,7 @@ A PR that fails any of these needs the usual authority: a directive grant or the
   for a model that did not pass Stage A.
 - Scheduled or unattended jobs **outside** the 2026-09-22 read-only VPS authorization, the
   2026-09-23 daily-shadow authorization, and the narrowly approved 2026-09-24 ADR 0030 observation
-  timers, the 2026-09-24 evening Freshness supervisor and Polymarket US NFL pilot timers, and the 2026-11-05 news timers (shipped disabled; enabling them is the owner's), including GitHub Actions cron, any paid host, and any authenticated source, without new
+  timers, the 2026-09-24 evening Freshness supervisor and Polymarket US NFL pilot timers, and the 2026-11-05 news timers once the owner records their activation (they ship disabled), including GitHub Actions cron, any paid host, and any authenticated source, without new
   owner approval.
 - Browser automation against any source whose terms have not been reviewed and recorded.
 
